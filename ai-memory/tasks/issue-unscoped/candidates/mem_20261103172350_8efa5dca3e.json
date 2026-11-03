@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:1349 (and 1996 for attempt_state handler) | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The except handler for the conflict resolver guards (`_resolver_scope_state` heredoc) omits TypeError.\n  WHY: An unexpected TypeError bypasses the RESOLVER_SCOPE_CHECK diagnostic and prevents fail-closed auditability. Minimax noted this as a pass-1 carry-over and did not re-raise it as a finding.\n- tests/test_ai_labels.py:Entire file / suite | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test suite for ai_labels fails after the introduction of prefetch logic in scripts/ai_labels.py.\n  WHY: The pre-push test gate reports this test file as failing after the autofix run, so the tests do not account for the new prefetch API calls or the prefetch logic violates existing test assumptions.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:Entire file / suite | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test suite for review_conflict_resolve fails after the introduction of RESOLVER_SCOPE_CHECK lines.\n  WHY: The pre-push test gate reports this test file as failing after the autofix run, suggesting the new stderr diagnostic output breaks existing output parsing or induces invalid state transitions.\n- scripts/ai_labels.py:570-580 (test at tests/test_ai_labels.py:761-789) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: No test exercises the filtered `fallback_get_count` that replaced `len(label_items)` in the stderr line of `cmd_sync_labels`.\n  WHY: This is a coverage gap rather than a runtime defect; reverting the filter would leave every existing test green.\n- scripts/ai_labels.py:953-963 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The label-sync dry run does not handle `http.client.HTTPException` in the retired-label request path, and `main` does not catch it (also cites .github/workflows/ci.yml:2072-2091).\n  WHY: The command exits before writing its JSON result, so the CI smoke fails parsing `RESULT_JSON` even though the step documents HTTP and transport errors as non-fatal.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_resolve.sh:1349 (and 1996 for attempt_state handler) | severity=NIT | confidence=3\n  PROBLEM: The except handler for the conflict resolver guards omits TypeError.\n  WHY: An unexpected TypeError triggers a broad catch-all or exit 1, bypassing the RESOLVER_SCOPE_CHECK diagnostic and preventing fail-closed auditability.\n- tests/test_ai_labels.py:Entire file / suite | severity=BLOCKER | confidence=5\n  PROBLEM: The test suite for ai_labels fails after the introduction of prefetch logic in scripts/ai_labels.py.\n  WHY: The pre-push test gate reports this test file as failing after the autofix run, indicating the tests do not account for the new prefetch API calls or the prefetch logic violates existing test assumptions.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:Entire file / suite | severity=BLOCKER | confidence=5\n  PROBLEM: The test suite for review_conflict_resolve fails after the introduction of RESOLVER_SCOPE_CHECK lines.\n  WHY: The pre-push test gate reports this test file as failing after the autofix run, suggesting the new stderr diagnostic output breaks existing output parsing or induces invalid state transitions.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ai_labels.py:570-580 (test at tests/test_ai_labels.py:761-789) | severity=NIT | confidence=3\n  PROBLEM: The LAST RUN DIFF replaced `len(label_items)` with a filtered `fallback_get_count`, but no test exercises the filter.\n  WHY: It is a coverage gap, not a runtime defect; a future revert would lose diagnostic accuracy without any test failing.\n- (carry-over, not re-raised) scripts/review_conflict_resolve.sh:1349 | not rated\n  PROBLEM: The `_resolver_scope_state` heredoc is missing `TypeError` in its `except`.\n  WHY: Predates the LAST RUN DIFF and was not made worse by it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/ai_labels.py:953-963; .github/workflows/ci.yml:2072-2091 | severity=NIT | confidence=4\n  PROBLEM: The label-sync dry run does not handle `http.client.HTTPException` in the retired-label request path, and `main` does not catch it.\n  WHY: The command exits before writing its JSON result, so the CI smoke fails when it cannot parse `RESULT_JSON`, despite the step documenting HTTP and transport errors as non-fatal.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "76db24e6340f97fafad087c9568be33c78119f0deefd80793b58e0fe53058ea0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8755,
+    "run_id": "41676579963",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41676579963",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103172350_8efa5dca3e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8755,
+    "run_id": "41676579963"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T17:23:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
