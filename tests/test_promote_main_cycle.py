@@ -262,7 +262,7 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None, script: Path
 			"PYTHONDONTWRITEBYTECODE": "1",
 		}
 	)
-	for key in ("BASH_ENV", "ENV", "TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID", "ALERT_MSG_LEVEL"):
+	for key in ("BASH_ENV", "ENV", "TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID", "ALERT_MSG_LEVEL", "SUPPORT_SCRIPTS_DIR"):
 		run_env.pop(key, None)
 	if env:
 		run_env.update(env)
@@ -835,6 +835,8 @@ def _pinned_repo(tmp: Path, *, wrappers_pinned: bool = True, support_pinned: boo
 	workflows.mkdir(parents=True)
 	script = repo / "scripts" / "promote_main_cycle.sh"
 	script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+	# The real Telegram helper, so alert assertions in pinned tests can fail.
+	(repo / "scripts" / "tg_helpers.sh").write_text((REPO_ROOT / "scripts" / "tg_helpers.sh").read_text(encoding="utf-8"), encoding="utf-8")
 	(workflows / "internal-review.yml").write_text("jobs:\n  r:\n    uses: o/r/.github/workflows/review_autofix.yml@promote-candidate\n", encoding="utf-8")
 	ref = "main" if not wrappers_pinned else "promote-candidate"
 	(workflows / "internal-plan.yml").write_text(f"jobs:\n  p:\n    uses: o/r/.github/workflows/plan.yml@{ref}\n", encoding="utf-8")
@@ -1317,8 +1319,10 @@ def test_released_tick_runs_the_cycle_unpinned() -> None:
 		"gate_runs_sequence": GATE_SUCCESS,
 	}
 	with tempfile.TemporaryDirectory() as tmp:
-		proc, final, _ = _pinned_run(Path(tmp), state)
+		proc, final, _ = _pinned_run(Path(tmp), state, env=TG_ENV)
 	assert "PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=42" in proc.stdout
+	# The pinned fixture carries tg_helpers.sh, so the release alert is sent.
+	assert len(final["tg_posts"]) == 1
 	_assert_unpinned_dispatch(proc, final, "released_cycle_holds_pin")
 	assert "PROMOTE_CYCLE_PIN outcome=stale_tag_deleted" not in proc.stdout
 
@@ -1349,7 +1353,7 @@ def test_released_issue_freeze_tag_lookup_failure_fails_closed() -> None:
 		"pin_tag_lookup_error": True,
 	}
 	with tempfile.TemporaryDirectory() as tmp:
-		proc, final, _ = _run(Path(tmp), state)
+		proc, final, _ = _run(Path(tmp), state, env={"GH_RETRY_MAX_ATTEMPTS": "1"})
 	assert "PROMOTE_CYCLE_SKIPPED reason=guard_unavailable lookup=tag:promote-cycle-frozen" in proc.stdout
 	assert not final.get("dispatches")
 
