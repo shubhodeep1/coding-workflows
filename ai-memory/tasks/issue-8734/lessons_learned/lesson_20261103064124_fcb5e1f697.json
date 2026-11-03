@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-03T06:41:24Z",
+  "issue_number": 8734,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=(check-run context, not the diff):n/a; cited_path=copilot-pull-request-reviewer check-run 41588567747/job/125759700068; files_touched=scripts/review_collect_pr_metadata.sh, tests/test_review_autofix_review_pipeline_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8737,
+  "record_id": "lesson_20261103064124_fcb5e1f697",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer check-run 41588567747/job/125759700068",
+    "(check-run context, not the diff)",
+    "scripts/review_collect_pr_metadata.sh",
+    "tests/test_review_autofix_review_pipeline_contract.py"
+  ]
+}
