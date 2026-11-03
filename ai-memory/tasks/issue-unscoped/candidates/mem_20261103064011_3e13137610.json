@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:10959-10977 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate records a `ruff` failure attributed to this change in the new test `test_review_collect_pr_metadata_does_not_shadow_shared_gh_retry` and related hunks.\n  WHY: Severity disagreement: gemini rated it MAJOR with confidence 4, and glm rated it MAJOR with confidence 3. Gemini claims `re` may lack a module-level import. glm found `re` imported at line 14 and `METADATA_HELPER` defined at line 43, and found no E/F violation, so the attribution may be a misattribution. The gate stays red until the cause is resolved.\n- (check-run context, not the diff):failed[0] `copilot-pull-request-reviewer`, run 41588567747/job/125759700068 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot PR reviewer check-run fails with HTTP 422 `custom_instructions_too_large` before reviewing.\n  WHY: This is an environmental, pre-existing condition not attributable to the diff, and the reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_review_pipeline_contract.py:10959-10977 | severity=MAJOR | confidence=4\n  PROBLEM: The pre-push `ruff` failure indicates a linting violation, likely due to a missing module-level import for `re` used in `test_review_collect_pr_metadata_does_not_shadow_shared_gh_retry`.\n  WHY: If the import is missing at the module level, it violates `ruff` rules (e.g., F401 or similar) and would raise a `NameError` at runtime if `re` is not globally available in the test module.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_autofix_review_pipeline_contract.py:3181-3187, 3690-3696, 3954-3979, 10962-10973 | severity=MAJOR | confidence=3\n  PROBLEM: The PR's pre-push gate records `ruff` (`check --select E,F --ignore E501`, ruff==0.17.2 per scripts/codex_isolated_exec.sh:184) as the single failure caused by this change. Static inspection of every changed hunk finds no E/F violation. The cause is either (a) a genuine E/F finding that only ruff 0.17.2 sees, or (b) a fail-closed tool run misattributed (prepush_affected_tests.py:709-714, 814-816).\n  WHY: The gate stays red and blocks merge until the cause is reproduced and fixed or the attribution corrected.\n- (check-run context, not the diff):failed[0] `copilot-pull-request-reviewer`, run 41588567747/job/125759700068 | severity=NIT | confidence=4\n  PROBLEM: The only failed check-run on head SHA 6f8e847d is the Copilot PR reviewer bot, failing with HTTP 422 `custom_instructions_too_large` before reviewing.\n  WHY: This is an environmental, pre-existing condition not introduced or worsened by this diff, so it is not diff-attributable and needs no in-scope fix.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "db4c1195e5ef453c9bf5aa87331dc8d9c5a7960fac684d39359558fc838ee1cc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8737,
+    "run_id": "41588554890",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41588554890",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103064011_3e13137610",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8737,
+    "run_id": "41588554890"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T06:40:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
