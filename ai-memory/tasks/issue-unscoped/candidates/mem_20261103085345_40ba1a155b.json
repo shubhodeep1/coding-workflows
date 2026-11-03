@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Review the PR diff against the linked issue and PR description under the nine lenses.\n  expected_change_site: Not determinable \u2014 no PR diff, changed-files list, linked issue body, or PR description was supplied in this rollout.\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: Only instruction/checklist fragments are present in context; no reviewable change set exists on disk or in context, so no finding can be cited without violating the fabrication ban. (Other reviewers, anthropic_claude-sonnet-5_5 and minimax_minimax-m3, state the diff was supplied and this gap is invalid.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: Review the PR diff against the linked issue and PR description under the nine lenses.\nExpected change site: Not determinable \u2014 no PR diff, changed-files list, linked issue body, or PR description was supplied in this rollout.\nEvidence of absence: Only instruction/checklist fragments are present in context; no reviewable change set exists on disk or in context, so no finding can be cited without violating the fabrication ban.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: HIGH\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0f846119a6f7e6399c308df8da0d12afb4778bcee6f362651d5cad2791d19d4d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8701,
+    "run_id": "41604218869",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41604218869",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103085345_40ba1a155b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8701,
+    "run_id": "41604218869"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T08:53:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
