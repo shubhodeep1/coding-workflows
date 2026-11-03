@@ -769,6 +769,24 @@ def test_sync_labels_prefetch_failure_falls_back_to_per_label_gets() -> None:
 		assert "falling back to per-label GET for 2 labels" in stderr_text
 
 
+def test_sync_labels_fallback_records_truncated_per_label_get() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-fallback-truncated-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			ai_labels.http.client.IncompleteRead(b""),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload["unchanged"] == 1
+	assert len(payload["errors"]) == 1
+	assert payload["errors"][0]["action"] == "get"
+	assert payload["errors"][0]["label"] == "ai:alpha"
+	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
+	assert "LABEL_SYNC_ERROR:" in stderr_text
+
+
 def test_sync_labels_prefetch_paginates_across_two_pages() -> None:
 	with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-pages-") as tmpdir:
 		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)

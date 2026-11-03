@@ -590,14 +590,16 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
                 existing_label = None
             except LabelContractError:
                 raise
-            except (urllib.error.URLError, OSError, ValueError) as exc:
+            except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
+                # The fallback runs right after the prefetch failed, so the
+                # same truncated read (IncompleteRead) is handled the same way.
                 _append_label_sync_error(
                     errors,
                     repo=repo,
                     label_name=label_name,
                     action="get",
                     dry_run=dry_run,
-                    message=str(exc),
+                    message=str(exc) or type(exc).__name__,
                 )
                 continue
 
