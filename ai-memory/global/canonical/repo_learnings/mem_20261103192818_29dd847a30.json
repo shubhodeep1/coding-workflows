@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "When changing automation, inspect both the workflow definition and the scripts it invokes rather than treating either as the sole source of behavior. The merged changes repeatedly pair these files with targeted workflow, script, or contract tests.",
+  "fingerprint": "3a00b938a6a5668f4a2e76d1b94d24e6c5386f62ec201a22f6cb7a46897e231f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41701709446",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41701709446",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8745",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8749",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8750",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8751",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8757",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8747",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8752",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8753",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8754",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8758"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261103192818_29dd847a30",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow behavior changes are commonly implemented across GitHub Actions YAML and supporting scripts, with focused tests for the resulting contract.",
+  "timestamps": {
+    "created_at": "2026-11-03T19:28:18Z",
+    "promoted_at": "2026-11-03T19:29:34Z",
+    "superseded_at": null
+  }
+}
