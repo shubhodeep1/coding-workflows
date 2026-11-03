@@ -686,3 +686,106 @@ def test_clarify_route_wires_the_gate():
 	assert "::warning::Check-triage resolution gate failed" in gate_block
 	assert 'echo "check_triage_resolved=${CHECK_TRIAGE_RESOLVED}" >> "$GITHUB_OUTPUT"' in script
 	assert '[ "${CHECK_TRIAGE_RESOLVED}" != "true" ]' in script[script.index("Only a verified orchestrator fast path"):]
+
+
+# --- open PR whose head moved (issue #8671) ---------------------------------
+
+OPEN_HEAD_SHA = "8afc8228" + "0" * 32
+OPEN_RUN_ID = 37000001234
+
+
+def _open_pr(head_sha=OPEN_HEAD_SHA, head_repo=REPO, state="open"):
+	return {
+		"number": PR, "merged": False, "state": state, "merge_commit_sha": None,
+		"head": {"sha": head_sha, "ref": PR_HEAD_BRANCH, "repo": {"full_name": head_repo}},
+		"base": {"ref": "main", "repo": {"full_name": REPO}},
+	}
+
+
+def _open_run(**overrides):
+	run = {
+		"id": OPEN_RUN_ID, "status": "completed", "conclusion": "success", "event": "pull_request",
+		"workflow_id": WORKFLOW_ID, "head_sha": OPEN_HEAD_SHA,
+		"html_url": f"https://github.com/{REPO}/actions/runs/{OPEN_RUN_ID}",
+	}
+	run.update(overrides)
+	return run
+
+
+OPEN_RUNS_KEY = rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?head_sha={OPEN_HEAD_SHA}&event=pull_request&per_page=1"
+OPEN_JOBS_KEY = rf"repos/{REPO}/actions/runs/{OPEN_RUN_ID}/jobs\?filter=latest&per_page=100"
+
+
+def _open_routes(**overrides):
+	routes = _routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _open_pr(),
+		OPEN_RUNS_KEY: {"workflow_runs": [_open_run()]},
+		OPEN_JOBS_KEY: _jobs(BASE_JOBS, id_base=1),
+	})
+	routes.update(overrides)
+	return routes
+
+
+def test_open_pr_with_moved_head_resolves_on_current_head(tmp_path, monkeypatch):
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_open_routes(), dry_run=False)
+	assert rc == 0 and result["status"] == "resolved" and result["reason"] == "verified"
+	assert result["path"] == "open_head" and result["pr_state"] == "open"
+	assert result["evidence_sha"] == OPEN_HEAD_SHA and result["triage_head_sha"] == PR_HEAD_SHA
+	assert [w[0][:3] for w in fake.writes] == [
+		["-X", "POST", f"repos/{REPO}/issues/{ISSUE}/comments"],
+		["-X", "POST", f"repos/{REPO}/issues/{ISSUE}/labels"],
+		["-X", "PATCH", f"repos/{REPO}/issues/{ISSUE}"],
+	]
+	body = fake.writes[0][1]["body"]
+	assert "is still open" in body and PR_HEAD_SHA in body
+	assert body.splitlines()[-1] == f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={OPEN_HEAD_SHA} -->"
+	assert not any("/compare/" in call[-1] or "branch=main" in call[-1] for call in fake.calls)
+	assert not any(call[-1].startswith(f"repos/{REPO}/pulls/{PR}/") for call in fake.calls)
+
+
+def test_open_head_check_run_triage_resolves(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID))
+	routes = _open_routes(**{
+		rf"repos/{REPO}/commits/{OPEN_HEAD_SHA}/check-runs\?check_name=CI&filter=latest&per_page=100": {
+			"total_count": 1, "check_runs": [{"head_sha": OPEN_HEAD_SHA, "status": "completed", "conclusion": "success"}],
+		},
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=routes)
+	assert rc == 0 and result["status"] == "resolved" and result["path"] == "open_head"
+
+
+@pytest.mark.parametrize(("overrides", "reason"), [
+	({OPEN_RUNS_KEY: {"workflow_runs": [_open_run(status="in_progress", conclusion=None)]}}, "open_head_run_pending"),
+	({OPEN_RUNS_KEY: {"workflow_runs": []}}, "open_head_run_missing"),
+	({OPEN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha="7" * 40)]}}, "open_head_run_missing"),
+	({OPEN_RUNS_KEY: {"workflow_runs": [_open_run(conclusion="failure")]}}, "open_head_run_not_success"),
+	({OPEN_RUNS_KEY: mod.GhApiError("rc=1")}, "open_head_run_unreadable"),
+	({OPEN_JOBS_KEY: mod.GhApiError("rc=1")}, "open_head_run_jobs_unreadable"),
+	({OPEN_JOBS_KEY: _jobs({"static-checks": "success"}, id_base=1)}, "failed_jobs_not_resolved"),
+	({OPEN_JOBS_KEY: _jobs({"orchestrate-poll (3)": "failure"}, id_base=1)}, "failed_jobs_not_resolved"),
+	({rf"repos/{REPO}/pulls/{PR}": _open_pr(head_sha=PR_HEAD_SHA)}, "open_head_unchanged"),
+	({rf"repos/{REPO}/pulls/{PR}": _open_pr(head_repo="fork/coding-workflows")}, "pr_cross_repository"),
+	({rf"repos/{REPO}/pulls/{PR}": _open_pr(state="closed")}, "pr_not_merged"),
+])
+def test_open_head_unverified_variants(tmp_path, monkeypatch, overrides, reason):
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_open_routes(**overrides))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == reason
+	assert "path" not in result
+	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
+
+
+def test_open_head_needs_trusted_header_head_sha(tmp_path, monkeypatch):
+	body = "\n".join(line for line in _body().splitlines() if not line.startswith("- **Head SHA:**"))
+	result, _, _ = _gate(tmp_path, monkeypatch, issue=_issue(body=body), routes=_open_routes())
+	assert result["status"] == "unverified" and result["reason"] == "triage_head_unavailable"
+
+
+def test_closed_pr_reports_pr_state(tmp_path, monkeypatch):
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=_open_routes(**{rf"repos/{REPO}/pulls/{PR}": _open_pr(state="closed")}))
+	assert result["pr_state"] == "closed"
+
+
+def test_merged_path_reports_merged(tmp_path, monkeypatch):
+	result, rc, _ = _gate(tmp_path, monkeypatch)
+	assert rc == 0 and result["status"] == "resolved"
+	assert result["path"] == "merged" and result["pr_state"] == "merged"
