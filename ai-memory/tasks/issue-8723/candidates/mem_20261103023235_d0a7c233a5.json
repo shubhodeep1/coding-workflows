@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply analysis recommendations from workflow-optimization-2026-09-30.md\",\"issues\":[{\"id\":\"checkrun-pending-identity\",\"title\":\"Log pending check-run names and exit reason in the review check-run wait loop\",\"priority\":2},{\"id\":\"review-disk-headroom-pre\",\"title\":\"Log disk headroom before the review 'Free disk space' step\",\"priority\":3},{\"id\":\"memory-push-retry-class\",\"title\":\"Emit a bounded push retry-reason field in AI memory write telemetry\",\"priority\":4},{\"id\":\"reviewer-common-context-sections\",\"title\":\"Deduplicate reviewer prompt untrusted-context sections into one helper (byte-identical output)\",\"priority\":5},{\"id\":\"collect-pr-metadata-gh-retry-shadow\",\"title\":\"Stop review_collect_pr_metadata.sh from overriding the shared gh_retry signature\",\"priority\":5},{\"id\":\"processing-report-and-doc-removal\",\"title\":\"Record recommendation verdicts for workflow-optimization-2026-09-30.md and delete the source doc\",\"priority\":8}],\"dependency_edges\":[{\"from\":\"checkrun-pending-identity\",\"to\":\"processing-report-and-doc-removal\"},{\"from\":\"review-disk-headroom-pre\",\"to\":\"processing-report-and-doc-removal\"},{\"from\":\"memory-push-retry-class\",\"to\":\"processing-report-and-doc-removal\"},{\"from\":\"reviewer-common-context-sections\",\"to\":\"processing-report-and-doc-removal\"},{\"from\":\"collect-pr-metadata-gh-retry-shadow\",\"to\":\"processing-report-and-doc-removal\"},{\"from\":\"checkrun-pending-identity\",\"to\":\"collect-pr-metadata-gh-retry-shadow\"},{\"from\":\"collect-pr-metadata-gh-retry-shadow\",\"to\":\"reviewer-common-context-sections\"}]}",
+  "fingerprint": "b47d031896ab3761e23eb73c4edcc5c8aa8645aa83247423b519b626b050f438",
+  "lineage": {
+    "issue_number": 8723,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41565910575",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41565910575",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261103023235_d0a7c233a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8723,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41565910575"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply analysis recommendations from workflow-optimization-2026-09-30.md' into 6 issues (tracking #8723)",
+  "timestamps": {
+    "created_at": "2026-11-03T02:32:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
