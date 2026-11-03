@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:1004-1030 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: When all hunks are filtered, the placeholder prose makes the diff file non-empty, so the symbol-summary generator runs on prose-only input instead of the \"No reviewer-visible diff available\" branch, and an empty generated summary would give reviewers no explanatory message.\n  WHY: The reviewer rated it NIT and said the claimed major downstream parsing failure does not materialize, since no `git apply` is run on `PR_DIFF_FILE` in this script. Only an empty summary file on a fully-filtered run remains as a risk.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The fully-filtered placeholder path (REVIEWER_FILTER_UNINTERESTING removes every hunk) should be verified end-to-end so downstream reviewer passes receive valid, non-placeholder diff content.\n  expected_change_site: scripts/review_run_reviewers.sh lines 1117-1132 and tests covering the reviewer-filter artifact flow\n  confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: Repo-wide search finds no test referencing `ensure_reviewer_filter_diff_placeholder` or the placeholder message \"All reviewer-visible PR diff hunks were filtered\", and tests around `test_review_autofix_review_pipeline_contract.py:5536-5537` assert only filter activation and file-path rebinding. (anthropic_claude-sonnet-5_5 and minimax_minimax-m3 judged this path not a deliverable of issue #8383.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_run_reviewers.sh:1004-1006 and 1020-1030 | severity=low (source: NIT) | confidence=3 (source: MEDIUM)\n  PROBLEM: When all hunks are filtered, the placeholder prose makes the diff file non-empty, so the symbol-summary generator runs on prose-only input instead of the \"No reviewer-visible diff available\" branch, and an empty generated summary would give reviewers no explanatory message.\n  WHY: The placeholder is intentional prose for prompt-based reviewers and no `git apply` is run on `PR_DIFF_FILE` in this script, so the claimed MAJOR downstream failure does not materialize. Only the empty-summary edge case remains.\n- TASK_GAP:\n  Requirement: The fully-filtered placeholder path (REVIEWER_FILTER_UNINTERESTING removes every hunk) should be verified end-to-end so downstream reviewer passes receive valid, non-placeholder diff content.\n  Expected change site: scripts/review_run_reviewers.sh lines 1117-1132 and tests covering the reviewer-filter artifact flow.\n  Evidence of absence: Repo-wide search finds no test referencing `ensure_reviewer_filter_diff_placeholder` or the placeholder message \"All reviewer-visible PR diff hunks were filtered\"; tests around `test_review_autofix_review_pipeline_contract.py:5536-5537` assert only the filter activation and file-path rebinding, not placeholder content or downstream handling.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: MEDIUM\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "89cba8001bae6fe0066b30b6f3a935a1dc565a2ed80ea8b1d1abe57cbbcad670",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41669863629",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41669863629",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103161403_418a143433",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41669863629"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T16:14:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
