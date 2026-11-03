@@ -438,6 +438,65 @@ if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]]; then
 fi
 RETRY_QUEUED_SECS=0
 RETRY_LAST_QUEUED_TS=""
+# Stuck states P4 (Refs #8291): with E2E_PHASE4B_QUEUED_GRACE_ENABLED on
+# (default), EDITOR_RETRY_BUDGET_MINUTES counts from the first poll that
+# reads the pinned run as in_progress or completed, not from adoption or
+# dispatch. Until then the run is bounded by its own queued cap,
+# E2E_RETRY_QUEUED_GRACE_MINUTES (default 30); a run still queued at that
+# cap fails as retry_queued_timeout. run_started_at is only logged: GitHub
+# fills it in for queued runs too (it equals created_at), so it does not
+# say when a runner picked the run up. Every deadline stays within
+# [RETRY_BASE_DEADLINE, RETRY_DEADLINE_CEILING], so the base deadline is
+# never shortened and the serial budget checked in "Validate
+# prerequisites" still holds. Any value that is not truthy keeps the
+# legacy queued-poll extension below, with unchanged output.
+RETRY_QUEUED_GRACE_ON=0
+case "$(printf '%s' "${E2E_PHASE4B_QUEUED_GRACE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) RETRY_QUEUED_GRACE_ON=1 ;;
+esac
+RETRY_QUEUED_GRACE_MINUTES="${E2E_RETRY_QUEUED_GRACE_MINUTES:-30}"
+RETRY_WAIT_STARTED_EPOCH=""
+RETRY_QUEUED_GRACE_DEADLINE=""
+RETRY_RUN_STARTED_EPOCH=""
+RETRY_RUN_STARTED_AT_LOG=""
+if [ "${RETRY_QUEUED_GRACE_ON}" -eq 1 ]; then
+  if ! [[ "${RETRY_QUEUED_GRACE_MINUTES}" =~ ^[1-9][0-9]{0,4}$ ]]; then
+    # The raw value is not echoed: it is a repo variable and must not
+    # reach a workflow-command line.
+    echo "::warning::E2E_RETRY_QUEUED_GRACE_MINUTES must be a positive integer of at most 5 digits (no leading zero); falling back to 30"
+    RETRY_QUEUED_GRACE_MINUTES=30
+  fi
+  # The same instant the base DEADLINE above was computed from.
+  RETRY_WAIT_STARTED_EPOCH=$(( RETRY_BASE_DEADLINE - (EDITOR_RETRY_BUDGET_MINUTES * 60) ))
+  RETRY_QUEUED_GRACE_DEADLINE=$(( RETRY_WAIT_STARTED_EPOCH + (RETRY_QUEUED_GRACE_MINUTES * 60) ))
+  if [ "${RETRY_QUEUED_GRACE_DEADLINE}" -gt "${RETRY_DEADLINE_CEILING}" ]; then
+    RETRY_QUEUED_GRACE_DEADLINE="${RETRY_DEADLINE_CEILING}"
+  fi
+  if [ "${RETRY_QUEUED_GRACE_DEADLINE}" -lt "${RETRY_BASE_DEADLINE}" ]; then
+    RETRY_QUEUED_GRACE_DEADLINE="${RETRY_BASE_DEADLINE}"
+  fi
+  DEADLINE="${RETRY_QUEUED_GRACE_DEADLINE}"
+fi
+
+# Writes the timeout error and status for a pinned retry run that did
+# not complete in time. With the queued grace on, a run never seen
+# leaving the queue reports retry_queued_timeout; everything else (and
+# the legacy path, byte for byte) reports retry_timeout.
+retry_report_timeout() {
+  local report_now
+  if [ "${RETRY_QUEUED_GRACE_ON}" -eq 1 ] && [ -n "${RETRY_RUN_ID}" ] && [ -z "${RETRY_RUN_STARTED_EPOCH}" ]; then
+    report_now=$(date +%s)
+    echo "::error::Retry review run #${RETRY_RUN_ID} stayed queued for $(( report_now - RETRY_WAIT_STARTED_EPOCH ))s, past E2E_RETRY_QUEUED_GRACE_MINUTES=${RETRY_QUEUED_GRACE_MINUTES} (deadline capped at $(( RETRY_QUEUED_GRACE_DEADLINE - RETRY_WAIT_STARTED_EPOCH ))s)"
+    echo "status=retry_queued_timeout" >> "$GITHUB_OUTPUT"
+    return 0
+  fi
+  echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
+  if [ "${RETRY_QUEUED_GRACE_ON}" -eq 1 ] && [ -n "${RETRY_RUN_STARTED_EPOCH}" ]; then
+    report_now=$(date +%s)
+    echo "Retry review run #${RETRY_RUN_ID} queued $(( RETRY_RUN_STARTED_EPOCH - RETRY_WAIT_STARTED_EPOCH ))s, ran $(( report_now - RETRY_RUN_STARTED_EPOCH ))s."
+  fi
+  echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
+}
 # Circuit breaker: if fetch_pr_state returns "unknown" (API
 # failure / parse failure) for too many consecutive iterations
 # we're effectively polling blind and the closed-PR guard
@@ -473,8 +532,7 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
         echo "::error::Retry dispatch did not register a matching review run within 90 seconds"
         echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
       else
-        echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
-        echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
+        retry_report_timeout
       fi
       exit 1
     fi
@@ -583,31 +641,55 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
   RETRY_STATUS=$(printf '%s\n' "${RETRY_RUN_JSON}" | jq -r '.status')
   RETRY_CONCL=$(printf '%s\n' "${RETRY_RUN_JSON}" | jq -r '.conclusion // "null"')
   echo "  retry run #${RETRY_RUN_ID}: status=${RETRY_STATUS} conclusion=${RETRY_CONCL}"
-  if [ "${RETRY_STATUS}" = "completed" ]; then
-    break
-  fi
-  RETRY_POLL_NOW=$(date +%s)
-  case "${RETRY_STATUS}" in
-    queued|waiting|pending|requested)
-      if [ -n "${RETRY_LAST_QUEUED_TS}" ]; then
-        RETRY_QUEUED_SECS=$(( RETRY_QUEUED_SECS + RETRY_POLL_NOW - RETRY_LAST_QUEUED_TS ))
-        DEADLINE=$(( RETRY_BASE_DEADLINE + RETRY_QUEUED_SECS ))
+  # Queued grace: latch the first poll that sees the run out of the
+  # queue (never reset later) and restart the editor budget there.
+  if [ "${RETRY_QUEUED_GRACE_ON}" -eq 1 ] && [ -z "${RETRY_RUN_STARTED_EPOCH}" ]; then
+    case "${RETRY_STATUS}" in
+      in_progress|completed)
+        RETRY_RUN_STARTED_EPOCH=$(date +%s)
+        DEADLINE=$(( RETRY_RUN_STARTED_EPOCH + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))
         if [ "${DEADLINE}" -gt "${RETRY_DEADLINE_CEILING}" ]; then
           DEADLINE="${RETRY_DEADLINE_CEILING}"
         fi
-      fi
-      RETRY_LAST_QUEUED_TS="${RETRY_POLL_NOW}"
-      ;;
-    *)
-      RETRY_LAST_QUEUED_TS=""
-      ;;
-  esac
+        if [ "${DEADLINE}" -lt "${RETRY_BASE_DEADLINE}" ]; then
+          DEADLINE="${RETRY_BASE_DEADLINE}"
+        fi
+        RETRY_RUN_STARTED_AT_LOG=$(printf '%s\n' "${RETRY_RUN_JSON}" | jq -r '.run_started_at // empty' 2>/dev/null) || RETRY_RUN_STARTED_AT_LOG=""
+        if ! [[ "${RETRY_RUN_STARTED_AT_LOG}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+          RETRY_RUN_STARTED_AT_LOG="unknown"
+        fi
+        echo "Retry review run #${RETRY_RUN_ID} left the queue after $(( RETRY_RUN_STARTED_EPOCH - RETRY_WAIT_STARTED_EPOCH ))s (run_started_at=${RETRY_RUN_STARTED_AT_LOG}); EDITOR_RETRY_BUDGET_MINUTES=${EDITOR_RETRY_BUDGET_MINUTES} now counts from here"
+        ;;
+    esac
+  fi
+  if [ "${RETRY_STATUS}" = "completed" ]; then
+    break
+  fi
+  if [ "${RETRY_QUEUED_GRACE_ON}" -eq 0 ]; then
+    RETRY_POLL_NOW=$(date +%s)
+    case "${RETRY_STATUS}" in
+      queued|waiting|pending|requested)
+        if [ -n "${RETRY_LAST_QUEUED_TS}" ]; then
+          RETRY_QUEUED_SECS=$(( RETRY_QUEUED_SECS + RETRY_POLL_NOW - RETRY_LAST_QUEUED_TS ))
+          DEADLINE=$(( RETRY_BASE_DEADLINE + RETRY_QUEUED_SECS ))
+          if [ "${DEADLINE}" -gt "${RETRY_DEADLINE_CEILING}" ]; then
+            DEADLINE="${RETRY_DEADLINE_CEILING}"
+          fi
+        fi
+        RETRY_LAST_QUEUED_TS="${RETRY_POLL_NOW}"
+        ;;
+      *)
+        RETRY_LAST_QUEUED_TS=""
+        ;;
+    esac
+  fi
 done
 
 if [ "$(date +%s)" -ge "${DEADLINE}" ] || [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
-  echo "Retry review run queued for ${RETRY_QUEUED_SECS}s; deadline extended by $(( DEADLINE - RETRY_BASE_DEADLINE ))s (cap $(( RETRY_DEADLINE_CEILING - RETRY_BASE_DEADLINE ))s)."
-  echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
-  echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
+  if [ "${RETRY_QUEUED_GRACE_ON}" -eq 0 ]; then
+    echo "Retry review run queued for ${RETRY_QUEUED_SECS}s; deadline extended by $(( DEADLINE - RETRY_BASE_DEADLINE ))s (cap $(( RETRY_DEADLINE_CEILING - RETRY_BASE_DEADLINE ))s)."
+  fi
+  retry_report_timeout
   exit 1
 fi
 
