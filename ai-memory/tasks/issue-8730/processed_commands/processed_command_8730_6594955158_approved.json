@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8730_6594955158_approved",
   "issue_number": 8730,
   "metadata": {
+    "branch": "ai/issue-8730",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/8730-ci-hooks-plumbing-step-to-release.md",
+      "tests/test_ci_poll_test_sharding.py"
+    ],
+    "issue_number": 8730,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8730",
+    "pr_number": 8733,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8733",
+    "run_attempt": "1",
+    "run_id": "41574418617",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41574418617"
   },
   "run_attempt": 1,
   "run_id": "41574418617",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-03T03:53:04Z",
+  "status": "completed",
+  "timestamp": "2026-11-03T04:19:25Z",
   "workflow": "implement"
 }
