@@ -16,8 +16,8 @@ between the `support-scripts-legacy` markers, behind the kill switch
 SUPPORT_SCRIPTS_UNIFIED_ENABLED.
 
 PHASE_WORKFLOWS is parametrized so each phase workflow adds one entry: clarify
-(P2a-1) and plan (P2a-2) today; orchestrate_clarify_respond.yml and
-implement.yml come with the later P2a/P2b issues. PHASE_EXPECTATIONS holds the
+(P2a-1), plan (P2a-2) and orchestrate_clarify_respond.yml (P2a-3) today;
+implement.yml comes with the later P2b issue. PHASE_EXPECTATIONS holds the
 per-phase differences (host Python directory, checkout sandbox Dockerfile,
 required call sites).
 """
@@ -44,6 +44,10 @@ SUPPORT_PATH = "${SUPPORT_SCRIPTS_DIR:-scripts}/"
 PHASE_WORKFLOWS = [
 	pytest.param(".github/workflows/clarify.yml", "Stage workflow support files", "clarify", id="clarify"),
 	pytest.param(".github/workflows/plan.yml", "Stage workflow support files", "plan", id="plan"),
+	pytest.param(
+		".github/workflows/orchestrate_clarify_respond.yml", "Stage workflow support files", "clarify_respond",
+		id="clarify_respond",
+	),
 ]
 
 # Per-phase differences of the staging step.
@@ -69,6 +73,18 @@ PHASE_EXPECTATIONS = {
 		"unified_checkout": {".gitignore"},
 		"call_sites": (f'source "{SUPPORT_PATH}ai_engine.sh"', f'bash "{SUPPORT_PATH}run_plan_codex.sh"'),
 		"dropped_script": "plan_split_dispatch.sh",
+		"list_probe": True,
+	},
+	"clarify_respond": {
+		"host_python": False,
+		"checkout_sandbox": False,
+		"unified_checkout": {".gitignore"},
+		"call_sites": (
+			f'source "{SUPPORT_PATH}ai_engine.sh"',
+			f'bash "{SUPPORT_PATH}clarify_isolated_run.sh"',
+			f'bash "{SUPPORT_PATH}orchestrate_parse_and_post_answer.sh"',
+		),
+		"dropped_script": "clarify_data_provision_guard.py",
 		"list_probe": True,
 	},
 }
@@ -274,7 +290,9 @@ def _make_support(workspace: Path, phase: str, workflow: str) -> tuple[Path, str
 		_write(scripts / "claude_settings.json.tmpl", "{}\n")
 	for rel in (
 		"unattended_system_instructions.md", "ai_pipeline.md", "prompts/header.txt", "prompts/_identity_recall.txt",
-		"prompts/references/security-money-lens.txt",
+		"prompts/references/security-money-lens.txt", "prompts/mode-clarify-respond.txt",
+		"prompts/_prelude_common.txt", "prompts/_prelude_output_contract.txt", "prompts/_prelude_role_persona.txt",
+		"prompts/_templates/mode-clarify-respond.txt",
 	):
 		_write(support / rel, f"{rel}\n")
 	schema = "ai-memory/schemas/workflow_overlay.v1.json"

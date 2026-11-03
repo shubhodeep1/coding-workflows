@@ -3,8 +3,8 @@
 # verified workflow support checkout into the out-of-tree runtime bundle.
 #
 # Usage: stage_support_for_phase.sh <phase> [--host-python-dir DIR | --list]
-#   phase              `clarify` or `plan`; clarify_respond and implement are
-#                      added by the later P2a/P2b issues
+#   phase              `clarify`, `plan` or `clarify_respond`; implement is
+#                      added by the later P2b issue
 #                      (docs/plans/remove-unattended-pipeline-stuck-states-plan.md)
 #   --host-python-dir  absolute directory that also receives the phase's host
 #                      Python helpers (clarify: CLARIFY_HOST_PYTHON_DIR)
@@ -45,7 +45,7 @@ set -euo pipefail
 
 stage_support_usage()
 {
-	echo "Usage: stage_support_for_phase.sh <clarify|plan> [--host-python-dir DIR | --list]" >&2
+	echo "Usage: stage_support_for_phase.sh <clarify|plan|clarify_respond> [--host-python-dir DIR | --list]" >&2
 	exit 2
 }
 
@@ -124,6 +124,26 @@ case "${stage_support_phase}" in
 		# the Claude settings template and the sandbox Dockerfile from its own
 		# directory or CLARIFY_ISOLATION_SUPPORT_DIR.
 		stage_support_data_files=(claude_settings.json.tmpl clarify_sandbox/Dockerfile)
+		stage_support_host_python_scripts=()
+		stage_support_export_isolation_dir="true"
+		;;
+	clarify_respond)
+		stage_support_required_scripts=(
+			gh_helpers.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py
+			tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py
+			memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py
+			build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh
+			write_codex_config.sh codex_stall_guard.sh orchestrate_parse_and_post_answer.sh
+			clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh
+			clarify_openrouter_broker.py ai_engine.sh claude_engine.py claude_anthropic_relay.py
+			claude_settings.json.tmpl auto_decisions.py clarify_github_facts.py
+			clarify_data_provision_guard.py
+		)
+		# gh_helpers.sh sources emit_event.sh from its own directory first.
+		stage_support_optional_scripts=(emit_event.sh)
+		# clarify_isolated_run.sh reads its sandbox Dockerfile from its own
+		# directory or CLARIFY_ISOLATION_SUPPORT_DIR, not the checkout.
+		stage_support_data_files=(clarify_sandbox/Dockerfile)
 		stage_support_host_python_scripts=()
 		stage_support_export_isolation_dir="true"
 		;;
