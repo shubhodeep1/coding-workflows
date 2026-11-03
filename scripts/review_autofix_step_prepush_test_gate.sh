@@ -13,8 +13,10 @@
 # `inherited`) get exactly one editor turn through
 # `review_apply_fixes.sh --repair-turn` (the editor's own sandbox launch and
 # validated transfer). Edits outside the repair allow-list are rolled back,
-# syntax is re-validated (a syntax failure reverts the whole repair), and the
-# gate runs once more; there is never a second repair. The host writes the
+# syntax is re-validated (a syntax failure reverts the whole repair), and a
+# repair that leaves no change while every PR-caused failure is a lint unit is
+# reverted too (the editor's change is kept). Only a kept repair gets one more
+# gate run; there is never a second repair. The host writes the
 # summary from the final result.json (never from the container's summary.md)
 # and appends it to EDITOR_SUMMARY_FILE as "## Pre-push test gate" when that
 # file is already non-empty, so "Post editor summary comment" posts it.
@@ -489,7 +491,8 @@ review_prepush_test_gate_restore_symlinks()
 	done < <(git ls-files -s -z 2>/dev/null)
 }
 
-# One review editor turn. Sets rpg_repair to ran | skipped (...) | reverted (syntax).
+# One review editor turn. Sets rpg_repair to ran | skipped (...) | reverted (syntax)
+# | reverted (it removed the whole change for lint findings only); the gate re-runs only for ran.
 review_prepush_test_gate_repair()
 {
 	local result="$1" prompt rc editor editor_timeout validator sd
