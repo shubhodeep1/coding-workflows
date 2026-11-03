@@ -2835,10 +2835,10 @@ class MovedHooks8730StepsContractTest(unittest.TestCase):
 		for name in MOVED_HOOKS_8730_STEPS:
 			self.assertIn(name, GROUP_PINNED_STEPS)
 			group = GROUP_PINNED_STEPS[name]
+			self.assertLess(group, poll_group_count())
 			for owner, step in self.owning_steps(name):
 				with self.subTest(step=name, job=owner):
 					self.assertEqual(step.get("if"), f"strategy.job-index == {group}")
-					self.assertLess(group, poll_group_count())
 
 	def test_moved_steps_run_after_the_release_job_setup(self) -> None:
 		names = [step.get("name") for step in self.jobs()[HOOKS_8730_TARGET_JOB_ID]["steps"]]

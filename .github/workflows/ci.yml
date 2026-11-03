@@ -3004,11 +3004,10 @@ jobs:
       # its 20 minutes on main (run 41670184870, budget-watch issue #8759), to
       # group 1, which has carried only its slice since #8396. The run's step
       # timings could not be read, so the pick is an estimate from test and
-      # subprocess counts, not a measurement. The step needs no git history:
-      # _origin_main_ref in the plumbing module fetches origin/main at depth 1
-      # on a shallow checkout, as it did in the depth-1 heal job before #8395.
-      # It needs no Node or prepared .claude/ live copies. Name and body
-      # unchanged.
+      # subprocess counts, not a measurement. The step needs no git history
+      # beyond HEAD, as when it ran in the depth-1 heal job before #8395, so
+      # this job's default checkout is enough. It needs no Node or prepared
+      # .claude/ live copies. Name and body unchanged.
       - name: Review autofix review-pipeline plumbing contract test
         if: strategy.job-index == 1
         run: |
