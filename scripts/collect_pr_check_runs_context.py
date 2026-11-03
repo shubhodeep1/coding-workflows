@@ -15,6 +15,7 @@ import time
 import traceback
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
@@ -32,6 +33,8 @@ LOG_TAIL_LINES = 200
 FAILURE_CONCLUSIONS = {"failure", "timed_out", "action_required", "cancelled", "stale", "startup_failure"}
 # Full commit SHA accepted for PR_CHECK_RUNS_HEAD_SHA_OVERRIDE (#6918).
 _HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+# Cap on check identities listed per CHECK_RUNS_WAIT_PENDING line.
+WAIT_PENDING_MAX_ENTRIES = 20
 
 
 def _required_env(name: str) -> str:
@@ -218,12 +221,107 @@ def _build_wait_view(raw_text: str, self_run_id: str) -> list[dict[str, Any]]:
 	return sorted(wait_view, key=lambda item: (item["id"], item["status"]))
 
 
+def _build_wait_identity(raw_text: str, self_run_id: str) -> tuple[list[dict[str, Any]], int]:
+	"""Return (identities, self_excluded) for diagnostics only.
+
+	Uses the same skip rules as _build_wait_view, so the identity list
+	describes exactly the in-flight set. It is never compared, so names or
+	started_at cannot affect the backoff. details_url is only substring
+	matched for the self-run rule and is never returned; output/summary and
+	html_url are never read.
+	"""
+	identities: list[dict[str, Any]] = []
+	self_excluded = 0
+	for run in _extract_runs(raw_text):
+		status = "" if run.get("status") is None else str(run.get("status"))
+		if status == "completed":
+			continue
+		details_url = "" if run.get("details_url") is None else str(run.get("details_url"))
+		if self_run_id and f"/actions/runs/{self_run_id}/job/" in details_url:
+			self_excluded += 1
+			continue
+		app = run.get("app") or {}
+		if not isinstance(app, dict):
+			app = {}
+		identities.append({
+			"id": _coerce_int(run.get("id"), 0),
+			"name": run.get("name"),
+			"app_slug": app.get("slug"),
+			"status": status,
+			"started_at": run.get("started_at"),
+		})
+	return identities, self_excluded
+
+
 def _short(value: Any, limit: int = 400) -> str:
 	text = "" if value is None else str(value)
 	text = text.replace("\r", " ").replace("\n", " | ")
 	if len(text) <= limit:
 		return text
 	return text[:limit] + "..."
+
+
+def _sanitize_wait_field(value: Any, limit: int = 80) -> str:
+	"""Render untrusted check-run text as one safe log token."""
+	text = "" if value is None else str(value)
+	# CR/LF go first so a later step cannot join ":\n:" into "::".
+	text = text.replace("\r", "").replace("\n", "")
+	text = "".join("_" if (ord(ch) < 32 or ord(ch) == 127) else ch for ch in text)
+	while "::" in text:
+		text = text.replace("::", ":_")
+	# Legacy "##[command]" annotation syntax.
+	while "##[" in text:
+		text = text.replace("##[", "#_[")
+	text = re.sub(r"[\s|,]", "_", text)
+	if not text:
+		text = "-"
+	return _short(text, limit)
+
+
+def _format_wait_elapsed(started_at: Any, now: float) -> str:
+	if started_at in (None, ""):
+		return "-"
+	try:
+		ts = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+	except (TypeError, ValueError):
+		return "-"
+	if ts.tzinfo is None or ts.utcoffset() is None:
+		return "-"
+	try:
+		return str(max(0, int(now - ts.timestamp())))
+	except (OverflowError, ValueError, OSError):
+		return "-"
+
+
+def _format_wait_pending_line(
+	*,
+	head_sha: str,
+	poll: int,
+	in_flight: int,
+	self_excluded: int,
+	entries: list[dict[str, Any]],
+	now: float,
+) -> str:
+	ordered = sorted(entries, key=lambda item: _coerce_int(item.get("id"), 0))
+	shown = ordered[:WAIT_PENDING_MAX_ENTRIES]
+	rendered = [
+		"|".join((
+			_sanitize_wait_field(item.get("name")),
+			_sanitize_wait_field(item.get("app_slug")),
+			_sanitize_wait_field(item.get("status")),
+			_format_wait_elapsed(item.get("started_at"), now),
+		))
+		for item in shown
+	]
+	checks = ",".join(rendered) if rendered else "-"
+	line = (
+		f"CHECK_RUNS_WAIT_PENDING head_sha={_sanitize_wait_field(head_sha, 40)}"
+		f" poll={int(poll)} in_flight={int(in_flight)} self_excluded={int(self_excluded)}"
+		f" checks={checks}"
+	)
+	if len(ordered) > WAIT_PENDING_MAX_ENTRIES:
+		line += f" truncated={len(ordered) - WAIT_PENDING_MAX_ENTRIES}"
+	return line
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -440,8 +538,12 @@ def main() -> int:
 		unchanged_wait_snapshots = 0
 		final_status = "ready"
 		raw_text = ""
+		wait_started = int(time.time())
+		wait_polls = 0
+		wait_last_in_flight = 0
 
 		while True:
+			wait_polls += 1
 			proc = _run_check_runs_api(repository=repository, head_sha=head_sha, script_dir=Path(__file__).resolve().parent)
 			raw_text = proc.stdout or ""
 			if proc.returncode != 0:
@@ -465,11 +567,28 @@ def main() -> int:
 
 			wait_view = _build_wait_view(raw_text, self_run_id)
 			in_flight = len(wait_view)
+			wait_last_in_flight = in_flight
 			if last_wait_view is not None and wait_view == last_wait_view:
 				unchanged_wait_snapshots += 1
 			else:
 				last_wait_view = wait_view
 				unchanged_wait_snapshots = 0
+
+			if in_flight > 0:
+				# Diagnostics only (fail-open): never touches final_status,
+				# the wait view or the backoff counter.
+				try:
+					wait_entries, wait_self_excluded = _build_wait_identity(raw_text, self_run_id)
+					print(_format_wait_pending_line(
+						head_sha=head_sha,
+						poll=wait_polls,
+						in_flight=in_flight,
+						self_excluded=wait_self_excluded,
+						entries=wait_entries,
+						now=time.time(),
+					))
+				except Exception as exc:
+					sys.stderr.write(f"collect_pr_check_runs_context: wait diagnostics skipped ({type(exc).__name__})\n")
 
 			if in_flight == 0:
 				final_status = "ready"
@@ -493,6 +612,16 @@ def main() -> int:
 				sleep_secs = remaining
 			print(f"Waiting for {in_flight} in-progress/queued check-run(s) on {head_sha} (sleep {sleep_secs}s, deadline in {remaining}s)…")
 			time.sleep(max(0, sleep_secs))
+
+		try:
+			print(
+				f"CHECK_RUNS_WAIT_EXIT head_sha={_sanitize_wait_field(head_sha, 40)}"
+				f" status={final_status} polls={wait_polls}"
+				f" waited_s={max(0, int(time.time()) - wait_started)}"
+				f" last_in_flight={wait_last_in_flight}"
+			)
+		except Exception as exc:
+			sys.stderr.write(f"collect_pr_check_runs_context: wait diagnostics skipped ({type(exc).__name__})\n")
 
 		writer_ok = _write_context_file(out_path=out_path, raw_text=raw_text, head_sha=head_sha, final_status=final_status)
 		if not writer_ok:

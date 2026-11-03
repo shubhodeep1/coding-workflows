@@ -3181,7 +3181,7 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"' in block
 	assert 'gh_retry "${PR_PAYLOAD_FILE}"' not in block
 	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in helper_text
-	assert 'gh_retry_to_file "${outfile}" gh "$@"' in helper_text
+	assert 'gh_retry_to_file "${PR_PAYLOAD_FILE}" gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"' in helper_text
 	assert 'review_collect_pr_metadata.XXXXXX' in helper_text
 	assert '::error::Unable to determine PR base branch' in helper_text
 
@@ -3690,7 +3690,7 @@ def test_review_collect_pr_metadata_no_pr_base_ref_fails_closed() -> None:
 	block = text[start:end]
 
 	assert 'BASE_REF_OVERRIDE="${BASE_REF_OVERRIDE_INPUT:-}"' in block
-	assert 'gh_retry "${branch_review_repo_json}" api "repos/${REPOSITORY}"' in block
+	assert 'gh_retry_to_file "${branch_review_repo_json}" gh api "repos/${REPOSITORY}"' in block
 	assert ".default_branch // empty" in block
 	assert _NO_PR_BASE_REF_ERROR in block
 	error_idx = block.index(_NO_PR_BASE_REF_ERROR)
@@ -3954,10 +3954,9 @@ def test_review_collect_pr_metadata_helper_fails_open_on_non_array_batch_input()
 		TMP_RUNTIME_DIR="$(mktemp -d)"
 		REPOSITORY_OWNER="owner"
 		REPOSITORY_NAME="repo"
-		gh_retry() {
-			echo "unexpected gh_retry call" >&2
-			return 99
-		}
+		# Neither retry wrapper may run on the fail-open path.
+		gh_retry() { echo "unexpected gh_retry call" >&2; return 99; }
+		gh_retry_to_file() { echo "unexpected gh_retry_to_file call" >&2; return 99; }
 		"""
 	) + helper_block + "\n_fetch_linked_issue_bodies_graphql $'1\\n2'\n"
 
@@ -3974,6 +3973,7 @@ def test_review_collect_pr_metadata_helper_fails_open_on_non_array_batch_input()
 	assert result.returncode == 0
 	assert result.stdout.strip() == "[]"
 	assert "unexpected gh_retry call" not in result.stderr
+	assert "unexpected gh_retry_to_file call" not in result.stderr
 
 
 def test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions() -> None:
@@ -10958,6 +10958,20 @@ def test_post_sync_test_repair_step_script_mode_and_resolver_hand_off() -> None:
 	assert active < body.index("reason=conflict_path")
 	assert 'bash "${resolver}" --test-repair "${gate_dir}/run1/result.json"' in body
 	assert "--phase integration" in body
+
+
+def test_review_collect_pr_metadata_does_not_shadow_shared_gh_retry() -> None:
+	# The helper sources gh_helpers.sh, whose gh_retry takes a full command.
+	# A local outfile-first gh_retry override would break any shared helper
+	# that calls gh_retry from this shell (CONSIST-001).
+	text = METADATA_HELPER.read_text(encoding="utf-8")
+
+	assert re.search(r"(?m)^\s*(function\s+)?gh_retry\s*\(\)", text) is None
+	assert re.search(r'(?<![\w])gh_retry\s+"\$\{', text) is None
+	commands = re.findall(r'gh_retry_to_file\s+"\$\{[^}]+\}"\s+(\S+)', text)
+	assert commands, "expected gh_retry_to_file call sites in the helper"
+	assert all(command == "gh" for command in commands), commands
+	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in text
 
 
 if __name__ == "__main__":

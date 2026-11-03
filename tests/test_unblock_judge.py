@@ -5320,3 +5320,122 @@ def test_fixup_delivered_body_cli(tmp_path: Path) -> None:
 		"--repo", "o/r", "--pipeline-login", BOT], capture_output=True, text=True, check=False, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
 	assert out.returncode == 0, out.stderr
 	assert json.loads(out.stdout)["target_branch"] == "stable"
+
+
+# --- pr_check_green hold (issue #8671) ---------------------------------------
+
+
+@pytest.mark.parametrize("check,ref", [
+	("CI", "8430@CI"),
+	("CI / tests (3)", "8430@CI%20%2F%20tests%20%283%29"),
+	("lint~fast", "8430@lint%7Efast"),
+])
+def test_pr_check_green_ref_round_trips(check: str, ref: str) -> None:
+	wait_for = {"kind": "pr_check_green", "pr": 8430, "check": check}
+	assert ledger.hold_ref(wait_for, 8433) == ("pr_check_green", ref)
+	assert ledger.wait_for_from_ref("pr_check_green", ref) == wait_for
+	marker = ledger.hold_marker(8433, "pr_check_green", ref)
+	match = ledger.HOLD_MARKER_RE.match(marker)
+	assert match and match.group("kind") == "pr_check_green" and match.group("ref") == ref
+	decision = ledger.decide(7, "blocked", FP, [], None, NOW)
+	verdict = ledger.validate({"verdict": "wait", "reason": "r", "wait_for": wait_for}, decision, "o/r")
+	assert (verdict["hold_kind"], verdict["hold_ref"]) == ("pr_check_green", ref)
+
+
+@pytest.mark.parametrize("wait_for", [
+	{"kind": "pr_check_green", "pr": 0, "check": "CI"},
+	{"kind": "pr_check_green", "pr": "5", "check": "CI"},
+	{"kind": "pr_check_green", "pr": 5},
+	{"kind": "pr_check_green", "pr": 5, "check": ""},
+	{"kind": "pr_check_green", "pr": 5, "check": "CI, lint"},
+	{"kind": "pr_check_green", "pr": 5, "check": "CI\nx"},
+	{"kind": "pr_check_green", "pr": 5, "check": "C`I"},
+	{"kind": "pr_check_green", "pr": 5, "check": "<b>"},
+	{"kind": "pr_check_green", "pr": 5, "check": "x" * 101},
+	{"kind": "pr_check_green", "pr": 5, "check": " " * 60},
+])
+def test_pr_check_green_refuses_bad_conditions(wait_for: dict) -> None:
+	with pytest.raises(ledger.UsageError):
+		ledger.hold_ref(wait_for, 7)
+
+
+def test_pr_check_green_marker_must_be_canonical() -> None:
+	with pytest.raises(ledger.UsageError):
+		ledger.hold_marker(7, "pr_check_green", "08430@CI")
+	with pytest.raises(ledger.UsageError):
+		ledger.hold_marker(7, "pr_check_green", "8430@CI%20%7e")
+	assert actions.hold_description("pr_check_green", "8430@CI%20pull") == "the `CI pull` check passing on pull request #8430's current head"
+
+
+def test_judge_marker_regex_accepts_pr_check_green() -> None:
+	text = JUDGE.read_text(encoding="utf-8")
+	assert "hold=(?<kind>pr_on_branch|item_closed|placeholder_retired|pr_check_green) ref=(?<ref>[A-Za-z0-9_./@%-]{1,120})" in text
+
+
+def _green_support(tmp_path: Path) -> tuple[Path, Path, Path]:
+	support, target = _triage_support(tmp_path)
+	(support / "scripts" / "check_triage_resolution.py").write_text(
+		"import json, os, sys\n"
+		"with open(os.environ['FAKE_TRIAGE_ARGS'], 'a', encoding='utf-8') as handle:\n"
+		"    handle.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+		"print(os.environ['FAKE_TRIAGE_JSON'])\n"
+		"sys.exit(int(os.environ.get('FAKE_TRIAGE_RC', '0')))\n",
+		encoding="utf-8",
+	)
+	return support, target, tmp_path / "triage_args.jsonl"
+
+
+GREEN_REF = "8430@CI%20pull"
+
+
+def _green_judge(tmp_path: Path, item: dict, gate: dict | str, rc: str = "0"):
+	support, target, args_file = _green_support(tmp_path)
+	result, state = _judge(
+		tmp_path, item, comments=[_hold_comment("pr_check_green", GREEN_REF)],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "i"},
+		SUPPORT_DIR=str(support), TARGET_DIR=str(target), FAKE_TRIAGE_ARGS=str(args_file),
+		FAKE_TRIAGE_JSON=gate if isinstance(gate, str) else json.dumps(gate), FAKE_TRIAGE_RC=rc,
+	)
+	calls = [json.loads(line) for line in args_file.read_text(encoding="utf-8").splitlines()] if args_file.exists() else []
+	return result, state, calls
+
+
+@pytest.mark.parametrize("gate,expected", [
+	({"issue": 7, "status": "unverified", "pr": 8430, "check_name": "CI pull", "pr_state": "open"}, "outcome=holding"),
+	({"issue": 7, "status": "unverified", "pr": 8430, "check_name": "CI pull", "pr_state": "closed"}, "outcome=expired reason=cannot_be_met"),
+	({"issue": 7, "status": "unverified", "pr": 8430, "check_name": "CI pull", "pr_state": "merged"}, "outcome=expired reason=cannot_be_met"),
+	({"issue": 7, "status": "unverified", "pr": 8431, "check_name": "CI pull", "pr_state": "open"}, "outcome=expired reason=cannot_be_met"),
+	({"issue": 7, "status": "unverified", "pr": 8430, "check_name": "CI", "pr_state": "open"}, "outcome=expired reason=cannot_be_met"),
+	({"issue": 7, "status": "unverified", "pr": 8430, "check_name": "CI pull"}, "outcome=skip reason=hold_check_unavailable"),
+	({"issue": 7, "status": "unverified", "reason": "identity_or_comments_unavailable"}, "outcome=skip reason=hold_check_unavailable"),
+])
+def test_pr_check_green_reuses_the_same_run_gate_verdict(tmp_path: Path, gate: dict, expected: str) -> None:
+	result, _, calls = _green_judge(tmp_path, TRIAGE_ISSUE, gate)
+	assert f"hold=pr_check_green ref={GREEN_REF} {expected}" in result.stdout, result.stdout
+	# The Q129 gate ran once (not dry-run); the hold check read its cached verdict.
+	assert len(calls) == 1 and "--dry-run" not in calls[0]
+
+
+@pytest.mark.parametrize("gate,rc,expected", [
+	({"issue": 7, "status": "resolved", "pr": 8430, "check_name": "CI pull", "pr_state": "open"}, "0", "outcome=met"),
+	({"issue": 7, "status": "not_triage", "reason": "not_trusted_check_triage"}, "0", "outcome=expired reason=cannot_be_met"),
+	({"issue": 7, "status": "disabled", "reason": "disabled"}, "0", "outcome=skip reason=hold_check_unavailable"),
+	("not json", "0", "outcome=skip reason=hold_check_unavailable"),
+	({"issue": 7, "status": "write_failed"}, "3", "outcome=skip reason=hold_check_unavailable"),
+])
+def test_pr_check_green_falls_back_to_a_dry_run_gate(tmp_path: Path, gate: dict | str, rc: str, expected: str) -> None:
+	# No ai:check-triage label: the Q129 gate did not run, so nothing is cached.
+	result, _, calls = _green_judge(tmp_path, ISSUE, gate, rc)
+	assert f"hold=pr_check_green ref={GREEN_REF} {expected}" in result.stdout, result.stdout
+	assert len(calls) == 1 and "--dry-run" in calls[0]
+	assert calls[0][calls[0].index("--issue-number") + 1] == "7"
+
+
+def test_pr_check_green_ignores_a_cached_verdict_for_another_item(tmp_path: Path) -> None:
+	runtime = tmp_path / "rt"
+	runtime.mkdir()
+	(runtime / "triage_resolution.json").write_text(json.dumps({"issue": 99, "status": "resolved", "pr": 8430, "check_name": "CI pull"}), encoding="utf-8")
+	gate = {"issue": 7, "status": "unverified", "pr": 8430, "check_name": "CI pull", "pr_state": "open"}
+	result, _, calls = _green_judge(tmp_path, ISSUE, gate)
+	assert f"hold=pr_check_green ref={GREEN_REF} outcome=holding" in result.stdout, result.stdout
+	assert len(calls) == 1 and "--dry-run" in calls[0]

@@ -148,3 +148,112 @@ def test_managed_child_copied_header_fixtures_are_present() -> None:
 def test_tracking_line_pattern_stays_in_sync_with_extract_tracking_issue() -> None:
 	text = RESOLVER.read_text(encoding="utf-8")
 	assert text.count(TRACKING_LINE_PATTERN) == 2
+
+
+# Issue #8671 / #8673: a label-less issue that only mentions
+# check-failure-triage markers in prose is skipped (ordinary issue) while
+# CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED is on (the default); a label-less body
+# whose first line is the canonical header is still refused as label_missing.
+PROSE_MARKER_PATTERN = re.compile(r"<!--\s*check-failure-triage:")
+PROSE_MARKER_NON_PR_PATTERN = re.compile(r"<!--\s*check-failure-triage:(?!pr=)")
+FP_HEADER_PATTERN = re.compile(r"<!-- check-failure-triage:fp=[0-9a-f]{64} -->")
+PROSE_MARKER_FIXTURES = {
+	"prose_marker_mid_body_without_label_skips": (0, None),
+	"prose_marker_header_first_line_without_label_refuses": (3, "label_missing"),
+	"prose_marker_skip_flag_false_refuses": (3, "label_missing"),
+	"prose_marker_skip_flag_unrecognised_refuses": (3, "label_missing"),
+	"prose_marker_body_with_label_refuses_marker_invalid": (3, "marker_invalid"),
+	"prose_marker_managed_child_without_tracking_line_refuses": (3, "label_missing"),
+	"prose_marker_header_behind_zero_width_joiner_refuses": (3, "label_missing"),
+	"prose_marker_header_behind_interleaved_invisibles_refuses": (3, "label_missing"),
+}
+# Fixtures whose canonical fp= header sits behind leading invisible characters
+# (and whitespace); the resolver must strip them and still refuse.
+INVISIBLE_PREFIX_STEMS = {
+	"prose_marker_header_behind_zero_width_joiner_refuses",
+	"prose_marker_header_behind_interleaved_invisibles_refuses",
+}
+INVISIBLE_PREFIX_PATTERN = re.compile(r"^[\s\ufeff\u200b-\u200f\u202a-\u202e\u2060-\u2064\u180e\u00ad\u034f]+")
+
+
+def test_invisible_prefix_pattern_stays_in_sync_with_resolver() -> None:
+	# The shape test above copies the resolver's strip class; fail if they drift.
+	text = RESOLVER.read_text(encoding="utf-8")
+	assert text.count('r"' + INVISIBLE_PREFIX_PATTERN.pattern + '"') == 1
+
+
+def test_prose_marker_skip_default_is_on() -> None:
+	text = RESOLVER.read_text(encoding="utf-8")
+	assert '"${CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED:-true}"' in text
+	assert '"${CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED:-false}"' not in text
+
+
+@pytest.mark.parametrize("stem", sorted(PROSE_MARKER_FIXTURES))
+def test_prose_marker_skip_fixtures_shape_and_run(stem: str) -> None:
+	path = FIXTURE_DIR / f"{stem}.json"
+	data = json.loads(path.read_text(encoding="utf-8"))
+	expected_rc, expected_reason = PROSE_MARKER_FIXTURES[stem]
+	assert data["expected_exit_code"] == expected_rc
+	assert data.get("expected_error_reason") == expected_reason
+	assert data["expected_stdout"] == ""
+	issue = data["issues"]["101"]
+	body = issue["body"]
+	labels = {label["name"] for label in issue["labels"]}
+	first_line = body.split("\n", 1)[0]
+	env = data.get("env") or {}
+	if stem == "prose_marker_header_first_line_without_label_refuses":
+		assert "ai:check-triage" not in labels
+		assert FP_HEADER_PATTERN.fullmatch(first_line)
+		assert env.get("CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED") is None
+	elif stem in INVISIBLE_PREFIX_STEMS:
+		# The raw first line does not start with the marker, but after the
+		# leading invisibles are dropped the canonical header is first.
+		assert "ai:check-triage" not in labels
+		assert not labels
+		assert not PROSE_MARKER_PATTERN.match(body)
+		assert INVISIBLE_PREFIX_PATTERN.match(body)
+		stripped_first = INVISIBLE_PREFIX_PATTERN.sub("", body).split("\n", 1)[0]
+		assert FP_HEADER_PATTERN.fullmatch(stripped_first)
+		assert env.get("CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED") is None
+	else:
+		assert not PROSE_MARKER_PATTERN.match(first_line)
+		assert PROSE_MARKER_NON_PR_PATTERN.search(body)
+		if stem == "prose_marker_body_with_label_refuses_marker_invalid":
+			assert "ai:check-triage" in labels
+			assert "CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED" not in env
+		else:
+			assert "ai:check-triage" not in labels
+	if stem == "prose_marker_mid_body_without_label_skips":
+		assert "CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED" not in env
+	if stem == "prose_marker_managed_child_without_tracking_line_refuses":
+		# A managed child with no tracking line stays fail closed even when its
+		# markers sit only in prose.
+		assert "ai:orchestrator-managed" in labels
+		assert "Tracking issue" not in body
+		assert "CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED" not in env
+	if stem == "prose_marker_skip_flag_false_refuses":
+		assert env["CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED"] == "false"
+	if stem == "prose_marker_skip_flag_unrecognised_refuses":
+		assert env["CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED"] == "maybe"
+		assert "CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED has an unrecognised value" in data["expected_warning"]
+	result = _run_case(path)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "self-test passed" in result.stdout
+
+
+def test_prose_marker_skip_outer_value_does_not_leak() -> None:
+	# The harness unsets the flag for a fixture without the key, so an outer
+	# "false" must not turn the default-on skip off.
+	env = dict(os.environ)
+	env["CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED"] = "false"
+	result = subprocess.run(
+		["bash", str(RESOLVER), "--self-test-case", str(FIXTURE_DIR / "prose_marker_mid_body_without_label_skips.json")],
+		cwd=REPO_ROOT,
+		env=env,
+		capture_output=True,
+		text=True,
+		timeout=120,
+		check=False,
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "self-test passed" in result.stdout

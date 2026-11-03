@@ -46,7 +46,14 @@
 #   CHECK_TRIAGE_SELF_CHECK_NAME_FRAGMENT    self-loop guard fragment
 #                                            (default "Check Failure Triage")
 #   CHECK_TRIAGE_TRUSTED_SUPPORT_DIR          trusted prompt root (required for diagnosis)
-#   CHECK_TRIAGE_STAGE                        all (default), collect, or diagnose
+#   CHECK_TRIAGE_STAGE                        all (default), collect, diagnose, route,
+#                                             or supersede (close the stale issue the
+#                                             collect stage recorded, issue #8671)
+#   CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED      "false" keeps a blocked triage issue from an
+#                                             older PR head as a duplicate instead of
+#                                             superseding it (default true; issue #8671)
+#   CHECK_TRIAGE_SUPERSEDE_NEW_ISSUE_URL      supersede stage only: URL of the triage issue
+#                                             the workflow just created (default empty)
 #   CHECK_TRIAGE_PREPARE_ONLY                 true: write issue body without posting
 #   CHECK_TRIAGE_HISTORICAL_RUN_ID            historical mode (#7093): failed CI run id of a
 #   CHECK_TRIAGE_HISTORICAL_JOB_ID            closed PR plus its failed job id; set both or
@@ -122,6 +129,147 @@ value = re.sub(r"Re-issued from\s*#", "Re-issued from (untrusted) #", value, fla
 value = re.sub(r"review-blocked-reissue", "review-blocked (untrusted) reissue", value, flags=re.IGNORECASE)
 print(value[:200] or "(unnamed check)")
 ' "$1"
+}
+
+# Supersede check for the dedup listing (issue #8671). Reads the projected
+# open-triage listing on stdin and prints "candidate <old> <old_head>" when
+# exactly one open issue carries the fingerprint, it is ai:blocked, its author
+# passes the triage trust rule (check_triage_resolution._author_trusted), its
+# first line is the canonical fingerprint header, its single unfenced Head SHA
+# line names another commit, and the new failure is on the PR's current head.
+# Otherwise prints "skip <reason> <old>". Never echoes issue text.
+triage_supersede_candidate()
+{
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+import json
+import re
+import sys
+
+fingerprint, new_head, current_head = sys.argv[1], sys.argv[2].lower(), sys.argv[3].lower()
+head_sha_re = re.compile(r"^- \*\*Head SHA:\*\* `([0-9a-f]{40})`\s*$")
+
+
+def emit(*parts):
+	print(" ".join(str(part) for part in parts))
+	sys.exit(0)
+
+
+try:
+	issues = json.load(sys.stdin)
+except ValueError:
+	emit("skip", "header_mismatch", 0)
+if not isinstance(issues, list):
+	emit("skip", "header_mismatch", 0)
+needle = "fp=" + fingerprint
+matches = [item for item in issues if isinstance(item, dict) and isinstance(item.get("body"), str) and needle in item["body"]]
+old = matches[0].get("number") if matches else 0
+if type(old) is not int or old < 1:
+	emit("skip", "header_mismatch", 0)
+if len(matches) != 1:
+	emit("skip", "multiple_open", old)
+issue = matches[0]
+labels = issue.get("labels") if isinstance(issue.get("labels"), list) else []
+if "ai:blocked" not in labels:
+	emit("skip", "not_blocked", old)
+user_type = issue.get("user_type")
+trusted = (user_type == "User" and issue.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR")) or (
+	user_type == "Bot" and issue.get("user_login") == "github-actions[bot]")
+if not trusted:
+	emit("skip", "untrusted_author", old)
+body = issue["body"]
+if body.split("\n", 1)[0].rstrip("\r") != "<!-- check-failure-triage:fp=" + fingerprint + " -->":
+	emit("skip", "header_mismatch", old)
+fence = None
+kept = []
+for line in body.split("\n"):
+	line = line.rstrip("\r")
+	match = re.match(r" {0,3}(`{3,}|~{3,})", line)
+	if fence is None:
+		if match:
+			fence = match.group(1)
+			continue
+		kept.append(line)
+	elif match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) and not line[match.end():].strip():
+		fence = None
+heads = [found.group(1) for found in (head_sha_re.match(line) for line in kept) if found]
+if len(heads) != 1 or sum(1 for line in kept if line.lstrip().startswith("- **Head SHA:**")) != 1:
+	emit("skip", "old_head_unreadable", old)
+if not re.fullmatch(r"[0-9a-f]{40}", new_head) or heads[0] == new_head:
+	emit("skip", "same_head", old)
+if new_head != current_head:
+	emit("skip", "not_current_head", old)
+emit("candidate", old, heads[0])
+' "$1" "$2" "$3"
+}
+
+# Supersede eligibility of the recorded stale issue (issue #8671). Returns 0
+# only when the authenticated account (the token that creates the new issue)
+# opened the old issue and it is still open and ai:blocked; otherwise logs the
+# skip reason and returns 1. One /user read and one issue read, made only for
+# a recorded candidate; anything unreadable fails closed. $1 is an optional
+# log suffix (for example "new=<n>").
+triage_supersede_old_issue_eligible()
+{
+	local supersede_log_suffix="${1-}" supersede_login supersede_live_state
+	local supersede_old_issue="${SUPERSEDE_OLD_ISSUE:-}"
+	supersede_login="$(gh api user 2>/dev/null | jq -r '.login // ""' 2>/dev/null || true)"
+	if ! [[ "${supersede_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$ ]]; then
+		log "op=supersede outcome=skip reason=identity_unavailable old=${supersede_old_issue}${supersede_log_suffix:+ ${supersede_log_suffix}}"
+		return 1
+	fi
+	supersede_live_state="$(gh api "repos/${REPO}/issues/${supersede_old_issue}" 2>/dev/null |
+		jq -r --arg login "${supersede_login}" 'if (.state | type) != "string" then "unreadable" elif (.user.login // "") != $login then "foreign_author" elif (.state == "open") and ([.labels[]?.name] | index("ai:blocked")) then "eligible" else "stale" end' 2>/dev/null || echo unreadable)"
+	if [ "${supersede_live_state}" = "foreign_author" ]; then
+		log "op=supersede outcome=skip reason=not_own_issue old=${supersede_old_issue}${supersede_log_suffix:+ ${supersede_log_suffix}}"
+		return 1
+	fi
+	if [ "${supersede_live_state}" != "eligible" ]; then
+		[ "${supersede_live_state}" = "stale" ] || supersede_live_state="unreadable"
+		log "op=supersede outcome=skip reason=old_issue_${supersede_live_state} old=${supersede_old_issue}${supersede_log_suffix:+ ${supersede_log_suffix}}"
+		return 1
+	fi
+	return 0
+}
+
+# Close the stale triage issue the dedup recorded as a supersede candidate
+# (issue #8671). Runs only after the new issue exists, so a failed close never
+# loses the new failure; any write failure warns and returns 0. Writes are not
+# retried, so a comment is never posted twice.
+triage_supersede_stale_issue()
+{
+	local supersede_new_issue="${1-}"
+	local supersede_old_issue="${SUPERSEDE_OLD_ISSUE:-}"
+	local supersede_old_head="${SUPERSEDE_OLD_HEAD:-}"
+	local supersede_new_head="${SUPERSEDE_NEW_HEAD:-}"
+	local supersede_comment
+	[ -n "${supersede_old_issue}" ] || return 0
+	if [ "${TRIAGE_SUPERSEDE_ENABLED}" != "true" ]; then
+		log "op=supersede outcome=skip reason=disabled old=${supersede_old_issue} new=${supersede_new_issue}"
+		return 0
+	fi
+	if ! [[ "${supersede_old_issue}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${supersede_new_issue}" =~ ^[1-9][0-9]*$ ]] ||
+		! [[ "${supersede_old_head}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${supersede_new_head}" =~ ^[0-9a-f]{40}$ ]] ||
+		[ "${supersede_old_head}" = "${supersede_new_head}" ] || [ "${supersede_old_issue}" = "${supersede_new_issue}" ]; then
+		log "op=supersede outcome=skip reason=metadata_invalid"
+		return 0
+	fi
+	supersede_comment="$(printf 'Superseded: check `%s` failed again on the PR'"'"'s current head `%s`; this issue'"'"'s failure was on `%s`. New triage: #%s\n\n<!-- %ssuperseded-by=%s -->' \
+		"${CHECK_NAME_DISPLAY:-(unnamed check)}" "${supersede_new_head}" "${supersede_old_head}" "${supersede_new_issue}" "${MARKER_PREFIX}" "${supersede_new_issue}")"
+	# Re-check right before writing: diagnose and route ran since the collect
+	# stage, and the old issue may have been resumed or closed meanwhile.
+	triage_supersede_old_issue_eligible "new=${supersede_new_issue}" || return 0
+	# Close before labelling: a failed close must not leave the terminal
+	# ai:closed label on an issue that is still open.
+	if ! gh api --method POST "repos/${REPO}/issues/${supersede_old_issue}/comments" -f body="${supersede_comment}" >/dev/null 2>&1 ||
+		! gh api --method PATCH "repos/${REPO}/issues/${supersede_old_issue}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
+		log "op=supersede outcome=warn reason=supersede_close_failed old=${supersede_old_issue} new=${supersede_new_issue}"
+	elif gh api --method POST "repos/${REPO}/issues/${supersede_old_issue}/labels" -f "labels[]=ai:closed" >/dev/null 2>&1; then
+		log "op=supersede outcome=closed old=${supersede_old_issue} new=${supersede_new_issue}"
+	else
+		# The old issue is closed; only its terminal label is missing.
+		log "op=supersede outcome=warn reason=supersede_label_failed old=${supersede_old_issue} new=${supersede_new_issue}"
+	fi
+	return 0
 }
 
 # Strict branch-name check for the trusted "Target branch:" routing line.
@@ -291,6 +439,21 @@ RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${GITHUB_
 TRUSTED_SUPPORT_DIR="${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:-}"
 TRIAGE_STAGE="${CHECK_TRIAGE_STAGE:-all}"
 TRIAGE_METADATA_FILE="${RUNTIME_DIR}/triage_metadata.json"
+# Supersede a blocked triage issue from an older PR head (issue #8671).
+# Parsed like CI_ACTION_RESOLUTION_RERUN_ENABLED: unset, empty or any-case
+# "true" is on, "false" is off, anything else is off with a warning.
+TRIAGE_SUPERSEDE_ENABLED=true
+case "$(printf '%s' "${CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+	''|true) ;;
+	false) TRIAGE_SUPERSEDE_ENABLED=false ;;
+	*)
+		TRIAGE_SUPERSEDE_ENABLED=false
+		echo "::warning::CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED is not true or false; stale triage issues are not superseded"
+		;;
+esac
+SUPERSEDE_OLD_ISSUE=""
+SUPERSEDE_OLD_HEAD=""
+SUPERSEDE_NEW_HEAD=""
 PR_CHECK_RUNS_CONTEXT_FILE="${RUNTIME_DIR}/pr_check_runs_context.txt"
 # Historical mode (#7093): triage one already-finished CI run of a PR that is
 # no longer open. Only the pr_not_open skip (closed PRs), the dedup scope
@@ -331,7 +494,7 @@ if [ -z "${TRUSTED_SUPPORT_DIR}" ] ||
 	exit 1
 fi
 case "${TRIAGE_STAGE}" in
-	all|collect|diagnose|route) ;;
+	all|collect|diagnose|route|supersede|supersede-check) ;;
 	*) log "error invalid_stage"; exit 1 ;;
 esac
 
@@ -474,6 +637,59 @@ triage_upstream_send()
 	fi
 	return 0
 }
+
+if [ "${TRIAGE_STAGE}" = "supersede-check" ]; then
+	# Runs in the workflow's post step before it creates the new issue, with
+	# that step's Issues-scoped token (issue #8671). Exit 0 lets the post step
+	# create the issue; exit 10 means the recorded stale issue cannot be
+	# superseded by this account, so today's duplicate skip stands.
+	if [ ! -s "${TRIAGE_METADATA_FILE}" ]; then
+		log "op=supersede outcome=skip reason=metadata_missing"
+		exit 0
+	fi
+	SUPERSEDE_OLD_ISSUE="$(jq -r '.supersede_issue // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
+	[ -n "${SUPERSEDE_OLD_ISSUE}" ] || exit 0
+	if ! [[ "${SUPERSEDE_OLD_ISSUE}" =~ ^[1-9][0-9]*$ ]]; then
+		log "op=supersede outcome=skip reason=metadata_invalid"
+		exit 10
+	fi
+	supersede_check_fp="$(jq -r '.fingerprint // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
+	supersede_check_pr="$(jq -r '.pr_number // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
+	if [ "${TRIAGE_SUPERSEDE_ENABLED}" != "true" ]; then
+		# Switched off after collect: the old issue stays open, so filing a
+		# second one would leave two issues with the same fingerprint.
+		log "op=supersede outcome=skip reason=disabled old=${SUPERSEDE_OLD_ISSUE} stage=pre_create"
+	elif triage_supersede_old_issue_eligible "stage=pre_create"; then
+		exit 0
+	fi
+	log "skip reason=duplicate_open_issue issue=${SUPERSEDE_OLD_ISSUE} fp=${supersede_check_fp//[^0-9a-f]/} pr=${supersede_check_pr//[^0-9]/}"
+	exit 10
+fi
+
+if [ "${TRIAGE_STAGE}" = "supersede" ]; then
+	# Runs in the workflow's post step, right after it created the new issue,
+	# with that step's Issues-scoped token. Reads only the collect stage's
+	# metadata; never fatal.
+	if [ ! -s "${TRIAGE_METADATA_FILE}" ]; then
+		log "op=supersede outcome=skip reason=metadata_missing"
+		exit 0
+	fi
+	SUPERSEDE_OLD_ISSUE="$(jq -r '.supersede_issue // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
+	[ -n "${SUPERSEDE_OLD_ISSUE}" ] || exit 0
+	SUPERSEDE_OLD_HEAD="$(jq -r '.supersede_old_head_sha // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
+	SUPERSEDE_NEW_HEAD="$(jq -r '.supersede_new_head_sha // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
+	CHECK_NAME="$(jq -r '.check_name // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
+	CHECK_NAME_DISPLAY="$(sanitize_check_name_display "${CHECK_NAME}" 2>/dev/null || echo '(unnamed check)')"
+	supersede_issue_prefix="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/issues/"
+	supersede_new_url="${CHECK_TRIAGE_SUPERSEDE_NEW_ISSUE_URL:-}"
+	supersede_new_number="${supersede_new_url#"${supersede_issue_prefix}"}"
+	if [ "${supersede_new_number}" = "${supersede_new_url}" ] || ! [[ "${supersede_new_number}" =~ ^[1-9][0-9]*$ ]]; then
+		log "op=supersede outcome=skip reason=new_issue_invalid old=${SUPERSEDE_OLD_ISSUE//[^0-9]/}"
+		exit 0
+	fi
+	triage_supersede_stale_issue "${supersede_new_number}" || true
+	exit 0
+fi
 
 if [ "${TRIAGE_STAGE}" = "route" ]; then
 	# Runs between diagnose and post with GH_PAT and the job's OIDC grant; it
@@ -852,7 +1068,7 @@ TRIAGE_DEDUP_PAGES="$(gh_retry gh api --paginate --method GET "repos/${REPO}/iss
 	-f state="${TRIAGE_DEDUP_STATE}" \
 	-f labels="${TRIAGE_LABEL}" \
 	-F per_page=100 \
-	--jq 'if type == "array" then [.[] | select(.pull_request | not) | {number, body: (.body // "")}] else error("not_an_array") end' 2>/dev/null)" || triage_dedup_rc=$?
+	--jq 'if type == "array" then [.[] | select(.pull_request | not) | {number, body: (.body // ""), labels: [.labels[]?.name], user_login: (.user.login // ""), user_type: (.user.type // ""), author_association: (.author_association // "")}] else error("not_an_array") end' 2>/dev/null)" || triage_dedup_rc=$?
 if [ "${triage_dedup_rc}" -ne 0 ]; then
 	triage_dedup_list_ok=false
 elif [ -z "${TRIAGE_DEDUP_PAGES//[[:space:]]/}" ]; then
@@ -868,6 +1084,30 @@ if [ "${triage_dedup_list_ok}" != "true" ]; then
 	exit 1
 fi
 EXISTING="$(printf '%s' "${OPEN_TRIAGE}" | jq -r --arg fp "fp=${FP}" '[.[] | select((.body // "") | contains($fp)) | .number] | first // empty' 2>/dev/null || echo '')"
+# Issue #8671: a blocked issue whose failure was on an older PR head no longer
+# hides a new failure on the current head. Normal mode only; the new issue is
+# filed first and the old one is closed afterwards (supersede stage, or the
+# stage-all call after the issue create below).
+if [ -n "${EXISTING}" ] && [ "${HISTORICAL_MODE}" != "true" ]; then
+	if [ "${TRIAGE_SUPERSEDE_ENABLED}" != "true" ]; then
+		log "op=supersede outcome=skip reason=disabled old=${EXISTING}"
+	else
+		supersede_verdict="$(printf '%s' "${OPEN_TRIAGE}" | triage_supersede_candidate "${FP}" "${HEAD_SHA}" "${PR_HEAD_SHA_CURRENT}" 2>/dev/null || echo 'skip header_mismatch 0')"
+		supersede_kind="" supersede_value="" supersede_old_head=""
+		read -r supersede_kind supersede_value supersede_old_head <<< "${supersede_verdict}" || true
+		if [ "${supersede_kind}" = "candidate" ] && [ "${supersede_value}" = "${EXISTING}" ] &&
+			[[ "${supersede_old_head}" =~ ^[0-9a-f]{40}$ ]]; then
+			SUPERSEDE_OLD_ISSUE="${supersede_value}"
+			SUPERSEDE_OLD_HEAD="${supersede_old_head}"
+			SUPERSEDE_NEW_HEAD="${HEAD_SHA,,}"
+			log "op=supersede outcome=candidate old=${SUPERSEDE_OLD_ISSUE} fp=${FP} pr=${PR_NUMBER}"
+			EXISTING=""
+		else
+			[[ "${supersede_value}" =~ ^[a-z_]{1,40}$ ]] || supersede_value="header_mismatch"
+			log "op=supersede outcome=skip reason=${supersede_value} old=${EXISTING}"
+		fi
+	fi
+fi
 if [ -n "${EXISTING}" ]; then
 	log "skip reason=duplicate_open_issue issue=${EXISTING} fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
 	# This exit also skips PR-head routing; report an unverified route here too
@@ -1503,7 +1743,10 @@ if [ "${TRIAGE_STAGE}" = "collect" ]; then
 		--arg routing_target_branch "${ROUTING_TARGET_BRANCH}" \
 		--arg routing_ref "${ROUTING_REF}" \
 		--arg integration_branch "${INTEGRATION_BRANCH}" \
-		'{pr_number: $pr_number, check_name: $check_name, fingerprint: $fingerprint, generation: $generation, root: $root, head_ref: $head_ref, title: $title, url: $url, routing_target_branch: $routing_target_branch, routing_ref: $routing_ref, integration_branch: $integration_branch}' > "${TRIAGE_METADATA_FILE}"
+		--arg supersede_issue "${SUPERSEDE_OLD_ISSUE}" \
+		--arg supersede_old_head_sha "${SUPERSEDE_OLD_HEAD}" \
+		--arg supersede_new_head_sha "${SUPERSEDE_NEW_HEAD}" \
+		'{pr_number: $pr_number, check_name: $check_name, fingerprint: $fingerprint, generation: $generation, root: $root, head_ref: $head_ref, title: $title, url: $url, routing_target_branch: $routing_target_branch, routing_ref: $routing_ref, integration_branch: $integration_branch, supersede_issue: $supersede_issue, supersede_old_head_sha: $supersede_old_head_sha, supersede_new_head_sha: $supersede_new_head_sha}' > "${TRIAGE_METADATA_FILE}"
 	if [ "${HISTORICAL_MODE}" = "true" ]; then
 		jq --argjson hist "${HIST_META_JSON}" '. + $hist' "${TRIAGE_METADATA_FILE}" > "${TRIAGE_METADATA_FILE}.tmp"
 		mv "${TRIAGE_METADATA_FILE}.tmp" "${TRIAGE_METADATA_FILE}"
@@ -1958,6 +2201,13 @@ if triage_upstream_send; then
 	exit 0
 fi
 
+# Issue #8671: only supersede (and so only file past) a stale issue this
+# account opened and that is still open and ai:blocked; otherwise keep the
+# duplicate skip. The same check runs again right before the close.
+if [ -n "${SUPERSEDE_OLD_ISSUE}" ] && ! triage_supersede_old_issue_eligible "stage=pre_create"; then
+	log "skip reason=duplicate_open_issue issue=${SUPERSEDE_OLD_ISSUE} fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+	exit 0
+fi
 ISSUE_URL_NEW="$(gh_retry gh issue create --repo "${REPO}" --title "${TITLE}" --body-file "${BODY_FILE}" --label "${TRIAGE_LABEL}" 2>/dev/null || echo '')"
 if [ -z "${ISSUE_URL_NEW}" ]; then
 	log "error issue_create_failed pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY} fp=${FP}"
@@ -1966,4 +2216,13 @@ if [ -z "${ISSUE_URL_NEW}" ]; then
 fi
 
 log "created issue=${ISSUE_URL_NEW} fp=${FP} gen=${GEN} root=${ROOT} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+# Issue #8671: the new issue exists, so the stale one it supersedes can close.
+if [ -n "${SUPERSEDE_OLD_ISSUE}" ]; then
+	supersede_created_number="${ISSUE_URL_NEW##*/issues/}"
+	if [[ "${supersede_created_number}" =~ ^[1-9][0-9]*$ ]]; then
+		triage_supersede_stale_issue "${supersede_created_number}" || true
+	else
+		log "op=supersede outcome=skip reason=new_issue_invalid old=${SUPERSEDE_OLD_ISSUE}"
+	fi
+fi
 tg_send_msg "Check-failure auto-triage opened ${ISSUE_URL_NEW} for ${REPO} PR #${PR_NUMBER} (check '${CHECK_NAME_DISPLAY}', generation ${GEN}/${MAX_DEPTH}). The pipeline will pick it up."$'\n'"PR: ${PR_URL_DISPLAY}" "DEBUG" >/dev/null 2>&1 || true

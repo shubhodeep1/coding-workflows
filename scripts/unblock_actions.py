@@ -149,6 +149,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from security_dependency import security_dependency_number
@@ -1022,6 +1023,10 @@ def hold_description(kind: str, ref: str) -> str:
 		return f"#{ref} closed"
 	if kind == "placeholder_retired":
 		return f"operator step `{ref}` done"
+	if kind == "pr_check_green":
+		pr, _, check = ref.partition("@")
+		check_name = unquote(check).replace("`", "'")
+		return f"the `{check_name}` check passing on pull request #{pr}'s current head"
 	raise UsageError(f"unknown hold kind {kind!r}")
 
 

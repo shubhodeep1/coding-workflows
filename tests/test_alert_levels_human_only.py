@@ -333,6 +333,51 @@ def test_conflict_sweep_reads_marker_from_existing_graphql_batch():
 	assert "STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}" in workflow
 
 
+def test_conflict_sweep_skips_claude_capacity_wait_prs():
+	"""2026-11-02: five conflicted PRs labelled ai:claude-capacity-wait got a
+	deferred review dispatch every tick, each counted as a resolution attempt,
+	so the sweep paged "resolve by hand" although no resolver ever ran. The
+	capacity-resume pass owns such a PR: the sweep neither dispatches nor counts."""
+	_require_jq()
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do")
+	end = script.index('echo "Standalone conflict sweep complete.', start)
+	sweep_loop = script[start:end]
+	helpers = (
+		_extract_bash_function(script, "_linked_pr_is_merge_queued()\n{")
+		+ _extract_bash_function(script, "_linked_pr_is_capacity_waiting()\n{")
+	)
+	prs = [
+		{"number": 7, "headRefName": "ai/issue-7", "headRefOid": HEAD_A, "baseRefName": "main", "isDraft": False},
+		{"number": 8, "headRefName": "ai/issue-8", "headRefOid": HEAD_B, "baseRefName": "main", "isDraft": False},
+	]
+	pr_json = {
+		"7": {"state": "open", "mergeable_state": "dirty", "head": {"ref": "ai/issue-7", "sha": HEAD_A}, "labels": [{"name": "ai:claude-capacity-wait"}]},
+		"8": {"state": "open", "mergeable_state": "dirty", "head": {"ref": "ai/issue-8", "sha": HEAD_B}, "labels": [{"name": "ai:done"}]},
+	}
+	body = (
+		"declare -A _STANDALONE_CLEAN_PRS=()\n"
+		f"STANDALONE_PRS={json.dumps(json.dumps(prs))}\n"
+		"STANDALONE_COUNT=2\n"
+		"CONFLICT_SWEEP_FIXED=0\n"
+		f"PR7={json.dumps(json.dumps(pr_json['7']))}\n"
+		f"PR8={json.dumps(json.dumps(pr_json['8']))}\n"
+		'_safe_gh_jq() { case "$1" in */pulls/7) printf \'%s\' "${PR7}" ;; */pulls/8) printf \'%s\' "${PR8}" ;; esac; }\n'
+		# update-branch on a dirty PR answers 422.
+		'gh() { printf \'%s\\n\' "$*" >> "${GH_LOG}"; return 1; }\n'
+		'_dispatch_review_for_conflicts() { echo "DISPATCH pr=$1"; return 0; }\n'
+		'_standalone_conflict_count_attempt() { echo "COUNT pr=$1 head=$2"; }\n'
+		+ helpers
+		+ sweep_loop
+	)
+	sends, calls, out = _run_harness(body)
+	assert "STANDALONE_CONFLICT_STUCK pr=7 outcome=skip reason=claude_capacity_wait" in out
+	assert "DISPATCH pr=7" not in out and "COUNT pr=7" not in out
+	assert not any("pulls/7/update-branch" in call for call in calls)
+	assert "DISPATCH pr=8" in out and f"COUNT pr=8 head={HEAD_B}" in out
+	assert [message for _, message in sends if "#7" in message] == []
+
+
 def _sweep_alert_level_harness(env_lines: str) -> str:
 	"""Apply the standalone sweep alert level, probe the real tg_helpers
 	filter for a WARNING, restore, and print what ALERT_MSG_LEVEL is left."""

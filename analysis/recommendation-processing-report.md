@@ -1769,3 +1769,41 @@ Source commit: `00b33ac5b49ac9640d4e596dd773371b0dccc10d`
 - DEAD-001: rejected — naming immutability (precedent). SHELL-001: rejected — style-only change in the hot poller file (precedent).
 - MERGE-001: rejected — tagged NEEDS_VERIFICATION and not verified. MERGE-002, REUSE-001, REUSE-002: rejected — tagged RISKY_SKIP.
 - DEAD-API: no findings.
+
+### `analysis/workflow-optimization-2026-09-30.md`
+Source doc: `analysis/workflow-optimization-2026-09-30.md`
+Processed: 2026-11-03
+Source commit: `fcb44ee4855705d0d63231dd1c6a66ba51b293e4`
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| Speed 1 / Reliability 3 / GH API audit row 1 (pending check identities and wait exit reason) | applied | Each poll in `scripts/collect_pr_check_runs_context.py` emits `CHECK_RUNS_WAIT_PENDING`, and the wait ends with `CHECK_RUNS_WAIT_EXIT` (`status=ready\|timeout\|api_error`). Pinned by `tests/test_collect_pr_check_runs_pending_identity.py`; changelog `changelog.d/wfopt-2026-09-30-check-run-pending-identity.md` (Refs #8724). |
+| Speed 2, logging half (disk headroom before cleanup) | applied | The `codex-agent` job in `.github/workflows/review_autofix.yml` runs a `Show disk usage (pre free-disk-space)` step before `Free disk space`; the pre and post steps both log `df -B1 --output=avail,size /`. Pinned by `tests/test_review_autofix_disk_headroom_contract.py`; changelog `changelog.d/8725-review-disk-headroom-logging.md`. |
+| AI Memory Health (push retry-reason telemetry) | applied | `persist_memory_operation` in `scripts/ai_memory_lib.py` records bounded `push_retry_reasons` (`_classify_memory_push_retry_reason`, `_MEMORY_PUSH_RETRY_REASONS_MAX`), and `scripts/ai_memory.py` forwards them into its telemetry. Pinned by `tests/test_ai_memory_push_retry_reasons.py`; changelog `changelog.d/8726-memory-push-retry-reasons.md`. |
+| DUP-002 (shared reviewer context sections) | applied | `emit_reviewer_common_context_sections()` in `scripts/review_run_reviewers.sh` is called by both the full and the scoped reviewer prompt builders. Pinned by `tests/test_review_reviewer_common_context_sections.py`; changelog `changelog.d/8738-reviewer-common-context-sections.md`. |
+| CONSIST-001 (`gh_retry` override) | applied | The local `gh_retry()` wrapper is gone from `scripts/review_collect_pr_metadata.sh`; its callers use `gh_retry_to_file <file> gh ...` directly. No changelog fragment exists, and the PR number is not recoverable from this branch's squashed history. |
+| Cost 1 / Reliability 1 (collector parent/child dedup) | already-implemented | `_strip_structured_cost_telemetry_key_timestamp` and `_dedupe_structured_cost_telemetry_full_logs` in `scripts/collect_workflow_logs.py`. |
+| SEC-001 (triage checkout credentials) | already-implemented | All four `actions/checkout` steps in `.github/workflows/check_failure_triage.yml` set `persist-credentials: false`. |
+| SEC-002 (unredacted retry diagnostics) | already-implemented | `scripts/gh_helpers.sh` logs through `_gh_cmd_log_summary` plus the escaped `_gh_final_stderr_excerpt`. |
+| BUG-001 (merge without head pin) | already-implemented | Every executable `gh pr merge` in `scripts/orchestrate_poll_process.sh` passes `--match-head-commit`, one of them through `_rb_mwf_match_arg`. |
+| BUG-002 (triage PR metadata fallback) | already-implemented | `scripts/check_failure_triage.sh` requires `state=open` and an exact head-repository match before creating a triage issue. |
+| API-003 (HTTP 401 retries) | already-implemented | HTTP 401 / `Bad credentials` is classified as permanent in `_is_gh_permanent_failure` (`scripts/gh_helpers.sh`). |
+| API-004 (non-idempotent create retries) | already-implemented | `gh_retry` makes a single attempt for a non-idempotent create. |
+| EXPR-001 (implement.yml staging body size) | already-implemented | The `Stage workflow support files` step in `.github/workflows/implement.yml` passes values through `STAGE_*` `env:` variables. |
+| Speed 4 / Cost 5 (pre-submission parity) | already-implemented | The pre-push affected-test gate exists (agents.md, "Pre-push affected-test gate"). |
+| GH API request-count telemetry | already-implemented | `GH_API_RETRY` lines in `scripts/gh_helpers.sh`. |
+| Reliability 2 (inventory entry for `scripts/guard_differential.py`) | rejected | Obsolete: the file does not exist on main; the failure was branch-local. |
+| Speed 1 overlap of polling with cleanup; Speed 2 conditional cleanup skip | rejected | Need the new measurements first; risk to the merge gate and to disk. |
+| Speed 3 / Cost 3 (reviewer pass or reasoning changes, per-slot profiling) | rejected | High quality risk and no defined spec. |
+| Cost 2 (prompt-prefix fingerprint and trimming) / Cost 4 (Semble value measurement) | rejected | Open-ended, with no verified duplication. |
+| Reliability 4 (validation-dispatch outcome for PR #5321) / Orchestrator Health cycle and skip summaries / Pipeline Flow timestamps / collection-coverage split | rejected | Open-ended instrumentation without concrete evidence or spec. |
+| Memory retrieve truncation logging | rejected | Only conditional on enlarging the retrieval budget, which is not planned. |
+| API-001, API-002, BATCH-001, BATCH-002, API-005, MERGE-001 | rejected | Tagged RISKY_SKIP by the doc itself. |
+| DUP-001 (label helper consolidation) | rejected | Label contract parity is already covered by tests (e.g. `tests/test_ai_label_precreation_contract.py`), and the change would touch the hot poller. |
+| DUP-003 (`_safe_gh_jq` inline fallbacks) | rejected | `tests/test_workflow_gh_retry_fallback_contract.py` intentionally requires the local fallbacks for older support refs. |
+| DEAD-001 (`RB_FOLLOWUP_REFUSED`) | rejected | A no-op cleanup in the hot poller; not worth the conflict risk. |
+| SHELL-001 (SC2043 single-item loops) | rejected | Style-only (§9). |
+| DEBT-001 (`review_autofix.yml` size headroom) | rejected | The 480,000-byte guard is enforced by `tests/test_workflow_file_size_limit.py`; extraction is required only when that guard is reached (§24). |
+| REUSE / DEAD-API | informational | No findings in the doc's "API Call Consolidation & Dead-Call Analysis" section. |
+| Prompt Cache & Memory System (static-prefix fingerprint) | informational | Covered by the Cost 2 rejection. |
+| Per-Repo Breakdown top three actions | informational | Covered by the rows above (Cost 1, Speed 1/2, Reliability 2). |

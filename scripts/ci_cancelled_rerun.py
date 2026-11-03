@@ -20,6 +20,10 @@ A failed job that ran no steps and whose only failure annotations are
 GitHub's "Unable to resolve action ..." text (issue #8471) is also re-run
 once (reason `action_resolution`), using the same reads and no extra API
 calls; CI_ACTION_RESOLUTION_RERUN_ENABLED=false turns that class off.
+A failed job whose checkout step could not fetch (HTTP 408 / RPC failure,
+issue #8671) and that ran nothing after checkout is re-run once too (reason
+`checkout_fetch`), again with no extra API calls;
+CI_CHECKOUT_FETCH_RERUN_ENABLED=false turns that class off.
 """
 
 from __future__ import annotations
@@ -47,6 +51,27 @@ ACTION_RESOLUTION_MESSAGE = re.compile(
 	r"Unable to resolve action `[^`]+`, unable to find version `[^`]+`"
 	r"(\. Unable to resolve action `[^`]+`, unable to find version `[^`]+`)*\.?"
 )
+# Checkout-fetch classification (issue #8671, run 40999073395): a job whose
+# `actions/checkout` step could not fetch from GitHub (HTTP 408 / RPC
+# failure) before any PR step ran. Each pattern is used with .fullmatch()
+# on the stripped annotation message.
+CHECKOUT_FETCH_MESSAGES = (
+	re.compile(r"RPC failed; HTTP (408|429|5\d\d) curl \d+ .*"),
+	re.compile(r"expected 'packfile'"),
+	re.compile(r"The process '/usr/bin/git' failed with exit code 128"),
+	re.compile(r"fetch-pack: unexpected disconnect while reading sideband packet"),
+	re.compile(r"early EOF"),
+	re.compile(r"the remote end hung up unexpectedly"),
+)
+# At least one annotation must name the fetch failure itself; a bare git
+# exit code 128 (or `early EOF`) alone does not qualify.
+CHECKOUT_FETCH_STRONG = (
+	CHECKOUT_FETCH_MESSAGES[0],
+	CHECKOUT_FETCH_MESSAGES[3],
+	CHECKOUT_FETCH_MESSAGES[5],
+)
+CHECKOUT_STEP_NAME = "Checkout repository"
+CHECKOUT_STEP_PREFIX = "Run actions/checkout"
 # ci.yml's aggregate job keeps the id `lint` (CLAUDE.md §6) and fails with
 # `::error::CI jobs that did not succeed: <key>, <key>` when a needed job fails.
 CI_AGGREGATE_JOB_NAME = "lint"
@@ -76,6 +101,49 @@ def action_resolution_rerun_enabled(raw: str | None) -> bool:
 		print("::warning::CI_ACTION_RESOLUTION_RERUN_ENABLED is not true or false; "
 			"action-resolution CI re-runs are off", file=sys.stderr)
 	return False
+
+
+def checkout_fetch_rerun_enabled(raw: str | None) -> bool:
+	# Off switch for the checkout-fetch class only (issue #8671), parsed like
+	# CI_ACTION_RESOLUTION_RERUN_ENABLED. The raw value is never echoed.
+	value = (raw or "").lower()
+	if value in ("", "true"):
+		return True
+	if value != "false":
+		print("::warning::CI_CHECKOUT_FETCH_RERUN_ENABLED is not true or false; "
+			"checkout-fetch CI re-runs are off", file=sys.stderr)
+	return False
+
+
+def job_failed_at_checkout(job: dict) -> bool:
+	# Fail closed on a missing or malformed `steps` list. True only when the
+	# first failed step is the checkout step, only `Set up job` ran (and
+	# succeeded) before it, and everything after it was skipped apart from
+	# cleanup steps. The step is matched by display name only, and a
+	# pull_request run uses the PR's own workflow file, so a PR could name a
+	# step like this and print matching errors; the once-per-head rerun cap
+	# bounds that to one extra rerun of the PR's own CI.
+	steps = job.get("steps")
+	if not isinstance(steps, list) or not steps \
+			or any(not isinstance(step, dict) or not isinstance(step.get("name"), str) for step in steps):
+		return False
+	failed_index = next((index for index, step in enumerate(steps) if step.get("conclusion") == "failure"), None)
+	if failed_index is None:
+		return False
+	name = steps[failed_index]["name"]
+	if name != CHECKOUT_STEP_NAME and not name.startswith(CHECKOUT_STEP_PREFIX):
+		return False
+	if any(step["name"] != "Set up job" or step.get("conclusion") != "success" for step in steps[:failed_index]):
+		return False
+	return all(step.get("conclusion") == "skipped" or step["name"].startswith("Post ")
+		or step["name"] == "Complete job" for step in steps[failed_index + 1:])
+
+
+def checkout_fetch_annotations(annotations: list[dict]) -> bool:
+	messages = [item["message"].strip() for item in annotations]
+	return bool(messages) \
+		and all(any(pattern.fullmatch(message) for pattern in CHECKOUT_FETCH_MESSAGES) for message in messages) \
+		and any(any(pattern.fullmatch(message) for pattern in CHECKOUT_FETCH_STRONG) for message in messages)
 
 
 def job_ran_no_steps(job: dict) -> bool:
@@ -259,16 +327,20 @@ def failure_annotations(repo: str, check_run_id: int) -> list[dict]:
 	return [item for item in payload if item["annotation_level"] == "failure"]
 
 
-def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: bool = True) -> str:
-	"""Return "shutdown", "action_resolution", "genuine", or "unverified".
+def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: bool = True,
+		checkout_fetch_enabled: bool = True) -> str:
+	"""Return "shutdown", "action_resolution", "checkout_fetch", "genuine", or "unverified".
 
 	Fail closed: only a run whose every failed job was killed by a runner
 	shutdown or, when enabled, failed before any step ran with only
 	"Unable to resolve action" annotations (or is the `lint` aggregate
 	reporting only such jobs) counts. "action_resolution" means every
 	non-lint failed job is in that class; a mix with shutdown jobs is
-	"shutdown". Annotation text is never logged; it can be written by a
-	PR's own steps.
+	"shutdown". When enabled, a job whose checkout step failed to fetch
+	(nothing ran after it, only fetch-error annotations, issue #8671) also
+	counts; any run with such a job, mixed only with the other classes, is
+	"checkout_fetch". No extra API reads. Annotation text is never logged;
+	it can be written by a PR's own steps.
 	"""
 	try:
 		jobs = list_run_jobs(repo, run_id)
@@ -279,6 +351,7 @@ def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: 
 			return "unverified"
 		shutdown_ids: set[int] = set()
 		action_resolution_ids: set[int] = set()
+		checkout_fetch_ids: set[int] = set()
 		aggregate_annotations: list[list[dict]] = []
 		for job in failed:
 			check_run_id = int(CHECK_RUN_URL_PATTERN.search(job["check_run_url"])[1])
@@ -298,6 +371,12 @@ def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: 
 				# PR-controlled step could have written these annotations.
 				shutdown_ids.add(job["id"])
 				action_resolution_ids.add(job["id"])
+			elif checkout_fetch_enabled and job_failed_at_checkout(job) \
+					and checkout_fetch_annotations(annotations):
+				# Checkout fetch timeout (issue #8671): nothing ran after the
+				# checkout step; bounded by the once-per-head rerun cap.
+				shutdown_ids.add(job["id"])
+				checkout_fetch_ids.add(job["id"])
 			else:
 				return "genuine"
 		for annotations in aggregate_annotations:
@@ -323,12 +402,14 @@ def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: 
 					return "genuine"
 		if not shutdown_ids:
 			return "unverified"
+		if checkout_fetch_ids:
+			return "checkout_fetch"
 		return "action_resolution" if action_resolution_ids == shutdown_ids else "shutdown"
 	except (ValueError, OSError, subprocess.TimeoutExpired):
 		return "unverified"
 
 def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str,
-		action_resolution_enabled: bool = True) -> None:
+		action_resolution_enabled: bool = True, checkout_fetch_enabled: bool = True) -> None:
 	# One malformed item makes the enumerated set incomplete: do not infer
 	# that the remaining entries are the only open PRs on a shared head.
 	if any(not isinstance(pr, dict) or not positive_number(pr.get("number"))
@@ -436,14 +517,15 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 				decision(number, sha, run_id, "skip", "runner_shutdown_unverified")
 				continue
 			classified += 1
-			verdict = classify_runner_shutdown(repo, run_id, action_resolution_enabled=action_resolution_enabled)
+			verdict = classify_runner_shutdown(repo, run_id, action_resolution_enabled=action_resolution_enabled,
+				checkout_fetch_enabled=checkout_fetch_enabled)
 			if verdict == "genuine":
 				decision(number, sha, run_id, "skip", "other_conclusion")
-			elif verdict not in ("shutdown", "action_resolution"):
+			elif verdict not in ("shutdown", "action_resolution", "checkout_fetch"):
 				decision(number, sha, run_id, "skip", "runner_shutdown_unverified")
 			elif rerun_failed_jobs(repo, run_id):
 				decision(number, sha, run_id, "rerun",
-					"action_resolution" if verdict == "action_resolution" else "runner_shutdown")
+					verdict if verdict in ("action_resolution", "checkout_fetch") else "runner_shutdown")
 			else:
 				decision(number, sha, run_id, "skip", "rerun_refused")
 		elif rerun_failed_jobs(repo, run_id):
@@ -468,6 +550,8 @@ def main() -> None:
 		os.environ.get("HEAD_REF_FILTER", ""),
 		action_resolution_enabled=action_resolution_rerun_enabled(
 			os.environ.get("CI_ACTION_RESOLUTION_RERUN_ENABLED")),
+		checkout_fetch_enabled=checkout_fetch_rerun_enabled(
+			os.environ.get("CI_CHECKOUT_FETCH_RERUN_ENABLED")),
 	)
 
 

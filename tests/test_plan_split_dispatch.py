@@ -258,7 +258,10 @@ def test_failed_marker_post_that_landed_is_released_not_deduplicated() -> None:
 # --- poller: close the source issue when the project completes (Q152) -------
 
 POLLER = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
-_CLOSE_FN = re.search(r"^close_plan_split_source_if_needed\(\) \{\n.*?^\}\n", POLLER, re.S | re.M).group(0)
+# The trusted-marker lookup is shared with close_completed_tracking_issue_if_ready
+# (issue #8685), so the harness carries the helper too.
+_CLOSE_FN = (re.search(r"^_plan_split_source_issue_from_comments\(\) \{\n.*?^\}\n", POLLER, re.S | re.M).group(0)
+	+ re.search(r"^close_plan_split_source_if_needed\(\) \{\n.*?^\}\n", POLLER, re.S | re.M).group(0))
 _MARKER = "<!-- ai:plan-split-source:v1 issue=123 -->\n## Split from #123\n"
 _POLL_HARNESS = r'''
 set -uo pipefail

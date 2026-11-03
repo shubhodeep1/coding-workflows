@@ -265,7 +265,7 @@ unblock_latest_hold()
 		[.[] | select((.user.login // "") == $login)
 			| . as $c
 			| ((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r")) as $last
-			| ($last | capture("^<!-- ai:unblock-wait:v1 item=(?<item>[0-9]+) hold=(?<kind>pr_on_branch|item_closed|placeholder_retired) ref=(?<ref>[A-Za-z0-9_./@-]{1,120})(?: (?<state>done|expired))? -->$")?) as $m
+			| ($last | capture("^<!-- ai:unblock-wait:v1 item=(?<item>[0-9]+) hold=(?<kind>pr_on_branch|item_closed|placeholder_retired|pr_check_green) ref=(?<ref>[A-Za-z0-9_./@%-]{1,120})(?: (?<state>done|expired))? -->$")?) as $m
 			| select($m.item == $item)
 			| {id: $c.id, kind: $m.kind, ref: $m.ref, state: ($m.state // "open"), at: ($c.created_at // ""), updated: ($c.updated_at // $c.created_at // "")}]
 		| sort_by(.at) | last // empty
@@ -291,8 +291,26 @@ unblock_hold_resume_hint()
 {
 	case "$1" in
 		placeholder_retired) printf 'The unblock judge counts that step as done only once a repository Actions variable or secret named `%s` exists. For any other step (a label repair, say), do the step and then post this item'"'"'s resume command yourself; otherwise the judge decides again when the hold expires.' "$2" ;;
+		pr_check_green) printf 'The unblock judge re-checks the pull request'"'"'s CI on each run, and the check-triage gate closes this item with evidence once the check passes on the pull request'"'"'s current head.' ;;
 		*) printf 'The unblock judge resumes this item afterwards.' ;;
 	esac
+}
+
+# The check name a pr_check_green hold ref carries (<pr>@<percent-encoded
+# name>, issue #8671), decoded for display: control characters become spaces
+# and backticks become quotes. Prints nothing for a malformed ref.
+unblock_hold_check_name()
+{
+	unblock_py -I -B -c '
+import sys
+import unicodedata
+from urllib.parse import unquote
+
+pr, sep, encoded = sys.argv[1].partition("@")
+if sep and pr.isdigit() and encoded:
+	name = "".join(" " if unicodedata.category(char).startswith("C") else char for char in unquote(encoded))
+	print(name.replace("`", chr(39))[:100])
+' "$1" 2>/dev/null || true
 }
 
 unblock_hold_description()
@@ -301,6 +319,60 @@ unblock_hold_description()
 		pr_on_branch) printf 'pull request #%s merged and on `%s`' "${2%%@*}" "${2#*@}" ;;
 		item_closed) printf '#%s closed' "$2" ;;
 		placeholder_retired) printf 'operator step `%s` done' "$2" ;;
+		pr_check_green) printf 'the `%s` check passing on pull request #%s'"'"'s current head' "$(unblock_hold_check_name "$2")" "${2%%@*}" ;;
+	esac
+}
+
+# pr_check_green (issue #8671): read from the check-triage gate verdict this
+# run already computed (Q129 caches it in triage_resolution.json), else from
+# one dry-run gate. met: resolved; unmet: the PR is still open; impossible:
+# the PR is closed or merged, the item is not a trusted check-triage issue, or
+# it triaged another PR or check; unknown: anything unreadable.
+unblock_pr_check_green_condition()
+{
+	local hold_pr="$1" hold_check gate_json gate_status gate_state gate_rc=0 default_branch
+	hold_check="$(unblock_py -I -B -c '
+import sys
+from urllib.parse import unquote
+print(unquote(sys.argv[1]))
+' "$2" 2>/dev/null)" || { echo unknown; return 0; }
+	if [ -s "${RUNTIME_DIR}/triage_resolution.json" ] \
+		&& jq -e --argjson item "${ITEM}" '.issue == $item' "${RUNTIME_DIR}/triage_resolution.json" >/dev/null 2>&1; then
+		gate_json="$(cat "${RUNTIME_DIR}/triage_resolution.json")"
+	else
+		[ -f "${SUPPORT_DIR}/scripts/check_triage_resolution.py" ] || { echo unknown; return 0; }
+		default_branch="$(git -C "${TARGET_DIR:-${SUPPORT_DIR}}" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+		if [ -z "${default_branch}" ]; then
+			default_branch="$(gh api "repos/${REPOSITORY}" --jq '.default_branch // ""' 2>/dev/null || true)"
+		fi
+		[[ "${default_branch}" =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || { echo unknown; return 0; }
+		gate_json="$(unblock_py "${SUPPORT_DIR}/scripts/check_triage_resolution.py" gate --issue-json "${RUNTIME_DIR}/item.json" \
+			--repo "${REPOSITORY}" --issue-number "${ITEM}" --default-branch "${default_branch}" --dry-run 2>/dev/null)" || gate_rc=$?
+		[ "${gate_rc}" -eq 0 ] || { echo unknown; return 0; }
+	fi
+	gate_status="$(jq -r '.status // ""' <<< "${gate_json}" 2>/dev/null || true)"
+	case "${gate_status}" in
+		not_triage) echo impossible; return 0 ;;
+		resolved|already_resolved|unverified) ;;
+		*) echo unknown; return 0 ;;
+	esac
+	# A verdict that names no PR or check could not read the issue: try later.
+	if ! jq -e '(.pr | type) == "number" and (.check_name | type) == "string"' <<< "${gate_json}" >/dev/null 2>&1; then
+		echo unknown
+		return 0
+	fi
+	if ! jq -e --argjson pr "${hold_pr}" --arg check "${hold_check}" '.pr == $pr and .check_name == $check' <<< "${gate_json}" >/dev/null 2>&1; then
+		echo impossible
+		return 0
+	fi
+	case "${gate_status}" in
+		resolved|already_resolved) echo met; return 0 ;;
+	esac
+	gate_state="$(jq -r '.pr_state // ""' <<< "${gate_json}" 2>/dev/null || true)"
+	case "${gate_state}" in
+		open) echo unmet ;;
+		closed|merged) echo impossible ;;
+		*) echo unknown ;;
 	esac
 }
 
@@ -371,6 +443,10 @@ unblock_hold_condition()
 				echo unmet
 			fi
 			;;
+		pr_check_green)
+			[[ "${ref}" =~ ^[1-9][0-9]*@[A-Za-z0-9_.%-]{1,118}$ ]] || { echo unknown; return 0; }
+			unblock_pr_check_green_condition "${ref%%@*}" "${ref#*@}"
+			;;
 		*) echo unknown ;;
 	esac
 }
@@ -414,8 +490,13 @@ unblock_check_triage_resolved()
 		unblock_log "item=${ITEM} op=triage_resolution outcome=skip reason=default_branch_unknown"
 		return 1
 	fi
+	# The pr_check_green hold (issue #8671) reuses this run's verdict.
+	rm -f -- "${RUNTIME_DIR}/triage_resolution.json"
 	verdict="$(unblock_py "${SUPPORT_DIR}/scripts/check_triage_resolution.py" gate --issue-json "${RUNTIME_DIR}/item.json" \
 		--repo "${REPOSITORY}" --issue-number "${ITEM}" --default-branch "${default_branch}" 2>/dev/null)" || rc=$?
+	if [ "${rc}" -eq 0 ]; then
+		printf '%s\n' "${verdict}" > "${RUNTIME_DIR}/triage_resolution.json" 2>/dev/null || true
+	fi
 	status="$(jq -r '.status // ""' <<< "${verdict}" 2>/dev/null || true)"
 	status="$(printf '%s' "${status}" | tr -cd 'a-z_' | cut -c1-40)"
 	if [ "${rc}" -eq 3 ]; then

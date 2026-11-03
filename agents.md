@@ -3909,6 +3909,20 @@ The validation harness hold (plan `docs/plans/validation-failure-harness-routing
 
 State: `validation_harness_hold` (`fp`, `support`, `heal_issue`, `outcome`, `since`, `reason`), `validation_harness_resumes` (`by_fp`, `total`; kept by `/revalidate`) and `validation_harness_hold_requests_used` (the last 50 consumed request comment ids; every pending trusted request is consumed whatever the outcome, and the list survives the end of a hold, so a request is used once). A hold older than `VALIDATION_HARNESS_HOLD_MAX_DAYS` (default 14) ends with the needs-human park and a CRITICAL alert; a bounce marker on the same tick wins over the time limit. A `judge:` hold counts as active on any validation failure, not only `raw_status=harness_error`.
 
+Before filing each deferred advisory, `security_pass_file_deferred_advisory_followups`
+runs `security_pass_advisory_cited_code_status`. It fetches the default and
+integration branches and, for a numeric final PR, `refs/pull/<n>/head` once (local
+git, no API calls; a failed default-branch fetch makes every row `unknown`), takes the cited line plus up to
+two lines either side at `audited_head_sha`, and looks for that whitespace-trimmed
+block as one contiguous run in `origin/<default>` (`present` / `absent` /
+`unknown`). On `absent` the body says the cited lines are not on the default
+branch, tells the pipeline not to recreate removed code, and asks it to check
+whether the vulnerable behaviour still exists, fix it if so, and add a regression
+test either way. `present` and `unknown` keep the "already on the default branch"
+line. The issue is filed in every case. shubhodeep1/fun-token-multi-chain#710 is the
+incident: #667 reverted the cited coinflip code between the audit and the final
+merge, and planning blocked with "nothing to implement".
+
 ---
 
 ## Stable log prefixes (contractual)
@@ -4296,6 +4310,7 @@ and shipped:
 - `UNBLOCK_TARGET_REPO_GUARD` (`scripts/unblock_judge.sh`, harness routing of plan `docs/plans/validation-failure-harness-routing-plan.md` Phase 3: `item= verdict=retry_budget|descope|reissue|accept_with_followup|operator_step outcome=consumer|harness|mixed|disabled paths=<harness paths, comma-separated, at most 300 characters|none>`; one line per guarded verdict, read from the `heal_report` op `scripts/unblock_actions.py plan` returned (`reason=target_repo|backstop` is `harness`, `mixed_harness_part` is `mixed`), `disabled` while `UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED` is set to anything other than `true`; log only. The ops it describes log under `UNBLOCK_JUDGE item= op=heal_report issue= label= outcome=sent|failed|skip reason=no_accepted_label|workflow_heal_disabled|self_repo|helper_missing|invalid_issue|label_not_accepted|earlier_op_failed|issue_read_failed|pull_request_item|build_failed|runs_unavailable|smoke_test_fixture|self_workflow|unregistered_source_repo|wrap_failed|dispatch_failed` (the middle three come from `workflow_failure_heal.py skip-reason`, the reporter's own pre-dispatch check) and `UNBLOCK_JUDGE item= op=hold_request issue= outcome=posted|failed|skip reason=no_heal_report|earlier_op_failed|invalid_issue` (a skipped `heal_report` logs `issue=none` / `label=none` for a missing value; the intermediate `op=heal_report` lines `runs=unavailable` and `identity=attached|absent` carry no `outcome=`); a report sent without an OIDC identity (`identity=absent` in its log line) still posts the hold, because the intake files it by default (`WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false`), and pages one WARNING instead of the DEBUG message, because an intake with `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=true` drops it unfiled. A `heal_report` costs one `actions/runs` listing and one `repository_dispatch` (event `workflow-failure-heal`, one attempt) to `shubhodeep1/coding-workflows`; a `hold_request`, posted only after its report was sent, costs one comment on the tracking issue. The heal intake accepts `unblock_judge.yml` as the OIDC reporter workflow of `issue`-kind reports (`REPORT_IDENTITY_WORKFLOW_BY_KIND`); `WORKFLOW_HEAL_ENABLED=false` skips both ops and pages a WARNING; a report that names no failed run counts as `runs_unavailable` because the intake would drop it, a mixed verdict whose report was not sent (also `earlier_op_failed`, when a fix-up write failed first) pages one WARNING after its ops, and a pull request item is skipped as `pull_request_item` with a WARNING, because the intake binds an issue-kind report only to an issue)
 - `VALIDATION_CYCLE_SOURCE` (`scripts/validate_process.sh` `validation_cycle_resolve`: `source=env|dispatch_comment|default cycle=<n>`, and on `source=default` also `reason=invalid_env|not_tracking_run|login_unavailable|comments_unavailable|no_dispatch_comment|malformed_cycle`; when `VALIDATION_CYCLE` is unset the cycle comes from the `- Cycle: <n>` line of the newest `## 🧪 Runtime validation dispatched` tracking comment by the pipeline login, else 1)
 - `CLARIFY_ENGINE_ATTEMPT_FAILED` (`.github/workflows/clarify.yml` "Run Codex": `engine=<Claude|Codex> attempt=<n> max_attempts=<m> kind=nonzero_exit|empty_output exit_code=<rc> pool_role= pool_account= pool_outcome= pool_reason= pool_exit_code=`; one line per failed clarify attempt, pool fields `unknown` when absent)
+- `SECURITY_PASS_ADVISORY_CITED_CODE` (`scripts/orchestrate_poll_process.sh`: `tracking_issue=` `finding=` `default_branch=` `status=present|absent|unknown`)
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -4691,6 +4706,7 @@ LOG_PREFIX.name=VALIDATION_HARNESS_HOLD
 LOG_PREFIX.name=UNBLOCK_TARGET_REPO_GUARD
 LOG_PREFIX.name=VALIDATION_CYCLE_SOURCE
 LOG_PREFIX.name=CLARIFY_ENGINE_ATTEMPT_FAILED
+LOG_PREFIX.name=SECURITY_PASS_ADVISORY_CITED_CODE
 
 `AI_ENGINE_FALLBACK_REPORT` also carries `pool_reason=<token>` on its `dispatched` and `skip_dispatch` lines for `fallback_reason=no_credential` pairs only (before `detail=` on `skip_dispatch` lines). The token is the one the heal payload gets: a non-empty `CLAUDE_POOL_REASON`, else the Claude pool step's reason file (`CLAUDE_POOL_REASON_FILE`, default `${RUNNER_TEMP}/claude-pool-reason`), shown only when it matches `[a-z0-9_]{1,60}`, else `unavailable` (#8392). Diagnostic only: routing and the heal fingerprint are unchanged; the `dispatched` line now ends `pool_reason_source=<env|file|none>` followed by this suffix, and the separate `--pool-reason` payload evidence line comes from #8406.
 

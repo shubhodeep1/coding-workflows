@@ -13,7 +13,9 @@
 # `inherited`) get exactly one editor turn through
 # `review_apply_fixes.sh --repair-turn` (the editor's own sandbox launch and
 # validated transfer). Edits outside the repair allow-list are rolled back,
-# syntax is re-validated (a syntax failure reverts the whole repair), and the
+# syntax is re-validated (a syntax failure reverts the whole repair), and a
+# repair that leaves no change while every PR-caused failure is a lint unit is
+# reverted too (the editor's change is kept). Only after a kept repair the
 # gate runs once more; one repair unless PERSIST_REPAIR_LOOP_ENABLED=true.
 # The host writes the
 # summary from the final result.json (never from the container's summary.md)
@@ -94,7 +96,8 @@ review_prepush_test_gate_log()
 # Embedded host-side helper (trusted, stdlib only; same contract as P3's).
 # Modes: status RESULT | synthetic RESULT REASON | failures RESULT |
 #   allow SELECTION RESULT | summary RESULT MODULE OUT MODE REPAIR INITIAL |
-#   donecheck ACCEPTANCE_RESULT (unmet done-check lines, at most 10)
+#   donecheck ACCEPTANCE_RESULT (unmet done-check lines, at most 10) |
+#   lint_only RESULT (exit status only)
 REVIEW_PREPUSH_TEST_GATE_PY='
 import json
 import re
@@ -162,6 +165,10 @@ def main(argv):
 		if len(data) > FAILURE_CAP:
 			text = data[:FAILURE_CAP].decode("utf-8", "ignore") + "\n(truncated at 16 KiB)"
 		print(text or "(no failure output captured)")
+	elif mode == "lint_only":
+		# Exit 0 when every PR-caused failure is a lint unit (ruff, shellcheck).
+		failures = entries(load(argv[2]), "failures")
+		return 0 if failures and all(e.get("test") in ("ruff", "shellcheck") for e in failures) else 1
 	elif mode == "allow":
 		selection, result = load(argv[2]), load(argv[3])
 		paths = [e.get("path") for e in entries(selection, "affected_tests")]
@@ -606,7 +613,8 @@ review_prepush_test_gate_restore_symlinks()
 	done < <(git ls-files -s -z 2>/dev/null)
 }
 
-# One review editor turn. Sets rpg_repair to ran | skipped (...) | reverted (syntax).
+# One review editor turn. Sets rpg_repair to ran | skipped (...) | reverted (syntax)
+# | reverted (it removed the whole change for lint findings only); the gate re-runs only for ran.
 review_prepush_test_gate_repair()
 {
 	local result="$1" prompt rc editor editor_timeout validator sd
@@ -679,6 +687,17 @@ review_prepush_test_gate_repair()
 		review_prepush_test_gate_revert all || true
 		review_prepush_test_gate_log "outcome=repair_reverted reason=syntax"
 		rpg_repair="reverted (syntax)"
+		return 0
+	fi
+	# A repair that leaves no change at all undid the editor's work instead of
+	# fixing it. For lint-only failures that edit usually restores code the PR
+	# base already had (PR #8747: three E101 lines a reviewer asked to restore),
+	# so dropping it loses the commit every run ("Editor changes lost"). Keep
+	# the editor's change and report the findings.
+	if [ -z "$(review_prepush_test_gate_changed)" ] && review_prepush_test_gate_py lint_only "${result}"; then
+		review_prepush_test_gate_revert all || true
+		review_prepush_test_gate_log "outcome=repair_reverted reason=lint_only_change_erased"
+		rpg_repair="reverted (it removed the whole change for lint findings only)"
 		return 0
 	fi
 	rpg_repair="ran"

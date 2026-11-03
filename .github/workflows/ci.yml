@@ -936,33 +936,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
 
-      # Two moves, oldest first. History: this step first left
-      # tests-promote-stall-and-review, which took 15m18s of its 20 minutes on
-      # main (run 39039638823, budget-watch issue #7576); it and one sibling
-      # step were picked as that job's most expensive steps by test and
-      # subprocess counts (estimated, not measured; step timings were not
-      # readable) and moved to tests-heal-plan-and-validation. The sibling is
-      # not part of the later move; only this step is here.
-      #
-      # Current move: from tests-heal-plan-and-validation, which took 15m10s of
-      # its 20 minutes on main (run 40954844196, budget-watch issue #8395).
-      # Chosen as that job's largest step not split into parallel processes,
-      # by test and subprocess count (an estimate, not measured). It needs only
-      # checkout, Python 3.12 and the shared pip install, which this job
-      # already has. Name and body unchanged.
-      - name: Review autofix review-pipeline plumbing contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_editor_sandbox_excluded_escalation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
-
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -1734,6 +1707,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_force_tick_repository_env.py
 
+      - name: Review autofix disk headroom contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_disk_headroom_contract.py
+
       - name: Review autofix smoke editor override contract test
         run: |
           set -euo pipefail
@@ -2258,6 +2236,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_clarify_loop_guard.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_processed_command_entry.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_backoff.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_reasons.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_git_env_isolation.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_blocked_output.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_check_triage_branch_guard.py
@@ -2326,6 +2305,47 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py
+
+      # Three moves, oldest first. History: this step first left
+      # tests-promote-stall-and-review, which took 15m18s of its 20 minutes on
+      # main (run 39039638823, budget-watch issue #7576); it and one sibling
+      # step were picked as that job's most expensive steps by test and
+      # subprocess counts (estimated, not measured; step timings were not
+      # readable) and moved to tests-heal-plan-and-validation. The sibling is
+      # not part of the later move; only this step is here.
+      #
+      # Second move: from tests-heal-plan-and-validation, which took 15m10s of
+      # its 20 minutes on main (run 40954844196, budget-watch issue #8395).
+      # Chosen as that job's largest step not split into parallel processes,
+      # by test and subprocess count (an estimate, not measured). It needs only
+      # checkout, Python 3.12 and the shared pip install, which this job
+      # already has. Name and body unchanged.
+      #
+      # Third move: from tests-hooks-and-orchestrator, which took 15m07s of its
+      # 20 minutes on main (run 41570422282, budget-watch issue #8730). This is
+      # that job's largest step not split into parallel processes: 9 modules
+      # and about 367 test functions, of which
+      # tests/test_review_autofix_review_pipeline_contract.py alone has 227
+      # tests and about 145 subprocess call sites. The run's step timings could
+      # not be read, so the pick is an estimate, not a measurement. The step
+      # arrived in the hooks job in #8395, after #8281 last relieved that job.
+      # tests-release-and-log-analysis has had no budget-watch issue since
+      # #8278, the same basis #8466 used. The step needs only checkout, Python
+      # 3.12 and the shared pip install; no Node, git history or prepared
+      # .claude/ live copies. Name and body unchanged.
+      - name: Review autofix review-pipeline plumbing contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_collect_pr_check_runs_pending_identity.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_editor_sandbox_excluded_escalation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
 
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
@@ -2660,6 +2680,7 @@ jobs:
             tests/test_review_rb_judge_reference_staging.py \
             tests/test_review_resolve_review_threads.py \
             tests/test_review_reviewer_attempt_prompt_isolation.py \
+            tests/test_review_reviewer_common_context_sections.py \
             tests/test_static_context_agents_index.py \
             tests/test_static_context_agents_index_clarify_plan.py \
             tests/test_static_context_agents_index_implement.py \

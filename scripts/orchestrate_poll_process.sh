@@ -1218,8 +1218,7 @@ run_project_activation_verify() {
     echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=comments_unavailable"
     return 0
   fi
-  if printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "project-${TRACKING_NUM}" \
-    '[.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null)) | (.body // "" | sub("[[:space:]]+$"; "")) | (endswith("<!-- ai:activation:v1 verdict=LIVE source=" + $src + " -->") or endswith("<!-- ai:activation:v1 verdict=DORMANT source=" + $src + " -->"))] | any' >/dev/null 2>&1; then
+  if [ -n "$(activation_final_verdict_from_comments "${COMMENTS:-[]}" "${TRACKING_NUM}")" ]; then
     echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=already_verified"
     return 0
   fi
@@ -1255,6 +1254,30 @@ run_project_activation_verify() {
     || echo "::warning::Activation worktree cleanup failed for project #${TRACKING_NUM}."
   rm -rf -- "${verify_dir}-runtime" \
     || echo "::warning::Activation runtime cleanup failed for project #${TRACKING_NUM}."
+  return 0
+}
+
+# activation_final_verdict_from_comments <comments_json> <tracking_num>
+#
+# Prints "<LIVE|DORMANT> <html_url>" for the last trusted comment (author
+# github-actions[bot], or author_association OWNER/MEMBER/COLLABORATOR) whose
+# trailing-whitespace-trimmed body ends with the final activation marker
+# <!-- ai:activation:v1 verdict=LIVE|DORMANT source=project-<tracking_num> -->.
+# Prints nothing when there is none; a partial=true marker never matches.
+# Shared by run_project_activation_verify (already_verified guard) and
+# close_completed_tracking_issue_if_ready (issue #8685) so both apply one
+# trust filter. Reads only the given JSON (no API call); always returns 0.
+activation_final_verdict_from_comments() {
+  local comments_json="${1:-[]}"
+  local tracking_num="${2:-}"
+  printf '%s' "${comments_json}" | jq -r --arg src "project-${tracking_num}" '
+    [.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
+      | {url: ((.html_url // "") | tostring), body: (.body // "" | sub("[[:space:]]+$"; ""))}
+      | (if (.body | endswith("<!-- ai:activation:v1 verdict=LIVE source=" + $src + " -->")) then "LIVE"
+         elif (.body | endswith("<!-- ai:activation:v1 verdict=DORMANT source=" + $src + " -->")) then "DORMANT"
+         else empty end) as $verdict
+      | "\($verdict) \(.url)"] | last // empty
+  ' 2>/dev/null || true
   return 0
 }
 
@@ -14985,6 +15008,24 @@ dispatch_comprehensive_release_workflow() {
   return 1
 }
 
+# _plan_split_source_issue_from_comments <comments_json>
+#
+# Prints the source issue number N of the first trusted
+# `<!-- ai:plan-split-source:v1 issue=N -->` marker comment (author
+# association in COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS, or
+# github-actions[bot]), or nothing. Shared by close_plan_split_source_if_needed
+# and close_completed_tracking_issue_if_ready (issue #8685) so both apply one
+# trust rule. No API call; always returns 0.
+_plan_split_source_issue_from_comments() {
+  local comments_json="${1:-[]}"
+  printf '%s' "${comments_json}" | jq -r --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}" '
+    def trusted: (((.author_association // "") as $a | ($trusted | split(",") | map(gsub("^\\s+|\\s+$"; "")) | index($a)) != null)
+                  or ((.user.login // "") == "github-actions[bot]"));
+    [ .[]? | select(trusted) | (.body // "") | capture("^<!-- ai:plan-split-source:v1 issue=(?<n>[1-9][0-9]*) -->")? | .n ] | first // empty
+  ' 2>/dev/null || true
+  return 0
+}
+
 # close_plan_split_source_if_needed <project_status> <comments_json>
 #
 # Q152: a project the plan stage started for a plan too large for one grant
@@ -15004,11 +15045,7 @@ close_plan_split_source_if_needed() {
   if [ -n "$(jq -r '.plan_split_source.outcome // empty' "${STATE_FILE}" 2>/dev/null)" ]; then
     return 0
   fi
-  source_issue="$(printf '%s' "${comments_json}" | jq -r --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
-    def trusted: (((.author_association // "") as $a | ($trusted | split(",") | map(gsub("^\\s+|\\s+$"; "")) | index($a)) != null)
-                  or ((.user.login // "") == "github-actions[bot]"));
-    [ .[]? | select(trusted) | (.body // "") | capture("^<!-- ai:plan-split-source:v1 issue=(?<n>[1-9][0-9]*) -->")? | .n ] | first // empty
-  ' 2>/dev/null || true)"
+  source_issue="$(_plan_split_source_issue_from_comments "${comments_json}")"
   [ -n "${source_issue}" ] || return 0
 
   if ! source_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${source_issue}" 2>/dev/null)"; then
@@ -15032,6 +15069,163 @@ close_plan_split_source_if_needed() {
   jq --argjson issue "${source_issue}" --arg outcome "${outcome}" '.plan_split_source = {issue: $issue, outcome: $outcome}' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
+}
+
+# close_completed_tracking_issue_if_ready <project_status> <comments_json> <labels_json>
+#
+# Issue #8685: a complete project's tracking issue used to stay open for good
+# ("Issue kept open for manual review."), so finished projects piled up in
+# the tracking-issue listing. Once every follow-up the poller still runs for
+# a complete project is settled, this closes the tracking issue as completed.
+# All of these must hold (each unmet one logs outcome=deferred reason=...):
+#   - ORCHESTRATOR_CLOSE_COMPLETED_TRACKING is truthy (default true;
+#     reason=disabled is logged once per process);
+#   - COMMENTS was fetched (reason=comments_unavailable): the plan-split and
+#     duplicate-comment checks need real comments;
+#   - the labels were read: they include ai:orchestrator-tracking
+#     (reason=labels_unavailable), so a failed read never counts as "absent";
+#   - the activation verdict is final: ACTIVATION_VERIFY_ENABLED=false, or a
+#     trusted LIVE/DORMANT marker from activation_final_verdict_from_comments
+#     (a partial=true marker does not count; reason=no_activation_verdict);
+#   - the release callback is settled: no ai:comprehensive-test-pending
+#     label, or .comprehensive_release_callback.handled == true
+#     (reason=release_callback_pending);
+#   - the plan-split source is settled: no trusted plan-split-source marker,
+#     or .plan_split_source.outcome is set (reason=plan_split_pending);
+#   - no ai:integration-backpressure label is left (reason=backpressure_label).
+# Runs once: the outcome is kept in .tracking_auto_close in the state file,
+# so a reopened issue is not closed again (unless, after the close, writing
+# STATE_FILE failed once or posting the state comment failed twice, which
+# logs state_persist=failed and a ::warning::). Reads only comments_json,
+# labels_json and STATE_FILE (no API read). Writes at most one comment
+# (ending <!-- ai:tracking-auto-close:v1 issue=<N> -->), one PATCH and one
+# state comment per project. A failed PATCH (reason=close_failed) is retried
+# on the next tick without a second comment: the trusted marker comment is
+# found in COMMENTS. A failed comment POST (reason=comment_failed) never
+# PATCHes. The comment carries no model text.
+# Log: TRACKING_AUTO_CLOSE tracking_issue=<N> outcome=closed verdict=<LIVE|DORMANT|none> state_persist=<ok|failed>,
+# or outcome=deferred reason=<...>. A failed state save after the close is a ::warning::.
+_TRACKING_AUTO_CLOSE_DISABLED_LOGGED="false"
+close_completed_tracking_issue_if_ready() {
+  local project_status="$1"
+  local comments_json="${2:-[]}"
+  local labels_json="${3:-[]}"
+  local verdict="" verdict_line="" verdict_url="" verdict_text="" operator_text=""
+  local callback_handled split_issue repo_re url_re close_marker body now_utc
+
+  [ "${project_status}" = "complete" ] || return 0
+  [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]] || return 0
+  if ! is_truthy "${ORCHESTRATOR_CLOSE_COMPLETED_TRACKING:-true}"; then
+    if [ "${_TRACKING_AUTO_CLOSE_DISABLED_LOGGED:-false}" != "true" ]; then
+      echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=disabled"
+      _TRACKING_AUTO_CLOSE_DISABLED_LOGGED="true"
+    fi
+    return 0
+  fi
+  if [ -n "$(jq -r '.tracking_auto_close.outcome // empty' "${STATE_FILE}" 2>/dev/null || true)" ]; then
+    return 0
+  fi
+  if [ "${COMMENTS_FETCH_OK:-false}" != "true" ]; then
+    echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=comments_unavailable"
+    return 0
+  fi
+  # A tracking issue always carries ai:orchestrator-tracking; without it the
+  # labels read failed (get_issue_labels_json falls back to []) and the
+  # label-absence checks below would pass on no evidence.
+  if ! has_label "${labels_json}" "ai:orchestrator-tracking"; then
+    echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=labels_unavailable"
+    return 0
+  fi
+
+  if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ]; then
+    verdict="none"
+  else
+    verdict_line="$(activation_final_verdict_from_comments "${comments_json}" "${TRACKING_NUM}" || true)"
+    verdict="${verdict_line%% *}"
+    if [[ "${verdict_line}" == *" "* ]]; then
+      verdict_url="${verdict_line#* }"
+    fi
+    if ! [[ "${verdict}" =~ ^(LIVE|DORMANT)$ ]]; then
+      echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=no_activation_verdict"
+      return 0
+    fi
+    # Only a comment URL on this repository's tracking issue is linked.
+    repo_re="${GITHUB_REPOSITORY//./\\.}"
+    url_re="^https://github\.com/${repo_re}/issues/${TRACKING_NUM}#issuecomment-[0-9]+$"
+    if ! [[ "${verdict_url}" =~ ${url_re} ]]; then
+      verdict_url=""
+    fi
+  fi
+
+  if has_label "${labels_json}" "ai:comprehensive-test-pending"; then
+    callback_handled="$(jq -r '.comprehensive_release_callback.handled // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
+    if [ "${callback_handled}" != "true" ]; then
+      echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=release_callback_pending"
+      return 0
+    fi
+  fi
+  split_issue="$(_plan_split_source_issue_from_comments "${comments_json}" || true)"
+  if [ -n "${split_issue}" ] && [ -z "$(jq -r '.plan_split_source.outcome // empty' "${STATE_FILE}" 2>/dev/null || true)" ]; then
+    echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=plan_split_pending"
+    return 0
+  fi
+  if has_label "${labels_json}" "ai:integration-backpressure"; then
+    echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=backpressure_label"
+    return 0
+  fi
+
+  close_marker="<!-- ai:tracking-auto-close:v1 issue=${TRACKING_NUM} -->"
+  if ! printf '%s' "${comments_json}" | jq -e --arg marker "${close_marker}" '
+      [.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
+        | (.body // "" | sub("[[:space:]]+$"; "")) | endswith($marker)] | any
+    ' >/dev/null 2>&1; then
+    if [ "${verdict}" = "none" ]; then
+      verdict_text="Activation verification is disabled for this repository (\`ACTIVATION_VERIFY_ENABLED=false\`)."
+    elif [ -n "${verdict_url}" ]; then
+      verdict_text="Activation verification graded this project **${verdict}** ([verdict](${verdict_url}))."
+    else
+      verdict_text="Activation verification graded this project **${verdict}**."
+    fi
+    if [ "${verdict}" = "DORMANT" ]; then
+      operator_text="The remaining operator steps are tracked in this repository's open \`ai:operator-step\` issue: https://github.com/${GITHUB_REPOSITORY}/issues?q=is%3Aissue+is%3Aopen+label%3Aai%3Aoperator-step"
+      # Blank lines around it so Markdown renders it as its own paragraph.
+      operator_text=$'\n'"${operator_text}"$'\n'
+    fi
+    body="$(printf '%s\n' \
+      "## ✅ Project complete: tracking issue closed" \
+      "" \
+      "Project #${TRACKING_NUM} is complete. ${verdict_text}" \
+      "${operator_text}" \
+      "The release callback, the plan-split source and the integration backpressure label are settled, so the poller has nothing left to do here." \
+      "" \
+      "Reopen this issue to bring it back under the poller." \
+      "" \
+      "${close_marker}")"
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" -f body="${body}" >/dev/null 2>&1; then
+      echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=comment_failed"
+      return 0
+    fi
+  fi
+
+  if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
+    echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=close_failed"
+    return 0
+  fi
+  now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local state_persist="ok"
+  if ! { jq --arg at "${now_utc}" --arg verdict "${verdict}" '.tracking_auto_close = {outcome: "closed", at: $at, verdict: $verdict}' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+    rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    state_persist="failed"
+  elif ! post_state_comment && ! post_state_comment; then
+    # One retry: without a saved outcome a reopened issue could be closed again.
+    state_persist="failed"
+  fi
+  if [ "${state_persist}" = "failed" ]; then
+    echo "::warning::TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} closed, but its state was not saved; if the issue is reopened, a later tick may close it again." >&2
+  fi
+  echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=closed verdict=${verdict} state_persist=${state_persist}"
+  return 0
 }
 
 handle_comprehensive_release_callback_if_needed() {
@@ -28434,6 +28628,10 @@ The poller will resume processing on the next cycle."
       ' >/dev/null 2>&1; then
       run_project_activation_verify
     fi
+    # Issue #8685: close a complete project's tracking issue once its
+    # activation verdict, release callback, plan-split source and
+    # backpressure label are settled (runs once; see the function header).
+    close_completed_tracking_issue_if_ready "${PROJECT_STATUS}" "${COMMENTS:-[]}" "${TRACKING_LABELS:-[]}"
     if [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
       if completion_status_comment_failed_state_observation; then
         _completion_status_failed_observation_rc=0
@@ -33579,6 +33777,16 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 	if _linked_pr_is_merge_queued "${S_PR_JSON}"; then
 		echo "  PR #${S_PR} is ai:merge-queued (merge train); skipping standalone conflict recovery until released."
+		continue
+	fi
+	# A review waiting for Claude capacity labels its PR
+	# ai:claude-capacity-wait; the capacity-resume pass re-dispatches it and
+	# removes the label. Dispatching here would only defer again, and counting
+	# those deferrals as resolution attempts sent false "resolve by hand"
+	# WARNINGs (PRs #8239/#8346/#8348/#8373/#8389, 2026-11-02: 9 deferred
+	# dispatches each, no resolver ever ran).
+	if _linked_pr_is_capacity_waiting "${S_PR_JSON}"; then
+		echo "STANDALONE_CONFLICT_STUCK pr=${S_PR} outcome=skip reason=claude_capacity_wait"
 		continue
 	fi
 

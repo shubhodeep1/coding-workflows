@@ -2061,6 +2061,12 @@ jobs:
           fi
           echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=codex-agent remaining=${remaining} reset=${reset} used_in_job=unknown"
 
+      # Pre/post byte counts measure the headroom free-disk-space reclaims
+      # (analysis/workflow-optimization-2026-09-30.md). Logging only.
+      - name: Show disk usage (pre free-disk-space)
+        run: |
+          df -h / || true
+          df -B1 --output=avail,size / || true
 
       # Reclaim ~25–28 GB on ubuntu-latest before any checkout/LLM
       # work runs.  The codex-agent job has historically died mid-step on
@@ -2088,7 +2094,9 @@ jobs:
           swap-storage: true
 
       - name: Show disk usage (post free-disk-space)
-        run: df -h /
+        run: |
+          df -h /
+          df -B1 --output=avail,size / || true
 
       - name: Checkout repo
         uses: actions/checkout@v5
