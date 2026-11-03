@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:external check-run `copilot-pull-request-reviewer` (run 41544551704, job 125616826829) on PR head f64a6c52c111e231706e6c9e83344eaa357bc793 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The external check-run `copilot-pull-request-reviewer` failed with `Error: Prompt too big after adding system message` (`errorCode: custom_instructions_too_large`, statusCode 422) inside the Copilot reviewer bot's own action, and it never produced a review.\n  WHY: It is an infrastructure failure in a third-party bot, not in any repository code path this diff touches; the reviewer rated it NIT (mapped to low) and no repository change can resolve it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:external check-run `copilot-pull-request-reviewer` (run 41544551704, job 125616826829) on PR head f64a6c52c111e231706e6c9e83344eaa357bc793 | severity=low (source: NIT) | confidence=4\n  PROBLEM: The check-run failed with `Error: Prompt too big after adding system message` (`errorCode: custom_instructions_too_large`, statusCode 422, exit code 1) inside the Copilot reviewer bot's own action. The bot built 2 custom instructions (`AGENTS.md`, `CLAUDE.md`) from the head checkout, exceeded its prompt budget, and never produced a review.\n  WHY: It is an infrastructure failure in the third-party reviewer bot, not in any repository code path introduced by this diff, because the diff touches a 3-line text file that no runtime code path reads. No repository change in this PR can resolve the bot's prompt-size limit.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "98c16b165ee295be4790073a16a73f52eccf034bb82cd2e663cfdca3618623a0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41704064059",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41704064059",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103195521_610cddba52",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41704064059"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T19:55:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
