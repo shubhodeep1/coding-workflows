@@ -456,12 +456,14 @@ def test_phase4b_unknown_state_cannot_authorize_completed_run() -> None:
 
 
 def test_phase4b_reset_beyond_deadline_fails_closed() -> None:
-	# The adopted run was never seen leaving the queue, so with the queued
-	# grace on (default) the timeout is the queued one; legacy keeps retry_timeout.
+	# The adopted run was never read (the PR read stayed rate-limited), so it
+	# was never seen queued either: an API stall is not reported as a
+	# runner-queue timeout, with the queued grace on (default) or off.
 	result, output, requests = _run_phase4b_with_pr_states(["limit"], reset="x-ratelimit-reset: 99999")
 	assert result.returncode != 0
-	assert "status=retry_queued_timeout" in output
-	assert "status=retry_timeout" not in output
+	assert "status=retry_timeout" in output
+	assert "status=retry_queued_timeout" not in output
+	assert "stayed queued" not in result.stdout
 	assert "run" not in requests
 	result, output, requests = _run_phase4b_with_pr_states(
 		["limit"], reset="x-ratelimit-reset: 99999", extra_env=_LEGACY_QUEUE_ENV,

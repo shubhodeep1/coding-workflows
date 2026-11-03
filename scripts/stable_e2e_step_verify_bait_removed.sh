@@ -480,11 +480,16 @@ fi
 
 # Writes the timeout error and status for a pinned retry run that did
 # not complete in time. With the queued grace on, a run never seen
-# leaving the queue reports retry_queued_timeout; everything else (and
-# the legacy path, byte for byte) reports retry_timeout.
+# leaving the queue, whose last successful read was a queued state,
+# reports retry_queued_timeout. A run never read (rate limit, failed or
+# malformed GET) is not called queued; it, everything else and the
+# legacy path (byte for byte) report retry_timeout.
 retry_report_timeout() {
-  local report_now
-  if [ "${RETRY_QUEUED_GRACE_ON}" -eq 1 ] && [ -n "${RETRY_RUN_ID}" ] && [ -z "${RETRY_RUN_STARTED_EPOCH}" ]; then
+  local report_now retry_seen_queued=0
+  case "${RETRY_STATUS:-}" in
+    queued|waiting|pending|requested) retry_seen_queued=1 ;;
+  esac
+  if [ "${RETRY_QUEUED_GRACE_ON}" -eq 1 ] && [ -n "${RETRY_RUN_ID}" ] && [ -z "${RETRY_RUN_STARTED_EPOCH}" ] && [ "${retry_seen_queued}" -eq 1 ]; then
     report_now=$(date +%s)
     echo "::error::Retry review run #${RETRY_RUN_ID} stayed queued for $(( report_now - RETRY_WAIT_STARTED_EPOCH ))s, past E2E_RETRY_QUEUED_GRACE_MINUTES=${RETRY_QUEUED_GRACE_MINUTES} (deadline capped at $(( RETRY_QUEUED_GRACE_DEADLINE - RETRY_WAIT_STARTED_EPOCH ))s)"
     echo "status=retry_queued_timeout" >> "$GITHUB_OUTPUT"
