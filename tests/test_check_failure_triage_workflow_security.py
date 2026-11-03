@@ -3340,7 +3340,7 @@ class CheckFailureTriageSupersedeTests(unittest.TestCase):
 
 	def _supersede_stage(
 		self, metadata: dict, url: str, fail: str = "", old_issue: str | None = None,
-		user_json: str = '{"login": "maintainer"}',
+		user_json: str = '{"login": "maintainer"}', stage: str = "supersede",
 	) -> tuple[subprocess.CompletedProcess[str], list[str]]:
 		with tempfile.TemporaryDirectory(prefix="check-triage-supersede-") as temp_name:
 			temp_path = Path(temp_name)
@@ -3370,7 +3370,7 @@ exit 0
 				if key not in ("BASH_ENV", "ENV", "GH_TOKEN", "GITHUB_TOKEN", "CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED")
 			}
 			env.update({
-				"CHECK_TRIAGE_STAGE": "supersede", "CHECK_TRIAGE_SUPERSEDE_NEW_ISSUE_URL": url,
+				"CHECK_TRIAGE_STAGE": stage, "CHECK_TRIAGE_SUPERSEDE_NEW_ISSUE_URL": url,
 				"CHECK_TRIAGE_TRUSTED_SUPPORT_DIR": str(trusted), "GITHUB_REPOSITORY": "owner/repo",
 				"GITHUB_SERVER_URL": "https://github.com", "RUNTIME_DIR": str(runtime_dir),
 				"MOCK_GH_CALLS": str(calls_file), "MOCK_FAIL_MATCH": fail or "__never__",
@@ -3479,14 +3479,50 @@ exit 0
 		self.assertEqual(proc.returncode, 0)
 		self.assertEqual(calls, [])
 
+	def test_supersede_check_stage_allows_create_for_own_open_blocked_issue(self) -> None:
+		proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "", stage="supersede-check")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(calls, ["api user", "api repos/owner/repo/issues/99"])
+		self.assertNotIn("duplicate_open_issue", proc.stdout)
+
+	def test_supersede_check_stage_keeps_duplicate_skip_when_not_supersedable(self) -> None:
+		# Issue #8671: an issue another account opened, an unreadable identity,
+		# or a changed or unreadable old issue blocks the create (exit 10).
+		foreign = json.dumps({
+			"state": "open", "user": {"login": "someone-else"}, "labels": [{"name": "ai:check-triage"}, {"name": "ai:blocked"}],
+		})
+		cases = {
+			"not_own_issue": {"old_issue": foreign},
+			"identity_unavailable": {"user_json": "{}"},
+			"old_issue_stale": {"old_issue": json.dumps({"state": "closed", "user": {"login": "maintainer"}, "labels": []})},
+			"old_issue_unreadable": {"old_issue": json.dumps({"message": "Not Found"})},
+		}
+		for reason, kwargs in cases.items():
+			with self.subTest(reason=reason):
+				proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "", stage="supersede-check", **kwargs)
+				self.assertEqual(proc.returncode, 10, proc.stdout + proc.stderr)
+				self.assertIn(f"CHECK_TRIAGE op=supersede outcome=skip reason={reason} old=99 stage=pre_create", proc.stdout)
+				self.assertIn("CHECK_TRIAGE skip reason=duplicate_open_issue issue=99", proc.stdout)
+				self.assertFalse(any("--method" in call for call in calls), calls)
+
+	def test_supersede_check_stage_without_candidate_allows_create(self) -> None:
+		proc, calls = self._supersede_stage(dict(self.SUPERSEDE_METADATA, supersede_issue=""), "", stage="supersede-check")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(calls, [])
+
 	def test_post_step_runs_supersede_after_issue_create(self) -> None:
 		job = _workflow()["jobs"]["triage"]
 		post = _step(job, name="Post check-failure triage issue")
 		self.assertEqual(post["env"]["GH_TOKEN"], "${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}")
 		script = post["run"]
 		create_index = script.index("gh issue create")
-		supersede_index = script.index("CHECK_TRIAGE_STAGE=supersede")
+		supersede_index = script.index("CHECK_TRIAGE_STAGE=supersede ")
 		self.assertLess(create_index, supersede_index)
+		# Issue #8671: the account check gates the create; a non-zero exit
+		# keeps the duplicate skip and files nothing.
+		check_index = script.index("CHECK_TRIAGE_STAGE=supersede-check bash scripts/check_failure_triage.sh")
+		self.assertLess(check_index, create_index)
+		self.assertRegex(script[check_index:create_index], r'if \[ "\$\{triage_supersede_check_rc\}" -ne 0 \]; then[\s\S]*exit 0')
 		self.assertIn('CHECK_TRIAGE_SUPERSEDE_NEW_ISSUE_URL="${triage_issue_url}"', script)
 		self.assertRegex(script[supersede_index:], r"bash scripts/check_failure_triage\.sh \|\| true")
 		self.assertEqual(

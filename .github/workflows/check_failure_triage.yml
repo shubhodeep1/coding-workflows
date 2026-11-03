@@ -734,6 +734,15 @@ jobs:
           value = re.sub(r"review-blocked-reissue", "review-blocked (untrusted) reissue", value, flags=re.IGNORECASE)
           print(value[:200] or "(unnamed check)")
           ' "${CHECK_NAME}")"
+          # Issue #8671: a recorded stale issue is superseded only when this
+          # token's account opened it and it is still open and ai:blocked;
+          # otherwise (or on any failure) keep the duplicate skip and file nothing.
+          triage_supersede_check_rc=0
+          CHECK_TRIAGE_STAGE=supersede-check bash scripts/check_failure_triage.sh || triage_supersede_check_rc=$?
+          if [ "${triage_supersede_check_rc}" -ne 0 ]; then
+            printf 'CHECK_TRIAGE op=supersede outcome=skip_create rc=%s pr=%s\n' "${triage_supersede_check_rc}" "${PR_NUMBER}"
+            exit 0
+          fi
           triage_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
             --title "CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}" \
             --body-file "${body_file}" --label "ai:check-triage")"

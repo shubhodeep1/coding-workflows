@@ -202,6 +202,35 @@ emit("candidate", old, heads[0])
 ' "$1" "$2" "$3"
 }
 
+# Supersede eligibility of the recorded stale issue (issue #8671). Returns 0
+# only when the authenticated account (the token that creates the new issue)
+# opened the old issue and it is still open and ai:blocked; otherwise logs the
+# skip reason and returns 1. One /user read and one issue read, made only for
+# a recorded candidate; anything unreadable fails closed. $1 is an optional
+# log suffix (for example "new=<n>").
+triage_supersede_old_issue_eligible()
+{
+	local supersede_log_suffix="${1-}" supersede_login supersede_live_state
+	local supersede_old_issue="${SUPERSEDE_OLD_ISSUE:-}"
+	supersede_login="$(gh api user 2>/dev/null | jq -r '.login // ""' 2>/dev/null || true)"
+	if ! [[ "${supersede_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$ ]]; then
+		log "op=supersede outcome=skip reason=identity_unavailable old=${supersede_old_issue}${supersede_log_suffix:+ ${supersede_log_suffix}}"
+		return 1
+	fi
+	supersede_live_state="$(gh api "repos/${REPO}/issues/${supersede_old_issue}" 2>/dev/null |
+		jq -r --arg login "${supersede_login}" 'if (.state | type) != "string" then "unreadable" elif (.user.login // "") != $login then "foreign_author" elif (.state == "open") and ([.labels[]?.name] | index("ai:blocked")) then "eligible" else "stale" end' 2>/dev/null || echo unreadable)"
+	if [ "${supersede_live_state}" = "foreign_author" ]; then
+		log "op=supersede outcome=skip reason=not_own_issue old=${supersede_old_issue}${supersede_log_suffix:+ ${supersede_log_suffix}}"
+		return 1
+	fi
+	if [ "${supersede_live_state}" != "eligible" ]; then
+		[ "${supersede_live_state}" = "stale" ] || supersede_live_state="unreadable"
+		log "op=supersede outcome=skip reason=old_issue_${supersede_live_state} old=${supersede_old_issue}${supersede_log_suffix:+ ${supersede_log_suffix}}"
+		return 1
+	fi
+	return 0
+}
+
 # Close the stale triage issue the dedup recorded as a supersede candidate
 # (issue #8671). Runs only after the new issue exists, so a failed close never
 # loses the new failure; any write failure warns and returns 0. Writes are not
@@ -212,7 +241,7 @@ triage_supersede_stale_issue()
 	local supersede_old_issue="${SUPERSEDE_OLD_ISSUE:-}"
 	local supersede_old_head="${SUPERSEDE_OLD_HEAD:-}"
 	local supersede_new_head="${SUPERSEDE_NEW_HEAD:-}"
-	local supersede_comment supersede_live_state supersede_login
+	local supersede_comment
 	[ -n "${supersede_old_issue}" ] || return 0
 	if [ "${TRIAGE_SUPERSEDE_ENABLED}" != "true" ]; then
 		log "op=supersede outcome=skip reason=disabled old=${supersede_old_issue} new=${supersede_new_issue}"
@@ -226,27 +255,9 @@ triage_supersede_stale_issue()
 	fi
 	supersede_comment="$(printf 'Superseded: check `%s` failed again on the PR'"'"'s current head `%s`; this issue'"'"'s failure was on `%s`. New triage: #%s\n\n<!-- %ssuperseded-by=%s -->' \
 		"${CHECK_NAME_DISPLAY:-(unnamed check)}" "${supersede_new_head}" "${supersede_old_head}" "${supersede_new_issue}" "${MARKER_PREFIX}" "${supersede_new_issue}")"
-	# Only an issue the authenticated account (the token that just created the
-	# new issue) opened may be superseded (#8671). One /user read, made only
-	# for a recorded candidate; an unreadable identity fails closed.
-	supersede_login="$(gh api user 2>/dev/null | jq -r '.login // ""' 2>/dev/null || true)"
-	if ! [[ "${supersede_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$ ]]; then
-		log "op=supersede outcome=skip reason=identity_unavailable old=${supersede_old_issue} new=${supersede_new_issue}"
-		return 0
-	fi
-	# Re-read the old issue right before writing: diagnose and route ran since
-	# the collect stage, and it may have been resumed or closed meanwhile.
-	supersede_live_state="$(gh api "repos/${REPO}/issues/${supersede_old_issue}" 2>/dev/null |
-		jq -r --arg login "${supersede_login}" 'if (.user.login // "") != $login then "foreign_author" elif (.state == "open") and ([.labels[]?.name] | index("ai:blocked")) then "eligible" else "stale" end' 2>/dev/null || echo unreadable)"
-	if [ "${supersede_live_state}" = "foreign_author" ]; then
-		log "op=supersede outcome=skip reason=not_own_issue old=${supersede_old_issue} new=${supersede_new_issue}"
-		return 0
-	fi
-	if [ "${supersede_live_state}" != "eligible" ]; then
-		[ "${supersede_live_state}" = "stale" ] || supersede_live_state="unreadable"
-		log "op=supersede outcome=skip reason=old_issue_${supersede_live_state} old=${supersede_old_issue} new=${supersede_new_issue}"
-		return 0
-	fi
+	# Re-check right before writing: diagnose and route ran since the collect
+	# stage, and the old issue may have been resumed or closed meanwhile.
+	triage_supersede_old_issue_eligible "new=${supersede_new_issue}" || return 0
 	# Close before labelling: a failed close must not leave the terminal
 	# ai:closed label on an issue that is still open.
 	if ! gh api --method POST "repos/${REPO}/issues/${supersede_old_issue}/comments" -f body="${supersede_comment}" >/dev/null 2>&1 ||
@@ -483,7 +494,7 @@ if [ -z "${TRUSTED_SUPPORT_DIR}" ] ||
 	exit 1
 fi
 case "${TRIAGE_STAGE}" in
-	all|collect|diagnose|route|supersede) ;;
+	all|collect|diagnose|route|supersede|supersede-check) ;;
 	*) log "error invalid_stage"; exit 1 ;;
 esac
 
@@ -626,6 +637,30 @@ triage_upstream_send()
 	fi
 	return 0
 }
+
+if [ "${TRIAGE_STAGE}" = "supersede-check" ]; then
+	# Runs in the workflow's post step before it creates the new issue, with
+	# that step's Issues-scoped token (issue #8671). Exit 0 lets the post step
+	# create the issue; exit 10 means the recorded stale issue cannot be
+	# superseded by this account, so today's duplicate skip stands.
+	if [ ! -s "${TRIAGE_METADATA_FILE}" ]; then
+		log "op=supersede outcome=skip reason=metadata_missing"
+		exit 0
+	fi
+	SUPERSEDE_OLD_ISSUE="$(jq -r '.supersede_issue // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
+	[ -n "${SUPERSEDE_OLD_ISSUE}" ] || exit 0
+	if ! [[ "${SUPERSEDE_OLD_ISSUE}" =~ ^[1-9][0-9]*$ ]]; then
+		log "op=supersede outcome=skip reason=metadata_invalid"
+		exit 10
+	fi
+	supersede_check_fp="$(jq -r '.fingerprint // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
+	supersede_check_pr="$(jq -r '.pr_number // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
+	if triage_supersede_old_issue_eligible "stage=pre_create"; then
+		exit 0
+	fi
+	log "skip reason=duplicate_open_issue issue=${SUPERSEDE_OLD_ISSUE} fp=${supersede_check_fp//[^0-9a-f]/} pr=${supersede_check_pr//[^0-9]/}"
+	exit 10
+fi
 
 if [ "${TRIAGE_STAGE}" = "supersede" ]; then
 	# Runs in the workflow's post step, right after it created the new issue,
@@ -2162,6 +2197,13 @@ if triage_upstream_send; then
 	exit 0
 fi
 
+# Issue #8671: only supersede (and so only file past) a stale issue this
+# account opened and that is still open and ai:blocked; otherwise keep the
+# duplicate skip. The same check runs again right before the close.
+if [ -n "${SUPERSEDE_OLD_ISSUE}" ] && ! triage_supersede_old_issue_eligible "stage=pre_create"; then
+	log "skip reason=duplicate_open_issue issue=${SUPERSEDE_OLD_ISSUE} fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+	exit 0
+fi
 ISSUE_URL_NEW="$(gh_retry gh issue create --repo "${REPO}" --title "${TITLE}" --body-file "${BODY_FILE}" --label "${TRIAGE_LABEL}" 2>/dev/null || echo '')"
 if [ -z "${ISSUE_URL_NEW}" ]; then
 	log "error issue_create_failed pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY} fp=${FP}"
