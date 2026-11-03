@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Stay inside files_touched. Make append-only, minimal edits, and do not reflow unrelated code. Tabs or existing indentation as the file uses.\" (linked issue #8745, Implementer discipline)\n  expected_change_site: tests/test_review_conflict_resolve_retry_prelude_render.py, continuation lines 656 (`test_scope_retry_restores_full_attempt_and_keeps_final_gate`), 709 (`test_scope_feedback_is_available_for_generic_resolver`), 931 (`test_model_index_is_fresh_per_attempt_and_fails_closed`)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR diff still contains three whitespace-only hunks (`@@ -653`, `@@ -706`, `@@ -928`) at lines 656, 709 and 931, which the PR does not otherwise touch, the last-run diff did not touch these lines, and the \"Editor changes lost\" comments (6603689435, 6604230572) show earlier editor reverts never reached a commit. Severity disagreement: NIT (anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash) vs MAJOR (minimax_minimax-m3).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: The linked issue says \"Make append-only, minimal edits, and do not reflow unrelated code. Tabs or existing indentation as the file uses.\"\nExpected change site: `tests/test_review_conflict_resolve_retry_prelude_render.py`, continuation lines 656 (`test_scope_retry_restores_full_attempt_and_keeps_final_gate`), 709 (`test_scope_feedback_is_available_for_generic_resolver`) and 931 (`test_model_index_is_fresh_per_attempt_and_fails_closed`). These lines should match the base indentation: three tabs plus one space at 656, and three tabs plus five spaces at 709 and 931.\nEvidence of absence: All three lines still start with four tabs. The PR diff still shows three whitespace-only hunks (`@@ -653`, `@@ -706`, `@@ -928`) in tests this PR does not otherwise touch. The last-run diff adds only the TypeError test case. Earlier editor summaries claimed the revert was done, but the \"Editor changes lost\" comments show no commit was produced. Purely cosmetic, no runtime impact. Nothing else in the PR is missing against the issue.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: From issue #8745 \"Implementer discipline\" \u2014 \"Stay inside files_touched. Make append-only, minimal edits, and do not reflow unrelated code. Tabs or existing indentation as the file uses.\"\nExpected change site: `tests/test_review_conflict_resolve_retry_prelude_render.py` at three continuation lines (line 656 in `test_scope_retry_restores_full_attempt_and_keeps_final_gate`, line 709 in `test_scope_feedback_is_available_for_generic_resolver`, line 931 in `test_model_index_is_fresh_per_attempt_and_fails_closed`)\nEvidence of absence: The PR diff still contains three whitespace-only hunks at these lines. Line 656 goes from 3 tabs + 1 space to 3 tabs + 2 spaces; lines 709 and 931 go from 5 leading spaces to 4 leading tabs. The last-run diff (7 insertions, 0 deletions) did not touch them. The \"Editor changes lost\" comments 6603689435 and 6604230572 confirm earlier revert attempts never reached a commit.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Make append-only, minimal edits, and do not reflow unrelated code. Tabs or existing indentation as the file uses.\"\nExpected change site: `tests/test_review_conflict_resolve_retry_prelude_render.py`, continuation lines 656, 709, and 931.\nEvidence of absence: The PR diff retains three whitespace-only indentation changes at those lines. The added tests do not require changing these existing lines.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Stay inside files_touched. Make append-only, minimal edits, and do not reflow unrelated code. Tabs or existing indentation as the file uses.\" (linked issue #8745, Implementer discipline)\nExpected change site: tests/test_review_conflict_resolve_retry_prelude_render.py, continuation lines 656 (`test_scope_retry_restores_full_attempt_and_keeps_final_gate`), 709 (`test_scope_feedback_is_available_for_generic_resolver`), 931 (`test_model_index_is_fresh_per_attempt_and_fails_closed`)\nEvidence of absence: The revert of the three whitespace-only re-indentation hunks was claimed by four editor summaries (issue comments 6602806608, 6603279245, 6603674421, 6604214063) but never reached a commit; \"Editor changes lost\" notices (6603689435, 6604230572) confirm it. The PR diff at head c225b124 still contains the three hunks. Lines 656, 709 and 931 on disk start with four tabs, while the base shows three tabs plus trailing spaces. The last-run diff did not touch these lines.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "498eca14a2a55880625de030d96ff7fd8d3507fb1af34b96036ca009a53cfbd7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8747,
+    "run_id": "41640587443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41640587443",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103132118_af340d3dd4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8747,
+    "run_id": "41640587443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T13:21:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
