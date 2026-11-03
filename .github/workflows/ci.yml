@@ -1727,6 +1727,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_force_tick_repository_env.py
 
+      - name: Review autofix disk headroom contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_disk_headroom_contract.py
+
       - name: Review autofix smoke editor override contract test
         run: |
           set -euo pipefail
