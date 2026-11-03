@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8738,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8738\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8741\",\"pr_number\":8741,\"branch\":\"ai/issue-8738\",\"run_id\":\"41593767754\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41593767754\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/8738-reviewer-common-context-sections.md\",\"scripts/review_run_reviewers.sh\",\"tests/test_review_reviewer_common_context_sections.py\"]}",
+  "fingerprint": "5a17f5eb0296af44fd6b12f91c01a16fe773178c89974f1934d8a3a5e4808d76",
+  "lineage": {
+    "issue_number": 8738,
+    "parent_ids": [],
+    "pr_number": 8741,
+    "run_id": "41593767754",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41593767754",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8741"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261103074632_1f72e4434f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8738,
+    "level": "run",
+    "pr_number": 8741,
+    "run_id": "41593767754"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8738: https://github.com/shubhodeep1/coding-workflows/pull/8741",
+  "timestamps": {
+    "created_at": "2026-11-03T07:46:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
