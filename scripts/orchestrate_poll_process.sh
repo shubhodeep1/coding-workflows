@@ -32990,6 +32990,16 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		echo "  PR #${S_PR} is ai:merge-queued (merge train); skipping standalone conflict recovery until released."
 		continue
 	fi
+	# A review waiting for Claude capacity labels its PR
+	# ai:claude-capacity-wait; the capacity-resume pass re-dispatches it and
+	# removes the label. Dispatching here would only defer again, and counting
+	# those deferrals as resolution attempts sent false "resolve by hand"
+	# WARNINGs (PRs #8239/#8346/#8348/#8373/#8389, 2026-11-02: 9 deferred
+	# dispatches each, no resolver ever ran).
+	if _linked_pr_is_capacity_waiting "${S_PR_JSON}"; then
+		echo "STANDALONE_CONFLICT_STUCK pr=${S_PR} outcome=skip reason=claude_capacity_wait"
+		continue
+	fi
 
 	S_MERGEABLE_STATE="$(echo "${S_PR_JSON}" | jq -r '.mergeable_state // ""')"
 	if [ -z "${S_MERGEABLE_STATE}" ] || [ "${S_MERGEABLE_STATE}" = "unknown" ]; then
