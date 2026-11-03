@@ -2673,6 +2673,7 @@ jobs:
             tests/test_review_rb_judge_reference_staging.py \
             tests/test_review_resolve_review_threads.py \
             tests/test_review_reviewer_attempt_prompt_isolation.py \
+            tests/test_review_reviewer_common_context_sections.py \
             tests/test_static_context_agents_index.py \
             tests/test_static_context_agents_index_clarify_plan.py \
             tests/test_static_context_agents_index_implement.py \
