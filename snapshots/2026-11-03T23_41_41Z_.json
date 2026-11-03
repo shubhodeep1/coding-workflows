@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-02T22:40:26Z",
+  "tick_at": "2026-11-03T23:41:41Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,18 +11,18 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 6
+    "tracking_issues": 4
   },
   "tracking_issues": [
     {
-      "current_wave": 2,
-      "integration_ahead_by": "75",
+      "current_wave": 6,
+      "integration_ahead_by": "96",
       "issue_counts": {
         "closed": 0,
         "done": 1,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 2,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -72,46 +72,6 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] Give the workflow-failure heal evidence, reproduction and trend awareness (plan P1-P7)",
-      "total_waves": 0,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 0,
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 8649,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-09-28-3.md",
-      "total_waves": 0,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 0,
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 8663,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-09-29.md",
       "total_waves": 0,
       "wave_complete": false
     },
