@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md, CLAUDE.md:agents.md:1-5410, CLAUDE.md:1-1508 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The copilot-pull-request-reviewer check-run (41544382408) fails with `custom_instructions_too_large`, so the reviewer exits with code 1 and produces no review.\n  WHY: The combined agents.md and CLAUDE.md custom instructions exceed the Copilot reviewer's size limit. Severity disagreement: gemini said BLOCKER and glm said MAJOR, so the highest is used (mapped to high). gemini cited .github/workflows/review_autofix.yml (check-run failure, no line) and glm cited the instruction files. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 considered this and judged it out of scope for the PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR review pipeline must produce a review on the PR head.\n  expected_change_site: agents.md and CLAUDE.md (shrunk, split or scoped so the combined custom instructions fit the reviewer's size limit)\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: No diff hunk reduces the size of agents.md or CLAUDE.md on the PR head, and check-run 41544382408 still fails with `custom_instructions_too_large`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:N/A (check-run failure) | severity=BLOCKER | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check-run failed with \"custom_instructions_too_large\".\n  WHY: The custom instructions (CLAUDE.md and agents.md) exceed the Copilot reviewer's capacity, so the review job exits with code 1 and blocks the automated review pipeline.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md, CLAUDE.md:agents.md:1-5410, CLAUDE.md:1-1508 | severity=MAJOR | confidence=5\n  PROBLEM: The Copilot PR reviewer cannot construct its review request after loading both instruction files. Check-run 41544382408 reports `custom_instructions_too_large`, so the reviewer exits with code 1 and produces no review.\n  WHY: The combined agents.md (5410 lines) and CLAUDE.md (1508 lines) payload exceeds GitHub's custom-instructions size limit, so the reviewer rejects the request before reviewing any diff.\n- TASK_GAP\n  Requirement: The PR review pipeline must produce a review on the PR head.\n  Expected change site: agents.md and CLAUDE.md (must be shrunk/split or scoped so the combined custom instructions fit the reviewer's size limit).\n  Evidence of absence: No diff hunk reduces either file's size on the PR head; check-run 41544382408 still fails with `custom_instructions_too_large`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c6a2569fdf7939455173c4c431cd386d22a292e7412ff2b44be2dc151d6e2e3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41668129388",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41668129388",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103160319_45487106f8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41668129388"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T16:03:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
