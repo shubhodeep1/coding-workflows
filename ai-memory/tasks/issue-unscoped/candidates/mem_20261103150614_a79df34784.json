@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Reviewer reports no defect: the file contains exactly the three required lines with a trailing newline (NIT-level note only).\n  WHY: Deliverable matches the specification in issue #8363; severity=NIT as stated by the reviewer.\n- tests/e2e_smoke_canary.txt (check-run copilot-pull-request-reviewer, Actions run 41544382408 on head e540dbc) | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The failed check-run (`custom_instructions_too_large`, \"Prompt too big after adding system message\") cannot be mapped to the diff.\n  WHY: It comes from the third-party Copilot reviewer's prompt-size limit on the repo instruction files, and is out of scope per the issue's single-file constraint; severity=NIT as stated by the reviewer.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly three lines: `status: ok`, `run_id: 40876853022`, `updated-by: ai-pipeline`.\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer states the file content matches the requirement, so no implementation gap exists in the file. It notes the copilot-pull-request-reviewer check failure as a distraction. It labelled this SEVERITY: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly three lines: `status: ok`, `run_id: 40876853022`, and `updated-by: ai-pipeline`.\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: The file content matches the three required lines. The reviewer notes the copilot-pull-request-reviewer failure (`custom_instructions_too_large`) is a distraction. The core task is complete, so no implementation gap exists. SEVERITY: NIT, ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:lines 1-3 | severity=low | confidence=5\n  PROBLEM: None. The file contains exactly the three required lines with a trailing newline, and the diff changes only this one file.\n  WHY: N/A. No failure path exists, and the deliverable matches the specification. The reviewer labelled it SEVERITY: NIT.\n- tests/e2e_smoke_canary.txt (check-run `copilot-pull-request-reviewer`, Actions run 41544382408 on head e540dbc) | severity=low | confidence=4\n  PROBLEM: This failed check-run cannot be mapped to the diff. It comes from the third-party Copilot reviewer app's prompt-size limit (`custom_instructions_too_large`, statusCode 422).\n  WHY: The check keeps failing while the assembled custom instructions exceed the limit. The remedy is out of scope per the issue's constraint to modify only `tests/e2e_smoke_canary.txt`. The reviewer labelled it SEVERITY: NIT.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "513ddec49988868b5d26eb47df769b18d767028c354b87827d3e7d0f69a51130",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41657575270",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41657575270",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103150614_a79df34784",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41657575270"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T15:06:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
