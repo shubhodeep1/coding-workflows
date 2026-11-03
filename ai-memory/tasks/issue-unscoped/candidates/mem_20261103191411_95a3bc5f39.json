@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:1-1508 and agents.md:1-5410 | severity=high | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check (run 41544382408, job 125616255928) fails with `custom_instructions_too_large` because the combined prompt built from CLAUDE.md and agents.md exceeds the reviewer's size limit.\n  WHY: The review request is never created and the check exits `failure` on the PR head. The source rated this MAJOR, which is mapped here to high. Two other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) saw the same check failure and deliberately did not report it, because it is an environmental issue outside this one-file diff. That is a disagreement over whether to report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CLAUDE.md and agents.md:entire files (CLAUDE.md: 1508 lines; agents.md: 5410 lines) | severity=MAJOR | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check (run 41544382408, job 125616255928) fails before creating its review request with `Prompt too big after adding system message` / `custom_instructions_too_large`, because the combined custom-instruction prompt built from CLAUDE.md and agents.md exceeds the reviewer's prompt size limit.\n  WHY: The check assembles both files as custom instruction inputs, and their combined size overflows the input budget. The review request is never created and the check exits `failure` on the PR head. The failure is not mapped to the canary-file diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "75fbe7f0e169c646b2091e3643231d8a397a3488af099fddd3d6cf4917b8a8db",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41697561626",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41697561626",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103191411_95a3bc5f39",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41697561626"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T19:14:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
