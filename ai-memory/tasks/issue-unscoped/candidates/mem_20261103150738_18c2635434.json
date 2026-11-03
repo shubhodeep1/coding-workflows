@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_prepush_test_gate.sh:12-18,67,492,549 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The header comment (lines 12-18) and the `review_prepush_test_gate_repair` leading comment (line 492, reported as ~549 by one reviewer) are stale. They list `rpg_repair` outcomes as `ran | skipped (...) | reverted (syntax)` and say the gate always re-runs after a repair. They omit the new lint-only revert, which sets `rpg_repair=\"reverted (it removed the whole change for lint findings only)\"` and does not re-run the gate. One reviewer also notes the line 67 mode list lacks `lint_only`.\n  WHY: This is not a runtime bug, because `review_prepush_test_gate_main` (lines 673-680) re-runs the gate only when `rpg_repair` equals `ran`. The stale comments could mislead future edits to the repair flow. All reviewers rated it NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_autofix_step_prepush_test_gate.sh:492 (comment); header lines 13-18 | severity=NIT | confidence=4\n  PROBLEM: The `rpg_repair` outcome list at line 492 is stale: it omits the new `reverted (it removed the whole change for lint findings only)` value from lines 572-577. The header at lines 13-18 says the gate runs once more, but the new branch does not re-run it.\n  WHY: This is not a runtime failure. The code is correct, because lines 673-676 re-run the gate only when `rpg_repair` equals `ran`. The tests and the `agents.d` fragment describe it correctly.\n- Hardening suggestion: add the new `rpg_repair` value to the list and note that the gate is not re-run in that case (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_prepush_test_gate.sh:67,549 | severity=NIT | confidence=4\n  PROBLEM: The script header and the comment on `review_prepush_test_gate_repair` are stale. The header (line 67) lists the helper modes without `lint_only`. The function comment (around line 549, reported as 492 in the original context) omits the new `lint_only` revert, which does not re-run the gate.\n  WHY: This is not a runtime correctness bug, but it misleads readers about repair outcomes.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_prepush_test_gate.sh:12-18,492; `review_prepush_test_gate_main` 673-679 | severity=NIT | confidence=4\n  PROBLEM: The comments say a repair always causes a gate re-run and list only `ran`, `skipped (...)` and `reverted (syntax)`. The new lint-only branch returns `rpg_repair=\"reverted (...)\"`, and main re-runs the gate only when `rpg_repair` equals `ran`.\n  WHY: There is no current runtime failure. The comments misstate the lint-only path, which skips the re-run and reports the original failure, and that can mislead future changes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_autofix_step_prepush_test_gate.sh:12-17,492 | severity=NIT | confidence=4\n  PROBLEM: The header contract comment and the line 492 comment are stale. The header says \"the gate runs once more; there is never a second repair\". Line 492 says `rpg_repair` is `ran | skipped (...) | reverted (syntax)`. The lint-only revert (lines 572-577) sets `rpg_repair=\"reverted (it removed the whole change for lint findings only)\"` and returns without a second gate run.\n  WHY: There is no runtime failure: lines 673-680 skip `run2` correctly, and the summary code at line 185 special-cases only the `ran (re-run skipped` prefix. The script is the shared gate entry point for three phases, so readers of these comments would wrongly expect every revert to re-run the gate.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ba911ce3095de2a7aa1ee4bd0f54267cbc71c6c91a96f1973d1a890b47958dd2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8756,
+    "run_id": "41653670772",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41653670772",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103150738_18c2635434",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8756,
+    "run_id": "41653670772"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T15:07:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
