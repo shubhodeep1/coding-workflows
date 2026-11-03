@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:full file (3 lines) | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check on head e540dbc failed with `custom_instructions_too_large` (HTTP 422) before producing a review, and the canary diff did not cause it.\n  WHY: The external reviewer cannot build its prompt from the repo-wide CLAUDE.md/AGENTS.md instructions, and the issue forbids touching other files. Severity disagreement: minimax_minimax-m3 said NIT and z-ai_glm-5_3-flash said MAJOR, so the highest is used.\n- tests/test_implement_post_codex_recovery.py:5060,5779 | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate attributes 7 test failures in tests/test_implement_post_codex_recovery.py to this change, but no code reads the canary file's content.\n  WHY: `tests/e2e_smoke_canary.txt` appears in that test file only inside prompt fixture strings, so the attribution is wrong, and the issue forbids modifying any other file.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/e2e_smoke_canary.txt:full file (3 lines) | severity=NIT | confidence=4\n  PROBLEM: The `copilot-pull-request-reviewer` check on head e540dbc failed with `custom_instructions_too_large` (HTTP 422); the canary diff is plain text no script reads, so this PR's hunk did not cause it.\n  WHY: The Copilot reviewer job cannot build its prompt when the combined CLAUDE.md and agents.md exceed its budget. The failure is inherited from the merge base and is out of scope per the issue.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:check-run failure, not a diff hunk (PR head e540dbc; job 125616255928) | severity=MAJOR | confidence=4\n  PROBLEM: The `copilot-pull-request-reviewer` check completed with conclusion=failure (`custom_instructions_too_large`, statusCode 422) before producing any review, and it cannot be mapped to the diff.\n  WHY: The external reviewer action enforces a prompt-size budget on repo-wide custom instructions, and the repo's payload exceeds it. No change within the issue's allowed scope can clear it.\n- tests/test_implement_post_codex_recovery.py:5060,5779 | severity=MAJOR | confidence=4\n  PROBLEM: The pre-push gate attributes 7 test failures to this change, but no code reads the canary file's content.\n  WHY: `tests/e2e_smoke_canary.txt` appears in that test file only inside prompt fixture strings (lines 5060, 5779), so the gate's attribution is wrong, and the issue forbids modifying any other file.\n- TASK_GAP (requirement fully met, no gap):\n  Requirement: \"Update its content so it is exactly these three lines ... `status: ok` / `run_id: 40876853022` / `updated-by: ai-pipeline` ... Only modify `tests/e2e_smoke_canary.txt`.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: Not applicable. The file contains exactly the three required lines with a trailing newline (55 bytes), byte-identical to the spec template `tests/e2e_smoke_canary_spec.txt` with `__RUN_ID__` substituted by 40876853022. `pr_changed_files.txt` confirms only that file is touched.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b27ad351b8e23dd420538d1fc66a2480e008da93fd277867d8e983df5c38adc3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41634049644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41634049644",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103122736_42dafbd930",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41634049644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T12:27:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
