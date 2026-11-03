@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_conflict_resolve_retry_prelude_render.py:653-931 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: Whitespace-only reflow hunks (lines 656, 709, 931 per two reviewers; 653/706/928 per z-ai_glm-5_3-flash) in tests the PR does not otherwise modify.\n  WHY: Violates the issue's append-only, minimal-edit rule and adds unrelated diff noise, though it has no runtime effect. Reviewers rated it NIT. z-ai_glm-5_3-flash noted it normalizes indentation and is non-blocking.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_conflict_resolve_retry_prelude_render.py:656, 709, 931 | severity=NIT | confidence=5\n  PROBLEM: Three continuation lines still start with four tabs, where the base had three tabs plus spaces. They sit in test_scope_retry_restores_full_attempt_and_keeps_final_gate, test_scope_feedback_is_available_for_generic_resolver and test_model_index_is_fresh_per_attempt_and_fails_closed.\n  WHY: It has no runtime effect. It breaks the linked issue's \"append-only, minimal edits, and do not reflow unrelated code\" rule and leaves three unrelated whitespace hunks in the PR diff.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_conflict_resolve_retry_prelude_render.py:656, 709, 931 | severity=NIT | confidence=4\n  PROBLEM: Unnecessary whitespace-only reflow hunks in tests that are not otherwise modified by this PR.\n  WHY: No runtime impact; however, it violates the requirement to avoid reflowing unrelated code and clutters the diff.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_conflict_resolve_retry_prelude_render.py:653, 706, 928 | severity=NIT | confidence=high\n  PROBLEM: Three whitespace-only reflow hunks touch lines the PR otherwise does not modify.\n  WHY: They add diff noise against the issue's minimal-edit rule. Mitigating: the reflow normalizes continuation-line indentation to the repo's tab convention, so it is defensible and not blocking.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "de32c59132ba44546466941bd9d7ab641fe72f2f9f5634c11754c96e047195e3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8747,
+    "run_id": "41636480237",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41636480237",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103124644_16062accf9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8747,
+    "run_id": "41636480237"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T12:46:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
