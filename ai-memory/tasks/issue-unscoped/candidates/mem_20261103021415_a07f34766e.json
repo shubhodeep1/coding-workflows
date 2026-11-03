@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Review pass requires LINKED ISSUE body, PR DESCRIPTION, PR DIFF, and LAST RUN DIFF inputs to compare intent against delivery.\n  expected_change_site: Reviewer prompt bundle (inputs not present in this pass).\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: No diff, PR description, or issue body was supplied with the prompt; the cross-pollination summary contains no findings or task gaps.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: Review pass requires LINKED ISSUE body, PR DESCRIPTION, PR DIFF, and LAST RUN DIFF inputs to compare intent against delivery.\n  Expected change site: Reviewer prompt bundle (inputs not present in this pass).\n  Evidence of absence: No diff, PR description, or issue body was supplied with the prompt; the cross-pollination summary contains no findings or task gaps.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: high\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6779c56e0d4718e5cd47dde4e4ab80c7b0ecc0aae12f97f2119d5cd437f6945b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8700,
+    "run_id": "41563447140",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41563447140",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103021415_a07f34766e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8700,
+    "run_id": "41563447140"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T02:14:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
