@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_gh_api_write_guard.py:Multiple test failures | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The moved step `Review autofix review-pipeline plumbing contract test` causes contract test failures in `tests/test_gh_api_write_guard.py` in the new job context `tests-release-and-log-analysis`.\n  WHY: The reviewer says these contract tests verify security and permission guards and that the move likely violated them in the new job context. Severity is the source's BLOCKER, mapped to critical.\n- tests/test_pr_watch_guard.py:Test failure in `tests/test_pr_watch_guard.py` | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The step move caused a failure in `tests/test_pr_watch_guard.py`.\n  WHY: The reviewer says the move potentially puts the step in a context where its watch-guard status violates the contract. Severity is the source's BLOCKER, mapped to critical.\n- tests/test_workflow_checkout_integration_ref_audit.py:Test failure in `tests/test_workflow_checkout_integration_ref_audit.py` | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The step move caused a failure in `tests/test_workflow_checkout_integration_ref_audit.py`.\n  WHY: The reviewer says the moved step likely violates the checkout integration ref expectation for the `tests-release-and-log-analysis` job. Severity is the source's BLOCKER, mapped to critical.\n- tests/test_files_touched_scope_guard.py:Test failure in `tests/test_files_touched_scope_guard.py` | severity=critical | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The move resulted in a failure in `tests/test_files_touched_scope_guard.py`.\n  WHY: The reviewer says the move might have introduced an interaction that violates the scope guard. Severity is the source's BLOCKER, mapped to critical.\n- .github/workflows/ci.yml:2293-2338 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate attributes 5 test failures to this change, but the reviewer found no mechanism linking them to the diff.\n  WHY: The gate stays red unless the 5 files are re-verified in isolation, and the attribution may be an environment artifact. Severity is the source's NIT, mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Never add text to agents.md directly... Write a fragment instead.\"\n  expected_change_site: agents.d/8730-ci-hooks-plumbing-step-to-release.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No agent fragment file `agents.d/8730-ci-hooks-plumbing-step-to-release.md` was created or included in the PR diff, and `tests/test_agents_fragment_contract.py` is failing as a result.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: \"Never add text to agents.md directly... Write a fragment instead.\"\n  Expected change site: agents.d/8730-ci-hooks-plumbing-step-to-release.md\n  Evidence of absence: No agent fragment file `agents.d/8730-ci-hooks-plumbing-step-to-release.md` was created or included in the PR diff; `tests/test_agents_fragment_contract.py` is failing as a result.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- tests/test_gh_api_write_guard.py:Multiple test failures: `test_dispatchable_workflows_match_the_gh_workflow_run_allow_rules`, `test_settings_wire_the_guard_once_under_bash`, `test_settings_no_longer_carry_gh_api_ask_rules`, `test_other_bash_guards_stay_wired`, `test_template_parity` | severity=BLOCKER | confidence=4\n  PROBLEM: The moved step `Review autofix review-pipeline plumbing contract test` causes contract test failures in `tests/test_gh_api_write_guard.py` when running in the new job context `tests-release-and-log-analysis`.\n  WHY: These contract tests verify security/permission guards (e.g., dispatch rules, wire-once settings). The move likely introduced a violation in the new job context where these protections are differently configured or expected to be absent/present.\n- tests/test_pr_watch_guard.py:Test failure in `tests/test_pr_watch_guard.py` | severity=BLOCKER | confidence=4\n  PROBLEM: The step move caused a failure in `tests/test_pr_watch_guard.py`.\n  WHY: This test ensures that PR watching is disabled for specific jobs/steps. The move to `tests-release-and-log-analysis` potentially places the step in a context where its watch-guard status violates the contract.\n- tests/test_workflow_checkout_integration_ref_audit.py:Test failure in `tests/test_workflow_checkout_integration_ref_audit.py` | severity=BLOCKER | confidence=4\n  PROBLEM: The step move caused a failure in `tests/test_workflow_checkout_integration_ref_audit.py`.\n  WHY: This test verifies the integrity of checkout integration refs for specific steps/jobs. The moved step likely now violates the expectation for the `tests-release-and-log-analysis` job.\n- tests/test_files_touched_scope_guard.py:Test failure in `tests/test_files_touched_scope_guard.py` | severity=BLOCKER | confidence=3\n  PROBLEM: The move resulted in a failure in `tests/test_files_touched_scope_guard.py`.\n  WHY: This test guards the scope of changes against the granted files list. The move might have introduced an interaction or implicit dependency change that violates the scope guard, despite `ci.yml` being in the granted list.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:2293-2338 | severity=NIT | confidence=3\n  PROBLEM: The pre-push test gate on head 747d5a59 attributes 5 failures to this change (tests/test_agents_fragment_contract.py::test_instructions_point_at_fragments, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py [path0] x4, tests/test_pr_watch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py), but verification shows no mechanism linking them to this diff.\n  WHY: The gate reports status=fail on the current head, so the release gate stays red unless these 5 are re-verified in isolation; if the attribution is wrong (environment/ordering artifact), no code change in this PR can clear it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "93970ae7d3b1f3baccb78151dca72d285c3e9f7101ab6c0131957f9355e0b7fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8733,
+    "run_id": "41589887247",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41589887247",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103063938_1714b9c98e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8733,
+    "run_id": "41589887247"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T06:39:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
