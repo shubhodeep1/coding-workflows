@@ -28,7 +28,8 @@ name: Promote main to stable
 #   1. detect a code change on `main` since the `stable` tag (non-code paths
 #      such as analysis/, docs/ and most *.md do not count), hold while a
 #      cycle is in flight, already ran for this tip, or already failed on it
-#      PROMOTE_CYCLE_MAX_ATTEMPTS times;
+#      PROMOTE_CYCLE_MAX_ATTEMPTS times (a tracking issue parked on a human
+#      latch label for PROMOTE_CYCLE_HOLD_MAX_HOURS no longer holds);
 #   2. run test-and-mark-stable.yml in gate_only mode on `main` (the smoke
 #      gate) and wait for it;
 #   3. dispatch the PROVING apply-analysis run (one analysis doc) with the
@@ -143,6 +144,14 @@ jobs:
           PROMOTE_CYCLE_MAX_ATTEMPTS: ${{ vars.PROMOTE_CYCLE_MAX_ATTEMPTS || '3' }}
           PROMOTE_CYCLE_PIN_ENABLED: ${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}
           PROMOTE_CYCLE_FREEZE_MAX_SECS: ${{ vars.PROMOTE_CYCLE_FREEZE_MAX_SECS || '172800' }}
+          PROMOTE_CYCLE_HOLD_RELEASE_ENABLED: ${{ vars.PROMOTE_CYCLE_HOLD_RELEASE_ENABLED || 'true' }}
+          PROMOTE_CYCLE_HOLD_MAX_HOURS: ${{ vars.PROMOTE_CYCLE_HOLD_MAX_HOURS || '24' }}
+          # WARNING alert when a human-latched tracking issue stops holding
+          # the cycle (same rows as promote-candidate-follow.yml).
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           PROMOTE_CYCLE_GATE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_WAIT_SECS || '18000' }}
           PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS || '1800' }}
           PROMOTE_CYCLE_GATE_POLL_SECS: ${{ vars.PROMOTE_CYCLE_GATE_POLL_SECS || '60' }}

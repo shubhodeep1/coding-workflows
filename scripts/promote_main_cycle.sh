@@ -23,6 +23,12 @@
 #   PROMOTE_CYCLE_SKIPPED reason=disabled
 #   PROMOTE_CYCLE_SKIPPED reason=another_run_active         a previous cycle job is still running
 #   PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight            a labelled tracking issue is open
+#                                                           and still holds (see the bounded hold)
+#   PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=<n> reason=<label> latch_age_secs=<n> max_hours=<n>
+#                                                           not an exit: a tracking issue parked on
+#                                                           a human latch label for at least
+#                                                           PROMOTE_CYCLE_HOLD_MAX_HOURS no longer
+#                                                           holds the cycle (WARNING alert sent)
 #   PROMOTE_CYCLE_SKIPPED reason=no_code_changes            nothing but non-code paths changed
 #   PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_last_cycle
 #   PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_failed_run   PROMOTE_CYCLE_MAX_ATTEMPTS
@@ -105,6 +111,27 @@
 #                                       pinned mode off
 #   PROMOTE_CYCLE_FREEZE_MAX_SECS       default 172800; age reported for a stale
 #                                       promote-cycle-frozen tag
+#   PROMOTE_CYCLE_HOLD_RELEASE_ENABLED  default true; `false` (anything not truthy)
+#                                       makes every labelled tracking issue hold, as
+#                                       before the bounded hold
+#   PROMOTE_CYCLE_HOLD_MAX_HOURS        default 24; a tracking issue whose newest
+#                                       human latch label (PROMOTE_CYCLE_HOLD_LATCH_LABELS)
+#                                       is at least this old stops holding the cycle.
+#                                       A non-positive-integer value falls back to 24
+#                                       with a warning.
+#   TG_BOT_SECRET, TG_ADMIN_CHAT_ID / TG_CHAT_ID, ALERT_MSG_LEVEL
+#                                       Telegram settings for the WARNING sent when a
+#                                       hold is released (best effort, via tg_helpers.sh)
+#
+# Bounded hold (stuck-states P4, Refs #8291): guard 2 reads the labels of the
+# open tracking issues it already lists. An issue without a latch label holds
+# the cycle as before. For issues carrying one of ai:harness-broken,
+# ai:validation-failed, ai:security-pass-failed, ai:blocked or ai:needs-human,
+# one batched GraphQL read fetches their LabeledEvent history; the newest event
+# of any present latch label is the latch start. At least
+# PROMOTE_CYCLE_HOLD_MAX_HOURS old: the issue is released (logged, WARNING
+# alert) and no longer holds. A failed, unverified, incomplete or unparseable
+# history keeps the issue holding (fail closed).
 #
 # Operator-step drain (plan item 4d): whenever the `stable` tag resolves, the
 # cycle first runs `operator_step_issue.py tick` with the tag's commit, before
@@ -123,6 +150,11 @@ cd "${REPO_ROOT}"
 
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+if [ -r "${SCRIPT_DIR}/tg_helpers.sh" ]; then
+	# shellcheck source=tg_helpers.sh
+	# shellcheck disable=SC1091
+	source "${SCRIPT_DIR}/tg_helpers.sh"
+fi
 
 PROMOTE_CYCLE_ENABLED="${PROMOTE_CYCLE_ENABLED:-true}"
 PROMOTE_CYCLE_DEFAULT_BRANCH="${PROMOTE_CYCLE_DEFAULT_BRANCH:-main}"
@@ -144,6 +176,18 @@ if ! [[ "${PROMOTE_CYCLE_FREEZE_MAX_SECS}" =~ ^[0-9]+$ ]] || [ "${PROMOTE_CYCLE_
 	echo "::warning::PROMOTE_CYCLE_FREEZE_MAX_SECS must be a positive integer; using 172800."
 	PROMOTE_CYCLE_FREEZE_MAX_SECS=172800
 fi
+PROMOTE_CYCLE_HOLD_RELEASE_ENABLED="${PROMOTE_CYCLE_HOLD_RELEASE_ENABLED:-true}"
+PROMOTE_CYCLE_HOLD_MAX_HOURS="${PROMOTE_CYCLE_HOLD_MAX_HOURS:-24}"
+# A bad optional variable must not stop the nightly cycle: warn and use 24.
+# No leading zero (bash arithmetic would read it as octal) and at most 6
+# digits, so the hours-to-seconds product cannot overflow.
+if ! [[ "${PROMOTE_CYCLE_HOLD_MAX_HOURS}" =~ ^[1-9][0-9]{0,5}$ ]]; then
+	echo "::warning::PROMOTE_CYCLE_HOLD_MAX_HOURS must be a positive integer; using 24."
+	PROMOTE_CYCLE_HOLD_MAX_HOURS=24
+fi
+# Human latch labels (all in .github/ai/label_contract.v1.json). A fixed list,
+# not a repo variable, so configuration cannot widen what gets released.
+PROMOTE_CYCLE_HOLD_LATCH_LABELS=(ai:harness-broken ai:validation-failed ai:security-pass-failed ai:blocked ai:needs-human)
 # Fixed names shared with promote_candidate_follow.sh and the poller.
 PROMOTE_CYCLE_PIN_BRANCH="promote-candidate"
 PROMOTE_CYCLE_PIN_TAG="promote-cycle-frozen"
@@ -606,8 +650,10 @@ pin_freeze()
 	local err_file tag_ref_json tag_obj frozen_at age_note tag_obj_sha branch_tip compare_status new_obj
 	PIN_FREEZE_DETAIL=""
 	err_file="$(mktemp)"
-	# Guards 1-2 showed no other cycle job and no labelled tracking issue, so a
-	# tag that still exists is stale.
+	# Guards 1-2 showed no other cycle job and no labelled tracking issue still
+	# holding (a human-latched issue past PROMOTE_CYCLE_HOLD_MAX_HOURS no longer
+	# holds), so a tag that still exists, e.g. one a released parked cycle left
+	# behind, is stale.
 	if tag_ref_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${PROMOTE_CYCLE_PIN_TAG}" 2>"${err_file}")"; then
 		age_note="age=unknown"
 		tag_obj="$(printf '%s' "${tag_ref_json}" | jq -r 'if (.object.type // "") == "tag" then .object.sha else empty end' 2>/dev/null || true)"
@@ -689,6 +735,183 @@ pin_freeze()
 	return 0
 }
 
+# --- Bounded hold (stuck-states P4) -------------------------------------------
+
+# promote_cycle_hold_alert <text>: best-effort WARNING; never fails the cycle.
+promote_cycle_hold_alert()
+{
+	if type tg_send_msg >/dev/null 2>&1; then
+		tg_send_msg "$1" WARNING >/dev/null 2>&1 || true
+	else
+		echo "::warning::promote_main_cycle: tg_helpers.sh not available; hold-release alert not sent" >&2
+	fi
+	return 0
+}
+
+# promote_cycle_hold_history <owner> <name> <issue_number>...
+# Batching contract (§14):
+#   input   up to 100 issue numbers (guard 2's listing is per_page=100), each
+#           matching ^[1-9][0-9]*$; owner and name matching ^[A-Za-z0-9_.-]+$.
+#   output  the raw GraphQL response on stdout; one alias i<n> per issue with
+#           its number and its last 100 LABELED_EVENT timeline items.
+#   calls   exactly 1 (gh api graphql through gh_retry).
+#   failure non-zero exit; the caller keeps every candidate holding (fail
+#           closed), never a per-issue fallback loop.
+# Audited calls: guard 2's REST issues listing carries current labels only, no
+# label-event times, and no other call in this script returns timeline data.
+promote_cycle_hold_history()
+{
+	local owner="$1"
+	local name="$2"
+	shift 2
+	local aliases="" issue_number count=0 query response
+	if ! [[ "${owner}" =~ ^[A-Za-z0-9_.-]+$ ]] || ! [[ "${name}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+		return 1
+	fi
+	for issue_number in "$@"; do
+		[[ "${issue_number}" =~ ^[1-9][0-9]*$ ]] || return 1
+		count=$((count + 1))
+		aliases+=" i${issue_number}:issue(number:${issue_number}){number timelineItems(itemTypes:[LABELED_EVENT],last:100){pageInfo{hasPreviousPage} nodes{... on LabeledEvent{createdAt label{name}}}}}"
+	done
+	if [ "${count}" -lt 1 ] || [ "${count}" -gt 100 ]; then
+		return 1
+	fi
+	query="query(\$owner:String!,\$name:String!){repository(owner:\$owner,name:\$name){${aliases} }}"
+	if ! response="$(gh_retry gh api graphql -f query="${query}" -f owner="${owner}" -f name="${name}" 2>/dev/null)"; then
+		return 1
+	fi
+	if ! printf '%s' "${response}" | jq -e 'type == "object" and ((.data.repository? // null) | type) == "object"' >/dev/null 2>&1; then
+		return 1
+	fi
+	printf '%s\n' "${response}"
+}
+
+# promote_cycle_hold_decide <listing_json> <history_json|""> <now_epoch> <cap_secs>
+# Prints one line per listed issue, in listing order:
+#   hold <n>                       no latch label: holds as before
+#   release <n> <label> <age_secs> newest latch at least cap_secs old
+#   keep <n> <reason>              latch_recent, or history_unverified /
+#                                  history_incomplete / history_unparseable
+# <label> is the first present latch label in PROMOTE_CYCLE_HOLD_LATCH_LABELS
+# order. With several latch labels the newest event sets the age (D2); the age
+# never falls back to the issue's creation time.
+promote_cycle_hold_decide()
+{
+	local listing="$1"
+	local history="${2:-}"
+	local now="$3"
+	local cap="$4"
+	local latch_json
+	[ -n "${history}" ] || history="null"
+	latch_json="$(printf '%s\n' "${PROMOTE_CYCLE_HOLD_LATCH_LABELS[@]}" | jq -R . | jq -sc .)"
+	printf '%s' "${listing}" | jq -r \
+		--argjson L "${latch_json}" \
+		--argjson hist "${history}" \
+		--argjson now "${now}" \
+		--argjson cap "${cap}" '
+		($hist | (try .data.repository catch null) | if type == "object" then . else {} end) as $repo
+		| .[]
+		| select((.number | type) == "number")
+		| . as $issue
+		| ($issue.number) as $n
+		| [$L[] as $l | select(any(($issue.labels // [])[]; . == $l)) | $l] as $present
+		| if ($present | length) == 0 then "hold \($n)"
+		  else
+			($repo["i\($n)"]) as $node
+			| if ($node | type) != "object" or ($node.number != $n) then "keep \($n) history_unverified"
+			  else
+				[(((($node.timelineItems // {}) | if type == "object" then . else {} end).nodes) // [])[]? | select(type == "object")] as $events
+				| [$present[] as $l | [$events[] | select(((.label // {}) | if type == "object" then (.name // "") else "" end) == $l) | .createdAt]] as $per
+				| if any($per[]; length == 0) then "keep \($n) history_incomplete"
+				  else
+					[$per[][] | (try (if type == "string" then fromdateiso8601 else null end) catch null)] as $times
+					| if any($times[]; . == null) then "keep \($n) history_unparseable"
+					  else
+						(($now - ($times | max)) | floor) as $age
+						| if $age >= $cap then "release \($n) \($present[0]) \($age)"
+						  else "keep \($n) latch_recent" end
+					  end
+				  end
+			  end
+		  end'
+}
+
+# promote_cycle_hold_guard <listing_json> <in_flight_csv>
+# Guard 2 when tracking issues are open. Exits through skip_cycle while any
+# issue still holds; returns 0 when every issue was released. Runs in the
+# main shell so skip_cycle really exits. Disabled, or with no latch label on
+# any listed issue, it behaves exactly as before (no extra API call).
+promote_cycle_hold_guard()
+{
+	local listing="$1"
+	local in_flight_csv="$2"
+	local latch_json candidates history_json="" decisions now cap_secs remaining=""
+	local action issue_number detail age hours listed_count decided_count=0
+	local -a candidate_list=()
+	if ! is_truthy "${PROMOTE_CYCLE_HOLD_RELEASE_ENABLED}"; then
+		skip_cycle cycle_in_flight "tracking_issues=${in_flight_csv}"
+	fi
+	latch_json="$(printf '%s\n' "${PROMOTE_CYCLE_HOLD_LATCH_LABELS[@]}" | jq -R . | jq -sc .)"
+	candidates="$(printf '%s' "${listing}" | jq -r --argjson L "${latch_json}" '.[] | . as $i | select(any($L[]; . as $l | any(($i.labels // [])[]; . == $l))) | .number' 2>/dev/null || true)"
+	if [ -z "${candidates}" ]; then
+		skip_cycle cycle_in_flight "tracking_issues=${in_flight_csv}"
+	fi
+	mapfile -t candidate_list <<< "${candidates}"
+	if ! history_json="$(promote_cycle_hold_history "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY#*/}" "${candidate_list[@]}")"; then
+		echo "::warning::Promote cycle hold: label history unavailable; keeping tracking issues $(printf '%s\n' "${candidate_list[@]}" | paste -sd, -) holding."
+		history_json=""
+	fi
+	now="$(date -u +%s)"
+	cap_secs=$((PROMOTE_CYCLE_HOLD_MAX_HOURS * 3600))
+	if ! decisions="$(promote_cycle_hold_decide "${listing}" "${history_json}" "${now}" "${cap_secs}" 2>/dev/null)"; then
+		echo "::warning::Promote cycle hold: could not evaluate the latch ages; keeping every tracking issue holding."
+		skip_cycle cycle_in_flight "tracking_issues=${in_flight_csv}"
+	fi
+	listed_count="$(printf '%s' "${listing}" | jq -r 'length' 2>/dev/null || echo "")"
+	while IFS=' ' read -r action issue_number detail age; do
+		[ -n "${action}" ] || continue
+		decided_count=$((decided_count + 1))
+		if ! [[ "${issue_number}" =~ ^[1-9][0-9]*$ ]]; then
+			skip_cycle cycle_in_flight "tracking_issues=${in_flight_csv}"
+		fi
+		case "${action}" in
+			hold)
+				remaining+="${issue_number},"
+				;;
+			keep)
+				remaining+="${issue_number},"
+				case "${detail}" in
+					history_*)
+						echo "::warning::Promote cycle hold: tracking issue #${issue_number} keeps holding (${detail}); its latch age could not be proven."
+						;;
+				esac
+				;;
+			release)
+				if ! [[ "${age}" =~ ^[0-9]+$ ]]; then
+					skip_cycle cycle_in_flight "tracking_issues=${in_flight_csv}"
+				fi
+				hours=$((age / 3600))
+				echo "PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=${issue_number} reason=${detail} latch_age_secs=${age} max_hours=${PROMOTE_CYCLE_HOLD_MAX_HOURS}"
+				echo "::warning::Promote cycle hold released: tracking issue #${issue_number} has been parked on ${detail} for ${hours}h (cap ${PROMOTE_CYCLE_HOLD_MAX_HOURS}h); the cycle no longer waits for it."
+				promote_cycle_hold_alert "Promote cycle: tracking issue #${issue_number} in ${GITHUB_REPOSITORY} has been parked on ${detail} for ${hours}h (cap ${PROMOTE_CYCLE_HOLD_MAX_HOURS}h); the daily cycle no longer waits for it."
+				;;
+			*)
+				skip_cycle cycle_in_flight "tracking_issues=${in_flight_csv}"
+				;;
+		esac
+	done <<< "${decisions}"
+	# Every listed issue must get exactly one decision; otherwise fail closed.
+	if [ "${decided_count}" != "${listed_count}" ]; then
+		echo "::warning::Promote cycle hold: ${decided_count} decision(s) for ${listed_count:-unknown} tracking issue(s); keeping every tracking issue holding."
+		skip_cycle cycle_in_flight "tracking_issues=${in_flight_csv}"
+	fi
+	remaining="${remaining%,}"
+	if [ -n "${remaining}" ]; then
+		skip_cycle cycle_in_flight "tracking_issues=${remaining}"
+	fi
+	return 0
+}
+
 if ! is_truthy "${PROMOTE_CYCLE_ENABLED}"; then
 	skip_cycle disabled
 fi
@@ -702,11 +925,14 @@ if [ "${other_active}" -gt 0 ]; then
 	skip_cycle another_run_active "active_runs=${other_active}"
 fi
 
-# 2. A cycle already in flight (proving or verifying run open).
+# 2. A cycle already in flight (proving or verifying run open). A tracking
+#    issue parked on a human latch label for PROMOTE_CYCLE_HOLD_MAX_HOURS no
+#    longer holds (bounded hold, see promote_cycle_hold_guard).
 encoded_labels="$(printf '%s' "ai:orchestrator-tracking,${PROMOTE_CYCLE_TRACKING_LABEL}" | sed 's/:/%3A/g; s/,/%2C/g')"
-in_flight="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=${encoded_labels}&per_page=100" | jq -r '[.[] | select(has("pull_request") | not) | .number] | join(",")')"
+in_flight_listing="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=${encoded_labels}&per_page=100" | jq -c '[.[] | select(has("pull_request") | not) | {number, labels: [(.labels // [])[] | (.name? // empty)]}]')"
+in_flight="$(printf '%s' "${in_flight_listing}" | jq -r '[.[].number] | join(",")')"
 if [ -n "${in_flight}" ]; then
-	skip_cycle cycle_in_flight "tracking_issues=${in_flight}"
+	promote_cycle_hold_guard "${in_flight_listing}" "${in_flight}"
 fi
 
 # 3. Code change since the last promotion.

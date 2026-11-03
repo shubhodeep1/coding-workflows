@@ -9,6 +9,7 @@ import stat
 import re
 import subprocess
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -45,6 +46,20 @@ if args[:1] == ["api"]:
         if not a.startswith("-") and path is None:
             path = a
         i += 1
+    # Bounded hold (stuck-states P4): aliased LabeledEvent history batch.
+    if path == "graphql":
+        import re as _re
+        query = next((a[len("query="):] for a in args if a.startswith("query=")), "")
+        state.setdefault("graphql_queries", []).append(query)
+        if state.get("graphql_error"):
+            save(); sys.stderr.write("HTTP 404: Not Found\n"); sys.exit(1)
+        repo = {}
+        for num in _re.findall(r"i(\d+):issue", query):
+            events = state.get("latch_events", {}).get(num, [])
+            nodes = [{"createdAt": e["createdAt"], "label": {"name": e["label"]}} for e in events]
+            number = int(num) + 1000 if state.get("graphql_wrong_number") else int(num)
+            repo["i" + num] = {"number": number, "timelineItems": {"pageInfo": {"hasPreviousPage": bool(state.get("graphql_has_previous"))}, "nodes": nodes}}
+        respond({"data": {"repository": repo}})
     # Pinned mode (phase 3): promote-candidate branch and promote-cycle-frozen tag.
     if path.endswith("/branches/promote-candidate"):
         pin = state.get("pin_branch", "missing")
@@ -120,7 +135,8 @@ if args[:1] == ["api"]:
     if "/issues/" in path and path.endswith("/comments?per_page=100"):
         respond(state.get("cycle_comments", [{"body": "apply-analysis-source-doc: x\napply-analysis-cycle-baseline-sha: " + state.get("last_cycle_baseline", ""), "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}]))
     if "/issues?" in path:
-        respond([{"number": n, "labels": []} for n in state.get("in_flight", [])])
+        labels = state.get("in_flight_labels", {})
+        respond([{"number": n, "labels": [{"name": l} for l in labels.get(str(n), [])]} for n in state.get("in_flight", [])])
     if "/actions/workflows/promote-main-to-stable.yml/runs" in path:
         respond({"workflow_runs": state.get("self_runs", [])})
     if "/actions/workflows/test-and-mark-stable.yml/runs" in path and "event=workflow_dispatch" not in path:
@@ -195,6 +211,14 @@ print(json.dumps({"issue": 5, "ticked": ["pr-1"], "skipped": {}}))
 '''
 
 
+MOCK_CURL = r'''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["MOCK_CURL_LOG"], "a", encoding="utf-8") as out:
+    out.write(json.dumps(sys.argv[1:]) + "\n")
+sys.stdout.write(json.dumps({"ok": True, "result": {"message_id": 1}}))
+'''
+
+
 def _run(tmp: Path, state: dict, env: dict[str, str] | None = None, script: Path = SCRIPT) -> tuple[subprocess.CompletedProcess[str], dict, Path]:
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
@@ -236,12 +260,19 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None, script: Path
 			"PYTHONDONTWRITEBYTECODE": "1",
 		}
 	)
-	for key in ("BASH_ENV", "ENV"):
+	for key in ("BASH_ENV", "ENV", "TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID", "ALERT_MSG_LEVEL"):
 		run_env.pop(key, None)
 	if env:
 		run_env.update(env)
+	curl_log = tmp / "curl_log.jsonl"
+	if run_env.get("TG_BOT_SECRET"):
+		# Opt-in Telegram stub: records each post instead of sending it.
+		(bin_dir / "curl").write_text(MOCK_CURL, encoding="utf-8")
+		(bin_dir / "curl").chmod(0o755)
+		run_env["MOCK_CURL_LOG"] = str(curl_log)
 	proc = subprocess.run(["bash", str(script)], cwd=str(tmp), env=run_env, text=True, capture_output=True, timeout=120)
 	final = json.loads(state_file.read_text(encoding="utf-8"))
+	final["tg_posts"] = [json.loads(line) for line in curl_log.read_text(encoding="utf-8").splitlines()] if curl_log.exists() else []
 	final["github_output"] = output_file.read_text(encoding="utf-8")
 	final["tick_calls"] = [json.loads(line) for line in tick_args_out.read_text(encoding="utf-8").splitlines()] if tick_args_out.exists() else []
 	return proc, final, env_out
@@ -1078,3 +1109,175 @@ def test_stable_branch_compare_keeps_the_tag_change_log() -> None:
 		proc, _final, _ = _run(Path(tmp), state)
 	assert "  scripts/x.sh" in proc.stdout
 	assert "  scripts/y.sh" not in proc.stdout
+
+
+# --- Bounded hold for human-latched tracking issues (stuck-states P4) --------
+
+TG_ENV = {"TG_BOT_SECRET": "test-secret", "TG_ADMIN_CHAT_ID": "123"}
+
+
+def _hours_ago(hours: float) -> str:
+	return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _graphql_calls(final: dict) -> int:
+	return sum(1 for call in final.get("calls", []) if call[:2] == ["api", "graphql"])
+
+
+def test_hold_release_disabled_keeps_todays_skip_and_makes_no_graphql_call() -> None:
+	state = {"in_flight": [42], "in_flight_labels": {"42": ["ai:blocked"]}, "latch_events": {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(30)}]}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state, env={"PROMOTE_CYCLE_HOLD_RELEASE_ENABLED": "false"})
+	assert proc.returncode == 0, proc.stderr
+	assert "PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight tracking_issues=42" in proc.stdout
+	assert "PROMOTE_CYCLE_HOLD_RELEASED" not in proc.stdout
+	assert _graphql_calls(final) == 0
+	assert not final.get("dispatches")
+
+
+def test_hold_without_latch_label_makes_no_graphql_call() -> None:
+	state = {"in_flight": [42], "in_flight_labels": {"42": ["ai:orchestrator-tracking", "ai:comprehensive-test-pending"]}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	assert "PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight tracking_issues=42" in proc.stdout
+	assert _graphql_calls(final) == 0
+
+
+def test_old_latch_releases_the_hold_and_alerts() -> None:
+	state = {
+		"in_flight": [42],
+		"in_flight_labels": {"42": ["ai:orchestrator-tracking", "ai:blocked"]},
+		"latch_events": {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(30)}]},
+		"gate_runs_sequence": GATE_SUCCESS,
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state, env=TG_ENV)
+	assert proc.returncode == 0, proc.stderr
+	assert re.search(r"^PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=42 reason=ai:blocked latch_age_secs=\d+ max_hours=24$", proc.stdout, re.M), proc.stdout
+	assert "reason=cycle_in_flight" not in proc.stdout
+	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout
+	assert _graphql_calls(final) == 1
+	assert len(final["tg_posts"]) == 1
+	text = next(a for a in final["tg_posts"][0] if a.startswith("text="))
+	assert "WARNING" in text and "#42" in text
+	assert "test-secret" not in proc.stdout + proc.stderr
+
+
+def test_recent_latch_keeps_holding() -> None:
+	state = {"in_flight": [42], "in_flight_labels": {"42": ["ai:needs-human"]}, "latch_events": {"42": [{"label": "ai:needs-human", "createdAt": _hours_ago(2)}]}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state, env=TG_ENV)
+	assert "PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight tracking_issues=42" in proc.stdout
+	assert "PROMOTE_CYCLE_HOLD_RELEASED" not in proc.stdout
+	assert _graphql_calls(final) == 1
+	assert final["tg_posts"] == []
+
+
+def test_custom_cap_releases_a_younger_latch() -> None:
+	state = {"in_flight": [42], "in_flight_labels": {"42": ["ai:validation-failed"]}, "latch_events": {"42": [{"label": "ai:validation-failed", "createdAt": _hours_ago(2)}]}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final, _ = _run(Path(tmp), state, env={"PROMOTE_CYCLE_HOLD_MAX_HOURS": "1"})
+	assert "PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=42 reason=ai:validation-failed" in proc.stdout
+	assert "max_hours=1" in proc.stdout
+	assert "reason=cycle_in_flight" not in proc.stdout
+
+
+def test_newest_of_several_latch_labels_sets_the_age() -> None:
+	state = {
+		"in_flight": [42],
+		"in_flight_labels": {"42": ["ai:blocked", "ai:needs-human"]},
+		"latch_events": {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(48)}, {"label": "ai:needs-human", "createdAt": _hours_ago(1)}]},
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final, _ = _run(Path(tmp), state)
+	assert "PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight tracking_issues=42" in proc.stdout
+	assert "PROMOTE_CYCLE_HOLD_RELEASED" not in proc.stdout
+
+
+def test_missing_label_history_keeps_holding() -> None:
+	for has_previous in (False, True):
+		state = {
+			"in_flight": [42],
+			"in_flight_labels": {"42": ["ai:blocked", "ai:harness-broken"]},
+			"latch_events": {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(48)}]},
+			"graphql_has_previous": has_previous,
+		}
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, _final, _ = _run(Path(tmp), state)
+		assert "PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight tracking_issues=42" in proc.stdout, has_previous
+		assert "::warning::Promote cycle hold: tracking issue #42 keeps holding (history_incomplete)" in proc.stdout
+		assert "PROMOTE_CYCLE_HOLD_RELEASED" not in proc.stdout
+
+
+def test_unparseable_latch_timestamp_keeps_holding() -> None:
+	state = {"in_flight": [42], "in_flight_labels": {"42": ["ai:blocked"]}, "latch_events": {"42": [{"label": "ai:blocked", "createdAt": "not-a-date"}]}}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final, _ = _run(Path(tmp), state)
+	assert "PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight tracking_issues=42" in proc.stdout
+	assert "(history_unparseable)" in proc.stdout
+
+
+def test_graphql_failure_or_wrong_alias_number_keeps_holding() -> None:
+	events = {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(48)}]}
+	for extra, marker in (({"graphql_error": True}, "label history unavailable"), ({"graphql_wrong_number": True}, "(history_unverified)")):
+		state = {"in_flight": [42], "in_flight_labels": {"42": ["ai:blocked"]}, "latch_events": events, **extra}
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final, _ = _run(Path(tmp), state)
+		assert "PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight tracking_issues=42" in proc.stdout, extra
+		assert marker in proc.stdout, (extra, proc.stdout)
+		assert "PROMOTE_CYCLE_HOLD_RELEASED" not in proc.stdout
+		assert not final.get("dispatches")
+
+
+def test_mixed_holders_skip_lists_only_the_remaining_issue() -> None:
+	state = {
+		"in_flight": [42, 43],
+		"in_flight_labels": {"42": ["ai:blocked"], "43": ["ai:security-pass-failed"]},
+		"latch_events": {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(30)}], "43": [{"label": "ai:security-pass-failed", "createdAt": _hours_ago(3)}]},
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	assert "PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=42 reason=ai:blocked" in proc.stdout
+	assert "PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight tracking_issues=43\n" in proc.stdout
+	assert _graphql_calls(final) == 1
+	query = final["graphql_queries"][0]
+	assert "i42:issue(number:42)" in query and "i43:issue(number:43)" in query
+
+
+def test_unlatched_holder_still_holds_beside_a_released_one() -> None:
+	state = {
+		"in_flight": [42, 44],
+		"in_flight_labels": {"42": ["ai:blocked"], "44": []},
+		"latch_events": {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(30)}]},
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	assert "PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=42" in proc.stdout
+	assert "PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight tracking_issues=44\n" in proc.stdout
+	# Only latch candidates are queried.
+	assert "i44:" not in final["graphql_queries"][0]
+
+
+def test_invalid_hold_max_hours_falls_back_to_24() -> None:
+	for bad in ("abc", "0", "08", "1234567"):
+		state = {"in_flight": [42], "in_flight_labels": {"42": ["ai:blocked"]}, "latch_events": {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(30)}]}, "gate_runs_sequence": GATE_SUCCESS}
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, _final, _ = _run(Path(tmp), state, env={"PROMOTE_CYCLE_HOLD_MAX_HOURS": bad})
+		assert proc.returncode == 0, (bad, proc.stderr)
+		assert "::warning::PROMOTE_CYCLE_HOLD_MAX_HOURS must be a positive integer; using 24." in proc.stdout, bad
+		assert "PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=42 reason=ai:blocked" in proc.stdout, bad
+		assert "max_hours=24" in proc.stdout, bad
+
+
+def test_cycle_step_env_wires_the_hold_and_telegram() -> None:
+	text = (REPO_ROOT / ".github" / "workflows" / "promote-main-to-stable.yml").read_text(encoding="utf-8")
+	cycle_job = text.split("\n  cycle:\n", 1)[1].split("\n  promote:\n", 1)[0]
+	for row in (
+		"PROMOTE_CYCLE_HOLD_RELEASE_ENABLED: ${{ vars.PROMOTE_CYCLE_HOLD_RELEASE_ENABLED || 'true' }}",
+		"PROMOTE_CYCLE_HOLD_MAX_HOURS: ${{ vars.PROMOTE_CYCLE_HOLD_MAX_HOURS || '24' }}",
+		"TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}",
+		"TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}",
+		"TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}",
+		"ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}",
+	):
+		assert f"          {row}\n" in cycle_job, row
