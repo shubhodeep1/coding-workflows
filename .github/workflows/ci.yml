@@ -1537,8 +1537,9 @@ jobs:
       # not a measurement. It was also the slowest step that could be timed in
       # the planning sandbox (about 49s across eight of its nine modules, a
       # relative weight only); failing run 37499559962 recorded 825s at this
-      # step. This job was chosen because it has had no budget-watch issue
-      # since #8279 and no steps moved into it since then. It needs no git
+      # step. This job's last budget-watch issue was #8395 (15m10s, run
+      # 40954844196), which moved a step out of it; its headroom now is an
+      # estimate, not a measurement. It needs no git
       # history, Node or prepared .claude/ live copies. Name and body unchanged.
       # Moved here unchanged from tests-hooks-and-orchestrator (15m01s of its 20
       # minutes, run 40264887710, budget-watch issue #8179). Step timings were not
