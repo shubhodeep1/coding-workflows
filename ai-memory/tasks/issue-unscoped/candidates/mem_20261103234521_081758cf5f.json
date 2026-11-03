@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:multiple test methods (no line numbers given) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push gate reports that changes to tests/e2e_smoke_canary.txt cause failures in multiple test cases within tests/test_implement_post_codex_recovery.py.\n  WHY: The updated canary file content appears to break the assumptions of the integration tests or the post-codex recovery logic (source severity: MAJOR, mapped to high). anthropic_claude-sonnet-5_5 disagreed: it said these failures cannot be traced to this change, because that file is not in the diff and it did not open it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Review the PR diff and compare deliverables against the linked issue/PR description.\n  expected_change_site: N/A (no diff, PR description, or linked issue body was supplied to this reviewer pass)\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The reviewer bundle contained only the checklist template and an empty cross-pollination summary; no diff hunks or task artefacts were present. Source severity: BLOCKER, confidence HIGH.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:multiple test methods (test_review_pipeline_integration_chain_module_runs_clean, etc.) | severity=MAJOR | confidence=4\n  PROBLEM: The pre-push gate reports that changes to tests/e2e_smoke_canary.txt cause failures in multiple test cases within tests/test_implement_post_codex_recovery.py.\n  WHY: The updated canary file content appears to break the assumptions of the integration tests or the post-codex recovery logic, leading to multiple test failures (e.g., test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: Review the PR diff and compare deliverables against the linked issue/PR description.\n  Expected change site: N/A \u2014 no diff, PR description, or linked issue body was supplied to this reviewer pass.\n  Evidence of absence: The reviewer bundle contained only the checklist template and an empty cross-pollination summary; no diff hunks or task artefacts were present.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: HIGH\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8d8720772b63565906afdd2eb8f2887fdb531c3ac3b59c7f70f3308b3d0b8a40",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41739800193",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41739800193",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103234521_081758cf5f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41739800193"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T23:45:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
