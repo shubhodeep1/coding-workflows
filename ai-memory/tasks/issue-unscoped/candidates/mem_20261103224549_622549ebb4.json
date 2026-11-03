@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: `copilot-pull-request-reviewer` check must pass so a review is produced.\n  expected_change_site: `.github/copilot-instructions.md` (or the config feeding Copilot custom instructions) \u2014 no such file or config exists on the current ref.\n  confidence=[2]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: `glob .github/**` returns no files, grep for `copilot-instructions|custom.instructions|instructions_too_large` returns no matches, the referenced check log (run 41544382408, job 125616255928) is not retrievable from this checkout, so the failure cannot be tied to any change in the diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP:\n  Requirement: `copilot-pull-request-reviewer` check must pass so a review is produced.\n  Expected change site: `.github/copilot-instructions.md` (or the config feeding Copilot custom instructions) \u2014 no such file or config exists on the current ref.\n  Evidence of absence: `glob .github/**` returns no files and grep for `copilot-instructions|custom.instructions|instructions_too_large` returns no matches; the referenced check log (run 41544382408, job 125616255928) is not retrievable from this checkout, so the failure cannot be tied to any change in the diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f647aae53aac85380d59e312ae006898f385d1fce10505452967c0c0dcc435ec",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41731125102",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41731125102",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103224549_622549ebb4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41731125102"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T22:45:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
