@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-04T12:25:23Z",
+  "issue_number": 8821,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=scripts/ai_labels.py:1142-1143; cited_path=scripts/ai_labels.py; files_touched=.github/workflows/security-audit.yml, README.md, agents.d/stuck-states-p5b-consolidated-followup.md, changelog.d/stuck-states-p5b-consolidated-followup.md, scripts/review_single_issue_security_pass.sh, scripts/security_audit.sh, tests/test_security_audit_workflow_contract.py, tests/test_single_issue_security_pass.py.",
+  "phase": "review_autofix",
+  "pr_number": 8823,
+  "record_id": "lesson_20261104122523_8902ae488b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ai_labels.py",
+    ".github/workflows/security-audit.yml",
+    "README.md",
+    "agents.d/stuck-states-p5b-consolidated-followup.md",
+    "changelog.d/stuck-states-p5b-consolidated-followup.md",
+    "scripts/review_single_issue_security_pass.sh",
+    "scripts/security_audit.sh",
+    "tests/test_security_audit_workflow_contract.py",
+    "tests/test_single_issue_security_pass.py"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-04T12:25:23Z",
+  "issue_number": 8821,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=.github/workflows/clarify.yml:2347; cited_path=.github/workflows/clarify.yml; files_touched=.github/workflows/security-audit.yml, README.md, agents.d/stuck-states-p5b-consolidated-followup.md, changelog.d/stuck-states-p5b-consolidated-followup.md, scripts/review_single_issue_security_pass.sh, scripts/security_audit.sh, tests/test_security_audit_workflow_contract.py, tests/test_single_issue_security_pass.py.",
+  "phase": "review_autofix",
+  "pr_number": 8823,
+  "record_id": "lesson_20261104122523_dd17de5e5a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/clarify.yml",
+    ".github/workflows/security-audit.yml",
+    "README.md",
+    "agents.d/stuck-states-p5b-consolidated-followup.md",
+    "changelog.d/stuck-states-p5b-consolidated-followup.md",
+    "scripts/review_single_issue_security_pass.sh",
+    "scripts/security_audit.sh",
+    "tests/test_security_audit_workflow_contract.py",
+    "tests/test_single_issue_security_pass.py"
+  ]
+}
