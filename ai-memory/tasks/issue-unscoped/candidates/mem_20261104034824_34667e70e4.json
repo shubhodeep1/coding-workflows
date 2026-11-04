@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:1-12 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The combined repository instructions (agents.md lines 1-12; CLAUDE.md lines 1-11) loaded by the `copilot-pull-request-reviewer` exceed its prompt limit.\n  WHY: Check run 41544382408 reports `custom_instructions_too_large` (HTTP 422) and exits with code 1 before producing a review; the reviewer notes it is not caused by the canary-file diff. Source severity was MAJOR, mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md and CLAUDE.md:agents.md lines 1-12; CLAUDE.md lines 1-11 | severity=MAJOR | confidence=5\n  PROBLEM: The combined repository instructions loaded by the `copilot-pull-request-reviewer` exceed its prompt limit.\n  WHY: Check run 41544382408 reports `custom_instructions_too_large` (HTTP 422) and exits with code 1 before producing a review. This failure is confirmed by the check-run log, though it is not caused by the canary-file diff.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5fa0b5bbe8ce08c626a67fb18236a561f8e691b101227eef13d2a11e1461712f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41765874028",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41765874028",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104034824_34667e70e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41765874028"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T03:48:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
