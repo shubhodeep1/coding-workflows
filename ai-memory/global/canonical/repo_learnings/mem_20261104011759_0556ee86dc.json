@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Several merged changes to CI poll-group wiring updated this same test module alongside .github/workflows/ci.yml. When changing poll groups or sharding behavior, inspect and extend this shared coverage.",
+  "fingerprint": "850fe4da504c08ae8b61c1d9c08e5178bf0fc1aefa1cb2c5da643536efd3c53f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41752197401",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41752197401",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8750",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8759",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8761",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8771",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8772",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8754",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8760",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8768",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8775",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8776"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261104011759_0556ee86dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "CI test-poll sharding behavior is covered in tests/test_ci_poll_test_sharding.py.",
+  "timestamps": {
+    "created_at": "2026-11-04T01:17:59Z",
+    "promoted_at": "2026-11-04T01:18:36Z",
+    "superseded_at": null
+  }
+}
