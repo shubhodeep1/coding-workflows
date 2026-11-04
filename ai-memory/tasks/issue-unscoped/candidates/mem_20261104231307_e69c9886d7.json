@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The CI failure in `tests/test_implement_post_codex_recovery.py` persists across runs even though the canary content was updated correctly, and the reviewer treats it as a correctness signal.\n  WHY: The suite integration failure could mask regressions or point to a broken test environment state. The reviewer also notes that the canary path appears in that test file only in fixture/prompt strings. Severity is MAJOR in the source and is mapped to high.\n- .github/workflows/review_autofix.yml:Log tail of failed check-run (custom_instructions_too_large) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large`, which indicates the instructions or context injected into the reviewer job exceed size limits.\n  WHY: The PR review workflow cannot complete and leaves the PR in a failed state. Severity is MAJOR in the source and is mapped to high. Other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) judged this failure external to the diff and did not report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=MAJOR | confidence=3\n  PROBLEM: The PR diff successfully modified the canary content to match the requirements. However, the CI failure in `tests/test_implement_post_codex_recovery.py` persists across runs. The consensus finding indicates a possible dependency failure, but direct inspection shows `tests/e2e_smoke_canary.txt` path references in that test file are only in fixture/prompt strings. The failure is likely unrelated to the logic in `tests/e2e_smoke_canary.txt`, but a persistent CI failure in an autofix pipeline that just updated a canary file is a correctness signal.\n  WHY: The test suite integration fails, potentially masking regressions or indicating broken test environment state.\n- .github/workflows/review_autofix.yml:Log tail of failed check-run (custom_instructions_too_large) | severity=MAJOR | confidence=4\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large`. While the PR diff (the canary update) is tiny and clearly not the cause, the reviewer job failure itself indicates that the custom instructions or the context injected into the reviewer job have exceeded size limits, causing the review pipeline to fail for this PR. This impacts the operational stability of the autofix pipeline.\n  WHY: The PR review workflow cannot complete its execution due to instruction size limits, leaving the PR in a failed state.\n- TASK_GAP (reported under TASK COMPLETENESS / INTENT GAPS) | severity=NIT | confidence=5\n  Requirement: Update `tests/e2e_smoke_canary.txt` to contain exactly three lines (`status: ok`, `run_id: 40608957733`, `updated-by: ai-pipeline`) with a trailing newline.\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The PR diff has already implemented this requirement correctly. No gaps exist.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f9923c711607eee909525b44284ac39258714919c4235ee66be22f333739f6ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41930284761",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41930284761",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104231307_e69c9886d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41930284761"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T23:13:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
