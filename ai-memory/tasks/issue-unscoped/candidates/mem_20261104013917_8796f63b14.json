@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  expected_change_site: PR base branch and merge state (orchestrator action after review, not a file edit)\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The diff replaces line 2 with `decompose-run: 41501570285`, leaves `status: ok` on line 1, adds no third line and touches no other file. The merge happens after review, so a file change cannot satisfy it. The reviewer did not confirm the PR's base branch from the prompt.\n- requirement: \"Rewrite tests/e2e_smoke_canary.txt so it contains exactly two lines: `status: ok` and `decompose-run: 41501570285`. Replace the stale second line. Do not append a third line. Keep the trailing newline after the second line. Do not modify any other file.\"\n  expected_change_site: tests/e2e_smoke_canary.txt (lines 1\u20132)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: Both reviewers report the requirement is met, so no implementation is missing. The diff replaces `decompose-run: 40427433026` with `decompose-run: 41501570285`, the hunk `@@ -1,2 +1,2 @@` keeps the file at two lines, and no other file is changed. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR base branch and merge state. This is an orchestrator action after review, not a file edit.\n  Evidence of absence: The diff correctly replaces line 2 with `decompose-run: 41501570285`, leaves `status: ok` on line 1, adds no third line and touches no other file. The merge happens after review, so a file change cannot satisfy it. I did not confirm the PR's base branch from the prompt. Earlier editor summaries state that it is already `orchestrator/project-8693`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Rewrite tests/e2e_smoke_canary.txt so it contains exactly two lines: `status: ok` and `decompose-run: 41501570285`. Replace the stale second line. Do not append a third line. Keep the trailing newline after the second line. Do not modify any other file.\"\n  Expected change site: tests/e2e_smoke_canary.txt (lines 1\u20132)\n  Evidence of absence: The PR diff at tests/e2e_smoke_canary.txt replaces `decompose-run: 40427433026` with `decompose-run: 41501570285` while keeping `status: ok` as line 1. The `@@ -1,2 +1,2 @@` hunk header confirms the file remains exactly two lines. The trailing newline is preserved. The PR changes no other file (PR_CHANGED_FILES lists only `tests/e2e_smoke_canary.txt`). All file-level acceptance criteria from issue #8696 are met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Note: the remaining acceptance item (merge into `orchestrator/project-8693`) is a meta-process requirement that no file edit can satisfy. The merge is performed by the orchestrator after review passes. The reviewer did not flag it as a code-side TASK_GAP.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"rewrite tests/e2e_smoke_canary.txt so it contains exactly two lines: `status: ok` / `decompose-run: 41501570285` ... Do not modify any other file.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: none \u2014 the file on HEAD reads exactly `status: ok` then `decompose-run: 41501570285` (verified by reading the checkout), the diff replaces the stale `decompose-run: 40427433026` line, and the PR touches no other file. The remaining acceptance item (merge into `orchestrator/project-8693`) is the orchestrator's post-review merge action; the PR already targets that branch. Not emitted as a gap.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a95c688d4347e90fe3cb02c0b54baf660554153070f37e30db4c26c05d216114",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8701,
+    "run_id": "41752777603",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41752777603",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104013917_8796f63b14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8701,
+    "run_id": "41752777603"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T01:39:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
