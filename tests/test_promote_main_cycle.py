@@ -1718,19 +1718,33 @@ def test_failed_baseline_search_never_reports_cycle_stale() -> None:
 	assert "RELEASE_BLOCKER_REPORTED" not in proc.stdout
 
 
+def _diverged_stable_state(marker_hours: float) -> dict:
+	state = {**_stale_state(commit_hours=200, marker_hours=marker_hours), "stable_branch_sha": STABLE_BRANCH_OTHER}
+	state["compares"][STABLE_BRANCH_OTHER] = {"status": "diverged", "total_commits": 0, "files": []}
+	return state
+
+
 def test_diverged_stable_branch_still_reports_cycle_stale() -> None:
 	# base_not_ancestor on heads/stable skips before guard 4 on every tick; the
-	# baseline-read gate covers guard_unavailable only, so it still reports.
-	state = {
-		**_stale_state(commit_hours=200, marker_hours=1),
-		"stable_branch_sha": STABLE_BRANCH_OTHER,
-	}
-	state["compares"][STABLE_BRANCH_OTHER] = {"status": "diverged", "total_commits": 0, "files": []}
+	# reporter reads the baseline marker itself, so the clock is still the
+	# later of the marker (80h) and the oldest unreleased commit (200h).
 	with tempfile.TemporaryDirectory() as tmp:
-		proc, final, _ = _run(Path(tmp), state)
+		proc, final, _ = _run(Path(tmp), _diverged_stable_state(marker_hours=80))
 	assert proc.returncode == 0, proc.stderr
 	assert "PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor" in proc.stdout and "ref=heads/stable" in proc.stdout
 	reports = _reports(final)
 	assert [r["blocker_reason"] for r in reports] == ["cycle_stale"]
 	assert "skip_reason=base_not_ancestor" in reports[0]["blocker_evidence"]
-	assert 199 * 3600 <= reports[0]["blocker_age_secs"] <= 201 * 3600
+	assert "baseline_marker_at=none" not in reports[0]["blocker_evidence"]
+	assert 79 * 3600 <= reports[0]["blocker_age_secs"] <= 81 * 3600
+
+
+def test_diverged_stable_branch_with_recent_marker_does_not_report() -> None:
+	# A recent cycle marker keeps a stable-diverged tick (hotfix before
+	# sync-to-main) from reporting on the oldest-commit clock alone.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), _diverged_stable_state(marker_hours=1))
+	assert proc.returncode == 0, proc.stderr
+	assert "PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor" in proc.stdout
+	assert not final.get("heal_dispatches")
+	assert "RELEASE_BLOCKER_REPORTED" not in proc.stdout

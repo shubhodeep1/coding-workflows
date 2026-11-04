@@ -160,14 +160,15 @@
 #                                not disabled / insufficient_docs /
 #                                cycle_in_flight / another_run_active (nor a
 #                                guard_unavailable before the baseline-marker
-#                                read), and the
+#                                read; any other skip before guard 4 reads the
+#                                marker itself), and the
 #                                later of the last cycle's baseline marker and
 #                                the oldest unreleased commit is at least
 #                                RELEASE_BLOCKER_CYCLE_STALE_SECS old
 # Log lines:
 #   RELEASE_BLOCKER_REPORTED reason=<r> age=<n> branch=<b> sha=<tip|none> run_ref=none
 #   RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled|payload_invalid|dispatch_denied|guard_unavailable|streak_broken blocker=<r> ...
-#     (guard_unavailable lookup=work_dir|jobs|cycle_job|logs|run_created_at|untrusted_comments|untrusted_parse)
+#     (guard_unavailable lookup=work_dir|jobs|cycle_job|logs|run_created_at|untrusted_comments|untrusted_parse|baseline_marker)
 # payload_invalid and dispatch_denied also send a Telegram WARNING. A reporter
 # failure never fails or changes the tick. Failed cycle runs (fail_cycle) are
 # not reported here: the intake already receives them through workflow_run.
@@ -1471,15 +1472,25 @@ release_blocker_check_cycle_stale()
 {
 	local rb_skip_reason="${1:-}" rb_marker_t="" rb_commit_t="" rb_clock="" rb_age="" rb_now="" rb_evidence=""
 	[ "${release_blocker_main_ahead}" = "true" ] || return 0
-	# Only a transient guard_unavailable skip needs the marker read; a
-	# persistent skip before guard 4 (base_not_ancestor on heads/stable) still
-	# reports from the oldest-commit clock.
-	if [ "${release_blocker_baseline_read}" != "true" ] && [ "${rb_skip_reason}" = "guard_unavailable" ]; then
-		return 0
-	fi
 	case "${rb_skip_reason}" in
 		disabled|insufficient_docs|cycle_in_flight|another_run_active) return 0 ;;
 	esac
+	# A skip before guard 4 (base_not_ancestor on heads/stable) has not read the
+	# last cycle's baseline marker yet: read it here so the clock is still the
+	# later of the two times. A transient guard_unavailable skip reports nothing.
+	# API calls: 1 search + up to 10 comment reads, only on that path.
+	if [ "${release_blocker_baseline_read}" != "true" ]; then
+		[ "${rb_skip_reason}" != "guard_unavailable" ] || return 0
+		local rb_marker_line=""
+		if ! rb_marker_line="$(last_cycle_baseline_sha with_time)"; then
+			echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=cycle_stale lookup=baseline_marker"
+			return 0
+		fi
+		release_blocker_baseline_read=true
+		if [ "${rb_marker_line}" != "${rb_marker_line%% *}" ]; then
+			release_blocker_baseline_at="${rb_marker_line#* }"
+		fi
+	fi
 	rb_marker_t="$(release_blocker_epoch_from_iso "${release_blocker_baseline_at}")"
 	rb_commit_t="$(release_blocker_epoch_from_iso "${release_blocker_oldest_commit_at}")"
 	[[ "${rb_marker_t}" =~ ^[0-9]+$ ]] || rb_marker_t=""
