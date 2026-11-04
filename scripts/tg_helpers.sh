@@ -142,7 +142,9 @@ tg_send_msg()
 		return 0
 	fi
 	local resp
-	resp=$(curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+	# Bounded like tg_send_report_msg: the needs-human alert (P6b) sends once
+	# after its claim, so a hung endpoint must not stall the judge or poller.
+	resp=$(curl -s --max-time 30 -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
 		-d "chat_id=${chat_id}" \
 		-d "disable_web_page_preview=true" \
 		--data-urlencode "text=${msg}" 2>/dev/null) || {
