@@ -1797,6 +1797,26 @@ On shubhodeep1/btc_sweeper#248 clarify failed three times with `Claude clarify f
 
 Exit codes, retries, sleeps and the existing warning and error lines are unchanged. The heal filter itself (`scripts/workflow_failure_heal.py`) is not changed here.
 
+- **Interactive sessions no longer stall when a ruleset refuses the force-push after a merged-PR reset.** New CLAUDE.md §21.F tells the session to push the work to `<branch>-resend` and open the PR from there, without asking.
+
+Before, a session whose PR merged mid-session reset its branch per §21.A, hit a ruleset that bans force-pushes (for example on `ccr-*` branches, `GH013` / `Cannot force-push to this branch`), and then stopped to ask the user how to proceed. §21.F makes the new-branch option the default: create `<branch>-resend` (or the first free `-resend-2`, `-resend-3`, ...), push that same branch with a plain `git push -u origin <branch>-resend` (or `git push -u origin <branch>-resend-2` and so on, matching the name picked), open the PR from it and keep working there. Deleting the old branch, changing repository rules and retrying the force-push in another form stay ask-first under §23.C, and a refused `-resend` push is reported and asked about.
+
+What this means for consumer repos: CLAUDE.md and `.claude/docs/s21-merged-pr-commit-guard.md` arrive with the next `@stable` sync, and interactive sessions there follow the same fallback. No guard, setting or workflow changes.
+
+- **Claude pool messages now show hours until each window resets, for every account.** The hourly near-cap alert also lists every probed account, not only the gated ones.
+
+The `📊 Claude pool daily usage` report (`claude_engine.py pool-usage`) and the hourly near-cap alert (`scripts/claude_pool_health_alert.sh`, `claude_engine.py pool-health`) now print `resets in Xh` next to each window with a known reset time, for example `TEAM1: 5h 93% (resets in 1.7h), 7d 71% (resets in 5.8h)`. Windows at or above `gate_utilization` keep the UTC reset time as well, for example `(resets in 0.8h, 2026-11-01 01:00 UTC)`. A reset time that has already passed reads `resets now`. The capacity-wait line now reads `earliest reset <UTC time> (in Xh)`.
+
+What this means for operators: one message tells you when each account frees up, with no time-zone math. The hourly alert gets longer by one line per usable account. When it is sent and its level are unchanged.
+
+### For contributors
+
+`pool-health` JSON gains `next_usable_in` (`in 0.8h`, `now` once that time has passed, or empty) next to the unchanged `next_usable_at`. `pool_health` and `pool_usage_report` take an optional `now` (epoch seconds) so tests can pin the reference time.
+
+- **The validate job no longer produces misleading follow-on errors when authorization or runtime setup fails.** In `.github/workflows/validate.yml`, `Run validation process` now also requires `authorized_target`, `runtime` and `support_staging` to succeed. `Record validation candidate` and `Record validation run end` require runtime and support-staging success, and the force-tick step requires authorization and support-staging success, because in consumer repos the scripts these steps run are staged by `Fetch workflow support files`. `Collect validation status` writes no file when the runtime directory is missing (it used to write `/validation_status.json`) or support staging failed, and reports `status=error` with `raw_status=not_initialized`. `Upload validation artifacts` needs a runtime directory, and an empty workspace path turns its workspace entry into the exclude pattern `!/validation/`, so `/` and `/validation/` can no longer be uploaded (run 36378523375 scanned `/boot/efi`). `Run workspace before_remove hook` is skipped when support staging never exported `VALIDATE_HOOK_HELPER`. Authorization stays fail-closed and `Enforce validation outcome` still fails the job. To roll back, remove the added `if:` clauses, the early-exit branch in `Collect validation status` and the `!` guard on the upload path. Workflow-optimization Reliability 2 (2026-09-28-2).
+
+- **CI group 3 now runs its three single-file test modules at the same time.** The `orchestrate-poll` step "Orchestrate poll single-file module tests" in `.github/workflows/ci.yml` used to run `tests/test_orchestrate_poll_noop_suspicious_recovery.py`, `tests/test_state_snapshot.py` and `tests/test_run_substate_ledger.py` one after another. The ledger module alone takes about 139s, because one of its tests waits for the 120s default emit bound. The modules now start as separate background processes and the step fails closed, the same way the unblock step does: every process is reaped before any result is judged, a missing or non-numeric exit code counts as a failure, each module's grouped log and the repeated tail of each failing log carry a `| ` prefix, so test output cannot act as a workflow command. The step prints `CI_SUBTEST_START`, `CI_SUBTEST_END` (`elapsed_ms=`, `rc=`) and `CI_SUBTEST_HEARTBEAT` lines. The saving is an estimate (up to about 2 minutes) until a timed CI run measures it. To roll back, restore the sequential three-line body. Workflow-optimization recommendation Speed 1 / Reliability 1 / Cost 1 (2026-09-28).
+
 ### For contributors
 
 The step had already moved three times (#8072, #8091, #8118), and every group it landed in then neared the timeout, because no CI job has room for a step recorded at 860s in a failing run (40065164413). Group totals cannot isolate its cost, so it is not measured. It is split the way the merge-train step was split (#7579). A failing shard's last 40 log lines are printed with a `| ` prefix outside the collapsed log groups.
@@ -4010,6 +4030,112 @@ The orchestrator files accepted security-pass findings as `ai:security` follow-u
 | New log line | `SECURITY_PASS_ADVISORY_CITED_CODE ... status=present\|absent\|unknown` |
 
 What this means for consumer repos: advisories whose cited code was removed before the merge now arrive with a plan the pipeline can carry out (find out whether the vulnerable behaviour still exists, fix it if so, add a regression test), instead of blocking at planning. Findings are still filed every time. `present` and `unknown` keep the old wording.
+
+- **Stall recovery re-plans once when a plan is held only by a directory or glob token (#8339).** A plan whose "Files likely to change" section mentioned a placeholder such as `scripts/<helper>` was read as the bare directory `scripts/`, which can never be granted exactly, so the plan auto-approval gate held it with `path_not_granted` on every tick and the issue stayed in `ai:awaiting-approval`. `scripts/files_touched_scope_guard.py --plan-auto-approval-gate` now adds `replannable: true` to a `path_not_granted` hold when every denied path ends in `/` or holds a glob character, the issue is not on the heal route, and the rest of the plan would be approved (checked in memory; no grant body is written and the decision, denied list and grants are unchanged). For such a hold in `ai:awaiting-approval`, `_plan_auto_approval_gate` in `scripts/orchestrate_poll_process.sh` moves the label to `ai:planning` and posts one `/answer` comment carrying `<!-- ai:automation-path-replan:v1 issue=<N> -->`. The re-plan waits for the `ai:planning` concurrency cap, and a failed comment moves the label back so the next tick retries with the marker, unless one re-read of the recent comments shows the comment did land. Once a trusted comment carries that marker, a later hold gets today's hold notice for a maintainer. API cost: at most one label edit and one comment per issue on the eligible path, plus one comment read and one label edit only when that comment post fails; no new call anywhere else.
+
+- **The unblock judge no longer resumes an issue that planning found nothing to implement in, and a failed heal issue create now logs why.**
+
+Issue #8470 was a CI-triage issue whose only fix was a CI re-run. Planning stopped with `work is already on the planning ref; nothing to implement`. The unblock judge filed fix-up #8471, and once it merged posted `/answer`, so planning stopped again with the same reason and paged as CRITICAL. Now, when a fix-up is done and the newest pipeline "Planning blocked" comment on a standalone issue gives that reason, `scripts/unblock_judge.sh` closes the issue as completed with `ai:closed` and an evidence comment instead of resuming it. Separately, `scripts/workflow_failure_heal_intake.sh` used to drop the stderr of `gh issue create`: run 41071146143 logged `issue_create_failed` for shubhodeep1/binance-blessings#459 with no reason. The line now carries GitHub's error text and the title and body sizes.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Planning runs #8470 spent on the same block | 2 |
+| New kill switch | `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`; repository variable, forwarded by `unblock_judge.yml`) |
+| Error text kept on a failed heal issue create | last 300 bytes, one line |
+
+What this means for operators: a nothing-to-implement issue closes itself once its fix-up lands, instead of coming back as "Planning blocked: human input required". The next `issue_create_failed` page comes with a reason you can act on. Orchestrator items still resume as before.
+
+### For contributors
+
+The close runs only where the judge would post the resume command, after the protected-path handoff and the operator-step hold. It writes three times to the issue (comment, label, close), then marks the fix-up wait `done`, and reads nothing new. A trusted implementation plan posted after the block keeps the resume. A failed comment, label or close write keeps the fix-up wait open, and the trusted marker `<!-- ai:unblock-nothing-to-implement:v1 item=<n> fixup=<f> -->` stops the comment from being posted twice. Log: `UNBLOCK_JUDGE ... op=nothing_to_implement outcome=closed|skip`.
+
+- **The review-blocked judge now retries a merge that failed on a GitHub server error.** Before, an HTTP 5xx or GraphQL "Something went wrong" on both `gh pr merge` attempts left an approved PR open with `merge_failed`, and nothing retried it.
+
+On shubhodeep1/tele-funtoken-msg-scoring#5025 the judge chose merge at 2026-10-30 14:23 UTC, both attempts hit GitHub's GraphQL error, and the PR stayed open until it was merged by hand. `scripts/review_rb_judge.sh` now retries those failures on the `merge`, final-round `fix` and `merge_with_followup` paths, still bound to the judged head with `--match-head-commit`. Before each retry it reads the PR once over REST: a merge or auto-merge that landed anyway counts as success, and a closed PR or moved head stops the retry. Draft, permission, conflict and other 4xx errors fail at once, as before. Each retry logs `RB_JUDGE_MERGE_RETRY`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Retries | at most 3 |
+| Waits | 10s, 20s, 40s |
+| Extra API calls | 1 REST read per retry, none when the error is not a server error |
+
+What this means for operators: a "Review-blocked judge approved PR as-is, but the merge did not go through" alert now means GitHub kept failing for about 70 seconds, or the error was not a server error. Check the `RB_JUDGE_MERGE_ERROR` line for the reason.
+
+- **The unblock judge no longer re-plans a heal issue whose fix-up already shipped its whole fix on the default branch.**
+
+Heal issue #8481 targeted `stable`. The unblock judge filed fix-up #8484, which merged into `main` as pull request #8486 and held the whole fix. The judge then posted `/answer`, and planning ran on `stable`, which did not have #8486 yet, and proposed the same retry again. Now, when a fix-up merges into the default branch and its pull request changed every file a pipeline-authored `ai:workflow-heal` issue lists under Affected files, and the issue targets another branch, `scripts/unblock_judge.sh` closes the issue as completed with `ai:closed` and an evidence comment instead of resuming it.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra API reads, only after every local check passes | 2 (the merged fix-up pull request, its file list) |
+| Writes on a close | 3 (comment, label, close), plus the wait update |
+| New kill switch | `UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED` (default `true`; script environment only, not forwarded by `unblock_judge.yml`) |
+
+What this means for operators: a heal issue whose fix landed on `main` closes itself and says the fix reaches `stable` with the next release, instead of coming back with a duplicate plan. Reopen it and reply `/reclarify` if work is still missing. Orchestrator items, issues that target the default branch, and issues whose Affected files list cannot be read in full resume as before.
+
+### For contributors
+
+The check runs after the #8470 nothing-to-implement close. `scripts/unblock_actions.py fixup-delivered-body` does the body parsing without the network. Any read failure resumes; a failed write keeps the fix-up wait open, and the marker `<!-- ai:unblock-fixup-delivered:v1 item=<n> fixup=<f> pr=<pr> -->` stops the comment from being posted twice. Log: `UNBLOCK_JUDGE ... op=fixup_delivered outcome=closed|resume|skip`, plus `outcome=warn reason=wait_update_failed` when the issue closed but the wait comment could not be marked done.
+
+- **Telegram tracking comments are now trusted by author and exact body, not by text alone.** Anyone who could comment on a tracked issue could post a body that looked like a `<!-- tg_cleanup:... -->` marker. A multi-line body could inject a record that made `tg_cleanup_msgs` / `tg_cleanup_phase_msgs` in `scripts/tg_helpers.sh` DELETE any comment in the repository with the pipeline token and delete Telegram messages it named, and `tg_store_msg_id` / `tg_store_phase_msg_id` could be made to PATCH someone else's comment. All four functions now act only on comments written by the identity behind `GH_TOKEN` (resolved once per process from `GET /user`, compared case-insensitively) whose whole body is exactly one marker. When `/user` cannot be resolved (for example with an installation `GITHUB_TOKEN`), one `::warning::Telegram tracking: could not resolve the GH_TOKEN identity; only github-actions[bot] tracking comments are trusted` is printed and only `github-actions[bot]` comments with user type `Bot` are trusted. Cleanup records now carry only the comment id and the message-ID list, never the comment body, and both are re-checked before any delete. An invalid phase name is rejected with a warning and no API call. Markers written by a previous token owner, or with any extra text, are no longer cleaned up or appended to; a fresh marker is created instead. Refs #8598.
+
+- **The merge train now counts a renamed file's old path, so a queued PR that edits it waits behind the PR that renamed it.**
+
+`scripts/review_merge_train.sh` read only the new path (`filename`) of a renamed file from `pulls/<n>/files`. When an older PR renamed `a.sh` to `b.sh` and a younger PR edited `a.sh`, the gate saw no overlap and let the younger PR through. It now also reads `previous_filename` when that is a non-empty string, the same as the diff-based path already did. It still makes one paginated call per PR per run.
+
+What this means for operators: a PR may now show `ai:merge-queued` behind an older PR that renamed a file it edits. Before, the two raced and the second one usually hit a merge conflict.
+
+- **Telegram cleanup no longer skips tracking comments on busy issues or loses message IDs when Telegram fails.** `tg_cleanup_msgs` and `tg_cleanup_phase_msgs` in `scripts/tg_helpers.sh` used to delete tracking comments while paging through the issue's comments. On an issue with more than 100 comments, later comments moved up a page and were skipped, so their Telegram messages stayed. Both functions now read every page first and delete nothing if any page read fails or returns something that is not a comment list; they log the same `aborting cleanup` warning as before. A tracking comment is now kept when deleting one of its Telegram messages fails transiently (transport error, HTTP 401 or 403 from a bad bot token or chat permission, HTTP 429 or 5xx, or an unreadable response), so the next cleanup retries it. One `::warning::` per cleanup call gives the number of kept comments and failed message IDs, and how many IDs were not tried after the stop below. Messages that are already gone or cannot be deleted ("message to delete not found", HTTP 400, other `ok: false` replies) count as done. Each Telegram delete call and each tracking-comment delete now times out after 10 seconds, each comment-page read attempt after 30 seconds (`curl_gh_api` still makes up to `GH_RETRY_MAX_ATTEMPTS` attempts in total before the cleanup aborts and deletes nothing), and after 3 transient failures in a row a cleanup call stops calling Telegram and keeps the remaining comments. `tg_delete_msg` keeps its signature and still always returns 0. Refs #8598.
+
+- **Heal log filter keeps runtime signal lines and drops unstyled echoed step scripts.** `filter_log` in `scripts/workflow_failure_heal.py` now keeps the runner's `##[warning]` / `##[error]` lines, `CLAUDE_POOL run` lines whose outcome is not `success`, `AI_ENGINE_FALLBACK` lines and `exited with code` lines even when they fall outside the tail. `_drop_step_script_lines` also drops a step script the runner echoed without ANSI colour: inside a `##[group]Run` header, the unstyled lines before the first `shell:` / `with:` / `env:` section key are dropped once a section key confirms the header, and kept if the header closes or never closes without one. The header line, the `env:` block (still redacted) and all output after `##[endgroup]` are kept, and the fingerprint and signature code is unchanged. Refs #8602.
+
+- **The merge train now skips malformed entries in a PR's file list instead of losing the whole list.**
+
+`scripts/review_merge_train.sh` read each PR's files from `pulls/<n>/files`. One entry that was not an object made the whole lookup fail, and the gate then let the PR through without checking overlaps. An entry whose `filename` was null or empty added a literal `null` path. Now such entries add no path and the rest of the list is still used. Renamed files still count under both their old and new paths, and there is still one paginated call per PR per run.
+
+- **The Claude account pool now ranks an account with no 5-hour reading by its 7-day use.** Before, such an account was tried after every other usable account, so the pool used up some accounts and left others idle.
+
+Before each job, `.github/actions/claude-pool-token` probes every account, and `choose_account` in `scripts/claude_engine.py` orders them, lowest `max(5h, 7d)` use first. Many accounts no longer report a 5-hour window, and a probe without one (`5h ?` in the `📊 Claude pool daily usage` report) used to put the account in the "unknown" group at the end of the order. On 2026-11-02 that left PERSONAL1 and PERSONAL2 at 74% and 76% weekly use while the other six accounts were at or above the 95% gate. A missing 5-hour reading now means the account has no 5-hour limit, so it ranks by its 7-day use. It is gated only when that 7-day reading reaches `gate_utilization` or the probe was `rejected`. An account with no 7-day reading still goes last.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Gate (`gate_utilization` in `.github/ai/claude_engine.json`) | `0.95`, unchanged |
+| Accounts in the pool on 2026-11-02 | 8 |
+| Accounts reporting `5h ?` that day | 3 (FUNTOKEN1, PERSONAL1, PERSONAL2) |
+
+What this means for operators: weekly use should even out across the pool, so fewer accounts sit at the gate while others still have room. The daily usage report and the hourly near-cap alert look the same; only the order jobs try accounts in changes.
+
+- **The orchestrator clarify-respond worker now answers only clarify's questions comment.** Before, a plan or an earlier auto-answer on an orchestrator-managed issue that happened to contain the words "clarification required" started another answer run, and the runs fed each other until the loop breaker escalated the issue.
+
+The `orchestrate_clarify_respond.yml` job filter is `contains(github.event.comment.body, 'Clarification required')`, and GitHub's `contains()` ignores case. On issue #8650 the task was about the `ai:clarification` label, whose description is "AI clarification required before planning", so the plan comment and each of the three `/answer [auto-answered-by-orchestrator]` comments matched. Each run posted a new auto-answer, which started the next run, until run 41377181254 escalated the issue to `ai:blocked`. The "Check orchestrator metadata" step now also requires the comment's first line to be `<!-- ai:clarification-questions -->`, the marker clarify.yml puts on its questions comment and the capacity-wait replay keeps. Standalone mode already had this rule. Other comments are skipped with `AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_questions reason=not_clarify_questions outcome=skip`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra answer runs on #8650 | 3 (02:05, 02:09, 02:15 UTC on 2026-11-02), then escalation |
+| Wrapper `if:` change for consumers | none |
+| Extra API calls | 0 |
+
+What this means for operators: a plan, an auto-answer or a human comment that mentions "clarification required" no longer starts a clarify-respond run on an orchestrator-managed issue. Real questions comments are answered as before. Consumer repos get the fix on the next `@stable` sync with no change to their wrapper.
+
+- **An issue written by a person that only mentions `check-failure-triage` markers in prose is no longer held as `label_missing`.**
+
+Refs #8671. `scripts/resolve_integration_ref.sh` searched the whole issue body for a `check-failure-triage` marker. Issue #8671 is a feature request with no `ai:check-triage` label that discusses the fingerprint and markers in its text, so the resolver refused it with `reason=label_missing` and clarify held it. Now a label-less issue whose body does not open with a `check-failure-triage` marker is treated as an ordinary issue. Issues filed by `scripts/check_failure_triage.sh` always open with the `fp=` header, so a real triage issue that lost its label keeps that header and is still refused as `label_missing`. Labelled issues are unchanged.
+
+The new `CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED` switch defaults to `true`. `false` restores the old refusal; any other value also turns the skip off and logs a `::warning::`. The resolver reads it from its own environment; no workflow forwards a repository variable for it yet. No log prefix, refusal reason or identifier changed.
+
+- **A failed PATCH of the weekly retro tracker comment no longer posts a duplicate.** GitHub can apply a PATCH and lose the response; the source-repo `Upsert weekly retro tracker comment` step and the consumer fan-out in `scripts/workflow_retro_fanout.sh` used to POST a second marker comment in that case. Both now re-read the comment by ID after a failed PATCH: a matching body counts as refreshed, a stale body fails the step (or marks that consumer failed) without a POST, because the week-scoped marker means no later run refreshes it, any other read failure posts nothing, and a new comment is posted only when GitHub returns 404. Refs #8504.
+
+- **The workflow-log collector no longer double-counts cost telemetry when a parent and child step log carry the same event with different timestamps.** `scripts/collect_workflow_logs.py` now ignores GitHub's leading log timestamp when it matches a parent step's copy of a child step's cost/MCP telemetry line, so parent and step copies that differ by microseconds (review run 36237495547: 96 vs 82 OpenRouter calls, 10,157,867 duplicated tokens) are counted once. Only an anchored leading timestamp is ignored, retained lines keep their original text, and identical events in sibling steps are still all counted. Refs #8531.
+
+- **The release smoke gate's decomposition check no longer ends on the first empty child-issue poll.** In `test-and-mark-stable.yml`, the `orchestrate-decompose-test` dispatch step counted children with a bare `grep -c .`, which exits 1 on an empty poll and ended the step under `set -euo pipefail`. The count now comes from the fetched JSON with `jq` (0 on an empty, malformed or non-array result, numeric-guarded), so the 90s polling loop and its `last gh api stderr during child-issue polling` diagnostic run as intended. Refs #8531.
+
+- **The review-blocked judge's last-resort label fallback now creates labels with contract metadata.** When `scripts/review_rb_judge.sh` can neither source nor fetch `label_helpers.sh`, its inline `ensure_label_exists` now creates `ai:clarification`, `ai:orchestrator-managed` and `ai:workflow-heal` with the color and description from `.github/ai/label_contract.v1.json`, instead of the generic `1d76db` / `AI workflow label`. Labels without an explicit arm are still created with the generic metadata, but now emit a `::warning::`. The new `test_review_rb_judge_fallback_label_metadata_matches_label_contract` test fails when a literal `ensure_label_exists "ai:..."` call has no fallback arm or an arm drifts from the contract. To roll back, revert the whole change: remove the three arms, the warning line and the new test together, because the test requires the arms and the warning. Workflow-optimization CONSIST-001 (2026-09-28-3).
+
+- **The workflow-log collector no longer counts a run twice when the runs list shifts between page requests.** `scripts/collect_workflow_logs.py` now drops a run that `list_runs_for_repo` already returned earlier in the same listing, keyed on run ID plus attempt, so a run created between two offset-paginated page requests can no longer push an earlier run onto the next page and duplicate it (one collected window held 1,000 run rows but only 999 unique keys; run 36457861680 appeared twice). Different attempts of the same run are still kept, only unique runs count toward `--max-runs`, and the number dropped is reported as `duplicate_runs_skipped` in the listing metadata; duplicates are expected pagination drift and are not recorded as errors. Refs #8663.
+
+- **The orchestrator poller now polls up to 100 open projects per tick, not 20, and warns when it hits the limit.**
+
+The `find_tracking` step in `.github/workflows/orchestrate_poll.yml` listed open `ai:orchestrator-tracking` issues with a fixed `--limit 20`, so with more than 20 open projects the oldest were left out of every tick and their waves stopped dispatching. The step now lists up to `ORCHESTRATE_TRACKING_ISSUE_LIST_LIMIT` (default 100, integer 1-1000) issues per tick. An invalid value falls back to 100 with a warning, and a listing that reaches the limit emits `ORCH_TRACKING_ISSUE_LIST_TRUNCATED limit=<n> count=<n>`. Refs #8663.
 
 ### For contributors
 
@@ -9025,6 +9151,8 @@ The three synced commands used `curl --fail-with-body -sSL -o <path> <url>` for 
 | Cap per request (each redirect hop is one request) | 100 MiB and 120 s by default |
 
 What this means for consumer repos: after the next `@stable` sync, a fetch of an `http://` URL or of a host on a private network fails on purpose instead of downloading. Fetch GitHub Actions logs through the MCP tools or `gh run view` as before. shubhodeep1/radateeree-resort.com can turn on its `SAFE_FETCH_COMMAND_GRANT_UNSET_OPERATOR_STEP` check once the converted files reach its `main`.
+
+- **The gh retry helpers no longer dump raw stderr after a final failure.** After their `failed after N attempts` error line, `gh_retry`, `gh_retry_to_file` and `gh_api_json_to_file` in `scripts/gh_helpers.sh`, and `gh_api_retry` after its `GH_API_RETRY outcome=permanent` or `outcome=gave_up kind=transient` line, used to print the last attempt's stderr unescaped and without a size limit, so an API error body line starting with `::` could be read as a workflow command. They now print it as one escaped `::warning::  stderr:` line, the same shape the per-attempt warnings use, capped at the first 2048 bytes with NUL bytes removed and a ` [truncated]` suffix when cut. The per-attempt `::warning::  stderr:` lines of `gh_retry`, `gh_retry_to_file` and `gh_api_json_to_file`, which were already escaped, now use the same 2048-byte cap. The error line, return codes, stdout handling and temp-file cleanup are unchanged. The poller's final-merge refusal text (`final_merge_error` and the "Final merge blocked" comment) drops the `stderr: ` prefix and decodes the escaping, so it still shows GitHub's message as before. Refs #8504.
 
 ### For contributors
 

@@ -653,7 +653,7 @@ def test_scope_retry_restores_full_attempt_and_keeps_final_gate() -> None:
 		touched.write_text("conflict.txt\n", encoding="utf-8")
 		result = subprocess.run(
 			["bash", str(REPO_ROOT / "scripts/check_resolver_diff.sh"),
-			 "--conflicted-set", env["CONFLICTED_PATHS_FILE"], "--touched-set", str(touched), "--repo-root", str(repo)],
+				"--conflicted-set", env["CONFLICTED_PATHS_FILE"], "--touched-set", str(touched), "--repo-root", str(repo)],
 			env={key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH")},
 			capture_output=True, text=True, check=False,
 		)
@@ -706,7 +706,7 @@ def test_scope_feedback_is_available_for_generic_resolver() -> None:
 		result = subprocess.run(
 			["bash", "-c", fn + '\n_build_retry_prompt 1 /nonexistent /nonexistent scope; printf "%s" "${_retry_prompt_outcome}"'],
 			env={**os.environ, "IS_INTEGRATION_SYNC": "false", "CONFLICT_RESOLVER_PROMPT_FILE": str(prompt),
-			     "RESOLVER_RETRY_PROMPT_FILE": str(retry)}, capture_output=True, text=True, check=False,
+				"RESOLVER_RETRY_PROMPT_FILE": str(retry)}, capture_output=True, text=True, check=False,
 		)
 		assert result.returncode == 0, result.stderr
 		assert result.stdout == "scope-prelude"
@@ -928,7 +928,7 @@ def test_model_index_is_fresh_per_attempt_and_fails_closed() -> None:
 		not_a_repo = subprocess.run(
 			["bash", "-c", f"{prepare}\n_resolver_model_index_prepare\n"], cwd=directory,
 			env={**_clean_git_env(), "GIT_CEILING_DIRECTORIES": directory,
-			     "RESOLVER_MODEL_INDEX_FILE": str(Path(directory) / "copy")},
+				"RESOLVER_MODEL_INDEX_FILE": str(Path(directory) / "copy")},
 			capture_output=True, text=True, check=False,
 		)
 		assert not_a_repo.returncode != 0
@@ -989,6 +989,119 @@ def test_private_model_index_wiring() -> None:
 	assert "GIT_INDEX_FILE=" not in src[src.rindex("This staging runs on the real index on purpose", 0, staging_call):staging_call]
 
 
+_SCOPE_CHECK_LINE_RE = re.compile(
+	r"^RESOLVER_SCOPE_CHECK guard=(scope|attempt_state) action=([a-z_-]{1,32}|-) "
+	r"reason=[a-z][a-z0-9_]{0,63} exc=[A-Za-z0-9_]+ attempt=(\d+|-) allowed_paths=(\d+|-) "
+	r"changed_paths=(\d+|-) merge_state_changed=(true|false|-)$"
+)
+
+
+def _scope_check_line(stderr: str, error_prefix: str, forbidden: tuple[str, ...] = ()) -> str:
+	"""Return the single RESOLVER_SCOPE_CHECK line and pin its shape/placement."""
+	lines = stderr.splitlines()
+	matches = [i for i, line in enumerate(lines) if line.startswith("RESOLVER_SCOPE_CHECK ")]
+	assert len(matches) == 1, stderr
+	line = lines[matches[0]]
+	assert _SCOPE_CHECK_LINE_RE.fullmatch(line), line
+	errors = [i for i, text in enumerate(lines) if text.startswith(error_prefix)]
+	assert errors and matches[0] < errors[0], stderr
+	# Counts only: no path text, file names or exception text.
+	for text in ("/", ".txt", "conflict.", "outside.", "untracked.", *forbidden):
+		assert text not in line, (text, line)
+	return line
+
+
+def test_scope_check_reason_line_for_scope_guard_failures() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		env["RESOLVER_SCOPE_CHECK_ATTEMPT"] = ""
+		Path(env["CONFLICTED_PATHS_FILE"]).unlink()
+		result = _scope_action(repo, env, "capture")
+		assert result.returncode == 2
+		assert "::error::Resolver scope capture failed closed (ValueError)." in result.stderr.splitlines()
+		line = _scope_check_line(result.stderr, "::error::Resolver scope", (directory,))
+		assert " guard=scope action=capture reason=conflicted_paths_missing exc=ValueError attempt=- " in line
+		Path(env["CONFLICTED_PATHS_FILE"]).write_text("conflict.txt\n", encoding="utf-8")
+		assert _scope_action(repo, env, "capture").returncode == 0
+		result = _scope_action(repo, env, "bogus")
+		assert result.returncode == 2
+		assert "::error::Resolver scope bogus failed closed (ValueError)." in result.stderr
+		line = _scope_check_line(result.stderr, "::error::Resolver scope", (directory,))
+		assert "action=bogus reason=unknown_action exc=ValueError" in line
+		assert line.endswith("allowed_paths=- changed_paths=0 merge_state_changed=false")
+		result = _scope_action(repo, {**env, "RESOLVER_SCOPE_CHECK_ATTEMPT": "3"}, "Bad/Act")
+		assert result.returncode == 2
+		line = _scope_check_line(result.stderr, "::error::Resolver scope", (directory,))
+		assert "action=- reason=unknown_action" in line and " attempt=3 " in line
+		result = _scope_action(repo, {**env, "RESOLVER_SCOPE_CHECK_ATTEMPT": "3;x"}, "bogus")
+		assert " attempt=- " in _scope_check_line(result.stderr, "::error::Resolver scope", (directory,))
+		(repo / "outside.txt").write_text("staged drift\n", encoding="utf-8")
+		subprocess.run(["git", "add", "--", "outside.txt"], cwd=repo, check=True, env=_clean_git_env())
+		result = _scope_action(repo, env, "check")
+		assert result.returncode == 2
+		assert "::error::Resolver scope check failed closed (ValueError)." in result.stderr
+		line = _scope_check_line(result.stderr, "::error::Resolver scope", (directory,))
+		assert "reason=merge_state_changed" in line and line.endswith("merge_state_changed=true")
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		result = _scope_action(repo, env, "check")
+		assert result.returncode == 2
+		assert "::error::Resolver scope check failed closed (FileNotFoundError)." in result.stderr
+		line = _scope_check_line(result.stderr, "::error::Resolver scope", (directory,))
+		assert "reason=os_error exc=FileNotFoundError" in line
+
+
+def test_scope_check_reason_line_for_attempt_state_failures(tmp_path: Path) -> None:
+	result = _run_attempt_fixture(tmp_path, """
+	attempt=4
+	_resolver_attempt_state capture
+	_rc=0
+	_resolver_attempt_state capture || _rc=$?
+	echo "capture_rc=${_rc}"
+	_rc=0
+	_resolver_attempt_state bogus || _rc=$?
+	echo "bogus_rc=${_rc}"
+	""")
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "capture_rc=2" in result.stdout and "bogus_rc=2" in result.stdout
+	stderr_lines = result.stderr.splitlines()
+	assert "::error::Resolver attempt state unavailable or unsafe: attempt snapshot already exists" in stderr_lines
+	assert "::error::Resolver attempt state unavailable or unsafe: unknown attempt state action" in stderr_lines
+	first, second = [i for i, line in enumerate(stderr_lines) if line.startswith("::error::")]
+	capture_line = _scope_check_line("\n".join(stderr_lines[:first + 1]), "::error::Resolver attempt state", (str(tmp_path),))
+	assert " guard=attempt_state action=capture reason=attempt_snapshot_exists exc=ValueError attempt=4 " in capture_line
+	bogus_line = _scope_check_line("\n".join(stderr_lines[first + 1:second + 1]), "::error::Resolver attempt state", (str(tmp_path),))
+	assert "action=bogus reason=unknown_action" in bogus_line
+	assert bogus_line.endswith("allowed_paths=- changed_paths=0 merge_state_changed=false")
+
+
+def test_scope_check_reason_codes_are_tagged_and_fail_open() -> None:
+	"""Every raise in both guards carries an allowlisted reason code, the two
+	allowlists stay identical, and the diagnostic runs fail-open before the
+	unchanged ::error:: line."""
+	allowlists = []
+	for source, guard, error_print in (
+		(_scope_state_source(), "scope", 'print(f"::error::Resolver scope {action} failed closed'),
+		(_named_function_source("_resolver_attempt_state"), "attempt_state", 'print("::error::Resolver attempt state unavailable or unsafe: "'),
+	):
+		assert "raise ValueError(" not in source
+		block = re.search(r"_SCOPE_CHECK_REASON_CODES = frozenset\(\((.*?)\)\)", source, flags=re.DOTALL)
+		assert block is not None
+		codes = set(re.findall(r'"([a-z][a-z0-9_]{0,63})"', block.group(1)))
+		allowlists.append(codes)
+		tagged = re.findall(r'raise _scope_check_tag\("([^"]+)"', source)
+		assert tagged and set(tagged) <= codes, set(tagged) - codes
+		handler = source.index("except (OSError, ValueError, KeyError")
+		emit = source.index(f'_emit_scope_check_line("{guard}", exc)')
+		assert handler < emit < source.index(error_print) < source.index("sys.exit(2)", handler)
+		emitter = source[source.index("def _emit_scope_check_line("):source.index("\ntry:\n")]
+		assert "except Exception:" in emitter and "str(exc)" not in emitter
+	assert allowlists[0] == allowlists[1]
+	assert {"os_error", "key_error", "type_error", "json_error", "subprocess_error", "unclassified"} <= allowlists[0]
+	src = _resolve_script_text()
+	assert src.count('RESOLVER_SCOPE_CHECK_ATTEMPT="${RESOLVER_SCOPE_CHECK_ATTEMPT:-${attempt:--}}" \\') == 2
+
+
 def main() -> int:
 	test_dependency_fallback_prefers_main_then_script_ref_checkout()
 	test_dependency_fallback_gates_workspace_scripts_and_fails_closed()
@@ -1014,6 +1127,10 @@ def main() -> int:
 	test_model_index_is_fresh_per_attempt_and_fails_closed()
 	test_resolver_opencode_snapshot_opt_out()
 	test_private_model_index_wiring()
+	test_scope_check_reason_line_for_scope_guard_failures()
+	test_scope_check_reason_codes_are_tagged_and_fail_open()
+	with tempfile.TemporaryDirectory() as directory:
+		test_scope_check_reason_line_for_attempt_state_failures(Path(directory))
 	print(
 		"OK: review_conflict_resolve outcome-aware retry-prelude "
 		"contract holds (validation + timeout preludes, "

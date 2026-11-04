@@ -2061,21 +2061,53 @@ jobs:
       - name: AI label sync dry-run smoke
         env:
           GH_TOKEN: ${{ github.token }}
+        # Only label-contract defects fail this step: errors with
+        # action == "validate" or a "100-character limit" message. Get / HTTP /
+        # transport errors stay non-fatal (documented assumption) so the smoke
+        # does not flake on token scope or rate-limit problems.
         run: |
           set -euo pipefail
           RESULT_JSON="/tmp/ai-label-sync-dry-run.json"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ai_labels.py sync-labels \
             --contract-file .github/ai/label_contract.v1.json \
             --repo "${GITHUB_REPOSITORY}" \
-            --dry-run > "${RESULT_JSON}"
-          python3 - <<'PY' "${RESULT_JSON}"
+            --dry-run > "${RESULT_JSON}" || SYNC_RC=$?
+          python3 - <<'PY' "${RESULT_JSON}" "${SYNC_RC:-0}"
           import json
           import sys
           from pathlib import Path
 
-          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          # sync-labels exits 1 when every label errored (for example a token
+          # or rate-limit failure); that alone is not fatal here. Any other
+          # exit code, or no parseable JSON, still fails the step.
+          sync_rc = int(sys.argv[2])
+          if sync_rc not in (0, 1):
+              print(f"::error::AI label sync dry-run exited {sync_rc}")
+              sys.exit(1)
+          try:
+              payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          except (OSError, ValueError) as exc:
+              print(f"::error::AI label sync dry-run produced no JSON result (exit {sync_rc}): {type(exc).__name__}")
+              sys.exit(1)
           assert set(payload) == {"created", "updated", "unchanged", "deleted", "errors"}
           assert isinstance(payload["errors"], list)
+          validation_failures = [
+              error
+              for error in payload["errors"]
+              if isinstance(error, dict)
+              and (
+                  error.get("action") == "validate"
+                  or "100-character limit" in str(error.get("message", ""))
+              )
+          ]
+          if validation_failures:
+              # Collapse CR/LF and other whitespace so a label name cannot start a new workflow command.
+              failing_labels = sorted({" ".join(str(error.get("label", "<unknown>")).split()) for error in validation_failures})
+              print(
+                  "::error::AI label sync dry-run: label contract validation errors for: "
+                  + ", ".join(failing_labels)
+              )
+              sys.exit(1)
           PY
 
       - name: Phase label transition and fallback contract tests
@@ -2321,6 +2353,7 @@ jobs:
     # engine judges and the validation harness sandbox steps.
     # Since #8759, group 1 pins the review-pipeline plumbing step and group
     # 0 the synthesize-smoke step.
+    # Since #8772, group 4 also pins the CI wiring guard part 2 step.
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -2603,10 +2636,22 @@ jobs:
       # carries the fast-fail subset (the single-file modules ran there until
       # #8080 moved them to group 1) and group 1
       # then carried the merge-train step (moved out in #7766), so this step
-      # runs in group 2 only, once per CI run. It needs only checkout, Python 3.12 and the shared pip install,
+      # ran in group 2 only, once per CI run, until #8772. It needs only checkout, Python 3.12 and the shared pip install,
       # which this job already has. Name and body unchanged.
+      # Moved from group 2 to group 4: orchestrate-poll (2) took 15m18s of its
+      # 20 minutes on main (run 41704793081, budget-watch issue #8772). That
+      # run's step timings could not be read, so the pick is an estimate from
+      # test and subprocess counts, not a measurement: this step names 52
+      # modules with about 568 test functions and 134 subprocess call sites,
+      # while group 2's other three pinned steps have about 213 tests between
+      # them, and in #7690's sandbox timing this was the heaviest step (37.2s).
+      # Group 4 has not been named by budget-watch since #8150, and its only
+      # pinned step (unblock) was split across 4 local processes in #8150. The
+      # step needs only checkout, Python 3.12 and the shared pip install, which
+      # every group has. It now runs in group 4 only, once per CI run. Name and
+      # body unchanged.
       - name: Regression tests wired by the CI wiring guard (part 2)
-        if: strategy.job-index == 2
+        if: strategy.job-index == 4
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
