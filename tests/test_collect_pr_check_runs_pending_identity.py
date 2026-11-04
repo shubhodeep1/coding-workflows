@@ -10,6 +10,7 @@ summarise the wait when it ends. They must not change wait semantics, the
 from __future__ import annotations
 
 import contextlib
+import email.message
 import importlib.util
 import io
 import json
@@ -17,8 +18,14 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -391,6 +398,287 @@ def test_diagnostics_fail_open_without_changing_status_or_snapshot() -> None:
 	assert patched["context_text"] == baseline["context_text"]
 	assert "collection_status: ready\n" in patched["context_text"]
 
+
+# --- Issue #8799: log_tail window selection ---------------------------------
+# The fixture follows shubhodeep1/fun-token-multi-chain job 125140539489: the
+# cause line and the step's ``##[error]`` line are followed by ~35 KB of
+# Postgres service-container teardown output, so the last 16 KiB of the log hold
+# no failure detail at all. The window must end at the step error instead.
+# These tests live here because this file is already wired into ci.yml.
+
+HELPER = REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py"
+REPO = "octo/repo"
+DETAILS_URL = f"https://github.com/{REPO}/actions/runs/41403592424/job/125140539489"
+CAUSE = "TransactionExecutionError: Transaction reverted: trying to deploy a contract whose code is too large"
+STEP_ERROR = "##[error]Process completed with exit code 1."
+FIRST_PG_LINE_KEY = "Key (id)=(0) already exists."
+
+
+def _load():
+	spec = importlib.util.spec_from_file_location("collect_pr_check_runs_context_8799", HELPER)
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+mod = _load()
+
+
+def _ts(n: int) -> str:
+	return f"2026-11-01T10:{(n // 60) % 60:02d}:{n % 60:02d}.0000000Z "
+
+
+def build_job_log(*, padding_lines: int = 0, with_step_error: bool = True) -> bytes:
+	lines: list[str] = []
+	for n in range(padding_lines):
+		lines.append(_ts(n) + f"padding line {n:06d} " + "p" * 60)
+	lines += [_ts(1) + "##[group]Run npm test", _ts(1) + "##[endgroup]"]
+	lines += [_ts(2) + f" ✓ test/unit_{n}.test.ts (3 tests) 12ms" for n in range(40)]
+	lines.append(_ts(3) + " Test Files  8 passed (8)")
+	lines += [_ts(4) + "##[group]Run npm run smoke", _ts(4) + "##[endgroup]"]
+	lines.append(_ts(5) + CAUSE)
+	long_line = _ts(5) + "Error: could not deploy (code=CALL_EXCEPTION, data=0x"
+	lines.append(long_line + "a" * (65000 - len(long_line)))
+	if with_step_error:
+		lines.append(_ts(6) + STEP_ERROR)
+	lines += [
+		_ts(7) + "Post job cleanup.",
+		_ts(7) + "Stop and remove container: 4f1c",
+		_ts(7) + "##[command]/usr/bin/docker logs --details 4f1c",
+		_ts(7) + "PostgreSQL init process complete; ready for start up.",
+		_ts(7) + "listening on IPv4 address \"0.0.0.0\", port 5432",
+		_ts(7) + "database system is ready to accept connections",
+	]
+	n = 0
+	while sum(len(line) + 1 for line in lines) < 35000 + 65000 + 8000 + padding_lines * 100:
+		lines.append(
+			_ts(8) + f" 2026-11-01 10:00:08.000 UTC [61] ERROR:  duplicate key value violates unique constraint "
+			f"\"users_pkey\" DETAIL:  Key (id)=({n}) already exists."
+		)
+		n += 1
+	return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+class _LogServer:
+	"""Serves HEAD and Range GET like the signed job-log blob URL."""
+
+	def __init__(self, data: bytes):
+		self.data = data
+		self.requests: list[tuple[str, str]] = []
+		server_ref = self
+
+		class Handler(BaseHTTPRequestHandler):
+			def log_message(self, *args):
+				return
+
+			def do_HEAD(self):
+				server_ref.requests.append(("HEAD", ""))
+				self.send_response(200)
+				self.send_header("Content-Length", str(len(server_ref.data)))
+				self.end_headers()
+
+			def do_GET(self):
+				range_header = self.headers.get("Range") or ""
+				server_ref.requests.append(("GET", range_header))
+				start_s, end_s = range_header.removeprefix("bytes=").split("-")
+				chunk = server_ref.data[int(start_s):int(end_s) + 1]
+				self.send_response(206)
+				self.send_header("Content-Length", str(len(chunk)))
+				self.end_headers()
+				self.wfile.write(chunk)
+
+		self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+		self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}/blob"
+		self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+	def __enter__(self):
+		self.thread.start()
+		return self
+
+	def __exit__(self, *exc):
+		self.httpd.shutdown()
+		self.httpd.server_close()
+
+
+class _RedirectOpener:
+	def __init__(self, location: str):
+		self.location = location
+		self.calls = 0
+
+	def open(self, req, timeout=None):
+		self.calls += 1
+		headers = email.message.Message()
+		headers["Location"] = self.location
+		raise urllib.error.HTTPError(req.full_url, 302, "Found", headers, None)
+
+
+@pytest.fixture
+def local_http(monkeypatch):
+	for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+		monkeypatch.delenv(name, raising=False)
+	monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+	monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+	monkeypatch.setattr(urllib.request, "_opener", None)
+
+
+def _fetch(monkeypatch, data: bytes, log_tail_bytes: int = mod.DEFAULT_LOG_TAIL_BYTES):
+	with _LogServer(data) as server:
+		opener = _RedirectOpener(server.url)
+		monkeypatch.setattr(mod, "_LOG_REDIRECT_OPENER", opener)
+		result = mod._fetch_log_tail(details_url=DETAILS_URL, log_tail_bytes=log_tail_bytes, repository=REPO, token="t")
+	return result, opener.calls + len(server.requests), server.requests
+
+
+def _old_tail(data: bytes, log_tail_bytes: int) -> str:
+	"""The pre-#8799 selection: last log_tail_bytes bytes, last 200 lines."""
+	out = data[-log_tail_bytes:]
+	lines = out.decode("utf-8", errors="replace").splitlines()
+	return "\n".join(lines[-mod.LOG_TAIL_LINES:])
+
+
+def test_window_ends_at_the_step_error_not_the_teardown_dump(monkeypatch, local_http):
+	data = build_job_log(padding_lines=2500)
+	assert len(data) > mod.LOG_SCAN_BYTES
+	result, request_count, requests = _fetch(monkeypatch, data)
+	assert request_count == 3
+	assert requests[-1] == ("GET", f"bytes={len(data) - mod.LOG_SCAN_BYTES - 1}-{len(data) - 1}")
+	assert result.startswith("log_tail_anchor: step_error\n")
+	body = result.split("\n", 1)[1]
+	assert CAUSE in body and STEP_ERROR in body
+	assert "duplicate key" not in body
+	assert "[… 63000 chars truncated]" in body
+	assert len(body.encode("utf-8")) <= mod.DEFAULT_LOG_TAIL_BYTES
+	assert len(body.split("\n")) <= mod.LOG_TAIL_LINES
+	# Up to five lines after the step error are kept.
+	assert body.split("\n")[-1].endswith('listening on IPv4 address "0.0.0.0", port 5432')
+
+
+def test_small_log_is_fetched_from_byte_zero(monkeypatch, local_http):
+	data = build_job_log()
+	assert len(data) < mod.LOG_SCAN_BYTES
+	result, request_count, requests = _fetch(monkeypatch, data)
+	assert request_count == 3
+	assert requests[-1] == ("GET", f"bytes=0-{len(data) - 1}")
+	assert result.startswith("log_tail_anchor: step_error\n") and CAUSE in result
+
+
+def test_log_without_step_error_keeps_the_old_tail(monkeypatch, local_http):
+	lines = [_ts(n) + f"ok line {n} " + "z" * 50 for n in range(3000)]
+	data = ("\n".join(lines) + "\n").encode("utf-8")
+	result, request_count, _ = _fetch(monkeypatch, data)
+	assert request_count == 3
+	assert result == "log_tail_anchor: end_of_log\n" + _old_tail(data, mod.DEFAULT_LOG_TAIL_BYTES)
+
+
+def _boundary_log(*, aligned: bool) -> bytes:
+	"""A log whose scan (last LOG_SCAN_BYTES bytes) starts with the only step error."""
+	body = (_ts(6) + STEP_ERROR + "\n").encode("utf-8")
+	filler = (_ts(8) + "teardown " + "t" * 80 + "\n").encode("utf-8")
+	while len(body) + len(filler) <= mod.LOG_SCAN_BYTES:
+		body += filler
+	body += b"x" * (mod.LOG_SCAN_BYTES - len(body) - 1) + b"\n"
+	assert len(body) == mod.LOG_SCAN_BYTES
+	prefix = b"cause line before the scan\n" if aligned else b"cut mid-line "
+	return prefix + body
+
+
+def test_scan_starting_on_a_line_boundary_keeps_the_first_line_as_anchor(monkeypatch, local_http):
+	data = _boundary_log(aligned=True)
+	result, request_count, requests = _fetch(monkeypatch, data)
+	assert request_count == 3
+	assert requests[-1] == ("GET", f"bytes={len(data) - mod.LOG_SCAN_BYTES - 1}-{len(data) - 1}")
+	assert result.startswith("log_tail_anchor: step_error\n") and STEP_ERROR in result
+
+
+def test_scan_starting_mid_line_still_skips_the_fragment(monkeypatch, local_http):
+	data = _boundary_log(aligned=False)
+	result, request_count, _ = _fetch(monkeypatch, data)
+	assert request_count == 3
+	assert result.startswith("log_tail_anchor: end_of_log\n") and STEP_ERROR not in result
+
+
+def test_zero_budget_returns_empty_without_requests(monkeypatch, local_http):
+	result, request_count, _ = _fetch(monkeypatch, build_job_log(), log_tail_bytes=0)
+	assert result == "" and request_count == 0
+
+
+def test_cap_long_lines():
+	limit = mod.LOG_LINE_CHAR_CAP
+	assert mod._cap_long_lines(["a" * limit, "b"]) == ["a" * limit, "b"]
+	capped = mod._cap_long_lines(["c" * (limit + 7)])
+	assert capped == ["c" * limit + " [… 7 chars truncated]"]
+	source = ["d" * (limit + 1)]
+	mod._cap_long_lines(source)
+	assert source == ["d" * (limit + 1)]
+
+
+def test_select_window_respects_budgets():
+	data = build_job_log(padding_lines=50)
+	result = mod._select_log_tail_window(data, log_tail_bytes=4096, partial_start=False)
+	body = result.split("\n", 1)[1]
+	assert result.startswith("log_tail_anchor: step_error\n")
+	assert len(body.encode("utf-8")) <= 4096 and STEP_ERROR in body
+	assert len(body.split("\n")) <= mod.LOG_TAIL_LINES
+	lines_only = "\n".join(f"line {n}" for n in range(500)) + "\n" + STEP_ERROR
+	result = mod._select_log_tail_window(lines_only.encode(), log_tail_bytes=100000, partial_start=False)
+	assert len(result.split("\n", 1)[1].split("\n")) == mod.LOG_TAIL_LINES
+
+
+def test_partial_first_line_is_never_the_anchor():
+	data = b"##[error]fragment of a cut line\nnext line\nlast line"
+	assert mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=True).startswith("log_tail_anchor: end_of_log\n")
+	assert mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=False).startswith("log_tail_anchor: step_error\n")
+
+
+def test_tiny_budget_keeps_the_step_error_line():
+	data = ("before\n" + _ts(6) + STEP_ERROR + "\nafter\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=64, partial_start=False)
+	body = result.split("\n", 1)[1]
+	assert STEP_ERROR in body and len(body.encode("utf-8")) <= 64
+	assert mod._select_log_tail_window(b"", log_tail_bytes=64, partial_start=False) == ""
+
+
+def test_end_of_log_long_trailing_line_is_capped_before_the_byte_budget():
+	early = [f"context line {n}" for n in range(300)]
+	data = ("\n".join(early + ["x" * 14000]) + "\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=mod.DEFAULT_LOG_TAIL_BYTES, partial_start=False)
+	assert result.startswith("log_tail_anchor: end_of_log\n")
+	body = result.split("\n", 1)[1]
+	assert len(body.encode("utf-8")) <= mod.DEFAULT_LOG_TAIL_BYTES
+	assert len(body.split("\n")) == mod.LOG_TAIL_LINES
+	assert body.endswith("[… 12000 chars truncated]")
+	assert "context line 299" in body and "context line 120" in body
+
+
+def test_partial_first_line_is_not_kept_as_lead_context():
+	data = b"fragment-of-cut-line\nwhole line\n" + STEP_ERROR.encode() + b"\n"
+	body = mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=True).split("\n", 1)[1]
+	assert "fragment-of-cut-line" not in body
+	assert body.startswith("whole line\n") and STEP_ERROR in body
+
+
+def test_credentials_are_redacted_before_the_line_cut():
+	long_line = "x" * 1985 + " ghp_" + "Zq9" * 12 + " " + "y" * 3000
+	data = ("step\n" + long_line + "\n" + STEP_ERROR + "\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=8000, partial_start=False)
+	assert "ghp_[redacted]" in result and "Zq9" not in result
+
+
+def test_encoded_access_token_is_redacted():
+	import base64 as b64
+	encoded = b64.b64encode(b"x-access-token:" + b"Q7" * 20).decode()
+	data = ("config " + encoded + "\n" + STEP_ERROR + "\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=8000, partial_start=False)
+	assert encoded not in result and "config [redacted]" in result
+	# Plain hex runs (SHAs, initcode) stay readable.
+	assert mod._redact_log_text("0x" + "ab" * 40) == "0x" + "ab" * 40
+
+
+def test_redaction_never_swallows_the_next_lines_step_error():
+	data = ("x-header extraheader:\n" + _ts(6) + STEP_ERROR + "\nauth Bearer\nafter\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=8000, partial_start=False)
+	assert result.startswith("log_tail_anchor: step_error\n") and STEP_ERROR in result
+	assert mod._redact_log_text("extraheader: AUTHORIZATION: basic abcdefgh") == "extraheader: [redacted]"
 
 if __name__ == "__main__":
 	import pytest

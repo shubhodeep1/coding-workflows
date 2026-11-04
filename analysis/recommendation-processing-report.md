@@ -1847,3 +1847,39 @@ Source commit: `8a0fe2f3febf6dbd5fca5b2448cc8f9d091dc97c`
 | Per-Repo Breakdown top three actions | informational | Covered by the Exec 1, Exec 2 + Cost 4, and Exec 3–5 rows. |
 | Metrics Appendix | informational | No separate recommendation. |
 | Dead Calls (DEAD-API) | informational | The doc says "No findings." |
+
+### `analysis/workflow-optimization-2026-10-01.md`
+Source doc: `analysis/workflow-optimization-2026-10-01.md`
+Processed: 2026-11-04
+Source commit: `1bf09113182d30722de27cf62619001aa7e7c678`
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| BUG-001 (integration-ref resolver API failure falls back to the default branch), remaining part | applied | The `Resolve integration ref` step in `.github/workflows/clarify.yml`, `.github/workflows/plan.yml` and `.github/workflows/orchestrate_clarify_respond.yml` now stops with `::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable` when `scripts/resolve_integration_ref.sh` exits 2 and CI-triage routing is on. With routing off, exit 2 keeps the legacy fallback, matching the exit-75 policy. Pinned by `tests/test_workflow_checkout_integration_ref_audit.py`; changelog `changelog.d/wfopt-2026-10-01-refctx-api-unavailable.md` (Refs #8796). Already in place: the resolver's distinct exit codes and `gh_api_retry` reads, and `.github/workflows/implement.yml` failing closed on exits 2 and 75. |
+| SHELL-001 (unchecked clock read in `check_integration_branch_staleness`) | applied | `scripts/orchestrate_poll_process.sh` now runs `if ! now_epoch="$(date +%s)" \|\| ! [[ "${now_epoch}" =~ ^[0-9]+$ ]]`, logs one `::warning::` and skips the check for that cycle. Pinned by `tests/test_orchestrate_integration_staleness_clock.py`; changelog `changelog.d/wfopt-2026-10-01-staleness-clock-read.md` (Refs #8796). |
+| Exec 1 / Speed 1 / Reliability 1, reason-code part (sanitized resolver scope rejection reason) | already-implemented | `RESOLVER_SCOPE_CHECK guard=… action=… reason=…` in `scripts/review_conflict_resolve.sh` (`agents.d/8744-resolver-scope-check-reason.md`). The doc's proposed name `RESOLVER_SCOPE_AUDIT` was not added; the existing prefix covers it. |
+| Exec 2 / Speed 2 / Cost 2, per-slot timing part | already-implemented | `REVIEWER_ATTEMPT_RESULT` (pass, slot, model, `duration_secs`) in `scripts/review_run_reviewers.sh` (#8097). The doc's reasoning-level, cache-status and verdict-contribution fields are not emitted; see the Speed 2 / Cost 2 rejection row. |
+| Exec 4 / Cost 1 (duplicated composite/split-step token accounting) | already-implemented | `_dedupe_structured_cost_telemetry_full_logs` in `scripts/collect_workflow_logs.py`. |
+| Speed 3, logging part (free space around disk cleanup) | already-implemented | The `Show disk usage (pre free-disk-space)` step in `.github/workflows/review_autofix.yml`, before `Free disk space`; pinned by `tests/test_review_autofix_disk_headroom_contract.py` (#8725). It logs before and after the whole step, not each component. |
+| Reliability 3 (separate synthetic contract-test Semble fallbacks from runtime ones) | already-implemented | `semble_contract_test_fallbacks` and `semble_runtime_fallbacks` in `scripts/cost_audit.py`. |
+| AI Memory Health (push timing and retry telemetry) | already-implemented | `push_attempts`, `push_ms` and `push_retry_reasons` in `scripts/ai_memory.py` telemetry (#8726). |
+| BUG-002 (`gh workflow run` retried) | already-implemented | The `_gh_cmd_is_unsafe_post` case list in `scripts/gh_helpers.sh` includes `"workflow run"`, so `gh_retry` makes a single attempt. |
+| BUG-003 (label pagination) | already-implemented | `_fetch_issue_labels_batch_graphql` and `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh` both request `labels(first: 100) { nodes { name } pageInfo { hasNextPage } }`. |
+| SEC-001 (full gh arguments in retry logs) | already-implemented | `gh_retry` logs through `_gh_cmd_log_summary` (`scripts/gh_helpers.sh`). |
+| SEC-002 (API payload in diagnostics) | already-implemented | `gh_api_json_to_file` in `scripts/gh_helpers.sh` logs `bytes=`, a 12-character `sha256=` prefix and `category=` only (#8095). |
+| EXPR-001 (`implement.yml` support-staging body size) | already-implemented | The `Stage workflow support files` run body in `.github/workflows/implement.yml` contains no `${{ }}`; values pass through `STAGE_*` `env:`. |
+| Exec 3 / Reliability 2 (early inventory-parity and Ruff checks) | rejected | Obsolete: `scripts/claude_issue_route.py` no longer exists, nothing references `guard_differential`, and `Python lint (ruff)` already runs in the first-tier `static-checks` job (no `needs:`) of `.github/workflows/ci.yml`. |
+| Same-head resolver hold (suppression part of Exec 1 / Speed 1 / Cost 5 / Reliability 1) | rejected | A behaviour change that needs evidence from the `RESOLVER_SCOPE_CHECK` reason codes first. |
+| Speed 2 / Cost 2, pass reduction and roster changes | rejected | The doc itself defers these until there is verdict-parity evidence. |
+| Speed 3, skipping cleanup components | rejected | Medium risk given past disk exhaustion; no tested free-space thresholds yet. |
+| Speed 4, Cost 4, Cost 5 (resolver usage logging), Reliability 4 (warning event IDs), GH API audit counters, watchdog sharing and follow-up batching, Orchestrator Health transition events | rejected | Measurement-only or conditional, with no demonstrated saving. |
+| Cost 3 / Prompt Cache & Memory System (prompt-prefix reordering) | rejected | The doc rates the quality risk as medium. |
+| API-001, API-002, API-004, MERGE-001, MERGE-002, MERGE-003 | rejected | Tagged RISKY_SKIP by the doc itself. |
+| API-003, REUSE-001 | rejected | Tagged NEEDS_VERIFICATION by the doc; parity not established. |
+| DUP-001, DUP-002, DUP-003, EXPR-002 | rejected | Refactor-only with no defect (§9). The BUG-001 remnant was fixed in place instead. |
+| DEBT-001 (`review_autofix.yml` size headroom) | rejected | `tests/test_workflow_file_size_limit.py` enforces the 480,000-byte guard; extraction happens at the guard (§24). |
+| DEAD-001 | rejected | Removing an identifier needs explicit approval (§10). |
+| Pipeline Flow Bottlenecks | informational | Covered by the Exec 1–4, Speed and Orchestrator Health rows. |
+| Per-Repo Breakdown | informational | Covered by the Exec 1–4 rows. |
+| Metrics Appendix | informational | No separate recommendation. |
+| Dead Calls (DEAD-API) | informational | The doc reports none. |
