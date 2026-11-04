@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP (self-reported as satisfied, \"NONE\") | severity=NIT | confidence=5\n  Requirement: Replace the second line of tests/e2e_smoke_canary.txt with 'decompose-run: 41746468580'.\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The PR diff (last_run_diff.patch and original_pr_diff.patch) correctly replaces the old marker with 'decompose-run: 41746468580' and the file has exactly two lines. The requirement is satisfied. NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d68f64024b5f5c344faba24bed30a01ed7007bf5875f7f1f5efa4d07f6acc909",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8792,
+    "run_id": "41803966735",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41803966735",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104091016_ab6af9466d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8792,
+    "run_id": "41803966735"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T09:10:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
