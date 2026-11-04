@@ -1691,6 +1691,7 @@ def test_heal_test_only_check_holds() -> None:
 		(_to_plan("tests/test_x.py"), {"issue": "0"}, "plan_comment_unknown"),
 		(_to_plan("tests/test_x.py"), {"scope": ""}, "heal_scope_check_unavailable"),
 		(_to_plan(*[f"tests/test_{i}.py" for i in range(51)]), {}, "too_many_paths"),
+		(_to_plan("tests/test_x.py", "tests/pytest.ini"), {}, "path_not_test_only"),
 	]
 	for plan_text, kwargs, reason in cases:
 		record, code = _to_check(plan_text, **kwargs)
@@ -1861,6 +1862,35 @@ def test_heal_test_only_weakening_check_refuses() -> None:
 		record, code = _to_weaken({}, {name: "[pytest]\naddopts = -k 'not flaky'\n"}, [name])
 		assert (record["reason"], code) == ("pytest_config_changed", 30), (name, record)
 	record, code = _to_weaken({"tests/pytest.ini": "[pytest]\n"}, {"tests/pytest.ini": "[pytest]\n"}, ["tests/pytest.ini"])
+	assert code == 0, record
+	# Runtime markers, namespace lookups, empty parameter sets, pytestmark and a
+	# same-file SystemExit subclass are controls too.
+	for added in ("def test_z(request):\n\trequest.node.add_marker('xfail')\n\tassert True\n",
+		"def test_z(request):\n\trequest.applymarker('skip')\n\tassert True\n",
+		"pytestmark = pytest.mark.__getattr__('skip')\n", "import os\nos.__dict__['_exit'](0)\n",
+		"import os\nvars(os)['_exit'](0)\n",
+		"@pytest.mark.parametrize('value', [])\ndef test_z(value):\n\tassert value\n",
+		"@pytest.mark.parametrize('value', CASES)\ndef test_z(value):\n\tassert value\n",
+		"isinstance(0, (_ for _ in ()).throw(SystemExit))\n"):
+		record, code = _to_weaken({"tests/conftest.py": "import pytest\n"},
+			{"tests/conftest.py": "import pytest\n" + added}, ["tests/conftest.py"])
+		assert (record["reason"], code) == ("skip_added", 30), (added, record)
+	exit_base = "class _E(SystemExit):\n\tpass\n"
+	record, code = _to_weaken({"tests/conftest.py": exit_base}, {"tests/conftest.py": exit_base + "_E()\n"},
+		["tests/conftest.py"])
+	assert (record["reason"], code) == ("skip_added", 30), record
+	# Moving an existing skip onto another test keeps every count but changes its scope: refused.
+	moved = _TO_BASE_TEST.replace("@pytest.mark.skip(reason='old')\n", "").replace(
+		"def test_a():", "@pytest.mark.skip(reason='old')\ndef test_a():")
+	record, code = _to_weaken({path: _TO_BASE_TEST}, {path: moved}, [path])
+	assert (record["reason"], code) == ("skip_added", 30), record
+	# test_* methods of a unittest.TestCase subclass not named Test* are counted.
+	case_base = "import unittest\n\nclass Outcomes(unittest.TestCase):\n\tdef test_x(self):\n\t\tself.assertTrue(True)\n"
+	record, code = _to_weaken({path: case_base}, {path: case_base.replace("def test_x", "def helper_x")}, [path])
+	assert (record["reason"], code) == ("test_methods_dropped", 30), record
+	# A non-empty literal parameter set is fine.
+	record, code = _to_weaken({path: _TO_BASE_TEST},
+		{path: _TO_BASE_TEST + "\n@pytest.mark.parametrize('v', [1, 2])\ndef test_p(v):\n\tassert v\n"}, [path])
 	assert code == 0, record
 	# A lock path that is not test-only, or no lock at all, refuses.
 	assert _to_weaken({}, {}, ["scripts/fix.py"])[0]["reason"] == "lock_invalid"
