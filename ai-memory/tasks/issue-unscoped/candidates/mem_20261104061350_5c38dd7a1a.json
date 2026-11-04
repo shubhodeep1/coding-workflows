@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- (check-run) copilot-pull-request-reviewer:Actions run 41549900517, job 125634616239 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The Copilot PR reviewer check failed with `custom_instructions_too_large`.\n  WHY: The reviewer action aborted before completing its review because its prompt exceeded the size limit; the source does not identify a defect in the changed file. Source severity was NIT.\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: No defect. The file holds exactly the three required lines, and the PR modifies only this file.\n  WHY: The delivered content matches the linked issue's spec, and the pre-push gate attribution of `tests/test_implement_post_codex_recovery.py` failures to this change is unsupported. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- (check-run) copilot-pull-request-reviewer:Actions run 41549900517, job 125634616239 | severity=NIT | confidence=5\n  PROBLEM: The Copilot PR reviewer check failed with `custom_instructions_too_large`.\n  WHY: The reviewer action aborted before completing its review. The supplied log attributes this to the prompt exceeding the action's size limit; it does not identify a defect in the changed file.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:lines 1-3 | severity=NIT | confidence=5\n  PROBLEM: No defect. The file holds exactly the three required lines (`status: ok`, `run_id: alt-40831286935`, `updated-by: ai-pipeline`), and the PR modifies only this file. The last-run diff (changing `run_id: 40831286935` to `run_id: alt-40831286935`) corrected the final discrepancy from the prior run.\n  WHY: N/A. No failing path exists; the delivered content matches the linked issue's spec byte-for-byte. The pre-push gate's attribution of `tests/test_implement_post_codex_recovery.py` failures to this change is unsupported by any evidence (a plain-text canary file is not imported by any code), and the PR head's check-runs show no failed checks attributable to this diff.\n- tests/e2e_smoke_canary.txt:lines 1-3 | severity=NIT | confidence=5 (reported again under CORRECTNESS & LOGIC)\n  PROBLEM: No defect. The file holds exactly the three required lines, and the PR modifies only this file. The last-run diff corrected the final discrepancy from the prior run.\n  WHY: N/A. No failing path exists; the delivered content matches the linked issue's spec. The pre-push gate's attribution of `tests/test_implement_post_codex_recovery.py` failures to this change is unsupported by any evidence, and the PR head's check-runs show no failed checks attributable to this diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e473dd2e94041273755653fc3b0a532f0923f48e44db452a189c2fe5d51e70bc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41782777807",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41782777807",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104061350_5c38dd7a1a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41782777807"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T06:13:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
