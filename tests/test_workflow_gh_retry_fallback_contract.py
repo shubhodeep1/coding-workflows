@@ -556,8 +556,9 @@ def _run_sweep_snapshot_with_listing(listing: str) -> subprocess.CompletedProces
 
 
 def test_sweep_snapshot_parse_failure_marks_incomplete_behaviour() -> None:
-	if shutil.which("jq") is None or shutil.which("bash") is None:
-		return
+	# Fail loudly instead of passing silently when the tools are missing.
+	assert shutil.which("jq") is not None, "jq is required for the sweep snapshot behavioural test"
+	assert shutil.which("bash") is not None, "bash is required for the sweep snapshot behavioural test"
 	truncated = _run_sweep_snapshot_with_listing('{"workflow_runs":[')
 	assert truncated.returncode == 0, truncated.stderr
 	assert "FLAG=true" in truncated.stdout, truncated.stdout
