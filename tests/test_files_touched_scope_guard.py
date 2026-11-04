@@ -1804,6 +1804,276 @@ def test_auto_allow_env_wired_into_workflows() -> None:
 	assert row.split("'")[1] == guard.SCOPE_GUARD_AUTO_ALLOW_DEFAULT
 
 
+# --- Test-only heal plans (issue #8809) -------------------------------------
+
+_TO_SCOPE = "scripts/fix.py\ntests/**\nchangelog.d/*.md\nagents.d/42-*.md\n"
+
+
+def _to_plan(*files: str, section: bool = True) -> str:
+	lines = ["Implementation Plan", ""]
+	if section:
+		lines += ["## Files likely to change", ""] + [f"- `{path}`" for path in files] + [""]
+	lines += ["## Counterfactual check", "", "HEAL_COUNTERFACTUAL: UNVERIFIED: flaky timing", ""]
+	return "\n".join(lines)
+
+
+def _to_check(plan_text: str, *, flag: str = "true", scope: str = _TO_SCOPE, comment: str = "555",
+	issue: str = "42") -> tuple[dict, int]:
+	with tempfile.TemporaryDirectory() as tmp:
+		plan = Path(tmp) / "plan.md"
+		plan.write_text(plan_text, encoding="utf-8")
+		scope_file = Path(tmp) / "scope.txt"
+		scope_file.write_text(scope, encoding="utf-8")
+		return guard.run_heal_test_only_check(str(plan), str(scope_file), flag, issue, comment)
+
+
+def test_heal_test_only_check_approves_exact_tests_and_changelog() -> None:
+	record, code = _to_check(_to_plan("tests/test_x.py", "changelog.d/42-x.md"))
+	assert code == guard.EXIT_IN_SCOPE, record
+	assert (record["decision"], record["reason"]) == ("approve", "test_only_paths")
+	assert record["paths"] == ["tests/test_x.py", "changelog.d/42-x.md"]
+	assert record["marker"] == ("<!-- ai:heal-test-only-approval:v1 issue=42 plan_comment=555 "
+		"paths=tests/test_x.py,changelog.d/42-x.md -->")
+	assert record["flag_invalid"] is False
+
+
+def test_heal_test_only_check_holds() -> None:
+	cases = [
+		(_to_plan("tests/test_x.py", "scripts/fix.py"), {}, "path_not_test_only"),
+		(_to_plan("tests/test_x.py", "tests/*.py"), {}, "path_not_exact"),
+		(_to_plan("tests/test_x.py", "tests/"), {}, "path_not_exact"),
+		(_to_plan("tests/*.py"), {}, "plan_paths_missing"),
+		(_to_plan(section=False), {}, "plan_paths_missing"),
+		(_to_plan(), {}, "plan_paths_missing"),
+		(_to_plan("tests/test_x.py", "docs/guide.md"), {}, "path_out_of_heal_scope"),
+		(_to_plan("tests/test_x.py", "agents.d/42-x.md"), {}, "path_not_test_only"),
+		(_to_plan("tests/test_x.py"), {"flag": "false"}, "gate_disabled"),
+		(_to_plan("tests/test_x.py"), {"flag": " FALSE "}, "gate_disabled"),
+		(_to_plan("tests/test_x.py"), {"comment": "unknown"}, "plan_comment_unknown"),
+		(_to_plan("tests/test_x.py"), {"comment": ""}, "plan_comment_unknown"),
+		(_to_plan("tests/test_x.py"), {"issue": "0"}, "plan_comment_unknown"),
+		(_to_plan("tests/test_x.py"), {"scope": ""}, "heal_scope_check_unavailable"),
+		(_to_plan(*[f"tests/test_{i}.py" for i in range(51)]), {}, "too_many_paths"),
+		(_to_plan("tests/test_x.py", "tests/pytest.ini"), {}, "path_not_test_only"),
+	]
+	for plan_text, kwargs, reason in cases:
+		record, code = _to_check(plan_text, **kwargs)
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED, (reason, record)
+		assert (record["decision"], record["reason"]) == ("hold", reason), (kwargs, record)
+		assert record["marker"] == "" and record["paths"] == []
+
+
+def test_heal_test_only_check_invalid_flag_stays_on() -> None:
+	record, code = _to_check(_to_plan("tests/test_x.py"), flag="banana")
+	assert code == guard.EXIT_IN_SCOPE and record["flag_invalid"] is True, record
+
+
+def test_heal_test_only_check_cli() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		plan = Path(tmp) / "plan.md"
+		plan.write_text(_to_plan("tests/test_x.py"), encoding="utf-8")
+		scope = Path(tmp) / "scope.txt"
+		scope.write_text(_TO_SCOPE, encoding="utf-8")
+		proc = subprocess.run([sys.executable, "-B", str(GUARD_SCRIPT), "--heal-test-only-check", "--plan-file", str(plan),
+			"--heal-scope-file", str(scope), "--flag-enabled", "true", "--issue-number", "42", "--plan-comment-id", "555"],
+			capture_output=True, text=True, check=False)
+		assert proc.returncode == 0, proc.stderr
+		assert json.loads(proc.stdout)["reason"] == "test_only_paths"
+
+
+_TO_PLAN_BODY = "Implementation Plan\n\n<!-- ai:plan-proposal:v1 -->\n"
+
+
+def _to_comment(cid: int, created: str, body: str, login: str = "pipeline", association: str = "NONE") -> dict:
+	return {"id": cid, "created_at": created, "body": body, "user": {"login": login}, "author_association": association}
+
+
+def _to_marker(plan: int = 555, paths: str = "tests/test_x.py,changelog.d/42-x.md", issue: int = 42) -> str:
+	return f"approved\n<!-- ai:heal-test-only-approval:v1 issue={issue} plan_comment={plan} paths={paths} -->"
+
+
+def _to_lock(comments: object, scope: str = _TO_SCOPE) -> tuple[dict, int, str | None]:
+	with tempfile.TemporaryDirectory() as tmp:
+		comments_file = Path(tmp) / "comments.json"
+		comments_file.write_text(json.dumps(comments), encoding="utf-8")
+		scope_file = Path(tmp) / "scope.txt"
+		scope_file.write_text(scope, encoding="utf-8")
+		lock = Path(tmp) / "lock.txt"
+		record, code = guard.run_heal_test_only_lock_scope(str(comments_file), "42", "pipeline", str(scope_file), str(lock))
+		return record, code, (lock.read_text(encoding="utf-8") if lock.exists() else None)
+
+
+def test_heal_test_only_lock_scope() -> None:
+	plan = _to_comment(555, "2026-11-01T00:00:00Z", _TO_PLAN_BODY)
+	record, code, lock = _to_lock([plan])
+	assert (record, code, lock) == ({"status": "none"}, 0, None)
+	record, code, lock = _to_lock([plan, _to_comment(600, "2026-11-01T00:01:00Z", _to_marker())])
+	assert code == 0 and record == {"status": "locked", "plan_comment": "555", "count": 2}, record
+	assert lock == "tests/test_x.py\nchangelog.d/42-x.md\n"
+	# A marker for an older plan does not lock the newer plan.
+	newer = _to_comment(700, "2026-11-02T00:00:00Z", _TO_PLAN_BODY)
+	record, code, lock = _to_lock([plan, _to_comment(600, "2026-11-01T00:01:00Z", _to_marker()), newer])
+	assert (record["status"], code, lock) == ("none", 0, None)
+	# An untrusted author's marker is ignored; a trusted association counts.
+	outsider = _to_comment(601, "2026-11-01T00:01:00Z", _to_marker(), login="stranger")
+	assert _to_lock([plan, outsider])[0] == {"status": "none"}
+	owner = _to_comment(602, "2026-11-01T00:01:00Z", _to_marker(), login="maintainer", association="OWNER")
+	assert _to_lock([plan, owner])[0]["status"] == "locked"
+	# A forged plan comment from another account is not the latest plan.
+	forged = _to_comment(800, "2026-11-03T00:00:00Z", _TO_PLAN_BODY, login="stranger")
+	assert _to_lock([plan, _to_comment(600, "2026-11-01T00:01:00Z", _to_marker()), forged])[0]["status"] == "locked"
+
+
+def test_heal_test_only_lock_scope_invalid() -> None:
+	plan = _to_comment(555, "2026-11-01T00:00:00Z", _TO_PLAN_BODY)
+	for paths, reason in (("scripts/fix.py", "path_not_test_only"), ("tests/*.py", "path_not_test_only"),
+		("tests/../scripts/fix.py", "path_not_test_only"), ("tests/test_x.py,,", "path_not_test_only")):
+		record, code, lock = _to_lock([plan, _to_comment(600, "2026-11-01T00:01:00Z", _to_marker(paths=paths))])
+		assert (record, code, lock) == ({"status": "invalid", "reason": reason}, 30, None), (paths, record)
+	record, code, _ = _to_lock([plan, _to_comment(600, "2026-11-01T00:01:00Z", _to_marker())], scope="scripts/fix.py\n")
+	assert (record["status"], record["reason"], code) == ("invalid", "path_out_of_heal_scope", 30)
+	assert _to_lock({"not": "a list"})[0] == {"status": "invalid", "reason": "comments_unreadable"}
+
+
+def _to_weaken(base_files: dict, edited_files: dict, lock_paths: list[str]) -> tuple[dict, int]:
+	with tempfile.TemporaryDirectory() as tmp:
+		base, edited = Path(tmp) / "base", Path(tmp) / "edited"
+		for root, files in ((base, base_files), (edited, edited_files)):
+			root.mkdir()
+			for rel, text in files.items():
+				target = root / rel
+				target.parent.mkdir(parents=True, exist_ok=True)
+				if text is None:
+					target.symlink_to("/etc/passwd")
+				else:
+					target.write_text(text, encoding="utf-8")
+		lock = Path(tmp) / "lock.txt"
+		lock.write_text("\n".join(lock_paths) + "\n", encoding="utf-8")
+		return guard.run_heal_test_only_weakening_check(str(lock), str(base), str(edited))
+
+
+_TO_BASE_TEST = (
+	"import pytest\n\n"
+	"def test_a():\n\tassert 1 == 1\n\tassert 2 == 2\n\n"
+	"@pytest.mark.skip(reason='old')\ndef test_b():\n\tassert True\n\n"
+	"class TestC:\n\tdef test_c(self):\n\t\tself.assertEqual(1, 1)\n"
+)
+
+
+def test_heal_test_only_weakening_check_allows_safe_edits() -> None:
+	path = "tests/test_x.py"
+	for edited in (_TO_BASE_TEST, _TO_BASE_TEST + "\ndef test_d():\n\tassert 3 == 3\n",
+		_TO_BASE_TEST.replace("assert 1 == 1", "assert 1 == 1, 'clearer message'")):
+		record, code = _to_weaken({path: _TO_BASE_TEST}, {path: edited}, [path])
+		assert (record["decision"], code) == ("allow", 0), record
+	# Expecting or catching SystemExit checks an exit; it does not cause one.
+	raises = _TO_BASE_TEST + ("\ndef test_e():\n\twith pytest.raises(SystemExit):\n\t\tassert run()\n"
+		"\ndef test_f():\n\ttry:\n\t\tassert run()\n\texcept SystemExit as e:\n\t\tassert isinstance(e, SystemExit)\n")
+	record, code = _to_weaken({path: _TO_BASE_TEST}, {path: raises}, [path])
+	assert (record["decision"], code) == ("allow", 0), record
+	# A new file and an untouched changelog fragment pass too.
+	record, code = _to_weaken({}, {path: "def test_new():\n\tassert True\n", "changelog.d/42-x.md": "x\n"},
+		[path, "changelog.d/42-x.md"])
+	assert code == 0, record
+
+
+def test_heal_test_only_weakening_check_refuses() -> None:
+	path = "tests/test_x.py"
+	cases = [
+		({}, "file_deleted"),
+		({path: _TO_BASE_TEST.replace("def test_a", "def _test_a")}, "test_functions_dropped"),
+		({path: _TO_BASE_TEST.replace("def test_c", "def helper_c")}, "test_methods_dropped"),
+		({path: _TO_BASE_TEST.replace("\tassert 2 == 2\n", "\tpass\n")}, "asserts_dropped"),
+		({path: _TO_BASE_TEST.replace("self.assertEqual(1, 1)", "pass")}, "asserts_dropped"),
+		({path: _TO_BASE_TEST.replace("def test_a():", "@pytest.mark.skipif(True, reason='x')\ndef test_a():")}, "skip_added"),
+		({path: _TO_BASE_TEST.replace("def test_a():\n", "def test_a():\n\tpytest.xfail('x')\n")}, "skip_added"),
+		({path: _TO_BASE_TEST.replace("def test_c(self):\n", "def test_c(self):\n\t\tself.skipTest('x')\n")}, "skip_added"),
+		({path: "from unittest import skip as s\n" + _TO_BASE_TEST.replace("def test_a():", "@s('x')\ndef test_a():")}, "skip_added"),
+		({path: "import pytest as pt\n" + _TO_BASE_TEST.replace("def test_a():", "@pt.mark.xfail\ndef test_a():")}, "skip_added"),
+		({path: _TO_BASE_TEST + "\ncollect_ignore = ['test_y.py']\n"}, "skip_added"),
+		({path: _TO_BASE_TEST + "\ndef pytest_collection_modifyitems(items):\n\titems.clear()\n"}, "skip_added"),
+		({path: _TO_BASE_TEST + "\ndef broken(:\n"}, "parse_error"),
+		({path: None}, "unreadable"),
+	]
+	for edited, reason in cases:
+		record, code = _to_weaken({path: _TO_BASE_TEST}, edited, [path])
+		assert (record["decision"], record["reason"], code) == ("refuse", reason, 30), (reason, record)
+	# conftest.py: collection hooks count even outside test_*.py files.
+	record, code = _to_weaken({"tests/conftest.py": "import pytest\n"},
+		{"tests/conftest.py": "import pytest\ncollect_ignore_glob = ['*']\n"}, ["tests/conftest.py"])
+	assert (record["reason"], code) == ("skip_added", 30), record
+	# Any new pytest_* hook (outcome rewriting) or pytest_plugins assignment counts as a control.
+	for added in ("@pytest.hookimpl(hookwrapper=True)\ndef pytest_runtest_makereport(item, call):\n\tyield\n",
+		"pytest_plugins = ['evil']\n", "pytest.exit('done', returncode=0)\n",
+		"import os\nos._exit(0)\n", "import sys\nsys.exit(0)\n", "raise SystemExit(0)\n", "quit(0)\n",
+		"from _pytest.outcomes import skip\nskip('x', allow_module_level=True)\n",
+		"__import__('os')._exit(0)\n", "import importlib\nimportlib.import_module('os')._exit(0)\n",
+		"import os\ngetattr(os, '_exit')(0)\n", "exec('import os; os._exit(0)')\n",
+		"from os import *\n_exit(0)\n", "from _pytest.outcomes import *\nskip('x', allow_module_level=True)\n",
+		"import os\nos.abort()\n", "import os\nos.execv('/bin/true', ['true'])\n",
+		"@pytest.hookimpl(hookwrapper=True, specname='pytest_runtest_makereport')\ndef rewrite(item, call):\n\tyield\n"):
+		record, code = _to_weaken({"tests/conftest.py": "import pytest\n"},
+			{"tests/conftest.py": "import pytest\n" + added}, ["tests/conftest.py"])
+		assert (record["reason"], code) == ("skip_added", 30), (added, record)
+	# Swapping an existing skip for a process exit keeps the total but adds a new kind: refused.
+	record, code = _to_weaken({path: _TO_BASE_TEST},
+		{path: "import sys\n" + _TO_BASE_TEST.replace("@pytest.mark.skip(reason='old')\n", "") + "\nsys.exit(0)\n"}, [path])
+	assert (record["reason"], code) == ("skip_added", 30), record
+	# A new or changed pytest config file under tests/ refuses; an unchanged one passes.
+	for name in ("tests/pytest.ini", "tests/.pytest.ini", "tests/tox.ini", "tests/setup.cfg", "tests/pytest.toml",
+		"tests/.pytest.toml"):
+		record, code = _to_weaken({}, {name: "[pytest]\naddopts = -k 'not flaky'\n"}, [name])
+		assert (record["reason"], code) == ("pytest_config_changed", 30), (name, record)
+	record, code = _to_weaken({"tests/pytest.ini": "[pytest]\n"}, {"tests/pytest.ini": "[pytest]\n"}, ["tests/pytest.ini"])
+	assert code == 0, record
+	# Runtime markers, namespace lookups, empty parameter sets, pytestmark and a
+	# same-file SystemExit subclass are controls too.
+	for added in ("def test_z(request):\n\trequest.node.add_marker('xfail')\n\tassert True\n",
+		"def test_z(request):\n\trequest.applymarker('skip')\n\tassert True\n",
+		"pytestmark = pytest.mark.__getattr__('skip')\n", "import os\nos.__dict__['_exit'](0)\n",
+		"import os\nvars(os)['_exit'](0)\n",
+		"@pytest.mark.parametrize('value', [])\ndef test_z(value):\n\tassert value\n",
+		"@pytest.mark.parametrize('value', CASES)\ndef test_z(value):\n\tassert value\n",
+		"isinstance(0, (_ for _ in ()).throw(SystemExit))\n"):
+		record, code = _to_weaken({"tests/conftest.py": "import pytest\n"},
+			{"tests/conftest.py": "import pytest\n" + added}, ["tests/conftest.py"])
+		assert (record["reason"], code) == ("skip_added", 30), (added, record)
+	exit_base = "class _E(SystemExit):\n\tpass\n"
+	record, code = _to_weaken({"tests/conftest.py": exit_base}, {"tests/conftest.py": exit_base + "_E()\n"},
+		["tests/conftest.py"])
+	assert (record["reason"], code) == ("skip_added", 30), record
+	# Moving an existing skip onto another test keeps every count but changes its scope: refused.
+	moved = _TO_BASE_TEST.replace("@pytest.mark.skip(reason='old')\n", "").replace(
+		"def test_a():", "@pytest.mark.skip(reason='old')\ndef test_a():")
+	record, code = _to_weaken({path: _TO_BASE_TEST}, {path: moved}, [path])
+	assert (record["reason"], code) == ("skip_added", 30), record
+	# test_* methods of a unittest.TestCase subclass not named Test* are counted.
+	case_base = "import unittest\n\nclass Outcomes(unittest.TestCase):\n\tdef test_x(self):\n\t\tself.assertTrue(True)\n"
+	record, code = _to_weaken({path: case_base}, {path: case_base.replace("def test_x", "def helper_x")}, [path])
+	assert (record["reason"], code) == ("test_methods_dropped", 30), record
+	# A non-empty literal parameter set is fine.
+	record, code = _to_weaken({path: _TO_BASE_TEST},
+		{path: _TO_BASE_TEST + "\n@pytest.mark.parametrize('v', [1, 2])\ndef test_p(v):\n\tassert v\n"}, [path])
+	assert code == 0, record
+	# A lock path that is not test-only, or no lock at all, refuses.
+	assert _to_weaken({}, {}, ["scripts/fix.py"])[0]["reason"] == "lock_invalid"
+	assert _to_weaken({}, {}, [])[0]["reason"] == "lock_unavailable"
+
+
+def test_heal_test_only_weakening_check_cli_logs_sanitized_reason() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		base, edited = Path(tmp) / "base", Path(tmp) / "edited"
+		(base / "tests").mkdir(parents=True)
+		edited.mkdir()
+		(base / "tests/test_x.py").write_text("def test_a():\n\tassert True\n", encoding="utf-8")
+		lock = Path(tmp) / "lock.txt"
+		lock.write_text("tests/test_x.py\n", encoding="utf-8")
+		proc = subprocess.run([sys.executable, "-B", str(GUARD_SCRIPT), "--heal-test-only-weakening-check", "--lock-file", str(lock),
+			"--base-dir", str(base), "--edited-dir", str(edited)], capture_output=True, text=True, check=False)
+		assert proc.returncode == guard.EXIT_AUTOMATION_UNGRANTED
+		assert "reason=file_deleted path=tests/test_x.py" in proc.stderr
+
+
 def _run_all() -> int:
 	funcs = [obj for name, obj in sorted(globals().items()) if name.startswith("test_") and callable(obj)]
 	failures = 0

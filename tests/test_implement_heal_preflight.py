@@ -445,3 +445,63 @@ def test_invalid_flag_warns_and_refuses(tmp_path: Path) -> None:
 	assert "::warning::HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED has invalid value; treating as off" in result.stdout
 	assert "maybe" not in result.stdout
 	assert not any("userContentEdits" in line for line in _graphql_calls(calls))
+
+
+# --- test-only heal approval lock (issue #8809) ------------------------------
+
+_PLAN_COMMENT = {"id": 555, "created_at": "2026-11-01T00:00:00Z", "user": {"login": "pipeline"}, "author_association": "NONE",
+	"body": "Implementation Plan\n\n<!-- ai:plan-proposal:v1 -->\n"}
+
+
+def _marker_comment(paths: str = "tests/test_fix.py,changelog.d/42-fix.md", login: str = "pipeline", association: str = "NONE") -> dict:
+	return {"id": 600, "created_at": "2026-11-01T00:01:00Z", "user": {"login": login}, "author_association": association,
+		"body": f"approved\n<!-- ai:heal-test-only-approval:v1 issue=42 plan_comment=555 paths={paths} -->"}
+
+
+def _run_with_comments(tmp_path: Path, comments: object, raw: str | None = None) -> tuple[subprocess.CompletedProcess, Path, Path]:
+	sha = _make_support(tmp_path)
+	comments_file = tmp_path / "issue_comments.json"
+	comments_file.write_text(raw if raw is not None else json.dumps(comments))
+	return _run(tmp_path, {"live": _live_issue()}, script_ref=sha, extra_env={
+		"ISSUE_COMMENTS_FILE": str(comments_file),
+		"FILES_TOUCHED_SCOPE_GUARD_PY": str(ROOT / "scripts/files_touched_scope_guard.py"),
+	})
+
+
+@needs_jq
+def test_trusted_test_only_marker_narrows_the_heal_scope(tmp_path: Path) -> None:
+	result, env_file, calls = _run_with_comments(tmp_path, [_PLAN_COMMENT, _marker_comment()])
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "HEAL_SCOPE_REFUSED" not in result.stdout
+	assert "AI_PHASE_GATE_V1 phase=implement gate=heal_test_only outcome=locked plan_comment=555 paths=2 issue=42" in result.stdout
+	assert (tmp_path / "heal-scope-91.txt").read_text().split() == ["tests/test_fix.py", "changelog.d/42-fix.md"]
+	lock = tmp_path / "heal-test-only-lock-91.txt"
+	assert lock.read_text().split() == ["tests/test_fix.py", "changelog.d/42-fix.md"]
+	env_text = env_file.read_text()
+	assert f"HEAL_TEST_ONLY_LOCK_FILE={lock}" in env_text
+	assert "HEAL_ROUTE=true" in env_text
+
+
+@needs_jq
+def test_untrusted_or_missing_test_only_marker_keeps_the_heal_scope(tmp_path: Path) -> None:
+	for index, comments in enumerate(([_PLAN_COMMENT], [_PLAN_COMMENT, _marker_comment(login="stranger")])):
+		case = tmp_path / str(index)
+		case.mkdir()
+		result, env_file, _calls = _run_with_comments(case, comments)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "AI_PHASE_GATE_V1 phase=implement gate=heal_test_only outcome=none issue=42" in result.stdout
+		assert (case / "heal-scope-91.txt").read_text().split() == ["scripts/fix.py", "tests/**", "changelog.d/*.md", "agents.d/42-*.md"]
+		assert "HEAL_TEST_ONLY_LOCK_FILE" not in env_file.read_text()
+
+
+@needs_jq
+def test_invalid_test_only_marker_is_refused(tmp_path: Path) -> None:
+	result, env_file, calls = _run_with_comments(tmp_path, [_PLAN_COMMENT, _marker_comment(paths="scripts/fix.py")])
+	_assert_refused(result, env_file, calls, "unavailable", "test_only_lock_invalid")
+	assert "HEAL_TEST_ONLY_LOCK_FILE" not in env_file.read_text()
+
+
+@needs_jq
+def test_unreadable_comments_file_is_refused(tmp_path: Path) -> None:
+	result, env_file, calls = _run_with_comments(tmp_path, None, raw="not json")
+	_assert_refused(result, env_file, calls, "unavailable", "comments_unreadable")
