@@ -12291,7 +12291,7 @@ check_integration_branch_staleness() {
 	local integration_branch="$1"
 	local default_branch="$2"
 	local ahead_by="$3"
-	local now_epoch="$(date +%s)"
+	local now_epoch=""
 	local last_main_squash_at_utc=""
 	local integration_stale_last_alerted_at_utc=""
 
@@ -12300,6 +12300,11 @@ check_integration_branch_staleness() {
 	# touching state so the disabled path is a true no-op.
 	if [ "${ORCH_INTEGRATION_STALE_ALERT_HOURS}" -eq 0 ]; then
 		return 0
+	fi
+
+	if ! now_epoch="$(date +%s)" || ! [[ "${now_epoch}" =~ ^[0-9]+$ ]]; then
+		echo "::warning::check_integration_branch_staleness: clock read failed; skipping the integration staleness check this cycle." >&2
+		return 1
 	fi
 
 	local stale_threshold_secs=$(( ORCH_INTEGRATION_STALE_ALERT_HOURS * 3600 ))
