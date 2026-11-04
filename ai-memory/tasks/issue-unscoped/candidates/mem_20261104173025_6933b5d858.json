@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The failed external check-run copilot-pull-request-reviewer (run 41544551704) fails with \"Prompt too big after adding system message\" (custom_instructions_too_large, 422), and it maps to no hunk in this diff.\n  WHY: The failure comes from the external Copilot reviewer action loading AGENTS.md/CLAUDE.md, so no edit to this data-only canary file can fix or worsen it. Both reviewers rated it NIT, which is mapped here to low. Confidence was 5 from anthropic_claude-sonnet-5_5 and 4 from z-ai_glm-5_3-flash.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=NIT | confidence=5\n  PROBLEM: The failure comes from the external check-run copilot-pull-request-reviewer (run 41544551704), not from this file. It failed with \"Prompt too big after adding system message\" (custom_instructions_too_large, 422), and it maps to no code in this diff.\n  WHY: The failure is in the Copilot reviewer's setup, and the canary file is plain data. No edit within this PR can fix or worsen it.\n- (Note, not a finding) The pre-push gate failures in tests/test_implement_post_codex_recovery.py are not tied to this diff. That file mentions the canary path only as string literals (around lines 5060 and 5779), and no test reads the canary content.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt: PR-head check-run `copilot-pull-request-reviewer` (run 41544551704, job 125616826829) | severity=NIT | confidence=4\n  PROBLEM: The failed check-run cannot be mapped to any hunk in this diff. Its log shows \"Error creating PR review request: Prompt too big after adding system message\" (errorCode: custom_instructions_too_large, statusCode 422), raised by the external Copilot reviewer action while building custom instructions from AGENTS.md/CLAUDE.md. No test or script reads tests/e2e_smoke_canary.txt (references in tests/test_implement_post_codex_recovery.py:5060 and :5779 are string literals in fixture text).\n  WHY: The external reviewer action's prompt exceeds its size limit when it loads repository instruction files, so the failure exists independently of this diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8ef10e510a9521d2069b12352ea92cd9d82239b67cd4d7227c224b5976e45c39",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41876305043",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41876305043",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104173025_6933b5d858",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41876305043"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T17:30:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
