@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-04T09:13:33Z",
+  "issue_number": 8813,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/clarify.yml:2321-2345; cited_path=.github/workflows/clarify.yml, .github/workflows/plan.yml, scripts/ai_labels.py; files_touched=.github/workflows/orchestrate_poll.yml, .github/workflows/unblock_judge.yml, README.md, changelog.d/stuck-states-p6a-unblock-max-rounds.md, scripts/unblock_ledger.py, tests/test_unblock_judge.py.",
+  "phase": "review_autofix",
+  "pr_number": 8818,
+  "record_id": "lesson_20261104091333_9c1905e774",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/clarify.yml, .github/workflows/plan.yml, scripts/ai_labels.py",
+    ".github/workflows/clarify.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    ".github/workflows/unblock_judge.yml",
+    "README.md",
+    "changelog.d/stuck-states-p6a-unblock-max-rounds.md",
+    "scripts/unblock_ledger.py",
+    "tests/test_unblock_judge.py"
+  ]
+}

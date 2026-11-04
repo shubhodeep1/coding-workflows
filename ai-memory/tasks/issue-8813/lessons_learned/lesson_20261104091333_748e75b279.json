@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-04T09:13:33Z",
+  "issue_number": 8813,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=scripts/ai_labels.py:1142-1143; cited_path=scripts/ai_labels.py; files_touched=.github/workflows/orchestrate_poll.yml, .github/workflows/unblock_judge.yml, README.md, changelog.d/stuck-states-p6a-unblock-max-rounds.md, scripts/unblock_ledger.py, tests/test_unblock_judge.py.",
+  "phase": "review_autofix",
+  "pr_number": 8818,
+  "record_id": "lesson_20261104091333_748e75b279",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ai_labels.py",
+    ".github/workflows/orchestrate_poll.yml",
+    ".github/workflows/unblock_judge.yml",
+    "README.md",
+    "changelog.d/stuck-states-p6a-unblock-max-rounds.md",
+    "scripts/unblock_ledger.py",
+    "tests/test_unblock_judge.py"
+  ]
+}
