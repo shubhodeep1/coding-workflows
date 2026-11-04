@@ -811,7 +811,12 @@ def _excerpt_with_anchor(filtered: str) -> tuple[str, str]:
 	lines = filtered.split("\n")
 	index = _first_match(lines, TEST_FAILURE_RE)
 	if index is not None:
-		return _forward_window(lines, max(0, index - TEST_FAILURE_LEAD_LINES)), "test_failure"
+		start = max(0, index - TEST_FAILURE_LEAD_LINES)
+		# Drop lead lines until the matched failure line fits MAX_EXCERPT_BYTES,
+		# so long lead lines can never push it out of the excerpt.
+		while start < index and len("\n".join(lines[start:index + 1]).encode("utf-8")) > MAX_EXCERPT_BYTES:
+			start += 1
+		return _forward_window(lines, start), "test_failure"
 	index = _first_match(lines, STEP_ERROR_RE)
 	if index is not None:
 		return _step_error_window(lines, index), "step_error"

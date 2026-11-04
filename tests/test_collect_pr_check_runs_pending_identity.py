@@ -611,6 +611,31 @@ def test_tiny_budget_keeps_the_step_error_line():
 	assert mod._select_log_tail_window(b"", log_tail_bytes=64, partial_start=False) == ""
 
 
+def test_end_of_log_long_trailing_line_is_capped_before_the_byte_budget():
+	early = [f"context line {n}" for n in range(300)]
+	data = ("\n".join(early + ["x" * 14000]) + "\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=mod.DEFAULT_LOG_TAIL_BYTES, partial_start=False)
+	assert result.startswith("log_tail_anchor: end_of_log\n")
+	body = result.split("\n", 1)[1]
+	assert len(body.encode("utf-8")) <= mod.DEFAULT_LOG_TAIL_BYTES
+	assert len(body.split("\n")) == mod.LOG_TAIL_LINES
+	assert body.endswith("[… 12000 chars truncated]")
+	assert "context line 299" in body and "context line 120" in body
+
+
+def test_partial_first_line_is_not_kept_as_lead_context():
+	data = b"fragment-of-cut-line\nwhole line\n" + STEP_ERROR.encode() + b"\n"
+	body = mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=True).split("\n", 1)[1]
+	assert "fragment-of-cut-line" not in body
+	assert body.startswith("whole line\n") and STEP_ERROR in body
+
+
+def test_credentials_are_redacted_before_the_line_cut():
+	long_line = "x" * 1985 + " ghp_" + "Zq9" * 12 + " " + "y" * 3000
+	data = ("step\n" + long_line + "\n" + STEP_ERROR + "\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=8000, partial_start=False)
+	assert "ghp_[redacted]" in result and "Zq9" not in result
+
 if __name__ == "__main__":
 	import pytest
 

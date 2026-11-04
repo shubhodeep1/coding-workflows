@@ -1072,3 +1072,12 @@ def test_traceback_comment_omits_unknown_anchor(anchor):
 	body = mod.render_traceback_comment(ISSUE, traceback, "pr_not_merged")
 	assert "Excerpt anchor" not in body
 	assert body.endswith(f"<!-- ai:check-triage-traceback:v1 issue={ISSUE} job=5 -->")
+
+
+def test_test_failure_line_survives_long_lead_lines():
+	lead = ["L" * 1999 for _ in range(10)]
+	lines = lead + [" FAIL  test/x.test.ts > token > rejects oversized contract", "after"]
+	excerpt, anchor = mod._excerpt_with_anchor(mod._cap_long_lines("\n".join(lines)))
+	assert anchor == "test_failure"
+	assert "FAIL  test/x.test.ts" in excerpt
+	assert len(excerpt.encode("utf-8")) <= mod.MAX_EXCERPT_BYTES
