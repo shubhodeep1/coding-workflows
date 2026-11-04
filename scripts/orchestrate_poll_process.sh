@@ -2574,6 +2574,18 @@ if ! [[ "${COMPREHENSIVE_VERIFICATION_RETRY_MAX}" =~ ^[0-9]+$ ]]; then
   echo "::warning::COMPREHENSIVE_VERIFICATION_RETRY_MAX must be a non-negative integer; defaulting to 24"
   COMPREHENSIVE_VERIFICATION_RETRY_MAX="24"
 fi
+# Release-blocker heal reports from the promote cycle (stuck-states P4,
+# release-blocker Phase 3; Refs #8291). The poller reports promotion_failed:*,
+# verification_not_dispatched and marker_untrusted to the heal intake through
+# the same build-blocker-payload -> request-report-identity -> wrap-dispatch
+# chain auto_release_stable.sh uses. Defaults live here (CLAUDE.md §8) so a
+# staged copy run under an older workflow YAML still works.
+RELEASE_BLOCKER_HEAL_ENABLED="${RELEASE_BLOCKER_HEAL_ENABLED:-true}"
+RELEASE_BLOCKER_HEAL_PY="${RELEASE_BLOCKER_HEAL_PY:-${ORCH_SCRIPTS_ROOT}/workflow_failure_heal.py}"
+# Must match the RELEASE_BLOCKER_PRODUCER_SCOPE_PATHS key in
+# workflow_failure_heal.py: only this repository's internal poller caller
+# reports, so consumer pollers never send reports the intake would reject.
+RELEASE_BLOCKER_POLLER_PRODUCER_FILE="internal-orchestrate-poll.yml"
 
 # Advisory follow-ups for accepted (waived) findings are filed only after the
 # project's integration branch has merged into the default branch.  Filing
@@ -14365,6 +14377,7 @@ comprehensive_cycle_metadata_json() {
                   or ((.user.login // "") == "github-actions[bot]"));
     ([ .[] | select(is_marker and trusted) | .body ] | last // "") as $body
     | ([ .[] | select(is_marker and (trusted | not)) ] | length > 0) as $untrusted
+    | ([ .[] | select(is_marker and (trusted | not)) | (.user.login // "") ] | last // "") as $untrusted_author
     | {
         role: line($body; "apply-analysis-role"),
         doc: line($body; "apply-analysis-source-doc"),
@@ -14373,8 +14386,9 @@ comprehensive_cycle_metadata_json() {
         promote_sha: line($body; "apply-analysis-promote-sha"),
         proving_merge_sha: line($body; "apply-analysis-proving-merge-sha"),
         pinned: (line($body; "apply-analysis-pinned") == "true"),
-        untrusted_marker: $untrusted
-      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","pinned":false,"untrusted_marker":false}'
+        untrusted_marker: $untrusted,
+        untrusted_author: $untrusted_author
+      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","pinned":false,"untrusted_marker":false,"untrusted_author":""}'
 }
 
 # comprehensive_stable_tag_commit
@@ -14414,6 +14428,143 @@ comprehensive_stable_tag_commit() {
   fi
 }
 
+# poller_release_blocker_safe <text>
+# Prints the text reduced to [A-Za-z0-9_.:/@+=[]-], at most 200 bytes. Mirrors
+# release_blocker_safe in auto_release_stable.sh; brackets are kept so a
+# login such as github-actions[bot] stays readable.
+poller_release_blocker_safe() {
+  local poller_rb_safe_value
+  poller_rb_safe_value="$(printf '%s' "${1:-}" | tr -cd 'A-Za-z0-9_.:/@+=\133\135-')"
+  printf '%s' "${poller_rb_safe_value:0:200}"
+}
+
+# poller_release_blocker_evidence <reason> <age_secs> [key=value ...]
+# Prints the evidence lines of one report. The fixed first line
+# (reason=<token>) keeps the intake fingerprint stable; every line is
+# sanitised, so attacker-chosen values (a marker author's login) stay data.
+poller_release_blocker_evidence() {
+  local prb_ev_reason="${1:-}" prb_ev_age="${2:-}"
+  shift 2 || true
+  local prb_ev_line
+  printf 'reason=%s\n' "$(poller_release_blocker_safe "${prb_ev_reason}")"
+  printf 'tracking_issue=%s\n' "$(poller_release_blocker_safe "$(_gh_url "issues/${TRACKING_NUM:-0}")")"
+  printf 'age_secs=%s\n' "$(poller_release_blocker_safe "${prb_ev_age:-unknown}")"
+  for prb_ev_line in "$@"; do
+    [ -n "${prb_ev_line}" ] || continue
+    printf '%s\n' "$(poller_release_blocker_safe "${prb_ev_line}")"
+  done
+}
+
+# poller_release_blocker_report <state_key> <reason> <age_secs> <head_sha> [evidence key=value ...]
+# Sends one release_blocker heal report for a terminal promote-cycle outcome.
+# Always returns 0 and never changes the tick's outcome. Order: kill switch
+# (RELEASE_BLOCKER_HEAL_ENABLED), producer gate (GITHUB_WORKFLOW_REF must be
+# this repository's internal-orchestrate-poll.yml), once-only guard
+# (<state_key>.release_blocker_reported in STATE_FILE), then build, identity,
+# wrap and POST repos/<self>/dispatches. Any attempt past the three gates sets
+# the guard, whatever the outcome; the caller's post_state_comment persists
+# it. No EXIT trap: the poller owns its traps, so the work dir is removed
+# inline on every path.
+poller_release_blocker_report() {
+  local prb_state_key="${1:-}" prb_reason="${2:-}" prb_age="${3:-}" prb_head_sha="${4:-}"
+  shift 4 || true
+  local prb_branch prb_sha_log="none" prb_work_dir="" prb_evidence="" prb_payload="" prb_identity=""
+  local prb_envelope="" prb_error="" prb_identity_status="" prb_detail="" prb_skip="" prb_reported
+  prb_branch="$(poller_release_blocker_safe "${DEFAULT_BRANCH_TRACKING:-main}")"
+  [[ "${prb_age}" =~ ^[0-9]{1,12}$ ]] || prb_age=""
+  if ! is_truthy "${RELEASE_BLOCKER_HEAL_ENABLED}"; then
+    echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=${prb_reason}"
+    return 0
+  fi
+  if [ -z "${GITHUB_REPOSITORY:-}" ] || [[ "${GITHUB_WORKFLOW_REF:-}" != "${GITHUB_REPOSITORY}/.github/workflows/${RELEASE_BLOCKER_POLLER_PRODUCER_FILE}@"* ]]; then
+    echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=${prb_reason} detail=producer_unregistered"
+    return 0
+  fi
+  prb_reported="$(jq -r --arg k "${prb_state_key}" '(.[$k] // {}) | if type == "object" then (.release_blocker_reported // false) else false end' "${STATE_FILE}" 2>/dev/null || echo false)"
+  if [ "${prb_reported}" = "true" ]; then
+    echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=already_reported blocker=${prb_reason}"
+    return 0
+  fi
+  prb_work_dir="$(mktemp -d 2>/dev/null)" || prb_work_dir=""
+  if [ -z "${prb_work_dir}" ] || [ ! -d "${prb_work_dir}" ]; then
+    prb_skip="payload_invalid"
+    echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=${prb_reason} stage=build detail=work_dir_unavailable"
+  else
+    prb_evidence="${prb_work_dir}/evidence.txt"
+    prb_payload="${prb_work_dir}/payload.json"
+    prb_identity="${prb_work_dir}/report_identity.jwt"
+    prb_envelope="${prb_work_dir}/dispatch.json"
+    prb_error="${prb_work_dir}/error.txt"
+    poller_release_blocker_evidence "${prb_reason}" "${prb_age}" "$@" > "${prb_evidence}" 2>/dev/null || true
+    local -a prb_build_args=(
+      build-blocker-payload
+      --repo "${GITHUB_REPOSITORY}"
+      --workflow-name "${GITHUB_WORKFLOW:-AI Orchestrate Poll}"
+      --reason "${prb_reason}"
+      --evidence-file "${prb_evidence}"
+      --age-secs "${prb_age}"
+      --head-branch "${DEFAULT_BRANCH_TRACKING:-main}"
+    )
+    if [[ "${prb_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+      prb_build_args+=(--head-sha "${prb_head_sha}")
+      prb_sha_log="${prb_head_sha}"
+    fi
+    if [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]{1,20}$ ]]; then
+      prb_build_args+=(
+        --reporter-run-id "${GITHUB_RUN_ID}"
+        --reporter-run-url "$(poller_release_blocker_safe "${GITHUB_SERVER_URL:-https://github.com}")/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+      )
+      if [[ "${GITHUB_RUN_ATTEMPT:-1}" =~ ^[0-9]{1,10}$ ]]; then
+        prb_build_args+=(--reporter-run-attempt "${GITHUB_RUN_ATTEMPT:-1}")
+      fi
+    fi
+    if ! python3 "${RELEASE_BLOCKER_HEAL_PY}" "${prb_build_args[@]}" > "${prb_payload}" 2> "${prb_error}"; then
+      prb_detail="$(poller_release_blocker_safe "$(head -c 200 "${prb_error}" 2>/dev/null | tr '\n' ' ' | tr ' ' '_')")"
+      prb_skip="payload_invalid"
+      echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=${prb_reason} stage=build detail=${prb_detail:-none}"
+    fi
+    if [ -z "${prb_skip}" ]; then
+      local -a prb_wrap_args=(wrap-dispatch --payload-json "${prb_payload}")
+      if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+        prb_identity_status="$(python3 "${RELEASE_BLOCKER_HEAL_PY}" request-report-identity --out "${prb_identity}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
+        prb_identity_status="$(printf '%s' "${prb_identity_status}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
+        echo "Release blocker report identity: ${prb_identity_status:-identity=absent reason=unknown} blocker=${prb_reason}"
+        if [ -s "${prb_identity}" ]; then
+          prb_wrap_args+=(--report-identity-file "${prb_identity}")
+        fi
+      else
+        echo "Release blocker report identity: identity=absent reason=oidc_unavailable blocker=${prb_reason}"
+      fi
+      if ! python3 "${RELEASE_BLOCKER_HEAL_PY}" "${prb_wrap_args[@]}" > "${prb_envelope}" 2> "${prb_error}"; then
+        prb_skip="payload_invalid"
+        echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=${prb_reason} stage=wrap"
+      fi
+      rm -f "${prb_identity}"
+    fi
+    if [ -z "${prb_skip}" ]; then
+      if ! gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/dispatches" --input "${prb_envelope}" >/dev/null 2> "${prb_error}"; then
+        prb_detail="$(poller_release_blocker_safe "$(head -c 200 "${prb_error}" 2>/dev/null | tr '\n' ' ' | tr ' ' '_')")"
+        prb_skip="dispatch_denied"
+        echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=dispatch_denied blocker=${prb_reason} detail=${prb_detail:-none}"
+        echo "::warning::Release blocker report ${prb_reason} on ${prb_branch} could not be dispatched to ${GITHUB_REPOSITORY}."
+      fi
+    fi
+    if [ -z "${prb_skip}" ]; then
+      echo "RELEASE_BLOCKER_REPORTED reason=${prb_reason} age=${prb_age:-unknown} branch=${prb_branch} sha=${prb_sha_log} run_ref=none tracking_issue=${TRACKING_NUM:-0}"
+    fi
+    rm -rf "${prb_work_dir}"
+  fi
+  if [ -n "${prb_skip}" ]; then
+    tg_notify "Release blocker report could not be dispatched (${prb_skip}): ${prb_reason} on ${prb_branch}. Refs #8291" "WARNING" || true
+  fi
+  if jq --arg k "${prb_state_key}" '.[$k] = ((if (.[$k] | type) == "object" then .[$k] else {} end) + {release_blocker_reported: true})' "${STATE_FILE}" > "${STATE_FILE}.rb.tmp" 2>/dev/null; then
+    mv "${STATE_FILE}.rb.tmp" "${STATE_FILE}" || true
+  else
+    rm -f "${STATE_FILE}.rb.tmp" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # comprehensive_promotion_hold_or_fail <reason> <now_epoch> <alert_text>
 #
 # Shared bounded hold for pre-dispatch checks that could not run this tick
@@ -14437,6 +14588,10 @@ comprehensive_promotion_hold_or_fail() {
     return 1
   fi
   jq --arg r "${reason}" '.comprehensive_promotion = {status: "failed", reason: ($r + " past the hold cap")}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  # promote_sha is the calling gate's local (bash dynamic scope); empty when
+  # unset, which the payload allows.
+  poller_release_blocker_report comprehensive_promotion "promotion_failed:${reason}" "$((now - gate_started))" "${promote_sha:-}" \
+    "gate=${reason}" "hold_max_secs=${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" || true
   post_state_comment || true
   echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=${reason}"
   tg_notify "${alert_text}" "DEBUG"
@@ -14784,6 +14939,9 @@ comprehensive_promotion_gate_before_final_merge() {
         # whatever main is now.
         jq --arg wf "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" '.comprehensive_promotion = {status: "failed", reason: ("pinned promotion requires promote-main-to-stable.yml, got " + $wf)}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=release_workflow_not_pinnable workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}"
+        poller_release_blocker_report comprehensive_promotion "promotion_failed:release_workflow_not_pinnable" "" "${promote_sha}" \
+          "workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" || true
+        post_state_comment || true
         post_tracking_comment "## ❌ Promotion not possible
 
 \`COMPREHENSIVE_RELEASE_WORKFLOW_FILE\` is \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\`, which cannot promote a pinned commit (only promote-main-to-stable.yml takes \`target_sha\`). Nothing is promoted; the final merge proceeds."
@@ -14961,6 +15119,10 @@ ${promotion_basis} \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\` was dispatched wit
       rm -f "${_dispatch_err}"
       jq --arg reason "${_dispatch_msg}" '.comprehensive_promotion = {status: "failed", reason: ("dispatch failed: " + $reason)}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=dispatch_failed"
+      # _dispatch_msg is raw gh stderr and stays out of the evidence.
+      poller_release_blocker_report comprehensive_promotion "promotion_failed:dispatch_failed" "" "${promote_sha}" \
+        "promote_sha=${promote_sha}" "smoke_sha=${smoke_sha}" "workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" || true
+      post_state_comment || true
       tg_notify "Project #${TRACKING_NUM}: could not dispatch ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} (${_dispatch_msg:-unknown error}); merge proceeds without promotion." "CRITICAL"
       comprehensive_release_cycle_freeze "${pinned}"
       return 0
@@ -14985,6 +15147,8 @@ ${promotion_basis} \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\` was dispatched wit
           ;;
         failed)
           jq '.comprehensive_promotion.status = "failed" | .comprehensive_promotion.reason = "release run failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          poller_release_blocker_report comprehensive_promotion "promotion_failed:release_failed" "$((now - dispatched_at))" "${promote_sha}" \
+            "promote_sha=${promote_sha}" "workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" || true
           post_state_comment || true
           echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=release_failed promote_sha=${promote_sha}"
           post_tracking_comment "## ❌ Promotion failed
@@ -14997,6 +15161,8 @@ The release run for \`${promote_sha:0:7}\` did not succeed; \`stable\` is unchan
       esac
       if [ $((now - dispatched_at)) -ge "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" ]; then
         jq '.comprehensive_promotion.status = "failed" | .comprehensive_promotion.reason = "hold cap reached before the release finished"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        poller_release_blocker_report comprehensive_promotion "promotion_failed:hold_timeout" "$((now - dispatched_at))" "${promote_sha}" \
+          "promote_sha=${promote_sha}" "workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" "hold_max_secs=${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" || true
         post_state_comment || true
         echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=hold_timeout"
         post_tracking_comment "## ⌛ Promotion hold expired
@@ -15296,6 +15462,14 @@ handle_comprehensive_release_callback_if_needed() {
     jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg outcome "${verification_outcome}" \
       '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at, role: "proving", verification: $outcome}' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    # Only a transient outcome that exhausted its retries is a release
+    # blocker; a plain SKIPPED (e.g. not enough docs) is the normal
+    # "start over next cycle" path.
+    if [[ "${verification_outcome}" == *"retries_exhausted="* ]]; then
+      poller_release_blocker_report comprehensive_release_callback "verification_not_dispatched" "" \
+        "$(printf '%s' "${cycle_metadata_json}" | jq -r '.promote_sha // ""' 2>/dev/null || true)" \
+        "dispatcher_outcome=$(printf '%s' "${verification_outcome}" | tr ' ' '_')" "retries=${COMPREHENSIVE_VERIFICATION_RETRY_MAX}" || true
+    fi
     post_state_comment || true
     case "${verification_outcome}" in
       DISPATCHED*)
@@ -15332,6 +15506,10 @@ The proving run merged, but the verifying run could not be dispatched (${verific
       jq --arg alerted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         '.comprehensive_release_callback = ((.comprehensive_release_callback // {}) + {role: "untrusted", untrusted_marker_alerted: true, untrusted_marker_alerted_at: $alerted_at})' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      local untrusted_marker_author
+      untrusted_marker_author="$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.untrusted_author // ""' 2>/dev/null || true)"
+      poller_release_blocker_report comprehensive_release_callback "marker_untrusted" "" "" \
+        "marker_author=${untrusted_marker_author:-unknown}" || true
       post_state_comment || true
       post_tracking_comment "## ⚠️ Untrusted apply-analysis marker
 
