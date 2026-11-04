@@ -30,6 +30,16 @@ BACKOFF_CAP_SECS = 120
 DEFAULT_LOG_TAIL_BYTES = 16384
 MAX_LOG_TAIL_BYTES = 131072
 LOG_TAIL_LINES = 200
+# Issue #8799: the ranged GET reads up to this many bytes from the end of the
+# job log so the step's "##[error]" line is found even when a long post-job
+# section (service-container teardown dumps) follows it. Not an env var: the
+# window itself stays bounded by CHECK_RUNS_LOG_TAIL_BYTES and LOG_TAIL_LINES.
+LOG_SCAN_BYTES = 262144
+# Lines longer than this are cut before any byte budget is applied, so one
+# huge line (an error embedding initcode hex) cannot crowd out the rest.
+LOG_LINE_CHAR_CAP = 2000
+LOG_TAIL_STEP_ERROR_MARKER = "##[error]"
+LOG_TAIL_STEP_ERROR_AFTER_LINES = 5
 FAILURE_CONCLUSIONS = {"failure", "timed_out", "action_required", "cancelled", "stale", "startup_failure"}
 # Full commit SHA accepted for PR_CHECK_RUNS_HEAD_SHA_OVERRIDE (#6918).
 _HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -332,6 +342,84 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _LOG_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
 
 
+def _cap_long_lines(lines: list[str], limit: int = LOG_LINE_CHAR_CAP) -> list[str]:
+	"""Return a new list with every line over ``limit`` characters cut."""
+	capped: list[str] = []
+	for line in lines:
+		if len(line) > limit:
+			capped.append(line[:limit] + f" [\u2026 {len(line) - limit} chars truncated]")
+		else:
+			capped.append(line)
+	return capped
+
+
+def _utf8_len(text: str) -> int:
+	return len(text.encode("utf-8"))
+
+
+def _select_log_tail_window(out: bytes, *, log_tail_bytes: int, partial_start: bool) -> str:
+	"""Pick the ``failed[i].log_tail`` text from the scanned end of a job log.
+
+	When the scan holds a step-level ``##[error]`` line, the window ends at the
+	first one (plus up to 5 following lines) and is trimmed from the front to
+	``log_tail_bytes`` bytes and ``LOG_TAIL_LINES`` lines (issue #8799).
+	Otherwise the window is the pre-#8799 one: the last ``log_tail_bytes``
+	bytes, last ``LOG_TAIL_LINES`` lines. A ``log_tail_anchor:`` line names the
+	window kind; it is informational and not counted in the byte budget.
+	"""
+	if log_tail_bytes <= 0 or not out:
+		return ""
+	lines = out.decode("utf-8", errors="replace").splitlines()
+	anchor: int | None = None
+	for index, line in enumerate(lines):
+		# A partial range may start mid-line; that fragment is never an anchor.
+		if index == 0 and partial_start:
+			continue
+		if LOG_TAIL_STEP_ERROR_MARKER in line:
+			anchor = index
+			break
+	if anchor is None:
+		tail = out[-log_tail_bytes:] if len(out) > log_tail_bytes else out
+		tail_lines = tail.decode("utf-8", errors="replace").splitlines()
+		if len(tail_lines) > LOG_TAIL_LINES:
+			tail_lines = tail_lines[-LOG_TAIL_LINES:]
+		body = "\n".join(_cap_long_lines(tail_lines))
+		if not body:
+			return ""
+		return "log_tail_anchor: end_of_log\n" + body
+	capped = _cap_long_lines(lines[: anchor + 1 + LOG_TAIL_STEP_ERROR_AFTER_LINES])
+	before = capped[:anchor]
+	error_line = capped[anchor]
+	after = capped[anchor + 1:]
+	# Trailing after-lines go first; the error line itself always survives.
+	while after and (
+		_utf8_len("\n".join([error_line, *after])) > log_tail_bytes
+		or 1 + len(after) > LOG_TAIL_LINES
+	):
+		after.pop()
+	if _utf8_len(error_line) > log_tail_bytes:
+		# Keep the line end, where the "##[error]" text and message sit.
+		window = [error_line.encode("utf-8")[-log_tail_bytes:].decode("utf-8", errors="ignore")]
+	else:
+		window = [error_line, *after]
+		used = _utf8_len("\n".join(window))
+		lead: list[str] = []
+		for line in reversed(before):
+			if len(window) + len(lead) + 1 > LOG_TAIL_LINES:
+				break
+			cost = _utf8_len(line) + 1
+			if used + cost > log_tail_bytes:
+				break
+			lead.append(line)
+			used += cost
+		lead.reverse()
+		window = lead + window
+	body = "\n".join(window)
+	if not body:
+		return ""
+	return "log_tail_anchor: step_error\n" + body
+
+
 def _fetch_log_tail(*, details_url: str, log_tail_bytes: int, repository: str, token: str) -> str:
 	if log_tail_bytes <= 0:
 		return ""
@@ -369,7 +457,10 @@ def _fetch_log_tail(*, details_url: str, log_tail_bytes: int, repository: str, t
 			content_length = int(resp.headers.get("Content-Length", "0"))
 		if content_length <= 0:
 			return ""
-		start = max(0, content_length - log_tail_bytes)
+		# Issue #8799: scan up to LOG_SCAN_BYTES so the step error is found
+		# behind a long post-job section. Still exactly one ranged GET.
+		scan_bytes = max(log_tail_bytes, min(content_length, LOG_SCAN_BYTES))
+		start = max(0, content_length - scan_bytes)
 		tail_req = urllib.request.Request(
 			blob_url,
 			headers={"Range": f"bytes={start}-{content_length - 1}"},
@@ -377,18 +468,15 @@ def _fetch_log_tail(*, details_url: str, log_tail_bytes: int, repository: str, t
 		)
 		with urllib.request.urlopen(tail_req, timeout=30) as resp:
 			status = resp.getcode()
-			if status == 206 or (status == 200 and content_length <= log_tail_bytes):
+			if status == 206 or (status == 200 and content_length <= scan_bytes):
 				out = resp.read()
 			else:
 				return ""
 	except (OSError, ValueError, urllib.error.HTTPError, http.client.HTTPException):
 		return ""
-	if len(out) > log_tail_bytes:
-		out = out[-log_tail_bytes:]
-	lines = out.decode("utf-8", errors="replace").splitlines()
-	if len(lines) > LOG_TAIL_LINES:
-		lines = lines[-LOG_TAIL_LINES:]
-	return "\n".join(lines)
+	if len(out) > scan_bytes:
+		out = out[-scan_bytes:]
+	return _select_log_tail_window(out, log_tail_bytes=log_tail_bytes, partial_start=start > 0)
 
 
 def _build_context_text(*, raw_text: str, head_sha: str, final_status: str) -> str:

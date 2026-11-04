@@ -941,3 +941,134 @@ def test_non_project_base_keeps_the_default_path(tmp_path, monkeypatch):
 	result, _, fake = _gate(tmp_path, monkeypatch, routes=_routes(**{rf"repos/{REPO}/pulls/{PR}": pr}))
 	assert result["status"] == "resolved" and result["evidence_ref"] == "default"
 	assert not any("/pulls?head=" in call[-1] for call in fake.calls)
+
+
+# --- Issue #8799: ranked excerpt anchor and long-line cap -------------------
+
+CAUSE_8799 = "TransactionExecutionError: Transaction reverted: trying to deploy a contract whose code is too large"
+STEP_ERROR_8799 = "##[error]Process completed with exit code 1."
+PG_FIRST_8799 = "Key (id)=(0) already exists."
+
+
+def _ts_8799(n: int) -> str:
+	return f"2026-11-01T10:00:{n % 60:02d}.0000000Z "
+
+
+def _pg_lines_8799(count: int) -> list[str]:
+	return [
+		_ts_8799(8) + f" 2026-11-01 10:00:08.000 UTC [61] ERROR:  duplicate key value violates unique constraint "
+		f"\"users_pkey\" DETAIL:  Key (id)=({n}) already exists."
+		for n in range(count)
+	]
+
+
+def _incident_log_8799() -> str:
+	"""Shape of fun-token-multi-chain job 125140539489: cause, step error, then a teardown dump."""
+	lines = [_ts_8799(1) + "##[group]Run npm test", _ts_8799(1) + "##[endgroup]"]
+	lines += [_ts_8799(2) + f" ✓ test/unit_{n}.test.ts (3 tests) 12ms" for n in range(40)]
+	lines += [_ts_8799(3) + " Test Files  8 passed (8)", _ts_8799(4) + "##[group]Run npm run smoke", _ts_8799(4) + "##[endgroup]"]
+	lines.append(_ts_8799(5) + CAUSE_8799)
+	long_line = _ts_8799(5) + "Error: could not deploy (code=CALL_EXCEPTION, data=0x"
+	lines.append(long_line + "a" * (65000 - len(long_line)))
+	lines.append(_ts_8799(6) + STEP_ERROR_8799)
+	lines += [
+		_ts_8799(7) + "Post job cleanup.",
+		_ts_8799(7) + "Stop and remove container: 4f1c",
+		_ts_8799(7) + "##[command]/usr/bin/docker logs --details 4f1c",
+		_ts_8799(7) + "PostgreSQL init process complete; ready for start up.",
+		_ts_8799(7) + "listening on IPv4 address port 5432",
+		_ts_8799(7) + "database system is ready to accept connections",
+	]
+	lines += _pg_lines_8799(300)
+	return "\n".join(lines)
+
+
+def _prepared_8799(log: str) -> str:
+	return mod.heal.filter_log(mod._cap_long_lines(mod.heal.redact_secrets(log)))
+
+
+def _old_excerpt_8799(filtered: str) -> str:
+	lines = filtered.split("\n")
+	start = next((index for index, line in enumerate(lines) if mod.TRACEBACK_START_RE.search(line)), None)
+	if start is None:
+		return ""
+	excerpt = "\n".join(lines[start:start + mod.MAX_EXCERPT_LINES])
+	return excerpt.encode("utf-8")[:mod.MAX_EXCERPT_BYTES].decode("utf-8", errors="ignore")
+
+
+def test_excerpt_anchors_on_step_error_not_teardown_errors():
+	excerpt, anchor = mod._excerpt_with_anchor(_prepared_8799(_incident_log_8799()))
+	assert anchor == "step_error"
+	assert CAUSE_8799 in excerpt and STEP_ERROR_8799 in excerpt
+	assert PG_FIRST_8799 not in excerpt and "duplicate key" not in excerpt
+	assert "[… 63000 chars truncated]" in excerpt
+	assert len(excerpt.encode("utf-8")) <= mod.MAX_EXCERPT_BYTES
+	assert excerpt.split("\n")[-1].endswith("listening on IPv4 address port 5432")
+
+
+def test_step_error_excerpt_trims_from_the_front_and_keeps_the_error():
+	lines = [f"filler {n} " + "f" * 200 for n in range(110)] + [STEP_ERROR_8799, "after"]
+	excerpt, anchor = mod._excerpt_with_anchor("\n".join(lines))
+	assert anchor == "step_error"
+	assert len(excerpt.encode("utf-8")) <= mod.MAX_EXCERPT_BYTES
+	assert excerpt.endswith(STEP_ERROR_8799 + "\nafter")
+	assert "filler 0 " not in excerpt
+
+
+def test_test_failure_outranks_a_later_step_error():
+	lines = [f"line {n}" for n in range(20)]
+	lines += [" FAIL  test/x.test.ts > token > rejects oversized contract", "AssertionError: expected 1 to be 2"]
+	lines += [f"more {n}" for n in range(5)] + [STEP_ERROR_8799]
+	excerpt, anchor = mod._excerpt_with_anchor("\n".join(lines))
+	assert anchor == "test_failure"
+	assert excerpt.split("\n")[0] == "line 10"
+	assert "FAIL  test/x.test.ts" in excerpt
+
+
+def test_python_traceback_tier():
+	excerpt, anchor = mod._excerpt_with_anchor("noise\nTraceback (most recent call last):\n  File \"x.py\"\nValueError: bad")
+	assert anchor == "traceback" and excerpt.startswith("Traceback (most recent call last):")
+
+
+def test_only_postgres_errors_keep_the_legacy_excerpt():
+	filtered = "\n".join(["setup ok", *_pg_lines_8799(200)])
+	excerpt, anchor = mod._excerpt_with_anchor(filtered)
+	assert anchor == "legacy"
+	assert excerpt == _old_excerpt_8799(filtered) == mod._excerpt(filtered)
+	assert mod._excerpt_with_anchor("nothing to see\nall good") == ("", "")
+
+
+def test_token_past_the_line_cap_is_redacted_before_the_cut(monkeypatch):
+	token_body = "Zq9" * 12
+	# The raw token spans characters 1986-2025, across the 2,000-character cap;
+	# its redacted form ends exactly at the cap.
+	long_line = "x" * 1985 + " ghp_" + token_body + " " + "y" * 3000
+	assert long_line.index("ghp_") < mod.MAX_LOG_LINE_CHARS < long_line.index("ghp_") + 40
+	log = f"step output\n{long_line}\n{STEP_ERROR_8799}"
+	monkeypatch.setattr(mod, "_actions_job_log", lambda repo, job_id: log)
+	results = mod.fetch_failing_tracebacks(REPO, [{"id": 7, "name": "ci"}])
+	assert len(results) == 1 and results[0]["excerpt_anchor"] == "step_error"
+	excerpt = results[0]["excerpt"]
+	assert "ghp_[redacted]" in excerpt
+	assert "Zq9" not in excerpt
+	assert "chars truncated]" in excerpt
+	body = mod.render_traceback_comment(ISSUE, results[0], "pr_not_merged")
+	assert "Zq9" not in body
+	assert "- **Excerpt anchor:** `step_error`" in body
+
+
+@pytest.mark.parametrize("anchor", ["test_failure", "step_error", "traceback", "legacy"])
+def test_traceback_comment_names_allowlisted_anchor(anchor):
+	traceback = {"id": 5, "name": "ci", "tests": {}, "excerpt": "boom", "excerpt_anchor": anchor}
+	body = mod.render_traceback_comment(ISSUE, traceback, "pr_not_merged")
+	assert f"- **Excerpt anchor:** `{anchor}`" in body
+	assert body.index("Excerpt anchor") < body.index("boom")
+	assert body.endswith(f"<!-- ai:check-triage-traceback:v1 issue={ISSUE} job=5 -->")
+
+
+@pytest.mark.parametrize("anchor", [None, "", "`evil`", "step_error\n- injected"])
+def test_traceback_comment_omits_unknown_anchor(anchor):
+	traceback = {"id": 5, "name": "ci", "tests": {}, "excerpt": "boom", "excerpt_anchor": anchor}
+	body = mod.render_traceback_comment(ISSUE, traceback, "pr_not_merged")
+	assert "Excerpt anchor" not in body
+	assert body.endswith(f"<!-- ai:check-triage-traceback:v1 issue={ISSUE} job=5 -->")
