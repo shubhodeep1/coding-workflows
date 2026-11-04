@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- external check-run \"copilot-pull-request-reviewer\" (not a repository file):log_tail \"Prompt too big after adding system message ... errorCode: custom_instructions_too_large, statusCode: 422\" | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The third-party Copilot reviewer failed on head f64a6c5 because it could not load the repository's custom instructions (AGENTS.md and CLAUDE.md), and the failure cannot be mapped to any line in tests/e2e_smoke_canary.txt.\n  WHY: The Copilot service rejects the prompt as too large and no change in this PR can fix that. The source rated it SEVERITY: NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- external check-run \"copilot-pull-request-reviewer\" (not a repository file):log_tail \"Prompt too big after adding system message ... errorCode: custom_instructions_too_large, statusCode: 422\" | severity=low (source: NIT) | confidence=2\n  PROBLEM: The third-party Copilot reviewer failed on head f64a6c5 because it could not load the repository's custom instructions (AGENTS.md and CLAUDE.md), and the failure cannot be mapped to any line in tests/e2e_smoke_canary.txt.\n  WHY: The Copilot service rejects the prompt as too large and no change in this PR can fix that.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6dfb236a28df70bbb4d33b6e20f2e994d5278eb4d1d82f4a0a3a9586aa804d3d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41773703119",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41773703119",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104044052_0071d96075",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41773703119"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T04:40:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
