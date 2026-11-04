@@ -2751,6 +2751,28 @@ AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL
 # turns it off, any other value is treated as `true` with a warning.
 HEAL_COUNTERFACTUAL_GATE_ENABLED="${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}"
 
+# Issue #8808: stale auto-close of held run-sourced heal issues (see
+# _heal_stale_close_check). On by default; `false` turns it off, any other
+# value is treated as `true` with a warning (checked at the call).
+HEAL_STALE_AUTO_CLOSE_ENABLED="${HEAL_STALE_AUTO_CLOSE_ENABLED:-true}"
+HEAL_STALE_GREEN_RUNS="${HEAL_STALE_GREEN_RUNS:-5}"
+if ! [[ "${HEAL_STALE_GREEN_RUNS}" =~ ^[0-9]{1,6}$ ]] || [ "$(( 10#${HEAL_STALE_GREEN_RUNS} ))" -lt 1 ]; then
+  echo "::warning::HEAL_STALE_GREEN_RUNS must be a positive integer; defaulting to 5"
+  HEAL_STALE_GREEN_RUNS="5"
+fi
+HEAL_STALE_GREEN_RUNS="$(( 10#${HEAL_STALE_GREEN_RUNS} ))"
+HEAL_STALE_MIN_AGE_HOURS="${HEAL_STALE_MIN_AGE_HOURS:-24}"
+if ! [[ "${HEAL_STALE_MIN_AGE_HOURS}" =~ ^[0-9]{1,6}$ ]]; then
+  echo "::warning::HEAL_STALE_MIN_AGE_HOURS must be a non-negative integer; defaulting to 24"
+  HEAL_STALE_MIN_AGE_HOURS="24"
+fi
+HEAL_STALE_MIN_AGE_HOURS="$(( 10#${HEAL_STALE_MIN_AGE_HOURS} ))"
+# Tick-local caches: workflow runs keyed `repo|workflow|branch`, run lookups
+# keyed `repo:run_id` (a cached failure is not retried this tick).
+HEAL_STALE_RUNS_CACHE_JSON='{}'
+HEAL_STALE_RUN_LOOKUP_CACHE_JSON='{}'
+HEAL_STALE_CLOSE_OUTCOME=""
+
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
   echo "::warning::MAX_VALIDATE_CYCLES must be a positive integer; defaulting to 3"
@@ -18645,6 +18667,195 @@ _heal_counterfactual_hold_notify()
   return 0
 }
 
+# Issue #8808: close a held run-sourced heal issue whose failing workflow
+# stopped failing. Called from the heal_counterfactual_hold branch of
+# _plan_auto_approval_gate before the hold notice, in the main shell so the
+# tick-local caches persist. workflow_failure_heal.py heal-stale-decision
+# decides from the batched details map entry (body, labels, author,
+# created_at, linked_pr), the gate's comment snapshot and one cached
+# `actions/workflows/<file>/runs` read per (source repo, workflow, branch).
+# Issues filed before the workflow= body marker resolve the workflow with one
+# cached `actions/runs/<id>` read of the heal-scope marker's first run.
+# Audited calls: the batched details map carries no run data and
+# STALL_MANAGED_LINKED_PR_CACHE only PR state, so these reads are new; only
+# held heal issues reach them. Every error keeps the issue open. On close it
+# posts one ai:heal-stale-close:v1 comment (none when a trusted one exists),
+# PATCHes state=closed/state_reason=completed (labels untouched) and sends
+# a Telegram INFO. Sets HEAL_STALE_CLOSE_OUTCOME (closed|kept|skipped) and
+# always logs one HEAL_STALE_CLOSE line. Always returns 0.
+# Args: <issue_num> <details_map_json> <comments_json> <login> <phase>
+_heal_stale_close_check()
+{
+  local issue_num="$1"
+  local details_map_json="$2"
+  local comments_json="$3"
+  local login="$4"
+  # <phase> is accepted for the caller's context; the log line omits it.
+  local phase="$5"
+  local flag_norm="" heal_py="" outcome="kept" reason="" green_runs="0"
+  local stale_issue_file="" stale_comments_file="" stale_runs_file="" stale_linked_file="" stale_run_file=""
+  local target_json="" src_repo="" workflow_base="" stale_branch="" fb_repo="" fb_run=""
+  local lookup_key="" lookup_json="" runs_key="" runs_json="" decide_json="" decision="" per_page=""
+  local comment_body="" anchor="" linked_args=()
+
+  HEAL_STALE_CLOSE_OUTCOME="skipped"
+  # sed, not xargs: xargs fails on an unmatched quote in the flag value.
+  flag_norm="$(printf '%s' "${HEAL_STALE_AUTO_CLOSE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm="true"
+  case "${flag_norm}" in
+    false)
+      echo "HEAL_STALE_CLOSE issue=${issue_num} outcome=skipped reason=disabled green_runs=0"
+      return 0
+      ;;
+    ""|true) ;;
+    *) echo "::warning::HEAL_STALE_AUTO_CLOSE_ENABLED has invalid value; treating as true" ;;
+  esac
+  heal_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/workflow_failure_heal.py"
+  stale_issue_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_stale_issue.XXXXXX" 2>/dev/null || true)"
+  stale_comments_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_stale_comments.XXXXXX" 2>/dev/null || true)"
+  stale_runs_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_stale_runs.XXXXXX" 2>/dev/null || true)"
+  stale_linked_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_stale_linked.XXXXXX" 2>/dev/null || true)"
+  stale_run_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_stale_run.XXXXXX" 2>/dev/null || true)"
+  # One pass; each `break` ends the check with outcome/reason set.
+  while :; do
+    if [ "${HEAL_CF_GATE_REASON:-}" = "heal_route_unknown" ]; then
+      outcome="skipped"; reason="heal_route_unknown"; break
+    fi
+    if [ ! -f "${heal_py}" ] || [ -z "${stale_issue_file}" ] || [ -z "${stale_comments_file}" ] \
+      || [ -z "${stale_runs_file}" ] || [ -z "${stale_linked_file}" ] || [ -z "${stale_run_file}" ]; then
+      reason="decision_unavailable"; break
+    fi
+    if ! printf '%s' "${details_map_json:-{\}}" | jq -ce --arg n "${issue_num}" '
+        .[$n]
+        | select(type == "object" and .comments_available == true)
+        | select((.body | type) == "string")
+        | {number: ($n | tonumber), state: (.state // ""), body: .body, labels: (.labels // []),
+           user: {login: (.author_login // "")}, author_association: (.author_association // ""),
+           created_at: (.created_at // null)}
+      ' > "${stale_issue_file}" 2>/dev/null; then
+      outcome="skipped"; reason="details_unavailable"; break
+    fi
+    printf '%s' "${comments_json:-[]}" | jq -c 'if type == "array" then . else [] end' > "${stale_comments_file}" 2>/dev/null \
+      || printf '[]' > "${stale_comments_file}"
+    target_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${heal_py}" heal-stale-decision --stage target \
+      --issue-json "${stale_issue_file}" 2>/dev/null)" || target_json=""
+    if ! printf '%s' "${target_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      reason="decision_unavailable"; break
+    fi
+    reason="$(printf '%s' "${target_json}" | jq -r '.reason // ""' 2>/dev/null)" || reason="decision_unavailable"
+    if [ "${reason}" = "not_run_sourced" ]; then
+      outcome="skipped"; break
+    fi
+    src_repo="$(printf '%s' "${target_json}" | jq -r '.source_repo // "" | strings' 2>/dev/null)" || src_repo=""
+    workflow_base="$(printf '%s' "${target_json}" | jq -r '.workflow // "" | strings' 2>/dev/null)" || workflow_base=""
+    stale_branch="$(printf '%s' "${target_json}" | jq -r '.branch // "" | strings' 2>/dev/null)" || stale_branch=""
+    fb_repo="$(printf '%s' "${target_json}" | jq -r '.fallback_run.repo // "" | strings' 2>/dev/null)" || fb_repo=""
+    fb_run="$(printf '%s' "${target_json}" | jq -r '.fallback_run.run_id // "" | strings' 2>/dev/null)" || fb_run=""
+    if [ -n "${reason}" ]; then
+      break
+    fi
+    if ! [[ "${src_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+      reason="source_unknown"; break
+    fi
+    if { [ -z "${workflow_base}" ] || [ -z "${stale_branch}" ]; } \
+      && [[ "${fb_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] && [[ "${fb_run}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+      lookup_key="${fb_repo}:${fb_run}"
+      if printf '%s' "${HEAL_STALE_RUN_LOOKUP_CACHE_JSON:-{\}}" | jq -e --arg k "${lookup_key}" 'has($k)' >/dev/null 2>&1; then
+        lookup_json="$(printf '%s' "${HEAL_STALE_RUN_LOOKUP_CACHE_JSON}" | jq -c --arg k "${lookup_key}" '.[$k]' 2>/dev/null)" || lookup_json=""
+      else
+        if gh_retry gh api "repos/${fb_repo}/actions/runs/${fb_run}" > "${stale_run_file}" 2>/dev/null; then
+          lookup_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${heal_py}" heal-stale-decision --stage resolve \
+            --run-json "${stale_run_file}" 2>/dev/null)" || lookup_json=""
+        fi
+        printf '%s' "${lookup_json}" | jq -e 'type == "object"' >/dev/null 2>&1 \
+          || lookup_json='{"workflow":null,"branch":null,"reason":"runs_unavailable"}'
+        HEAL_STALE_RUN_LOOKUP_CACHE_JSON="$(printf '%s' "${HEAL_STALE_RUN_LOOKUP_CACHE_JSON:-{\}}" \
+          | jq -c --arg k "${lookup_key}" --argjson v "${lookup_json}" '. + {($k): $v}' 2>/dev/null)" \
+          || HEAL_STALE_RUN_LOOKUP_CACHE_JSON='{}'
+      fi
+      [ -n "${workflow_base}" ] || workflow_base="$(printf '%s' "${lookup_json}" | jq -r '.workflow // "" | strings' 2>/dev/null)" || workflow_base=""
+      [ -n "${stale_branch}" ] || stale_branch="$(printf '%s' "${lookup_json}" | jq -r '.branch // "" | strings' 2>/dev/null)" || stale_branch=""
+      if [ -z "${workflow_base}" ] || [ -z "${stale_branch}" ]; then
+        reason="$(printf '%s' "${lookup_json}" | jq -r '.reason // "workflow_unknown" | strings' 2>/dev/null)" || reason="workflow_unknown"
+        [ -n "${reason}" ] || reason="workflow_unknown"
+        break
+      fi
+    fi
+    if ! [[ "${workflow_base}" =~ ^[A-Za-z0-9_.-]+\.ya?ml$ ]] || [[ "${workflow_base}" == *..* ]] \
+      || ! [[ "${stale_branch}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] || [[ "${stale_branch}" == *..* ]]; then
+      reason="workflow_unknown"; break
+    fi
+    runs_key="${src_repo}|${workflow_base}|${stale_branch}"
+    if printf '%s' "${HEAL_STALE_RUNS_CACHE_JSON:-{\}}" | jq -e --arg k "${runs_key}" 'has($k)' >/dev/null 2>&1; then
+      runs_json="$(printf '%s' "${HEAL_STALE_RUNS_CACHE_JSON}" | jq -c --arg k "${runs_key}" '.[$k]' 2>/dev/null)" || runs_json="null"
+    else
+      per_page=$(( HEAL_STALE_GREEN_RUNS + 10 ))
+      [ "${per_page}" -le 100 ] || per_page=100
+      runs_json="$(gh_retry gh api -X GET "repos/${src_repo}/actions/workflows/${workflow_base}/runs" \
+        -f branch="${stale_branch}" -f event=push -f status=completed -F per_page="${per_page}" 2>/dev/null \
+        | jq -c 'select(type == "object" and ((.workflow_runs | type) == "array"))
+          | {workflow_runs: [.workflow_runs[] | select(type == "object")
+              | {id, html_url, head_sha, head_branch, event, status, conclusion, created_at}]}' 2>/dev/null)" || runs_json=""
+      [ -n "${runs_json}" ] || runs_json="null"
+      HEAL_STALE_RUNS_CACHE_JSON="$(printf '%s' "${HEAL_STALE_RUNS_CACHE_JSON:-{\}}" \
+        | jq -c --arg k "${runs_key}" --argjson v "${runs_json}" '. + {($k): $v}' 2>/dev/null)" \
+        || HEAL_STALE_RUNS_CACHE_JSON='{}'
+    fi
+    if [ "${runs_json}" = "null" ] || [ -z "${runs_json}" ]; then
+      reason="runs_unavailable"; break
+    fi
+    printf '%s' "${runs_json}" > "${stale_runs_file}"
+    # Linked PR: batched details map first, then the managed linked-PR cache;
+    # no entry in either keeps the issue (linked_pr_unknown). No new call.
+    if printf '%s' "${details_map_json:-{\}}" | jq -e --arg n "${issue_num}" '.[$n] | has("linked_pr")' >/dev/null 2>&1; then
+      printf '%s' "${details_map_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr' > "${stale_linked_file}" 2>/dev/null \
+        && linked_args=(--linked-pr-json "${stale_linked_file}")
+    elif printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE:-{\}}" | jq -e --arg n "${issue_num}" 'type == "object" and has($n)' >/dev/null 2>&1; then
+      printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq -c --arg n "${issue_num}" '.[$n]' > "${stale_linked_file}" 2>/dev/null \
+        && linked_args=(--linked-pr-json "${stale_linked_file}")
+    fi
+    decide_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${heal_py}" heal-stale-decision --stage decide \
+      --issue-json "${stale_issue_file}" --comments-json "${stale_comments_file}" --runs-json "${stale_runs_file}" \
+      "${linked_args[@]}" --pipeline-login "${login}" --plan-comment "${HEAL_CF_GATE_PLAN_COMMENT:-unknown}" \
+      --workflow "${workflow_base}" --branch "${stale_branch}" --green-runs "${HEAL_STALE_GREEN_RUNS:-5}" \
+      --min-age-hours "${HEAL_STALE_MIN_AGE_HOURS:-24}" --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null)" || decide_json=""
+    decision="$(printf '%s' "${decide_json}" | jq -r '.decision // "" | strings' 2>/dev/null)" || decision=""
+    case "${decision}" in
+      close|keep|skip) ;;
+      *) reason="decision_unavailable"; break ;;
+    esac
+    reason="$(printf '%s' "${decide_json}" | jq -r '.reason // "" | strings' 2>/dev/null)" || reason=""
+    green_runs="$(printf '%s' "${decide_json}" | jq -r '.green_runs // 0' 2>/dev/null)" || green_runs="0"
+    if [ "${decision}" = "skip" ]; then
+      outcome="skipped"; break
+    fi
+    [ "${decision}" = "close" ] || break
+    if ! printf '%s' "${decide_json}" | jq -e '.marker_present == true' >/dev/null 2>&1; then
+      comment_body="$(printf '%s' "${decide_json}" | jq -r '.comment_body // "" | strings' 2>/dev/null)" || comment_body=""
+      if [ -z "${comment_body}" ] \
+        || ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${comment_body}" >/dev/null 2>&1; then
+        reason="comment_failed"; break
+      fi
+    fi
+    if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" \
+      -f state=closed -f state_reason=completed >/dev/null 2>&1; then
+      # The next tick sees the trusted marker and only retries the close.
+      reason="close_failed"; break
+    fi
+    outcome="closed"
+    anchor="$(printf '%s' "${decide_json}" | jq -r '.anchor // "" | strings' 2>/dev/null | tr -cd '0-9TZ:-' | cut -c1-25)" || anchor=""
+    tg_notify_issue "${issue_num}" "Heal issue closed: ${workflow_base} green on ${stale_branch} for ${green_runs//[!0-9]/} push runs since ${anchor:-unknown}." "INFO" || true
+    break
+  done
+  rm -f "${stale_issue_file}" "${stale_comments_file}" "${stale_runs_file}" "${stale_linked_file}" "${stale_run_file}" 2>/dev/null || true
+  reason="$(printf '%s' "${reason}" | tr -cd 'a-z_' | cut -c1-80)"
+  [ -n "${reason}" ] || reason="decision_unavailable"
+  green_runs="$(printf '%s' "${green_runs}" | tr -cd '0-9' | cut -c1-6)"
+  [ -n "${green_runs}" ] || green_runs="0"
+  HEAL_STALE_CLOSE_OUTCOME="${outcome}"
+  echo "HEAL_STALE_CLOSE issue=${issue_num} outcome=${outcome} reason=${reason} green_runs=${green_runs}"
+  return 0
+}
+
 # Issue #6769: hold automatic /approved posts from stall recovery for plans
 # that list automation paths (.github/, .claude/, scripts/, prompts/,
 # workflow-templates/). The plan is the newest comment carrying the
@@ -18806,7 +19017,13 @@ _plan_auto_approval_gate()
     # Issue #8249: the issue keeps its phase and no recovery attempt counts.
     echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=hold result=${HEAL_CF_GATE_RESULT:-missing} reason=${HEAL_CF_GATE_REASON:-heal_counterfactual_check_unavailable} issue=${issue_num}"
     echo "STALL_SKIP issue=${issue_num} reason=heal_counterfactual_hold phase=${phase} action=none"
-    _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
+    # Issue #8808: a held run-sourced heal issue whose workflow is green again
+    # is closed instead; a just-closed issue gets no hold notice.
+    HEAL_STALE_CLOSE_OUTCOME=""
+    _heal_stale_close_check "${issue_num}" "${details_map_json}" "${comments_json}" "${gate_login}" "${phase}" || true
+    if [ "${HEAL_STALE_CLOSE_OUTCOME:-}" != "closed" ]; then
+      _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
+    fi
     return 1
   fi
   if [ "${gate_reason}" = "path_not_granted" ] && [ "${gate_replannable}" = "true" ] \
@@ -20499,6 +20716,7 @@ _fetch_standalone_pipeline_label_issues_graphql() {
 # /comments and /timeline round-trips with ceil(N / batch_size) GraphQL
 # calls.  Returns a JSON object keyed by stringified issue number:
 #   { "123": {"state": "open|closed",
+#             "created_at": "ISO8601"|null,
 #             "labels": ["ai:clarification"],
 #             "comments": [{"id":N,"body":"...","created_at":"..."},...],
 #             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,
@@ -20575,6 +20793,7 @@ _fetch_candidate_issue_details_graphql() {
       fragment+=$'\n'"        i${i}: issue(number: ${n}) {
           number
           state
+          createdAt
           body
           author { login }
           authorAssociation
@@ -20630,6 +20849,7 @@ _fetch_candidate_issue_details_graphql() {
           key: (.value.number | tostring),
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
+            created_at: (.value.createdAt // null),
             body: .value.body,
             author_login: (.value.author.login // ""),
             author_association: (.value.authorAssociation // ""),
