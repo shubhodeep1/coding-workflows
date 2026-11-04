@@ -646,6 +646,13 @@ def test_encoded_access_token_is_redacted():
 	# Plain hex runs (SHAs, initcode) stay readable.
 	assert mod._redact_log_text("0x" + "ab" * 40) == "0x" + "ab" * 40
 
+
+def test_redaction_never_swallows_the_next_lines_step_error():
+	data = ("x-header extraheader:\n" + _ts(6) + STEP_ERROR + "\nauth Bearer\nafter\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=8000, partial_start=False)
+	assert result.startswith("log_tail_anchor: step_error\n") and STEP_ERROR in result
+	assert mod._redact_log_text("extraheader: AUTHORIZATION: basic abcdefgh") == "extraheader: [redacted]"
+
 if __name__ == "__main__":
 	import pytest
 

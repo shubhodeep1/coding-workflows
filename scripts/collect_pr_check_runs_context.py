@@ -365,10 +365,12 @@ def _utf8_len(text: str) -> int:
 _LOG_TAIL_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 	# Scheme bounded to 32 chars (unlike heal) so long hex runs cannot backtrack quadratically.
 	(re.compile(r"([A-Za-z][A-Za-z0-9+.-]{0,31}://)[^/@\s]+@"), r"\1[redacted]@"),
-	(re.compile(r"(authorization\s*:\s*)(?:(?:bearer|basic|token)\s+)?\S+", re.IGNORECASE), r"\1[redacted]"),
-	(re.compile(r"(extraheader\s*[=:]\s*)\S+(?:\s+\S+)?", re.IGNORECASE), r"\1[redacted]"),
-	(re.compile(r"(basic\s+)[A-Za-z0-9+/=_-]{8,}", re.IGNORECASE), r"\1[redacted]"),
-	(re.compile(r"([Bb]earer\s+)\S+"), r"\1[redacted]"),
+	# Separators use [ \t] (unlike heal): this runs on the whole multi-line scan,
+	# and a \s match must not swallow the next line's "##[error]" anchor.
+	(re.compile(r"(authorization[ \t]*:[ \t]*)(?:(?:bearer|basic|token)[ \t]+)?\S+", re.IGNORECASE), r"\1[redacted]"),
+	(re.compile(r"(extraheader[ \t]*[=:][ \t]*)\S+(?:[ \t]+\S+)?", re.IGNORECASE), r"\1[redacted]"),
+	(re.compile(r"(basic[ \t]+)[A-Za-z0-9+/=_-]{8,}", re.IGNORECASE), r"\1[redacted]"),
+	(re.compile(r"([Bb]earer[ \t]+)\S+"), r"\1[redacted]"),
 	(re.compile(r"(github_pat_|gh[pousr]_)[A-Za-z0-9_]+"), r"\1[redacted]"),
 	(re.compile(r"(sk-(?:or|ant)-)[A-Za-z0-9_-]+"), r"\1[redacted]"),
 )
