@@ -452,6 +452,35 @@ def test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit() 
 			assert rc == 0 and "ref=\n" in gh_output, f"{workflow_name} rate_limited routing off\n{out}"
 
 
+def test_refctx_api_unavailable_fails_closed_when_routing_on() -> None:
+	"""BUG-001 (workflow-optimization-2026-10-01): with CI-triage routing on,
+	a resolver API failure (exit 2) never falls back to the default branch in
+	clarify, plan or clarify-respond; implement already failed closed. With
+	routing off, exit 2 keeps the legacy fallback, and exit 1 (declared branch
+	missing) still falls back. validate.yml is deliberately not covered."""
+	api_unavailable = {"FAKE_RESOLVER_RC": "2"}
+	branch_missing = {"FAKE_RESOLVER_RC": "1"}
+	for workflow_name in ("clarify.yml", "plan.yml", "orchestrate_clarify_respond.yml"):
+		for routing in ("true", None):
+			rc, out, gh_output = _run_refctx(workflow_name, "ok", routing, api_unavailable)
+			label = f"{workflow_name} api_unavailable routing={routing}"
+			assert rc != 0, f"{label}: expected failure\n{out}"
+			assert "ref=" not in gh_output, f"{label}: wrote a ref: {gh_output!r}"
+			assert "INTEGRATION_REF_RESOLVE outcome=api_unavailable" in out, f"{label}\n{out}"
+			assert "Canonical integration resolver failed" not in out, f"{label}\n{out}"
+		rc, out, gh_output = _run_refctx(workflow_name, "ok", "false", api_unavailable)
+		label = f"{workflow_name} api_unavailable routing off"
+		assert rc == 0 and "ref=\n" in gh_output, f"{label}\n{out}"
+		if workflow_name == "plan.yml":
+			assert "resolver_status=failed\n" in gh_output, f"{label}: {gh_output!r}"
+		rc, out, gh_output = _run_refctx(workflow_name, "ok", "true", branch_missing)
+		assert rc == 0 and "ref=\n" in gh_output, f"{workflow_name} branch_missing\n{out}"
+	rc, out, gh_output = _run_refctx("implement.yml", "ok", "true", api_unavailable)
+	assert rc != 0, f"implement.yml api_unavailable: expected failure\n{out}"
+	assert "ref=" not in gh_output, f"implement.yml api_unavailable wrote a ref: {gh_output!r}"
+	assert "INTEGRATION_REF_RESOLVE outcome=api_unavailable" in out, out
+
+
 def test_plan_pr_not_open_refusal_keeps_other_reasons_fatal() -> None:
 	"""Issue #7477: plan's refctx step exited 1 on reason=pr_not_open
 	(multi-user-ai-agent#264, run 38862023746). It now succeeds with an
@@ -975,6 +1004,7 @@ def main() -> int:
 	test_required_workflows_fail_closed_on_ci_triage_routing_refusal()
 	test_required_workflows_fail_closed_when_resolver_staging_fails()
 	test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit()
+	test_refctx_api_unavailable_fails_closed_when_routing_on()
 	test_plan_pr_not_open_refusal_keeps_other_reasons_fatal()
 	test_implement_pr_not_open_skips_without_a_ref()
 	test_implement_pr_not_open_fixtures_skip_without_a_ref()

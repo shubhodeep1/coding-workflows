@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Integration-ref API failures no longer fall back to the default branch.** With CI-triage routing on (the default), the `Resolve integration ref` step in clarify, plan and orchestrate-clarify-respond now stops with `::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable` when the canonical resolver exits 2 (retries exhausted or a permanent API error), instead of checking out the default branch. Exit 1 (declared branch missing) and routing off keep the legacy fallback; implement.yml already behaved this way.
