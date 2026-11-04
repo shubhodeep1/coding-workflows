@@ -1407,8 +1407,9 @@ _HEAL_SKIP_NAMES = frozenset({"pytest.skip", "pytest.mark.skip", "pytest.mark.sk
 	"pytest.importorskip", "self.skipTest", "unittest.SkipTest", "unittest.expectedFailure",
 	"unittest.case.SkipTest", "unittest.case.expectedFailure"})
 _HEAL_SKIP_PREFIXES = ("unittest.skip", "unittest.case.skip")
-_HEAL_COLLECTION_NAMES = frozenset({"__test__", "collect_ignore", "collect_ignore_glob"})
+_HEAL_COLLECTION_NAMES = frozenset({"__test__", "collect_ignore", "collect_ignore_glob", "pytest_plugins"})
 _HEAL_COLLECTION_HOOKS = frozenset({"pytest_collection_modifyitems", "pytest_ignore_collect"})
+_HEAL_PYTEST_CONFIG_NAMES = frozenset({"pytest.ini", ".pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml"})
 
 
 def _heal_dotted(node: ast.AST, aliases: dict[str, str]) -> str:
@@ -1458,7 +1459,9 @@ def _heal_test_only_counts(tree: ast.Module, count_tests: bool) -> dict[str, int
 					if (isinstance(leaf, ast.Name) and leaf.id in _HEAL_COLLECTION_NAMES) \
 						or (isinstance(leaf, ast.Attribute) and leaf.attr in _HEAL_COLLECTION_NAMES):
 						skips += 1
-		if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in _HEAL_COLLECTION_HOOKS:
+		# Any pytest_* hook (e.g. pytest_runtest_makereport rewriting outcomes) is a collection/run control.
+		if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+			and (node.name in _HEAL_COLLECTION_HOOKS or node.name.startswith("pytest_")):
 			skips += 1
 	return {"test_functions": functions, "test_methods": classes, "asserts": asserts, "skips": skips}
 
@@ -1477,6 +1480,9 @@ def run_heal_test_only_weakening_check(lock_file: str, base_dir: str, edited_dir
 			edited = _heal_test_only_read(edited_dir, path)
 			if base is not None and edited is None:
 				raise _HealWeakeningRefused("file_deleted", path)
+			# pytest config files can deselect or skip tests and cannot be checked with ast.
+			if path.rsplit("/", 1)[-1] in _HEAL_PYTEST_CONFIG_NAMES and edited is not None and edited != base:
+				raise _HealWeakeningRefused("pytest_config_changed", path)
 			if not (path.startswith("tests/") and path.endswith(".py")) or edited is None:
 				continue
 			count_tests = path.rsplit("/", 1)[-1].startswith("test_")

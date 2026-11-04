@@ -1833,6 +1833,18 @@ def test_heal_test_only_weakening_check_refuses() -> None:
 	record, code = _to_weaken({"tests/conftest.py": "import pytest\n"},
 		{"tests/conftest.py": "import pytest\ncollect_ignore_glob = ['*']\n"}, ["tests/conftest.py"])
 	assert (record["reason"], code) == ("skip_added", 30), record
+	# Any new pytest_* hook (outcome rewriting) or pytest_plugins assignment counts as a control.
+	for added in ("@pytest.hookimpl(hookwrapper=True)\ndef pytest_runtest_makereport(item, call):\n\tyield\n",
+		"pytest_plugins = ['evil']\n"):
+		record, code = _to_weaken({"tests/conftest.py": "import pytest\n"},
+			{"tests/conftest.py": "import pytest\n" + added}, ["tests/conftest.py"])
+		assert (record["reason"], code) == ("skip_added", 30), (added, record)
+	# A new or changed pytest config file under tests/ refuses; an unchanged one passes.
+	for name in ("tests/pytest.ini", "tests/.pytest.ini", "tests/tox.ini", "tests/setup.cfg"):
+		record, code = _to_weaken({}, {name: "[pytest]\naddopts = -k 'not flaky'\n"}, [name])
+		assert (record["reason"], code) == ("pytest_config_changed", 30), (name, record)
+	record, code = _to_weaken({"tests/pytest.ini": "[pytest]\n"}, {"tests/pytest.ini": "[pytest]\n"}, ["tests/pytest.ini"])
+	assert code == 0, record
 	# A lock path that is not test-only, or no lock at all, refuses.
 	assert _to_weaken({}, {}, ["scripts/fix.py"])[0]["reason"] == "lock_invalid"
 	assert _to_weaken({}, {}, [])[0]["reason"] == "lock_unavailable"
