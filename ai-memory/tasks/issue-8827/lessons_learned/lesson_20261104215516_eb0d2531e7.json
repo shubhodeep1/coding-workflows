@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-04T21:55:16Z",
+  "issue_number": 8827,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/clarify.yml:2347; cited_path=.github/workflows/clarify.yml; files_touched=.github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p4-rb-poller-reporters.md, changelog.d/stuck-states-p4-rb-poller-reporters.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrate_poll_process.py, tests/test_orchestrate_poll_promote_cycle.py, tests/test_orchestrate_poll_workflow_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8828,
+  "record_id": "lesson_20261104215516_eb0d2531e7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/clarify.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/stuck-states-p4-rb-poller-reporters.md",
+    "changelog.d/stuck-states-p4-rb-poller-reporters.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrate_poll_process.py",
+    "tests/test_orchestrate_poll_promote_cycle.py",
+    "tests/test_orchestrate_poll_workflow_contract.py"
+  ]
+}
