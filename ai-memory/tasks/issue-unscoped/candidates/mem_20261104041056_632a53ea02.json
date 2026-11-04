@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- external check-run log (https://github.com/shubhodeep1/coding-workflows/actions/runs/41765749615/job/126363602395):n/a | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The Copilot reviewer (`copilot-pull-request-reviewer`) rejected its own instruction payload (AGENTS.md and CLAUDE.md) with `custom_instructions_too_large` (422) before reviewing anything.\n  WHY: The failure is in the reviewer service, not in any hunk of this PR, and gives no review signal (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run the tests with `PYTHONDONTWRITEBYTECODE=1`.\"\n  expected_change_site: tests/test_orchestrate_integration_staleness_clock.py (cases collected by the integration-ahead-by test runner)\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The pre-push test-gate report is unverified (`container_rc_137`) and records 0 tests/checks run, so execution of the new regression cases remains unverified (source severity NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- external check-run log (https://github.com/shubhodeep1/coding-workflows/actions/runs/41765749615/job/126363602395):n/a | severity=low | confidence=1\n  PROBLEM: The Copilot reviewer (`copilot-pull-request-reviewer`, head SHA 1d4730d) rejected its own instruction payload (AGENTS.md and CLAUDE.md) with `custom_instructions_too_large` (422) before reviewing anything.\n  WHY: The failure is in the reviewer service, not in any hunk of this PR, and gives no review signal (source severity NIT).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cRun the tests with `PYTHONDONTWRITEBYTECODE=1`.\u201d\n  Expected change site: The new cases in `tests/test_orchestrate_integration_staleness_clock.py`, collected by the integration-ahead-by test runner.\n  Evidence of absence: The supplied pre-push test-gate report is unverified (`container_rc_137`) and records 0 tests/checks run, so execution of the new regression cases remains unverified.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "185c75bbc4e4a5db7c1c792c1428ff53e53fdb62f4add3e7158c6ccd60c4b849",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8802,
+    "run_id": "41765737734",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41765737734",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104041056_632a53ea02",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8802,
+    "run_id": "41765737734"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T04:10:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
