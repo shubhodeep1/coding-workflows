@@ -122,6 +122,56 @@
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID / TG_CHAT_ID, ALERT_MSG_LEVEL
 #                                       Telegram settings for the WARNING sent when a
 #                                       hold is released (best effort, via tg_helpers.sh)
+#                                       and when a release-blocker report is not delivered
+#   RELEASE_BLOCKER_HEAL_ENABLED        default true (kill switch for the
+#                                       release-blocker reporters below)
+#   RELEASE_BLOCKER_CYCLE_SKIP_STREAK   default 3; consecutive scheduled ticks
+#                                       (this one included) that skipped gate_busy
+#                                       or smoke_gate_cancelled before
+#                                       cycle_gate_unavailable is reported (1-10;
+#                                       any other value warns and uses 3)
+#   RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS default 86400
+#   RELEASE_BLOCKER_CYCLE_STALE_SECS    default 259200
+#                                       (a non-integer threshold warns and
+#                                       falls back to its default)
+#   RELEASE_BLOCKER_HEAL_PY             default scripts/workflow_failure_heal.py
+#
+# Release-blocker reporters (stuck-states P4 / release-blocker Phase 2b,
+# Refs #8291). The cycle-side twin of the Phase 2a reporters in
+# auto_release_stable.sh. Inside skip_cycle, before the PROMOTE_CYCLE_SKIPPED
+# line and without changing it, GITHUB_OUTPUT or the exit code, a tick sends
+# at most one `release_blocker` heal report (workflow_failure_heal.py
+# build-blocker-payload + request-report-identity + wrap-dispatch, then one
+# `POST repos/<self>/dispatches`, head_branch=main, no run_refs) when:
+#   cycle_gate_unavailable       this tick skipped gate_busy or
+#                                smoke_gate_cancelled and so did the previous
+#                                RELEASE_BLOCKER_CYCLE_SKIP_STREAK-1 completed
+#                                scheduled ticks (read from their `cycle` job
+#                                logs; only when every one of them concluded
+#                                success)
+#   cycle_held_untrusted_marker  this tick skipped cycle_in_flight and a held
+#                                tracking issue (first 5 checked) carries the
+#                                poller's trusted "Untrusted apply-analysis
+#                                marker" alert, posted at least
+#                                RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS ago, with no
+#                                trusted baseline marker after it
+#   cycle_stale                  neither of the above reported, main is ahead of
+#                                the stable tag with code changes, the skip is
+#                                not disabled / insufficient_docs /
+#                                cycle_in_flight / another_run_active (nor a
+#                                guard_unavailable before the baseline-marker
+#                                read; any other skip before guard 4 reads the
+#                                marker itself), and the
+#                                later of the last cycle's baseline marker and
+#                                the oldest unreleased commit is at least
+#                                RELEASE_BLOCKER_CYCLE_STALE_SECS old
+# Log lines:
+#   RELEASE_BLOCKER_REPORTED reason=<r> age=<n> branch=<b> sha=<tip|none> run_ref=none
+#   RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled|payload_invalid|dispatch_denied|guard_unavailable|streak_broken blocker=<r> ...
+#     (guard_unavailable lookup=work_dir|jobs|cycle_job|logs|run_created_at|untrusted_comments|untrusted_parse|baseline_marker)
+# payload_invalid and dispatch_denied also send a Telegram WARNING. A reporter
+# failure never fails or changes the tick. Failed cycle runs (fail_cycle) are
+# not reported here: the intake already receives them through workflow_run.
 #
 # Bounded hold (stuck-states P4, Refs #8291): guard 2 reads the labels of the
 # open tracking issues it already lists. An issue without a latch label holds
@@ -194,6 +244,31 @@ if ! [[ "${PROMOTE_CYCLE_HOLD_MAX_HOURS}" =~ ^[1-9][0-9]{0,5}$ ]]; then
 	echo "::warning::PROMOTE_CYCLE_HOLD_MAX_HOURS must be a positive integer; using 24."
 	PROMOTE_CYCLE_HOLD_MAX_HOURS=24
 fi
+# Release-blocker reporters (Phase 2b, Refs #8291). Like the hold settings, a
+# bad value warns and falls back: a reporter must never stop the cycle.
+RELEASE_BLOCKER_HEAL_ENABLED="${RELEASE_BLOCKER_HEAL_ENABLED:-true}"
+RELEASE_BLOCKER_CYCLE_SKIP_STREAK="${RELEASE_BLOCKER_CYCLE_SKIP_STREAK:-3}"
+RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS="${RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS:-86400}"
+RELEASE_BLOCKER_CYCLE_STALE_SECS="${RELEASE_BLOCKER_CYCLE_STALE_SECS:-259200}"
+RELEASE_BLOCKER_HEAL_PY="${RELEASE_BLOCKER_HEAL_PY:-${SCRIPT_DIR}/workflow_failure_heal.py}"
+# The cap of 10 bounds the job and log reads of the streak check.
+if ! [[ "${RELEASE_BLOCKER_CYCLE_SKIP_STREAK}" =~ ^([1-9]|10)$ ]]; then
+	release_blocker_streak_shown="$(printf '%s' "${RELEASE_BLOCKER_CYCLE_SKIP_STREAK}" | tr -cd 'A-Za-z0-9_.:+-')"
+	echo "::warning::RELEASE_BLOCKER_CYCLE_SKIP_STREAK must be an integer from 1 to 10 (got '${release_blocker_streak_shown:0:40}'); using 3."
+	RELEASE_BLOCKER_CYCLE_SKIP_STREAK=3
+fi
+for release_blocker_threshold_spec in RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS:86400 RELEASE_BLOCKER_CYCLE_STALE_SECS:259200; do
+	release_blocker_threshold_name="${release_blocker_threshold_spec%%:*}"
+	release_blocker_threshold_default="${release_blocker_threshold_spec#*:}"
+	if ! [[ "${!release_blocker_threshold_name}" =~ ^[0-9]{1,10}$ ]]; then
+		release_blocker_threshold_shown="$(printf '%s' "${!release_blocker_threshold_name}" | tr -cd 'A-Za-z0-9_.:+-')"
+		echo "::warning::${release_blocker_threshold_name} must be a non-negative integer (got '${release_blocker_threshold_shown:0:40}'); using ${release_blocker_threshold_default}."
+		printf -v "${release_blocker_threshold_name}" '%s' "${release_blocker_threshold_default}"
+	else
+		# Canonical decimal: jq --argjson rejects leading zeros (0086400).
+		printf -v "${release_blocker_threshold_name}" '%d' "$((10#${!release_blocker_threshold_name}))"
+	fi
+done
 # Human latch labels (all in .github/ai/label_contract.v1.json). A fixed list,
 # not a repo variable, so configuration cannot widen what gets released.
 PROMOTE_CYCLE_HOLD_LATCH_LABELS=(ai:harness-broken ai:validation-failed ai:security-pass-failed ai:blocked ai:needs-human)
@@ -232,6 +307,8 @@ skip_cycle()
 {
 	local reason="$1"
 	local detail="${2:-}"
+	# Release-blocker reporters (Phase 2b): before the skip line, never fatal.
+	release_blocker_on_skip "${reason}" "${detail}" || true
 	echo "PROMOTE_CYCLE_SKIPPED reason=${reason}${detail:+ ${detail}}"
 	emit_output outcome "skipped:${reason}"
 	exit 0
@@ -327,7 +404,11 @@ is_code_path()
 # callers' skip_cycle exits really exit. A compare payload truncated by
 # GitHub (300 files / 250 commits) is treated as a code change: better a
 # spurious cycle than a missed one.
+# CODE_CHANGES_OLDEST_COMMIT_AT gets the committer date of the first commit
+# in the compare payload (the oldest one GitHub returned) on an `ahead`
+# status, else "" (read by the cycle_stale reporter).
 CODE_CHANGES_OUT=""
+CODE_CHANGES_OLDEST_COMMIT_AT=""
 code_changes_between()
 {
 	local base="$1"
@@ -335,6 +416,7 @@ code_changes_between()
 	local payload
 	CODE_CHANGES_OUT=""
 	CODE_CHANGES_STATUS=""
+	CODE_CHANGES_OLDEST_COMMIT_AT=""
 	if ! payload="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/compare/${base}...${head}")"; then
 		return 2
 	fi
@@ -344,7 +426,9 @@ code_changes_between()
 	file_count="$(printf '%s' "${payload}" | jq -r '(.files // []) | length')"
 	CODE_CHANGES_STATUS="${status}"
 	case "${status}" in
-		ahead) ;;
+		ahead)
+			CODE_CHANGES_OLDEST_COMMIT_AT="$(printf '%s' "${payload}" | jq -r '(.commits // [])[0]? | (.commit.committer.date // .commit.author.date // empty) | tostring' 2>/dev/null || true)"
+			;;
 		identical|behind)
 			return 0
 			;;
@@ -398,14 +482,21 @@ resolve_tag_commit()
 	fi
 }
 
-# last_cycle_baseline_sha: the baseline SHA recorded by the most recent
-# cycle (any outcome), or empty. Exit 2 when the search failed.
+# last_cycle_baseline_sha [with_time]: the baseline SHA recorded by the most
+# recent cycle (any outcome), or empty. Exit 2 when the search failed. With
+# `with_time` it prints "<sha> <created_at>" (the marker comment's creation
+# time, possibly empty) for the cycle_stale reporter; without it the output
+# is the bare SHA.
 # The search matches any comment body, so each candidate issue's comments
 # are re-read and only a marker posted by github-actions[bot] or a trusted
 # author_association counts; a stray comment cannot fake a completed cycle.
 last_cycle_baseline_sha()
 {
 	local query numbers issue_number sha
+	local with_time="false"
+	if [ "${1:-}" = "with_time" ]; then
+		with_time="true"
+	fi
 	query="repo:${GITHUB_REPOSITORY} is:issue label:ai:orchestrator-tracking in:comments \"${CYCLE_BASELINE_MARKER}:\""
 	if ! numbers="$(gh_retry gh api -X GET search/issues -f "q=${query}" -f sort=created -f order=desc -f per_page=10 2>/dev/null | jq -r '.items[]?.number | select(. != null)')"; then
 		return 2
@@ -414,10 +505,12 @@ last_cycle_baseline_sha()
 	while IFS= read -r issue_number; do
 		[[ "${issue_number}" =~ ^[0-9]+$ ]] || continue
 		if ! sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100" \
-			| jq -r --arg m "${CYCLE_BASELINE_MARKER}" --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
+			| jq -r --arg m "${CYCLE_BASELINE_MARKER}" --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" --arg with_time "${with_time}" '
 				($trusted | split(",") | map(ascii_upcase | gsub("^\\s+|\\s+$"; ""))) as $ok
 				| [.[]? | select((.user.login // "") == "github-actions[bot]" or (((.author_association // "") | ascii_upcase) as $a | $ok | index($a)) != null)
-					| .body // "" | capture("(?m)^" + $m + ": (?<sha>[0-9a-f]{40})")? | .sha] | last // empty')"; then
+					| ((.created_at // "") | tostring) as $at
+					| .body // "" | capture("(?m)^" + $m + ": (?<sha>[0-9a-f]{40})")? | {sha: .sha, at: $at}] | last // empty
+				| if $with_time == "true" then "\(.sha) \(.at | gsub("[^0-9A-Za-z:.+-]"; ""))" else .sha end')"; then
 			return 2
 		fi
 		if [ -n "${sha}" ]; then
@@ -983,6 +1076,488 @@ promote_cycle_hold_guard()
 	return 0
 }
 
+# --- Release-blocker reporters (stuck-states P4 / Phase 2b, Refs #8291) -------
+# The Phase 2a reporter shape from auto_release_stable.sh, for the cycle side.
+# Every function below is called as `<fn> || true` (the entry point
+# release_blocker_on_skip runs from skip_cycle that way), so errexit is off
+# inside them: each step is checked explicitly and none can fail or change the
+# tick. No EXIT trap is set here: pin_release_freeze owns the EXIT trap, so
+# the work dir is removed by release_blocker_cleanup instead.
+release_blocker_fired="false"
+release_blocker_on_skip_done="false"
+# Set by guard 3 once main is ahead of the stable tag with code changes.
+release_blocker_main_ahead="false"
+release_blocker_oldest_commit_at=""
+release_blocker_commits_truncated="false"
+# Creation time of the last cycle's trusted baseline marker (guard 4).
+release_blocker_baseline_at=""
+# Set once a marker search succeeded (guard 4, or cycle_stale's own read on a
+# skip before guard 4); cycle_stale needs it so a
+# guard_unavailable skip before that read never falls back to the
+# oldest-commit clock alone.
+release_blocker_baseline_read="false"
+RELEASE_BLOCKER_WORK_DIR=""
+
+# Print an API-derived value reduced to safe characters, at most 200 bytes.
+release_blocker_safe()
+{
+	local release_blocker_safe_value
+	release_blocker_safe_value="$(printf '%s' "${1:-}" | tr -cd 'A-Za-z0-9_.:/@+=,-')"
+	printf '%s' "${release_blocker_safe_value:0:200}"
+}
+
+# Print the epoch seconds of an ISO-8601 UTC timestamp; nothing when it is
+# missing or unparseable.
+release_blocker_epoch_from_iso()
+{
+	local release_blocker_iso="${1:-}"
+	[ -n "${release_blocker_iso}" ] || return 0
+	jq -rn --arg ts "${release_blocker_iso}" '$ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601? | floor' 2>/dev/null || true
+}
+
+# Print floor(now - <iso>) clamped at 0; nothing for a missing or unparseable
+# timestamp (callers treat empty as "age unknown").
+release_blocker_age_from_iso()
+{
+	local release_blocker_iso="${1:-}"
+	[ -n "${release_blocker_iso}" ] || return 0
+	jq -rn --arg ts "${release_blocker_iso}" '($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) as $t | [((now - $t) | floor), 0] | max' 2>/dev/null || true
+}
+
+# Print the Actions URL of a run in this repository, or `none` when the id is
+# not numeric (URLs are rebuilt from ids, never copied from html_url).
+release_blocker_run_url()
+{
+	local release_blocker_url_id="${1:-}"
+	if [[ "${release_blocker_url_id}" =~ ^[0-9]{1,20}$ ]]; then
+		printf '%s/%s/actions/runs/%s' "$(release_blocker_safe "${GITHUB_SERVER_URL:-https://github.com}")" "${GITHUB_REPOSITORY}" "${release_blocker_url_id}"
+	else
+		printf 'none'
+	fi
+}
+
+release_blocker_ensure_work_dir()
+{
+	if [ -z "${RELEASE_BLOCKER_WORK_DIR}" ]; then
+		RELEASE_BLOCKER_WORK_DIR="$(mktemp -d 2>/dev/null)" || RELEASE_BLOCKER_WORK_DIR=""
+	fi
+	[ -n "${RELEASE_BLOCKER_WORK_DIR}" ] && [ -d "${RELEASE_BLOCKER_WORK_DIR}" ]
+}
+
+# Removes the evidence, log, payload, OIDC token and envelope files.
+release_blocker_cleanup()
+{
+	if [ -n "${RELEASE_BLOCKER_WORK_DIR}" ]; then
+		rm -rf "${RELEASE_BLOCKER_WORK_DIR}"
+	fi
+	RELEASE_BLOCKER_WORK_DIR=""
+	return 0
+}
+
+# release_blocker_evidence_header <reason> <age_secs> <limit_text> <tip>
+# The fixed first line keeps the intake fingerprint stable across ticks.
+release_blocker_evidence_header()
+{
+	local release_blocker_header_reason="$1" release_blocker_header_age="$2" release_blocker_header_limit="$3" release_blocker_header_tip="${4:-}"
+	[[ "${release_blocker_header_tip}" =~ ^[0-9a-f]{40}$ ]] || release_blocker_header_tip="none"
+	printf 'reason=%s\n' "${release_blocker_header_reason}"
+	printf 'branch=%s tip=%s tag=%s tag_commit=%s\n' "$(release_blocker_safe "${PROMOTE_CYCLE_DEFAULT_BRANCH}")" "${release_blocker_header_tip}" "$(release_blocker_safe "${PROMOTE_CYCLE_STABLE_TAG}")" "$(release_blocker_safe "${tag_commit:-none}")"
+	printf 'age_secs=%s %s\n' "${release_blocker_header_age}" "${release_blocker_header_limit}"
+}
+
+release_blocker_alert()
+{
+	local release_blocker_alert_skip="$1" release_blocker_alert_reason="$2"
+	local release_blocker_alert_pid release_blocker_alert_waited=0
+	if ! type tg_send_msg >/dev/null 2>&1; then
+		echo "::warning::promote_main_cycle: tg_helpers.sh not available; release-blocker alert not sent" >&2
+		return 0
+	fi
+	# tg_send_msg's curl has no time limit, so the send runs in the background
+	# and is abandoned after 30 seconds (150 polls of 0.2 s).
+	( tg_send_msg "Release blocker report could not be dispatched (${release_blocker_alert_skip}): ${release_blocker_alert_reason} on $(release_blocker_safe "${PROMOTE_CYCLE_DEFAULT_BRANCH}") in ${GITHUB_REPOSITORY}. Refs #8291" WARNING >/dev/null 2>&1 || true ) &
+	release_blocker_alert_pid=$!
+	while kill -0 "${release_blocker_alert_pid}" 2>/dev/null && [ "${release_blocker_alert_waited}" -lt 150 ]; do
+		sleep 0.2
+		release_blocker_alert_waited=$((release_blocker_alert_waited + 1))
+	done
+	if kill -0 "${release_blocker_alert_pid}" 2>/dev/null; then
+		pkill -P "${release_blocker_alert_pid}" 2>/dev/null || true
+		kill "${release_blocker_alert_pid}" 2>/dev/null || true
+		echo "::warning::Release blocker Telegram alert timed out after 30s; not sent."
+	fi
+	wait "${release_blocker_alert_pid}" 2>/dev/null || true
+	return 0
+}
+
+# report_release_blocker <reason> <age_secs> <evidence_file> <head_sha>
+# Build, sign, envelope and send one release_blocker heal report. No run_refs:
+# the cycle reasons name no failed run (the intake drops claimed runs that did
+# not fail). Returns 0.
+report_release_blocker()
+{
+	local rb_reason="$1" rb_age="$2" rb_evidence="$3" rb_head_sha="${4:-}"
+	local rb_branch="" rb_payload="" rb_identity="" rb_envelope="" rb_error="" rb_identity_status="" rb_detail="" rb_sha_shown="none"
+	rb_branch="$(release_blocker_safe "${PROMOTE_CYCLE_DEFAULT_BRANCH}")"
+	release_blocker_fired="true"
+	if ! is_truthy "${RELEASE_BLOCKER_HEAL_ENABLED}"; then
+		echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=${rb_reason}"
+		return 0
+	fi
+	if ! release_blocker_ensure_work_dir; then
+		echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=${rb_reason} stage=build detail=work_dir_unavailable"
+		release_blocker_alert payload_invalid "${rb_reason}"
+		return 0
+	fi
+	rb_payload="${RELEASE_BLOCKER_WORK_DIR}/payload.json"
+	rb_identity="${RELEASE_BLOCKER_WORK_DIR}/report_identity.jwt"
+	rb_envelope="${RELEASE_BLOCKER_WORK_DIR}/dispatch.json"
+	rb_error="${RELEASE_BLOCKER_WORK_DIR}/error.txt"
+	local -a rb_build_args=(
+		build-blocker-payload
+		--repo "${GITHUB_REPOSITORY}"
+		--workflow-name "${GITHUB_WORKFLOW:-Promote main to stable}"
+		--reason "${rb_reason}"
+		--evidence-file "${rb_evidence}"
+		--age-secs "${rb_age}"
+		--head-branch "${PROMOTE_CYCLE_DEFAULT_BRANCH}"
+	)
+	if [[ "${rb_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		rb_build_args+=(--head-sha "${rb_head_sha}")
+		rb_sha_shown="${rb_head_sha}"
+	fi
+	if [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]{1,20}$ ]]; then
+		rb_build_args+=(
+			--reporter-run-id "${GITHUB_RUN_ID}"
+			--reporter-run-url "$(release_blocker_run_url "${GITHUB_RUN_ID}")"
+		)
+		if [[ "${GITHUB_RUN_ATTEMPT:-1}" =~ ^[0-9]{1,10}$ ]]; then
+			rb_build_args+=(--reporter-run-attempt "${GITHUB_RUN_ATTEMPT:-1}")
+		fi
+	fi
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 "${RELEASE_BLOCKER_HEAL_PY}" "${rb_build_args[@]}" > "${rb_payload}" 2> "${rb_error}"; then
+		rb_detail="$(release_blocker_safe "$(head -c 200 "${rb_error}" 2>/dev/null | tr '\n' ' ' | tr ' ' '_')")"
+		echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=${rb_reason} stage=build detail=${rb_detail:-none}"
+		release_blocker_alert payload_invalid "${rb_reason}"
+		return 0
+	fi
+	local -a rb_wrap_args=(wrap-dispatch --payload-json "${rb_payload}")
+	if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+		rb_identity_status="$(PYTHONDONTWRITEBYTECODE=1 python3 "${RELEASE_BLOCKER_HEAL_PY}" request-report-identity --out "${rb_identity}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
+		rb_identity_status="$(printf '%s' "${rb_identity_status}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
+		echo "Release blocker report identity: ${rb_identity_status:-identity=absent reason=unknown} blocker=${rb_reason}"
+		if [ -s "${rb_identity}" ]; then
+			rb_wrap_args+=(--report-identity-file "${rb_identity}")
+		fi
+	else
+		echo "Release blocker report identity: identity=absent reason=oidc_unavailable blocker=${rb_reason}"
+	fi
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 "${RELEASE_BLOCKER_HEAL_PY}" "${rb_wrap_args[@]}" > "${rb_envelope}" 2> "${rb_error}"; then
+		rm -f "${rb_identity}"
+		echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=${rb_reason} stage=wrap"
+		release_blocker_alert payload_invalid "${rb_reason}"
+		return 0
+	fi
+	rm -f "${rb_identity}"
+	if ! gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/dispatches" --input "${rb_envelope}" >/dev/null 2> "${rb_error}"; then
+		rm -f "${rb_envelope}"
+		rb_detail="$(release_blocker_safe "$(head -c 200 "${rb_error}" 2>/dev/null | tr '\n' ' ' | tr ' ' '_')")"
+		echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=dispatch_denied blocker=${rb_reason} detail=${rb_detail:-none}"
+		echo "::warning::Release blocker report ${rb_reason} on ${rb_branch} could not be dispatched to ${GITHUB_REPOSITORY}."
+		release_blocker_alert dispatch_denied "${rb_reason}"
+		return 0
+	fi
+	rm -f "${rb_envelope}"
+	echo "RELEASE_BLOCKER_REPORTED reason=${rb_reason} age=${rb_age} branch=${rb_branch} sha=${rb_sha_shown} run_ref=none"
+	return 0
+}
+
+# release_blocker_check_skip_streak <current_reason> <current_detail>
+# cycle_gate_unavailable: this tick and the previous
+# RELEASE_BLOCKER_CYCLE_SKIP_STREAK-1 completed scheduled ticks all skipped
+# gate_busy or smoke_gate_cancelled.
+# API calls (§14): the runs come from guard 1's self-run listing. The skip
+# reason of an earlier tick is in no listing this script reads (run objects
+# carry only status and conclusion, a gate_busy tick leaves no gate run, and
+# job summaries are not exposed by the REST API), so per earlier tick: 1 GET
+# actions/runs/<id>/jobs and 1 GET actions/jobs/<id>/logs, at most 2x9 calls
+# and none unless every earlier tick concluded success.
+release_blocker_check_skip_streak()
+{
+	local rb_current="$1" rb_current_detail="${2:-}"
+	local rb_needed=$((RELEASE_BLOCKER_CYCLE_SKIP_STREAK - 1))
+	local rb_runs="" rb_count=0 rb_id="" rb_created="" rb_conclusion="" rb_jobs="" rb_job_id="" rb_log_file="" rb_matched=""
+	local rb_oldest="" rb_lines="" rb_age="" rb_evidence=""
+	if [ "${rb_needed}" -gt 0 ]; then
+		rb_runs="$(printf '%s' "${self_runs_json:-}" | jq -r --arg me "${GITHUB_RUN_ID}" --argjson n "${rb_needed}" '
+			[.workflow_runs[]? | select(.event == "schedule" and ((.id // "") | tostring) != $me and .status == "completed")]
+			| sort_by([(.run_number // 0), ((.created_at // "") | tostring)]) | reverse | .[:$n][]
+			| [((.id // "") | tostring), ((.created_at // "") | tostring), ((.conclusion // "") | tostring)] | @tsv' 2>/dev/null)" || rb_runs=""
+		rb_count="$(printf '%s' "${rb_runs}" | grep -c . || true)"
+		[[ "${rb_count}" =~ ^[0-9]+$ ]] || rb_count=0
+		if [ "${rb_count}" -lt "${rb_needed}" ]; then
+			return 0
+		fi
+		# A skip concludes success; any other conclusion breaks the streak
+		# before a single extra API call.
+		while IFS=$'\t' read -r rb_id rb_created rb_conclusion; do
+			if [ "${rb_conclusion}" != "success" ] || ! [[ "${rb_id}" =~ ^[0-9]{1,20}$ ]]; then
+				return 0
+			fi
+		done <<< "${rb_runs}"
+		if ! release_blocker_ensure_work_dir; then
+			echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=cycle_gate_unavailable lookup=work_dir"
+			return 0
+		fi
+		rb_log_file="${RELEASE_BLOCKER_WORK_DIR}/cycle_job.log"
+		while IFS=$'\t' read -r rb_id rb_created rb_conclusion; do
+			if ! rb_jobs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${rb_id}/jobs?per_page=100" 2>/dev/null)"; then
+				echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=cycle_gate_unavailable lookup=jobs run=${rb_id}"
+				return 0
+			fi
+			rb_job_id="$(printf '%s' "${rb_jobs}" | jq -r '[.jobs[]? | select(.name == "cycle")] | first | .id // empty' 2>/dev/null || true)"
+			if ! [[ "${rb_job_id}" =~ ^[0-9]{1,20}$ ]]; then
+				# No cycle job in that run: the streak is not proven.
+				echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=cycle_gate_unavailable lookup=cycle_job run=${rb_id}"
+				return 0
+			fi
+			# Job logs carry ANSI colour codes; gh rejects them without
+			# --allow-escape-sequences (as in workflow_failure_heal_intake.sh).
+			if ! gh_retry gh api --allow-escape-sequences "repos/${GITHUB_REPOSITORY}/actions/jobs/${rb_job_id}/logs" > "${rb_log_file}" 2>/dev/null; then
+				echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=cycle_gate_unavailable lookup=logs run=${rb_id}"
+				return 0
+			fi
+			# Log lines carry a timestamp prefix; match the fixed token only.
+			rb_matched="$(tr -d '\r' < "${rb_log_file}" | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | grep -oE '^[^ ]+ PROMOTE_CYCLE_SKIPPED reason=(gate_busy|smoke_gate_cancelled)( |$)' | tail -n 1 | sed -E 's/.* reason=([a-z_]+).*/\1/' || true)"
+			if [ -z "${rb_matched}" ]; then
+				echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=streak_broken blocker=cycle_gate_unavailable run=${rb_id}"
+				return 0
+			fi
+			rb_lines+="run=$(release_blocker_run_url "${rb_id}") reason=${rb_matched}"$'\n'
+			rb_oldest="${rb_created}"
+		done <<< "${rb_runs}"
+		rb_age="$(release_blocker_age_from_iso "${rb_oldest}")"
+		if [ -z "${rb_age}" ]; then
+			echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=cycle_gate_unavailable lookup=run_created_at"
+			return 0
+		fi
+	else
+		rb_age=0
+	fi
+	release_blocker_ensure_work_dir || return 0
+	rb_evidence="${RELEASE_BLOCKER_WORK_DIR}/evidence.txt"
+	{
+		release_blocker_evidence_header cycle_gate_unavailable "${rb_age}" "streak=${RELEASE_BLOCKER_CYCLE_SKIP_STREAK}" "${main_tip:-}"
+		printf 'run=%s reason=%s detail=%s\n' "$(release_blocker_run_url "${GITHUB_RUN_ID}")" "${rb_current}" "$(release_blocker_safe "$(printf '%s' "${rb_current_detail}" | tr ' ' '_')")"
+		printf '%s' "${rb_lines}"
+	} > "${rb_evidence}"
+	report_release_blocker cycle_gate_unavailable "${rb_age}" "${rb_evidence}" "${main_tip:-}"
+	return 0
+}
+
+# release_blocker_untrusted_comments <owner> <name> <issue_number>...
+# Batching contract (§14):
+#   input   1-5 issue numbers (the first ones of the cycle_in_flight skip),
+#           each matching ^[1-9][0-9]*$; owner and name matching
+#           ^[A-Za-z0-9_.-]+$.
+#   output  the raw GraphQL response on stdout; one alias u<n> per issue with
+#           its number and its last 30 comments (createdAt, body,
+#           authorAssociation, author.login).
+#   calls   exactly 1 (gh api graphql through gh_retry).
+#   failure non-zero exit; the caller logs guard_unavailable and reports
+#           nothing (fail open, no per-issue fallback loop).
+# Audited calls: guard 2's REST issues listing carries labels only; the
+# baseline-marker comments read runs after guard 2 (and REST returns the
+# oldest comment page, where the poller's alert may be missing); the hold
+# guard's GraphQL batch reads LabeledEvent history, not comments.
+release_blocker_untrusted_comments()
+{
+	local owner="$1"
+	local name="$2"
+	shift 2
+	local aliases="" issue_number count=0 query response
+	if ! [[ "${owner}" =~ ^[A-Za-z0-9_.-]+$ ]] || ! [[ "${name}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+		return 1
+	fi
+	for issue_number in "$@"; do
+		[[ "${issue_number}" =~ ^[1-9][0-9]*$ ]] || return 1
+		count=$((count + 1))
+		aliases+=" u${issue_number}:issue(number:${issue_number}){number comments(last:30){nodes{createdAt body authorAssociation author{login}}}}"
+	done
+	if [ "${count}" -lt 1 ] || [ "${count}" -gt 5 ]; then
+		return 1
+	fi
+	query="query(\$owner:String!,\$name:String!){repository(owner:\$owner,name:\$name){${aliases} }}"
+	if ! response="$(gh_retry gh api graphql -f query="${query}" -f owner="${owner}" -f name="${name}" 2>/dev/null)"; then
+		return 1
+	fi
+	if ! printf '%s' "${response}" | jq -e 'type == "object" and ((.data.repository? // null) | type) == "object"' >/dev/null 2>&1; then
+		return 1
+	fi
+	printf '%s\n' "${response}"
+}
+
+# release_blocker_check_untrusted_hold <skip_detail>
+# cycle_held_untrusted_marker: a held tracking issue whose newest trusted
+# "Untrusted apply-analysis marker" alert (posted by the poller,
+# orchestrate_poll_process.sh) is at least RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS
+# old and has no trusted baseline marker after it. Trusted = github-actions
+# or COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS, as in
+# last_cycle_baseline_sha. The oldest such alert is reported.
+# API calls: 1 GraphQL read; +1 GET git/ref/heads/<default> only when a
+# report is sent (main_tip is not known yet at guard 2).
+release_blocker_check_untrusted_hold()
+{
+	local rb_detail="${1:-}" rb_csv="" rb_response="" rb_nums_json="" rb_found="" rb_issue="" rb_alerted_at="" rb_age="" rb_tip="" rb_evidence=""
+	local -a rb_issues=()
+	rb_csv="$(printf '%s' "${rb_detail}" | sed -nE 's/^(.* )?tracking_issues=([0-9,]+)( .*)?$/\2/p' | head -n 1)"
+	if ! [[ "${rb_csv}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]]; then
+		return 0
+	fi
+	IFS=',' read -r -a rb_issues <<< "${rb_csv}"
+	rb_issues=("${rb_issues[@]:0:5}")
+	if ! rb_response="$(release_blocker_untrusted_comments "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY#*/}" "${rb_issues[@]}")"; then
+		echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=cycle_held_untrusted_marker lookup=untrusted_comments"
+		return 0
+	fi
+	rb_nums_json="$(printf '%s\n' "${rb_issues[@]}" | jq -sc 'map(tonumber)' 2>/dev/null || echo '[]')"
+	if ! rb_found="$(printf '%s' "${rb_response}" | jq -r \
+		--argjson nums "${rb_nums_json}" \
+		--argjson cap "${RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS}" \
+		--arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
+		($trusted | split(",") | map(ascii_upcase | gsub("^\\s+|\\s+$"; ""))) as $ok
+		| ((.data.repository // {}) | if type == "object" then . else {} end) as $repo
+		| [ $nums[] as $n
+			| ($repo["u\($n)"] // null) as $node
+			| select(($node | type) == "object" and $node.number == $n)
+			| [ ((($node.comments // {}) | if type == "object" then . else {} end).nodes // [])[]? | select(type == "object")
+				| select((((.author // {}) | if type == "object" then (.login // "") else "" end) as $l | $l == "github-actions" or $l == "github-actions[bot]")
+					or (((.authorAssociation // "") | tostring | ascii_upcase) as $a | ($ok | index($a)) != null))
+				| {at: ((.createdAt // "") | tostring), body: ((.body // "") | tostring)}
+				| . + {t: (.at | (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null))}
+				| select(.t != null) ] as $tc
+			| ([$tc[] | select(.body | test("^## .{0,8}Untrusted apply-analysis marker"))] | max_by(.t)) as $alert
+			| select($alert != null)
+			| select([$tc[] | select(.t > $alert.t and (.body | test("(?m)^apply-analysis-cycle-baseline-sha: [0-9a-f]{40}")))] | length == 0)
+			| ((now - $alert.t) | floor) as $age
+			| select($age >= $cap)
+			| {n: $n, at: $alert.at, age: $age} ]
+		| max_by(.age) // empty
+		| "\(.n) \(.at) \(.age)"' 2>/dev/null)"; then
+		echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=cycle_held_untrusted_marker lookup=untrusted_parse"
+		return 0
+	fi
+	[ -n "${rb_found}" ] || return 0
+	read -r rb_issue rb_alerted_at rb_age <<< "${rb_found}"
+	if ! [[ "${rb_issue}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${rb_age}" =~ ^[0-9]+$ ]]; then
+		return 0
+	fi
+	rb_tip="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${PROMOTE_CYCLE_DEFAULT_BRANCH}" 2>/dev/null | jq -r '.object.sha // empty' 2>/dev/null || true)"
+	[[ "${rb_tip}" =~ ^[0-9a-f]{40}$ ]] || rb_tip=""
+	release_blocker_ensure_work_dir || return 0
+	rb_evidence="${RELEASE_BLOCKER_WORK_DIR}/evidence.txt"
+	{
+		release_blocker_evidence_header cycle_held_untrusted_marker "${rb_age}" "threshold_secs=${RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS}" "${rb_tip}"
+		printf 'tracking_issue=%s/%s/issues/%s alerted_at=%s\n' "$(release_blocker_safe "${GITHUB_SERVER_URL:-https://github.com}")" "${GITHUB_REPOSITORY}" "${rb_issue}" "$(release_blocker_safe "${rb_alerted_at}")"
+		printf 'checked_issues=%s\n' "$(printf '%s\n' "${rb_issues[@]}" | paste -sd, -)"
+	} > "${rb_evidence}"
+	report_release_blocker cycle_held_untrusted_marker "${rb_age}" "${rb_evidence}" "${rb_tip}"
+	return 0
+}
+
+# release_blocker_check_cycle_stale <skip_reason>
+# cycle_stale: main is ahead of the stable tag with code changes and the
+# later of the last cycle's baseline marker and the oldest unreleased commit
+# is at least RELEASE_BLOCKER_CYCLE_STALE_SECS old. After guard 4 it reads
+# no extra data; a skip before guard 4 reads the baseline marker itself
+# (1 search + up to 10 comment reads).
+release_blocker_check_cycle_stale()
+{
+	local rb_skip_reason="${1:-}" rb_marker_t="" rb_commit_t="" rb_clock="" rb_age="" rb_now="" rb_evidence=""
+	[ "${release_blocker_main_ahead}" = "true" ] || return 0
+	case "${rb_skip_reason}" in
+		disabled|insufficient_docs|cycle_in_flight|another_run_active) return 0 ;;
+	esac
+	# A skip before guard 4 (base_not_ancestor on heads/stable) has not read the
+	# last cycle's baseline marker yet: read it here so the clock is still the
+	# later of the two times. A transient guard_unavailable skip reports nothing.
+	# API calls: 1 search + up to 10 comment reads, only on that path.
+	if [ "${release_blocker_baseline_read}" != "true" ]; then
+		[ "${rb_skip_reason}" != "guard_unavailable" ] || return 0
+		local rb_marker_line=""
+		if ! rb_marker_line="$(last_cycle_baseline_sha with_time)"; then
+			echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=cycle_stale lookup=baseline_marker"
+			return 0
+		fi
+		release_blocker_baseline_read=true
+		if [ "${rb_marker_line}" != "${rb_marker_line%% *}" ]; then
+			release_blocker_baseline_at="${rb_marker_line#* }"
+		fi
+	fi
+	rb_marker_t="$(release_blocker_epoch_from_iso "${release_blocker_baseline_at}")"
+	rb_commit_t="$(release_blocker_epoch_from_iso "${release_blocker_oldest_commit_at}")"
+	[[ "${rb_marker_t}" =~ ^[0-9]+$ ]] || rb_marker_t=""
+	[[ "${rb_commit_t}" =~ ^[0-9]+$ ]] || rb_commit_t=""
+	rb_clock="${rb_marker_t}"
+	if [ -n "${rb_commit_t}" ] && { [ -z "${rb_clock}" ] || [ "${rb_commit_t}" -gt "${rb_clock}" ]; }; then
+		rb_clock="${rb_commit_t}"
+	fi
+	# Neither time is known: the age cannot be proven, so nothing is reported.
+	[ -n "${rb_clock}" ] || return 0
+	rb_now="$(date -u +%s)"
+	rb_age=$((rb_now - rb_clock))
+	[ "${rb_age}" -ge 0 ] || rb_age=0
+	[ "${rb_age}" -ge "${RELEASE_BLOCKER_CYCLE_STALE_SECS}" ] || return 0
+	release_blocker_ensure_work_dir || return 0
+	rb_evidence="${RELEASE_BLOCKER_WORK_DIR}/evidence.txt"
+	{
+		release_blocker_evidence_header cycle_stale "${rb_age}" "threshold_secs=${RELEASE_BLOCKER_CYCLE_STALE_SECS}" "${main_tip:-}"
+		printf 'baseline_marker_at=%s oldest_commit_at=%s commits_truncated=%s\n' "$(release_blocker_safe "${release_blocker_baseline_at:-none}")" "$(release_blocker_safe "${release_blocker_oldest_commit_at:-none}")" "${release_blocker_commits_truncated}"
+		printf 'skip_reason=%s\n' "$(release_blocker_safe "${rb_skip_reason}")"
+	} > "${rb_evidence}"
+	report_release_blocker cycle_stale "${rb_age}" "${rb_evidence}" "${main_tip:-}"
+	return 0
+}
+
+# release_blocker_on_skip <skip_reason> <skip_detail>: called first thing in
+# skip_cycle. Runs once per tick and sends at most one report: the streak or
+# the untrusted-hold check (by reason), then the stale check when neither
+# reported. Always returns 0.
+release_blocker_on_skip()
+{
+	local rb_skip_reason="${1:-}" rb_skip_detail="${2:-}" rb_relevant="false"
+	[ "${release_blocker_on_skip_done}" = "true" ] && return 0
+	release_blocker_on_skip_done="true"
+	case "${rb_skip_reason}" in
+		gate_busy|smoke_gate_cancelled|cycle_in_flight) rb_relevant="true" ;;
+	esac
+	if [ "${release_blocker_main_ahead}" = "true" ]; then
+		case "${rb_skip_reason}" in
+			disabled|insufficient_docs|cycle_in_flight|another_run_active) ;;
+			*) rb_relevant="true" ;;
+		esac
+	fi
+	[ "${rb_relevant}" = "true" ] || return 0
+	# Kill switch: no detection read, no report.
+	if ! is_truthy "${RELEASE_BLOCKER_HEAL_ENABLED}"; then
+		echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=cycle_reporters skip_reason=$(release_blocker_safe "${rb_skip_reason}")"
+		return 0
+	fi
+	case "${rb_skip_reason}" in
+		gate_busy|smoke_gate_cancelled)
+			release_blocker_check_skip_streak "${rb_skip_reason}" "${rb_skip_detail}" || true
+			;;
+		cycle_in_flight)
+			release_blocker_check_untrusted_hold "${rb_skip_detail}" || true
+			;;
+	esac
+	if [ "${release_blocker_fired}" != "true" ]; then
+		release_blocker_check_cycle_stale "${rb_skip_reason}" || true
+	fi
+	release_blocker_cleanup
+	return 0
+}
+
 if ! is_truthy "${PROMOTE_CYCLE_ENABLED}"; then
 	skip_cycle disabled
 fi
@@ -1021,6 +1596,12 @@ case "${tag_lookup_rc}" in
 		# Before the code-change guard: right after a promotion it skips.
 		tick_operator_steps "${tag_commit}" || true
 		require_code_changes "${tag_commit}" "${main_tip}" no_code_changes
+		# cycle_stale reporter: main carries unreleased code from here on.
+		release_blocker_main_ahead=true
+		release_blocker_oldest_commit_at="${CODE_CHANGES_OLDEST_COMMIT_AT:-}"
+		case "${CODE_CHANGES_OUT}" in
+			"(compare payload truncated"*) release_blocker_commits_truncated=true ;;
+		esac
 		require_stable_branch_ancestor "${main_tip}" "${tag_commit}"
 		echo "Code changes since ${PROMOTE_CYCLE_STABLE_TAG} (${tag_commit:0:7}):"
 		printf '%s\n' "${CODE_CHANGES_OUT}" | sed 's/^/  /'
@@ -1037,11 +1618,17 @@ esac
 # 4. Not the same tip the last cycle already covered (Q14: retry only after
 #    main moves with code), regardless of that cycle's outcome.
 set +e
-last_baseline="$(last_cycle_baseline_sha)"
+last_baseline_with_time="$(last_cycle_baseline_sha with_time)"
 last_baseline_rc=$?
 set -e
 if [ "${last_baseline_rc}" -ne 0 ]; then
 	skip_cycle guard_unavailable "search=${CYCLE_BASELINE_MARKER}"
+fi
+release_blocker_baseline_read=true
+# "<sha> <created_at>": the SHA keeps today's checks; the time feeds cycle_stale.
+last_baseline="${last_baseline_with_time%% *}"
+if [ "${last_baseline_with_time}" != "${last_baseline}" ]; then
+	release_blocker_baseline_at="${last_baseline_with_time#* }"
 fi
 if [[ "${last_baseline}" =~ ^[0-9a-f]{40}$ ]] && [ "${last_baseline}" != "${tag_commit:-}" ]; then
 	require_code_changes "${last_baseline}" "${main_tip}" no_code_changes_since_last_cycle

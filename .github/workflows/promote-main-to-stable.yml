@@ -40,6 +40,13 @@ name: Promote main to stable
 # is ready to merge it dispatches THIS workflow with `target_sha` (the
 # proving merge) and holds the verifying merge until the release finishes.
 #
+# Release-blocker reporters (stuck-states P4 / release-blocker Phase 2b,
+# Refs #8291): when a tick skips, the cycle job may send one `release_blocker`
+# heal report (cycle_gate_unavailable, cycle_held_untrusted_marker or
+# cycle_stale) to workflow-failure-heal through repository_dispatch, signed
+# with the job's OIDC identity (hence `id-token: write`). It never changes
+# the tick's outcome; RELEASE_BLOCKER_HEAL_ENABLED=false turns it off.
+#
 "on":
   schedule:
     - cron: "0 0 * * *"
@@ -128,6 +135,8 @@ jobs:
       contents: read
       issues: write
       actions: write
+      # OIDC identity for the release-blocker heal reports (Refs #8291).
+      id-token: write
     steps:
       - name: Checkout main
         uses: actions/checkout@v5
@@ -152,6 +161,11 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          # Release-blocker reporters (stuck-states P4 / Phase 2b).
+          RELEASE_BLOCKER_HEAL_ENABLED: ${{ vars.RELEASE_BLOCKER_HEAL_ENABLED || 'true' }}
+          RELEASE_BLOCKER_CYCLE_SKIP_STREAK: ${{ vars.RELEASE_BLOCKER_CYCLE_SKIP_STREAK || '3' }}
+          RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS: ${{ vars.RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS || '86400' }}
+          RELEASE_BLOCKER_CYCLE_STALE_SECS: ${{ vars.RELEASE_BLOCKER_CYCLE_STALE_SECS || '259200' }}
           PROMOTE_CYCLE_GATE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_WAIT_SECS || '18000' }}
           PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS || '1800' }}
           PROMOTE_CYCLE_GATE_POLL_SECS: ${{ vars.PROMOTE_CYCLE_GATE_POLL_SECS || '60' }}
