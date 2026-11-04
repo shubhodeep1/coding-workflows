@@ -1405,8 +1405,11 @@ def _heal_test_only_read(root: str, rel: str) -> bytes | None:
 
 _HEAL_SKIP_NAMES = frozenset({"pytest.skip", "pytest.mark.skip", "pytest.mark.skipif", "pytest.xfail", "pytest.mark.xfail",
 	"pytest.importorskip", "pytest.exit", "pytest.hookimpl", "self.skipTest", "unittest.SkipTest", "unittest.expectedFailure",
-	"unittest.case.SkipTest", "unittest.case.expectedFailure"})
-_HEAL_SKIP_PREFIXES = ("unittest.skip", "unittest.case.skip")
+	"unittest.case.SkipTest", "unittest.case.expectedFailure",
+	# Process exits end pytest with status 0 before any test runs.
+	"sys.exit", "os._exit", "exit", "quit", "SystemExit", "builtins.exit", "builtins.quit"})
+# Internal pytest spellings of skip/xfail/exit, reached through import aliases.
+_HEAL_SKIP_PREFIXES = ("unittest.skip", "unittest.case.skip", "_pytest.outcomes", "_pytest.skipping", "_pytest.mark")
 _HEAL_COLLECTION_NAMES = frozenset({"__test__", "collect_ignore", "collect_ignore_glob", "pytest_plugins"})
 _HEAL_COLLECTION_HOOKS = frozenset({"pytest_collection_modifyitems", "pytest_ignore_collect"})
 _HEAL_PYTEST_CONFIG_NAMES = frozenset({"pytest.toml", ".pytest.toml", "pytest.ini", ".pytest.ini", "tox.ini", "setup.cfg",

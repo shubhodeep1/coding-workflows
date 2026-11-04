@@ -1836,6 +1836,8 @@ def test_heal_test_only_weakening_check_refuses() -> None:
 	# Any new pytest_* hook (outcome rewriting) or pytest_plugins assignment counts as a control.
 	for added in ("@pytest.hookimpl(hookwrapper=True)\ndef pytest_runtest_makereport(item, call):\n\tyield\n",
 		"pytest_plugins = ['evil']\n", "pytest.exit('done', returncode=0)\n",
+		"import os\nos._exit(0)\n", "import sys\nsys.exit(0)\n", "raise SystemExit(0)\n", "quit(0)\n",
+		"from _pytest.outcomes import skip\nskip('x', allow_module_level=True)\n",
 		"@pytest.hookimpl(hookwrapper=True, specname='pytest_runtest_makereport')\ndef rewrite(item, call):\n\tyield\n"):
 		record, code = _to_weaken({"tests/conftest.py": "import pytest\n"},
 			{"tests/conftest.py": "import pytest\n" + added}, ["tests/conftest.py"])
