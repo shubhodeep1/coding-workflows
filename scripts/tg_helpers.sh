@@ -153,6 +153,10 @@ tg_send_msg()
 	}
 	local msg_id
 	msg_id=$(printf '%s' "${resp}" | jq -r '.result.message_id // empty' 2>/dev/null)
+	if [ -z "${msg_id}" ]; then
+		# Telegram's own error text (never contains the bot token), as tg_send_report_msg logs it.
+		echo "::warning::Telegram returned no message id: $(printf '%s' "${resp}" | jq -r '.description // "unknown"' 2>/dev/null | tr -cd '[:print:]' | cut -c1-200)" >&2
+	fi
 	printf '%s' "${msg_id:-}"
 }
 
