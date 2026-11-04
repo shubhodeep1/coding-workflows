@@ -3551,7 +3551,7 @@ comment_lines = [
 	*([f"- Suppressed upstream-managed findings (reported below, not filed; fix them in coding-workflows): {int(summary.get('suppressed_upstream_managed', 0))}"] if summary.get("suppressed_upstream_managed") else []),
 	f"- New follow-up issues planned this run: {(1 if planned_followups else 0) if consolidate_active else len(planned_followups)}",
 	f"- Findings skipped because a marked follow-up issue already exists: {skipped_existing_count}",
-	*([f"- Follow-up mode: consolidated ({len(planned_followups)} findings in one issue)"] if consolidate_active else []),
+	*([f"- Follow-up mode: consolidated ({len(planned_followups)} findings in one issue)"] if consolidate_active and planned_followups else []),
 ]
 
 if findings:
@@ -3757,6 +3757,10 @@ declare -A LAST_FOLLOWUP_BY_FILE=()
 # Highest open follow-up per file (existing open issues and issues filed in
 # this run); only the consolidated `Depends on` choice reads it.
 declare -A LAST_OPEN_FOLLOWUP_BY_FILE=()
+# Highest follow-up per file in any state; LAST_FOLLOWUP_BY_FILE keeps the
+# last-listed row for the per-finding chain, so the consolidated closed
+# fallback reads this map instead.
+declare -A LAST_ANY_FOLLOWUP_BY_FILE=()
 while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLLOWUP_EXISTING_NUMBER; do
 	if [ "${FOLLOWUP_EXISTING_NUMBER}" != "0" ]; then
 		[[ "${FOLLOWUP_EXISTING_NUMBER}" =~ ^[1-9][0-9]*$ ]] || {
@@ -3769,6 +3773,10 @@ while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLL
 					|| [ "${FOLLOWUP_EXISTING_NUMBER}" -gt "${LAST_OPEN_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]}" ]; }; then
 			LAST_OPEN_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_EXISTING_NUMBER}"
 		fi
+		if [ -z "${LAST_ANY_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]:-}" ] \
+				|| [ "${FOLLOWUP_EXISTING_NUMBER}" -gt "${LAST_ANY_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]}" ]; then
+			LAST_ANY_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_EXISTING_NUMBER}"
+		fi
 		continue
 	fi
 	[ -n "${FOLLOWUP_BODY_PATH}" ] || continue
@@ -3776,11 +3784,13 @@ while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLL
 	if [[ "${FOLLOWUP_FILE_KEY}" == multi:* ]]; then
 		# Consolidated follow-up (stuck-states P5b): it touches several files but
 		# may carry only one `Depends on` line (scripts/security_dependency.py
-		# holds an issue with repeated lines), so depend on the highest-numbered
+		# treats repeated lines as held), so depend on the highest-numbered
 		# same-file predecessor across all of them that is still open. A closed
 		# predecessor would release the hold (once ai:merged) while another
 		# file's open predecessor is still being fixed, so a closed one is used
-		# only when none is open.
+		# only when none is open. Known limit: with open predecessors in several
+		# files only the highest-numbered one is depended on, so merging it
+		# releases the hold even while a lower-numbered one is still open.
 		IFS='+' read -r -a FOLLOWUP_FILE_KEYS <<< "${FOLLOWUP_FILE_KEY#multi:}"
 		FOLLOWUP_DEPENDS_ON=""
 		FOLLOWUP_DEPENDS_ON_ANY=""
@@ -3790,7 +3800,7 @@ while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLL
 					&& { [ -z "${FOLLOWUP_DEPENDS_ON}" ] || [ "${FOLLOWUP_MULTI_PREDECESSOR}" -gt "${FOLLOWUP_DEPENDS_ON}" ]; }; then
 				FOLLOWUP_DEPENDS_ON="${FOLLOWUP_MULTI_PREDECESSOR}"
 			fi
-			FOLLOWUP_MULTI_PREDECESSOR="${LAST_FOLLOWUP_BY_FILE[${FOLLOWUP_MULTI_KEY}]:-}"
+			FOLLOWUP_MULTI_PREDECESSOR="${LAST_ANY_FOLLOWUP_BY_FILE[${FOLLOWUP_MULTI_KEY}]:-}"
 			if [[ "${FOLLOWUP_MULTI_PREDECESSOR}" =~ ^[1-9][0-9]*$ ]] \
 					&& { [ -z "${FOLLOWUP_DEPENDS_ON_ANY}" ] || [ "${FOLLOWUP_MULTI_PREDECESSOR}" -gt "${FOLLOWUP_DEPENDS_ON_ANY}" ]; }; then
 				FOLLOWUP_DEPENDS_ON_ANY="${FOLLOWUP_MULTI_PREDECESSOR}"
@@ -3825,6 +3835,7 @@ while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLL
 	for FOLLOWUP_MULTI_KEY in "${FOLLOWUP_FILE_KEYS[@]}"; do
 		LAST_FOLLOWUP_BY_FILE["${FOLLOWUP_MULTI_KEY}"]="${FOLLOWUP_NUMBER}"
 		LAST_OPEN_FOLLOWUP_BY_FILE["${FOLLOWUP_MULTI_KEY}"]="${FOLLOWUP_NUMBER}"
+		LAST_ANY_FOLLOWUP_BY_FILE["${FOLLOWUP_MULTI_KEY}"]="${FOLLOWUP_NUMBER}"
 	done
 done < "${FOLLOWUP_INDEX_FILE}"
 

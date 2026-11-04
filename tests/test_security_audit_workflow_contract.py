@@ -569,7 +569,7 @@ def test_security_audit_support_identity_fails_closed_and_pins_source_and_consum
 	assert proc.returncode == 0, proc.stderr
 	assert output == f"support_sha={support_sha}\nprotected_main_sha={support_sha}\n"
 	for bad_branch in ({"protected": False, "commit": {"sha": support_sha}},
-	                   {"protected": True, "commit": {"sha": "invalid"}}):
+		{"protected": True, "commit": {"sha": "invalid"}}):
 		proc, output, _ = _run_audit_workflow_resolution(
 			"Resolve trusted audit support commit", {main_api: bad_branch}, env_overrides=source_env
 		)
@@ -587,12 +587,12 @@ def test_security_audit_support_identity_fails_closed_and_pins_source_and_consum
 	proc, output, _ = _run_audit_workflow_resolution(
 		"Resolve trusted audit support commit",
 		{stable_api: {"object": {"type": "tag", "sha": other_sha}},
-		 f"repos/{source_repo}/git/tags/{other_sha}": {"object": {"type": "commit", "sha": support_sha}}},
+			f"repos/{source_repo}/git/tags/{other_sha}": {"object": {"type": "commit", "sha": support_sha}}},
 	)
 	assert proc.returncode == 0, proc.stderr
 	assert output == f"support_sha={support_sha}\n"
 	for bad_responses in ({}, {stable_api: {"object": {"type": "tag", "sha": other_sha}}},
-	                      {stable_api: {"object": {"type": "commit", "sha": "invalid"}}}):
+		{stable_api: {"object": {"type": "commit", "sha": "invalid"}}}):
 		proc, output, _ = _run_audit_workflow_resolution("Resolve trusted audit support commit", bad_responses)
 		assert proc.returncode != 0 and not output
 	pinned_env = {"WORKFLOW_JOB_JSON": json.dumps({
@@ -603,7 +603,7 @@ def test_security_audit_support_identity_fails_closed_and_pins_source_and_consum
 	assert proc.returncode == 0, proc.stderr
 	assert output == f"support_sha={support_sha}\n"
 	for invalid_identity in (f"{source_repo}/.github/workflows/security-audit.yml@refs/heads/main",
-	                         f"other/repo/.github/workflows/security-audit.yml@{support_sha}"):
+		f"other/repo/.github/workflows/security-audit.yml@{support_sha}"):
 		proc, output, _ = _run_audit_workflow_resolution(
 			"Resolve trusted audit support commit", {},
 			env_overrides={"WORKFLOW_JOB_JSON": json.dumps({
@@ -760,7 +760,7 @@ def test_security_audit_exclusions_resolution_accepts_only_unchanged_tracked_sup
 def test_security_audit_nested_data_cannot_replace_trusted_exclusions() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-trust-boundary-") as td:
 		workspace = Path(td)
-		trusted = _audit_exclusions_support_repo(workspace)
+		_audit_exclusions_support_repo(workspace)
 		repo_dir, first_sha, head_sha = _git_fixture_repo(workspace / "audit-data")
 		malicious = repo_dir / "scripts" / "security_audit_fp_exclusions.json"
 		malicious.parent.mkdir()
@@ -789,7 +789,7 @@ def test_security_audit_nested_data_cannot_replace_trusted_exclusions() -> None:
 				},
 			)
 			assert proc.returncode == 0, proc.stderr
-			assert f"tracker=#9000 findings=1 followups_created=1" in proc.stdout
+			assert "tracker=#9000 findings=1 followups_created=1" in proc.stdout
 			assert finding_id in "\n".join(final_state.get("issue_create_bodies", []))
 
 		proc, variables = _run_audit_exclusions_resolution(workspace, "scripts/malformed.json")
@@ -4188,7 +4188,7 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	so mod.py stays in scope even when the project leaves it unchanged):
 	- ``append``: pure addition of line 61; lines 1-60 predate the project.
 	- ``unrelated_change``: mod.py is unchanged; the project adds other.py,
-	  which names nothing.
+		which names nothing.
 	- ``rewrite``: line 2 is rewritten (a deletion plus an addition).
 	- ``delete_guard``: a guard line above an unchanged operation is deleted.
 	- ``insert_near``: one line is inserted after line 50 (no deletion).
@@ -4196,24 +4196,24 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	- ``cross_file_import``: as ``cross_file``, but mod.py imports auth.
 	- ``cross_file_reverse``: as ``cross_file``, but auth.py names mod.
 	- ``cross_file_registry``: as ``cross_file``, but an unchanged registry.py
-	  names both auth and mod (neither names the other).
+		names both auth and mod (neither names the other).
 	- ``cross_file_registry_short``: as ``cross_file_registry``, but the guard
-	  is deleted from the two-letter module db.py instead of auth.py.
+		is deleted from the two-letter module db.py instead of auth.py.
 	- ``head_router``: as ``cross_file``, but the project adds router.py
-	  naming both auth and mod (the link exists only at the head).
+		naming both auth and mod (the link exists only at the head).
 	- ``head_override``: no deletions; the project adds patch.py naming mod.
 	- ``test_added``: no deletions; the project adds tests/test_mod.py
-	  naming mod.
+		naming mod.
 	- ``one_letter_deleted``: as ``cross_file``, but the guard is deleted
-	  from the one-letter module a.py, whose name cannot be searched.
+		from the one-letter module a.py, whose name cannot be searched.
 	- ``cross_file_chain``: as ``cross_file``, but middleware.py names auth
-	  and app.py names middleware and mod (a two-hop link).
+		and app.py names middleware and mod (a two-hop link).
 	- ``cross_file_long_chain``: as ``cross_file``, but mod is named by a
-	  five-file reference chain longer than the search bound.
+		five-file reference chain longer than the search bound.
 	- ``cross_file_shared_dependency``: as ``cross_file``, but mod.py and
-	  auth.py both import an unchanged shared.py that names neither.
+		auth.py both import an unchanged shared.py that names neither.
 	- ``cross_file_shared_one_letter``: as ``cross_file_shared_dependency``,
-	  but the shared module is the one-letter x.py.
+		but the shared module is the one-letter x.py.
 	"""
 	repo_dir = base_dir / "audited-repo"
 	repo_dir.mkdir(parents=True, exist_ok=True)
@@ -4943,6 +4943,39 @@ def test_security_audit_consolidated_followup_falls_back_to_highest_closed_prede
 	assert len(bodies) == 1
 	assert bodies[0].count("Depends on:") == 1
 	assert "\n- Depends on: #9105\n" in bodies[0]
+
+
+def test_security_audit_consolidated_closed_fallback_uses_highest_same_file_number() -> None:
+	# Two closed predecessors for one file, listed highest first: the fallback
+	# must still pick the highest, not the last-listed one.
+	findings = [
+		_finding_payload("old-b-high", file_path="file_b.py"),
+		_finding_payload("old-b-low", file_path="file_b.py"),
+		*_p5b_findings(),
+	]
+	existing = [
+		{"number": 9105, "state": "closed", "body": "<!-- ai:security-finding:old-b-high -->\nRefs #9000\n"},
+		{"number": 9100, "state": "closed", "body": "<!-- ai:security-finding:old-b-low -->\nRefs #9000\n"},
+	]
+	proc, final_state, _ = _run_p5b_audit(findings, api_issues=existing)
+	assert proc.returncode == 0, proc.stderr
+	bodies = final_state.get("issue_create_bodies", [])
+	assert len(bodies) == 1
+	assert bodies[0].count("Depends on:") == 1
+	assert "\n- Depends on: #9105\n" in bodies[0]
+
+
+def test_security_audit_consolidated_retry_omits_follow_up_mode_line_when_nothing_planned() -> None:
+	existing = {
+		"number": 9150,
+		"state": "open",
+		"body": "".join(f"<!-- ai:security-finding:{finding['finding_id']} -->\n" for finding in _p5b_findings()),
+	}
+	proc, final_state, _ = _run_p5b_audit(_p5b_findings(), api_issues=[existing])
+	assert proc.returncode == 0, proc.stderr
+	comment = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "- New follow-up issues planned this run: 0" in comment
+	assert "Follow-up mode:" not in comment
 
 
 @pytest.mark.parametrize("env", [
