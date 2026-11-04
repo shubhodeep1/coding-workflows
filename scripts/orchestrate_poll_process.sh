@@ -2751,6 +2751,12 @@ AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL
 # turns it off, any other value is treated as `true` with a warning.
 HEAL_COUNTERFACTUAL_GATE_ENABLED="${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}"
 
+# Issue #8809: an UNVERIFIED heal plan that lists only exact tests/ and
+# changelog.d/*.md files inside the verified heal scope is auto-approved (see
+# _plan_heal_test_only_check). On by default; `false` turns it off, any other
+# value is treated as `true` with a warning.
+HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED="${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}"
+
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
   echo "::warning::MAX_VALIDATE_CYCLES must be a positive integer; defaulting to 3"
@@ -18508,6 +18514,10 @@ _plan_heal_counterfactual_check()
   HEAL_CF_GATE_REASON=""
   HEAL_CF_GATE_JSON='{}'
   HEAL_CF_GATE_PLAN_COMMENT="unknown"
+  # Issue #8809: reset before any return so a marker never leaks to the next issue.
+  HEAL_TEST_ONLY_GATE_DECISION=""
+  HEAL_TEST_ONLY_GATE_REASON=""
+  HEAL_TEST_ONLY_GATE_MARKER=""
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   heal_py="${script_dir}/workflow_failure_heal.py"
   partial_py="${script_dir}/partial_delivery.py"
@@ -18575,8 +18585,87 @@ _plan_heal_counterfactual_check()
     echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=approve result=${HEAL_CF_GATE_RESULT} reason=${HEAL_CF_GATE_REASON} issue=${issue_num}"
     return 0
   fi
+  # Issue #8809: an UNVERIFIED heal plan (never FAIL, missing or an unknown
+  # route) gets the test-only check. On approve the flow continues to the
+  # automation-path guard unchanged; _plan_auto_approval_gate posts the
+  # approval marker before /approved.
+  if [ "${route}" = "true" ] && [ "${HEAL_CF_GATE_RESULT}" = "UNVERIFIED" ] && [ "${HEAL_CF_GATE_REASON}" = "unverified" ] \
+    && _plan_heal_test_only_check "${issue_num}" "${details_map_json}" "${plan_file}" "${login}"; then
+    HEAL_CF_GATE_DECISION="approve"
+    return 0
+  fi
   HEAL_CF_GATE_DECISION="hold"
   return 1
+}
+
+# Issue #8809: test-only check for an UNVERIFIED heal plan. The heal scope is
+# verified from the batched details map (body, author, labels and
+# last_edited_at; no GitHub API call) with workflow_failure_heal.py
+# heal-scope verify, then files_touched_scope_guard.py --heal-test-only-check
+# approves only a plan whose Files section lists exact tests/ and
+# changelog.d/*.md files inside that scope. Runs in the main shell and sets
+# HEAL_TEST_ONLY_GATE_DECISION, HEAL_TEST_ONLY_GATE_REASON and
+# HEAL_TEST_ONLY_GATE_MARKER (the approval marker on approve). Reads
+# HEAL_CF_GATE_PLAN_COMMENT. Every error holds; one log line either way.
+# Args: <issue_num> <details_map_json> <plan_file> <login>
+# Returns 0 to approve, 1 to hold.
+_plan_heal_test_only_check()
+{
+  local issue_num="$1"
+  local details_map_json="$2"
+  local plan_file="$3"
+  local login="$4"
+  local script_dir="" heal_py="" guard_py="" flag_norm="" verify_input="" verified="" scope_file="" to_json=""
+  local to_decision="hold" to_reason="heal_test_only_check_unavailable"
+
+  HEAL_TEST_ONLY_GATE_DECISION="hold"
+  HEAL_TEST_ONLY_GATE_REASON=""
+  HEAL_TEST_ONLY_GATE_MARKER=""
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  heal_py="${script_dir}/workflow_failure_heal.py"
+  guard_py="${script_dir}/files_touched_scope_guard.py"
+  flag_norm="$(printf '%s' "${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm="true"
+  case "${flag_norm}" in
+    false) to_reason="gate_disabled" ;;
+    ""|true) ;;
+    *) echo "::warning::HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED has invalid value; treating as true" ;;
+  esac
+  if [ "${flag_norm}" != "false" ]; then
+    to_reason="heal_scope_unverified"
+    if [ -n "${login}" ] && [ -f "${heal_py}" ] && [ -f "${guard_py}" ] \
+      && verify_input="$(printf '%s' "${details_map_json:-{\}}" | jq -ce --arg n "${issue_num}" --arg login "${login}" '
+          .[$n]
+          | select(type == "object")
+          | select(has("last_edited_at") and .labels_complete == true)
+          | select((.body | type) == "string" and (.author_login | type) == "string" and ((.labels // []) | type) == "array")
+          | {body: .body, last_edited_at: .last_edited_at, author_login: .author_login, labels: .labels, pipeline_login: $login}
+        ' 2>/dev/null)" \
+      && verified="$(printf '%s' "${verify_input}" | PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${heal_py}" heal-scope verify --input-json /dev/stdin 2>/dev/null)" \
+      && printf '%s' "${verified}" | jq -e '.status == "verified"' >/dev/null 2>&1 \
+      && scope_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_test_only_scope.XXXXXX" 2>/dev/null)" \
+      && printf '%s' "${verified}" | jq -r '.paths[]' > "${scope_file}" 2>/dev/null && [ -s "${scope_file}" ]; then
+      to_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${guard_py}" --heal-test-only-check --plan-file "${plan_file}" \
+        --heal-scope-file "${scope_file}" --flag-enabled "${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}" \
+        --issue-number "${issue_num}" --plan-comment-id "${HEAL_CF_GATE_PLAN_COMMENT:-}" 2>/dev/null || true)"
+      to_decision="$(printf '%s' "${to_json}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
+      to_reason="$(printf '%s' "${to_json}" | jq -r '.reason // "heal_test_only_check_unavailable"' 2>/dev/null || echo heal_test_only_check_unavailable)"
+      if [ "${to_decision}" = "approve" ]; then
+        HEAL_TEST_ONLY_GATE_MARKER="$(printf '%s' "${to_json}" | jq -r '.marker // ""' 2>/dev/null || true)"
+        case "${HEAL_TEST_ONLY_GATE_MARKER}" in
+          "<!-- ai:heal-test-only-approval:v1 issue=${issue_num} plan_comment="*" -->") ;;
+          *) to_decision="hold"; to_reason="heal_test_only_check_unavailable"; HEAL_TEST_ONLY_GATE_MARKER="" ;;
+        esac
+      fi
+    fi
+    [ -z "${scope_file}" ] || rm -f "${scope_file}"
+  fi
+  [ "${to_decision}" = "approve" ] || { to_decision="hold"; HEAL_TEST_ONLY_GATE_MARKER=""; }
+  to_reason="$(printf '%s' "${to_reason}" | tr -cd 'a-z_' | cut -c1-80)"
+  [ -n "${to_reason}" ] || to_reason="heal_test_only_check_unavailable"
+  HEAL_TEST_ONLY_GATE_DECISION="${to_decision}"
+  HEAL_TEST_ONLY_GATE_REASON="${to_reason}"
+  echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_test_only outcome=${to_decision} reason=${to_reason} issue=${issue_num}"
+  [ "${to_decision}" = "approve" ]
 }
 
 # Issue #8249: a poller heal counterfactual hold reaches a human once per
@@ -18796,6 +18885,29 @@ _plan_auto_approval_gate()
     fi
   fi
   rm -f "${gate_plan_file}" "${gate_meta_file}" "${gate_grant_body_file}" "${gate_fresh_file}" 2>/dev/null || true
+  if [ "${gate_decision}" = "approve" ] && [ -n "${HEAL_TEST_ONLY_GATE_MARKER:-}" ]; then
+    # Issue #8809: the test-only approval marker binds implement to the
+    # plan's paths, so it is posted before any /approved (all four callers
+    # post only after this returns 0). A trusted copy already on the issue
+    # is reused; a failed post holds without counting a recovery attempt.
+    gate_replan_jq='
+      [ .[]?
+        | select(type == "object")
+        | select(((.user.login // "") == $login and $login != "")
+            or ((.user.login // "") | test("\\[bot\\]$"))
+            or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+        | (.body // "")
+        | select(contains($marker))
+      ] | length > 0'
+    if [ "$(printf '%s' "${comments_json:-[]}" | jq -r --arg marker "${HEAL_TEST_ONLY_GATE_MARKER}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" != "true" ] \
+      && ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="Automatic approval of a test-only workflow-heal plan: implementation is limited to the files listed in the marker below, and a change that deletes a file, removes tests or asserts, or adds a skip is refused.
+
+${HEAL_TEST_ONLY_GATE_MARKER}" >/dev/null 2>&1; then
+      echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_test_only outcome=hold reason=marker_post_failed issue=${issue_num}"
+      echo "STALL_SKIP issue=${issue_num} reason=heal_test_only_marker_failed phase=${phase} action=none"
+      return 1
+    fi
+  fi
   if [ "${gate_decision}" = "approve" ]; then
     return 0
   fi
@@ -20578,6 +20690,7 @@ _fetch_candidate_issue_details_graphql() {
           body
           author { login }
           authorAssociation
+          lastEditedAt
           labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
@@ -20633,6 +20746,7 @@ _fetch_candidate_issue_details_graphql() {
             body: .value.body,
             author_login: (.value.author.login // ""),
             author_association: (.value.authorAssociation // ""),
+            last_edited_at: (.value.lastEditedAt // null),
             labels: [(.value.labels.nodes // [])[]?.name],
             labels_complete: ((.value.labels.pageInfo.hasNextPage == false) and ((.value.labels.nodes | type) == "array")),
             comments_available: ((.value.comments.nodes? | type) == "array"),
