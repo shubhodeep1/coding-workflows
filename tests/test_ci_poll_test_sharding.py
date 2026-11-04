@@ -28,6 +28,7 @@ that drops tests would turn a green CI into a lie.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 import tempfile
@@ -1131,7 +1132,8 @@ class MergeTrainStepContractTest(unittest.TestCase):
 # (#7690) and from tests-hooks-and-orchestrator (budget-watch issue #7798).
 # Without its guard such a step would run in every group.
 GROUP_PINNED_STEPS = {
-	"Regression tests wired by the CI wiring guard (part 2)": 2,
+	# Moved from group 2 to group 4 in #8772.
+	"Regression tests wired by the CI wiring guard (part 2)": 4,
 	# Moved from group 3 to group 1 in #8072, to group 0 in #8091, and to
 	# group 4 in #8118.
 	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": 4,
@@ -1151,9 +1153,10 @@ GROUP_PINNED_STEPS = {
 	# Moved from tests-release-and-log-analysis in #8777.
 	"Validation bootstrap and family direct-run tests": 1,
 }
-# The only steps pinned to the last matrix group (#8118).
+# The only steps pinned to the last matrix group (#8118, #8772).
 LAST_GROUP_PINNED_STEPS = (
 	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)",
+	"Regression tests wired by the CI wiring guard (part 2)",
 )
 POLL_JOB_UNGUARDED_STEPS = {
 	"Checkout repository",
@@ -1193,6 +1196,8 @@ class PollGroupPinnedStepsTest(unittest.TestCase):
 
 	def test_last_group_runs_its_slice_and_only_the_unblock_step(self) -> None:
 		"""Group 4 was added for capacity (#8113); #8118 moved one step into it.
+
+		#8772 moved the CI wiring guard part 2 step into it as well.
 
 		A later move into group 4 must update LAST_GROUP_PINNED_STEPS on purpose.
 		"""
@@ -3038,6 +3043,96 @@ class MovedRelease8777StepsContractTest(unittest.TestCase):
 		for name, (group, _modules) in MOVED_RELEASE_8777_STEPS.items():
 			with self.subTest(step=name):
 				self.assertNotEqual(group, last_group)
+
+
+# Step moved out of orchestrate-poll (2), which took 15m18s of its 20 minutes
+# (run 41704793081, budget-watch issue #8772): step name -> new matrix group.
+# Picked by test and subprocess counts because the run's step timings could
+# not be read (an estimate, not a measurement). Group 4 has the oldest
+# budget-watch record (#8150). Name and body unchanged; only the guard moved.
+POLL_GROUP_TWO_8772_SOURCE_GROUP = 2
+POLL_GROUP_TWO_8772_SETUP_STEP = "Install Python CI dependencies"
+POLL_GROUP_TWO_8772_STEP_NAME = "Regression tests wired by the CI wiring guard (part 2)"
+MOVED_POLL_GROUP_TWO_8772_STEPS = {
+	POLL_GROUP_TWO_8772_STEP_NAME: 4,
+}
+# The body's first and last module and the module count, so an edit to the
+# moved body is caught (the move kept it unchanged).
+POLL_GROUP_TWO_8772_BOUNDARY_MODULES = (
+	"tests/test_ai_memory_sync_reference_files.py",
+	"tests/test_workflow_untrusted_input_contract.py",
+)
+POLL_GROUP_TWO_8772_MODULE_COUNT = 52
+# sha256 of the sorted, newline-joined module paths, so swapping an interior
+# module for another one is caught too.
+POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "a9fd35d08c872bb8b425964f565525d2255fc50964f0e19f26676959e7f03757"
+
+
+class MovedPollGroupTwo8772StepsContractTest(unittest.TestCase):
+	"""The CI wiring guard part 2 step runs once, in orchestrate-poll group 4 (#8772)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_step_is_owned_only_by_the_poll_job(self) -> None:
+		for name in MOVED_POLL_GROUP_TWO_8772_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(
+					[owner for owner, _step in self.owning_steps(name)],
+					[POLL_JOB_ID],
+				)
+
+	def test_step_is_guarded_to_its_new_group(self) -> None:
+		for name, group in MOVED_POLL_GROUP_TWO_8772_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), group)
+				self.assertNotEqual(group, POLL_GROUP_TWO_8772_SOURCE_GROUP)
+				# A guard naming a group the matrix does not run would skip the step silently.
+				self.assertLess(group, poll_group_count())
+				for _owner, step in self.owning_steps(name):
+					self.assertEqual(step.get("if"), f"strategy.job-index == {group}")
+
+	def test_step_left_the_source_group(self) -> None:
+		source_guard = f"strategy.job-index == {POLL_GROUP_TWO_8772_SOURCE_GROUP}"
+		source_names = {
+			step.get("name")
+			for step in load_poll_job()["steps"]
+			if str(step.get("if", "")) == source_guard
+		}
+		for name in MOVED_POLL_GROUP_TWO_8772_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_step_runs_after_the_poll_job_setup(self) -> None:
+		names = [step.get("name") for step in load_poll_job()["steps"]]
+		self.assertIn(POLL_GROUP_TWO_8772_SETUP_STEP, names)
+		setup_index = names.index(POLL_GROUP_TWO_8772_SETUP_STEP)
+		for name in MOVED_POLL_GROUP_TWO_8772_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				self.assertLess(setup_index, names.index(name))
+
+	def test_step_body_is_unchanged(self) -> None:
+		steps = self.owning_steps(POLL_GROUP_TWO_8772_STEP_NAME)
+		self.assertEqual(len(steps), 1)
+		body = steps[0][1]["run"]
+		for module in POLL_GROUP_TWO_8772_BOUNDARY_MODULES:
+			with self.subTest(module=module):
+				self.assertTrue((REPO_ROOT / module).is_file(), module)
+				self.assertIn(module, body)
+		named = re.findall(r"tests/[A-Za-z0-9_]+\.py", body)
+		self.assertEqual(len(named), POLL_GROUP_TWO_8772_MODULE_COUNT, named)
+		self.assertEqual(len(set(named)), POLL_GROUP_TWO_8772_MODULE_COUNT, named)
+		digest = hashlib.sha256("\n".join(sorted(named)).encode("utf-8")).hexdigest()
+		self.assertEqual(digest, POLL_GROUP_TWO_8772_MODULE_SET_SHA256, named)
 
 
 PROMOTE_CYCLE_STEP_NAME = "Promote cycle and blocked-verdict unit tests"
