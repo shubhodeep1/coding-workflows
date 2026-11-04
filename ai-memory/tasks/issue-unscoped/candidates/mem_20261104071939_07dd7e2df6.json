@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_pr_check_runs_context.py:415-419,537 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `_select_log_tail_window` always skips index 0 of the scan when `partial_start=True`, and `_fetch_log_tail` sets that flag with `partial_start=start > 0` at line 537. So when the ranged read starts exactly on a line boundary, a complete first line that may be the only `##[error]` line is dropped as an anchor candidate (and as lead context at line 449).\n  WHY: The anchor search ends with `anchor=None` and the `end_of_log` fallback is used, so when teardown output after the error exceeds `log_tail_bytes`, `failed[i].log_tail` holds the teardown dump instead of the step error. No test covers the line-boundary case. Reviewers disagree on severity. minimax_minimax-m3 and openai_gpt-6-luna rated it MAJOR (confidence 5). z-ai_glm-5_3-flash rated it NIT (confidence 3): the trigger is 1 position in a 256 KiB scan, the result is the same as the pre-#8799 tail, and it is a documented tradeoff. anthropic_claude-sonnet-5_5 agreed with the code reading but did not report it as a defect, citing Approach \u00a7A.3; it listed the issue as a hardening suggestion only.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING (not a defect): scripts/collect_pr_check_runs_context.py `_fetch_log_tail`, where it computes `start` and calls `_select_log_tail_window` with `partial_start=start > 0` (line 537)\n  PROBLEM: When start > 0, the first scanned line is always treated as a fragment, even when byte start-1 is a newline and the line is complete. If that line is the only `##[error]` in the scan, it is never used as the anchor.\n  WHY: Not reported as a defect. The trigger is unlikely, the result matches the old end_of_log tail, and Approach \u00a7A.3 explicitly says to drop the partial first line. Suggested fix: request from start-1, set `partial_start = out[:1] != b\"\\n\"`, and drop that first byte (4-6 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/collect_pr_check_runs_context.py:_select_log_tail_window at the for-loop guard `if index == 0 and partial_start: continue` (around lines 415-419); _fetch_log_tail at the call site passing `partial_start=start > 0` (around line 537) | severity=MAJOR | confidence=5\n  PROBLEM: The collector always skips index 0 of the decoded scan when `partial_start=True`, even when `start` falls exactly on a line boundary. A complete first line carrying the only `##[error]` is therefore dropped, `anchor=None` results, and the `end_of_log` branch returns the post-job teardown dump.\n  WHY: `start = content_length - scan_bytes` is routinely non-zero, so the triage emits `log_tail_anchor: end_of_log` and the step error is missing from `failed[i].log_tail`, which is the failure mode #8799 was meant to remove. The tests do not cover it: `test_partial_first_line_is_never_the_anchor` covers only the fragment case, and `test_window_ends_at_the_step_error_not_the_teardown_dump` keeps the error away from offset 0.\n- HARDENING: _select_log_tail_window `if index == 0 and partial_start: continue` guard and `before = capped[1 if partial_start else 0:anchor]` slice. Suggested fix: remove the guard and the offset, and add a regression test where byte `start - 1` is `\\n` and the first line is `##[error]Process completed with exit code 1.` (2 code lines plus ~20 test lines). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/collect_pr_check_runs_context.py:`_select_log_tail_window`, lines 415\u2013419; `_fetch_log_tail`, line 537 | severity=MAJOR | confidence=5\n  PROBLEM: The collector skips the first scanned line whenever the ranged read starts after byte zero, even when the range starts exactly at a line boundary and that line is complete.\n  WHY: If the only `##[error]` line is the first line in the 256 KiB scan, the collector ignores it and falls back to the end-of-log window. When teardown output after that error exceeds `log_tail_bytes`, `failed[i].log_tail` contains the teardown instead of the failure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/collect_pr_check_runs_context.py:`_select_log_tail_window` lines 415-419 (first-line skip when `partial_start`), set by `_fetch_log_tail` line 537 (`partial_start=start > 0`) | severity=NIT | confidence=3\n  PROBLEM: When the ranged GET's start offset falls exactly on a line boundary, lines 417-418 still skip the complete first line as an anchor candidate, and line 449 drops it as lead context. The code cannot tell a boundary-aligned start from a mid-line fragment without a second ranged request, and the constraint caps the collector at redirect + HEAD + one ranged GET.\n  WHY: If that line is the only `##[error]` and the teardown after it exceeds `log_tail_bytes`, the `end_of_log` fallback (lines 422-446) leaves the error out of `failed[i].log_tail`. The reviewer downgraded this to NIT: the trigger is 1 position in a 256 KiB scan, the result equals the pre-#8799 tail, and it is a documented tradeoff (code comment line 416, test `test_partial_first_line_is_never_the_anchor`), not a regression.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0c73c2792c21c51da7c00cae99150f9cf3d606a4e1fe4abaa0b92f5fb1a6e737",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8804,
+    "run_id": "41788565421",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41788565421",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104071939_07dd7e2df6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8804,
+    "run_id": "41788565421"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T07:19:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
