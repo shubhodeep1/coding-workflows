@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (no gap; requirement met)\n  Requirement: \"rewrite tests/e2e_smoke_canary_b.txt so it contains exactly two lines: `status: ok` / `decompose-run: 41501570285`, no third line, trailing newline, no other file modified, merged into orchestrator/project-8693.\"\n  Expected change site: tests/e2e_smoke_canary_b.txt\n  Evidence of absence: none \u2014 the PR diff (tests/e2e_smoke_canary_b.txt:2) changes exactly the stale run-ID line, and on-disk content is the two required lines ending in a newline; no other file is in pr_changed_files.txt.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e99faedb6d0051ed44ed4fdf6dc62ffa5f0d4ab84af04b3cb41736a265ae6304",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8700,
+    "run_id": "41776657347",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41776657347",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104051210_8de69f618f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8700,
+    "run_id": "41776657347"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T05:12:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
