@@ -231,7 +231,8 @@ unblock_needs_human_alert()
 		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=failed reason=claim_id_missing" >&2
 		return 0
 	fi
-	msg_id="$(tg_send_msg "${text}" CRITICAL 2>/dev/null || true)"
+	# stderr kept: tg_send_msg logs why a send returned no message id (curl stderr stays silenced inside).
+	msg_id="$(tg_send_msg "${text}" CRITICAL || true)"
 	if [[ "${msg_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
 		if ! unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" needs-human alert-confirm \
 			--repo "${REPOSITORY}" --item "${item}" --parking "${parking}" --comment-id "${claim_id}" \

@@ -22319,7 +22319,8 @@ needs_human_park_project() {
       [ -z "${alert_url}" ] || alert_msg+=$'\n'"Run: ${alert_url}"
     fi
   fi
-  msg_id="$(tg_send_msg "${alert_msg}" CRITICAL 2>/dev/null || true)"
+  # stderr kept: tg_send_msg logs why a send returned no message id (curl stderr stays silenced inside).
+  msg_id="$(tg_send_msg "${alert_msg}" CRITICAL || true)"
   if [[ "${msg_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
     # Keep the tg_send_tracked cleanup record on the tracking issue.
     if declare -F tg_store_msg_id >/dev/null 2>&1; then
