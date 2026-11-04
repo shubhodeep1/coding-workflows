@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:3244-3247 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The boundary module tests/test_workflow_overlay_core.py does not exist in the repository tree.\n  WHY: test_step_body_is_unchanged would crash with FileNotFoundError at (REPO_ROOT / module).is_file(); the reviewer rated it BLOCKER. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and openai_gpt-6-luna each checked and found the file exists and is named at .github/workflows/ci.yml lines 3124 and 3136, so they dispute this finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\n  expected_change_site: .github/workflows/ci.yml, job orchestrate-poll, group 1 steps\n  confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite, anthropic_claude-sonnet-5_5]\n  EVIDENCE: Only \"Validation bootstrap and family direct-run tests\" moves (ci.yml line 3121), while \"Review autofix review-pipeline plumbing contract test\" (ci.yml lines 3029-3030) stays in group 1, and the issue says \"steps\" in the plural. anthropic_claude-sonnet-5_5 rated it a NIT at confidence 1 and did not count it as an unmet deliverable. minimax_minimax-m3 and openai_gpt-6-luna reported no gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP (reported under TASK COMPLETENESS / INTENT GAPS):\n- Requirement: \"Move its slowest steps ... into the CI job with the most headroom, unchanged, keeping job and step names.\" The issue also says not to raise `timeout-minutes` and not to split tests into new required job names.\n  Expected change site: `.github/workflows/ci.yml`, job `orchestrate-poll`, group 1 pinned steps.\n  Evidence of absence: The PR moves one step, \"Validation bootstrap and family direct-run tests\", and the issue says \"steps\" in the plural. The reviewer notes the approved plan covers exactly this one step, and names and `timeout-minutes` are unchanged. The reviewer does not count it as an unmet deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ci_poll_test_sharding.py:3244-3247 | severity=BLOCKER | confidence=5\n  PROBLEM: The boundary module tests/test_workflow_overlay_core.py does not exist in the repository tree.\n  WHY: The test method test_step_body_is_unchanged will crash with a FileNotFoundError when executing (REPO_ROOT / module).is_file() for this non-existent path.\n\nTASK_GAP:\n- Requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\n  Expected change site: .github/workflows/ci.yml, job orchestrate-poll, group 1 steps.\n  Evidence of absence: Only \"Validation bootstrap and family direct-run tests\" moves (ci.yml line 3121); \"Review autofix review-pipeline plumbing contract test\" (ci.yml lines 3029-3030) stays in group 1. The issue specified \"slowest steps\" (plural), suggesting more than one might need to be moved to address the timeout.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "4f25dc3e3afdff71bf665c493a6bfc14ea4667efb065b01cd8641f0ba9b6d49c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8807,
+    "run_id": "41778752879",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41778752879",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104055449_295589602d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8807,
+    "run_id": "41778752879"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T05:54:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
