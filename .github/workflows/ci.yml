@@ -2313,6 +2313,8 @@ jobs:
     # Since #8777, group 0 also pins the clarify loop guard step and group
     # 1 the validation bootstrap step.
     # Since #8772, group 4 also pins the CI wiring guard part 2 step.
+    # Since #8805, group 2 runs the validation bootstrap step (moved from
+    # group 1).
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -3114,8 +3116,16 @@ jobs:
       # step timings could not be read (an estimate, not a measurement). It
       # first ran in the depth-1 static-checks job and needs no git history,
       # Node or prepared .claude/ live copies. Name and body unchanged.
+      #
+      # Moved from group 1 to group 2 because orchestrate-poll (1) took
+      # 16m44s of its 20 minutes on main (run 41765731285, budget-watch issue
+      # #8805). Picked by test and subprocess counts because the run's step
+      # timings could not be read (an estimate, not a measurement). Group 1
+      # keeps its slice and the review-pipeline plumbing step; group 2 had
+      # carried only its slice and the three container/sandbox steps since
+      # #8772. Name and body unchanged; the step still runs once per CI run.
       - name: Validation bootstrap and family direct-run tests
-        if: strategy.job-index == 1
+        if: strategy.job-index == 2
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
