@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- copilot-pull-request-reviewer check run (action 41544382408) | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The copilot-pull-request-reviewer check failed (`custom_instructions_too_large` / \"Prompt too big after adding system message\") while building its own review prompt.\n  WHY: The failure is a CI/tooling issue, not a defect in the canary content; severity is MAJOR from both reviewers, and the reviewers differ on the file reference (tests/e2e_smoke_canary.txt lines 1-3 versus the check run).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- copilot-pull-request-reviewer check run (action 41544382408) | severity=MAJOR | confidence=4\n  PROBLEM: CI infrastructure failure\n  WHY: The CI check-run failed due to \"Prompt too big after adding system message\", which is an infrastructure configuration issue unrelated to the code changes in this PR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=MAJOR | confidence=5\n  PROBLEM: The PR head has a failed `copilot-pull-request-reviewer` check (run 41544382408). Its log reports `custom_instructions_too_large` while constructing the review prompt.\n  WHY: The reviewer cannot construct its prompt and exits before producing a review. The failure is confirmed by the check log, but it does not identify a defect in the canary content.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d69b478d1c0367a81646dceef93cfc09718d7ea7cadadd06ea7089026db4b6b4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41923893095",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41923893095",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104222932_7cb5e981bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41923893095"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T22:29:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
