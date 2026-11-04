@@ -541,7 +541,7 @@ def test_window_ends_at_the_step_error_not_the_teardown_dump(monkeypatch, local_
 	assert len(data) > mod.LOG_SCAN_BYTES
 	result, request_count, requests = _fetch(monkeypatch, data)
 	assert request_count == 3
-	assert requests[-1] == ("GET", f"bytes={len(data) - mod.LOG_SCAN_BYTES}-{len(data) - 1}")
+	assert requests[-1] == ("GET", f"bytes={len(data) - mod.LOG_SCAN_BYTES - 1}-{len(data) - 1}")
 	assert result.startswith("log_tail_anchor: step_error\n")
 	body = result.split("\n", 1)[1]
 	assert CAUSE in body and STEP_ERROR in body
@@ -568,6 +568,33 @@ def test_log_without_step_error_keeps_the_old_tail(monkeypatch, local_http):
 	result, request_count, _ = _fetch(monkeypatch, data)
 	assert request_count == 3
 	assert result == "log_tail_anchor: end_of_log\n" + _old_tail(data, mod.DEFAULT_LOG_TAIL_BYTES)
+
+
+def _boundary_log(*, aligned: bool) -> bytes:
+	"""A log whose scan (last LOG_SCAN_BYTES bytes) starts with the only step error."""
+	body = (_ts(6) + STEP_ERROR + "\n").encode("utf-8")
+	filler = (_ts(8) + "teardown " + "t" * 80 + "\n").encode("utf-8")
+	while len(body) + len(filler) <= mod.LOG_SCAN_BYTES:
+		body += filler
+	body += b"x" * (mod.LOG_SCAN_BYTES - len(body) - 1) + b"\n"
+	assert len(body) == mod.LOG_SCAN_BYTES
+	prefix = b"cause line before the scan\n" if aligned else b"cut mid-line "
+	return prefix + body
+
+
+def test_scan_starting_on_a_line_boundary_keeps_the_first_line_as_anchor(monkeypatch, local_http):
+	data = _boundary_log(aligned=True)
+	result, request_count, requests = _fetch(monkeypatch, data)
+	assert request_count == 3
+	assert requests[-1] == ("GET", f"bytes={len(data) - mod.LOG_SCAN_BYTES - 1}-{len(data) - 1}")
+	assert result.startswith("log_tail_anchor: step_error\n") and STEP_ERROR in result
+
+
+def test_scan_starting_mid_line_still_skips_the_fragment(monkeypatch, local_http):
+	data = _boundary_log(aligned=False)
+	result, request_count, _ = _fetch(monkeypatch, data)
+	assert request_count == 3
+	assert result.startswith("log_tail_anchor: end_of_log\n") and STEP_ERROR not in result
 
 
 def test_zero_budget_returns_empty_without_requests(monkeypatch, local_http):

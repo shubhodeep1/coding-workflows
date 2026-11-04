@@ -519,22 +519,30 @@ def _fetch_log_tail(*, details_url: str, log_tail_bytes: int, repository: str, t
 		# behind a long post-job section. Still exactly one ranged GET.
 		scan_bytes = max(log_tail_bytes, min(content_length, LOG_SCAN_BYTES))
 		start = max(0, content_length - scan_bytes)
+		# Read one extra byte before the scan when it starts past byte 0: a
+		# newline there means the first scanned line is complete, not a
+		# fragment, so it may still be the step-error anchor.
+		probe = 1 if start > 0 else 0
 		tail_req = urllib.request.Request(
 			blob_url,
-			headers={"Range": f"bytes={start}-{content_length - 1}"},
+			headers={"Range": f"bytes={start - probe}-{content_length - 1}"},
 			method="GET",
 		)
 		with urllib.request.urlopen(tail_req, timeout=30) as resp:
 			status = resp.getcode()
 			if status == 206 or (status == 200 and content_length <= scan_bytes):
-				out = resp.read(scan_bytes + 1)
+				out = resp.read(scan_bytes + probe + 1)
 			else:
 				return ""
 	except (OSError, ValueError, urllib.error.HTTPError, http.client.HTTPException):
 		return ""
+	partial_start = start > 0
+	if probe and len(out) == scan_bytes + probe:
+		partial_start = out[:1] != b"\n"
+		out = out[1:]
 	if len(out) > scan_bytes:
 		out = out[-scan_bytes:]
-	return _select_log_tail_window(out, log_tail_bytes=log_tail_bytes, partial_start=start > 0)
+	return _select_log_tail_window(out, log_tail_bytes=log_tail_bytes, partial_start=partial_start)
 
 
 def _build_context_text(*, raw_text: str, head_sha: str, final_status: str) -> str:
