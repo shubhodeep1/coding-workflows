@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-04T10:27:09Z",
+  "tick_at": "2026-11-04T10:45:21Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -16,13 +16,13 @@
   "tracking_issues": [
     {
       "current_wave": 8,
-      "integration_ahead_by": "107",
+      "integration_ahead_by": "108",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 0,
+        "merged": 1,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -30,10 +30,10 @@
       },
       "number": 8291,
       "project_complete": false,
-      "status": "in-progress",
+      "status": "waiting",
       "title": "[Orchestrator] Unattended pipeline: remove stuck states (plan P2a-P13 remainder)",
       "total_waves": 20,
-      "wave_complete": false
+      "wave_complete": true
     },
     {
       "current_wave": 0,
@@ -97,13 +97,13 @@
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "2",
+      "integration_ahead_by": "3",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 0,
+        "merged": 1,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -111,10 +111,10 @@
       },
       "number": 8814,
       "project_complete": false,
-      "status": "in-progress",
+      "status": "waiting",
       "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-10-01-2.md",
       "total_waves": 2,
-      "wave_complete": false
+      "wave_complete": true
     }
   ]
 }
