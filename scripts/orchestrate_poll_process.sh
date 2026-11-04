@@ -22233,8 +22233,11 @@ unblock_handover_merge_deferral() {
 # Needs-human digest (docs/plans/unattended-claude-pipeline-completion-plan.md
 # item 4a, decision D6). When a project's automated budgets are spent it is
 # parked in the repository's single needs-human digest issue
-# (scripts/operator_step_issue.py needs-human park) with one CRITICAL alert per
-# newly parked project; nothing is closed by an exhausted budget. While the
+# (scripts/operator_step_issue.py needs-human park) with at most one persisted
+# CRITICAL alert attempt per parking (stuck-states P6b, Refs #8291: a trusted
+# ai:unblock-park-alert claim on the tracking issue is written before the one
+# Telegram send and confirmed with its message id; the send is never retried);
+# nothing is closed by an exhausted budget. While the
 # unblock judge is enabled it still has rounds for a failed project, so the
 # poller defers to it and the judge parks the project when its own rounds run
 # out. Kill switch NEEDS_HUMAN_DIGEST_ENABLED (default true). Labels and state
@@ -22275,9 +22278,62 @@ needs_human_park_project() {
     echo "NEEDS_HUMAN item=${TRACKING_NUM} kind=project reason=${reason} outcome=skip detail=park_failed"
     return 0
   fi
-  if jq -e '.newly_parked == true' <<< "${park_json}" >/dev/null 2>&1; then
-    digest="$(jq -r '.issue // "?"' <<< "${park_json}" 2>/dev/null || echo '?')"
-    tg_notify "Project #${TRACKING_NUM} parked in needs-human digest #${digest} (${reason}): every automated budget is spent and a person must decide." "CRITICAL" || true
+  local park_parking="" claim_json="" claim_id="" msg_id="" alert_msg="" alert_url=""
+  park_parking="$(jq -r '.parking // empty' <<< "${park_json}" 2>/dev/null || true)"
+  [ -n "${park_parking}" ] || return 0
+  # Smoke fixtures and an unconfigured Telegram never claim: the claim is the
+  # only attempt this parking gets, so it is kept for a run that can send.
+  if declare -F _smoke_fixture_alert_silenced >/dev/null 2>&1 && _smoke_fixture_alert_silenced CRITICAL; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=skip reason=smoke_silenced"
+    return 0
+  fi
+  if ! declare -F tg_alert_configured >/dev/null 2>&1 || ! declare -F tg_send_msg >/dev/null 2>&1; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=skip reason=helper_missing"
+    return 0
+  fi
+  if ! tg_alert_configured CRITICAL; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=skip reason=telegram_unconfigured"
+    return 0
+  fi
+  if ! claim_json="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/operator_step_issue.py needs-human alert-claim \
+    --repo "${GITHUB_REPOSITORY}" --item "${TRACKING_NUM}" --parking "${park_parking}" \
+    --trusted-login "${UNBLOCK_TRUSTED_LOGIN}")"; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=failed reason=claim_failed"
+    return 0
+  fi
+  # Not claimed (already attempted, lost race, unverified): the helper logged why.
+  jq -e '.claimed == true' <<< "${claim_json}" >/dev/null 2>&1 || return 0
+  claim_id="$(jq -r '.comment_id // empty' <<< "${claim_json}" 2>/dev/null || true)"
+  if ! [[ "${claim_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=failed reason=claim_id_missing"
+    return 0
+  fi
+  digest="$(jq -r '.issue // "?"' <<< "${park_json}" 2>/dev/null || echo '?')"
+  # Same text tg_notify built: base message plus the Tracking and Run links.
+  alert_msg="Project #${TRACKING_NUM} parked in needs-human digest #${digest} (${reason}): every automated budget is spent and a person must decide."
+  if declare -F _gh_url >/dev/null 2>&1; then
+    alert_url="$(_gh_url "issues/${TRACKING_NUM}")"
+    [ -z "${alert_url}" ] || alert_msg+=$'\n'"Tracking: ${alert_url}"
+    if [ -n "${GITHUB_RUN_ID:-}" ]; then
+      alert_url="$(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+      [ -z "${alert_url}" ] || alert_msg+=$'\n'"Run: ${alert_url}"
+    fi
+  fi
+  # stderr kept: tg_send_msg logs why a send returned no message id (curl stderr stays silenced inside).
+  msg_id="$(tg_send_msg "${alert_msg}" CRITICAL || true)"
+  if [[ "${msg_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+    # Keep the tg_send_tracked cleanup record on the tracking issue.
+    if declare -F tg_store_msg_id >/dev/null 2>&1; then
+      tg_store_msg_id "${TRACKING_NUM}" "${msg_id}" >/dev/null 2>&1 || true
+    fi
+    if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/operator_step_issue.py needs-human alert-confirm \
+      --repo "${GITHUB_REPOSITORY}" --item "${TRACKING_NUM}" --parking "${park_parking}" \
+      --comment-id "${claim_id}" --message-id "${msg_id}" >/dev/null; then
+      echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=failed reason=confirm_write_failed"
+    fi
+  else
+    # The claim stays state=attempted; the send is never retried for this parking.
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=unconfirmed reason=send_failed_or_ambiguous"
   fi
   return 0
 }

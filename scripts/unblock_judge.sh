@@ -197,6 +197,56 @@ unblock_tg()
 	fi
 }
 
+# unblock_needs_human_alert ITEM PARKING TEXT — at most one persisted CRITICAL
+# alert attempt per needs-human parking (stuck-states P6b, Refs #8291).
+# Claim (a trusted ai:unblock-park-alert comment on the item, written before
+# any Telegram call) -> send once -> confirm with the message id. Skips without
+# a claim when Telegram cannot send at CRITICAL, so the attempt is not used up.
+# Never retries a send and never fails the op list. Logs NEEDS_HUMAN_ALERT.
+unblock_needs_human_alert()
+{
+	local item="$1" parking="$2" text="$3" claim_json="" claim_id="" msg_id=""
+	if [ -f "${SUPPORT_DIR}/scripts/tg_helpers.sh" ]; then
+		# shellcheck source=/dev/null
+		source "${SUPPORT_DIR}/scripts/tg_helpers.sh" 2>/dev/null || true
+	fi
+	if ! declare -F tg_alert_configured >/dev/null 2>&1 || ! declare -F tg_send_msg >/dev/null 2>&1; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=skip reason=helper_missing" >&2
+		return 0
+	fi
+	if ! tg_alert_configured CRITICAL; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=skip reason=telegram_unconfigured" >&2
+		return 0
+	fi
+	if ! claim_json="$(unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" needs-human alert-claim \
+		--repo "${REPOSITORY}" --item "${item}" --parking "${parking}" --trusted-login "${UNBLOCK_LOGIN}")"; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=failed reason=claim_failed" >&2
+		return 0
+	fi
+	# Not claimed (already attempted, lost race, unverified, disabled): the
+	# helper logged why; never send.
+	jq -e '.claimed == true' <<< "${claim_json}" >/dev/null 2>&1 || return 0
+	claim_id="$(jq -r '.comment_id // empty' <<< "${claim_json}" 2>/dev/null || true)"
+	if ! [[ "${claim_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=failed reason=claim_id_missing" >&2
+		return 0
+	fi
+	# stderr kept: tg_send_msg logs why a send returned no message id (curl stderr stays silenced inside).
+	msg_id="$(tg_send_msg "${text}" CRITICAL || true)"
+	if [[ "${msg_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+		if ! unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" needs-human alert-confirm \
+			--repo "${REPOSITORY}" --item "${item}" --parking "${parking}" --comment-id "${claim_id}" \
+			--message-id "${msg_id}" >/dev/null; then
+			echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=failed reason=confirm_write_failed" >&2
+		fi
+	else
+		# Explicit failure or ambiguous timeout: the claim stays state=attempted
+		# and is never retried for this parking.
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=unconfirmed reason=send_failed_or_ambiguous" >&2
+	fi
+	return 0
+}
+
 # The newest trusted wait marker: `<comment id> <fixup> <done|open> <iso time>`.
 unblock_latest_wait()
 {
@@ -1194,8 +1244,12 @@ PY
 					unblock_project_terminal_recheck needs_human || return 1
 				fi
 				if unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" "${park_args[@]}" > "${RUNTIME_DIR}/needs_human_park.json"; then
-					if jq -e '.newly_parked == true' "${RUNTIME_DIR}/needs_human_park.json" >/dev/null 2>&1; then
-						unblock_tg "CRITICAL" "Unblock judge parked #${issue} ($(jq -r ".ops[${idx}].kind" "${ops_file}"), $(jq -r ".ops[${idx}].stop" "${ops_file}"), $(jq -r ".ops[${idx}].reason" "${ops_file}")) in needs-human digest #$(jq -r '.issue // "?"' "${RUNTIME_DIR}/needs_human_park.json"); a person must decide (${REPOSITORY})."
+					# P6b: every successful park that lists the item may page, but the
+					# persisted claim keeps it to one attempt per parking.
+					local park_alert_parking=""
+					park_alert_parking="$(jq -r '.parking // empty' "${RUNTIME_DIR}/needs_human_park.json" 2>/dev/null || true)"
+					if [ -n "${park_alert_parking}" ]; then
+						unblock_needs_human_alert "${issue}" "${park_alert_parking}" "Unblock judge parked #${issue} ($(jq -r ".ops[${idx}].kind" "${ops_file}"), $(jq -r ".ops[${idx}].stop" "${ops_file}"), $(jq -r ".ops[${idx}].reason" "${ops_file}")) in needs-human digest #$(jq -r '.issue // "?"' "${RUNTIME_DIR}/needs_human_park.json"); a person must decide (${REPOSITORY})."
 					fi
 				else
 					ops_failed="true"
