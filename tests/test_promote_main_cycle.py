@@ -142,6 +142,8 @@ if args[:1] == ["api"]:
     if path.startswith("search/issues"):
         q = next(a for a in args if a.startswith("q="))
         if "apply-analysis-cycle-baseline-sha:" in q:
+            if state.get("baseline_search_error"):
+                save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
             respond({"total_count": 1 if state.get("last_cycle_issue") else 0, "items": ([{"number": state["last_cycle_issue"]}] if state.get("last_cycle_issue") else [])})
         respond({"total_count": 0, "items": []})
     if "/issues/" in path and path.endswith("/comments?per_page=100"):
@@ -1680,3 +1682,37 @@ def test_untrusted_alert_heading_matches_the_poller() -> None:
 	headings = [line.split('"', 1)[1] for line in poller.splitlines() if "Untrusted apply-analysis marker" in line and 'post_tracking_comment "' in line]
 	assert headings, "poller no longer posts the untrusted-marker alert"
 	assert all(re.match(r"^## .{0,8}Untrusted apply-analysis marker", heading) for heading in headings)
+
+
+def test_leading_zero_untrusted_hold_threshold_still_detects() -> None:
+	# 0086400 passes validation; it must reach jq --argjson as 86400.
+	state = _untrusted_state([_gql_comment(UNTRUSTED_ALERT, 30)])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state, env={"RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS": "0086400"})
+	assert proc.returncode == 0, proc.stderr
+	assert "lookup=untrusted_parse" not in proc.stdout
+	assert [r["blocker_reason"] for r in _reports(final)] == ["cycle_held_untrusted_marker"]
+
+
+def test_ansi_coloured_prior_log_still_counts_toward_the_streak() -> None:
+	first = _prior_tick(701, 11, 24)
+	second = _prior_tick(700, 10, 48)
+	log_id = str(700 + 9000)
+	second[2][log_id] = "2026-11-02T00:30:01.1234567Z \x1b[36;1mPROMOTE_CYCLE_SKIPPED reason=gate_busy active_runs=1\x1b[0m\n"
+	state = _streak_state(first, second)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state, env=GATE_BUSY_ENV)
+	assert proc.returncode == 0, proc.stderr
+	assert [r["blocker_reason"] for r in _reports(final)] == ["cycle_gate_unavailable"]
+
+
+def test_failed_baseline_search_never_reports_cycle_stale() -> None:
+	# guard_unavailable before guard 4's marker read must not fall back to the
+	# oldest-commit clock alone (it would report a stale cycle falsely).
+	state = {**_stale_state(commit_hours=200, marker_hours=1), "baseline_search_error": True}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state, env={"GH_RETRY_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert "PROMOTE_CYCLE_SKIPPED reason=guard_unavailable" in proc.stdout
+	assert not final.get("heal_dispatches")
+	assert "RELEASE_BLOCKER_REPORTED" not in proc.stdout

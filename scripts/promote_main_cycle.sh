@@ -260,6 +260,9 @@ for release_blocker_threshold_spec in RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS:86400 
 		release_blocker_threshold_shown="$(printf '%s' "${!release_blocker_threshold_name}" | tr -cd 'A-Za-z0-9_.:+-')"
 		echo "::warning::${release_blocker_threshold_name} must be a non-negative integer (got '${release_blocker_threshold_shown:0:40}'); using ${release_blocker_threshold_default}."
 		printf -v "${release_blocker_threshold_name}" '%s' "${release_blocker_threshold_default}"
+	else
+		# Canonical decimal: jq --argjson rejects leading zeros (0086400).
+		printf -v "${release_blocker_threshold_name}" '%d' "$((10#${!release_blocker_threshold_name}))"
 	fi
 done
 # Human latch labels (all in .github/ai/label_contract.v1.json). A fixed list,
@@ -1084,6 +1087,9 @@ release_blocker_oldest_commit_at=""
 release_blocker_commits_truncated="false"
 # Creation time of the last cycle's trusted baseline marker (guard 4).
 release_blocker_baseline_at=""
+# Set once guard 4's marker search succeeded; cycle_stale needs it so a skip
+# before that read never falls back to the oldest-commit clock alone.
+release_blocker_baseline_read="false"
 RELEASE_BLOCKER_WORK_DIR=""
 
 # Print an API-derived value reduced to safe characters, at most 200 bytes.
@@ -1306,15 +1312,19 @@ release_blocker_check_skip_streak()
 			rb_job_id="$(printf '%s' "${rb_jobs}" | jq -r '[.jobs[]? | select(.name == "cycle")] | first | .id // empty' 2>/dev/null || true)"
 			if ! [[ "${rb_job_id}" =~ ^[0-9]{1,20}$ ]]; then
 				# No cycle job in that run: the streak is not proven.
+				echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=cycle_gate_unavailable lookup=cycle_job run=${rb_id}"
 				return 0
 			fi
-			if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${rb_job_id}/logs" > "${rb_log_file}" 2>/dev/null; then
+			# Job logs carry ANSI colour codes; gh rejects them without
+			# --allow-escape-sequences (as in workflow_failure_heal_intake.sh).
+			if ! gh_retry gh api --allow-escape-sequences "repos/${GITHUB_REPOSITORY}/actions/jobs/${rb_job_id}/logs" > "${rb_log_file}" 2>/dev/null; then
 				echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=cycle_gate_unavailable lookup=logs run=${rb_id}"
 				return 0
 			fi
 			# Log lines carry a timestamp prefix; match the fixed token only.
-			rb_matched="$(tr -d '\r' < "${rb_log_file}" | grep -oE '^[^ ]+ PROMOTE_CYCLE_SKIPPED reason=(gate_busy|smoke_gate_cancelled)( |$)' | tail -n 1 | sed -E 's/.* reason=([a-z_]+).*/\1/' || true)"
+			rb_matched="$(tr -d '\r' < "${rb_log_file}" | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | grep -oE '^[^ ]+ PROMOTE_CYCLE_SKIPPED reason=(gate_busy|smoke_gate_cancelled)( |$)' | tail -n 1 | sed -E 's/.* reason=([a-z_]+).*/\1/' || true)"
 			if [ -z "${rb_matched}" ]; then
+				echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=streak_broken blocker=cycle_gate_unavailable run=${rb_id}"
 				return 0
 			fi
 			rb_lines+="run=$(release_blocker_run_url "${rb_id}") reason=${rb_matched}"$'\n'
@@ -1405,7 +1415,7 @@ release_blocker_check_untrusted_hold()
 		return 0
 	fi
 	rb_nums_json="$(printf '%s\n' "${rb_issues[@]}" | jq -sc 'map(tonumber)' 2>/dev/null || echo '[]')"
-	rb_found="$(printf '%s' "${rb_response}" | jq -r \
+	if ! rb_found="$(printf '%s' "${rb_response}" | jq -r \
 		--argjson nums "${rb_nums_json}" \
 		--argjson cap "${RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS}" \
 		--arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
@@ -1427,7 +1437,10 @@ release_blocker_check_untrusted_hold()
 			| select($age >= $cap)
 			| {n: $n, at: $alert.at, age: $age} ]
 		| max_by(.age) // empty
-		| "\(.n) \(.at) \(.age)"' 2>/dev/null || true)"
+		| "\(.n) \(.at) \(.age)"' 2>/dev/null)"; then
+		echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=cycle_held_untrusted_marker lookup=untrusted_parse"
+		return 0
+	fi
 	[ -n "${rb_found}" ] || return 0
 	read -r rb_issue rb_alerted_at rb_age <<< "${rb_found}"
 	if ! [[ "${rb_issue}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${rb_age}" =~ ^[0-9]+$ ]]; then
@@ -1454,6 +1467,7 @@ release_blocker_check_cycle_stale()
 {
 	local rb_skip_reason="${1:-}" rb_marker_t="" rb_commit_t="" rb_clock="" rb_age="" rb_now="" rb_evidence=""
 	[ "${release_blocker_main_ahead}" = "true" ] || return 0
+	[ "${release_blocker_baseline_read}" = "true" ] || return 0
 	case "${rb_skip_reason}" in
 		disabled|insufficient_docs|cycle_in_flight|another_run_active) return 0 ;;
 	esac
@@ -1587,6 +1601,7 @@ set -e
 if [ "${last_baseline_rc}" -ne 0 ]; then
 	skip_cycle guard_unavailable "search=${CYCLE_BASELINE_MARKER}"
 fi
+release_blocker_baseline_read=true
 # "<sha> <created_at>": the SHA keeps today's checks; the time feeds cycle_stale.
 last_baseline="${last_baseline_with_time%% *}"
 if [ "${last_baseline_with_time}" != "${last_baseline}" ]; then
