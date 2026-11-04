@@ -333,6 +333,7 @@ jobs:
             # is absent) counts as no runs; any other permanent error (a non-limit
             # 403, 422, ...) leaves the snapshot incomplete.
             local snap_raw="${RUNNER_TEMP:-/tmp}/sweep-active-runs-${workflow}.json" snap_rc
+            local snap_parse_rc=0
             : > "${snap_raw}"
             for status in queued in_progress pending; do
               snap_rc=0
@@ -415,8 +416,14 @@ jobs:
                 ' 2>/dev/null
             )"; then
               :
+            # A failed reduce (malformed or truncated listing) is an incomplete
+            # snapshot, not "no active runs" (the PR #3895 failure mode), so
+            # every dispatch waits for the next tick. Raw API content is never logged.
             else
+              snap_parse_rc=$?
               snapshot_json='{}'
+              active_snapshot_incomplete=true
+              echo "::warning::AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE workflow=${workflow} status=parse rc=${snap_parse_rc}"
             fi
 
             while IFS=$'\t' read -r cached_head_ref cached_count; do
