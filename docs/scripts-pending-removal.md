@@ -124,6 +124,7 @@ Copy this block when adding a new entry:
   - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:orchestrator-tracking,ai:comprehensive-test-pending"` returns `[]` (no proving or verifying run in flight).
   - `git ls-remote origin refs/heads/main 'refs/tags/stable^{}'` shows no code change on `main` since the tag, or a replacement promotion path is live.
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_orchestrate_poll_promote_cycle.py` returns exit code 0.
+  - `gh issue list -R shubhodeep1/coding-workflows --label ai:workflow-heal --state open --search 'in:title "Release blocker: cycle_"' --json number,title` returns no issue whose title starts with `Release blocker: cycle_` (no cycle release-blocker report from `promote_main_cycle.sh` is still open).
 - **Owner:** @shubhodeep1
 
 ### `scripts/auto_release_stable.sh` + `.github/workflows/auto-release-stable.yml`
