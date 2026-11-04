@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-04T06:15:30Z",
+  "issue_number": 8799,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=agents.md:1; cited_path=agents.md, CLAUDE.md (external check-run copilot-pull-request-reviewer); files_touched=README.md, agents.d/8799-triage-log-anchor.md, changelog.d/8799-triage-log-anchor.md, scripts/check_triage_resolution.py, scripts/collect_pr_check_runs_context.py, tests/test_check_triage_resolution.py, tests/test_collect_pr_check_runs_pending_identity.py.",
+  "phase": "review_autofix",
+  "pr_number": 8804,
+  "record_id": "lesson_20261104061530_1428a0e423",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.md, CLAUDE.md (external check-run copilot-pull-request-reviewer)",
+    "agents.md",
+    "README.md",
+    "agents.d/8799-triage-log-anchor.md",
+    "changelog.d/8799-triage-log-anchor.md",
+    "scripts/check_triage_resolution.py",
+    "scripts/collect_pr_check_runs_context.py",
+    "tests/test_check_triage_resolution.py",
+    "tests/test_collect_pr_check_runs_pending_identity.py"
+  ]
+}
