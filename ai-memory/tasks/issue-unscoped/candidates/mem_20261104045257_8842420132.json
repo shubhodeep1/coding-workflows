@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- (no changed file) check-run `copilot-pull-request-reviewer`, run 41544382408 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The external Copilot reviewer check failed with `custom_instructions_too_large` (\"Prompt too big after adding system message\", HTTP 422) because the repo instruction files (AGENTS.md / CLAUDE.md) are too large, not because of the PR diff.\n  WHY: The diff only changes the 55-byte `tests/e2e_smoke_canary.txt`, and issue #8363 forbids touching other files, so no in-scope fix exists. Both reviewers rated it NIT (mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- (no changed file) check-run `copilot-pull-request-reviewer`, run 41544382408 | severity=NIT | confidence=4\n  PROBLEM: The Copilot review check failed with `custom_instructions_too_large` (\"Prompt too big after adding system message\", status 422) because AGENTS.md and CLAUDE.md are too large. The diff touches neither file. It changes only `tests/e2e_smoke_canary.txt`, and the failure appears on merge-resolution commit e540dbc.\n  WHY: The external reviewer cannot build its request for this head. The canary edit does not cause this, and issue #8363 forbids touching any other file, so no in-scope fix exists.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (infrastructure \u2014 no changed file), check-run `copilot-pull-request-reviewer` on head e540dbc18770bafdac9f8861d6f6b3b123f57ccd (Actions run 41544382408, job 125616255928) | severity=NIT | confidence=4\n  PROBLEM: The check failed with `custom_instructions_too_large` / `Prompt too big after adding system message` (HTTP 422) before producing any review. The cause is the size of the repo instruction files (AGENTS.md / CLAUDE.md), not the PR's 55-byte canary diff.\n  WHY: No hunk in the PR causes the failure. The PR body's claim that the `tests/test_implement_post_codex_recovery.py` failures were \"caused by this change\" is unsupported, because that test references the canary path only inside prompt strings. No in-scope fix exists under the single-file constraint.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d54ccf236d0eec4d3603948d055fe14d602d3eb398eebd057785670b3e18331d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41774286841",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41774286841",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104045257_8842420132",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41774286841"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T04:52:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
