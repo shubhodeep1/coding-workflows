@@ -32,8 +32,10 @@ CLOCK_WARNING = (
 	"::warning::check_integration_branch_staleness: clock read failed; "
 	"skipping the integration staleness check this cycle."
 )
-FAILING_DATE = "#!/usr/bin/env bash\nexit 1\n"
-NON_NUMERIC_DATE = "#!/usr/bin/env bash\necho notanumber\nexit 0\n"
+# Fake ``date`` as a shell function: a function shadows the real command, so
+# the stub still applies when the temp directory is mounted noexec.
+FAILING_DATE = "date() { return 1; }\n"
+NON_NUMERIC_DATE = "date() { echo notanumber; return 0; }\n"
 
 
 def _extract_staleness_function() -> str:
@@ -45,14 +47,9 @@ def _extract_staleness_function() -> str:
 
 
 def _run_staleness(date_script: str, alert_hours: str) -> dict:
-	"""Run the extracted function under bash with a fake ``date`` first on PATH."""
+	"""Run the extracted function under bash with ``date`` replaced by a shell function."""
 	with tempfile.TemporaryDirectory(prefix="staleness_clock_") as td:
 		tmp = Path(td)
-		bin_dir = tmp / "bin"
-		bin_dir.mkdir()
-		fake_date = bin_dir / "date"
-		fake_date.write_text(date_script, encoding="utf-8")
-		fake_date.chmod(0o755)
 		state_file = tmp / "state.json"
 		state_file.write_text("{}", encoding="utf-8")
 		calls_log = tmp / "stub_calls.log"
@@ -60,13 +57,13 @@ def _run_staleness(date_script: str, alert_hours: str) -> dict:
 		harness.write_text(
 			"tg_notify() { echo \"tg_notify\" >> " + repr(str(calls_log)) + "; }\n"
 			"mark_integration_branch_squash_fresh() { echo \"mark_fresh $*\" >> " + repr(str(calls_log)) + "; }\n"
+			+ date_script
 			+ _extract_staleness_function()
 			+ "check_integration_branch_staleness int-branch main 3\n"
 			"exit $?\n",
 			encoding="utf-8",
 		)
 		env = os.environ.copy()
-		env["PATH"] = f"{bin_dir}:" + env.get("PATH", "")
 		env["ORCH_INTEGRATION_STALE_ALERT_HOURS"] = alert_hours
 		env["ORCH_INTEGRATION_STALE_REALERT_HOURS"] = "1"
 		env["STATE_FILE"] = str(state_file)
