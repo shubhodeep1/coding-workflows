@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update its content so it is exactly these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention)\"\n  expected_change_site: `tests/e2e_smoke_canary.txt`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  EVIDENCE: `tests/e2e_smoke_canary.txt` currently holds the three required lines, so the content is satisfied. The gemini reviewer (SEVERITY: NIT) objects only that the change was made by patching, not by a full overwrite. The glm reviewer (SEVERITY: NIT, ISSUE_CONFIDENCE: 5) says no gap exists and calls its own entry self-refuting.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Update its content so it is exactly these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention)\"\nExpected change site: `tests/e2e_smoke_canary.txt`\nEvidence of absence: The PR diff (and the previous runs' verification) demonstrates that the file was modified, but the `decompose-run` line was incorrectly replaced rather than completely overwriting the file with the requested three lines. The file content is currently: status: ok / run_id: 40876853022 / updated-by: ai-pipeline. While the result coincidentally matches the requested content in this specific run, the PR diff implementation logic was flawed by relying on a patch rather than a full overwrite as the issue explicitly requested.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: `tests/e2e_smoke_canary.txt` containing exactly `status: ok`, `run_id: 40876853022`, `updated-by: ai-pipeline`. The reviewer says this is already satisfied and no gap exists.\nExpected change site: `tests/e2e_smoke_canary.txt`\nEvidence of absence: File read at review time shows exactly the three required lines (lines 1\u20133). The flagged finding is self-refuting.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6cbc0061c7db09ea7fe16514168f1ead6ef16b8475d15abe717156c6a46cee07",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41743926036",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41743926036",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104001449_8f67f93477",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41743926036"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T00:14:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
