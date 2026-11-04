@@ -5,13 +5,26 @@
   "entry_id": "processed_command_8798_6621133457_approved",
   "issue_number": 8798,
   "metadata": {
+    "branch": "ai/issue-8798",
+    "changed_files": [
+      "changelog.d/wfopt-2026-10-01-staleness-clock-read.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_ci_wires_every_test_file.py",
+      "tests/test_orchestrate_integration_ahead_by_gate.py",
+      "tests/test_orchestrate_integration_staleness_clock.py"
+    ],
+    "issue_number": 8798,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8798",
+    "pr_number": 8802,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8802",
+    "run_attempt": "1",
+    "run_id": "41762769680",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41762769680"
   },
   "run_attempt": 1,
   "run_id": "41762769680",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-04T02:46:40Z",
+  "status": "completed",
+  "timestamp": "2026-11-04T03:14:10Z",
   "workflow": "implement"
 }
