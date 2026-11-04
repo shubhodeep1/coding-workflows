@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The sole consensus finding describes a GitHub check run (`copilot-pull-request-reviewer`, check run 41549900517) failing with `custom_instructions_too_large` (prompt exceeds the service's limit, HTTP 422) during PR review.\n  expected_change_site: The code path that assembles the reviewer prompt / custom instructions (review autofix reviewer workflow or its prompt-assembly script).\n  confidence=[3]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: No diff hunks were provided in this pass, so no change addressing the oversized-prompt failure can be confirmed as present.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP:\n  Requirement: The sole consensus finding describes a GitHub check run (`copilot-pull-request-reviewer`, check run 41549900517) failing with `custom_instructions_too_large` (prompt exceeds the service's limit, HTTP 422) during PR review.\n  Expected change site: The code path that assembles the reviewer prompt / custom instructions (review autofix reviewer workflow or its prompt-assembly script).\n  Evidence of absence: No diff hunks were provided in this pass, so no change addressing the oversized-prompt failure can be confirmed as present.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- BLOCKED: no PR diff or run diff supplied for this reviewer pass; only the consensus ledger was received, so file-level verification was impossible.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "196be4356d7e0583429db73f49f1b55d88137215117b69892a9754715bf5d0d6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41743929899",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41743929899",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104001456_e2bff6bb5f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41743929899"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T00:14:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
