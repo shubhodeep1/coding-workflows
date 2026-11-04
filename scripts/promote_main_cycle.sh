@@ -158,13 +158,16 @@
 #   cycle_stale                  neither of the above reported, main is ahead of
 #                                the stable tag with code changes, the skip is
 #                                not disabled / insufficient_docs /
-#                                cycle_in_flight / another_run_active, and the
+#                                cycle_in_flight / another_run_active (nor a
+#                                guard_unavailable before the baseline-marker
+#                                read), and the
 #                                later of the last cycle's baseline marker and
 #                                the oldest unreleased commit is at least
 #                                RELEASE_BLOCKER_CYCLE_STALE_SECS old
 # Log lines:
 #   RELEASE_BLOCKER_REPORTED reason=<r> age=<n> branch=<b> sha=<tip|none> run_ref=none
-#   RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled|payload_invalid|dispatch_denied|guard_unavailable blocker=<r> ...
+#   RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled|payload_invalid|dispatch_denied|guard_unavailable|streak_broken blocker=<r> ...
+#     (guard_unavailable lookup=work_dir|jobs|cycle_job|logs|run_created_at|untrusted_comments|untrusted_parse)
 # payload_invalid and dispatch_denied also send a Telegram WARNING. A reporter
 # failure never fails or changes the tick. Failed cycle runs (fail_cycle) are
 # not reported here: the intake already receives them through workflow_run.
@@ -1087,8 +1090,9 @@ release_blocker_oldest_commit_at=""
 release_blocker_commits_truncated="false"
 # Creation time of the last cycle's trusted baseline marker (guard 4).
 release_blocker_baseline_at=""
-# Set once guard 4's marker search succeeded; cycle_stale needs it so a skip
-# before that read never falls back to the oldest-commit clock alone.
+# Set once guard 4's marker search succeeded; cycle_stale needs it so a
+# guard_unavailable skip before that read never falls back to the
+# oldest-commit clock alone.
 release_blocker_baseline_read="false"
 RELEASE_BLOCKER_WORK_DIR=""
 
@@ -1467,7 +1471,12 @@ release_blocker_check_cycle_stale()
 {
 	local rb_skip_reason="${1:-}" rb_marker_t="" rb_commit_t="" rb_clock="" rb_age="" rb_now="" rb_evidence=""
 	[ "${release_blocker_main_ahead}" = "true" ] || return 0
-	[ "${release_blocker_baseline_read}" = "true" ] || return 0
+	# Only a transient guard_unavailable skip needs the marker read; a
+	# persistent skip before guard 4 (base_not_ancestor on heads/stable) still
+	# reports from the oldest-commit clock.
+	if [ "${release_blocker_baseline_read}" != "true" ] && [ "${rb_skip_reason}" = "guard_unavailable" ]; then
+		return 0
+	fi
 	case "${rb_skip_reason}" in
 		disabled|insufficient_docs|cycle_in_flight|another_run_active) return 0 ;;
 	esac
