@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR description reports multiple failures (e.g. `test_review_pipeline_integration_chain_module_runs_clean`) in this pre-push gate suite, and earlier editor summaries ignored them while claiming CI was green.\n  WHY: The failures may mean the change broke the review/recovery pipeline integration. The reviewer rated this BLOCKER, mapped here to critical. Other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) did not raise it as a finding. They said the file references the canary path only in string literals and that the failures are not attributable to this change.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=BLOCKER | confidence=5\n  PROBLEM: The PR description reports multiple failures (e.g. `test_review_pipeline_integration_chain_module_runs_clean`) in this pre-push gate suite, and earlier editor summaries ignored them while claiming CI was green.\n  WHY: The failures may mean the change broke the review/recovery pipeline integration, which is critical for the repository's automation.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5b7282f3936c3bb90563c633a6b0111bdcbf3fc451645864c80464ba332bf0ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41811411918",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41811411918",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104101332_907522c312",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41811411918"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T10:13:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
