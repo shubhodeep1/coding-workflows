@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR causes failures in multiple tests within `tests/test_implement_post_codex_recovery.py` as indicated by the PR description.\n  WHY: The tests likely rely on the specific content of `tests/e2e_smoke_canary.txt` or a recovery mechanism that is now mismatched with the updated canary content, leading to test regressions. (Source severity was MAJOR, mapped to high. Other reviewers disagree and say these failures are unrelated, since the file only mentions the canary path in string literals.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=MAJOR | confidence=4\n  PROBLEM: The PR causes failures in multiple tests within `tests/test_implement_post_codex_recovery.py` as indicated by the PR description.\n  WHY: The tests likely rely on the specific content of `tests/e2e_smoke_canary.txt` or a recovery mechanism that is now mismatched with the updated canary content, leading to test regressions.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f279e992842d9d0d738565ad77da57da7f8b399f646ac71609c0d973561f1ceb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41916781207",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41916781207",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104214124_79dbbe56f8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41916781207"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T21:41:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
