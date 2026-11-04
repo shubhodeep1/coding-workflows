@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml \u2014 step selection and destination-job headroom choice (lines 1533-1549 for `Orchestrate lib unit tests` and 2291-2304 for `Check-failure triage workflow security tests`)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/ci.yml placement comments (lines 1535-1543, 2291-2303) state the step picks are estimates from test and subprocess counts, not measurements, and the run's step timings were unreadable, tests/test_ci_poll_test_sharding.py:2392-2438 (`MovedPromote8771StepsContractTest`) only verifies placement and not that the moved steps are the slowest or that the destination jobs had the most headroom, no measured evidence provided. Structural constraints are met (no `timeout-minutes` raised, no new jobs, step and job names kept). Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT (confidence 2), the other three rated it MAJOR (confidence 5). Post-merge `budget-watch` run is the check.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml` (step selection and destination jobs)\n  Evidence of absence: The step picks are estimates, not measurements, and both the workflow comments and the changelog fragment say so. Steps were moved unchanged, step and job names kept, no `timeout-minutes` raised, no job added. The step timings can't be read from the sandbox, and the post-merge `budget-watch` run on `main` checks the outcome. Listed as a low-severity note, not a defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- All other checklist categories: NONE. Hardening suggestions: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The workflow comments and PR description acknowledge that step timings were unreadable, so step selection relied on test/subprocess count estimates rather than measured run step timings as requested in the issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- All other checklist categories: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml \u2014 step selection and destination-job headroom choice (lines 1533-1549 for `Orchestrate lib unit tests` and 2291-2304 for `Check-failure triage workflow security tests`).\n  Evidence of absence: Structural constraints are satisfied (no `timeout-minutes` raised: `tests-heal-plan-and-validation:937`, `tests-release-and-log-analysis:1998`, and `tests-promote-stall-and-review:1568` all remain at 20; no new job names; step names and bodies preserved; two steps moved to distinct target jobs). The substantive constraint is not met as specified: placement comments say the picks are \"an estimate from test and subprocess counts, not a measurement\" (lines 1535, 2294) and step timings were unreadable. `tests/test_ci_poll_test_sharding.py:2392-2438` (`MovedPromote8771StepsContractTest`) only verifies placement, setup-order, single-ownership, no-matrix-guard, and module-path presence, not that these are the slowest steps or that destination jobs had the most headroom. The post-merge `budget-watch` run will validate the outcome but cannot retroactively prove the pre-move selection was optimal.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- All other checklist categories: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps and destination jobs.\n  Evidence of absence: The workflow comments at lines 1535\u20131543 and 2291\u20132303 say the step timings were unreadable and the selections and destination headroom are estimates, not measurements. The PR moves \"Orchestrate lib unit tests\" to `tests-heal-plan-and-validation` and \"Check-failure triage workflow security tests\" to `tests-release-and-log-analysis`, but provides no measured evidence that these are the slowest steps or that these jobs have the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- All other checklist categories: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "fa8d51a47251ada10218c8f52f125b4814f05ef1e535e2d3c06d4296d74eb9d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8776,
+    "run_id": "41743907640",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41743907640",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104001610_ceaca71f60",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8776,
+    "run_id": "41743907640"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T00:16:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
