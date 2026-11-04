@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:(no line given) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI check-runs report failures in tests/test_implement_post_codex_recovery.py (e.g., test_review_pipeline_integration_chain_module_runs_clean), which the reviewer attributes to the canary file update.\n  WHY: The reviewer says the tests likely depend on the old content of tests/e2e_smoke_canary.txt. Severity was given as BLOCKER, which is mapped to high. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash found no link between these failures and the canary file, so reviewers disagree.\n- .github/workflows/review_autofix.yml:(no line given) | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The PR reviewer check fails with errorCode custom_instructions_too_large because the combined CLAUDE.md and agents.md payload exceeds the reviewer's prompt-size limit.\n  WHY: The reviewer job exits before completing a review. z-ai_glm-5_3-flash cites CLAUDE.md / agents.md rather than the workflow file, and says the PR diff does not touch them. Severity was given as MAJOR, which is mapped to medium.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:(no line given) | severity=BLOCKER | confidence=4\n  PROBLEM: CI check-runs for this PR report test failures in tests/test_implement_post_codex_recovery.py (e.g., test_review_pipeline_integration_chain_module_runs_clean).\n  WHY: The tests likely depend on the previous content of tests/e2e_smoke_canary.txt, and the required canary update appears to invalidate their expectations.\n- .github/workflows/review_autofix.yml:(no line given) | severity=MAJOR | confidence=5\n  PROBLEM: The PR reviewer infrastructure fails with errorCode 'custom_instructions_too_large'.\n  WHY: The full custom-instruction payload (CLAUDE.md + agents.md) exceeds the reviewer's size limit, which prevents automated code reviews for this PR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CLAUDE.md / agents.md (repository custom instructions; not touched by this PR's diff):(Copilot check run 41544551704) | severity=MAJOR | confidence=4\n  PROBLEM: The copilot-pull-request-reviewer check fails on the PR head because the repository's combined custom-instruction payload (CLAUDE.md + AGENTS.md) exceeds the reviewer's prompt-size limit.\n  WHY: The reviewer job exits with code 1 before completing a review. The failure is infrastructure or instruction-size related and cannot be mapped to any hunk in this PR, which touches only tests/e2e_smoke_canary.txt. Fixing it requires shrinking CLAUDE.md/AGENTS.md in a separate change.\n- TASK_GAP (verified not a gap):\n  Requirement: \"Update its content so it is exactly these three lines ... `status: ok` / `run_id: 40608957733` / `updated-by: ai-pipeline` (with trailing newline); only modify `tests/e2e_smoke_canary.txt`.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: Not absent. The working-tree file contains exactly the three required lines with a trailing newline, and `pr_changed_files.txt` lists only this file. No gap.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0dbd1f0159bf624144db9bc431a09eea3ec470cf45601eb4e99e3ff5fb214679",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41779739802",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41779739802",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104054552_55fdc42754",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41779739802"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T05:45:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
