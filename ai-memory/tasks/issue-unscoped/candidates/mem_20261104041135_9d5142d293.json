@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/wfopt-2026-10-01-refctx-api-unavailable.md:2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The sentence \"Exit 1 (declared branch missing) and routing off keep the legacy fallback; implement.yml already behaved this way.\" can be read as saying implement.yml keeps the legacy fallback with routing off, but its exit-2 branch (.github/workflows/implement.yml:749-752) fails closed regardless of routing.\n  WHY: The release note misdescribes implement.yml's behavior, though nothing fails at runtime; all three reviewers rated it NIT (mapped to low), and z-ai_glm-5_3-flash noted the same wording as a NIT in its review notes but did not emit it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/wfopt-2026-10-01-refctx-api-unavailable.md:2 | severity=NIT | confidence=3\n  PROBLEM: The sentence \"Exit 1 (declared branch missing) and routing off keep the legacy fallback; implement.yml already behaved this way.\" can be read as saying implement.yml keeps the legacy fallback with routing off, but implement.yml's exit-2 branch has no routing condition (.github/workflows/implement.yml lines 747-752).\n  WHY: It does not fail at runtime; the release note is slightly wrong about implement.yml.\n- HARDENING_SUGGESTION: tests/test_workflow_checkout_integration_ref_audit.py, test_refctx_api_unavailable_fails_closed_when_routing_on, implement.yml call at the end of the function. The implement.yml exit-2 refusal is asserted only with routing \"true\". Loop the call over (\"true\", \"false\", None). Estimated lines changed: 3. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/wfopt-2026-10-01-refctx-api-unavailable.md:2 | severity=NIT | confidence=4\n  PROBLEM: \"implement.yml already behaved this way\" implies implement.yml keeps the legacy fallback when routing is off, but its exit-2 branch (.github/workflows/implement.yml:749-752) has no routing condition and fails closed even with CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED=false. (Reported under TASK COMPLETENESS / INTENT GAPS, but in the standard issue shape.)\n  WHY: Operators may misread implement.yml's exit-2 behavior as routing-conditional; documentation accuracy only, no code defect.\n- HARDENING_SUGGESTION: tests/test_workflow_checkout_integration_ref_audit.py, test_refctx_api_unavailable_fails_closed_when_routing_on, lines 478-481 (implement.yml block). The test locks implement.yml's exit-2 failure only at routing=\"true\". Replace the block with a `for routing in (\"true\", \"false\", None):` loop. Estimated lines changed: ~6. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/wfopt-2026-10-01-refctx-api-unavailable.md:2 | severity=NIT | confidence=3\n  PROBLEM: The sentence \"Exit 1 (declared branch missing) and routing off keep the legacy fallback; implement.yml already behaved this way.\" can be read to say implement.yml also keeps the routing-off fallback for exit 2, but its exit-2 handling is unconditional and fails closed.\n  WHY: The release note misstates implement.yml's behavior, potentially leading operators to expect a fallback where the workflow exits with an error.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (No findings reported.)\n- HARDENING_SUGGESTION: tests/test_workflow_checkout_integration_ref_audit.py, test_refctx_api_unavailable_fails_closed_when_routing_on, implement.yml block (lines 478-481). The implement.yml exit-2 refusal is asserted only with routing \"true\", while .github/workflows/implement.yml:749-752 fails closed unconditionally. Loop the implement.yml `_run_refctx(\"implement.yml\", \"ok\", <routing>, api_unavailable)` call over (\"true\", \"false\", None). Estimated lines changed: ~4. HARDENING_RISK_SCORE: 1\n- REVIEW NOTE (not emitted as a finding): the changelog sentence at changelog.d/wfopt-2026-10-01-refctx-api-unavailable.md:2 is ambiguous (NIT); implement.yml:749-752 fails closed on exit 2 regardless of routing.\n- REVIEW NOTE: the three workflow hunks (.github/workflows/clarify.yml:333-337, .github/workflows/plan.yml:443-447, .github/workflows/orchestrate_clarify_respond.yml:360-364) were verified correct. The pre-push gate failures listed in the PR description do not map to the changed files; the reviewer could not execute tests to confirm or refute them.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e2130784ce79c9807ef557613e5ef5d630de480bbe2b64daebf04409c9981211",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8803,
+    "run_id": "41766918359",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41766918359",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104041135_9d5142d293",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8803,
+    "run_id": "41766918359"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T04:11:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
