@@ -1835,12 +1835,14 @@ def test_heal_test_only_weakening_check_refuses() -> None:
 	assert (record["reason"], code) == ("skip_added", 30), record
 	# Any new pytest_* hook (outcome rewriting) or pytest_plugins assignment counts as a control.
 	for added in ("@pytest.hookimpl(hookwrapper=True)\ndef pytest_runtest_makereport(item, call):\n\tyield\n",
-		"pytest_plugins = ['evil']\n"):
+		"pytest_plugins = ['evil']\n", "pytest.exit('done', returncode=0)\n",
+		"@pytest.hookimpl(hookwrapper=True, specname='pytest_runtest_makereport')\ndef rewrite(item, call):\n\tyield\n"):
 		record, code = _to_weaken({"tests/conftest.py": "import pytest\n"},
 			{"tests/conftest.py": "import pytest\n" + added}, ["tests/conftest.py"])
 		assert (record["reason"], code) == ("skip_added", 30), (added, record)
 	# A new or changed pytest config file under tests/ refuses; an unchanged one passes.
-	for name in ("tests/pytest.ini", "tests/.pytest.ini", "tests/tox.ini", "tests/setup.cfg"):
+	for name in ("tests/pytest.ini", "tests/.pytest.ini", "tests/tox.ini", "tests/setup.cfg", "tests/pytest.toml",
+		"tests/.pytest.toml"):
 		record, code = _to_weaken({}, {name: "[pytest]\naddopts = -k 'not flaky'\n"}, [name])
 		assert (record["reason"], code) == ("pytest_config_changed", 30), (name, record)
 	record, code = _to_weaken({"tests/pytest.ini": "[pytest]\n"}, {"tests/pytest.ini": "[pytest]\n"}, ["tests/pytest.ini"])
