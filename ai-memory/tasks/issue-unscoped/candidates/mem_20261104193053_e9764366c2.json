@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/operator_step_issue.py:858-859 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The alert-claim logic reads comment bodies with `str(comment.get(\"body\") or \"\")`, and the check `if not match or int(match.group(1)) != item:` checks only the item number, not the repository or a specific alert instance.\n  WHY: The reviewer gave no severity and says the logic \"largely covers\" this, but the `str()` conversion of comment bodies might hide malformed data.\n- scripts/orchestrate_poll_process.sh:22283-22284 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `tg_alert_configured CRITICAL` is checked before the claim, but the Telegram configuration (token, chat ID) could change between the claim and the send.\n  WHY: The reviewer gave no severity and calls this acceptable; if Telegram is unconfigured after `alert-claim` succeeds, `tg_send_msg` fails and a claim exists with no message sent, logged as `outcome=unconfirmed reason=send_failed_or_ambiguous` and not retried.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"At most one persisted CRITICAL alert attempt per needs-human parking\" (Stuck-states P6b).\n  expected_change_site: All call sites of `tg_notify` related to needs-human digest.\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR migrates `orchestrate_poll_process.sh` and `unblock_judge.sh` but does not check whether `tg_notify` is still called elsewhere to send needs-human alerts (reviewer severity: NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/operator_step_issue.py:lines 858-859 | confidence=2\n  PROBLEM: The alert-claim logic reads comment bodies using `str(comment.get(\"body\") or \"\")`; the check `if not match or int(match.group(1)) != item:` only validates the item number.\n  WHY: It does not explicitly verify the repository context or tie the claim to a specific alert instance (it does check the `parking` stamp or `overflow` status); the logic largely covers this, but the `str()` conversion might hide malformed data.\n- scripts/orchestrate_poll_process.sh:lines 22283-22284 | confidence=2\n  PROBLEM: `tg_alert_configured CRITICAL` is checked before the claim, but the Telegram configuration (token, chat ID) could change between the claim and the send.\n  WHY: If Telegram is unconfigured between `alert-claim` and `tg_send_msg`, the send fails and a claim exists with no message sent; the code logs `outcome=unconfirmed reason=send_failed_or_ambiguous` and does not retry, which the reviewer considers acceptable given the one-attempt-per-parking requirement.\n- TASK_GAP\n  Requirement: \"At most one persisted CRITICAL alert attempt per needs-human parking\" (Stuck-states P6b).\n  Expected change site: All call sites of `tg_notify` related to needs-human digest.\n  Evidence of absence: The PR correctly migrates `orchestrate_poll_process.sh` and `unblock_judge.sh` but does not audit whether `tg_notify` is still called elsewhere for needs-human alerts.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- HARDENING_SUGGESTION scripts/tg_helpers.sh:`tg_send_msg()`\n  Issue: The function does not explicitly validate that `TG_BOT_SECRET` looks like a valid Telegram token before sending.\n  Suggested minimal fix: Add a regex or length check (an early return or a warning when the secret is malformed); Lines changed: 2; HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c376383846d1b490e8771e5f2d1fc0d799ba3afd45cd3f6dee472cf55e21b21f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8826,
+    "run_id": "41894367624",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41894367624",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104193053_e9764366c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8826,
+    "run_id": "41894367624"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T19:30:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
