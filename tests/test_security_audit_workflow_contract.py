@@ -4786,5 +4786,200 @@ def test_security_audit_prompts_require_final_array_only() -> None:
 	assert contract_blocks[0] == contract_blocks[1]
 
 
+# Stuck-states P5b: a single-issue security pass audit (target ref plus PR
+# number) files one consolidated follow-up per cycle.
+P5B_TARGET_REF = "ai/issue-7"
+
+
+def _p5b_fixture_repo(base_dir: Path) -> tuple[Path, str, str]:
+	repo_dir, first_sha, _ = _git_fixture_repo(base_dir)
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update({
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+		"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+	})
+	(repo_dir / "file_c.py").write_text("print('third module')\nVALUE_C = 3\n", encoding="utf-8")
+	subprocess.run(["git", "add", "file_c.py"], cwd=repo_dir, env=git_env, check=True)
+	subprocess.run(["git", "commit", "-qm", "third commit"], cwd=repo_dir, env=git_env, check=True)
+	head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, env=git_env, text=True).strip()
+	return repo_dir, first_sha, head_sha
+
+
+def _p5b_findings() -> list[dict]:
+	second = _finding_payload("p5b-b-second", file_path="file_b.py")
+	second["line"] = 2
+	return [
+		_finding_payload("p5b-b-first", file_path="file_b.py"),
+		second,
+		_finding_payload("p5b-c", file_path="file_c.py"),
+	]
+
+
+def _run_p5b_audit(findings: list[dict], *, api_issues: list | None = None, env: dict | None = None):
+	with tempfile.TemporaryDirectory(prefix="security-audit-p5b-") as fixture_td:
+		repo_dir, first_sha, head_sha = _p5b_fixture_repo(Path(fixture_td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[api_issues or []]]
+		state["next_issue_number"] = 9200
+		extra_env = {
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_TARGET_REF": P5B_TARGET_REF,
+			"SECURITY_AUDIT_DIFF_BASE": first_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			"SECURITY_AUDIT_PASS_PR_NUMBER": "42",
+		}
+		extra_env.update(env or {})
+		extra_env = {key: value for key, value in extra_env.items() if value is not None}
+		proc, final_state = _run_security_audit(state, codex_output=json.dumps(findings), cwd=repo_dir, extra_env=extra_env)
+		return proc, final_state, head_sha
+
+
+def _leading_markers(body: str) -> list[str]:
+	markers = []
+	for line in body.split("\n"):
+		match = re.fullmatch(r"<!-- ai:security-finding:(\S+) -->", line)
+		if match is None:
+			break
+		markers.append(match.group(1))
+	return markers
+
+
+def test_security_audit_pr_pass_files_one_consolidated_followup() -> None:
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import security_dependency
+
+	proc, final_state, head_sha = _run_p5b_audit(_p5b_findings())
+	assert proc.returncode == 0, proc.stderr
+	assert "security-audit: followup_mode=consolidated pr=42" in proc.stdout
+	assert "followups_created=1" in proc.stdout
+	assert "findings=3 " in proc.stdout
+	bodies = final_state.get("issue_create_bodies", [])
+	assert len(bodies) == 1
+	body = bodies[0]
+	assert _leading_markers(body) == ["p5b-b-first", "p5b-b-second", "p5b-c"]
+	assert body.split("\n")[3] == "Refs #9000"
+	assert "- Pull request: #42" in body
+	assert f"- Audited head: `{head_sha}`" in body
+	assert f"- Integration branch: `{P5B_TARGET_REF}`" in body
+	assert "## Findings" in body and "### 3. p5b-c" in body
+	assert "Depends on:" not in body
+	title = final_state["issue_create_args"][0][final_state["issue_create_args"][0].index("--title") + 1]
+	assert title == f"[security-audit] PR #42: 3 findings at {head_sha[:12]}"
+	assert "--label" in final_state["issue_create_args"][0] and "ai:security" in final_state["issue_create_args"][0]
+	comment = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "- Follow-up mode: consolidated (3 findings in one issue)" in comment
+	assert security_dependency.security_dependency_number({"body": body, "labels": ["ai:security"], "number": 9200}) is None
+
+
+@pytest.mark.parametrize("state", ["open", "closed"])
+def test_security_audit_consolidated_retry_dedupes_every_leading_marker(state: str) -> None:
+	existing = {
+		"number": 9150,
+		"state": state,
+		"body": "".join(f"<!-- ai:security-finding:{finding['finding_id']} -->\n" for finding in _p5b_findings())
+		+ "Refs #9000\n\n- Integration branch: `ai/issue-7`\n",
+	}
+	proc, final_state, _ = _run_p5b_audit(_p5b_findings(), api_issues=[existing])
+	assert proc.returncode == 0, proc.stderr
+	assert "followups_created=0" in proc.stdout
+	assert not final_state.get("issue_create_bodies")
+
+
+def test_security_audit_dedupe_ignores_markers_below_the_leading_block() -> None:
+	existing = {
+		"number": 9150,
+		"state": "open",
+		"body": "<!-- ai:security-finding:p5b-b-first -->\nRefs #9000\n\n<!-- ai:security-finding:p5b-c -->\n",
+	}
+	proc, final_state, _ = _run_p5b_audit(_p5b_findings(), api_issues=[existing])
+	assert proc.returncode == 0, proc.stderr
+	bodies = final_state.get("issue_create_bodies", [])
+	assert len(bodies) == 1
+	assert _leading_markers(bodies[0]) == ["p5b-b-second", "p5b-c"]
+	# p5b-b-first's file already has follow-up #9150.
+	assert "\n- Depends on: #9150\n" in bodies[0]
+
+
+def test_security_audit_consolidated_followup_depends_on_highest_same_file_predecessor() -> None:
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import security_dependency
+
+	findings = [
+		_finding_payload("old-b", file_path="file_b.py"),
+		_finding_payload("old-c", file_path="file_c.py"),
+		*_p5b_findings(),
+	]
+	existing = [
+		{"number": 9100, "state": "open", "body": "<!-- ai:security-finding:old-b -->\nRefs #9000\n"},
+		{"number": 9105, "state": "closed", "body": "<!-- ai:security-finding:old-c -->\nRefs #9000\n"},
+	]
+	proc, final_state, _ = _run_p5b_audit(findings, api_issues=existing)
+	assert proc.returncode == 0, proc.stderr
+	assert "followups_created=1" in proc.stdout
+	bodies = final_state.get("issue_create_bodies", [])
+	assert len(bodies) == 1
+	assert bodies[0].count("Depends on:") == 1
+	assert "\n- Depends on: #9105\n" in bodies[0]
+	assert security_dependency.security_dependency_number({"body": bodies[0], "labels": ["ai:security"], "number": 9200}) == 9105
+
+
+@pytest.mark.parametrize("env", [
+	{"SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED": "false"},
+	{"SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED": "off"},
+	{"SECURITY_AUDIT_PASS_PR_NUMBER": None},
+	{"SECURITY_AUDIT_PASS_PR_NUMBER": ""},
+])
+def test_security_audit_consolidation_off_or_without_pr_keeps_per_finding_followups(env: dict) -> None:
+	proc, final_state, _ = _run_p5b_audit(_p5b_findings(), env=env)
+	assert proc.returncode == 0, proc.stderr
+	assert "security-audit: followup_mode=per_finding" in proc.stdout
+	assert "followups_created=3" in proc.stdout
+	bodies = final_state.get("issue_create_bodies", [])
+	assert [_leading_markers(body) for body in bodies] == [["p5b-b-first"], ["p5b-b-second"], ["p5b-c"]]
+	assert "- Depends on: #9200" in bodies[1]
+	assert "Depends on:" not in bodies[2]
+	assert not any("Pull request:" in body for body in bodies)
+	comment = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "Follow-up mode:" not in comment
+	# Byte-identical to a run whose environment has neither new variable.
+	_, legacy_state, _ = _run_p5b_audit(
+		_p5b_findings(),
+		env={"SECURITY_AUDIT_PASS_PR_NUMBER": None, "SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED": None},
+	)
+	assert legacy_state.get("issue_create_bodies") == bodies
+
+
+@pytest.mark.parametrize("pr_number", ["abc", "0", "-1", "12345678901"])
+def test_security_audit_invalid_pr_number_warns_and_keeps_per_finding_followups(pr_number: str) -> None:
+	proc, final_state, _ = _run_p5b_audit(_p5b_findings(), env={"SECURITY_AUDIT_PASS_PR_NUMBER": pr_number})
+	assert proc.returncode == 0, proc.stderr
+	assert "::warning::security-audit: SECURITY_AUDIT_PASS_PR_NUMBER must be a positive integer" in proc.stdout
+	assert "security-audit: followup_mode=per_finding pr=none" in proc.stdout
+	assert len(final_state.get("issue_create_bodies", [])) == 3
+
+
+def test_security_audit_default_branch_audit_never_consolidates() -> None:
+	state = _security_audit_tracker_state()
+	state["api_responses"] = [[[]]]
+	state["next_issue_number"] = 9100
+	proc, final_state = _run_security_audit(
+		state,
+		codex_output=json.dumps([_finding_payload("first"), _finding_payload("second")]),
+		extra_env={"SECURITY_AUDIT_PASS_PR_NUMBER": "42"},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert "followup_mode=per_finding" in proc.stdout
+	assert len(final_state.get("issue_create_bodies", [])) == 2
+
+
+def test_security_audit_step_wires_consolidated_followup_switch() -> None:
+	env = _audit_workflow_step("Run security audit")["env"]
+	assert env["SECURITY_AUDIT_PASS_PR_NUMBER"] == "${{ inputs.pr_number || '' }}"
+	assert env["SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED"] == "${{ vars.SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED || 'true' }}"
+	script = SCRIPT_PATH.read_text(encoding="utf-8")
+	assert 'SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED="${SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED:-true}"' in script
+	assert 'SECURITY_AUDIT_PASS_PR_NUMBER="${SECURITY_AUDIT_PASS_PR_NUMBER:-}"' in script
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

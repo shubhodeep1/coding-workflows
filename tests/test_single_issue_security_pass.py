@@ -1524,3 +1524,69 @@ def test_findings_source_without_stored_payload_keeps_todays_dispatch(tmp_path: 
 def test_carry_forward_diff_lists_rename_sources() -> None:
 	text = (Path(__file__).resolve().parents[1] / "scripts" / "review_single_issue_security_pass.sh").read_text(encoding="utf-8")
 	assert 'diff --no-renames --name-only "${carry_since}..${head_sha}"' in text
+
+
+# Stuck-states P5b: one consolidated follow-up per cycle carries one leading
+# `<!-- ai:security-finding:<id> -->` line per finding.
+def _consolidated_body(finding_ids: tuple[str, ...], branch: str = "ai/issue-7", trailer: str = "") -> str:
+	markers = "".join(f"<!-- ai:security-finding:{finding_id} -->\n" for finding_id in finding_ids)
+	return f"{markers}Refs #9000\n\n- Pull request: #42\n- Integration branch: `{branch}`\n\n## Findings\n{trailer}"
+
+
+def test_consolidated_followup_covers_every_leading_marker(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1", "F-2")), "user": {"login": "owner"}}]]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=awaiting_followups\n"
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+
+
+def test_consolidated_followup_missing_an_id_still_pages(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1",)), "user": {"login": "owner"}}]]
+	result, _, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+@pytest.mark.parametrize("trailer", [
+	"Quoted: <!-- ai:security-finding:F-2 -->\n",
+	"<!-- ai:security-finding:F-2 -->\n",
+])
+def test_marker_outside_the_leading_block_does_not_count(tmp_path: Path, trailer: str) -> None:
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1",), trailer=trailer), "user": {"login": "owner"}}]]
+	result, _, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+@pytest.mark.parametrize("login, state", [("other", "open"), ("owner", "closed")])
+def test_consolidated_followup_from_other_author_or_closed_does_not_count(tmp_path: Path, login: str, state: str) -> None:
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	issues = [[{"state": state, "body": _consolidated_body(("F-1", "F-2")), "user": {"login": login}}]]
+	result, _, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+@pytest.mark.parametrize("issues", [
+	[[{"state": "open", "body": _consolidated_body(("F-1", "F-2")), "user": {"login": "owner"}}]],
+	[[]],
+])
+def test_findings_head_never_merges_with_or_without_consolidated_followup(tmp_path: Path, issues: list) -> None:
+	# Severity gating is unchanged: a findings result for this head holds the merge.
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output.startswith("hold=true\n")
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_prior_finding_covered_by_second_consolidated_marker_is_carried(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1", "F-9")), "user": {"login": "owner"}}]]
+	_, _, body = _carry_report(tmp_path, security_issues=issues)
+	assert _ids_in(body) == ["F-9"]
+	assert f"Carried forward (file untouched since `{OLD}`, follow-up open): F-9" in body
+
+
+def test_prior_finding_quoted_below_the_leading_block_is_not_carried(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1",), trailer="<!-- ai:security-finding:F-9 -->\n"), "user": {"login": "owner"}}]]
+	_, _, body = _carry_report(tmp_path, security_issues=issues)
+	assert "## Single-issue security pass: clean" in body
