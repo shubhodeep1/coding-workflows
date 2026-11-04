@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -55,8 +56,8 @@ def _run_staleness(date_script: str, alert_hours: str) -> dict:
 		calls_log = tmp / "stub_calls.log"
 		harness = tmp / "harness.sh"
 		harness.write_text(
-			"tg_notify() { echo \"tg_notify\" >> " + repr(str(calls_log)) + "; }\n"
-			"mark_integration_branch_squash_fresh() { echo \"mark_fresh $*\" >> " + repr(str(calls_log)) + "; }\n"
+			"tg_notify() { echo \"tg_notify\" >> " + shlex.quote(str(calls_log)) + "; }\n"
+			"mark_integration_branch_squash_fresh() { echo \"mark_fresh $*\" >> " + shlex.quote(str(calls_log)) + "; }\n"
 			+ date_script
 			+ _extract_staleness_function()
 			+ "check_integration_branch_staleness int-branch main 3\n"

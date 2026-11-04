@@ -475,6 +475,8 @@ def test_refctx_api_unavailable_fails_closed_when_routing_on() -> None:
 			assert "resolver_status=failed\n" in gh_output, f"{label}: {gh_output!r}"
 		rc, out, gh_output = _run_refctx(workflow_name, "ok", "true", branch_missing)
 		assert rc == 0 and "ref=\n" in gh_output, f"{workflow_name} branch_missing\n{out}"
+		if workflow_name == "plan.yml":
+			assert "resolver_status=failed\n" in gh_output, f"{workflow_name} branch_missing: {gh_output!r}"
 	# implement.yml refuses exit 2 whatever the routing setting.
 	for routing in ("true", "false", None):
 		rc, out, gh_output = _run_refctx("implement.yml", "ok", routing, api_unavailable)
