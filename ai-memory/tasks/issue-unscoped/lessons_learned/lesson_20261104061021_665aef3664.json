@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-04T06:10:21Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=AGENTS.md:n/a; cited_path=AGENTS.md; files_touched=.github/workflows/clarify.yml, .github/workflows/orchestrate_clarify_respond.yml, .github/workflows/plan.yml, scripts/orchestrate_poll_process.sh, tests/test_ci_wires_every_test_file.py, tests/test_orchestrate_integration_ahead_by_gate.py, tests/test_orchestrate_integration_staleness_clock.py, tests/test_workflow_checkout_integration_ref_audit.py.",
+  "phase": "review_autofix",
+  "pr_number": 8800,
+  "record_id": "lesson_20261104061021_665aef3664",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md",
+    ".github/workflows/clarify.yml",
+    ".github/workflows/orchestrate_clarify_respond.yml",
+    ".github/workflows/plan.yml",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_orchestrate_integration_ahead_by_gate.py",
+    "tests/test_orchestrate_integration_staleness_clock.py",
+    "tests/test_workflow_checkout_integration_ref_audit.py"
+  ]
+}
