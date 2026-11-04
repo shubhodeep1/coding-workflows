@@ -1091,7 +1091,8 @@ release_blocker_oldest_commit_at=""
 release_blocker_commits_truncated="false"
 # Creation time of the last cycle's trusted baseline marker (guard 4).
 release_blocker_baseline_at=""
-# Set once guard 4's marker search succeeded; cycle_stale needs it so a
+# Set once a marker search succeeded (guard 4, or cycle_stale's own read on a
+# skip before guard 4); cycle_stale needs it so a
 # guard_unavailable skip before that read never falls back to the
 # oldest-commit clock alone.
 release_blocker_baseline_read="false"
@@ -1467,7 +1468,9 @@ release_blocker_check_untrusted_hold()
 # release_blocker_check_cycle_stale <skip_reason>
 # cycle_stale: main is ahead of the stable tag with code changes and the
 # later of the last cycle's baseline marker and the oldest unreleased commit
-# is at least RELEASE_BLOCKER_CYCLE_STALE_SECS old. Reads no extra data.
+# is at least RELEASE_BLOCKER_CYCLE_STALE_SECS old. After guard 4 it reads
+# no extra data; a skip before guard 4 reads the baseline marker itself
+# (1 search + up to 10 comment reads).
 release_blocker_check_cycle_stale()
 {
 	local rb_skip_reason="${1:-}" rb_marker_t="" rb_commit_t="" rb_clock="" rb_age="" rb_now="" rb_evidence=""
