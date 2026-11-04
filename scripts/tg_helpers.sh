@@ -97,6 +97,20 @@ _tg_should_send()
 	[ "${msg_num}" -ge "${threshold_num}" ]
 }
 
+# tg_alert_configured — returns 0 only when tg_send_msg could really send a
+# message at LEVEL: a bot token, a chat ID, and a level that meets the
+# ALERT_MSG_LEVEL threshold (so ALERT_MSG_LEVEL=SILENT counts as not
+# configured). No I/O. The needs-human alert claim (stuck-states P6b) checks
+# it first so a run that could never send does not use up the only attempt.
+# Usage: if tg_alert_configured CRITICAL; then ...; fi
+tg_alert_configured()
+{
+	local level="${1:-CRITICAL}"
+	[ -n "${TG_BOT_SECRET:-}" ] || return 1
+	[ -n "$(_tg_chat_id)" ] || return 1
+	_tg_should_send "${level}"
+}
+
 # _tg_prepend_level — prepend "ICON LEVEL: " to a message.
 _tg_prepend_level()
 {

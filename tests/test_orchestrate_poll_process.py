@@ -28741,7 +28741,14 @@ def _run_needs_human_park(tmp: Path, **env_extra: str) -> tuple[subprocess.Compl
 	(tmp / "scripts" / "operator_step_issue.py").write_text(
 		"import json, os, sys\n"
 		"open(os.environ['FAKE_PARK_CALLS'], 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
-		"print(json.dumps({'issue': 900, 'newly_parked': True}))\n",
+		"sub = sys.argv[2]\n"
+		"if sub == 'park':\n"
+		"    print(json.dumps({'issue': 900, 'newly_parked': True, 'parking': '2026-10-08T00:00:00Z'}))\n"
+		"elif sub == 'alert-claim':\n"
+		"    claimed = os.environ.get('FAKE_ALERT_CLAIMED', 'true') == 'true'\n"
+		"    print(json.dumps({'claimed': claimed, 'comment_id': 5000} if claimed else {'claimed': False, 'reason': 'already_attempted'}))\n"
+		"else:\n"
+		"    print(json.dumps({'confirmed': True}))\n",
 		encoding="utf-8",
 	)
 	harness = tmp / "harness.sh"
@@ -28749,7 +28756,11 @@ def _run_needs_human_park(tmp: Path, **env_extra: str) -> tuple[subprocess.Compl
 		"set -uo pipefail\n"
 		'UNBLOCK_TRUSTED_LOGIN=""\n'
 		'unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN="pipeline-bot"; printf "%s" "$UNBLOCK_TRUSTED_LOGIN"; }\n'
-		'tg_notify() { printf "%s %s\\n" "$2" "$1" >> "$FAKE_ALERTS"; }\n'
+		'tg_alert_configured() { [ "${FAKE_TG_UNCONFIGURED:-}" != "true" ]; }\n'
+		'tg_send_msg() { printf "%s %s\\n" "$2" "$1" >> "$FAKE_ALERTS"; printf "777"; }\n'
+		'tg_store_msg_id() { printf "%s %s\\n" "$1" "$2" >> "$FAKE_ALERTS.store"; }\n'
+		'_gh_url() { printf "https://github.com/%s/%s" "$GITHUB_REPOSITORY" "$1"; }\n'
+		'_smoke_fixture_alert_silenced() { [ "${FAKE_SMOKE_SILENCED:-}" = "true" ]; }\n'
 		+ park + '\nneeds_human_park_project "recovery_exhausted"\n',
 		encoding="utf-8",
 	)
@@ -28784,6 +28795,42 @@ def test_needs_human_digest_parks_the_project_when_the_judge_is_off():
 			assert args[args.index(flag) + 1] == value, flag
 		if shutil.which("jq"):
 			assert alerts.read_text(encoding="utf-8").startswith("CRITICAL Project #40 parked in needs-human digest #900")
+
+
+def test_needs_human_project_park_alert_claims_sends_once_and_confirms():
+	if not shutil.which("jq"):
+		pytest.skip("jq is required")
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls, alerts = _run_needs_human_park(Path(tmp), UNBLOCK_JUDGE_ENABLED="false", GITHUB_RUN_ID="123")
+		assert result.returncode == 0, result.stderr
+		lines = calls.read_text(encoding="utf-8").splitlines()
+		assert [line.split()[1] for line in lines] == ["park", "alert-claim", "alert-confirm"]
+		claim = lines[1].split()
+		assert claim[claim.index("--parking") + 1] == "2026-10-08T00:00:00Z" and claim[claim.index("--item") + 1] == "40"
+		assert claim[claim.index("--trusted-login") + 1] == "pipeline-bot"
+		confirm = lines[2].split()
+		assert confirm[confirm.index("--comment-id") + 1] == "5000" and confirm[confirm.index("--message-id") + 1] == "777"
+		text = alerts.read_text(encoding="utf-8")
+		assert text.count("CRITICAL Project #40 parked in needs-human digest #900") == 1
+		assert "Tracking: https://github.com/o/r/issues/40" in text and "Run: https://github.com/o/r/actions/runs/123" in text
+		assert (Path(tmp) / "alerts.txt.store").read_text(encoding="utf-8").strip() == "40 777"
+
+
+@pytest.mark.parametrize(("env", "subcommands", "log"), [
+	({"FAKE_ALERT_CLAIMED": "false"}, ["park", "alert-claim"], None),
+	({"FAKE_SMOKE_SILENCED": "true"}, ["park"], "reason=smoke_silenced"),
+	({"FAKE_TG_UNCONFIGURED": "true"}, ["park"], "reason=telegram_unconfigured"),
+])
+def test_needs_human_project_park_alert_never_sends_without_a_won_claim(env, subcommands, log):
+	if not shutil.which("jq"):
+		pytest.skip("jq is required")
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls, alerts = _run_needs_human_park(Path(tmp), UNBLOCK_JUDGE_ENABLED="false", **env)
+		assert result.returncode == 0, result.stderr
+		assert [line.split()[1] for line in calls.read_text(encoding="utf-8").splitlines()] == subcommands
+		assert not alerts.exists()
+		if log:
+			assert f"NEEDS_HUMAN_ALERT item=40 parking=2026-10-08T00:00:00Z outcome=skip {log}" in result.stdout
 
 
 def test_needs_human_digest_park_never_triggers_the_staged_support_latch_release():
