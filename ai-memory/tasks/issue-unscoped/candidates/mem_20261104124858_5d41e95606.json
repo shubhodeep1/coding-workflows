@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ (referenced by copilot-pull-request-reviewer check-run):n/a | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check run failed with `Prompt too big after adding system message` (custom_instructions_too_large) because the combined size of AGENTS.md and CLAUDE.md exceeds the Copilot input limit.\n  WHY: The failure is environmental and not caused by the PR diff, which touches only `tests/e2e_smoke_canary.txt`. Both reviewers rated it NIT, mapped here to low. Confidence is 5 from google_gemini-3_1-flash-lite and 4 from z-ai_glm-5_3-flash. Their file references differ: .github/workflows/ versus repo-root CLAUDE.md / AGENTS.md.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ (referenced by copilot-pull-request-reviewer check-run):n/a | severity=NIT | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check run failed with `Prompt too big after adding system message` (custom_instructions_too_large).\n  WHY: The combined size of the repository's custom instructions (CLAUDE.md, AGENTS.md) exceeds the input token limit for the Copilot reviewer action.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- not in PR changed files (repo-root `CLAUDE.md` / `AGENTS.md`, unmodified in this PR):check run `copilot-pull-request-reviewer`, run 41549900517, job 125634616239 | severity=NIT | confidence=4\n  PROBLEM: The Copilot reviewer job exits 1 with `Prompt too big after adding system message` (`custom_instructions_too_large`, statusCode 422) while building 2 custom instructions (AGENTS.md, CLAUDE.md); no Copilot review was created.\n  WHY: The combined custom-instruction payload exceeds the Copilot API's prompt-size limit. The PR diff touches only `tests/e2e_smoke_canary.txt`, which cannot influence custom-instruction size, so this is an environmental/repo-config issue outside the PR's change set.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "657670127a29d1b0306d3f70c1ab90072d305aac4648318ac212d13561305b8f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41830351101",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41830351101",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104124858_5d41e95606",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41830351101"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T12:48:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
