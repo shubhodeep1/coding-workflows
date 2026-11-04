@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-04T09:01:40Z",
+  "issue_number": 8815,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=tests/test_workflow_gh_retry_fallback_contract.py:1-1; cited_path=external check run `copilot-pull-request-reviewer` (job 126473070588) and the pre-push gate entries `tests/test_review_autofix_provider_outage_contract.py` and `tests/test_workflow_checkout_integration_ref_audit.py`; files_touched=.github/workflows/review_autofix_sweep.yml, changelog.d/wfopt-2026-10-01-2-sweep-snapshot-parse.md, tests/test_workflow_gh_retry_fallback_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8816,
+  "record_id": "lesson_20261104090140_839f853f9a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "external check run `copilot-pull-request-reviewer` (job 126473070588) and the pre-push gate entries `tests/test_review_autofix_provider_outage_contract.py` and `tests/test_workflow_checkout_integration_ref_audit.py`",
+    "tests/test_workflow_gh_retry_fallback_contract.py",
+    ".github/workflows/review_autofix_sweep.yml",
+    "changelog.d/wfopt-2026-10-01-2-sweep-snapshot-parse.md"
+  ]
+}
