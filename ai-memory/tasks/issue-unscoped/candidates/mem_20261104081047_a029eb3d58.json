@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The CI failure reports that this test suite fails after applying the change to tests/e2e_smoke_canary.txt.\n  WHY: The test likely relies on the previous content or specific state of the smoke canary file, which is now invalid or missing. Severity is MAJOR in the source. Other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) judged this failure not caused by the diff.\n- external check run copilot-pull-request-reviewer (job 125616328401):unspecified | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The copilot-pull-request-reviewer check failed with custom_instructions_too_large (HTTP 422) because the AGENTS.md and CLAUDE.md custom instructions are too large.\n  WHY: The external service aborted before analysing any code. Severity disagreement: anthropic_claude-sonnet-5_5 gave NIT with confidence 2 and said the diff did not cause it. google_gemini-3_1-flash-lite gave MAJOR with confidence 5 and cited .github/workflows/review_autofix.yml.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- external check run copilot-pull-request-reviewer (job 125616328401, no repository file) | severity=NIT | confidence=2\n  PROBLEM: The external Copilot reviewer service rejected its own prompt (custom_instructions_too_large, HTTP 422, \"Prompt too big after adding system message\") because AGENTS.md and CLAUDE.md are too large.\n  WHY: This is a service-side limit and the diff, which only changes tests/e2e_smoke_canary.txt, did not cause it. It is listed only because every failed check must be surfaced.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=MAJOR | confidence=3\n  PROBLEM: The CI failure reports that this test suite fails after applying the change to tests/e2e_smoke_canary.txt.\n  WHY: The test likely relies on the previous content or specific state of the smoke canary file for integration verification, which is now invalid or missing.\n- .github/workflows/review_autofix.yml (via failure log copilot-pull-request-reviewer) | severity=MAJOR | confidence=5\n  PROBLEM: The PR failed the copilot-pull-request-reviewer check with a custom_instructions_too_large error (HTTP 422).\n  WHY: CLAUDE.md and AGENTS.md have grown too large, so the Copilot PR Reviewer service aborted before analysing the PR. The reviewer called this an infrastructure issue affecting all PRs.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c663b8607f984b968f51fccc4f7f9f9de62ac418ce4252d4781f02eae4cc1177",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41796310924",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41796310924",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104081047_a029eb3d58",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41796310924"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T08:10:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
