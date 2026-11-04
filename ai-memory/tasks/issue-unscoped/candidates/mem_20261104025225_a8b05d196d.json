@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- copilot-pull-request-reviewer (check-run):N/A | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The copilot-pull-request-reviewer check-run failed with an HTTP 422 custom_instructions_too_large error.\n  WHY: The reviewer calls this an environmental error: the repository's custom instructions (AGENTS.md/CLAUDE.md) exceed the Copilot review service prompt limit, and the canary file update does not cause it. The source labelled the severity NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- copilot-pull-request-reviewer (check-run):N/A | severity=NIT | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check-run failed with an HTTP 422 custom_instructions_too_large error.\n  WHY: This is an environmental error caused by the repository's custom instructions (AGENTS.md/CLAUDE.md) exceeding the Copilot review service prompt limit. The failure is not caused by the canary file update, and the PR diff does not contribute to this limit being exceeded.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "81c59513e4bf3afd7ad7264325f1ab272f362a08d3c0edbf221176f452f1e0f0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "41761751116",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41761751116",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104025225_a8b05d196d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "41761751116"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T02:52:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
