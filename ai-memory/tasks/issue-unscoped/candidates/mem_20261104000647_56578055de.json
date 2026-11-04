@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:1-7 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with HTTP 422 `custom_instructions_too_large` because the loaded custom-instruction payload exceeds the prompt limit.\n  WHY: The check exits with code 1 before it creates a review request, which blocks automated review. Severity disagreement: the sources rate it MAJOR. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) judged it inherited and not caused by this diff. z-ai_glm-5_3-flash called it a pre-existing repo condition, not a diff regression.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the content of `tests/e2e_smoke_canary.txt` to exactly `status: ok`, `run_id: 40831286935`, `updated-by: ai-pipeline`, with a trailing newline.\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer's own text says the diff appears to meet the requirement and the task is complete, so no real gap exists. It was filed with SEVERITY: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:1-7 | severity=MAJOR | confidence=5\n  PROBLEM: The PR audit identifies `copilot-pull-request-reviewer` failures caused by exceeding the custom instruction payload limits. This indicates that documentation or instructions added directly to `agents.md` are triggering the limit violations, which prevents automated review.\n  WHY: The CI check `copilot-pull-request-reviewer` returns a 422 error and exits with status 1 when the instructions payload is too large. This blocks PR review and requires manual intervention.\n- TASK_GAP: tests/e2e_smoke_canary.txt | severity=NIT | confidence=5\n  Requirement: Update the content of `tests/e2e_smoke_canary.txt` to exactly `status: ok`, `run_id: 40831286935`, `updated-by: ai-pipeline`, with a trailing newline.\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The current diff shows the file content as the required three lines. This appears to meet the requirement, and the task is complete.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:(loaded custom-instruction payload; the failed check identifies `custom_instructions_too_large` while creating the PR review request) | severity=MAJOR | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check cannot create a review request because its prompt exceeds the configured limit.\n  WHY: The check receives HTTP 422 before review creation and exits with code 1, as shown in the PR check-run log.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md:1-7 | severity=MAJOR | confidence=MEDIUM\n  PROBLEM: `agents.md` is 5410 lines and exceeds the copilot reviewer's custom-instruction payload limit.\n  WHY: The reviewer's instruction payload would be blown, so the reviewer check would fail or skip. The mechanism is verified as plausible from file size and repo precedent, but the exact 422 was not directly observed. This is a pre-existing repo condition, not a diff regression.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2ad570d864e74670596984fa20e3bb6b2ce68fb89d13542926300598746ce3f7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "41731974348",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41731974348",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104000647_56578055de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "41731974348"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T00:06:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
