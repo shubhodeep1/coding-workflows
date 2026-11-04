@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/copilot-pull-request-reviewer:N/A | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The copilot-pull-request-reviewer CI check failed with a 422 error (custom_instructions_too_large).\n  WHY: It is an external infrastructure failure from Copilot prompt size limits, not caused by the PR's change, and no repository edit can resolve it. The source labeled it SEVERITY: NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/copilot-pull-request-reviewer:N/A | severity=NIT | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer CI check failed with a 422 error (custom_instructions_too_large).\n  WHY: It is an external infrastructure failure related to prompt size limitations imposed by the GitHub Copilot review agent; it is not caused by the logic change in the PR, and no edit within the repository code can resolve it.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6a446c846ae79e1175536b83ea9649b34e5dae82ac51c64180d9f93859e87a81",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41821465102",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41821465102",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104114140_1b3ab3108a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41821465102"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T11:41:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
