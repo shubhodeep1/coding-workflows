@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- copilot-pull-request-reviewer check run (external, run 41549900517); no repository source file | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The external Copilot reviewer check fails with \"Error creating PR review request: Prompt too big after adding system message\" (errorCode custom_instructions_too_large, HTTP 422) because the instruction files it loads (AGENTS.md and CLAUDE.md) are too large for its prompt budget.\n  WHY: The reviewer flagged this as a reviewer-side configuration limit, not caused by this diff. The PR changes only tests/e2e_smoke_canary.txt, so no edit in this PR can fix it. Source severity was NIT, mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- copilot-pull-request-reviewer check run (external, run 41549900517); no repository source file | severity=low (source: NIT) | confidence=4\n  PROBLEM: The external Copilot reviewer check fails because the custom instruction files it loads (AGENTS.md and CLAUDE.md) are too large for its prompt budget (log line \"Error creating PR review request: Prompt too big after adding system message\", errorCode custom_instructions_too_large, HTTP 422).\n  WHY: This is a reviewer-side configuration limit, not a result of this diff. The PR changes only tests/e2e_smoke_canary.txt, which is not one of the instruction files, and the issue forbids touching other files.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "625495bff3bc44cdc9a1952a40cba6eb65cf76551fb0e9b85b04f13308fcfe3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41921390304",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41921390304",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104221259_e83da1f6fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41921390304"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T22:12:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
