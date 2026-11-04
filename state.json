@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-04T08:21:35Z",
+  "tick_at": "2026-11-04T08:38:52Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,12 +11,12 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 6
+    "tracking_issues": 5
   },
   "tracking_issues": [
     {
       "current_wave": 8,
-      "integration_ahead_by": "106",
+      "integration_ahead_by": "107",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -92,26 +92,6 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] [E2E Orchestrate Smoke 41445772297] Parallel canary file updates",
-      "total_waves": 0,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 0,
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 8796,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Apply workflow-optimization-2026-10-01 recommendations (resolver exit-2 fail-closed, staleness clock read, processing report)",
       "total_waves": 0,
       "wave_complete": false
     },

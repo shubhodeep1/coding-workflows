@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-03T07:00:02Z",
+  "tick_at": "2026-11-04T08:38:52Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,17 +11,17 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 7
+    "tracking_issues": 5
   },
   "tracking_issues": [
     {
-      "current_wave": 4,
-      "integration_ahead_by": "84",
+      "current_wave": 8,
+      "integration_ahead_by": "107",
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 2,
+        "in_progress": 1,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -88,46 +88,6 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 8649,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-09-28-3.md",
-      "total_waves": 0,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 0,
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 8663,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-09-29.md",
-      "total_waves": 0,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 0,
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
       "number": 8681,
       "project_complete": false,
       "status": "in-progress",
@@ -136,25 +96,25 @@
       "wave_complete": false
     },
     {
-      "current_wave": 2,
-      "integration_ahead_by": "6",
+      "current_wave": 1,
+      "integration_ahead_by": "0",
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 1,
+        "in_progress": 1,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 8723,
+      "number": 8814,
       "project_complete": false,
-      "status": "waiting",
-      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-09-30.md",
-      "total_waves": 4,
-      "wave_complete": true
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-10-01-2.md",
+      "total_waves": 2,
+      "wave_complete": false
     }
   ]
 }
