@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- analysis/recommendation-processing-report.md:~1920 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The row \"Reliability 2 (CI YAML lint / Inline edit guard `env -S` regressions)\" cites `.claude/hooks/pr_merge_status_guard.py`, which does not exist at the repository root. The only copy is `workflow-templates/.claude/hooks/pr_merge_status_guard.py`.\n  WHY: Nothing runs differently, but a reader cannot verify the \"rejected / obsolete\" evidence from the cited path. The reviewer rated it NIT. Disagreement: z-ai_glm-5_3-flash said both hooks exist and called the claim false, and minimax_minimax-m3 treated the hook paths as existing in consumer-repo checkouts.\n- .github/workflows/review_autofix_sweep.yml:~429 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `active_snapshot_incomplete=true` is set on snapshot parse failure, but the diff does not clearly show that the flag is used to skip dispatch.\n  WHY: If the flag is not checked, the sweep may dispatch a review when it should have failed closed. Severity was MAJOR. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) verified that the gate at lines 505-509 skips every candidate, which refutes this finding.\n- tests/test_workflow_gh_retry_fallback_contract.py:514-531 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The tests assert exact statement order (`snap_parse_rc=$?` as the first statement in the else block) and the warning content through a structural parse.\n  WHY: This is brittle against valid structural changes. minimax_minimax-m3 noted the production code already satisfies the property and the test pins it.\n- external check copilot-pull-request-reviewer (run 41813913212, job 126519731240) | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot reviewer check fails with a 422 `custom_instructions_too_large` (\"Prompt too big after adding system message\") and does not review the PR.\n  WHY: The failure comes from the size of the custom instructions and maps to no changed hunk, so no automated review ran.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- analysis/recommendation-processing-report.md:~1920 | severity=NIT | confidence=4\n  PROBLEM: The row \"Reliability 2\" cites `.claude/hooks/pr_merge_status_guard.py`, which does not exist at the repository root. Only `workflow-templates/.claude/hooks/pr_merge_status_guard.py` exists.\n  WHY: Nothing runs differently, but a reader cannot verify the evidence from the cited path.\n- (Checked and not raised: the pass-1 concern that the else branch does not skip candidates is refuted, and the statement-order assertion is a NIT. Both were checked and not raised.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix_sweep.yml:~429 | severity=MAJOR | confidence=3\n  PROBLEM: `active_snapshot_incomplete=true` is set on parse failure, but the diff does not clearly show that it is used to skip dispatch.\n  WHY: If the flag is not checked, the sweep may dispatch when it should have failed closed.\n- tests/test_workflow_gh_retry_fallback_contract.py:514-515 | severity=NIT | confidence=2\n  PROBLEM: `test_sweep_snapshot_parse_failure_is_not_no_active_runs` asserts the exact statement order (`snap_parse_rc=$?` first in the else block).\n  WHY: This makes the test brittle against valid structural changes.\n- External CI check copilot-pull-request-reviewer (run 41813913212, job 126519731240) | severity=NIT | confidence=3\n  PROBLEM: The job fails with a 422 `custom_instructions_too_large` (\"Prompt too big after adding system message\") and does not run.\n  WHY: No automated review is performed for this PR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_gh_retry_fallback_contract.py:530-531 | severity=NIT | confidence=3\n  PROBLEM: The assertion `assert \"snap_raw\" not in warning[0] and \"snapshot_json\" not in warning[0]` depends on a brittle structural parse (statements list).\n  WHY: The reviewer marked it already satisfied: `.github/workflows/review_autofix_sweep.yml:419-427` already excludes `snap_raw` and `snapshot_json` from the warning, and the test pins that. There is no runtime defect.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- External CI check `copilot-pull-request-reviewer` (run 41813913212, job 126519731240) | severity=NIT | confidence=5\n  PROBLEM: The reviewer check failed while constructing its prompt (`custom_instructions_too_large`, HTTP 422) and did not review the PR.\n  WHY: The log reports \"Prompt too big after adding system message\" before review execution. It is not attributable to a changed code location, but the check remains failed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- external check copilot-pull-request-reviewer (run 41813913212, job 126519731240) | severity=NIT | confidence=5\n  PROBLEM: The Copilot review check aborts while assembling its prompt because the repo's AGENTS.md/CLAUDE.md exceed the custom-instruction budget, so it produced no review.\n  WHY: The backend returns a 422 before any code analysis. It maps to no changed hunk because this PR touches neither AGENTS.md nor CLAUDE.md.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2b7b2dbbad6a92a6cb6eb664480066ffb618abe5acb19f1bd20a8ea11a6af19a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8817,
+    "run_id": "41817298317",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41817298317",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104111015_1436692218",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8817,
+    "run_id": "41817298317"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T11:10:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
