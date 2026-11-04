@@ -131,6 +131,42 @@ printf '%s' "${verified}" | jq -r '.paths[]' > "${scope_file}"
 if [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]{0,9}$ ]]; then
 	printf 'agents.d/%s-*.md\n' "${ISSUE_NUMBER}" >> "${scope_file}"
 fi
+# Test-only heal approval lock (#8809). When the latest plan was auto-approved
+# as test-only, a trusted <!-- ai:heal-test-only-approval:v1 --> marker names
+# its exact tests/ and changelog.d/*.md paths. The scope file is narrowed to
+# those paths (already intersected with the verified heal scope), so the
+# isolated editor's transfer and the commit guard both bind to them, and
+# HEAL_TEST_ONLY_LOCK_FILE turns on heal_isolated_implement.sh's weakening
+# check. No marker keeps the heal scope as before; an unreadable comments
+# file or an invalid marker refuses. ISSUE_COMMENTS_FILE unset (legacy
+# callers) skips the lock: implement.yml always fills it before this step.
+scope_guard_py="${FILES_TOUCHED_SCOPE_GUARD_PY:-scripts/files_touched_scope_guard.py}"
+if [ -n "${ISSUE_COMMENTS_FILE:-}" ]; then
+	jq -e 'type == "array"' "${ISSUE_COMMENTS_FILE}" >/dev/null 2>&1 || refuse unavailable comments_unreadable
+	test_only_lock_file="${RUNNER_TEMP:-/tmp}/heal-test-only-lock-${GITHUB_RUN_ID:-local}.txt"
+	rm -f "${test_only_lock_file}"
+	test_only_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${scope_guard_py}" --heal-test-only-lock-scope \
+		--comments-file "${ISSUE_COMMENTS_FILE}" --issue-number "${ISSUE_NUMBER}" --pipeline-login "${identity}" \
+		--heal-scope-file "${scope_file}" --lock-out "${test_only_lock_file}" 2>/dev/null)" || refuse unavailable test_only_lock_invalid
+	test_only_status="$(printf '%s' "${test_only_json}" | jq -r '.status // ""' 2>/dev/null || true)"
+	case "${test_only_status}" in
+		none)
+			echo "AI_PHASE_GATE_V1 phase=implement gate=heal_test_only outcome=none issue=${ISSUE_NUMBER}"
+			;;
+		locked)
+			test_only_plan="$(printf '%s' "${test_only_json}" | jq -r '.plan_comment // ""' 2>/dev/null | tr -cd '0-9' || true)"
+			test_only_count="$(printf '%s' "${test_only_json}" | jq -r '.count // ""' 2>/dev/null | tr -cd '0-9' || true)"
+			[ -s "${test_only_lock_file}" ] || refuse unavailable test_only_lock_invalid
+			cp "${test_only_lock_file}" "${scope_file}" || refuse unavailable test_only_lock_invalid
+			chmod 0444 "${test_only_lock_file}" || refuse unavailable test_only_lock_invalid
+			echo "HEAL_TEST_ONLY_LOCK_FILE=${test_only_lock_file}" >> "${GITHUB_ENV}" || refuse unavailable test_only_lock_env_failed
+			echo "AI_PHASE_GATE_V1 phase=implement gate=heal_test_only outcome=locked plan_comment=${test_only_plan:-unknown} paths=${test_only_count:-0} issue=${ISSUE_NUMBER}"
+			;;
+		*)
+			refuse unavailable test_only_lock_invalid
+			;;
+	esac
+fi
 chmod 0444 "${scope_file}"
 # The support checkout is separate from the editor's writable source copy.
 support="${GITHUB_WORKSPACE:?}/.codex-workflow-src"
