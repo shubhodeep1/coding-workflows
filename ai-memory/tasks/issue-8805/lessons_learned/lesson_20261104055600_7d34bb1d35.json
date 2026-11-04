@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-04T05:56:00Z",
+  "issue_number": 8805,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/ci.yml:3121; cited_path=.github/workflows/ci.yml (additional moved steps, \"Review autofix review-pipeline plumbing contract test\"); files_touched=.github/workflows/ci.yml, changelog.d/8805-ci-poll-group-one-bootstrap-to-group-two.md, tests/test_ci_poll_test_sharding.py.",
+  "phase": "review_autofix",
+  "pr_number": 8807,
+  "record_id": "lesson_20261104055600_7d34bb1d35",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml (additional moved steps, \"Review autofix review-pipeline plumbing contract test\")",
+    ".github/workflows/ci.yml",
+    "changelog.d/8805-ci-poll-group-one-bootstrap-to-group-two.md",
+    "tests/test_ci_poll_test_sharding.py"
+  ]
+}
