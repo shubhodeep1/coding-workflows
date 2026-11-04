@@ -319,7 +319,10 @@ single_pass_delta_source()
 }
 
 # Input: PR head ref and JSON array of finding IDs. Output: JSON array of the
-# IDs covered by matching open follow-ups. The PR
+# IDs covered by matching open follow-ups. An issue covers every ID in its
+# leading marker block: the run of `<!-- ai:security-finding:<id> -->` lines
+# from line 1 (one line in a legacy per-finding body, one per finding in a
+# stuck-states P5b consolidated body). A marker further down never counts. The PR
 # payload and cached PR comments lack issue state, and LINKED_ISSUES_JSON lists
 # issues the PR closes, not audit follow-ups. Gate-mode current-head findings
 # (through single_pass_open_followups) and report-mode delta carry-forward
@@ -349,7 +352,9 @@ single_pass_open_followup_ids()
 			  else "" end
 			| gsub("^\\s+|\\s+$"; "") | sub("^`"; "") | sub("`$"; "")
 			| gsub("^\\s+|\\s+$"; "") | . == $ref))
-		| .body | split("\n")[0]] as $issue_markers
+		| .body | split("\n")
+		| (map(gsub("\\s+$"; "") | test("^<!-- ai:security-finding:[^<>]+ -->$")) | index(false)) as $block_end
+		| .[0:($block_end // length)] | map(gsub("\\s+$"; ""))] | flatten as $issue_markers
 		| [$ids[] | select(. as $id | any($issue_markers[]; . == ("<!-- ai:security-finding:" + $id + " -->")))]
 	' "${followup_file}" 2>/dev/null)"; then
 		rm -f "${followup_file}"

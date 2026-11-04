@@ -471,6 +471,12 @@ jobs:
           # Single-issue security pass (stuck-states P5a): surviving findings
           # for the PR report, which stores them for the next delta re-audit.
           SECURITY_AUDIT_PASS_FINDINGS_OUT: ${{ inputs.pr_number != '' && format('{0}/single-pass-findings.json', runner.temp) || '' }}
+          # Single-issue security pass (stuck-states P5b): a PR audit files one
+          # consolidated follow-up per cycle; the helper re-validates the PR
+          # number and falls back to one issue per finding. 'false' restores
+          # one issue per finding.
+          SECURITY_AUDIT_PASS_PR_NUMBER: ${{ inputs.pr_number || '' }}
+          SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           # The single-issue security pass reads the summary line from this log.
