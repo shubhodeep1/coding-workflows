@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: change the run marker in `tests/e2e_smoke_canary_b.txt`\n\nThe plan was made against `orchestrator/project-8783` at commit `4e05fd8a76babac22cedc00157fb1a30cfa03bad`. The integration branch matches, so there is no mismatch.\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\nNone. This is a one-line data edit. Change the second line from `decompose-run: 41445772297` to `decompose-run: 41746468580`.\n\n## Data structures affected\nOnly the canary text file. It is checked against the acceptance criteria and has no schema.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace line 2 in place\n- Chosen: Overwrite the file so it holds exactly `status: ok\\ndecompose-run: 41746468580\\n`.\n- Alternatives considered: Add a new marker line; rewrite line 1 as well.\n- Why: The issue requires exactly two lines and says not to add a third. Line 1 is already correct, so only line 2 changes.\n\n## Security considerations\n- No trust boundaries, endpoints, secrets or money-handling code are involved.\n- The run ID is a public workflow-run number, not a credential.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue names exactly one file and one line to replace, and forbids touching any other file. No helper or pattern applies to a two-line data fixture. The complete change is this single-line edit, so nothing is reduced or expanded, and Security > Correctness & safety > Backward compatibility (\u00a76) is met by the minimal edit.\n\n## Potential risks or edge cases\n- Conflict check: none. The file on the planning ref holds `status: ok` / `decompose-run: 41445772297`, each line ending with a newline. This matches the issue's description of the current content.\n- Risk: dropping the trailing newline or adding a third line would fail the acceptance criteria. The diff must show exactly one line removed and one line added.\n- Do not touch `tests/e2e_smoke_canary.txt`. It belongs to a separate issue, and the closing lessons show that out-of-scope edits get rejected.\n\n## Testing considerations\n- Check the result with `cat -A tests/e2e_smoke_canary_b.txt`. The expected output is exactly two lines: `status: ok$` and `decompose-run: 41746468580$`.\n- `git diff --stat` should show only this file, with 1 insertion and 1 deletion.\n\n## Pre-execution self-check\n- The file exists and its current content matches the issue.\n- The target content is fully specified, with no missing inputs.\n- Only one file is in scope.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "e2f0bd8961bdb91ec8e6bc58478109ad4af303bd8e9dac7c84a2dff6fa71bb00",
+  "lineage": {
+    "issue_number": 8788,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41749140059",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41749140059",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8788"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261104004955_04e0a8146b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8788,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41749140059"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8788",
+  "timestamps": {
+    "created_at": "2026-11-04T00:49:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
