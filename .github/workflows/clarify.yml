@@ -2321,6 +2321,11 @@ jobs:
           FP_ERROR_LINE="0"
           FP_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal.py"
           FP_MARKER_PATTERN='^<!-- AI_FAILURE_FINGERPRINT_V1 phase=clarify fp=[0-9a-f]{12} run=[1-9][0-9]{0,19} -->$'
+          # Same truthy rule as the poller's is_truthy (1|true|yes|on, any case).
+          case "$(printf '%s' "${STALL_FINGERPRINT_BREAKER_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) STALL_FINGERPRINT_BREAKER_ENABLED="true" ;;
+            *) STALL_FINGERPRINT_BREAKER_ENABLED="false" ;;
+          esac
           if [ "${FP_JOB_STATUS:-}" = "cancelled" ]; then
             FP_REASON="cancelled"
           elif [ "${FP_JOB_STATUS:-}" != "failure" ]; then
@@ -2334,7 +2339,7 @@ jobs:
             FP_ANNOTATIONS_FILE="${RUNNER_TEMP:-/tmp}/phase_fp_annotations.json"
             rm -f "${FP_JOBS_FILE}" "${FP_ANNOTATIONS_FILE}" || true
             if gh_retry gh api "repos/${FP_REPOSITORY}/actions/runs/${FP_RUN_ID}/attempts/${FP_RUN_ATTEMPT:-1}/jobs?per_page=100" > "${FP_JOBS_FILE}" 2>/dev/null; then
-              FP_JOB_ID="$(jq -r '[.jobs[]? | select(.runner_name == env.RUNNER_NAME) | .id][0] // empty' "${FP_JOBS_FILE}" 2>/dev/null || true)"
+              FP_JOB_ID="$(jq -r '[.jobs[]? | select(.runner_name == env.RUNNER_NAME) | ((((.check_run_url // "") | capture("/check-runs/(?<id>[1-9][0-9]*)$") | .id) // .id) | tostring)][0] // empty' "${FP_JOBS_FILE}" 2>/dev/null || true)"
               if [[ "${FP_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
                 gh_retry gh api "repos/${FP_REPOSITORY}/check-runs/${FP_JOB_ID}/annotations?per_page=50" > "${FP_ANNOTATIONS_FILE}" 2>/dev/null || rm -f "${FP_ANNOTATIONS_FILE}" || true
               fi

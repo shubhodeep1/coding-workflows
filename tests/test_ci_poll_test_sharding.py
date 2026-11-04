@@ -1148,6 +1148,11 @@ GROUP_PINNED_STEPS = {
 	"Review autofix review-pipeline plumbing contract test": 1,
 	# Moved from tests-release-and-log-analysis in #8759.
 	"Review synthesize-smoke contract test": 0,
+	# Moved from tests-release-and-log-analysis in #8777.
+	"Clarify loop guard unit tests": 0,
+	# Moved from tests-release-and-log-analysis in #8777, and from group 1 to
+	# group 2 in #8805.
+	"Validation bootstrap and family direct-run tests": 2,
 }
 # The only steps pinned to the last matrix group (#8118, #8772).
 LAST_GROUP_PINNED_STEPS = (
@@ -1830,9 +1835,10 @@ MOVED_HOOKS_JOB_STEPS = {
 	HOOKS_VITEST_STEP: ("tests-heal-plan-and-validation", ("tools/claude-pool-broker",)),
 	# tests-hooks-and-orchestrator took 15m01s of its 20 minutes again (run
 	# 40264887710, budget-watch issue #8179); these three steps moved,
-	# unchanged, to tests-promote-stall-and-review.
+	# unchanged, to tests-promote-stall-and-review. Issue #8771 moved
+	# "Orchestrate lib unit tests" on to tests-heal-plan-and-validation.
 	"Orchestrate lib unit tests": (
-		"tests-promote-stall-and-review",
+		"tests-heal-plan-and-validation",
 		(
 			"tests/test_orchestrate_lib.py",
 			"tests/test_task_state.py",
@@ -2280,20 +2286,9 @@ PROMOTE_8466_SOURCE_JOB_ID = "tests-promote-stall-and-review"
 PROMOTE_8466_TARGET_JOB_ID = "tests-release-and-log-analysis"
 PROMOTE_8466_SETUP_STEP = "Install Python CI dependencies"
 MOVED_PROMOTE_8466_STEPS = {
-	"Validation bootstrap and family direct-run tests": (
-		"tests/test_validate_workflow_validate_bootstrap.py",
-		"tests/test_codex_thread_reuse_core.py",
-		"tests/test_codex_skip_git_repo_check_contract.py",
-		"tests/test_codex_stall_guard_scripts.py",
-		"tests/test_workspace_init.py",
-		"tests/test_workspace_safety_check.py",
-		"tests/test_workspace_hooks.py",
-		"tests/test_workspace_cache_maintenance.py",
-		"tests/test_family_node_runtime.py",
-		"tests/test_orchestrate_poll_workflow_contract.py",
-		"tests/test_workflow_overlay_orchestrator.py",
-		"tests/test_workflow_overlay_core.py",
-	),
+	# "Validation bootstrap and family direct-run tests" left the release job
+	# for orchestrate-poll (1) in #8777 and moved on to group 2 in #8805; its
+	# module list is in MOVED_RELEASE_8777_STEPS.
 	"Review/judge/conflict strict-render contract test": (
 		"tests/test_memory_record_schema.py",
 		"tests/test_render_prompt_foundation.py",
@@ -2359,6 +2354,87 @@ class MovedPromote8466StepsContractTest(unittest.TestCase):
 			with self.subTest(step=name):
 				self.assertIn(name, names)
 				self.assertLess(setup_index, names.index(name))
+
+
+# Steps moved out of tests-promote-stall-and-review, which took 16m02s of its
+# 20 minutes (run 41704793081, budget-watch issue #8771): step name -> (target
+# job id, module paths its body names). The pick is an estimate from test and
+# subprocess counts; the run's step timings were not readable. The two steps
+# go to different jobs so that no single job takes both.
+PROMOTE_8771_SOURCE_JOB_ID = "tests-promote-stall-and-review"
+PROMOTE_8771_SETUP_STEP = "Install Python CI dependencies"
+MOVED_PROMOTE_8771_STEPS = {
+	"Orchestrate lib unit tests": (
+		"tests-heal-plan-and-validation",
+		(
+			"tests/test_orchestrate_lib.py",
+			"tests/test_orchestrate_initial_state_v2.py",
+			"tests/test_task_state.py",
+			"tests/test_task_state_unblock.py",
+			"tests/test_blocker_check.py",
+			"tests/test_codex_stall_guard_poller.py",
+			"tests/test_orchestrate_force_tick.py",
+			"tests/test_orchestrate_poll_follow_up.py",
+			"tests/test_orchestrator_concurrency_caps.py",
+		),
+	),
+	"Check-failure triage workflow security tests": (
+		"tests-release-and-log-analysis",
+		(
+			"tests/test_check_failure_triage_workflow_security.py",
+			"tests/test_check_failure_triage_historical.py",
+		),
+	),
+}
+
+
+class MovedPromote8771StepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-promote-stall-and-review run once, in their target jobs (#8771)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_target_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_PROMOTE_8771_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_PROMOTE_8771_STEPS:
+			with self.subTest(step=name):
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_job_id, modules) in MOVED_PROMOTE_8771_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[PROMOTE_8771_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_PROMOTE_8771_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_target_job_setup(self) -> None:
+		for name, (job_id, _modules) in MOVED_PROMOTE_8771_STEPS.items():
+			names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+			with self.subTest(step=name):
+				self.assertIn(PROMOTE_8771_SETUP_STEP, names, job_id)
+				self.assertIn(name, names)
+				self.assertLess(names.index(PROMOTE_8771_SETUP_STEP), names.index(name))
 
 # Steps moved out of tests-release-and-log-analysis, which took 15m14s of its
 # 20 minutes (run 40750326439, budget-watch issue #8278): step name -> (new job
@@ -2439,24 +2515,9 @@ MOVED_HEAL_TO_RELEASE_STEPS = {
 		"tests/test_activation_verify.py",
 		"tests/test_operator_step_issue.py",
 	),
-	"Clarify loop guard unit tests": (
-		"tests/test_phase_wrapper_predicate_contract.py",
-		"tests/test_orchestrate_clarify_loop_guard.py",
-		"tests/test_ai_memory_processed_command_entry.py",
-		"tests/test_ai_memory_push_retry_backoff.py",
-		"tests/test_ai_memory_git_env_isolation.py",
-		"tests/test_plan_clarify_blocked_output.py",
-		"tests/test_plan_check_triage_branch_guard.py",
-		"tests/test_plan_clarify_header_prompt_staging.py",
-		"tests/test_plan_auto_approve_safe_state_fetch.py",
-		"tests/test_plan_split_dispatch.py",
-		"tests/test_workflow_gh_retry_fallback_contract.py",
-		"tests/test_plan_auto_answer_recommended_parser.py",
-		"tests/test_plan_codex_step_extraction.py",
-		"tests/test_plan_diagrams_contract.py",
-		"tests/test_plan_scope_mode_contract.py",
-		"tests/test_phase_skip_gate_telemetry_contract.py",
-	),
+	# "Clarify loop guard unit tests" left the release job for
+	# orchestrate-poll (0) in #8777; its module list is in
+	# MOVED_RELEASE_8777_STEPS.
 	"Implement files_touched scope guard unit tests": (
 		"tests/test_files_touched_scope_guard.py",
 	),
@@ -2558,8 +2619,10 @@ MOVED_STATIC_8394_STEPS = {
 	# back to static-checks in budget-watch issue #8472; see
 	# MOVED_POLL_GROUP_THREE_8472_STEPS.
 	# Moved again, from tests-promote-stall-and-review to the release job (#8466).
+	# Moved on to orchestrate-poll (group 1) in budget-watch issue #8777, and
+	# on to group 2 in budget-watch issue #8805.
 	"Validation bootstrap and family direct-run tests": (
-		"tests-release-and-log-analysis",
+		POLL_JOB_ID,
 		(
 			"tests/test_validate_workflow_validate_bootstrap.py",
 			"tests/test_codex_thread_reuse_core.py",
@@ -2571,6 +2634,7 @@ MOVED_STATIC_8394_STEPS = {
 			"tests/test_workspace_cache_maintenance.py",
 			"tests/test_family_node_runtime.py",
 			"tests/test_orchestrate_poll_workflow_contract.py",
+			"tests/test_orchestrate_poll_tracking_issue_list_limit.py",
 			"tests/test_workflow_overlay_orchestrator.py",
 			"tests/test_workflow_overlay_core.py",
 		),
@@ -2946,6 +3010,128 @@ class MovedRelease8759StepsContractTest(unittest.TestCase):
 		self.assertEqual(len(groups), len(set(groups)), groups)
 
 
+# Steps moved out of tests-release-and-log-analysis, which took 15m36s of its
+# 20 minutes (run 41726718996, budget-watch issue #8777): step name -> (poll
+# matrix group, module paths its body names). Picked by test and subprocess
+# counts because the run's step timings could not be read (an estimate, not a
+# measurement). They go to different groups so that neither leg takes both
+# heavy steps, and both avoid the last group, which keeps
+# LAST_GROUP_PINNED_STEPS unchanged.
+RELEASE_8777_SOURCE_JOB_ID = "tests-release-and-log-analysis"
+RELEASE_8777_TARGET_JOB_ID = POLL_JOB_ID
+RELEASE_8777_SETUP_STEP = "Install Python CI dependencies"
+MOVED_RELEASE_8777_STEPS = {
+	"Clarify loop guard unit tests": (
+		0,
+		(
+			"tests/test_phase_wrapper_predicate_contract.py",
+			"tests/test_orchestrate_clarify_loop_guard.py",
+			"tests/test_ai_memory_processed_command_entry.py",
+			"tests/test_ai_memory_push_retry_backoff.py",
+			"tests/test_ai_memory_push_retry_reasons.py",
+			"tests/test_ai_memory_git_env_isolation.py",
+			"tests/test_plan_clarify_blocked_output.py",
+			"tests/test_plan_check_triage_branch_guard.py",
+			"tests/test_plan_clarify_header_prompt_staging.py",
+			"tests/test_plan_auto_approve_safe_state_fetch.py",
+			"tests/test_plan_split_dispatch.py",
+			"tests/test_workflow_gh_retry_fallback_contract.py",
+			"tests/test_plan_auto_answer_recommended_parser.py",
+			"tests/test_plan_codex_step_extraction.py",
+			"tests/test_plan_diagrams_contract.py",
+			"tests/test_plan_scope_mode_contract.py",
+			"tests/test_phase_skip_gate_telemetry_contract.py",
+		),
+	),
+	# Moved on from group 1 to group 2 in budget-watch issue #8805; see
+	# MOVED_POLL_GROUP_ONE_8805_STEPS.
+	"Validation bootstrap and family direct-run tests": (
+		2,
+		(
+			"tests/test_validate_workflow_validate_bootstrap.py",
+			"tests/test_codex_thread_reuse_core.py",
+			"tests/test_codex_skip_git_repo_check_contract.py",
+			"tests/test_codex_stall_guard_scripts.py",
+			"tests/test_workspace_init.py",
+			"tests/test_workspace_safety_check.py",
+			"tests/test_workspace_hooks.py",
+			"tests/test_workspace_cache_maintenance.py",
+			"tests/test_family_node_runtime.py",
+			"tests/test_orchestrate_poll_workflow_contract.py",
+			"tests/test_orchestrate_poll_tracking_issue_list_limit.py",
+			"tests/test_workflow_overlay_orchestrator.py",
+			"tests/test_workflow_overlay_core.py",
+		),
+	),
+}
+
+
+class MovedRelease8777StepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-release-and-log-analysis run once, each in one orchestrate-poll group (#8777)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:
+		for name in MOVED_RELEASE_8777_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(
+					[owner for owner, _step in self.owning_steps(name)],
+					[RELEASE_8777_TARGET_JOB_ID],
+				)
+
+	def test_each_step_is_guarded_to_its_group(self) -> None:
+		for name, (group, _modules) in MOVED_RELEASE_8777_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), group)
+				# A guard naming a group the matrix does not run would skip the step silently.
+				self.assertLess(group, poll_group_count())
+				for _owner, step in self.owning_steps(name):
+					self.assertEqual(step.get("if"), f"strategy.job-index == {group}")
+
+	def test_moved_steps_left_the_release_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[RELEASE_8777_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_RELEASE_8777_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_poll_job_setup(self) -> None:
+		names = [step.get("name") for step in self.jobs()[RELEASE_8777_TARGET_JOB_ID]["steps"]]
+		self.assertIn(RELEASE_8777_SETUP_STEP, names, RELEASE_8777_TARGET_JOB_ID)
+		setup_index = names.index(RELEASE_8777_SETUP_STEP)
+		for name in MOVED_RELEASE_8777_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				self.assertLess(setup_index, names.index(name))
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_group, modules) in MOVED_RELEASE_8777_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_steps_go_to_different_groups(self) -> None:
+		groups = [group for group, _modules in MOVED_RELEASE_8777_STEPS.values()]
+		self.assertEqual(len(groups), len(set(groups)), groups)
+
+	def test_steps_avoid_the_last_group(self) -> None:
+		last_group = poll_group_count() - 1
+		for name, (group, _modules) in MOVED_RELEASE_8777_STEPS.items():
+			with self.subTest(step=name):
+				self.assertNotEqual(group, last_group)
+
+
 # Step moved out of orchestrate-poll (2), which took 15m18s of its 20 minutes
 # (run 41704793081, budget-watch issue #8772): step name -> new matrix group.
 # Picked by test and subprocess counts because the run's step timings could
@@ -3034,6 +3220,114 @@ class MovedPollGroupTwo8772StepsContractTest(unittest.TestCase):
 		self.assertEqual(len(set(named)), POLL_GROUP_TWO_8772_MODULE_COUNT, named)
 		digest = hashlib.sha256("\n".join(sorted(named)).encode("utf-8")).hexdigest()
 		self.assertEqual(digest, POLL_GROUP_TWO_8772_MODULE_SET_SHA256, named)
+
+
+# Step moved out of orchestrate-poll (1), which took 16m44s of its 20 minutes
+# (run 41765731285, budget-watch issue #8805): step name -> new matrix group.
+# Picked by test and subprocess counts because the run's step timings could
+# not be read (an estimate, not a measurement). Group 2 had the lightest
+# pinned load since #8772. Name and body unchanged; only the guard moved.
+POLL_GROUP_ONE_8805_SOURCE_GROUP = 1
+POLL_GROUP_ONE_8805_SETUP_STEP = "Install Python CI dependencies"
+POLL_GROUP_ONE_8805_STEP_NAME = "Validation bootstrap and family direct-run tests"
+# Group 1's other heavy pinned step; it stays there so the two are not put
+# back together in one leg.
+POLL_GROUP_ONE_8805_KEPT_STEP_NAME = "Review autofix review-pipeline plumbing contract test"
+MOVED_POLL_GROUP_ONE_8805_STEPS = {
+	POLL_GROUP_ONE_8805_STEP_NAME: 2,
+}
+# The body's first and last module and the module count, so an edit to the
+# moved body is caught (the move kept it unchanged).
+POLL_GROUP_ONE_8805_BOUNDARY_MODULES = (
+	"tests/test_validate_workflow_validate_bootstrap.py",
+	"tests/test_workflow_overlay_core.py",
+)
+POLL_GROUP_ONE_8805_MODULE_COUNT = 13
+# sha256 of the sorted, newline-joined module paths, so swapping an interior
+# module for another one is caught too.
+POLL_GROUP_ONE_8805_MODULE_SET_SHA256 = "891658909b261dccbeef9098922f5a28c1da2620ae20eb69536bf03042c27c1e"
+
+
+class MovedPollGroupOne8805StepsContractTest(unittest.TestCase):
+	"""The validation bootstrap step runs once, in orchestrate-poll group 2 (#8805)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_step_is_owned_only_by_the_poll_job(self) -> None:
+		for name in MOVED_POLL_GROUP_ONE_8805_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(
+					[owner for owner, _step in self.owning_steps(name)],
+					[POLL_JOB_ID],
+				)
+
+	def test_step_is_guarded_to_its_new_group(self) -> None:
+		for name, group in MOVED_POLL_GROUP_ONE_8805_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), group)
+				self.assertNotEqual(group, POLL_GROUP_ONE_8805_SOURCE_GROUP)
+				# A guard naming a group the matrix does not run would skip the step silently.
+				self.assertLess(group, poll_group_count())
+				for _owner, step in self.owning_steps(name):
+					self.assertEqual(step.get("if"), f"strategy.job-index == {group}")
+
+	def test_step_left_the_source_group(self) -> None:
+		source_guard = f"strategy.job-index == {POLL_GROUP_ONE_8805_SOURCE_GROUP}"
+		source_names = {
+			step.get("name")
+			for step in load_poll_job()["steps"]
+			if str(step.get("if", "")) == source_guard
+		}
+		for name in MOVED_POLL_GROUP_ONE_8805_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_step_runs_after_the_poll_job_setup(self) -> None:
+		names = [step.get("name") for step in load_poll_job()["steps"]]
+		self.assertIn(POLL_GROUP_ONE_8805_SETUP_STEP, names)
+		setup_index = names.index(POLL_GROUP_ONE_8805_SETUP_STEP)
+		for name in MOVED_POLL_GROUP_ONE_8805_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				self.assertLess(setup_index, names.index(name))
+
+	def test_step_body_is_unchanged(self) -> None:
+		steps = self.owning_steps(POLL_GROUP_ONE_8805_STEP_NAME)
+		self.assertEqual(len(steps), 1)
+		body = steps[0][1]["run"]
+		for module in POLL_GROUP_ONE_8805_BOUNDARY_MODULES:
+			with self.subTest(module=module):
+				self.assertTrue((REPO_ROOT / module).is_file(), module)
+				self.assertIn(module, body)
+		named = re.findall(r"tests/[A-Za-z0-9_]+\.py", body)
+		self.assertEqual(len(named), POLL_GROUP_ONE_8805_MODULE_COUNT, named)
+		self.assertEqual(len(set(named)), POLL_GROUP_ONE_8805_MODULE_COUNT, named)
+		digest = hashlib.sha256("\n".join(sorted(named)).encode("utf-8")).hexdigest()
+		self.assertEqual(digest, POLL_GROUP_ONE_8805_MODULE_SET_SHA256, named)
+
+	def test_step_avoids_the_last_group(self) -> None:
+		last_group = poll_group_count() - 1
+		for name, group in MOVED_POLL_GROUP_ONE_8805_STEPS.items():
+			with self.subTest(step=name):
+				self.assertNotEqual(group, last_group)
+
+	def test_group_one_keeps_the_plumbing_step(self) -> None:
+		self.assertEqual(
+			GROUP_PINNED_STEPS.get(POLL_GROUP_ONE_8805_KEPT_STEP_NAME),
+			POLL_GROUP_ONE_8805_SOURCE_GROUP,
+		)
+		for name in MOVED_POLL_GROUP_ONE_8805_STEPS:
+			with self.subTest(step=name):
+				self.assertNotEqual(GROUP_PINNED_STEPS.get(name), POLL_GROUP_ONE_8805_SOURCE_GROUP)
 
 
 PROMOTE_CYCLE_STEP_NAME = "Promote cycle and blocked-verdict unit tests"

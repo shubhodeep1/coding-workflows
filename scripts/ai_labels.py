@@ -34,6 +34,11 @@ RETIRED_LABEL_IN_USE_MAX_LISTED_NUMBERS = 10
 # RETIRED_LABEL_DRAIN_MAX_ITEMS_PER_RUN items per sync run in total.
 RETIRED_LABEL_DRAIN_MAX_ITEMS_PER_RUN = 10
 RETIRED_LABEL_DRAIN_MAX_LIST_PAGES = 2
+# Wall-clock budget for the per-item drain loop in one sync run, so the
+# drain defers (reason=budget) well before sync_ai_labels.yml's 5-minute job
+# timeout instead of being killed mid-run without its errors and log lines.
+RETIRED_LABEL_DRAIN_DEADLINE_SECONDS = 180.0
+_retired_label_drain_deadline: float | None = None
 RETIRED_LABEL_DRAIN_PAGE_SIZE = 100
 RETIRED_LABEL_DRAIN_MARKER_PREFIX = "<!-- ai:retired-label-drain:v1 label="
 RETIRED_LABEL_DRAIN_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
@@ -1134,6 +1139,8 @@ def _drain_retired_label(
     for item in items:
         if budget[0] <= 0:
             break
+        if _retired_label_drain_deadline is not None and time.monotonic() >= _retired_label_drain_deadline:
+            break
         budget[0] -= 1
         processed_count += 1
         item_number = item["number"]
@@ -1308,6 +1315,8 @@ def _delete_retired_labels(
     retired_label_names = contract.get("retired_labels", [])
     drain_enabled = _retired_label_drain_enabled() if retired_label_names else False
     drain_budget = [RETIRED_LABEL_DRAIN_MAX_ITEMS_PER_RUN]
+    global _retired_label_drain_deadline
+    _retired_label_drain_deadline = time.monotonic() + RETIRED_LABEL_DRAIN_DEADLINE_SECONDS
     for label_name in retired_label_names:
         label_path = _github_label_path(repo, label_name)
         try:
