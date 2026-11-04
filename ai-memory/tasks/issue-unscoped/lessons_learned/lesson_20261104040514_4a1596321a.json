@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-04T04:05:14Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=CLAUDE.md:1-1; cited_path=CLAUDE.md; files_touched=README.md, agents.d/8718-heal-skip-changes-lost-retrying.md, changelog.d/8718-heal-skip-changes-lost-retrying.md, scripts/workflow_failure_heal_autofix_report.sh, tests/test_workflow_failure_heal.py.",
+  "phase": "review_autofix",
+  "pr_number": 8801,
+  "record_id": "lesson_20261104040514_4a1596321a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "CLAUDE.md",
+    "README.md",
+    "agents.d/8718-heal-skip-changes-lost-retrying.md",
+    "changelog.d/8718-heal-skip-changes-lost-retrying.md",
+    "scripts/workflow_failure_heal_autofix_report.sh",
+    "tests/test_workflow_failure_heal.py"
+  ]
+}
