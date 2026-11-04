@@ -1218,8 +1218,7 @@ run_project_activation_verify() {
     echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=comments_unavailable"
     return 0
   fi
-  if printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "project-${TRACKING_NUM}" \
-    '[.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null)) | (.body // "" | sub("[[:space:]]+$"; "")) | (endswith("<!-- ai:activation:v1 verdict=LIVE source=" + $src + " -->") or endswith("<!-- ai:activation:v1 verdict=DORMANT source=" + $src + " -->"))] | any' >/dev/null 2>&1; then
+  if [ -n "$(activation_final_verdict_from_comments "${COMMENTS:-[]}" "${TRACKING_NUM}")" ]; then
     echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=already_verified"
     return 0
   fi
@@ -1255,6 +1254,30 @@ run_project_activation_verify() {
     || echo "::warning::Activation worktree cleanup failed for project #${TRACKING_NUM}."
   rm -rf -- "${verify_dir}-runtime" \
     || echo "::warning::Activation runtime cleanup failed for project #${TRACKING_NUM}."
+  return 0
+}
+
+# activation_final_verdict_from_comments <comments_json> <tracking_num>
+#
+# Prints "<LIVE|DORMANT> <html_url>" for the last trusted comment (author
+# github-actions[bot], or author_association OWNER/MEMBER/COLLABORATOR) whose
+# trailing-whitespace-trimmed body ends with the final activation marker
+# <!-- ai:activation:v1 verdict=LIVE|DORMANT source=project-<tracking_num> -->.
+# Prints nothing when there is none; a partial=true marker never matches.
+# Shared by run_project_activation_verify (already_verified guard) and
+# close_completed_tracking_issue_if_ready (issue #8685) so both apply one
+# trust filter. Reads only the given JSON (no API call); always returns 0.
+activation_final_verdict_from_comments() {
+  local comments_json="${1:-[]}"
+  local tracking_num="${2:-}"
+  printf '%s' "${comments_json}" | jq -r --arg src "project-${tracking_num}" '
+    [.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
+      | {url: ((.html_url // "") | tostring), body: (.body // "" | sub("[[:space:]]+$"; ""))}
+      | (if (.body | endswith("<!-- ai:activation:v1 verdict=LIVE source=" + $src + " -->")) then "LIVE"
+         elif (.body | endswith("<!-- ai:activation:v1 verdict=DORMANT source=" + $src + " -->")) then "DORMANT"
+         else empty end) as $verdict
+      | "\($verdict) \(.url)"] | last // empty
+  ' 2>/dev/null || true
   return 0
 }
 
@@ -2727,6 +2750,12 @@ AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL
 # auto-approval (see _plan_heal_counterfactual_check). On by default; `false`
 # turns it off, any other value is treated as `true` with a warning.
 HEAL_COUNTERFACTUAL_GATE_ENABLED="${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}"
+
+# Issue #8809: an UNVERIFIED heal plan that lists only exact tests/ and
+# changelog.d/*.md files inside the verified heal scope is auto-approved (see
+# _plan_heal_test_only_check). On by default; `false` turns it off, any other
+# value is treated as `true` with a warning.
+HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED="${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}"
 
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
@@ -7925,6 +7954,11 @@ create_security_pass_advisory_followup() {
   # the body tells the pipeline the cited code is already on the default
   # branch; empty on the legacy judge-time filing path.
   local merged_pr="${6:-}"
+	# Optional: present|absent|unknown from
+	# security_pass_advisory_cited_code_status.  `absent` means the cited code
+	# did not survive to the default branch, so the body must not claim it did
+	# (fun-token-multi-chain#710).  Empty or anything else keeps the legacy text.
+	local cited_code_status="${7:-}"
   local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
   finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
@@ -7964,7 +7998,7 @@ create_security_pass_advisory_followup() {
   fi
   body_file="${RUNTIME_DIR}/security_pass_advisory_${TRACKING_NUM}_$(printf '%s' "${finding_id}" | tr -c 'A-Za-z0-9._-' '_').md"
   printf '%s\n' "${finding_json}" > "${body_file}.finding.json"
-  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" <<'PY'
+  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" "${cited_code_status}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -7980,6 +8014,7 @@ head_sha = sys.argv[5]
 justification = sys.argv[6]
 source = sys.argv[7]
 merged_pr = sys.argv[8] if len(sys.argv) > 8 else ""
+cited_code_status = sys.argv[9] if len(sys.argv) > 9 else ""
 
 
 def prose(value: object) -> str:
@@ -8009,7 +8044,17 @@ if source == "line_ownership":
 		"Its cited line predates the project (it was written before the integration base), so it does not gate the project. "
 		"The project completes without this fix; address it through the normal issue pipeline."
 	)
-if merged_pr.isdigit():
+if merged_pr.isdigit() and cited_code_status == "absent":
+	# The audited lines are not on the default branch: the code was removed or
+	# rewritten between the audit and the final merge (fun-token-multi-chain#710,
+	# where #667 reverted the cited coinflip code before PR #596 merged).
+	lines.extend(
+		[
+			f"The integration branch has since merged into the default branch via PR #{merged_pr}, but the cited lines are not on the default branch: the code at `{prose(location)}` was removed or rewritten after the audit at `{head_sha}`. Do not recreate the removed code. Plan and implement this issue against the default branch: find whether the vulnerable behaviour described below still exists in the current code and fix it if it does; in either case add a regression test for the invariant the recommendation protects, and record in the PR body whether the path was found absent or was fixed.",
+			"",
+		]
+	)
+elif merged_pr.isdigit():
 	lines.extend(
 		[
 			f"The integration branch has since merged into the default branch via PR #{merged_pr}, so the cited location refers to code that is already on the default branch. Plan and implement this issue against the default branch.",
@@ -8075,6 +8120,98 @@ PY
   return 0
 }
 
+# security_pass_advisory_cited_code_status <audited_head_sha> <default_branch> <file> <line>
+#
+# Print whether the code a security-pass finding cites at <audited_head_sha>
+# survived to `origin/<default_branch>`: `present`, `absent` or `unknown`.
+# Code can be removed between the audit and the final merge; then the
+# deferred advisory must not claim the cited location is on the default branch
+# (fun-token-multi-chain#710 cited coinflip code that #667 had reverted, and
+# planning blocked with "nothing to implement").
+#
+# The check takes the cited line and up to two lines either side at the
+# audited head, trims whitespace, drops blank lines, and looks for that block
+# as one contiguous run in the default-branch file.  A single line is not
+# enough: `}` or `} catch {` match almost any file.  `unknown` when the
+# audited head is not a hex commit id, the audited blob cannot be read, the
+# line is out of range, the window holds under 12 non-blank characters, or the
+# file is missing on the default branch and `origin/<default_branch>` does not
+# resolve to a commit.  Blank lines are dropped and whitespace is
+# trimmed on both sides, so a moved, re-indented or blank-line-reformatted
+# block still reads `present`; only a content edit reads `absent`, which only
+# changes the advisory's wording (the issue is filed either way).
+# Local git only (the caller fetches the refs once): no GitHub API calls.
+# Fail-open: any error prints `unknown`.  Returns 0 always.
+security_pass_advisory_cited_code_status() {
+	local audited_head_sha="$1"
+	local default_branch="$2"
+	local cited_file="$3"
+	local cited_line="$4"
+	local cited_tmp_dir cited_status
+	if [ -z "${audited_head_sha}" ] || [ -z "${default_branch}" ] || [ -z "${cited_file}" ] \
+		|| ! [[ "${audited_head_sha}" =~ ^[0-9a-fA-F]{7,64}$ ]] \
+		|| ! [[ "${cited_line}" =~ ^[0-9]+$ ]]; then
+		echo "unknown"
+		return 0
+	fi
+	if ! cited_tmp_dir="$(mktemp -d "${RUNTIME_DIR:-/tmp}/security-pass-cited-code.XXXXXX" 2>/dev/null)"; then
+		echo "unknown"
+		return 0
+	fi
+	if ! git show "${audited_head_sha}:${cited_file}" > "${cited_tmp_dir}/audited" 2>/dev/null; then
+		rm -rf "${cited_tmp_dir}"
+		echo "unknown"
+		return 0
+	fi
+	if ! git show "origin/${default_branch}:${cited_file}" > "${cited_tmp_dir}/current" 2>/dev/null; then
+		# The audited blob exists but the file is gone from the default branch,
+		# unless the default-branch ref itself does not resolve (then unknown).
+		rm -rf "${cited_tmp_dir}"
+		if git rev-parse --verify --quiet "origin/${default_branch}^{commit}" >/dev/null 2>&1; then
+			echo "absent"
+		else
+			echo "unknown"
+		fi
+		return 0
+	fi
+	cited_status="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${cited_tmp_dir}/audited" "${cited_tmp_dir}/current" "${cited_line}" <<'PY' 2>/dev/null || echo "unknown"
+import sys
+from pathlib import Path
+
+
+def stripped(path: str) -> list[str]:
+	# Split on "\n" only, as git numbers lines; splitlines() also breaks on
+	# form feed, \x85, U+2028 and others, which would shift the cited window.
+	# read_bytes() avoids read_text()'s newline translation of a lone "\r".
+	lines = Path(path).read_bytes().decode("utf-8", errors="replace").split("\n")
+	if lines and lines[-1] == "":
+		lines.pop()
+	return [line.strip() for line in lines]
+
+
+audited = stripped(sys.argv[1])
+current = [line for line in stripped(sys.argv[2]) if line]
+line_no = int(sys.argv[3])
+if line_no < 1 or line_no > len(audited):
+	print("unknown")
+	raise SystemExit(0)
+window = [line for line in audited[max(0, line_no - 3):line_no + 2] if line]
+if sum(len(line) for line in window) < 12:
+	print("unknown")
+	raise SystemExit(0)
+size = len(window)
+found = any(current[start:start + size] == window for start in range(len(current) - size + 1))
+print("present" if found else "absent")
+PY
+)"
+	rm -rf "${cited_tmp_dir}"
+	case "${cited_status}" in
+		present|absent) echo "${cited_status}" ;;
+		*) echo "unknown" ;;
+	esac
+	return 0
+}
+
 # security_pass_file_deferred_advisory_followups <integration_branch> <default_branch> <final_pr>
 #
 # File the `ai:security` advisory follow-ups that the exhaustion judge or
@@ -8103,6 +8240,19 @@ security_pass_file_deferred_advisory_followups() {
   if [ "${pending_count}" -eq 0 ]; then
     return 0
   fi
+	# One fetch per ref (local git, no API calls) so the cited-code check sees
+	# the merged default branch and the audited head.  Fail-open: a failed
+	# fetch makes the check print `unknown`, which keeps the legacy wording.
+	local row_cited_status cited_default_fetch_ok=true
+	git fetch --no-tags origin "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || cited_default_fetch_ok=false
+	if [ -n "${integration_branch}" ]; then
+		git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1 || true
+	fi
+	# The final merge deletes the integration branch; the PR head ref keeps
+	# the audited commit reachable on later ticks.
+	if [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
+		git fetch --no-tags origin "+refs/pull/${final_pr}/head:refs/orchestrator/security-pass/advisory-pr-${final_pr}-head" >/dev/null 2>&1 || true
+	fi
   while IFS= read -r row_json; do
     [ -n "${row_json}" ] || continue
     row_finding="$(printf '%s' "${row_json}" | jq -c '.finding')"
@@ -8112,7 +8262,13 @@ security_pass_file_deferred_advisory_followups() {
     if [ -z "${row_head_sha}" ]; then
       row_head_sha="$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
     fi
-    create_security_pass_advisory_followup "${row_finding}" "${integration_branch}" "${row_head_sha}" "${row_justification}" "${row_source}" "${final_pr}"
+	row_cited_status="$(security_pass_advisory_cited_code_status "${row_head_sha}" "${default_branch}" \
+		"$(printf '%s' "${row_finding}" | jq -r '.file // ""')" \
+		"$(printf '%s' "${row_finding}" | jq -r '.line // ""')")"
+	# A failed default-branch fetch cannot prove the code is gone.
+	[ "${cited_default_fetch_ok}" = "true" ] || row_cited_status="unknown"
+	echo "SECURITY_PASS_ADVISORY_CITED_CODE tracking_issue=${TRACKING_NUM} finding=$(printf '%s' "${row_json}" | jq -r '.finding_id' | tr -d '\r\n') default_branch=${default_branch} status=${row_cited_status}"
+    create_security_pass_advisory_followup "${row_finding}" "${integration_branch}" "${row_head_sha}" "${row_justification}" "${row_source}" "${final_pr}" "${row_cited_status}"
     if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
       filed_count=$((filed_count + 1))
       filed_lines="${filed_lines}"$'\n'"- \`$(printf '%s' "${row_json}" | jq -r '.finding_id')\` → #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
@@ -12122,7 +12278,7 @@ check_integration_branch_staleness() {
 	local integration_branch="$1"
 	local default_branch="$2"
 	local ahead_by="$3"
-	local now_epoch="$(date +%s)"
+	local now_epoch=""
 	local last_main_squash_at_utc=""
 	local integration_stale_last_alerted_at_utc=""
 
@@ -12131,6 +12287,11 @@ check_integration_branch_staleness() {
 	# touching state so the disabled path is a true no-op.
 	if [ "${ORCH_INTEGRATION_STALE_ALERT_HOURS}" -eq 0 ]; then
 		return 0
+	fi
+
+	if ! now_epoch="$(date +%s)" || ! [[ "${now_epoch}" =~ ^[0-9]+$ ]]; then
+		echo "::warning::check_integration_branch_staleness: clock read failed; skipping the integration staleness check this cycle." >&2
+		return 1
 	fi
 
 	local stale_threshold_secs=$(( ORCH_INTEGRATION_STALE_ALERT_HOURS * 3600 ))
@@ -14858,6 +15019,24 @@ dispatch_comprehensive_release_workflow() {
   return 1
 }
 
+# _plan_split_source_issue_from_comments <comments_json>
+#
+# Prints the source issue number N of the first trusted
+# `<!-- ai:plan-split-source:v1 issue=N -->` marker comment (author
+# association in COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS, or
+# github-actions[bot]), or nothing. Shared by close_plan_split_source_if_needed
+# and close_completed_tracking_issue_if_ready (issue #8685) so both apply one
+# trust rule. No API call; always returns 0.
+_plan_split_source_issue_from_comments() {
+  local comments_json="${1:-[]}"
+  printf '%s' "${comments_json}" | jq -r --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}" '
+    def trusted: (((.author_association // "") as $a | ($trusted | split(",") | map(gsub("^\\s+|\\s+$"; "")) | index($a)) != null)
+                  or ((.user.login // "") == "github-actions[bot]"));
+    [ .[]? | select(trusted) | (.body // "") | capture("^<!-- ai:plan-split-source:v1 issue=(?<n>[1-9][0-9]*) -->")? | .n ] | first // empty
+  ' 2>/dev/null || true
+  return 0
+}
+
 # close_plan_split_source_if_needed <project_status> <comments_json>
 #
 # Q152: a project the plan stage started for a plan too large for one grant
@@ -14877,11 +15056,7 @@ close_plan_split_source_if_needed() {
   if [ -n "$(jq -r '.plan_split_source.outcome // empty' "${STATE_FILE}" 2>/dev/null)" ]; then
     return 0
   fi
-  source_issue="$(printf '%s' "${comments_json}" | jq -r --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
-    def trusted: (((.author_association // "") as $a | ($trusted | split(",") | map(gsub("^\\s+|\\s+$"; "")) | index($a)) != null)
-                  or ((.user.login // "") == "github-actions[bot]"));
-    [ .[]? | select(trusted) | (.body // "") | capture("^<!-- ai:plan-split-source:v1 issue=(?<n>[1-9][0-9]*) -->")? | .n ] | first // empty
-  ' 2>/dev/null || true)"
+  source_issue="$(_plan_split_source_issue_from_comments "${comments_json}")"
   [ -n "${source_issue}" ] || return 0
 
   if ! source_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${source_issue}" 2>/dev/null)"; then
@@ -14905,6 +15080,163 @@ close_plan_split_source_if_needed() {
   jq --argjson issue "${source_issue}" --arg outcome "${outcome}" '.plan_split_source = {issue: $issue, outcome: $outcome}' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
+}
+
+# close_completed_tracking_issue_if_ready <project_status> <comments_json> <labels_json>
+#
+# Issue #8685: a complete project's tracking issue used to stay open for good
+# ("Issue kept open for manual review."), so finished projects piled up in
+# the tracking-issue listing. Once every follow-up the poller still runs for
+# a complete project is settled, this closes the tracking issue as completed.
+# All of these must hold (each unmet one logs outcome=deferred reason=...):
+#   - ORCHESTRATOR_CLOSE_COMPLETED_TRACKING is truthy (default true;
+#     reason=disabled is logged once per process);
+#   - COMMENTS was fetched (reason=comments_unavailable): the plan-split and
+#     duplicate-comment checks need real comments;
+#   - the labels were read: they include ai:orchestrator-tracking
+#     (reason=labels_unavailable), so a failed read never counts as "absent";
+#   - the activation verdict is final: ACTIVATION_VERIFY_ENABLED=false, or a
+#     trusted LIVE/DORMANT marker from activation_final_verdict_from_comments
+#     (a partial=true marker does not count; reason=no_activation_verdict);
+#   - the release callback is settled: no ai:comprehensive-test-pending
+#     label, or .comprehensive_release_callback.handled == true
+#     (reason=release_callback_pending);
+#   - the plan-split source is settled: no trusted plan-split-source marker,
+#     or .plan_split_source.outcome is set (reason=plan_split_pending);
+#   - no ai:integration-backpressure label is left (reason=backpressure_label).
+# Runs once: the outcome is kept in .tracking_auto_close in the state file,
+# so a reopened issue is not closed again (unless, after the close, writing
+# STATE_FILE failed once or posting the state comment failed twice, which
+# logs state_persist=failed and a ::warning::). Reads only comments_json,
+# labels_json and STATE_FILE (no API read). Writes at most one comment
+# (ending <!-- ai:tracking-auto-close:v1 issue=<N> -->), one PATCH and one
+# state comment per project. A failed PATCH (reason=close_failed) is retried
+# on the next tick without a second comment: the trusted marker comment is
+# found in COMMENTS. A failed comment POST (reason=comment_failed) never
+# PATCHes. The comment carries no model text.
+# Log: TRACKING_AUTO_CLOSE tracking_issue=<N> outcome=closed verdict=<LIVE|DORMANT|none> state_persist=<ok|failed>,
+# or outcome=deferred reason=<...>. A failed state save after the close is a ::warning::.
+_TRACKING_AUTO_CLOSE_DISABLED_LOGGED="false"
+close_completed_tracking_issue_if_ready() {
+  local project_status="$1"
+  local comments_json="${2:-[]}"
+  local labels_json="${3:-[]}"
+  local verdict="" verdict_line="" verdict_url="" verdict_text="" operator_text=""
+  local callback_handled split_issue repo_re url_re close_marker body now_utc
+
+  [ "${project_status}" = "complete" ] || return 0
+  [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]] || return 0
+  if ! is_truthy "${ORCHESTRATOR_CLOSE_COMPLETED_TRACKING:-true}"; then
+    if [ "${_TRACKING_AUTO_CLOSE_DISABLED_LOGGED:-false}" != "true" ]; then
+      echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=disabled"
+      _TRACKING_AUTO_CLOSE_DISABLED_LOGGED="true"
+    fi
+    return 0
+  fi
+  if [ -n "$(jq -r '.tracking_auto_close.outcome // empty' "${STATE_FILE}" 2>/dev/null || true)" ]; then
+    return 0
+  fi
+  if [ "${COMMENTS_FETCH_OK:-false}" != "true" ]; then
+    echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=comments_unavailable"
+    return 0
+  fi
+  # A tracking issue always carries ai:orchestrator-tracking; without it the
+  # labels read failed (get_issue_labels_json falls back to []) and the
+  # label-absence checks below would pass on no evidence.
+  if ! has_label "${labels_json}" "ai:orchestrator-tracking"; then
+    echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=labels_unavailable"
+    return 0
+  fi
+
+  if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ]; then
+    verdict="none"
+  else
+    verdict_line="$(activation_final_verdict_from_comments "${comments_json}" "${TRACKING_NUM}" || true)"
+    verdict="${verdict_line%% *}"
+    if [[ "${verdict_line}" == *" "* ]]; then
+      verdict_url="${verdict_line#* }"
+    fi
+    if ! [[ "${verdict}" =~ ^(LIVE|DORMANT)$ ]]; then
+      echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=no_activation_verdict"
+      return 0
+    fi
+    # Only a comment URL on this repository's tracking issue is linked.
+    repo_re="${GITHUB_REPOSITORY//./\\.}"
+    url_re="^https://github\.com/${repo_re}/issues/${TRACKING_NUM}#issuecomment-[0-9]+$"
+    if ! [[ "${verdict_url}" =~ ${url_re} ]]; then
+      verdict_url=""
+    fi
+  fi
+
+  if has_label "${labels_json}" "ai:comprehensive-test-pending"; then
+    callback_handled="$(jq -r '.comprehensive_release_callback.handled // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
+    if [ "${callback_handled}" != "true" ]; then
+      echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=release_callback_pending"
+      return 0
+    fi
+  fi
+  split_issue="$(_plan_split_source_issue_from_comments "${comments_json}" || true)"
+  if [ -n "${split_issue}" ] && [ -z "$(jq -r '.plan_split_source.outcome // empty' "${STATE_FILE}" 2>/dev/null || true)" ]; then
+    echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=plan_split_pending"
+    return 0
+  fi
+  if has_label "${labels_json}" "ai:integration-backpressure"; then
+    echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=backpressure_label"
+    return 0
+  fi
+
+  close_marker="<!-- ai:tracking-auto-close:v1 issue=${TRACKING_NUM} -->"
+  if ! printf '%s' "${comments_json}" | jq -e --arg marker "${close_marker}" '
+      [.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
+        | (.body // "" | sub("[[:space:]]+$"; "")) | endswith($marker)] | any
+    ' >/dev/null 2>&1; then
+    if [ "${verdict}" = "none" ]; then
+      verdict_text="Activation verification is disabled for this repository (\`ACTIVATION_VERIFY_ENABLED=false\`)."
+    elif [ -n "${verdict_url}" ]; then
+      verdict_text="Activation verification graded this project **${verdict}** ([verdict](${verdict_url}))."
+    else
+      verdict_text="Activation verification graded this project **${verdict}**."
+    fi
+    if [ "${verdict}" = "DORMANT" ]; then
+      operator_text="The remaining operator steps are tracked in this repository's open \`ai:operator-step\` issue: https://github.com/${GITHUB_REPOSITORY}/issues?q=is%3Aissue+is%3Aopen+label%3Aai%3Aoperator-step"
+      # Blank lines around it so Markdown renders it as its own paragraph.
+      operator_text=$'\n'"${operator_text}"$'\n'
+    fi
+    body="$(printf '%s\n' \
+      "## ✅ Project complete: tracking issue closed" \
+      "" \
+      "Project #${TRACKING_NUM} is complete. ${verdict_text}" \
+      "${operator_text}" \
+      "The release callback, the plan-split source and the integration backpressure label are settled, so the poller has nothing left to do here." \
+      "" \
+      "Reopen this issue to bring it back under the poller." \
+      "" \
+      "${close_marker}")"
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" -f body="${body}" >/dev/null 2>&1; then
+      echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=comment_failed"
+      return 0
+    fi
+  fi
+
+  if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
+    echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=close_failed"
+    return 0
+  fi
+  now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local state_persist="ok"
+  if ! { jq --arg at "${now_utc}" --arg verdict "${verdict}" '.tracking_auto_close = {outcome: "closed", at: $at, verdict: $verdict}' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+    rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    state_persist="failed"
+  elif ! post_state_comment && ! post_state_comment; then
+    # One retry: without a saved outcome a reopened issue could be closed again.
+    state_persist="failed"
+  fi
+  if [ "${state_persist}" = "failed" ]; then
+    echo "::warning::TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} closed, but its state was not saved; if the issue is reopened, a later tick may close it again." >&2
+  fi
+  echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=closed verdict=${verdict} state_persist=${state_persist}"
+  return 0
 }
 
 handle_comprehensive_release_callback_if_needed() {
@@ -18187,6 +18519,10 @@ _plan_heal_counterfactual_check()
   HEAL_CF_GATE_REASON=""
   HEAL_CF_GATE_JSON='{}'
   HEAL_CF_GATE_PLAN_COMMENT="unknown"
+  # Issue #8809: reset before any return so a marker never leaks to the next issue.
+  HEAL_TEST_ONLY_GATE_DECISION=""
+  HEAL_TEST_ONLY_GATE_REASON=""
+  HEAL_TEST_ONLY_GATE_MARKER=""
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   heal_py="${script_dir}/workflow_failure_heal.py"
   partial_py="${script_dir}/partial_delivery.py"
@@ -18254,8 +18590,87 @@ _plan_heal_counterfactual_check()
     echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=approve result=${HEAL_CF_GATE_RESULT} reason=${HEAL_CF_GATE_REASON} issue=${issue_num}"
     return 0
   fi
+  # Issue #8809: an UNVERIFIED heal plan (never FAIL, missing or an unknown
+  # route) gets the test-only check. On approve the flow continues to the
+  # automation-path guard unchanged; _plan_auto_approval_gate posts the
+  # approval marker before /approved.
+  if [ "${route}" = "true" ] && [ "${HEAL_CF_GATE_RESULT}" = "UNVERIFIED" ] && [ "${HEAL_CF_GATE_REASON}" = "unverified" ] \
+    && _plan_heal_test_only_check "${issue_num}" "${details_map_json}" "${plan_file}" "${login}"; then
+    HEAL_CF_GATE_DECISION="approve"
+    return 0
+  fi
   HEAL_CF_GATE_DECISION="hold"
   return 1
+}
+
+# Issue #8809: test-only check for an UNVERIFIED heal plan. The heal scope is
+# verified from the batched details map (body, author, labels and
+# last_edited_at; no GitHub API call) with workflow_failure_heal.py
+# heal-scope verify, then files_touched_scope_guard.py --heal-test-only-check
+# approves only a plan whose Files section lists exact tests/ and
+# changelog.d/*.md files inside that scope. Runs in the main shell and sets
+# HEAL_TEST_ONLY_GATE_DECISION, HEAL_TEST_ONLY_GATE_REASON and
+# HEAL_TEST_ONLY_GATE_MARKER (the approval marker on approve). Reads
+# HEAL_CF_GATE_PLAN_COMMENT. Every error holds; one log line either way.
+# Args: <issue_num> <details_map_json> <plan_file> <login>
+# Returns 0 to approve, 1 to hold.
+_plan_heal_test_only_check()
+{
+  local issue_num="$1"
+  local details_map_json="$2"
+  local plan_file="$3"
+  local login="$4"
+  local script_dir="" heal_py="" guard_py="" flag_norm="" verify_input="" verified="" scope_file="" to_json=""
+  local to_decision="hold" to_reason="heal_test_only_check_unavailable"
+
+  HEAL_TEST_ONLY_GATE_DECISION="hold"
+  HEAL_TEST_ONLY_GATE_REASON=""
+  HEAL_TEST_ONLY_GATE_MARKER=""
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  heal_py="${script_dir}/workflow_failure_heal.py"
+  guard_py="${script_dir}/files_touched_scope_guard.py"
+  flag_norm="$(printf '%s' "${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm="true"
+  case "${flag_norm}" in
+    false) to_reason="gate_disabled" ;;
+    ""|true) ;;
+    *) echo "::warning::HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED has invalid value; treating as true" ;;
+  esac
+  if [ "${flag_norm}" != "false" ]; then
+    to_reason="heal_scope_unverified"
+    if [ -n "${login}" ] && [ -f "${heal_py}" ] && [ -f "${guard_py}" ] \
+      && verify_input="$(printf '%s' "${details_map_json:-{\}}" | jq -ce --arg n "${issue_num}" --arg login "${login}" '
+          .[$n]
+          | select(type == "object")
+          | select(has("last_edited_at") and .labels_complete == true)
+          | select((.body | type) == "string" and (.author_login | type) == "string" and ((.labels // []) | type) == "array")
+          | {body: .body, last_edited_at: .last_edited_at, author_login: .author_login, labels: .labels, pipeline_login: $login}
+        ' 2>/dev/null)" \
+      && verified="$(printf '%s' "${verify_input}" | PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${heal_py}" heal-scope verify --input-json /dev/stdin 2>/dev/null)" \
+      && printf '%s' "${verified}" | jq -e '.status == "verified"' >/dev/null 2>&1 \
+      && scope_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_test_only_scope.XXXXXX" 2>/dev/null)" \
+      && printf '%s' "${verified}" | jq -r '.paths[]' > "${scope_file}" 2>/dev/null && [ -s "${scope_file}" ]; then
+      to_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${guard_py}" --heal-test-only-check --plan-file "${plan_file}" \
+        --heal-scope-file "${scope_file}" --flag-enabled "${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}" \
+        --issue-number "${issue_num}" --plan-comment-id "${HEAL_CF_GATE_PLAN_COMMENT:-}" 2>/dev/null || true)"
+      to_decision="$(printf '%s' "${to_json}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
+      to_reason="$(printf '%s' "${to_json}" | jq -r '.reason // "heal_test_only_check_unavailable"' 2>/dev/null || echo heal_test_only_check_unavailable)"
+      if [ "${to_decision}" = "approve" ]; then
+        HEAL_TEST_ONLY_GATE_MARKER="$(printf '%s' "${to_json}" | jq -r '.marker // ""' 2>/dev/null || true)"
+        case "${HEAL_TEST_ONLY_GATE_MARKER}" in
+          "<!-- ai:heal-test-only-approval:v1 issue=${issue_num} plan_comment="*" -->") ;;
+          *) to_decision="hold"; to_reason="heal_test_only_check_unavailable"; HEAL_TEST_ONLY_GATE_MARKER="" ;;
+        esac
+      fi
+    fi
+    [ -z "${scope_file}" ] || rm -f "${scope_file}"
+  fi
+  [ "${to_decision}" = "approve" ] || { to_decision="hold"; HEAL_TEST_ONLY_GATE_MARKER=""; }
+  to_reason="$(printf '%s' "${to_reason}" | tr -cd 'a-z_' | cut -c1-80)"
+  [ -n "${to_reason}" ] || to_reason="heal_test_only_check_unavailable"
+  HEAL_TEST_ONLY_GATE_DECISION="${to_decision}"
+  HEAL_TEST_ONLY_GATE_REASON="${to_reason}"
+  echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_test_only outcome=${to_decision} reason=${to_reason} issue=${issue_num}"
+  [ "${to_decision}" = "approve" ]
 }
 
 # Issue #8249: a poller heal counterfactual hold reaches a human once per
@@ -18336,6 +18751,12 @@ _heal_counterfactual_hold_notify()
 # which is written to the issue body before the approval. Every
 # error holds. A hold leaves the issue in its phase for a human /approved and
 # does not increment the recovery count; the implement-time guard still runs.
+# Issue #8339: a path_not_granted hold that the guard marks replannable (only
+# directory or glob tokens denied, the rest would be granted) gets one
+# automatic re-plan per issue from ai:awaiting-approval: the label moves to
+# ai:planning and an /answer comment carrying the
+# ai:automation-path-replan:v1 marker is posted. Once that marker is on the
+# issue, a later hold gets the ordinary hold notice for a human.
 # Args: <issue_num> <details_map_json> <comments_json> <phase>
 # Returns 0 to approve, 1 to hold (after logging).
 _plan_auto_approval_gate()
@@ -18356,6 +18777,14 @@ _plan_auto_approval_gate()
   local gate_display_paths="[]"
   local gate_grant_body_file=""
   local gate_fresh_file=""
+  local gate_replannable="false"
+  local gate_replan_marker=""
+  local gate_replan_seen="true"
+  local gate_replan_body=""
+  local gate_replan_jq=""
+  local gate_replan_since=""
+  local gate_replan_recent=""
+  local gate_replan_landed="false"
 
   guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
   if [ ! -f "${guard_py}" ]; then
@@ -18417,6 +18846,10 @@ _plan_auto_approval_gate()
           --issue-number "${issue_num}" 2>/dev/null || true)"
         gate_decision="$(printf '%s' "${gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
         gate_reason="$(printf '%s' "${gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
+        # Issue #8339: strict check; a missing field or bad JSON is false.
+        if printf '%s' "${gate_result}" | jq -e '.replannable == true' >/dev/null 2>&1; then
+          gate_replannable="true"
+        fi
         # Q108: write the proposed exact grant before approving. The body the
         # guard extended comes from this tick's batched snapshot, so it is
         # re-read first (one REST read; no batched call carries a live body)
@@ -18457,6 +18890,29 @@ _plan_auto_approval_gate()
     fi
   fi
   rm -f "${gate_plan_file}" "${gate_meta_file}" "${gate_grant_body_file}" "${gate_fresh_file}" 2>/dev/null || true
+  if [ "${gate_decision}" = "approve" ] && [ -n "${HEAL_TEST_ONLY_GATE_MARKER:-}" ]; then
+    # Issue #8809: the test-only approval marker binds implement to the
+    # plan's paths, so it is posted before any /approved (all four callers
+    # post only after this returns 0). A trusted copy already on the issue
+    # is reused; a failed post holds without counting a recovery attempt.
+    gate_replan_jq='
+      [ .[]?
+        | select(type == "object")
+        | select(((.user.login // "") == $login and $login != "")
+            or ((.user.login // "") | test("\\[bot\\]$"))
+            or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+        | (.body // "")
+        | select(contains($marker))
+      ] | length > 0'
+    if [ "$(printf '%s' "${comments_json:-[]}" | jq -r --arg marker "${HEAL_TEST_ONLY_GATE_MARKER}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" != "true" ] \
+      && ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="Automatic approval of a test-only workflow-heal plan: implementation is limited to the files listed in the marker below, and a change that deletes a file, removes tests or asserts, or adds a skip is refused.
+
+${HEAL_TEST_ONLY_GATE_MARKER}" >/dev/null 2>&1; then
+      echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_test_only outcome=hold reason=marker_post_failed issue=${issue_num}"
+      echo "STALL_SKIP issue=${issue_num} reason=heal_test_only_marker_failed phase=${phase} action=none"
+      return 1
+    fi
+  fi
   if [ "${gate_decision}" = "approve" ]; then
     return 0
   fi
@@ -18469,6 +18925,84 @@ _plan_auto_approval_gate()
     echo "STALL_SKIP issue=${issue_num} reason=heal_counterfactual_hold phase=${phase} action=none"
     _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
     return 1
+  fi
+  if [ "${gate_reason}" = "path_not_granted" ] && [ "${gate_replannable}" = "true" ] \
+    && [ "${phase}" = "ai:awaiting-approval" ]; then
+    # Issue #8339: one automatic re-plan per issue. The marker counts only in
+    # a trusted comment (same filter as _plan_auto_approval_hold_notify); a
+    # jq failure counts as "seen", so the hold notice below runs as before.
+    gate_replan_marker="<!-- ai:automation-path-replan:v1 issue=${issue_num} -->"
+    gate_replan_jq='
+      [ .[]?
+        | select(type == "object")
+        | select(((.user.login // "") == $login and $login != "")
+            or ((.user.login // "") | test("\\[bot\\]$"))
+            or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+        | (.body // "")
+        | select(contains($marker))
+      ] | length > 0'
+    gate_replan_seen="$(printf '%s' "${comments_json:-[]}" | jq -r --arg marker "${gate_replan_marker}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" || gate_replan_seen="true"
+    [ "${gate_replan_seen}" = "false" ] || gate_replan_seen="true"
+    if [ "${gate_replan_seen}" = "false" ] \
+      && ! phase_cap_can_dispatch "ai:planning" "automation_path_replan" "${issue_num}"; then
+      # The callers checked only the ai:implementing cap; a re-plan starts a
+      # plan run, so it waits for the ai:planning cap. No marker is posted,
+      # so a later tick retries the re-plan.
+      echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=automation_path_replan"
+      return 1
+    fi
+    if [ "${gate_replan_seen}" = "false" ]; then
+      # §14 audit: comments_json, details_map_json and the retrigger_plan
+      # comment POST were checked; none of them can change labels, and
+      # plan.yml skips an /answer unless the issue carries ai:planning
+      # (AD-1). This edit runs only on the eligible path and at most once
+      # per issue, because the marker comment below ends eligibility.
+      if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        --add-label 'ai:planning' --remove-label 'ai:awaiting-approval' >/dev/null 2>&1; then
+        echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_label_failed issue=${issue_num}"
+      else
+        gate_replan_body="/answer
+
+_Orchestrator stall recovery: the plan's \"Files likely to change\" section listed a directory or glob token (for example from placeholder text), and such a token can never be granted exactly. Re-planning once. The earlier clarification answers still apply. List only exact file paths in that section, with no placeholder text. If the new plan is held again, it goes to a maintainer._
+
+${gate_replan_marker}"
+        gate_replan_since="$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+          -f body="${gate_replan_body}" >/dev/null 2>&1; then
+          gate_replan_landed="true"
+        else
+          # gh_retry makes one attempt for this POST, so a failure can be a
+          # lost response for a comment GitHub accepted. §14 audit:
+          # comments_json predates the POST, so one read of the recent
+          # comments runs here, only on this failure branch, with one
+          # attempt. A failed read keeps the rollback below.
+          if gate_replan_recent="$(GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100${gate_replan_since:+&since=${gate_replan_since}}" 2>/dev/null)" \
+            && [ "$(printf '%s' "${gate_replan_recent}" | jq -r --arg marker "${gate_replan_marker}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" = "true" ]; then
+            gate_replan_landed="true"
+            echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_confirmed issue=${issue_num}"
+          fi
+        fi
+        if [ "${gate_replan_landed}" = "true" ]; then
+          phase_cap_note_dispatch "ai:planning"
+          echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan issue=${issue_num}"
+          tg_notify_issue "${issue_num}" "Stall recovery: plan held only by directory or glob tokens; re-planning once." "DEBUG" || true
+        else
+          # Put the issue back in ai:awaiting-approval so the next tick retries
+          # the whole re-plan with its marker; without the marker a plain
+          # retrigger_plan /answer could allow a second automatic re-plan.
+          # If the rollback fails too, the retrigger_plan arm recovers it.
+          # Residual case: if the POST landed but both its response and the
+          # confirmation read were lost, the marker is already on the issue,
+          # so the next tick posts the hold notice for a maintainer instead
+          # of re-planning (never a second re-plan, never a stuck issue).
+          echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_failed issue=${issue_num}"
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+            --add-label 'ai:awaiting-approval' --remove-label 'ai:planning' >/dev/null 2>&1 \
+            || echo "::warning::Could not restore ai:awaiting-approval on issue #${issue_num} after a failed re-plan comment; it is left in ai:planning and the re-plan marker could not be confirmed (it may have landed)."
+        fi
+        return 1
+      fi
+    fi
   fi
   echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=${gate_reason:-plan_gate_error} outcome=defer issue=${issue_num} paths=${gate_paths:-none}"
   echo "STALL_SKIP issue=${issue_num} reason=automation_path_plan_hold phase=${phase} action=none"
@@ -20161,6 +20695,7 @@ _fetch_candidate_issue_details_graphql() {
           body
           author { login }
           authorAssociation
+          lastEditedAt
           labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
@@ -20216,6 +20751,7 @@ _fetch_candidate_issue_details_graphql() {
             body: .value.body,
             author_login: (.value.author.login // ""),
             author_association: (.value.authorAssociation // ""),
+            last_edited_at: (.value.lastEditedAt // null),
             labels: [(.value.labels.nodes // [])[]?.name],
             labels_complete: ((.value.labels.pageInfo.hasNextPage == false) and ((.value.labels.nodes | type) == "array")),
             comments_available: ((.value.comments.nodes? | type) == "array"),
@@ -27128,6 +27664,10 @@ The poller will resume processing on the next cycle."
       ' >/dev/null 2>&1; then
       run_project_activation_verify
     fi
+    # Issue #8685: close a complete project's tracking issue once its
+    # activation verdict, release callback, plan-split source and
+    # backpressure label are settled (runs once; see the function header).
+    close_completed_tracking_issue_if_ready "${PROJECT_STATUS}" "${COMMENTS:-[]}" "${TRACKING_LABELS:-[]}"
     if [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
       if completion_status_comment_failed_state_observation; then
         _completion_status_failed_observation_rc=0
@@ -32117,6 +32657,16 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 	if _linked_pr_is_merge_queued "${S_PR_JSON}"; then
 		echo "  PR #${S_PR} is ai:merge-queued (merge train); skipping standalone conflict recovery until released."
+		continue
+	fi
+	# A review waiting for Claude capacity labels its PR
+	# ai:claude-capacity-wait; the capacity-resume pass re-dispatches it and
+	# removes the label. Dispatching here would only defer again, and counting
+	# those deferrals as resolution attempts sent false "resolve by hand"
+	# WARNINGs (PRs #8239/#8346/#8348/#8373/#8389, 2026-11-02: 9 deferred
+	# dispatches each, no resolver ever ran).
+	if _linked_pr_is_capacity_waiting "${S_PR_JSON}"; then
+		echo "STANDALONE_CONFLICT_STUCK pr=${S_PR} outcome=skip reason=claude_capacity_wait"
 		continue
 	fi
 

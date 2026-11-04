@@ -2593,7 +2593,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		# The routing gate itself must call the helper before its exit.
 		gate = script_text.split("--- PR-head routing gate", 1)[1].split("# --- Collect failing check-run context", 1)[0]
 		self.assertIn("triage_report_routing_unverified\n\t\texit 0", gate)
-		dedup = script_text.split("skip reason=duplicate_open_issue", 1)[1].split("exit 0", 1)[0]
+		dedup = script_text.split("skip reason=duplicate_open_issue issue=${EXISTING}", 1)[1].split("exit 0", 1)[0]
 		self.assertIn("triage_report_routing_unverified", dedup)
 		# Base-gate skips (success, pending and the #7283 routed-head base) also
 		# report an unverified route.
@@ -3241,6 +3241,293 @@ class CheckFailureTriageUpstreamRoutingTests(unittest.TestCase):
 		staging = _step(job, name="Stage workflow support files")["run"]
 		self.assertLess(staging.index("build_sync_manifest.py managed-digests"), staging.index("rm -rf .codex-workflow-src"))
 		self.assertIn("CHECK_TRIAGE_WRAPPER_SHA=${SCRIPT_REF}", staging)
+
+
+
+SUPERSEDE_FP = hashlib.sha256(b"owner/repo|pr=17|check=CI").hexdigest()
+
+
+def _stale_triage_issue(
+	*, number: int = 99, head: str = "b" * 40, labels: tuple[str, ...] = ("ai:check-triage", "ai:blocked"),
+	user_type: str = "User", association: str = "OWNER", login: str = "maintainer", first_line: str | None = None,
+	extra: str = "",
+) -> dict:
+	lines = [
+		first_line if first_line is not None else f"<!-- check-failure-triage:fp={SUPERSEDE_FP} -->",
+		"<!-- check-failure-triage:pr=17 -->",
+		"- **Failing check:** `CI` (conclusion: `failure`)",
+		f"- **Head SHA:** `{head}`",
+		"",
+		"---",
+		extra,
+	]
+	return {
+		"number": number, "body": "\n".join(lines), "labels": list(labels),
+		"user_login": login, "user_type": user_type, "author_association": association,
+	}
+
+
+class CheckFailureTriageSupersedeTests(unittest.TestCase):
+	"""Issue #8671: a blocked triage issue from an older PR head no longer hides a
+	new failure on the current head; it is closed after the new issue exists."""
+
+	def _collect(self, issues: list[dict], **env: str):
+		return _run_collect_stage(parent_body="", extra_env={"MOCK_OPEN_TRIAGE": json.dumps(issues), **env})
+
+	def test_blocked_trusted_older_head_issue_becomes_candidate(self) -> None:
+		proc, outputs, metadata = self._collect([_stale_triage_issue()])
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE op=supersede outcome=candidate old=99", proc.stdout)
+		self.assertNotIn("duplicate_open_issue", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(metadata["supersede_issue"], "99")
+		self.assertEqual(metadata["supersede_old_head_sha"], "b" * 40)
+		self.assertEqual(metadata["supersede_new_head_sha"], "a" * 40)
+		# Lineage is computed exactly as without a stale issue.
+		self.assertEqual(metadata["generation"], "1")
+
+	def test_bot_author_is_trusted(self) -> None:
+		proc, _, metadata = self._collect([_stale_triage_issue(user_type="Bot", association="NONE", login="github-actions[bot]")])
+		self.assertIn("outcome=candidate old=99", proc.stdout)
+		self.assertEqual(metadata["supersede_issue"], "99")
+
+	def test_listing_projection_carries_labels_and_author(self) -> None:
+		raw_page = json.dumps([{
+			"number": 99, "body": _stale_triage_issue()["body"], "labels": [{"name": "ai:check-triage"}, {"name": "ai:blocked"}],
+			"user": {"login": "maintainer", "type": "User"}, "author_association": "MEMBER",
+		}])
+		proc, _, metadata = _run_collect_stage(parent_body="", extra_env={"MOCK_TRIAGE_RAW_PAGE": raw_page})
+		self.assertIn("outcome=candidate old=99", proc.stdout + proc.stderr)
+		self.assertEqual(metadata["supersede_issue"], "99")
+
+	def test_non_candidates_keep_duplicate_skip(self) -> None:
+		cases = {
+			"not_blocked": ([_stale_triage_issue(labels=("ai:check-triage",))], {}),
+			"same_head": ([_stale_triage_issue(head="a" * 40)], {}),
+			"untrusted_author": ([_stale_triage_issue(association="CONTRIBUTOR")], {}),
+			"header_mismatch": ([_stale_triage_issue(first_line="<!-- check-failure-triage:gen=1 -->", extra=f"fp={SUPERSEDE_FP}")], {}),
+			"old_head_unreadable": ([_stale_triage_issue(extra="- **Head SHA:** `" + "c" * 40 + "`")], {}),
+			"multiple_open": ([_stale_triage_issue(), _stale_triage_issue(number=100)], {}),
+			"disabled": ([_stale_triage_issue()], {"CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED": "false"}),
+			"not_current_head": ([_stale_triage_issue()], {"CHECK_TRIAGE_HEAD_SHA": "c" * 40}),
+		}
+		for reason, (issues, env) in cases.items():
+			with self.subTest(reason=reason):
+				proc, outputs, metadata = self._collect(issues, **env)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn(f"CHECK_TRIAGE op=supersede outcome=skip reason={reason} old=99", proc.stdout)
+				self.assertIn("CHECK_TRIAGE skip reason=duplicate_open_issue issue=99", proc.stdout)
+				self.assertNotIn("ready", outputs)
+				self.assertEqual(metadata, {})
+
+	def test_invalid_switch_is_off_with_warning(self) -> None:
+		proc, _, metadata = self._collect([_stale_triage_issue()], CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED="maybe")
+		self.assertIn("::warning::CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED is not true or false", proc.stdout)
+		self.assertNotIn("maybe", proc.stdout)
+		self.assertIn("reason=duplicate_open_issue issue=99", proc.stdout)
+		self.assertEqual(metadata, {})
+
+	def test_no_stale_issue_writes_empty_supersede_fields(self) -> None:
+		proc, outputs, metadata = _run_collect_stage(parent_body="")
+		self.assertEqual(outputs.get("ready"), "true", proc.stdout + proc.stderr)
+		self.assertEqual(
+			(metadata["supersede_issue"], metadata["supersede_old_head_sha"], metadata["supersede_new_head_sha"]), ("", "", ""),
+		)
+
+	OPEN_BLOCKED_ISSUE = json.dumps({
+		"state": "open", "user": {"login": "maintainer"}, "labels": [{"name": "ai:check-triage"}, {"name": "ai:blocked"}],
+	})
+
+	def _supersede_stage(
+		self, metadata: dict, url: str, fail: str = "", old_issue: str | None = None,
+		user_json: str = '{"login": "maintainer"}', stage: str = "supersede",
+	) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+		with tempfile.TemporaryDirectory(prefix="check-triage-supersede-") as temp_name:
+			temp_path = Path(temp_name)
+			bin_dir = temp_path / "bin"
+			bin_dir.mkdir()
+			trusted = temp_path / "trusted"
+			(trusted / "prompts").mkdir(parents=True)
+			(trusted / "unattended_system_instructions.md").write_text("instructions\n", encoding="utf-8")
+			(trusted / "prompts" / "mode-check-failure-triage.txt").write_text("prompt\n", encoding="utf-8")
+			runtime_dir = temp_path / "runtime"
+			runtime_dir.mkdir()
+			(runtime_dir / "triage_metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+			calls_file = temp_path / "calls.txt"
+			_write_executable(bin_dir / "gh", """#!/usr/bin/env bash
+gh_call_args="$*"
+printf '%s\\n' "${gh_call_args//$'\\n'/\\\\n}" >> "${MOCK_GH_CALLS}"
+case "$*" in
+  *"${MOCK_FAIL_MATCH:-__never__}"*) exit 1 ;;
+  *--method*) ;;
+  "api user") printf '%s' "${MOCK_USER_JSON}" ;;
+  *) printf '%s' "${MOCK_OLD_ISSUE_JSON}" ;;
+esac
+exit 0
+""")
+			env = {
+				key: value for key, value in os.environ.items()
+				if key not in ("BASH_ENV", "ENV", "GH_TOKEN", "GITHUB_TOKEN", "CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED")
+			}
+			env.update({
+				"CHECK_TRIAGE_STAGE": stage, "CHECK_TRIAGE_SUPERSEDE_NEW_ISSUE_URL": url,
+				"CHECK_TRIAGE_TRUSTED_SUPPORT_DIR": str(trusted), "GITHUB_REPOSITORY": "owner/repo",
+				"GITHUB_SERVER_URL": "https://github.com", "RUNTIME_DIR": str(runtime_dir),
+				"MOCK_GH_CALLS": str(calls_file), "MOCK_FAIL_MATCH": fail or "__never__",
+				"MOCK_OLD_ISSUE_JSON": self.OPEN_BLOCKED_ISSUE if old_issue is None else old_issue,
+				"MOCK_USER_JSON": user_json,
+				"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+			})
+			proc = subprocess.run(
+				["bash", "--noprofile", "--norc", str(TRIAGE_SCRIPT_PATH)],
+				cwd=REPO_ROOT, env=env, capture_output=True, text=True, encoding="utf-8",
+			)
+			calls = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+		return proc, calls
+
+	SUPERSEDE_METADATA = {
+		"check_name": "CI", "fingerprint": SUPERSEDE_FP, "supersede_issue": "99",
+		"supersede_old_head_sha": "b" * 40, "supersede_new_head_sha": "a" * 40,
+	}
+
+	def test_supersede_stage_comments_labels_and_closes_in_order(self) -> None:
+		proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "https://github.com/owner/repo/issues/120")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(len(calls), 5, calls)
+		self.assertEqual(calls[0], "api user")
+		self.assertEqual(calls[1], "api repos/owner/repo/issues/99")
+		self.assertTrue(calls[2].startswith("api --method POST repos/owner/repo/issues/99/comments -f body=Superseded: check `CI`"))
+		self.assertIn("New triage: #120", calls[2])
+		self.assertIn("<!-- check-failure-triage:superseded-by=120 -->", calls[2])
+		# Close first: a failed close must not leave ai:closed on an open issue.
+		self.assertEqual(calls[3], "api --method PATCH repos/owner/repo/issues/99 -f state=closed -f state_reason=not_planned")
+		self.assertEqual(calls[4], "api --method POST repos/owner/repo/issues/99/labels -f labels[]=ai:closed")
+		self.assertIn("CHECK_TRIAGE op=supersede outcome=closed old=99 new=120", proc.stdout)
+
+	def test_supersede_stage_failed_close_warns_and_exits_zero(self) -> None:
+		proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "https://github.com/owner/repo/issues/120", fail="--method PATCH")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(len(calls), 4)
+		self.assertFalse(any("/labels" in call for call in calls), calls)
+		self.assertIn("CHECK_TRIAGE op=supersede outcome=warn reason=supersede_close_failed old=99 new=120", proc.stdout)
+
+	def test_supersede_stage_failed_label_after_close_reports_label_failure(self) -> None:
+		proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "https://github.com/owner/repo/issues/120", fail="/labels")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(len(calls), 5, calls)
+		self.assertIn("CHECK_TRIAGE op=supersede outcome=warn reason=supersede_label_failed old=99 new=120", proc.stdout)
+		self.assertNotIn("supersede_close_failed", proc.stdout)
+
+	def test_supersede_stage_skips_when_old_issue_changed_since_collect(self) -> None:
+		cases = {
+			"old_issue_stale": json.dumps({"state": "closed", "user": {"login": "maintainer"}, "labels": [{"name": "ai:blocked"}]}),
+			"old_issue_stale_unblocked": json.dumps({"state": "open", "user": {"login": "maintainer"}, "labels": [{"name": "ai:check-triage"}]}),
+			"old_issue_unreadable": "",
+		}
+		for label, payload in cases.items():
+			with self.subTest(case=label):
+				proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "https://github.com/owner/repo/issues/120", old_issue=payload)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertEqual(calls, ["api user", "api repos/owner/repo/issues/99"])
+				reason = "old_issue_unreadable" if label == "old_issue_unreadable" else "old_issue_stale"
+				self.assertIn(f"CHECK_TRIAGE op=supersede outcome=skip reason={reason} old=99 new=120", proc.stdout)
+
+	def test_supersede_stage_only_closes_an_issue_the_authenticated_account_opened(self) -> None:
+		# Issue #8671: only an issue opened by the account whose token created
+		# the new issue may be superseded; an unreadable identity fails closed.
+		foreign = json.dumps({
+			"state": "open", "user": {"login": "someone-else"}, "labels": [{"name": "ai:check-triage"}, {"name": "ai:blocked"}],
+		})
+		proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "https://github.com/owner/repo/issues/120", old_issue=foreign)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(calls, ["api user", "api repos/owner/repo/issues/99"])
+		self.assertIn("CHECK_TRIAGE op=supersede outcome=skip reason=not_own_issue old=99 new=120", proc.stdout)
+		for user_json in ("", "{}", '{"login": "bad login"}'):
+			with self.subTest(user_json=user_json):
+				proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "https://github.com/owner/repo/issues/120", user_json=user_json)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertEqual(calls, ["api user"])
+				self.assertIn("CHECK_TRIAGE op=supersede outcome=skip reason=identity_unavailable old=99 new=120", proc.stdout)
+
+	def test_historical_mode_never_supersedes(self) -> None:
+		# A stale blocked issue carrying the historical fingerprint stays a
+		# duplicate in historical mode; the supersede branch never runs.
+		hist_fp = hashlib.sha256(b"owner/repo|pr=17|check=CI|run=37922279826|job=113792812346").hexdigest()
+		issue = _stale_triage_issue()
+		issue["body"] = issue["body"].replace(SUPERSEDE_FP, hist_fp)
+		proc, outputs, metadata = self._collect(
+			[issue], CHECK_TRIAGE_HISTORICAL_RUN_ID="37922279826", CHECK_TRIAGE_HISTORICAL_JOB_ID="113792812346",
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertNotIn("op=supersede", proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=duplicate_open_issue issue=99", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(metadata, {})
+
+	def test_supersede_stage_rejects_invalid_inputs(self) -> None:
+		for url in ("", "https://github.com/other/repo/issues/120", "https://github.com/owner/repo/issues/12x", "https://github.com/owner/repo/pull/120"):
+			with self.subTest(url=url):
+				proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, url)
+				self.assertEqual(proc.returncode, 0)
+				self.assertIn("op=supersede outcome=skip reason=new_issue_invalid", proc.stdout)
+				self.assertEqual(calls, [])
+		bad = dict(self.SUPERSEDE_METADATA, supersede_old_head_sha="a" * 40)
+		proc, calls = self._supersede_stage(bad, "https://github.com/owner/repo/issues/120")
+		self.assertIn("op=supersede outcome=skip reason=metadata_invalid", proc.stdout)
+		self.assertEqual(calls, [])
+		proc, calls = self._supersede_stage(dict(self.SUPERSEDE_METADATA, supersede_issue=""), "https://github.com/owner/repo/issues/120")
+		self.assertEqual(proc.returncode, 0)
+		self.assertEqual(calls, [])
+
+	def test_supersede_check_stage_allows_create_for_own_open_blocked_issue(self) -> None:
+		proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "", stage="supersede-check")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(calls, ["api user", "api repos/owner/repo/issues/99"])
+		self.assertNotIn("duplicate_open_issue", proc.stdout)
+
+	def test_supersede_check_stage_keeps_duplicate_skip_when_not_supersedable(self) -> None:
+		# Issue #8671: an issue another account opened, an unreadable identity,
+		# or a changed or unreadable old issue blocks the create (exit 10).
+		foreign = json.dumps({
+			"state": "open", "user": {"login": "someone-else"}, "labels": [{"name": "ai:check-triage"}, {"name": "ai:blocked"}],
+		})
+		cases = {
+			"not_own_issue": {"old_issue": foreign},
+			"identity_unavailable": {"user_json": "{}"},
+			"old_issue_stale": {"old_issue": json.dumps({"state": "closed", "user": {"login": "maintainer"}, "labels": []})},
+			"old_issue_unreadable": {"old_issue": json.dumps({"message": "Not Found"})},
+		}
+		for reason, kwargs in cases.items():
+			with self.subTest(reason=reason):
+				proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "", stage="supersede-check", **kwargs)
+				self.assertEqual(proc.returncode, 10, proc.stdout + proc.stderr)
+				self.assertIn(f"CHECK_TRIAGE op=supersede outcome=skip reason={reason} old=99 stage=pre_create", proc.stdout)
+				self.assertIn("CHECK_TRIAGE skip reason=duplicate_open_issue issue=99", proc.stdout)
+				self.assertFalse(any("--method" in call for call in calls), calls)
+
+	def test_supersede_check_stage_without_candidate_allows_create(self) -> None:
+		proc, calls = self._supersede_stage(dict(self.SUPERSEDE_METADATA, supersede_issue=""), "", stage="supersede-check")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(calls, [])
+
+	def test_post_step_runs_supersede_after_issue_create(self) -> None:
+		job = _workflow()["jobs"]["triage"]
+		post = _step(job, name="Post check-failure triage issue")
+		self.assertEqual(post["env"]["GH_TOKEN"], "${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}")
+		script = post["run"]
+		create_index = script.index("gh issue create")
+		supersede_index = script.index("CHECK_TRIAGE_STAGE=supersede ")
+		self.assertLess(create_index, supersede_index)
+		# Issue #8671: the account check gates the create; a non-zero exit
+		# keeps the duplicate skip and files nothing.
+		check_index = script.index("CHECK_TRIAGE_STAGE=supersede-check bash scripts/check_failure_triage.sh")
+		self.assertLess(check_index, create_index)
+		self.assertRegex(script[check_index:create_index], r'if \[ "\$\{triage_supersede_check_rc\}" -ne 0 \]; then[\s\S]*exit 0')
+		self.assertIn('CHECK_TRIAGE_SUPERSEDE_NEW_ISSUE_URL="${triage_issue_url}"', script)
+		self.assertRegex(script[supersede_index:], r"bash scripts/check_failure_triage\.sh \|\| true")
+		self.assertEqual(
+			job["env"]["CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED"], "${{ vars.CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED || 'true' }}",
+		)
 
 
 if __name__ == "__main__":

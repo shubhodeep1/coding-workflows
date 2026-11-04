@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -502,6 +503,73 @@ def test_sweep_snapshot_failure_is_not_no_active_runs() -> None:
 	assert "active_snapshot_incomplete=true" in step
 	assert "reason=active_snapshot_incomplete" in step
 	assert "snapshot_incomplete=${active_snapshot_incomplete}" in step
+
+
+SWEEP_DISPATCH_STEP = "Enumerate open PRs and dispatch internal-review.yml"
+
+
+def _sweep_dispatch_step() -> str:
+	return _gh_api_retry_step(_gh_api_retry_workflow("review_autofix_sweep.yml"), SWEEP_DISPATCH_STEP)
+
+
+def test_sweep_snapshot_parse_failure_is_not_no_active_runs() -> None:
+	step = _sweep_dispatch_step()
+	if_at = step.index('if snapshot_json="$(')
+	else_at = step.index("\n            else\n", if_at)
+	fi_at = step.index("\n            fi", else_at)
+	else_body = step[else_at + len("\n            else\n"):fi_at]
+	statements = [line.strip() for line in else_body.splitlines() if line.strip() and not line.strip().startswith("#")]
+	# $? must be read before any other statement overwrites it.
+	assert statements[0] == "snap_parse_rc=$?", statements
+	assert "snapshot_json='{}'" in statements
+	assert "active_snapshot_incomplete=true" in statements
+	warning = [s for s in statements if "AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE" in s]
+	assert warning == [
+		'echo "::warning::AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE workflow=${workflow} status=parse rc=${snap_parse_rc}"'
+	], warning
+	# Never log raw API content.
+	assert "snap_raw" not in warning[0] and "snapshot_json" not in warning[0]
+	assert step.index("local snap_parse_rc") < if_at
+
+
+def _run_sweep_snapshot_with_listing(listing: str) -> subprocess.CompletedProcess[str]:
+	step = _sweep_dispatch_step()
+	start = step.index("active_snapshot_incomplete=false")
+	end = step.index("for wf in internal-review.yml review_autofix.yml; do", start)
+	body = step[start:end]
+	with tempfile.TemporaryDirectory() as tempdir:
+		script = "\n".join(
+			(
+				"declare -A active_review_runs=()",
+				"sweep_default_branch=main",
+				"REPOSITORY=o/r",
+				"READ_TOKEN=x",
+				"SWEEP_STALE_QUEUED_MINUTES=0",
+				f"RUNNER_TEMP={tempdir}",
+				f"gh_api_retry() {{ printf '%s' '{listing}'; }}",
+				body,
+				"snapshot_active_review_runs internal-review.yml",
+				'echo "FLAG=${active_snapshot_incomplete}"',
+			)
+		)
+		return subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, check=False)
+
+
+def test_sweep_snapshot_parse_failure_marks_incomplete_behaviour() -> None:
+	# Fail loudly instead of passing silently when the tools are missing.
+	assert shutil.which("jq") is not None, "jq is required for the sweep snapshot behavioural test"
+	assert shutil.which("bash") is not None, "bash is required for the sweep snapshot behavioural test"
+	truncated = _run_sweep_snapshot_with_listing('{"workflow_runs":[')
+	assert truncated.returncode == 0, truncated.stderr
+	assert "FLAG=true" in truncated.stdout, truncated.stdout
+	assert "AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE workflow=internal-review.yml status=parse rc=" in truncated.stdout
+	assert "status=parse rc=0" not in truncated.stdout
+	assert "workflow_runs" not in truncated.stdout
+	# Control: a valid empty listing is still "no active runs".
+	empty = _run_sweep_snapshot_with_listing('{"workflow_runs":[]}')
+	assert empty.returncode == 0, empty.stderr
+	assert "FLAG=false" in empty.stdout, empty.stdout
+	assert "status=parse" not in empty.stdout
 
 
 def test_idempotent_marker_never_rides_on_creates() -> None:

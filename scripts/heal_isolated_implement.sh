@@ -392,6 +392,19 @@ heal_prepush_test_gate()
 	return 0
 }
 heal_prepush_test_gate || true
+# Test-only heal lock (#8809): implement_heal_preflight.sh sets
+# HEAL_TEST_ONLY_LOCK_FILE when the plan was auto-approved as test-only. The
+# trusted guard compares the host files with the edited snapshot before
+# anything is transferred and refuses a deleted file, fewer tests or asserts,
+# or a new skip/xfail. A set but missing lock file refuses (fail closed).
+if [ -n "${HEAL_TEST_ONLY_LOCK_FILE:-}" ]; then
+	if [ ! -f "${HEAL_TEST_ONLY_LOCK_FILE}" ] || [ -L "${HEAL_TEST_ONLY_LOCK_FILE}" ] \
+		|| ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${support}/files_touched_scope_guard.py" --heal-test-only-weakening-check \
+			--lock-file "${HEAL_TEST_ONLY_LOCK_FILE}" --base-dir "${WORKSPACE_PATH:-${PWD}}" --edited-dir "${root}/source" >/dev/null; then
+		echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=failed reason=out_of_heal_scope detail=test_only_lock" >&2
+		exit 42
+	fi
+fi
 # Heal reproduction check (Refs #8434, P2 step 8). Runs only when the approving
 # comment (APPROVAL_COMMENT_ID in ISSUE_COMMENTS_FILE) carries
 # [repro-required]; without it nothing below runs. Every listed test must fail

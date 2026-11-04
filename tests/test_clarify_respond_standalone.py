@@ -152,7 +152,8 @@ def _run_gate(tmp_path: Path, comment: str, body: str = "Fix it.", state: str = 
 @pytest.mark.parametrize(
 	"case, kwargs, mode, reason",
 	[
-		("orchestrator", {"comment": "Clarification required", "body": "Managed by: AI Orchestrator"}, "orchestrator", None),
+		("orchestrator", {"comment": QUESTIONS, "body": "Managed by: AI Orchestrator"}, "orchestrator", None),
+		("orchestrator capacity replay", {"comment": QUESTIONS.rstrip() + "\n\n<!-- ai:claude-capacity-wait-replay:v1 source=1 run=2 -->", "body": "Managed by: AI Orchestrator"}, "orchestrator", None),
 		("standalone", {"comment": QUESTIONS}, "standalone", "clarify_questions"),
 		("auto-decide off", {"comment": QUESTIONS, "auto": "false"}, "skip", "disabled"),
 		("worker off", {"comment": QUESTIONS, "respond": "false"}, "skip", "disabled"),
@@ -170,6 +171,33 @@ def test_gate_picks_the_mode(tmp_path: Path, case: str, kwargs: dict, mode: str,
 	if reason:
 		outcome = "run" if mode == "standalone" else "skip"
 		assert f"AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=standalone reason={reason} outcome={outcome} issue=6262" in stdout, case
+
+
+# Issue #8650: the job filter's `contains(..., 'Clarification required')` is
+# case-insensitive, so on an orchestrator-managed issue the plan comment and
+# every auto-answer that quoted the ai:clarification label description ("AI
+# clarification required before planning") re-ran the worker until the loop
+# breaker escalated. Only clarify.yml's questions comment may be answered.
+@pytest.mark.parametrize(
+	"case, comment",
+	[
+		("plan quoting the label", "Implementation Plan\n\n- `ai:clarification)` with `--description \"AI clarification required before planning\"`\n\n<!-- ai:plan-proposal:v1 -->"),
+		("auto-answer quoting the label", "/answer [auto-answered-by-orchestrator]\n\nDECISIONS:\nQ1: REFRAME\n\nRATIONALE:\nQ1: ai:clarification f9d0c4 / \"AI clarification required before planning\""),
+		("legacy text without marker", "Clarification required\n\nQ1: ..."),
+		("marker not on first line", "Clarification required\n<!-- ai:clarification-questions -->\n\nQ1: ..."),
+	],
+)
+def test_gate_skips_orchestrator_comments_that_are_not_questions(tmp_path: Path, case: str, comment: str) -> None:
+	outputs, _, stdout = _run_gate(tmp_path, comment, body="Managed by: AI Orchestrator")
+	assert outputs["is_orchestrator"] == "true", case
+	assert outputs["mode"] == "skip", case
+	assert outputs["respond"] == "false", case
+	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_questions reason=not_clarify_questions outcome=skip issue=6262" in stdout, case
+
+
+def test_gate_logs_orchestrator_questions_run(tmp_path: Path) -> None:
+	_, _, stdout = _run_gate(tmp_path, QUESTIONS, body="Managed by: AI Orchestrator")
+	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_questions reason=clarify_questions outcome=run issue=6262" in stdout
 
 
 def test_gate_silences_release_gate_fixtures(tmp_path: Path) -> None:

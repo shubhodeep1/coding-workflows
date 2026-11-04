@@ -945,3 +945,25 @@ def test_prompt_explains_open_pr_tagging() -> None:
 		assert "`open_pull_requests` lists this repository's open, unmerged pull requests" in prompt, rel
 		assert '"open_pr": <optional, code gaps only:' in prompt, rel
 		assert "when unsure, leave it out" in prompt, rel
+
+
+# Issue #8685: the poller's close_completed_tracking_issue_if_ready cases live in
+# tests/orchestrate_tracking_auto_close_cases.py and are collected here, since
+# CI runs this file. A name clash would hide a test, so it fails loudly.
+def _collect_tracking_auto_close_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"orchestrate_tracking_auto_close_cases", Path(__file__).resolve().parent / "orchestrate_tracking_auto_close_cases.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_"):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 10, f"only {collected} tracking auto-close cases collected"
+
+
+_collect_tracking_auto_close_cases()

@@ -317,6 +317,48 @@ def test_editor_failure_reverts_the_repair(tmp_path):
 	assert _docker_runs(tmp_path) == 1
 
 
+LINT_FAIL = _result("fail", failures=[{"test": "ruff", "file": None, "names": [],
+	"tail": "3 finding(s) added by this change:\nlib/a.py: E101 Indentation contains mixed spaces and tabs\n"}])
+
+
+def test_lint_only_repair_that_erases_the_change_keeps_the_editor_edit(tmp_path):
+	# PR #8747: the repair turn put the file back to HEAD to clear E101, so
+	# nothing was committed and every run ended in "Editor changes lost".
+	repo, env = _setup(tmp_path, [LINT_FAIL, PASS])
+	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 1\\n' > lib/a.py\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert _editor_calls(tmp_path) == 1
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 2\n"
+	assert "outcome=repair_reverted reason=lint_only_change_erased" in proc.stderr
+	assert _docker_runs(tmp_path) == 1
+	text = _summary(tmp_path).read_text(encoding="utf-8")
+	assert "Repair turn: reverted (it removed the whole change for lint findings only)" in text
+	assert "Status: **fail**" in text
+
+
+def test_lint_only_repair_that_keeps_a_change_is_kept(tmp_path):
+	repo, env = _setup(tmp_path, [LINT_FAIL, PASS])
+	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 3\\n' > lib/a.py\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 3\n"
+	assert "lint_only_change_erased" not in proc.stderr
+	assert _docker_runs(tmp_path) == 2
+	assert "repair=ran" in proc.stderr
+
+
+def test_mixed_failures_repair_that_erases_the_change_is_kept(tmp_path):
+	mixed = _result("fail", failures=LINT_FAIL["failures"] + FAIL["failures"])
+	repo, env = _setup(tmp_path, [mixed, PASS])
+	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 1\\n' > lib/a.py\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 1\n"
+	assert "lint_only_change_erased" not in proc.stderr
+	assert "repair=ran" in proc.stderr
+
+
 def test_editor_without_repair_turn_marker_is_skipped(tmp_path):
 	repo, env = _setup(tmp_path, [FAIL], with_marker=False)
 	proc = _run_step(tmp_path, repo, env)

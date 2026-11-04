@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import random
@@ -27,6 +28,8 @@ GITHUB_API_BACKOFF_BASE_SECONDS = 1.0
 GITHUB_API_BACKOFF_CAP_SECONDS = 8.0
 RETIRED_LABEL_IN_USE_PAGE_SIZE = 100
 RETIRED_LABEL_IN_USE_MAX_LISTED_NUMBERS = 10
+LABEL_SYNC_PREFETCH_PAGE_SIZE = 100
+LABEL_SYNC_PREFETCH_MAX_PAGES = 20
 
 
 def _require_nonempty(value: str | None, field_name: str) -> str:
@@ -466,6 +469,53 @@ def cmd_repair_labels(args: argparse.Namespace) -> int:
     return 0
 
 
+def _prefetch_repo_labels(repo: str) -> tuple[dict[str, dict[str, Any]] | None, str | None]:
+    """List every label in ``repo`` once, keyed by casefolded name.
+
+    Input: the repo slug. Output: ``(label_map, None)`` for a complete listing,
+    or ``(None, reason)`` when the prefetch fails open; the caller then falls
+    back to the per-label GET path.
+    API calls (CLAUDE.md §15): 1 to ``LABEL_SYNC_PREFETCH_MAX_PAGES`` read-only
+    ``GET repos/{repo}/labels?per_page=100&page=N`` calls (no token required,
+    so ``--dry-run`` behaves as before). A listing whose every page is full up
+    to the cap may be incomplete and is discarded (fail-open fallback).
+    """
+    label_map: dict[str, dict[str, Any]] = {}
+    # GH API hygiene (CLAUDE.md §15 / codex §14): this listing replaces the
+    # per-label ``GET repos/{repo}/labels/{name}`` (built by
+    # ``_github_label_path``) that ``cmd_sync_labels`` issued once per contract
+    # label (~59 calls today) with one paginated list read.
+    for page_number in range(1, LABEL_SYNC_PREFETCH_MAX_PAGES + 1):
+        page_path = f"repos/{repo}/labels?per_page={LABEL_SYNC_PREFETCH_PAGE_SIZE}&page={page_number}"
+        try:
+            page_items = _github_api_request(page_path)
+        except urllib.error.HTTPError as exc:
+            return None, f"HTTP {exc.code}"
+        except LabelContractError:
+            raise
+        except (urllib.error.URLError, OSError, ValueError, RuntimeError, http.client.HTTPException) as exc:
+            return None, type(exc).__name__
+        if not isinstance(page_items, list):
+            return None, f"malformed page {page_number}"
+        for page_item in page_items:
+            if not isinstance(page_item, dict):
+                return None, f"malformed page {page_number}"
+            listed_name = page_item.get("name")
+            if not isinstance(listed_name, str) or not listed_name.strip():
+                return None, f"malformed page {page_number}"
+            # GitHub label names are unique regardless of case and the
+            # per-label GET finds a label whatever case is requested
+            # (``_label_sync_matches`` ignores the returned name), so key the
+            # map case-insensitively to keep the per-label semantics.
+            folded_name = listed_name.casefold()
+            if folded_name in label_map:
+                return None, "duplicate casefolded name"
+            label_map[folded_name] = page_item
+        if len(page_items) < LABEL_SYNC_PREFETCH_PAGE_SIZE:
+            return label_map, None
+    return None, "page cap reached"
+
+
 def cmd_sync_labels(args: argparse.Namespace) -> int:
     contract = load_label_contract(Path(args.contract_file).resolve())
     repo = _require_repo_slug(args.repo)
@@ -478,6 +528,11 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
     updated_count = 0
     unchanged_count = 0
     errors: list[dict[str, Any]] = []
+
+    # The prefetch is deferred until the first label passes local validation,
+    # so an invalid label (or an all-invalid contract) never costs a GitHub read.
+    prefetched_labels: dict[str, dict[str, Any]] | None = None
+    prefetch_attempted = False
 
     for label_name, raw_metadata in label_items:
         expected_metadata = _normalize_label_sync_metadata(label_name, raw_metadata)
@@ -492,35 +547,78 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
                 message=name_validation_error,
             )
             continue
+        # Validate locally before any GitHub read so a contract defect never
+        # costs an API call; the create/update checks below stay as defence
+        # in depth.
+        description_validation_error = _label_sync_validation_error(expected_metadata)
+        if description_validation_error is not None:
+            _append_label_sync_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="validate",
+                dry_run=dry_run,
+                message=description_validation_error,
+            )
+            continue
         label_path = _github_label_path(repo, label_name)
 
-        try:
-            existing_label = _github_api_request(label_path)
-        except urllib.error.HTTPError as exc:
-            if exc.code != 404:
+        if not prefetch_attempted:
+            prefetch_attempted = True
+            prefetched_labels, prefetch_failure_reason = _prefetch_repo_labels(repo)
+            if prefetched_labels is None:
+                # Count only labels that pass local validation: invalid ones are
+                # skipped before any read, so they never get a per-label GET.
+                fallback_get_count = sum(
+                    1
+                    for fallback_name, fallback_metadata in label_items
+                    if _label_sync_name_validation_error(fallback_name) is None
+                    and _label_sync_validation_error(
+                        _normalize_label_sync_metadata(fallback_name, fallback_metadata)
+                    )
+                    is None
+                )
+                print(
+                    "ai_labels: label list prefetch unavailable "
+                    f"(reason={_sanitize_log_detail(prefetch_failure_reason or 'unknown')}); "
+                    f"falling back to per-label GET for {fallback_get_count} labels",
+                    file=sys.stderr,
+                )
+
+        if prefetched_labels is not None:
+            # A label missing from a complete prefetch counts as a 404.
+            existing_label = prefetched_labels.get(label_name.casefold())
+        else:
+            try:
+                existing_label = _github_api_request(label_path)
+            except urllib.error.HTTPError as exc:
+                if exc.code != 404:
+                    _append_label_sync_error(
+                        errors,
+                        repo=repo,
+                        label_name=label_name,
+                        action="get",
+                        dry_run=dry_run,
+                        message=_http_error_message(exc),
+                        status=exc.code,
+                    )
+                    continue
+                existing_label = None
+            except LabelContractError:
+                raise
+            except (urllib.error.URLError, OSError, ValueError, RuntimeError, http.client.HTTPException) as exc:
+                # The fallback runs right after the prefetch failed, so the
+                # same truncated read (IncompleteRead) is handled the same way;
+                # RuntimeError matches the prefetch handler (retry loop fallthrough).
                 _append_label_sync_error(
                     errors,
                     repo=repo,
                     label_name=label_name,
                     action="get",
                     dry_run=dry_run,
-                    message=_http_error_message(exc),
-                    status=exc.code,
+                    message=str(exc) or type(exc).__name__,
                 )
                 continue
-            existing_label = None
-        except LabelContractError:
-            raise
-        except (urllib.error.URLError, OSError, ValueError) as exc:
-            _append_label_sync_error(
-                errors,
-                repo=repo,
-                label_name=label_name,
-                action="get",
-                dry_run=dry_run,
-                message=str(exc),
-            )
-            continue
 
         if existing_label is None:
             validation_error = _label_sync_validation_error(expected_metadata)
@@ -913,7 +1011,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return int(args.func(args))
-    except (LabelContractError, ValueError, json.JSONDecodeError) as exc:
+    except (LabelContractError, ValueError, json.JSONDecodeError, OSError) as exc:
+        # OSError: a missing or unreadable contract file gets a named error, not a traceback.
         print(f"AI_LABELS_ERROR: {exc}", file=sys.stderr)
         return 2
 
