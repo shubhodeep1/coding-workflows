@@ -108,13 +108,115 @@ def test_the_never_repeat_rule_spans_the_project() -> None:
 	assert decision["project_rounds"] == 1 and decision["item_rounds"] == 0
 
 
-def test_item_cap_leaves_only_close() -> None:
-	entries = ledger.parse_markers(
-		[_comment(_marker(round_number=1)), _comment(_marker(verdict="descope", fp="ffffffffffff", round_number=2))], BOT
+def _rounds(count: int) -> list[dict]:
+	"""`count` trusted rounds on item 7, each on its own fingerprint and verdict."""
+	verdicts = ("descope", "reissue", "operator_step", "auto_answer", "accept_with_followup")
+	return ledger.parse_markers(
+		[_comment(_marker(verdict=verdicts[n], fp=f"f{n:011x}", round_number=n + 1)) for n in range(count)], BOT
 	)
-	decision = ledger.decide(7, "blocked", FP, entries, None, NOW)
+
+
+@pytest.fixture
+def _no_rounds_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+	monkeypatch.delenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, raising=False)
+	return monkeypatch
+
+
+def test_item_cap_leaves_only_close(_no_rounds_env: pytest.MonkeyPatch) -> None:
+	assert ledger.MAX_ROUNDS_PER_ITEM == 3
+	two = ledger.decide(7, "blocked", FP, _rounds(2), None, NOW)
+	assert not two["terminal"] and two["max_rounds_per_item"] == 3
+	decision = ledger.decide(7, "blocked", FP, _rounds(3), None, NOW)
 	assert decision["terminal"] and decision["terminal_reason"] == "item_cap"
 	assert decision["allowed"] == ["close"]
+	assert decision["max_rounds_per_item"] == 3
+
+
+@pytest.mark.parametrize("raw,rounds,terminal", [("2", 2, True), ("5", 4, False), ("5", 5, True), (" 2 ", 2, True)])
+def test_item_cap_follows_the_repository_variable(_no_rounds_env: pytest.MonkeyPatch, raw: str, rounds: int, terminal: bool) -> None:
+	_no_rounds_env.setenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, raw)
+	decision = ledger.decide(7, "blocked", FP, _rounds(rounds), None, NOW)
+	assert decision["terminal"] is terminal
+	assert decision["terminal_reason"] == ("item_cap" if terminal else "")
+	assert decision["max_rounds_per_item"] == int(raw)
+
+
+@pytest.mark.parametrize("raw,expected,warned", [
+	("0", 1, "out of range 1-5; using 1"), ("9", 5, "out of range 1-5; using 5"),
+	("abc", 3, "is not an integer; using 3"), ("-1", 3, "is not an integer; using 3"),
+	("2.5", 3, "is not an integer; using 3"), ("\u0663", 3, "is not an integer; using 3"),
+	("", 3, ""), ("3", 3, ""),
+])
+def test_item_cap_variable_is_clamped_or_defaulted(
+	_no_rounds_env: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, raw: str, expected: int, warned: str
+) -> None:
+	_no_rounds_env.setenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, raw)
+	assert ledger.resolve_max_rounds_per_item() == expected
+	captured = capsys.readouterr()
+	assert captured.out == ""
+	if warned:
+		assert captured.err.startswith("::warning::UNBLOCK_MAX_ROUNDS_PER_ITEM=") and warned in captured.err
+		assert captured.err.count("\n") == 1
+	else:
+		assert captured.err == ""
+	assert ledger.decide(7, "blocked", FP, [], None, NOW)["max_rounds_per_item"] == expected
+
+
+def test_item_cap_warning_truncates_and_strips_the_bad_value(_no_rounds_env: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	assert ledger.resolve_max_rounds_per_item("x\x1b[31m" + "y" * 100) == ledger.MAX_ROUNDS_PER_ITEM
+	err = capsys.readouterr().err
+	# The value is cut to 32 characters ("x", ESC, "[31m" and 26 "y") before the ESC is dropped.
+	assert "\x1b" not in err and "'x[31m" + "y" * 26 + "'" in err
+
+
+def test_explicit_item_cap_argument_wins_over_the_variable(_no_rounds_env: pytest.MonkeyPatch) -> None:
+	_no_rounds_env.setenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, "5")
+	decision = ledger.decide(7, "blocked", FP, _rounds(2), None, NOW, max_rounds_per_item=2)
+	assert decision["terminal_reason"] == "item_cap" and decision["max_rounds_per_item"] == 2
+
+
+def test_raised_item_cap_keeps_the_project_cap_and_never_repeat_rule(_no_rounds_env: pytest.MonkeyPatch) -> None:
+	_no_rounds_env.setenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, "5")
+	project = ledger.parse_markers(
+		[_comment(_marker(item=100 + n, fp=f"{n:012x}")) for n in range(ledger.MAX_ROUNDS_PER_PROJECT)], BOT
+	)
+	assert ledger.decide(7, "blocked", FP, [], project, NOW)["terminal_reason"] == "project_cap"
+	entries = ledger.parse_markers([
+		_comment(_marker(verdict="descope", fp="ffffffffffff", round_number=1)),
+		_comment(_marker(verdict="reissue", fp="eeeeeeeeeeee", round_number=2)),
+		_comment(_marker(verdict="retry_budget", round_number=3)),
+	], BOT)
+	decision = ledger.decide(7, "blocked", FP, entries, None, NOW)
+	assert not decision["terminal"] and decision["next_round"] == 4
+	assert "retry_budget" not in decision["allowed"] and decision["used"] == ["retry_budget"]
+
+
+def test_decide_cli_reads_the_item_cap_variable(tmp_path: Path) -> None:
+	comments = tmp_path / "comments.json"
+	comments.write_text(json.dumps([
+		_comment(_marker(verdict="descope", fp="ffffffffffff", round_number=1)),
+		_comment(_marker(verdict="reissue", fp="eeeeeeeeeeee", round_number=2)),
+	]), encoding="utf-8")
+	args = [sys.executable, str(SCRIPT), "decide", "--item", "7", "--stop", "blocked", "--fingerprint", FP,
+		"--comments-file", str(comments), "--trusted-login", BOT, "--now", NOW.isoformat()]
+	base = {key: value for key, value in os.environ.items() if key != ledger.UNBLOCK_MAX_ROUNDS_ENV}
+	for raw, terminal, cap in (("2", True, 2), (None, False, 3), ("bogus", False, 3)):
+		env = dict(base, PYTHONDONTWRITEBYTECODE="1")
+		if raw is not None:
+			env[ledger.UNBLOCK_MAX_ROUNDS_ENV] = raw
+		result = subprocess.run(args, capture_output=True, text=True, env=env, check=False)
+		assert result.returncode == 0, result.stderr
+		decision = json.loads(result.stdout)
+		assert decision["terminal"] is terminal and decision["max_rounds_per_item"] == cap
+		assert ("::warning::" in result.stderr) is (raw == "bogus")
+
+
+def test_workflows_forward_the_item_cap_variable() -> None:
+	line = "UNBLOCK_MAX_ROUNDS_PER_ITEM: ${{ vars.UNBLOCK_MAX_ROUNDS_PER_ITEM || '3' }}"
+	for name, expected in (("orchestrate_poll.yml", 3), ("unblock_judge.yml", 1)):
+		text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+		assert text.count(line) == expected, name
+		assert text.count("NEEDS_HUMAN_DIGEST_ENABLED: ${{") == expected, name
 
 
 def test_project_cap_leaves_only_close() -> None:
@@ -126,10 +228,8 @@ def test_project_cap_leaves_only_close() -> None:
 
 
 def _terminal_decision() -> dict:
-	entries = ledger.parse_markers(
-		[_comment(_marker(round_number=1)), _comment(_marker(verdict="descope", fp="ffffffffffff", round_number=2))], BOT
-	)
-	return ledger.decide(7, "blocked", FP, entries, None, NOW)
+	return ledger.decide(7, "blocked", FP, _rounds(ledger.MAX_ROUNDS_PER_ITEM), None, NOW,
+		max_rounds_per_item=ledger.MAX_ROUNDS_PER_ITEM)
 
 
 @pytest.mark.parametrize("kind", ["issue", "pr", "project"])
@@ -1414,7 +1514,7 @@ def _judge(tmp_path: Path, item: dict, comments: list | None = None, verdict: di
 	import os
 
 	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_GH_STATE=str(state_file), PYTHONDONTWRITEBYTECODE="1")
-	for name in ("UNBLOCK_JUDGE_ENABLED", "TG_BOT_SECRET", "GH_TOKEN", "NEEDS_HUMAN_DIGEST_ENABLED"):
+	for name in ("UNBLOCK_JUDGE_ENABLED", "TG_BOT_SECRET", "GH_TOKEN", "NEEDS_HUMAN_DIGEST_ENABLED", "UNBLOCK_MAX_ROUNDS_PER_ITEM"):
 		env.pop(name, None)
 	env.update(REPOSITORY="o/r", ITEM="7", SUPPORT_DIR=str(ROOT), RUNTIME_DIR=str(tmp_path / "rt"), MOCK_UNBLOCK_JUDGE_NOW="2026-10-04T12:00:00Z")
 	if verdict is not None:
@@ -1428,10 +1528,11 @@ ISSUE = {"number": 7, "state": "open", "title": "Add cache", "body": "Do it", "l
 
 
 def _terminal_markers(item: int = 7) -> list[dict]:
-	"""Two trusted rounds on the item: the item cap is spent, so the judge closes (#6557)."""
+	"""Three trusted rounds on the item: the default item cap (UNBLOCK_MAX_ROUNDS_PER_ITEM=3) is spent, so the judge closes (#6557)."""
 	return [
 		_comment(ledger.marker(item, "blocked", "0" * 12, "retry_budget", 1), "pipeline-bot", "2026-10-04T08:00:00Z"),
 		_comment(ledger.marker(item, "blocked", "1" * 12, "reissue", 2), "pipeline-bot", "2026-10-04T09:00:00Z"),
+		_comment(ledger.marker(item, "blocked", "2" * 12, "descope", 3), "pipeline-bot", "2026-10-04T10:00:00Z"),
 	]
 
 
@@ -1678,7 +1779,7 @@ def test_unlabeled_failed_project_still_closes(tmp_path: Path) -> None:
 	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
 	result, state = _judge(tmp_path, project, comments=_terminal_markers() + [_project_state_comment("failed")],
 		verdict={"verdict": "close", "reason": "still failed"})
-	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stderr
+	assert "verdict=close round=4 outcome=acted" in result.stdout, result.stderr
 	assert state["item_comments_reads"] == 3
 	assert state["comments"][0]["body"].splitlines()[-1].startswith("<!-- ai:unblock:v1")
 	# Every round is spent: the project is parked (needs-human digest), not closed.
@@ -1687,7 +1788,7 @@ def test_unlabeled_failed_project_still_closes(tmp_path: Path) -> None:
 	# The legacy close (kill switch) still adds the terminal label after the same recheck.
 	result, state = _judge(tmp_path, project, comments=_terminal_markers() + [_project_state_comment("failed")],
 		verdict={"verdict": "close", "reason": "still failed"}, NEEDS_HUMAN_DIGEST_ENABLED="false")
-	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stderr
+	assert "verdict=close round=4 outcome=acted" in result.stdout, result.stderr
 	assert state["item_comments_reads"] == 3
 	assert any(label == "ai:unblock-closed" for _, label in state["labels_added"])
 
@@ -1734,7 +1835,7 @@ def test_labeled_project_is_not_subject_to_failed_state_check(tmp_path: Path) ->
 	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}, {"name": "ai:validation-failed"}])
 	result, state = _judge(tmp_path, project, comments=_terminal_markers() + [_project_state_comment("in_progress")],
 		verdict={"verdict": "close", "reason": "stop remains"})
-	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stderr
+	assert "verdict=close round=4 outcome=acted" in result.stdout, result.stderr
 	assert state["item_comments_reads"] == 1
 	assert any(label == "ai:needs-human" for _, label in state["labels_added"])
 
@@ -1935,7 +2036,7 @@ def test_security_close_keeps_issue_open_and_extracts_first_finding_marker(tmp_p
 	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}], body="<!-- ai:security-finding:abc-1 -->\n<!-- ai:security-finding:second -->")
 	result, state = _judge(tmp_path, item, comments=_terminal_markers(), verdict={"verdict": "close", "reason": "nothing left"},
 		NEEDS_HUMAN_DIGEST_ENABLED="false")
-	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stderr
+	assert "verdict=close round=4 outcome=acted" in result.stdout, result.stderr
 	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
 	assert [label for _, label in state["labels_added"]] == ["ai:unblock-closed"]
 	assert any("stays open" in comment["body"] for comment in state["comments"])
@@ -2512,10 +2613,11 @@ def test_judge_closes_without_the_model_when_the_caps_are_spent(tmp_path: Path) 
 	comments = [
 		_comment(ledger.marker(7, "blocked", "0" * 12, "retry_budget", 1), "pipeline-bot", "2026-10-04T08:00:00Z"),
 		_comment(ledger.marker(7, "blocked", "1" * 12, "reissue", 2), "pipeline-bot", "2026-10-04T09:00:00Z"),
+		_comment(ledger.marker(7, "blocked", "2" * 12, "descope", 3), "pipeline-bot", "2026-10-04T10:00:00Z"),
 	]
 	result, state = _judge(tmp_path, ISSUE, comments=comments, MOCK_UNBLOCK_JUDGE_JSON="must not be read",
 		NEEDS_HUMAN_DIGEST_ENABLED="false")
-	assert "verdict=close round=3 outcome=acted" in result.stdout
+	assert "verdict=close round=4 outcome=acted" in result.stdout
 	assert any(label == "ai:unblock-closed" for _, label in state["labels_added"])
 	assert any(endpoint == "repos/o/r/issues/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
 
@@ -2852,9 +2954,10 @@ def test_needs_human_exhaustion_parks_in_the_digest_end_to_end(tmp_path: Path) -
 	comments = [
 		_comment(ledger.marker(7, "blocked", "0" * 12, "retry_budget", 1), "pipeline-bot", "2026-10-04T08:00:00Z"),
 		_comment(ledger.marker(7, "blocked", "1" * 12, "reissue", 2), "pipeline-bot", "2026-10-04T09:00:00Z"),
+		_comment(ledger.marker(7, "blocked", "2" * 12, "descope", 3), "pipeline-bot", "2026-10-04T10:00:00Z"),
 	]
 	result, state = _judge(tmp_path, ISSUE, comments=comments, MOCK_UNBLOCK_JUDGE_JSON="must not be read")
-	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stdout + result.stderr
+	assert "verdict=close round=4 outcome=acted" in result.stdout, result.stdout + result.stderr
 	assert "NEEDS_HUMAN item=7 kind=issue reason=item_cap outcome=parked" in result.stderr
 	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
 	assert [label for _, label in state["labels_added"]] == ["ai:needs-human"]

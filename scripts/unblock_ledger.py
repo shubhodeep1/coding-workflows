@@ -24,8 +24,10 @@ count, so a marker quoted or forged by anyone else is ignored.
 Rules enforced here:
   - a verdict already recorded for the same stop id and fingerprint is never
     offered again, on this item or anywhere in the same project;
-  - at most MAX_ROUNDS_PER_ITEM rounds per item and MAX_ROUNDS_PER_PROJECT
-    per project; past a cap, or BLOCKED_AFTER_LAST_ROUND_HOURS after the last
+  - at most UNBLOCK_MAX_ROUNDS_PER_ITEM rounds per item (repository variable,
+    default MAX_ROUNDS_PER_ITEM = 3, integers clamped to 1-5, anything else
+    falls back to the default with a stderr warning) and
+    MAX_ROUNDS_PER_PROJECT per project; past a cap, or BLOCKED_AFTER_LAST_ROUND_HOURS after the last
     round on the same stop id and fingerprint with the item still blocked,
     the only outcome is the terminal close;
   - `override_guard` exists only for the scope and destructive latches on an
@@ -120,6 +122,7 @@ import binascii
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import sys
 import unicodedata
@@ -200,7 +203,14 @@ CANONICAL_SOURCE_RE = re.compile(
 PROTECTED_AUTOMATION_OVERRIDE_RE = re.compile(r"^(\.github|\.claude|workflow-templates)(/|$)", re.IGNORECASE)
 NO_WAIVER_STOPS = ("security-pass-failed", "validation-failed", "validate-failed", "harness-broken")
 
-MAX_ROUNDS_PER_ITEM = 2
+# The default for the UNBLOCK_MAX_ROUNDS_PER_ITEM repository variable (issue
+# #8813); resolve_max_rounds_per_item() reads the variable when decide() runs
+# and clamps it to MAX_ROUNDS_PER_ITEM_FLOOR..MAX_ROUNDS_PER_ITEM_CEILING, so a
+# bad value can neither remove the bound nor make every item terminal on sight.
+MAX_ROUNDS_PER_ITEM = 3
+MAX_ROUNDS_PER_ITEM_FLOOR = 1
+MAX_ROUNDS_PER_ITEM_CEILING = 5
+UNBLOCK_MAX_ROUNDS_ENV = "UNBLOCK_MAX_ROUNDS_PER_ITEM"
 MAX_ROUNDS_PER_PROJECT = 6
 BLOCKED_AFTER_LAST_ROUND_HOURS = 24
 # Refused judge answers in a row on one block before the item is terminal
@@ -795,6 +805,39 @@ def invalid_verdict_streak(comments: object, trusted_login: str, item: int, stop
 	return streak
 
 
+def resolve_max_rounds_per_item(raw: str | None = None) -> int:
+	"""The per-item round cap from UNBLOCK_MAX_ROUNDS_PER_ITEM (or `raw`).
+
+	Unset or empty gives MAX_ROUNDS_PER_ITEM. Only an ASCII decimal integer is
+	accepted; anything else falls back to the default, and an integer outside
+	the floor..ceiling range is clamped, each with one `::warning::` line on
+	stderr. stdout is never written: `decide` output is redirected into the
+	decision file. A bad value never fails `decide`, so the item is still judged.
+	"""
+	if raw is None:
+		raw = os.environ.get(UNBLOCK_MAX_ROUNDS_ENV, "")
+	value = str(raw).strip()
+	if not value:
+		return MAX_ROUNDS_PER_ITEM
+	if not re.fullmatch(r"[0-9]+", value, flags=re.ASCII):
+		shown = "".join(char for char in value[:32] if char.isprintable())
+		print(
+			f"::warning::{UNBLOCK_MAX_ROUNDS_ENV}='{shown}' is not an integer; using {MAX_ROUNDS_PER_ITEM}",
+			file=sys.stderr,
+		)
+		return MAX_ROUNDS_PER_ITEM
+	number = int(value)
+	clamped = min(max(number, MAX_ROUNDS_PER_ITEM_FLOOR), MAX_ROUNDS_PER_ITEM_CEILING)
+	if clamped != number:
+		shown = value[:32]
+		print(
+			f"::warning::{UNBLOCK_MAX_ROUNDS_ENV}='{shown}' is out of range "
+			f"{MAX_ROUNDS_PER_ITEM_FLOOR}-{MAX_ROUNDS_PER_ITEM_CEILING}; using {clamped}",
+			file=sys.stderr,
+		)
+	return clamped
+
+
 def decide(
 	item: int,
 	stop: str,
@@ -810,10 +853,13 @@ def decide(
 	holds: list[dict] | None = None,
 	wait_enabled: bool = True,
 	invalid_verdicts_in_row: int = 0,
+	max_rounds_per_item: int | None = None,
 ) -> dict:
 	"""What the judge may still do for this item."""
 	if kind not in ITEM_KINDS:
 		raise UsageError(f"unknown item kind {kind!r}; expected one of {list(ITEM_KINDS)}")
+	if max_rounds_per_item is None:
+		max_rounds_per_item = resolve_max_rounds_per_item()
 	own = [entry for entry in item_entries if entry["item"] == item]
 	# A marker posted on both the item and the tracking issue counts once.
 	seen = set()
@@ -878,7 +924,7 @@ def decide(
 	if last_times and last_activity is not None:
 		last_times.append(last_activity)
 	terminal_reason = ""
-	if item_rounds >= MAX_ROUNDS_PER_ITEM:
+	if item_rounds >= max_rounds_per_item:
 		terminal_reason = "item_cap"
 	elif project_rounds is not None and project_rounds >= MAX_ROUNDS_PER_PROJECT:
 		terminal_reason = "project_cap"
@@ -904,6 +950,7 @@ def decide(
 		"holds_met": holds_met,
 		"invalid_verdict_streak": invalid_verdicts_in_row,
 		"invalid_verdict_park_after": INVALID_VERDICT_PARK_AFTER,
+		"max_rounds_per_item": max_rounds_per_item,
 	}
 
 

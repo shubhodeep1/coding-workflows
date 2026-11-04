@@ -114,6 +114,7 @@ deployment fallback.
 | `ZOMBIE_RUN_REAPER_ENABLED` | No | `true` | review_autofix_sweep | Cancels (force-cancels on 409) up to 10 `internal-review.yml` / `review_autofix.yml` runs per sweep that have been `queued` longer than `ZOMBIE_RUN_MAX_QUEUED_HOURS`, using the run listing the sweep already fetched. Logs `ZOMBIE_RUN_REAPED` and `ZOMBIE_RUN_REAPER_END`. `false`, `0`, `no` or `off` turn it off. |
 | `ZOMBIE_RUN_MAX_QUEUED_HOURS` | No | `24` | review_autofix_sweep | Age in hours after which a still-`queued` review run is reaped by `ZOMBIE_RUN_REAPER_ENABLED`. Must be a positive integer; an invalid value cancels nothing and logs `ZOMBIE_RUN_REAPER_END outcome=invalid_max_queued_hours`. |
 | `NEEDS_HUMAN_DIGEST_ENABLED` | No | `true` | orchestrate_poll, unblock_judge | Needs-human digest (plan item 4a, decision D6 of `docs/plans/unattended-claude-pipeline-completion-plan.md`). When every unblock judge round is spent, the item stays open, gets `ai:needs-human` and one line in the repository's single needs-human digest issue (body marker `<!-- ai:needs-human:v1 -->`, label `ai:operator-step`, at most 200 entries plus an overflow count), with one CRITICAL alert per newly parked item; it is no longer closed with `ai:unblock-closed`. The poller prunes entries whose item merged, closed or lost `ai:needs-human`. `false` restores the terminal close. Log prefix `NEEDS_HUMAN`. |
+| `UNBLOCK_MAX_ROUNDS_PER_ITEM` | No | `3` | orchestrate_poll, unblock_judge | Distinct unblock judge rounds per item before the ledger-forced terminal `item_cap` (parked in the needs-human digest when `NEEDS_HUMAN_DIGEST_ENABLED=true`). Integers are clamped to 1-5; a value that is not an integer falls back to 3 with a `::warning::` line. The project cap of 6 rounds still applies, and a verdict is still never repeated for the same failure fingerprint. |
 | `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK` | No | `5` | orchestrate_poll | Legacy upper bound for unblock dispatch. The scan sends only one judge at a time (even if this is higher), oldest block first. Set `0` to disable dispatch. |
 | `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES` | No | `30` | orchestrate_poll | How long an item must carry its block label (or a project must have been failed) before the scan sends it to the judge. |
 | `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
@@ -4112,8 +4113,8 @@ and resolver chains, a failed project) now goes to the unblock judge
   `descope`, `override_guard`, `reissue`, `accept_with_followup`,
   `operator_step` or `close`.
 - **Hard limits** (`scripts/unblock_ledger.py`). A verdict is never repeated
-  for the same failure fingerprint; at most 2 rounds per item and 6 per
-  project; `override_guard` only for the scope and destructive latches on an
+  for the same failure fingerprint; at most `UNBLOCK_MAX_ROUNDS_PER_ITEM`
+  rounds per item (default 3, clamped to 1-5) and 6 per project; `override_guard` only for the scope and destructive latches on an
   issue, never for `.github/**`, `.claude/**` or `workflow-templates/**` in
   any repository, nor for `scripts/**` in this repository, and never for
   deleting a canonical workflow source;
