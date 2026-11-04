@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-04T04:12:07Z",
+  "issue_number": 8798,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=external check-run log (copilot-pull-request-reviewer):1-1; cited_path=external check-run log (copilot-pull-request-reviewer, run 41765749615); files_touched=changelog.d/wfopt-2026-10-01-staleness-clock-read.md, scripts/orchestrate_poll_process.sh, tests/test_ci_wires_every_test_file.py, tests/test_orchestrate_integration_ahead_by_gate.py, tests/test_orchestrate_integration_staleness_clock.py.",
+  "phase": "review_autofix",
+  "pr_number": 8802,
+  "record_id": "lesson_20261104041207_14bc1e4d6d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "external check-run log (copilot-pull-request-reviewer, run 41765749615)",
+    "external check-run log (copilot-pull-request-reviewer)",
+    "changelog.d/wfopt-2026-10-01-staleness-clock-read.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_orchestrate_integration_ahead_by_gate.py",
+    "tests/test_orchestrate_integration_staleness_clock.py"
+  ]
+}
