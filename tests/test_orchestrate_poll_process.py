@@ -1413,6 +1413,7 @@ esac
 			"label_create_responses": {str(k): dict(v) for k, v in label_create_responses.items()},
 			"validation_dispatches": [],
 			"release_dispatches": [],
+			"heal_dispatches": [],
 			"review_dispatches": [],
 			"issue_body_edit_calls": [],
 			"commit_status_posts": [],
@@ -2113,6 +2114,21 @@ if args[0] == 'api':
 		print('{}')
 		sys.exit(0)
 	store.setdefault('api_calls', []).append(path)
+	# Release-blocker heal reports (Refs #8291): POST repos/<o>/<r>/dispatches
+	# with the wrap-dispatch envelope as --input. Recorded so a test cannot
+	# pass silently through the generic `{}` fallback below.
+	if (method or '').upper() == 'POST' and re.fullmatch(r'repos/[^/]+/[^/]+/dispatches', path):
+		if store.get('fail_heal_dispatch'):
+			save()
+			print('HTTP 403: Resource not accessible by integration', file=sys.stderr)
+			sys.exit(1)
+		heal_envelope = {}
+		if input_file:
+			with open(input_file, encoding='utf-8') as heal_envelope_fh:
+				heal_envelope = json.load(heal_envelope_fh)
+		store.setdefault('heal_dispatches', []).append(heal_envelope)
+		save()
+		sys.exit(0)
 	if path == 'user':
 		save()
 		if store.get('fail_user_lookup'):
@@ -3880,6 +3896,10 @@ sys.exit(proc.returncode)
 		# Exercise the script default of the automation-path plan gate (#7181)
 		# unless a test sets the flag through env_overrides.
 		env.pop("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", None)
+		# A CI runner's own Actions identity must not turn on the poller's
+		# release-blocker reporter (producer gate, OIDC) unless a test asks.
+		for actions_identity_var in ("GITHUB_WORKFLOW_REF", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "RELEASE_BLOCKER_HEAL_ENABLED", "RELEASE_BLOCKER_HEAL_PY"):
+			env.pop(actions_identity_var, None)
 		env.update(
 			{
 				"HOME": str(home_dir),
@@ -3976,6 +3996,7 @@ sys.exit(proc.returncode)
 		result["label_create_calls"] = result.get("label_create_calls", [])
 		result["api_calls"] = result.get("api_calls", [])
 		result["release_dispatches"] = result.get("release_dispatches", [])
+		result["heal_dispatches"] = result.get("heal_dispatches", [])
 		result["issue_body_edit_calls"] = result.get("issue_body_edit_calls", [])
 		result["commit_status_posts"] = result.get("commit_status_posts", [])
 		result["pr_ready_calls"] = result.get("pr_ready_calls", [])

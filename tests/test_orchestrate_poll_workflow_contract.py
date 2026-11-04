@@ -405,6 +405,28 @@ def test_validation_harness_hold_env_is_wired_into_both_poller_steps() -> None:
 	yaml.safe_load(wf)
 
 
+RELEASE_BLOCKER_POLLER_ENV_LINES = (
+	"RELEASE_BLOCKER_HEAL_ENABLED: ${{ vars.RELEASE_BLOCKER_HEAL_ENABLED || 'true' }}",
+	"RELEASE_BLOCKER_HEAL_PY: scripts/workflow_failure_heal.py",
+)
+
+
+def test_release_blocker_reporter_env_is_wired_into_both_poller_steps() -> None:
+	"""Refs #8291: the poller's release-blocker reporter switches reach every full-poller step."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	for step_name in ("Process each tracking issue", STANDALONE_SWEEP_STEP):
+		block = _step_block(wf, step_name)
+		for line in RELEASE_BLOCKER_POLLER_ENV_LINES:
+			assert line in block, (step_name, line)
+	assert "workflow_failure_heal.py" in wf
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'RELEASE_BLOCKER_HEAL_ENABLED="${RELEASE_BLOCKER_HEAL_ENABLED:-true}"' in poller
+	assert 'RELEASE_BLOCKER_HEAL_PY="${RELEASE_BLOCKER_HEAL_PY:-${ORCH_SCRIPTS_ROOT}/workflow_failure_heal.py}"' in poller
+	assert 'RELEASE_BLOCKER_POLLER_PRODUCER_FILE="internal-orchestrate-poll.yml"' in poller
+	heal = (REPO_ROOT / "scripts" / "workflow_failure_heal.py").read_text(encoding="utf-8")
+	assert '"internal-orchestrate-poll.yml"' in heal
+
+
 def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "worktree_registry.sh" in wf
@@ -600,6 +622,7 @@ def main() -> int:
 	test_standalone_recovery_sweep_runs_without_tracking_issues()
 	test_engine_and_claude_steps_run_on_idle_ticks_when_needed()
 	test_validation_harness_hold_env_is_wired_into_both_poller_steps()
+	test_release_blocker_reporter_env_is_wired_into_both_poller_steps()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	test_find_tracking_step_maps_standalone_recovery_switch()
 	test_standalone_stall_probe_log_prefix_is_registered()
