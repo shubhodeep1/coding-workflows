@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR causes multiple regression failures in the test suite, specifically in tests/test_implement_post_codex_recovery.py and other integration tests.\n  WHY: The canary file is likely used as an integration check or assertion target, so updating its content without updating expected values in fixtures or contract assertions breaks those tests. The reviewer labelled this BLOCKER, mapped here to high. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) state the failures are unrelated to the change because no test reads the canary file.\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The copilot-pull-request-reviewer check (run 41544551704) fails with custom_instructions_too_large (\"Prompt too big after adding system message\") before producing a review.\n  WHY: The reviewer attributes the failure to the Copilot CLI system prompt size, unrelated to the canary file's content. The reviewer labelled this NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=high | confidence=4\n  PROBLEM: The PR causes multiple regression failures in the test suite, specifically in tests/test_implement_post_codex_recovery.py and other integration tests.\n  WHY: The canary file is likely used as an integration check or assertion target, so updating its content without updating expected values in fixtures or contract assertions breaks those tests. The reviewer labelled this BLOCKER, mapped here to high.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=3\n  PROBLEM: The copilot-pull-request-reviewer check (run 41544551704) fails with custom_instructions_too_large (\"Prompt too big after adding system message\") before producing a review.\n  WHY: The reviewer attributes the failure to the Copilot CLI system prompt size, unrelated to the canary file's content. The reviewer labelled this NIT, mapped here to low.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "944fdab51c848423ad9f86fae5a67c801011f555f7b713f0323283ae45a3f79a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41886625628",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41886625628",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104183449_6d2acc4b0b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41886625628"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T18:34:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
