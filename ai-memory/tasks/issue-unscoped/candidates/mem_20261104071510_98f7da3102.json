@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Reviewer reported a confirmation, not a defect: the diff delivers the three required lines (`status: ok`, `run_id: 40876853022`, `updated-by: ai-pipeline`) with a trailing newline, and no in-diff defect exists. Reported as NIT for the record.\n  WHY: The canary is a plain-text file that no code reads. The pre-push gate failures in `tests/test_implement_post_codex_recovery.py` are said to also fail on the merge-base and to reference the canary path only inside fixture strings.\n- (external check-run, not a repository file) | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check (run 41544382408, head e540dbc18770bafdac9f8861d6f6b3b123f57ccd) fails with `Prompt too big after adding system message` (statusCode 422, errorCode custom_instructions_too_large).\n  WHY: The Copilot reviewer loads AGENTS.md/CLAUDE.md as custom instructions and they exceed its prompt-size limit. The failure maps to no hunk in the diff and cannot be fixed within the single-file constraint. Other reviewers also noted this failure and did not report it as a defect. Severity is NIT per the source.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=NIT | confidence=5\n  PROBLEM: Confirmation only, not a defect: the diff replaces `decompose-run: 41445772297` with `run_id: 40876853022` / `updated-by: ai-pipeline` and meets the issue #8363 requirement.\n  WHY: The canary is a plain-text file that no code reads. The pre-push gate failures in `tests/test_implement_post_codex_recovery.py` and four inherited test-file failures also fail on the merge-base and reference the canary path only inside fixture strings.\n- (external check-run, not a repository file) | severity=NIT | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check (run 41544382408, head e540dbc18770bafdac9f8861d6f6b3b123f57ccd) fails with `Prompt too big after adding system message` (statusCode 422, errorCode custom_instructions_too_large).\n  WHY: The harness exits 1 before generating any review. The failure maps to no hunk in the diff and cannot be fixed within the issue's single-file constraint.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "49a5ced0571b74772f581497bd6b31fb81320674de4689d5639086feea4a90cb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41789570949",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41789570949",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104071510_98f7da3102",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41789570949"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T07:15:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
