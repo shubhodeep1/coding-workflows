@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:3478-3481 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The audit dedupe still treats the first finding marker anywhere in an issue body as valid, so a body with no leading marker block but a marker later in its text suppresses filing that finding.\n  WHY: The audit skips the finding as already followed up, but the review gate only recognizes markers in the leading block, so it reports `followups_missing` and holds the PR while later audits keep suppressing the follow-up (source severity MAJOR).\n- scripts/security_audit.sh:3757-3765 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `LAST_ANY_FOLLOWUP_BY_FILE` is built only from existing index-file entries and is not filled with issues created in the current run until the end, so new issues from this run are not used for cross-reference.\n  WHY: If several new consolidated issues are planned for different files in one run, the `Depends on` calculation for the second file's issue will not see the first file's new issue, which can leave dependency chains missing or wrong (source severity MAJOR).\n- scripts/security_audit.sh:3803 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The consolidated closed fallback through `LAST_ANY_FOLLOWUP_BY_FILE` depends on the index title column being kept strictly as `open` vs `-`, so a closed issue not marked `-` could be wrongly ranked as a closed predecessor.\n  WHY: Dependency resolution is fragile because it depends on strict upkeep of the index file's title column, and nothing verifies that column (source severity NIT).\n- tests/test_security_audit_workflow_contract.py:571-572, 590-591, 594-595, 606-607, 763, 792, 4191-4219 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The last run re-indented continuation lines and docstrings of existing tests unrelated to P5b, removed the unused `trusted =` assignment (line 763) and dropped an f-string prefix (line 792), which trips the PR's \"Changed pre-existing assertions (removed_or_modified)\" gate.\n  WHY: Nothing fails at runtime because the assertions mean the same thing, but about 30 lines of re-indentation churn add review noise and fire the changed-assertions gate signal (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When `security-audit.yml` audits a PR branch (`pr_number` set), `scripts/security_audit.sh` files one `ai:security` issue listing every new finding of that cycle instead of one issue per finding.\"\n  expected_change_site: scripts/security_audit.sh\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The consolidated key built with `hashlib.sha256(str(finding[\"file\"]).encode(\"utf-8\")).hexdigest()` treats findings in different files as different keys, so the code files one issue per unique file key (or per `multi:` group) and could produce several issues in one cycle instead of one.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/security_audit.sh:lines 3757-3765 (inside the `while` loop, after reading `FOLLOWUP_INDEX_FILE`) | severity=MAJOR | confidence=4\n  PROBLEM: `LAST_ANY_FOLLOWUP_BY_FILE` is built only from existing index-file entries, and issues created in the current run are not added to it for cross-reference until the end.\n  WHY: When several new consolidated issues are planned for different files in one run, the second file's `Depends on` calculation will not see the first file's new issue, which can leave dependency chains missing or wrong.\n- scripts/security_audit.sh:line 3803 (`FOLLOWUP_DEPENDS_ON_ANY=\"${FOLLOWUP_DEPENDS_ON_ANY:-${FOLLOWUP_DEPENDS_ON_ANY}}\"` logic within the loop) | severity=NIT | confidence=2\n  PROBLEM: The closed fallback through `LAST_ANY_FOLLOWUP_BY_FILE` depends on the index title column being kept strictly as `open` vs `-`, so a closed issue not marked `-` could be wrongly ranked as a closed predecessor.\n  WHY: Dependency resolution is fragile because it depends on unverified upkeep of the index file's title column.\n- TASK_GAP\n  Requirement: \"When `security-audit.yml` audits a PR branch (`pr_number` set), `scripts/security_audit.sh` files one `ai:security` issue listing every new finding of that cycle instead of one issue per finding.\"\n  Expected change site: `scripts/security_audit.sh`\n  Evidence of absence: The per-file key `hashlib.sha256(str(finding[\"file\"]).encode(\"utf-8\")).hexdigest()` gives one issue per unique file key (or per `multi:` group), so a cycle with findings in different files could file several issues.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/security_audit.sh:3478-3481 (`marker_regex.search(body)` and `issue_finding_ids`) | severity=MAJOR | confidence=4\n  PROBLEM: The audit dedupe treats the first finding marker anywhere in an issue body as valid, so a body with no leading marker block but a later marker suppresses filing that finding; legacy follow-up bodies put the marker on line 1 (line 3619).\n  WHY: The audit skips the finding as already followed up, but the review gate only recognizes leading-block markers, so it reports `followups_missing` and holds the PR while later audits keep suppressing the follow-up.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_security_audit_workflow_contract.py:lines 571-572, 590-591, 594-595, 606-607, 763, 792, 4191-4219 (last-run diff hunks) | severity=NIT | confidence=4\n  PROBLEM: The last run re-indented continuation lines and docstrings of existing tests unrelated to P5b, removed the unused `trusted =` assignment (line 763) and dropped the f-string prefix (line 792), and the pre-push gate flags this under \"Changed pre-existing assertions (removed_or_modified)\".\n  WHY: Nothing fails at runtime because the assertions mean the same thing, but about 30 lines of re-indentation churn add review noise and fire the changed-assertions gate signal.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fc70a9492fc6c89571a54db2e8c7887373606ca1e6939f4a83ffa8a6735de9f3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8823,
+    "run_id": "41845731228",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41845731228",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104143536_d74e10e055",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8823,
+    "run_id": "41845731228"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T14:35:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
