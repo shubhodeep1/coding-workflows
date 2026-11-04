@@ -2055,7 +2055,9 @@ through `clarify → plan → implement → review`.
   is `true` or `skipped_peer_inflight`) are not reported (`skip
   reason=changes_lost_retrying`): the retry is the recovery, the run posts no
   failure comment and ends green, so the intake could only reject the report
-  as `not_failed`. The retry-unavailable path is still reported. The
+  as `not_failed`. The retry-unavailable paths need a person and are still
+  reported; those runs end green too, so their report is accepted only while
+  the run is still in progress and can still be rejected as `not_failed`. The
   reporter never fails the review job; stable log lines are prefixed
   `WORKFLOW_HEAL_AUTOFIX_REPORT`. The reporter and
   `scripts/workflow_failure_heal.py` are staged by the workflow-SHA-pinned

@@ -194,7 +194,10 @@ fi
 # dispatched, or one was already in flight) are being recovered: the run posts
 # no failure comment and ends green, so the intake would only reject the
 # report as not_failed and page (PR #8718, run 41564230342, 2026-11-03). The
-# retry-unavailable path posts a failure comment and is still reported.
+# retry-unavailable paths need a person and are still reported (the CAN_PUSH
+# path also posts a PR failure comment; push-disabled sends only a Telegram
+# WARNING). Those runs also end green, so the intake accepts their report only
+# while the run is still in progress and may still reject it as not_failed.
 if [ "${FAILURE_REASON}" = "editor_changes_lost" ] \
 	&& { [ "${CHANGES_LOST_REDISPATCHED:-}" = "true" ] || [ "${CHANGES_LOST_REDISPATCHED:-}" = "skipped_peer_inflight" ]; }; then
 	log "skip reason=changes_lost_retrying pr=${PR} redispatched=${CHANGES_LOST_REDISPATCHED}"
