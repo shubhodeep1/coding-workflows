@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=medium | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The change to tests/e2e_smoke_canary.txt triggers multiple test regressions in tests/test_implement_post_codex_recovery.py.\n  WHY: The suite likely relies on hardcoded content or keys in the canary file; severity reported as MAJOR. minimax_minimax-m3 and z-ai_glm-5_3-flash dispute this, noting the test file mentions the canary path only in string literals (lines 5060, 5779).\n- tests/e2e_smoke_canary.txt:N/A | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The external copilot-pull-request-reviewer check failed with custom_instructions_too_large (422), and openai_gpt-6-luna reportedly flagged it as a PR defect.\n  WHY: Both reviewers classify it as NIT because the failure is a third-party prompt-size limit that no canary edit can fix.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=MAJOR | confidence=3\n  PROBLEM: The change to tests/e2e_smoke_canary.txt triggers multiple test regressions in tests/test_implement_post_codex_recovery.py.\n  WHY: The test suite likely relies on hardcoded content or specific keys within tests/e2e_smoke_canary.txt that were modified, leading to failures when validating or using the canary file state.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_implement_post_codex_recovery.py:5060, 5779 | severity=NIT | confidence=1\n  PROBLEM: google_gemini-3_1-flash-lite raised a \"change causes test regressions\" finding, but no test reads or mutates tests/e2e_smoke_canary.txt. The file is mentioned only in string literals, so the canary's content cannot change test outcomes.\n  WHY: It does not fail at runtime. The pre-push gate attribution is heuristic, the PR's 25 CI check-runs pass on the head SHA, and the failures are inherited from the merge-base.\n- tests/e2e_smoke_canary.txt:N/A | severity=NIT | confidence=1\n  PROBLEM: openai_gpt-6-luna flagged the failed external copilot-pull-request-reviewer check run as a PR defect. The failure is custom_instructions_too_large (422) in GitHub's Copilot harness.\n  WHY: It does not fail at runtime for this PR. The error is a third-party prompt-size limit, not a defect introduced or aggravated by the canary replacement.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:whole file | severity=NIT | confidence=5\n  PROBLEM: None. The diff replaces the old content with exactly the three required lines, matching the linked issue verbatim. This is a no-defect confirmation.\n  WHY: N/A. No failure path exists in this one-file change. The pre-push gate failures in tests/test_implement_post_codex_recovery.py are not attributed to this diff.\n- tests/e2e_smoke_canary.txt:N/A | severity=NIT\n  PROBLEM: The copilot-pull-request-reviewer check failure (custom_instructions_too_large, 422) was verified as an external third-party limit.\n  WHY: The Copilot agent's own system prompt overflowed on AGENTS.md/CLAUDE.md before any diff review, so no edit to the canary file can resolve it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9e44906a4188b706b7706da0fba137463056e0bd60853cf4462f144dcf9272e3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41818064791",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41818064791",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104111227_568f3a3242",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41818064791"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T11:12:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
