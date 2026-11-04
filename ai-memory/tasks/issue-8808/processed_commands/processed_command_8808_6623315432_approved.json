@@ -5,13 +5,29 @@
   "entry_id": "processed_command_8808_6623315432_approved",
   "issue_number": 8808,
   "metadata": {
+    "branch": "ai/issue-8808",
+    "changed_files": [
+      ".github/workflows/orchestrate_poll.yml",
+      "agents.d/8808-heal-stale-auto-close.md",
+      "changelog.d/8808-heal-stale-auto-close.md",
+      "scripts/orchestrate_poll_process.sh",
+      "scripts/workflow_failure_heal.py",
+      "scripts/workflow_failure_heal_intake.sh",
+      "tests/test_orchestrate_poll_process.py",
+      "tests/test_workflow_failure_heal.py"
+    ],
+    "issue_number": 8808,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8808",
+    "pr_number": 8812,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8812",
+    "run_attempt": "1",
+    "run_id": "41778966923",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41778966923"
   },
   "run_attempt": 1,
   "run_id": "41778966923",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-04T05:25:10Z",
+  "status": "completed",
+  "timestamp": "2026-11-04T06:39:22Z",
   "workflow": "implement"
 }
