@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- external CI check-run `copilot-pull-request-reviewer` (run 41544333941, job 125616096789):log_tail \"Error creating PR review request: Error: Prompt too big after adding system message (statusCode 422, errorCode custom_instructions_too_large)\" | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The copilot-pull-request-reviewer check-run concludes \"failure\" because the upstream API rejects the reviewer prompt as too large after custom instructions are injected.\n  WHY: The reviewer builds its prompt from AGENTS.md and CLAUDE.md, so the prompt exceeds the upstream size budget and the API returns 422, independent of the 3-line canary diff. The source labelled it SEVERITY: NIT, which is mapped to low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- external CI check-run `copilot-pull-request-reviewer` (run 41544333941, job 125616096789):log_tail \"Error creating PR review request: Error: Prompt too big after adding system message (statusCode 422, errorCode custom_instructions_too_large)\" | severity=low (source: NIT) | confidence=4\n  PROBLEM: The copilot-pull-request-reviewer check-run concludes \"failure\" because the upstream API rejects the reviewer prompt as too large after custom instructions are injected.\n  WHY: The reviewer builds its prompt from AGENTS.md and CLAUDE.md, so the prompt exceeds the upstream size budget and the API returns 422, independent of the 3-line canary diff.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5cec65b90d51ea2298e8c21c391bd5828a985805ff7594a93e3ce60a363dfeb9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "41754672214",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41754672214",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104015213_f6edab64ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "41754672214"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T01:52:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
