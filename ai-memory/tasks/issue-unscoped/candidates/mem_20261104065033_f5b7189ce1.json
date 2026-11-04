@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/promote_main_cycle.sh:488-513 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `last_cycle_baseline_sha` reads only the first page of issue comments (`comments?per_page=100`, with no pagination) and takes the `last` marker on that page, so a newer baseline marker after comment 100 is missed and an older marker's SHA and timestamp are returned.\n  WHY: This PR adds a new user of that timestamp: the `with_time` value feeds the cycle_stale clock in `release_blocker_check_cycle_stale` (lines 1488/1497-1503 on the path before guard 4, line 1621 at guard 4). On a busy tracking issue the age comes out too high, which sends a false `cycle_stale` heal report and can open a spurious workflow-heal issue. It also points guard 4's \"same tip\" check at an older SHA. All four reviewers who flagged it rated it MAJOR. anthropic_claude-sonnet-5_5 disagreed and did not report it: the single-page read predates this PR, the loop stops at the first trusted marker, and that marker sits near the start of the tracking issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement the three cycle-side release-blocker reporters (`cycle_gate_unavailable`, `cycle_held_untrusted_marker`, `cycle_stale`) in `scripts/promote_main_cycle.sh`, fail open, send at most one report per tick, with the OIDC identity on the `cycle` job, four `vars.*` env rows with defaults, updated tests, README, agents and changelog fragments, and the removal registry.\n  expected_change_site: scripts/promote_main_cycle.sh, .github/workflows/promote-main-to-stable.yml, tests/test_promote_main_cycle.py, README.md, agents.d/, changelog.d/, docs/scripts-pending-removal.md\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer reports no missing deliverable (severity NIT). All three reporters are implemented. The reporter settings, OIDC permission, kill switch, evidence files, GraphQL batching, jq guards and existing PROMOTE_CYCLE_* outputs are preserved. The agents and changelog fragments and the removal registry line are added.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/promote_main_cycle.sh:494 | severity=MAJOR | confidence=4\n  PROBLEM: `last_cycle_baseline_sha` fetches only the first 100 issue comments and does not handle pagination.\n  WHY: On tracking issues with more than 100 comments, the most recent baseline marker is missed. The function returns an older marker, or none, to the stale-cycle reporter, which then sends false cycle_stale reports.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/promote_main_cycle.sh:lines 488-509, the `last_cycle_baseline_sha` function \u2014 specifically the `gh_retry gh api \"repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments?per_page=100\"` call and the jq pipeline that ends with `] | last // empty` | severity=MAJOR | confidence=4\n  PROBLEM: Only the first page of comments is read (no `?page=`). The REST API returns comments oldest-first, so `last` returns the newest marker on page one only, and the `with_time` timestamp feeds the cycle_stale clock at line 1621 (`last_baseline_with_time=$(last_cycle_baseline_sha with_time)`).\n  WHY: On tracking issues with more than 100 comments, `rb_age` comes out too high and a false `cycle_stale` heal report fires before the unchanged `PROMOTE_CYCLE_SKIPPED` line. No existing test covers more than 100 comments.\n- TASK_GAP: Requirement: Implement the three cycle-side release-blocker reporters (`cycle_gate_unavailable`, `cycle_held_untrusted_marker`, `cycle_stale`) in `scripts/promote_main_cycle.sh`, fail open, send at most one report per tick, with the OIDC identity on the `cycle` job, four `vars.*` env rows with defaults, updated tests, README, agents and changelog fragments, and the removal registry.\n  Expected change site: scripts/promote_main_cycle.sh, .github/workflows/promote-main-to-stable.yml, tests/test_promote_main_cycle.py, README.md, agents.d/, changelog.d/, docs/scripts-pending-removal.md\n  Evidence of absence: All three reporters are implemented and all deliverables are preserved or added. No missing deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/promote_main_cycle.sh:507-513; the timestamp is used by `release_blocker_check_cycle_stale` at 1497-1503. | severity=MAJOR | confidence=4\n  PROBLEM: The baseline lookup reads one page of up to 100 comments and picks the last matching marker on that page. It never fetches later pages to find the newest trusted baseline marker.\n  WHY: If a recent marker is on a later page, the stale reporter uses an older timestamp. When the unreleased commit is also old enough, it reports `cycle_stale` even though the recent marker reset the clock.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/promote_main_cycle.sh:line 507 (`gh api \"repos/.../issues/${issue_number}/comments?per_page=100\"`) inside `last_cycle_baseline_sha`; the possibly-stale result now feeds the `cycle_stale` clock at lines 1488 and 1497 (`release_blocker_baseline_at`). | severity=MAJOR | confidence=4\n  PROBLEM: Only the first page is fetched (oldest-first, no `--paginate`, no `since`), so an older marker's SHA and timestamp are returned. The PR adds a new user of that timestamp (line 1488 before guard 4, line 1621 at guard 4). Other scripts paginate this same read (`scripts/workflow_failure_heal_intake.sh:1254`, `scripts/unblock_judge.sh:167`).\n  WHY: When a baseline marker lands past comment 100, the next skipped tick computes an inflated age and sends a false `cycle_stale` heal report, which opens a spurious workflow-heal issue. Guard 4's \"same tip\" check is also weakened to an older SHA.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b6b0f3b1aaf1c1983779bc99a9850c1aa17fded645eb3483bf35bd1f531d77c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8793,
+    "run_id": "41784394831",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41784394831",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104065033_f5b7189ce1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8793,
+    "run_id": "41784394831"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T06:50:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
