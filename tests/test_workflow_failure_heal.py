@@ -3351,11 +3351,30 @@ def test_autofix_report_counts_interleaved_post_editor_failures() -> None:
 		assert len(_state(state_file)["dispatches"]) == 1
 
 
+def test_autofix_report_changes_lost_without_retry_still_reports() -> None:
+	# The retry-unavailable path posts a failure comment and needs a person.
+	for redispatched in ("skipped_budget_unavailable_or_exhausted", "false", None):
+		with tempfile.TemporaryDirectory(prefix="heal-autofix-changes-lost-") as tmp_name:
+			tmp = Path(tmp_name)
+			flags = {"EDITOR_CHANGES_LOST": "true"}
+			if redispatched is not None:
+				flags["CHANGES_LOST_REDISPATCHED"] = redispatched
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags=flags)
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert "dispatched pr=4174 failure=editor_changes_lost streak=1" in result.stdout, (redispatched, result.stdout)
+			assert len(_state(state_file)["dispatches"]) == 1
+
+
 def test_autofix_report_skip_paths() -> None:
 	cases = [
 		("below_streak", [], {"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "2"}, "skip reason=below_streak pr=4174 reason=editor_empty_noop streak=1 threshold=2"),
 		("disabled", [{"body": AUTOFIX_NOOP_COMMENT}], {"WORKFLOW_HEAL_ENABLED": "false"}, "skip reason=disabled"),
 		("resolver", [{"body": AUTOFIX_NOOP_COMMENT}], {"RESOLVER_ESCALATED": "true"}, "skip reason=resolver_escalated"),
+		# PR #8718: lost editor changes the run already retried end green, so the
+		# intake could only reject the report as not_failed.
+		("changes_lost_redispatched", [], {"EDITOR_CHANGES_LOST": "true", "CHANGES_LOST_REDISPATCHED": "true"}, "skip reason=changes_lost_retrying pr=4174 redispatched=true"),
+		("changes_lost_peer_inflight", [], {"EDITOR_CHANGES_LOST": "true", "CHANGES_LOST_REDISPATCHED": "skipped_peer_inflight"}, "skip reason=changes_lost_retrying pr=4174 redispatched=skipped_peer_inflight"),
 		("dispatch_denied", [{"user": {"login": "workflow-bot"}, "body": AUTOFIX_NOOP_COMMENT}], {"MOCK_DISPATCH_FAIL": "1"}, "skip reason=dispatch_denied pr=4174 failure=editor_empty_noop streak=2 upstream=shubhodeep1/coding-workflows detail=HTTP 422"),
 	]
 	for name, comments, flags, expected in cases:
