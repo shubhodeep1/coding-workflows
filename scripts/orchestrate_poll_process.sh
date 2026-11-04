@@ -2674,6 +2674,21 @@ if [ -n "${VALIDATION_HARNESS_ROUTE_LOGIN}" ] \
   VALIDATION_HARNESS_ROUTE_LOGIN=""
 fi
 
+# Harness heal auto-revalidate (Refs #8291, stuck-states plan P7 item 1). A
+# project parked failed with ai:harness-broken and no active harness hold is
+# revalidated once, by a poller-posted /revalidate, after the heal issue its
+# newest trusted routing marker names was closed with ai:merged. The value
+# falls back to its default with a warning that never prints the value.
+#   HARNESS_HEAL_AUTO_REVALIDATE_ENABLED   unset/empty/true -> true, false -> false
+case "$(printf '%s' "${HARNESS_HEAL_AUTO_REVALIDATE_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+  ""|true) HARNESS_HEAL_AUTO_REVALIDATE_ENABLED="true" ;;
+  false) HARNESS_HEAL_AUTO_REVALIDATE_ENABLED="false" ;;
+  *)
+    echo "::warning::HARNESS_HEAL_AUTO_REVALIDATE config=HARNESS_HEAL_AUTO_REVALIDATE_ENABLED outcome=default reason=invalid_value"
+    HARNESS_HEAL_AUTO_REVALIDATE_ENABLED="true"
+    ;;
+esac
+
 # Put the failure labels back after an aborted stale-pin recovery (#7138).
 # Restores ai:validation-failed and ai:harness-broken, plus the legacy
 # ai:validate-failed only when the issue carried it before (the label may not
@@ -16060,9 +16075,11 @@ validation_harness_pin() {
   printf '%s' "${vhp_pins}"
 }
 
-# validation_harness_marker owner <run_id> | route <fp>
+# validation_harness_marker owner <run_id> | route <fp> | route-latest any
 # Newest trusted marker (route login, marker on the comment's last non-empty
 # line) from COMMENTS, printed as compact JSON; prints nothing when absent.
+# `route-latest` is the newest routing marker for any fingerprint (harness
+# heal auto-revalidate, Refs #8291); its key must be the literal `any`.
 validation_harness_marker() {
   local vhm_kind="$1" vhm_key="$2" vhm_login
   vhm_login="$(validation_harness_route_login)"
@@ -16072,6 +16089,7 @@ validation_harness_marker() {
   case "${vhm_kind}" in
     owner) [[ "${vhm_key}" =~ ^[0-9]+$ ]] || return 0 ;;
     route) [[ "${vhm_key}" =~ ^[0-9a-f]{64}$ ]] || return 0 ;;
+    route-latest) [ "${vhm_key}" = "any" ] || return 0 ;;
     *) return 0 ;;
   esac
   printf '%s' "${COMMENTS:-[]}" | jq -c --arg login "${vhm_login}" --arg kind "${vhm_kind}" --arg key "${vhm_key}" '
@@ -16085,7 +16103,7 @@ validation_harness_marker() {
              | select(.run == $key)
            else
              ($last | capture("^<!-- workflow-failure-heal:validation-route:v1 fp=(?<fp>[0-9a-f]{64}) outcome=(?<outcome>opened|duplicate|already-fixed|bounced|skipped) issue=(?<issue>[0-9]+|none) classification=(?<classification>[a-z-]+) run=(?<run>[0-9]+) -->$")?)
-             | select(.fp == $key)
+             | select($kind == "route-latest" or .fp == $key)
            end)
         | {m: ., created_at: ($c.created_at // ""), id: (($c.id // 0) | tonumber? // 0)}
       ]
@@ -16189,12 +16207,13 @@ ${vhf_cause} The project stays failed with \`ai:validation-failed\` and \`ai:har
 # one pin-commit GET only when the compare lists fewer commits than it counts.
 # ---------------------------------------------------------------------------
 declare -gA _VALIDATION_HARNESS_COMPARE_CACHE=()  # "<support>...<pin>" -> "<status>|<committer date>" or "__error__"
-declare -gA _VALIDATION_HARNESS_ISSUE_CACHE=()    # "<heal issue>" -> "<state>|<state_reason>|<closed_at>" or "__error__"
+declare -gA _VALIDATION_HARNESS_ISSUE_CACHE=()    # "<heal issue>" -> "<state>|<state_reason>|<closed_at>|<merged>" or "__error__"
 VHH_COMPARE_STATUS=""
 VHH_PIN_DATE=""
 VHH_ISSUE_STATE=""
 VHH_ISSUE_STATE_REASON=""
 VHH_ISSUE_CLOSED_AT=""
+VHH_ISSUE_MERGED=""
 
 # One VALIDATION_HARNESS_HOLD log line. Args: outcome fp pin heal_issue [reason]
 _validation_harness_hold_log() {
@@ -16249,22 +16268,26 @@ _validation_harness_hold_compare() {
   return 0
 }
 
-# Sets VHH_ISSUE_STATE, VHH_ISSUE_STATE_REASON and VHH_ISSUE_CLOSED_AT for a
-# heal issue in the harness repo; returns 1 when the read fails.
+# Sets VHH_ISSUE_STATE, VHH_ISSUE_STATE_REASON, VHH_ISSUE_CLOSED_AT and
+# VHH_ISSUE_MERGED (`true` only when the issue carries ai:merged, else `false`)
+# for a heal issue in the harness repo; returns 1 when the read fails.
 _validation_harness_hold_issue_state() {
   local vhi_issue="$1" vhi_out
   VHH_ISSUE_STATE=""
   VHH_ISSUE_STATE_REASON=""
   VHH_ISSUE_CLOSED_AT=""
+  VHH_ISSUE_MERGED=""
   [[ "${vhi_issue}" =~ ^[0-9]{1,9}$ ]] || return 1
   if [ -z "${_VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]+set}" ]; then
     # §14/§15 API budget: at most one GET repos/shubhodeep1/coding-workflows/
     # issues/<n> per heal issue per tick, memoized in
     # _VALIDATION_HARNESS_ISSUE_CACHE, and only after the pin moved ahead of
-    # the hold's support commit. No batched read covers issues in the harness
+    # the hold's support commit, or (harness_heal_auto_revalidate, #8291) for
+    # a parked project once no once-only marker names the issue yet. Both
+    # callers share the cached entry. No batched read covers issues in the harness
     # repo (the candidate and linked-PR batches read ${GITHUB_REPOSITORY}).
     if vhi_out="$(gh_retry _safe_gh_jq "repos/shubhodeep1/coding-workflows/issues/${vhi_issue}" \
-      --jq '[(.state // ""), (.state_reason // ""), (.closed_at // "")] | join("|")' 2>/dev/null)"; then
+      --jq '[(.state // ""), (.state_reason // ""), (.closed_at // ""), ([.labels[]? | (.name? // empty)] | any(. == "ai:merged") | tostring)] | join("|")' 2>/dev/null)"; then
       _VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]="${vhi_out}"
     else
       _VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]="__error__"
@@ -16272,7 +16295,8 @@ _validation_harness_hold_issue_state() {
   fi
   vhi_out="${_VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]}"
   [ "${vhi_out}" != "__error__" ] || return 1
-  IFS='|' read -r VHH_ISSUE_STATE VHH_ISSUE_STATE_REASON VHH_ISSUE_CLOSED_AT <<< "${vhi_out}"
+  IFS='|' read -r VHH_ISSUE_STATE VHH_ISSUE_STATE_REASON VHH_ISSUE_CLOSED_AT VHH_ISSUE_MERGED <<< "${vhi_out}"
+  [ "${VHH_ISSUE_MERGED}" = "true" ] || VHH_ISSUE_MERGED="false"
   case "${VHH_ISSUE_STATE}" in
     open|closed) ;;
     *)
@@ -16661,6 +16685,157 @@ validation_harness_hold_tick() {
   vht_rc=0
   _validation_harness_hold_resume "${vht_fp}" "${vht_pin}" "${vht_issue}" || vht_rc=$?
   return "${vht_rc}"
+}
+
+# ---------------------------------------------------------------------------
+# Harness heal auto-revalidate (Refs #8291, docs/plans/
+# remove-unattended-pipeline-stuck-states-plan.md P7 item 1). A project parked
+# failed with ai:harness-broken and no active harness hold (the hold ended, a
+# resume cap was reached, or the source repository's self_repo park) stays
+# parked after its heal issue merges. Once the heal issue named by the newest
+# trusted routing marker is closed with ai:merged, this posts one /revalidate
+# comment whose last line is
+#   <!-- AI_HARNESS_HEAL_REVALIDATE_V1 heal=<n> -->
+# and hands it to the /revalidate block on the same tick. The once-only gate
+# is that marker on a comment by the pipeline login, read from the full
+# COMMENTS list, so the step fails closed when the comments could not be
+# fetched. A failed POST leaves no marker and the next tick retries.
+#
+# Returns 0 and always sets HHAR_POSTED_COMMENT_JSON: the posted comment as
+# {id, body, created_at, html_url, user:{login}, author_association}, or
+# empty when nothing was posted. Every check before the heal issue read is
+# local (no API call).
+# ---------------------------------------------------------------------------
+HHAR_POSTED_COMMENT_JSON=""
+
+# One HARNESS_HEAL_AUTO_REVALIDATE log line. Args: outcome heal_issue [reason]
+_harness_heal_auto_revalidate_log() {
+  local hhl_issue="${2:-}"
+  [[ "${hhl_issue}" =~ ^[1-9][0-9]{0,8}$ ]] || hhl_issue="none"
+  echo "HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=${TRACKING_NUM} outcome=$1 heal_issue=${hhl_issue}${3:+ reason=$3}"
+}
+
+harness_heal_auto_revalidate() {
+  local hhar_login hhar_marker hhar_outcome hhar_issue hhar_marker_line hhar_rc
+  local hhar_body hhar_response_file hhar_id hhar_now hhar_comment
+  HHAR_POSTED_COMMENT_JSON=""
+  # Switch off: silent, so the off path matches the output before #8291.
+  [ "${HARNESS_HEAL_AUTO_REVALIDATE_ENABLED:-true}" != "false" ] || return 0
+  if [ "${ENABLE_VALIDATION:-true}" != "true" ]; then
+    _harness_heal_auto_revalidate_log "skip" "" "validation_disabled"
+    return 0
+  fi
+  # An active hold owns its own resume, which also waits for the pin to move.
+  if validation_harness_hold_active; then
+    _harness_heal_auto_revalidate_log "skip" "" "hold_active"
+    return 0
+  fi
+  if [ "${COMMENTS_FETCH_OK:-false}" != "true" ] || [ "${COMMENTS_FOR_TRACKING_NUM:-}" != "${TRACKING_NUM:-}" ]; then
+    _harness_heal_auto_revalidate_log "skip" "" "comments_unavailable"
+    return 0
+  fi
+  unblock_trusted_login >/dev/null 2>&1 || true
+  hhar_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+  if [ -z "${hhar_login}" ]; then
+    _harness_heal_auto_revalidate_log "skip" "" "identity_unavailable"
+    return 0
+  fi
+
+  validation_harness_route_login >/dev/null
+  hhar_marker="$(validation_harness_marker route-latest any)"
+  if [ -z "${hhar_marker}" ]; then
+    _harness_heal_auto_revalidate_log "skip" "" "no_route_marker"
+    return 0
+  fi
+  hhar_outcome="$(printf '%s' "${hhar_marker}" | jq -r '.outcome // ""' 2>/dev/null || echo '')"
+  hhar_issue="$(printf '%s' "${hhar_marker}" | jq -r '.issue // ""' 2>/dev/null || echo '')"
+  [[ "${hhar_outcome}" =~ ^[a-z-]{1,20}$ ]] || hhar_outcome="unknown"
+  if { [ "${hhar_outcome}" != "opened" ] && [ "${hhar_outcome}" != "duplicate" ]; } \
+    || ! [[ "${hhar_issue}" =~ ^[1-9][0-9]{0,8}$ ]]; then
+    _harness_heal_auto_revalidate_log "skip" "" "route_${hhar_outcome}"
+    return 0
+  fi
+
+  # Once-only gate: the marker line on a comment by the pipeline login. An
+  # unreadable COMMENTS list fails closed.
+  hhar_marker_line="<!-- AI_HARNESS_HEAL_REVALIDATE_V1 heal=${hhar_issue} -->"
+  hhar_rc=0
+  printf '%s' "${COMMENTS:-[]}" | jq -e --arg login "${hhar_login}" --arg line "${hhar_marker_line}" '
+    if type != "array" then error("comments are not an array") else . end
+    | any(.[]?;
+        type == "object"
+        and ((.user.login // "") == $login)
+        and ((.body // "") | tostring | split("\n") | map(sub("\\s+$"; "")) | any(. == $line)))
+  ' >/dev/null 2>&1 || hhar_rc=$?
+  if [ "${hhar_rc}" = "0" ]; then
+    _harness_heal_auto_revalidate_log "skip" "${hhar_issue}" "already_posted"
+    return 0
+  fi
+  if [ "${hhar_rc}" != "1" ]; then
+    _harness_heal_auto_revalidate_log "skip" "${hhar_issue}" "comments_unavailable"
+    return 0
+  fi
+
+  # Heal issue state: the hold's memoized GET (_VALIDATION_HARNESS_ISSUE_CACHE).
+  if ! _validation_harness_hold_issue_state "${hhar_issue}"; then
+    _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "heal_read_failed"
+    return 0
+  fi
+  if [ "${VHH_ISSUE_STATE}" = "open" ]; then
+    _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "heal_open"
+    return 0
+  fi
+  if [ "${VHH_ISSUE_MERGED}" != "true" ]; then
+    _harness_heal_auto_revalidate_log "skip" "${hhar_issue}" "heal_closed_unmerged"
+    return 0
+  fi
+
+  hhar_body="/revalidate harness heal issue shubhodeep1/coding-workflows#${hhar_issue} merged
+
+The validation harness heal issue for this project merged, so the orchestrator is resuming runtime validation once. Set \`HARNESS_HEAL_AUTO_REVALIDATE_ENABLED=false\` to turn this off.
+
+${hhar_marker_line}"
+  if ! hhar_response_file="$(mktemp "${TMPDIR:-/tmp}/harness_heal_revalidate.XXXXXX")"; then
+    echo "::warning::HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=${TRACKING_NUM} outcome=post_failed heal_issue=${hhar_issue} reason=tempfile_failed"
+    return 0
+  fi
+  # §14 API budget: at most one comment POST per heal issue over its lifetime
+  # (the marker above gates it). post_tracking_comment is not reused because
+  # it does not return the posted comment, which the /revalidate block needs
+  # on this tick.
+  if ! gh_retry_to_file "${hhar_response_file}" gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+    -X POST -f body="${hhar_body}"; then
+    rm -f "${hhar_response_file}"
+    echo "::warning::HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=${TRACKING_NUM} outcome=post_failed heal_issue=${hhar_issue} reason=post_error"
+    return 0
+  fi
+  hhar_id="$(jq -r '.id // empty' "${hhar_response_file}" 2>/dev/null || echo '')"
+  if ! [[ "${hhar_id}" =~ ^[0-9]+$ ]]; then
+    rm -f "${hhar_response_file}"
+    echo "::warning::HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=${TRACKING_NUM} outcome=post_failed heal_issue=${hhar_issue} reason=no_comment_id"
+    return 0
+  fi
+  hhar_now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  hhar_comment="$(jq -c --arg body "${hhar_body}" --arg login "${hhar_login}" --arg now "${hhar_now}" --argjson id "${hhar_id}" '
+    {
+      id: $id,
+      body: ((.body // "") | if (type == "string" and length > 0) then . else $body end),
+      created_at: ((.created_at // "") | if (type == "string" and length > 0) then . else $now end),
+      html_url: ((.html_url // "") | if type == "string" then . else "" end),
+      user: {login: $login},
+      author_association: ((.author_association // "") | if (type == "string" and length > 0) then . else "OWNER" end)
+    }
+  ' "${hhar_response_file}" 2>/dev/null || echo '')"
+  rm -f "${hhar_response_file}"
+  if [ -z "${hhar_comment}" ]; then
+    hhar_comment="$(jq -cn --arg body "${hhar_body}" --arg login "${hhar_login}" --arg now "${hhar_now}" --argjson id "${hhar_id}" \
+      '{id: $id, body: $body, created_at: $now, html_url: "", user: {login: $login}, author_association: "OWNER"}')"
+  fi
+  HHAR_POSTED_COMMENT_JSON="${hhar_comment}"
+  COMMENTS="$(printf '%s' "${COMMENTS:-[]}" | jq -c --argjson c "${hhar_comment}" '(if type == "array" then . else [] end) + [$c]' 2>/dev/null || printf '%s' "${COMMENTS:-[]}")"
+  _harness_heal_auto_revalidate_log "posted" "${hhar_issue}"
+  tg_notify "Project #${TRACKING_NUM}: harness heal issue shubhodeep1/coding-workflows#${hhar_issue} merged; posted /revalidate to resume runtime validation once." "DEBUG"
+  return 0
 }
 
 # Unblock judge hold request (Refs #7913, P2c). The judge (Phase 3) asks the
@@ -27895,6 +28070,22 @@ The security pass that parked this project ran on workflow engine \`${SP_AUTO_RE
       ]
       | last // empty
     ')"
+
+    # Harness heal auto-revalidate (Refs #8291): with no pending /revalidate,
+    # a parked ai:harness-broken project whose heal issue merged gets one
+    # poller-posted /revalidate, handled below on this tick. A pending human
+    # /revalidate always wins. §14 API budget: at most one GET
+    # repos/shubhodeep1/coding-workflows/issues/<n> per tracker per tick
+    # (shared with the hold via _VALIDATION_HARNESS_ISSUE_CACHE, and only
+    # when a trusted routing marker names the issue and no once-only marker
+    # exists), plus at most one comment POST per heal issue ever.
+    if { [ -z "${REVALIDATE_COMMENT_JSON}" ] || [ "${REVALIDATE_COMMENT_JSON}" = "null" ]; } \
+      && has_label "${TRACKING_LABELS}" "ai:harness-broken"; then
+      harness_heal_auto_revalidate || true
+      if [ -n "${HHAR_POSTED_COMMENT_JSON:-}" ]; then
+        REVALIDATE_COMMENT_JSON="${HHAR_POSTED_COMMENT_JSON}"
+      fi
+    fi
 
     if [ -n "${REVALIDATE_COMMENT_JSON}" ] && [ "${REVALIDATE_COMMENT_JSON}" != "null" ]; then
       REVALIDATE_COMMENT_BODY="$(printf '%s' "${REVALIDATE_COMMENT_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
