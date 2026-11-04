@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR introduces a regression in the test suite, specifically in `tests/test_implement_post_codex_recovery.py`, according to the pre-push test gate report.\n  WHY: The integration tests likely depend on the content of `tests/e2e_smoke_canary.txt` and fail because it was updated to the new format (reviewer severity stated as MAJOR). Note that anthropic_claude-sonnet-5_5 found no evidence the diff causes these failures.\n- (external check run `copilot-pull-request-reviewer`, Run 41544404053 \u2014 no repository file):unmappable | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The check fails during its own prompt construction with error code `custom_instructions_too_large` (HTTP 422) before reviewing any code.\n  WHY: No repository code path in this PR's diff contributes to the failure; severity NIT, no editor action indicated.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:Test suite failure reported in pre-push gate | severity=MAJOR | confidence=5\n  PROBLEM: The PR introduces a regression in the test suite, specifically in `tests/test_implement_post_codex_recovery.py`, according to the pre-push test gate report.\n  WHY: The integration tests likely depend on the content of `tests/e2e_smoke_canary.txt` and fail because the content has been updated to the new format, causing mismatch with test expectations.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (external check run `copilot-pull-request-reviewer`, Run 41544404053 \u2014 no repository file):Not mappable to any hunk in the PR diff | severity=NIT | confidence=5\n  PROBLEM: The check fails during its own prompt construction with error code `custom_instructions_too_large` (HTTP 422) before reviewing any code; the log shows no reference to the changed file.\n  WHY: The reviewer bot errors out before review; no repository code path in this PR's diff contributes to the failure.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5f70569f7eb8b3dc2f9aace59051cf777795844925d6dc8447066ec49e434570",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41748805975",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41748805975",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104010429_3da9e52880",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41748805975"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T01:04:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
