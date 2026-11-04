@@ -1883,3 +1883,42 @@ Source commit: `1bf09113182d30722de27cf62619001aa7e7c678`
 | Per-Repo Breakdown | informational | Covered by the Exec 1–4 rows. |
 | Metrics Appendix | informational | No separate recommendation. |
 | Dead Calls (DEAD-API) | informational | The doc reports none. |
+
+### `analysis/workflow-optimization-2026-10-01-2.md`
+Source doc: `analysis/workflow-optimization-2026-10-01-2.md`
+Processed: 2026-11-04
+Source commit: `22368d37acedfd955de34c60d7c7c8d276d6f715`
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| BUG-001 (sweep active-run snapshot `\|\| true`), parse-failure remnant | applied | In `.github/workflows/review_autofix_sweep.yml`, a failed `jq` reduce in `snapshot_active_review_runs` now sets `active_snapshot_incomplete=true` and logs `::warning::AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE workflow=${workflow} status=parse rc=${snap_parse_rc}`, so the sweep skips candidates that tick with `reason=active_snapshot_incomplete`. Changelog `changelog.d/wfopt-2026-10-01-2-sweep-snapshot-parse.md` (Refs #8814). |
+| Exec 1 / Speed 1 / Reliability 1 / Pipeline Flow merge-conflict row, reason-code part (sanitized resolver scope-failure reason) | already-implemented | `RESOLVER_SCOPE_CHECK guard=… action=… reason=… exc=… attempt=…` in `scripts/review_conflict_resolve.sh` (`agents.d/8744-resolver-scope-check-reason.md`). The doc's proposed name `RESOLVER_SCOPE_FAILURE` was not added; the existing prefix covers it. |
+| Exec 2 / Speed 2, per-slot timing part | already-implemented | `REVIEWER_ATTEMPT_RESULT` in `scripts/review_run_reviewers.sh` (#8097). |
+| Speed 3, logging part (free space and memory push timing) | already-implemented | The `Show disk usage (pre free-disk-space)` step in `.github/workflows/review_autofix.yml` (#8725); `push_attempts`, `push_ms` and `push_retry_reasons` in `scripts/ai_memory.py` telemetry (#8726). |
+| Exec 4 / Cost 1 (duplicated aggregate-job/step token accounting) | already-implemented | `_dedupe_structured_cost_telemetry_full_logs` in `scripts/collect_workflow_logs.py`. |
+| Reliability (separate Semble contract-test fallbacks from runtime ones) | already-implemented | `semble_contract_test_fallbacks` and `semble_runtime_fallbacks` in `scripts/cost_audit.py`. |
+| Reliability 3 / GH API audit `review_autofix.yml` row (trusted support commit retry) | already-implemented | The `Resolve trusted review support commit` step in `.github/workflows/review_autofix.yml` reads through `gh_api_retry` (the rate-limit-aware bounded retry from `scripts/gh_helpers.sh`) and still runs `exit 1` when the trust decision fails. |
+| Reliability 4 (validation dispatch follow-up) | already-implemented | `.github/workflows/review_autofix.yml` emits `::error::Standalone validation was required for merged PR #… but could not be dispatched; the ai:orchestrator-validate-required label is kept…` and exits 1, keeping the label. The proposed `VALIDATION_DISPATCH result=unavailable` line was not added (measurement-only). |
+| GH API audit `review_autofix_sweep.yml` row | already-implemented (snapshot cache) / rejected (extra counters) | The per-workflow active-run snapshot with the `active_snapshot_incomplete` gate in `.github/workflows/review_autofix_sweep.yml` is in place; the extra endpoint counters are measurement-only. |
+| SEC-001 (merge-train head-ref dispatch) | already-implemented | `_mt_dispatch_review` in `scripts/review_merge_train.sh` dispatches from the default ref (issue #4701) and logs `MERGE_TRAIN_DISPATCHED … ref=default`. |
+| BUG-001 (sweep active-run snapshot `\|\| true`), main part | already-implemented | The `active_snapshot_incomplete` gate in `.github/workflows/review_autofix_sweep.yml` marks a failed status read incomplete and skips dispatch. |
+| BUG-003 (merge-train release run listing) | already-implemented | `_mt_inflight_review_branches` in `scripts/review_merge_train.sh` uses a paginated, status-scoped listing with trusted `pr:<N>` keys and logs `MERGE_TRAIN_RUNS_LISTING outcome=incomplete` on a partial read. |
+| BUG-004 (`_mt_upsert_comment` swallowed write failure) | already-implemented | `_mt_upsert_comment` in `scripts/review_merge_train.sh` returns `write_rc`, the PATCH/POST status. |
+| SEC-002 (full args / response bodies in retry logs) | already-implemented | `_gh_cmd_log_summary` in `scripts/gh_helpers.sh`; `gh_api_json_to_file` logs `bytes=`, `sha256=` and `category=` only. |
+| EXPR-001 (`implement.yml` support-staging body size) | already-implemented | The `Stage workflow support files` body in `.github/workflows/implement.yml` passes values through `STAGE_*` `env:`. |
+| SHELL-001 (unchecked clock read in staleness check) | already-implemented | Applied while processing `analysis/workflow-optimization-2026-10-01.md` (`changelog.d/wfopt-2026-10-01-staleness-clock-read.md`). |
+| Speed 1 / Reliability 1, follow-up preflight or invariant fix | rejected | A behaviour change that first needs the `RESOLVER_SCOPE_CHECK` reason-code distribution as evidence; the guard stays fail-closed. |
+| Speed 2 fallback canary, Cost 3 (fewer passes / lower reasoning canary) | rejected | The doc defers these until findings parity is shown and rates the quality risk as high. |
+| Speed 3, conditional cleanup skip | rejected | Medium risk; no tested free-space thresholds yet. |
+| Speed 4, GH API audit `internal-review.yml` row (PR lookup counters) | rejected | Measurement-only; the doc itself states zero saving on the observed no-PR path. |
+| Cost 2 (terminal-failure usage), Cost 4 (MCP forwarded bytes), AI Memory Health record-set fingerprint, Prompt Cache prefix fingerprint and reordering, Orchestrator Health state-transition records, queue timestamps | rejected | Measurement-only with no demonstrated saving; prompt reordering carries medium quality risk. |
+| Reliability 2 (CI YAML lint / Inline edit guard `env -S` regressions) | rejected | Obsolete one-off regressions in the observed window: no `Inline edit guard` step exists in `.github/workflows/ci.yml`, and `env -S` handling is in `.claude/hooks/gh_api_write_guard.py` and `.claude/hooks/pr_merge_status_guard.py`. |
+| GH API audit `claude_pr_sweep.py` row, BUG-002, BUG-005 | rejected | Obsolete: `scripts/claude_pr_sweep.py`, `scripts/claude_issue_intake.sh` and `scripts/claude_issue_route.py` do not exist. |
+| API-001, API-002, BATCH-001, BATCH-002, MERGE-001, MERGE-002 | rejected | Tagged RISKY_SKIP by the doc itself. |
+| DUP-001, DUP-002, DUP-003, DUP-004 | rejected | Refactor-only with no defect (§9). |
+| DEBT-001 (`review_autofix.yml` size headroom) | rejected | `tests/test_workflow_file_size_limit.py` enforces the 480,000-byte guard; extraction happens at the guard (§24). |
+| DEAD-001 (`PR_HEAD_SHA` in `scripts/review_rb_judge.sh`) | rejected | Removing an identifier needs explicit approval (§10). |
+| Redundant Re-Fetch (REUSE) / Dead Calls (DEAD-API) | informational | The doc reports none. |
+| Pipeline Flow Bottlenecks | informational | Covered by the Exec, Speed and Reliability rows above. |
+| Per-Repo Breakdown | informational | Covered by the Exec, Cost and GH API audit rows above. |
+| Metrics Appendix | informational | No separate recommendation. |
