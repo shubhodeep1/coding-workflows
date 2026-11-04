@@ -2550,6 +2550,7 @@ MOVED_STATIC_8394_STEPS = {
 			"tests/test_workspace_cache_maintenance.py",
 			"tests/test_family_node_runtime.py",
 			"tests/test_orchestrate_poll_workflow_contract.py",
+			"tests/test_orchestrate_poll_tracking_issue_list_limit.py",
 			"tests/test_workflow_overlay_orchestrator.py",
 			"tests/test_workflow_overlay_core.py",
 		),

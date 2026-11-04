@@ -2234,11 +2234,12 @@ jobs:
       # most room: budget-watch issues #8208, #8245 and #8268 each moved four
       # steps out of it (#8268 was its last issue), and #8268 fixed the collector test whose
       # step took about 5 minutes here (it now runs in seconds). Four steps
-      # came from the source job; the last two first reached it from
-      # tests-promote-stall-and-review (#7677). Three remain below. None needs
-      # Node or the prepared .claude/ live copies. Names and bodies unchanged.
-      # The fourth, `Clarify loop guard unit tests`, moved on to
-      # orchestrate-poll (0) in budget-watch issue #8777.
+      # came from the source job; two of them, `Clarify loop guard unit tests`
+      # and `Implement files_touched scope guard unit tests`, first reached it
+      # from tests-promote-stall-and-review (#7677). None needs Node or the
+      # prepared .claude/ live copies. Names and bodies unchanged.
+      # `Clarify loop guard unit tests` moved on to orchestrate-poll (0) in
+      # budget-watch issue #8777; the other three remain below.
       - name: Validate process cross-cycle escalation unit tests
         run: |
           set -euo pipefail
