@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The failed `copilot-pull-request-reviewer` check (run 41544333941) fails with `custom_instructions_too_large` (HTTP 422), an external check failure that this PR's canary edit cannot fix.\n  WHY: The third-party job exits 1 before it reads the PR, because the combined AGENTS.md and CLAUDE.md instructions are too large; both reviewers rated it NIT and judged it not a defect in this PR. The anthropic_claude-sonnet-5_5 reviewer cited tests/e2e_smoke_canary.txt lines 1-3, and the z-ai_glm-5_3-flash reviewer cited no repository file.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=NIT | confidence=4\n  PROBLEM: The failed `copilot-pull-request-reviewer` check (run 41544333941) fails with `custom_instructions_too_large`. The Copilot reviewer rejects the combined AGENTS.md and CLAUDE.md instructions as too large. The diff does not touch either file.\n  WHY: The third-party job exits with code 1 before it reads the PR, and editing the canary cannot change that. This is an external check failure, not a defect in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (external \u2014 no repository file in the diff) | severity=NIT | confidence=4\n  PROBLEM: The only failed check-run on the PR head, `copilot-pull-request-reviewer` (run 41544333941, job 125616096789), failed at request creation with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\"). The job exits 1 before analyzing the PR.\n  WHY: The third-party reviewer job rejects the prompt before review. The failure is not caused by the changed file, and editing `tests/e2e_smoke_canary.txt` cannot fix it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "97289b027829e7aee89dada2f7f011917bec41b031989f0e5ed8780edebb11d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "41757951431",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41757951431",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104021133_055d2e1e4b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "41757951431"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T02:11:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
