@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The issue lists `tests/test_collect_pr_check_runs_context.py` as a new test file.\n  expected_change_site: `tests/test_collect_pr_check_runs_context.py`\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: That file is absent from the PR\u2019s changed-file list. The collector tests were added to `tests/test_collect_pr_check_runs_pending_identity.py` instead. (Reviewer marked SEVERITY: NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION agents.d/8799-triage-log-anchor.md:line 2, the sentence that calls _redact_log_text \"a local copy of workflow_failure_heal.redact_secrets\"\n  PROBLEM: The fragment names the 32-character scheme bound as the only difference from heal. The copied authorization, extraheader, basic and Bearer patterns at scripts/collect_pr_check_runs_context.py lines 370-373 now also allow only spaces and tabs as separators.\n  WHY: A later sync with heal that follows this text could put \\s back and bring back the lost-anchor bug. The code comment at line 368 explains this but the fragment does not. Suggested fix: add a clause about the space/tab-only separators (1 line). HARDENING_RISK_SCORE: 1\n- NOTE: The failed CI check copilot-pull-request-reviewer stopped with errorCode custom_instructions_too_large (HTTP 422). This is an external limit caused by the size of AGENTS.md and CLAUDE.md, which this PR does not change. The check-run snapshot's collection_status is timeout with lint still queued, so whether CI passes on this commit is not known.\n- NOTE: The reviewer chose not to report one case: the triage path (check_triage_resolution.py, through heal.redact_secrets) can drop the anchor when a line ends in extraheader followed by = or : with no value. The reasons given were an unlikely trigger and that the behaviour predates the last run.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION scripts/collect_pr_check_runs_context.py:_LOG_TAIL_SECRET_PATTERNS, lines 370-373 (the four `authorization`, `extraheader`, `basic`, `Bearer` separator slots)\n  PROBLEM: `[ \\t]` excludes `\\r`, `\\f`, `\\v`, so a keyword whose separator before the value is a CRLF `\\r` artifact is no longer matched and the secret is not redacted.\n  WHY: The fixed bug was specifically `\\s` consuming `\\n`. Using \"any whitespace except newline\" keeps the anchor guarantee and restores redaction coverage. Suggested fix: replace `[ \\t]` with `[^\\S\\n]` (about 4 lines). HARDENING_RISK_SCORE: 1\n- HARDENING_SUGGESTION agents.d/8799-triage-log-anchor.md:line 2, the sentence describing the `_redact_log_text` copy\n  PROBLEM: The fragment documents only the 32-character URL-scheme bound and the encoded-credential pass as differences from `workflow_failure_heal._SECRET_PATTERNS`. It does not mention the `[ \\t]` separator in the header patterns.\n  WHY: A future sync that follows the fragment could put `\\s` back and reintroduce the bug the new test guards. Suggested fix: add one clause naming the `[ \\t]` bound (about 1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- TASK_GAP\n  Requirement: The issue lists `tests/test_collect_pr_check_runs_context.py` as a new test file.\n  Expected change site: `tests/test_collect_pr_check_runs_context.py`\n  Evidence of absence: That file is absent from the PR\u2019s changed-file list. The collector tests were added to `tests/test_collect_pr_check_runs_pending_identity.py` instead.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTION `agents.d/8799-triage-log-anchor.md`:line 2, description of `_redact_log_text` as a local copy of the heal patterns\n  PROBLEM: The collector\u2019s authorization, extraheader, basic, and Bearer patterns use `[ \\t]`, and the fragment does not mention this difference from the heal patterns.\n  WHY: Suggested fix: note that these separators match only horizontal whitespace on purpose, which preserves line boundaries and the `##[error]` anchor (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION agents.d/8799-triage-log-anchor.md:line 2, the sentence describing `_redact_log_text` as \"a local copy of `workflow_failure_heal.redact_secrets`: the simple `_SECRET_PATTERNS`, with the URL-scheme prefix bounded to 32 characters\"\n  PROBLEM: The last run added a second intended divergence from heal: the separator is `[ \\t]` instead of `\\s` in the authorization/extraheader/basic/Bearer patterns, scripts/collect_pr_check_runs_context.py:370-373. The fragment still lists the 32-character scheme bound as the only difference.\n  WHY: A future sync that follows this fragment could restore `\\s` and reintroduce the anchor-swallowing bug. Suggested fix: add a clause about the space/tab-only separators and why (1 line). HARDENING_RISK_SCORE: 1\n- HARDENING_SUGGESTION scripts/collect_pr_check_runs_context.py:`_LOG_TAIL_SECRET_PATTERNS`, lines 370-373 (the four `[ \\t]` separator positions)\n  PROBLEM: `[ \\t]` excludes `\\r`, so a credential separated from its keyword by a carriage return (CRLF artifacts in log text) is no longer redacted.\n  WHY: `\\r` does not carry the newline-swallowing risk that motivated the change. Suggested fix: use `[^\\S\\n]`, which matches more and still cannot consume the next line's `##[error]` anchor (4 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3a219b447dff1395e454cfd99b0da8d5481febc373c3911cec212d6ed48a78fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8804,
+    "run_id": "41784527831",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41784527831",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104065138_d73f5140d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8804,
+    "run_id": "41784527831"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T06:51:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
