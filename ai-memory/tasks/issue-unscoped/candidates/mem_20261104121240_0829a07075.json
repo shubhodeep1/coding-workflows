@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/copilot-pull-request-reviewer:CI check-run 41544551704 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: copilot-pull-request-reviewer check-run failed with `custom_instructions_too_large` (HTTP 422).\n  WHY: The review automation fails due to configuration overhead and cannot generate a PR review; the reviewer called it an infrastructure issue unrelated to the task implementation (severity MAJOR mapped to high).\n- tests/e2e_smoke_canary.txt:entire diff (3-line text file) | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The only failed check-run on the PR head is `copilot-pull-request-reviewer` (run 41544551704, job 125616826829), which failed with `custom_instructions_too_large` (HTTP 422) while building its own review prompt; no repository file is implicated.\n  WHY: The check is external infrastructure and does not map to any file in the diff, so it is reported only to document the discrepancy between PR status and review findings (NIT).\n- tests/e2e_smoke_canary.txt:lines 1-3 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The file was verified to contain exactly the three required lines with a trailing newline, so no defect exists.\n  WHY: The entry documents a verification rather than a defect (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/copilot-pull-request-reviewer:CI check-run 41544551704 | severity=MAJOR | confidence=5\n  PROBLEM: copilot-pull-request-reviewer check-run failed with `custom_instructions_too_large` (HTTP 422).\n  WHY: The review automation is failing due to configuration overhead, preventing it from generating a PR review. This is an infrastructure issue unrelated to the task implementation.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:lines 1-3 (verified on-disk) | severity=NIT | confidence=5\n  PROBLEM: The linked issue requires exactly three lines `status: ok`, `run_id: 40608957733`, `updated-by: ai-pipeline` with a trailing newline. The file at HEAD of this PR contains exactly those three lines with a trailing newline, so no defect exists in the changed file.\n  WHY: n/a \u2014 no defect found; on-disk content verified byte-wise via read.\n- tests/e2e_smoke_canary.txt:entire diff (3-line text file) | severity=NIT | confidence=4\n  PROBLEM: The only failed check-run on the PR head is `copilot-pull-request-reviewer` (run 41544551704, job 125616826829), which died with `custom_instructions_too_large` (HTTP 422) while building its own review prompt; no repository file is implicated.\n  WHY: The check is external infrastructure (third-party reviewer bot) and does not map to any file in the diff; there is no repository change this PR can make to fix it. Reported only to document the discrepancy between PR status and review findings.\n- TASK_GAP (none found):\n  Requirement: \"Update its content so it is exactly these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention): status: ok / run_id: 40608957733 / updated-by: ai-pipeline.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: none \u2014 the PR diff and the on-disk file at the review ref both contain exactly the three required lines with a trailing newline; the PR changes no other file. No gap exists.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "855939b7de74722f62876d203e4f7bc7736a3696bf920634219c6d68c9829b19",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41825656721",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41825656721",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104121240_0829a07075",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41825656721"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T12:12:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
