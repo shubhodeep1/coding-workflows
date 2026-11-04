@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The PR should use `Refs #8693`, not a closing keyword.\"\n  expected_change_site: PR description\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: PR description contains `Closes https://github.com/shubhodeep1/coding-workflows/issues/8697` rather than the required `Refs #8693` linkage; severity stated as BLOCKER by both. Disputed by anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash, who say #8697 is a sub-issue, so closing keywords are correct under \u00a721, and #8693 is linked with `Refs #8693`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nNote: TASK COMPLETENESS reported no gaps. The diff replaces `decompose-run: 40427433026` with `decompose-run: 41501570285` in tests/e2e_smoke_canary_b.txt and keeps `status: ok`. The `Closes ...issues/8697` finding is rejected because #8697 is a sub-issue and #8693 is linked with `Refs`. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: \"The PR should use Refs #8693, not a closing keyword.\"\n  Expected change site: PR Description\n  Evidence of absence: The PR description contains `Closes https://github.com/shubhodeep1/coding-workflows/issues/8697` and lacks the required `Refs #8693`. This violates \u00a721 and the explicit instruction in issue #8697.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nNote: The gemini `Closes` finding is rejected because #8697 is a sub-issue, so \u00a721 allows closing keywords. All acceptance criteria are met and no changes are needed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"The PR should use `Refs #8693`, not a closing keyword.\"\n  Expected change site: PR description.\n  Evidence of absence: The PR description uses `Closes https://github.com/shubhodeep1/coding-workflows/issues/8697` rather than the required `Refs #8693` linkage.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nNote: tests/e2e_smoke_canary_b.txt contains exactly two lines (`status: ok`, `decompose-run: 41501570285`). The gemini `Closes` BLOCKER is rejected because #8697 is the managed sub-issue and #8693 is linked with `Refs`.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2c6534a89b5b21b3865b622b7af3d84dfa673c9b769167943285659ce599b85f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8700,
+    "run_id": "41838790499",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41838790499",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104134210_3335b052bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8700,
+    "run_id": "41838790499"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T13:42:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
