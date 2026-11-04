@@ -5,13 +5,33 @@
   "entry_id": "processed_command_8809_6623365333_approved",
   "issue_number": 8809,
   "metadata": {
+    "branch": "ai/issue-8809",
+    "changed_files": [
+      ".github/workflows/orchestrate_poll.yml",
+      ".github/workflows/plan.yml",
+      "agents.d/8809-heal-test-only-auto-approve.md",
+      "changelog.d/8809-heal-test-only-auto-approve.md",
+      "scripts/files_touched_scope_guard.py",
+      "scripts/heal_isolated_implement.sh",
+      "scripts/implement_heal_preflight.sh",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_files_touched_scope_guard.py",
+      "tests/test_heal_isolated_editor.py",
+      "tests/test_implement_heal_preflight.py",
+      "tests/test_plan_heal_counterfactual_gate.py"
+    ],
+    "issue_number": 8809,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8809",
+    "pr_number": 8811,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8811",
+    "run_attempt": "1",
+    "run_id": "41779326991",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41779326991"
   },
   "run_attempt": 1,
   "run_id": "41779326991",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-04T05:29:00Z",
+  "status": "completed",
+  "timestamp": "2026-11-04T06:22:07Z",
   "workflow": "implement"
 }
