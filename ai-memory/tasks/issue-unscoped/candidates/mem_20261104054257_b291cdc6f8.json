@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:2 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The canary value `run_id: alt-40831286935` has a non-numeric `alt-` prefix that conflicts with the smoke-test contract requiring a numeric run ID.\n  WHY: `tests/test_e2e_editor_smoke_canary.py:97-100` rejects a non-numeric `E2E_EXPECTED_RUN_ID`, and the canary bytes are compared against content rendered with that ID (`tests/test_e2e_editor_smoke_canary.py:117, 133-141`), so Phase 4b cannot pass. Both reviewers rated it MAJOR. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash examined and rejected this finding, because issue #8337 requires exactly this value and the alt-model path does not run that pytest.\n- tests/e2e_smoke_canary.txt:file-level | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check-run on PR head 3e9378e63fc32e51197d75f638fa1b4cf439901d fails with `custom_instructions_too_large` / \"Prompt too big after adding system message\" (run 41549900517, job 125634616239).\n  WHY: The failure comes from third-party reviewer infrastructure loading repo custom instructions and cannot be mapped to any hunk in the canary file. The reviewer rated it NIT and surfaced it only so the editor can confirm it is environmental.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary.txt:2 | severity=MAJOR | confidence=4\n  PROBLEM: The canary value `run_id: alt-40831286935` causes smoke-test verification failures.\n  WHY: Tests in `tests/test_e2e_editor_smoke_canary.py` expect a numeric `run_id` matching the execution environment, and the `alt-` prefix makes it non-numeric. The PR fulfills the issue's literal request but introduces a runtime regression in the test suite.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/e2e_smoke_canary.txt:2 | severity=MAJOR | confidence=5\n  PROBLEM: The `alt-` prefixed ID conflicts with the Phase 4b smoke-test contract, which requires a numeric run ID.\n  WHY: `tests/test_e2e_editor_smoke_canary.py:97-100` rejects a non-numeric `E2E_EXPECTED_RUN_ID`. The test then compares the canary bytes against content rendered using that expected ID (`tests/test_e2e_editor_smoke_canary.py:117, 133-141`). Phase 4b therefore cannot pass with this value.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:file-level | severity=NIT | confidence=3\n  PROBLEM: The `copilot-pull-request-reviewer` check-run on PR head 3e9378e63fc32e51197d75f638fa1b4cf439901d fails with `custom_instructions_too_large` / \"Prompt too big after adding system message\" (run 41549900517, job 125634616239).\n  WHY: The failing job is third-party reviewer infrastructure choking on repo instruction size, and no change to tests/e2e_smoke_canary.txt can fix it. It was surfaced so the editor can confirm it is environmental rather than diff-caused.\n- TASK_GAP (none emitted):\n  Requirement: Issue #8337 \u2014 \"Update its content so it is exactly these three lines: status: ok / run_id: alt-40831286935 / updated-by: ai-pipeline\" with the constraint \"Only modify tests/e2e_smoke_canary.txt.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: None \u2014 the requirement is met.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3f6bcf5e7ca779ffb5b98955e967b260c1f7092e67efc74de1ec57018d9884c8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41779736698",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41779736698",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104054257_b291cdc6f8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41779736698"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T05:42:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
