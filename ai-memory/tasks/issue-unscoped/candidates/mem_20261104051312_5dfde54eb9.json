@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:(no line; PR-head check `copilot-pull-request-reviewer` run 41544333941) | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\") before reviewing any code.\n  WHY: The repo-level AGENTS.md/CLAUDE.md instructions are too large for the bot's prompt, not the canary content. All three reviewers rated it NIT, and minimax_minimax-m3 gave the no-defect canary note a NIT as well.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/e2e_smoke_canary.txt:(PR-head check `copilot-pull-request-reviewer`, run 41544333941) | severity=NIT | confidence=5\n  PROBLEM: The check fails with \"Prompt too big after adding system message\". The cause is the size of the repo-level instructions, not the canary content.\n  WHY: The bot aborts before reviewing anything, and the failure comes from the merged base commit.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/e2e_smoke_canary.txt:full file (3 lines, 55 bytes, trailing newline present) | severity=NIT | confidence=5\n  PROBLEM: No defect. The content matches the linked issue #8338 spec byte for byte, and only this file is modified.\n  WHY: The deliverable is fully satisfied (N/A at runtime).\n- Advisory note (not a finding): the `copilot-pull-request-reviewer` check (run 41544333941, job 125616096789) failed with `custom_instructions_too_large` (HTTP 422). The cause is the combined size of AGENTS.md and CLAUDE.md, and it cannot be fixed within this PR's scope.\n- Advisory note: the pre-push gate lists 7 tests in `tests/test_implement_post_codex_recovery.py` as caused by this change. At `tests/test_implement_post_codex_recovery.py:5060` and `:5779` the canary path appears only inside string literals, so the change does not cause the failures.\n- Advisory note: the PR body uses `Closes` against issue #8338, which is a standalone canary issue and not `ai:orchestrator-tracking`, so \u00a721 is not violated.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:(no source line in the diff; PR-head check-run `copilot-pull-request-reviewer`, run 41544333941, job 125616096789) | severity=NIT | confidence=5\n  PROBLEM: The check fails with `custom_instructions_too_large` (\"Prompt too big after adding system message\", HTTP 422) before producing any review output. The error is an external bot prompt-size failure caused by repo-level custom instructions, not by the canary content.\n  WHY: The action aborts with exit code 1 during prompt assembly, before analyzing the diff, so the check cannot pass on this PR regardless of file content.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e93aa288c517f2e913cda39f900db5f37c1a832f2dfacb55cb68506cd32ec242",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "41776673036",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41776673036",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104051312_5dfde54eb9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "41776673036"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T05:13:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
