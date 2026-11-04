@@ -28816,21 +28816,24 @@ def test_needs_human_project_park_alert_claims_sends_once_and_confirms():
 		assert (Path(tmp) / "alerts.txt.store").read_text(encoding="utf-8").strip() == "40 777"
 
 
-@pytest.mark.parametrize(("env", "subcommands", "log"), [
-	({"FAKE_ALERT_CLAIMED": "false"}, ["park", "alert-claim"], None),
-	({"FAKE_SMOKE_SILENCED": "true"}, ["park"], "reason=smoke_silenced"),
-	({"FAKE_TG_UNCONFIGURED": "true"}, ["park"], "reason=telegram_unconfigured"),
-])
-def test_needs_human_project_park_alert_never_sends_without_a_won_claim(env, subcommands, log):
+def test_needs_human_project_park_alert_never_sends_without_a_won_claim():
+	# The custom runner calls each test as func(), so the cases loop here
+	# instead of using pytest.mark.parametrize.
 	if not shutil.which("jq"):
 		pytest.skip("jq is required")
-	with tempfile.TemporaryDirectory() as tmp:
-		result, calls, alerts = _run_needs_human_park(Path(tmp), UNBLOCK_JUDGE_ENABLED="false", **env)
-		assert result.returncode == 0, result.stderr
-		assert [line.split()[1] for line in calls.read_text(encoding="utf-8").splitlines()] == subcommands
-		assert not alerts.exists()
-		if log:
-			assert f"NEEDS_HUMAN_ALERT item=40 parking=2026-10-08T00:00:00Z outcome=skip {log}" in result.stdout
+	cases = [
+		({"FAKE_ALERT_CLAIMED": "false"}, ["park", "alert-claim"], None),
+		({"FAKE_SMOKE_SILENCED": "true"}, ["park"], "reason=smoke_silenced"),
+		({"FAKE_TG_UNCONFIGURED": "true"}, ["park"], "reason=telegram_unconfigured"),
+	]
+	for env, subcommands, log in cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			result, calls, alerts = _run_needs_human_park(Path(tmp), UNBLOCK_JUDGE_ENABLED="false", **env)
+			assert result.returncode == 0, result.stderr
+			assert [line.split()[1] for line in calls.read_text(encoding="utf-8").splitlines()] == subcommands, env
+			assert not alerts.exists(), env
+			if log:
+				assert f"NEEDS_HUMAN_ALERT item=40 parking=2026-10-08T00:00:00Z outcome=skip {log}" in result.stdout
 
 
 def test_needs_human_digest_park_never_triggers_the_staged_support_latch_release():

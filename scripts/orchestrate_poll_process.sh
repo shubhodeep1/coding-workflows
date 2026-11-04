@@ -22287,8 +22287,11 @@ needs_human_park_project() {
     echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=skip reason=smoke_silenced"
     return 0
   fi
-  if ! declare -F tg_alert_configured >/dev/null 2>&1 || ! declare -F tg_send_msg >/dev/null 2>&1 \
-    || ! tg_alert_configured CRITICAL; then
+  if ! declare -F tg_alert_configured >/dev/null 2>&1 || ! declare -F tg_send_msg >/dev/null 2>&1; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=skip reason=helper_missing"
+    return 0
+  fi
+  if ! tg_alert_configured CRITICAL; then
     echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=skip reason=telegram_unconfigured"
     return 0
   fi

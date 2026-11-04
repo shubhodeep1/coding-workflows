@@ -210,8 +210,11 @@ unblock_needs_human_alert()
 		# shellcheck source=/dev/null
 		source "${SUPPORT_DIR}/scripts/tg_helpers.sh" 2>/dev/null || true
 	fi
-	if ! declare -F tg_alert_configured >/dev/null 2>&1 || ! declare -F tg_send_msg >/dev/null 2>&1 \
-		|| ! tg_alert_configured CRITICAL; then
+	if ! declare -F tg_alert_configured >/dev/null 2>&1 || ! declare -F tg_send_msg >/dev/null 2>&1; then
+		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=skip reason=helper_missing" >&2
+		return 0
+	fi
+	if ! tg_alert_configured CRITICAL; then
 		echo "NEEDS_HUMAN_ALERT item=${item} parking=${parking} outcome=skip reason=telegram_unconfigured" >&2
 		return 0
 	fi
