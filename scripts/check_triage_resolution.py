@@ -783,10 +783,10 @@ def _forward_window(lines: list[str], start: int) -> str:
 
 
 def _step_error_window(lines: list[str], index: int) -> str:
-	"""Lines ending at the step error plus up to STEP_ERROR_AFTER_LINES, trimmed
+	"""MAX_EXCERPT_LINES lines ending at the step error plus up to STEP_ERROR_AFTER_LINES, trimmed
 	from the front to MAX_EXCERPT_BYTES; the error line itself always survives."""
 	after = min(STEP_ERROR_AFTER_LINES, len(lines) - index - 1)
-	before = lines[max(0, index + 1 + after - MAX_EXCERPT_LINES):index]
+	before = lines[max(0, index + 1 - MAX_EXCERPT_LINES):index]
 	error_line = lines[index]
 	trailing = lines[index + 1:index + 1 + after]
 	while trailing and len("\n".join([error_line, *trailing]).encode("utf-8")) > MAX_EXCERPT_BYTES:

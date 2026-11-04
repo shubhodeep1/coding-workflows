@@ -636,6 +636,16 @@ def test_credentials_are_redacted_before_the_line_cut():
 	result = mod._select_log_tail_window(data, log_tail_bytes=8000, partial_start=False)
 	assert "ghp_[redacted]" in result and "Zq9" not in result
 
+
+def test_encoded_access_token_is_redacted():
+	import base64 as b64
+	encoded = b64.b64encode(b"x-access-token:" + b"Q7" * 20).decode()
+	data = ("config " + encoded + "\n" + STEP_ERROR + "\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=8000, partial_start=False)
+	assert encoded not in result and "config [redacted]" in result
+	# Plain hex runs (SHAs, initcode) stay readable.
+	assert mod._redact_log_text("0x" + "ab" * 40) == "0x" + "ab" * 40
+
 if __name__ == "__main__":
 	import pytest
 

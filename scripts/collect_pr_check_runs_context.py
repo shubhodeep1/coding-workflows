@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import http.client
 import io
@@ -362,7 +363,8 @@ def _utf8_len(text: str) -> int:
 # simple patterns in workflow_failure_heal._SECRET_PATTERNS: this helper is
 # staged on its own and cannot import that module.
 _LOG_TAIL_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-	(re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@"), r"\1[redacted]@"),
+	# Scheme bounded to 32 chars (unlike heal) so long hex runs cannot backtrack quadratically.
+	(re.compile(r"([A-Za-z][A-Za-z0-9+.-]{0,31}://)[^/@\s]+@"), r"\1[redacted]@"),
 	(re.compile(r"(authorization\s*:\s*)(?:(?:bearer|basic|token)\s+)?\S+", re.IGNORECASE), r"\1[redacted]"),
 	(re.compile(r"(extraheader\s*[=:]\s*)\S+(?:\s+\S+)?", re.IGNORECASE), r"\1[redacted]"),
 	(re.compile(r"(basic\s+)[A-Za-z0-9+/=_-]{8,}", re.IGNORECASE), r"\1[redacted]"),
@@ -372,10 +374,24 @@ _LOG_TAIL_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 
+def _redact_log_encoded_credential(match: re.Match[str]) -> str:
+	"""Local copy of workflow_failure_heal._redact_encoded_credential."""
+	value = match.group()
+	for offset in range(4):
+		try:
+			decoded = base64.b64decode(value[offset:] + "=" * (-len(value[offset:]) % 4), altchars=b"-_", validate=True)
+		except (ValueError, base64.binascii.Error):
+			continue
+		if b"x-access-token:" in decoded.lower() or (all(0x20 <= byte < 0x7F for byte in decoded) and re.search(rb"[^:\s]:\S{36,}", decoded)):
+			return "[redacted]"
+	return value
+
+
 def _redact_log_text(text: str) -> str:
 	for pattern, replacement in _LOG_TAIL_SECRET_PATTERNS:
 		text = pattern.sub(replacement, text)
-	return text
+	# Encoded credentials need not follow a Basic header (heal.redact_secrets).
+	return re.sub(r"[A-Za-z0-9+/_-]{24,}={0,2}", _redact_log_encoded_credential, text)
 
 
 def _select_log_tail_window(out: bytes, *, log_tail_bytes: int, partial_start: bool) -> str:

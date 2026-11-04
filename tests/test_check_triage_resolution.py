@@ -1081,3 +1081,12 @@ def test_test_failure_line_survives_long_lead_lines():
 	assert anchor == "test_failure"
 	assert "FAIL  test/x.test.ts" in excerpt
 	assert len(excerpt.encode("utf-8")) <= mod.MAX_EXCERPT_BYTES
+
+
+def test_step_error_excerpt_keeps_max_excerpt_lines_before_the_trailing_lines():
+	lines = [f"l{n}" for n in range(300)] + [STEP_ERROR_8799] + [f"t{n}" for n in range(10)]
+	excerpt, anchor = mod._excerpt_with_anchor("\n".join(lines))
+	assert anchor == "step_error"
+	out = excerpt.split("\n")
+	assert out.index(STEP_ERROR_8799) == mod.MAX_EXCERPT_LINES - 1
+	assert out[-1] == f"t{mod.STEP_ERROR_AFTER_LINES - 1}"
