@@ -1802,6 +1802,11 @@ def test_heal_test_only_weakening_check_allows_safe_edits() -> None:
 		_TO_BASE_TEST.replace("assert 1 == 1", "assert 1 == 1, 'clearer message'")):
 		record, code = _to_weaken({path: _TO_BASE_TEST}, {path: edited}, [path])
 		assert (record["decision"], code) == ("allow", 0), record
+	# Expecting or catching SystemExit checks an exit; it does not cause one.
+	raises = _TO_BASE_TEST + ("\ndef test_e():\n\twith pytest.raises(SystemExit):\n\t\tassert run()\n"
+		"\ndef test_f():\n\ttry:\n\t\tassert run()\n\texcept SystemExit as e:\n\t\tassert isinstance(e, SystemExit)\n")
+	record, code = _to_weaken({path: _TO_BASE_TEST}, {path: raises}, [path])
+	assert (record["decision"], code) == ("allow", 0), record
 	# A new file and an untouched changelog fragment pass too.
 	record, code = _to_weaken({}, {path: "def test_new():\n\tassert True\n", "changelog.d/42-x.md": "x\n"},
 		[path, "changelog.d/42-x.md"])
@@ -1838,10 +1843,18 @@ def test_heal_test_only_weakening_check_refuses() -> None:
 		"pytest_plugins = ['evil']\n", "pytest.exit('done', returncode=0)\n",
 		"import os\nos._exit(0)\n", "import sys\nsys.exit(0)\n", "raise SystemExit(0)\n", "quit(0)\n",
 		"from _pytest.outcomes import skip\nskip('x', allow_module_level=True)\n",
+		"__import__('os')._exit(0)\n", "import importlib\nimportlib.import_module('os')._exit(0)\n",
+		"import os\ngetattr(os, '_exit')(0)\n", "exec('import os; os._exit(0)')\n",
+		"from os import *\n_exit(0)\n", "from _pytest.outcomes import *\nskip('x', allow_module_level=True)\n",
+		"import os\nos.abort()\n", "import os\nos.execv('/bin/true', ['true'])\n",
 		"@pytest.hookimpl(hookwrapper=True, specname='pytest_runtest_makereport')\ndef rewrite(item, call):\n\tyield\n"):
 		record, code = _to_weaken({"tests/conftest.py": "import pytest\n"},
 			{"tests/conftest.py": "import pytest\n" + added}, ["tests/conftest.py"])
 		assert (record["reason"], code) == ("skip_added", 30), (added, record)
+	# Swapping an existing skip for a process exit keeps the total but adds a new kind: refused.
+	record, code = _to_weaken({path: _TO_BASE_TEST},
+		{path: "import sys\n" + _TO_BASE_TEST.replace("@pytest.mark.skip(reason='old')\n", "") + "\nsys.exit(0)\n"}, [path])
+	assert (record["reason"], code) == ("skip_added", 30), record
 	# A new or changed pytest config file under tests/ refuses; an unchanged one passes.
 	for name in ("tests/pytest.ini", "tests/.pytest.ini", "tests/tox.ini", "tests/setup.cfg", "tests/pytest.toml",
 		"tests/.pytest.toml"):

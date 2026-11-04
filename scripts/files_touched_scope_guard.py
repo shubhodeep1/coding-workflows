@@ -1407,9 +1407,16 @@ _HEAL_SKIP_NAMES = frozenset({"pytest.skip", "pytest.mark.skip", "pytest.mark.sk
 	"pytest.importorskip", "pytest.exit", "pytest.hookimpl", "self.skipTest", "unittest.SkipTest", "unittest.expectedFailure",
 	"unittest.case.SkipTest", "unittest.case.expectedFailure",
 	# Process exits end pytest with status 0 before any test runs.
-	"sys.exit", "os._exit", "exit", "quit", "SystemExit", "builtins.exit", "builtins.quit"})
+	"sys.exit", "os._exit", "exit", "quit", "SystemExit", "builtins.exit", "builtins.quit", "os.abort", "os.kill",
+	# Dynamic dispatch can reach any of the above without naming it.
+	"exec", "eval", "compile", "__import__", "builtins.__import__", "importlib.import_module", "importlib.__import__"})
 # Internal pytest spellings of skip/xfail/exit, reached through import aliases.
-_HEAL_SKIP_PREFIXES = ("unittest.skip", "unittest.case.skip", "_pytest.outcomes", "_pytest.skipping", "_pytest.mark")
+_HEAL_SKIP_PREFIXES = ("unittest.skip", "unittest.case.skip", "_pytest.outcomes", "_pytest.skipping", "_pytest.mark",
+	"os.exec", "os.spawn")
+# An attribute of a computed object (`__import__("os")._exit`) is counted by name.
+_HEAL_DYNAMIC_ATTRS = frozenset({"_exit", "exit", "abort", "kill", "skip", "xfail", "skipTest", "importorskip"})
+# Star imports from these modules hide which bare names resolve to a control.
+_HEAL_STAR_MODULE_ROOTS = frozenset({"os", "sys", "builtins", "pytest", "_pytest", "unittest", "importlib"})
 _HEAL_COLLECTION_NAMES = frozenset({"__test__", "collect_ignore", "collect_ignore_glob", "pytest_plugins"})
 _HEAL_COLLECTION_HOOKS = frozenset({"pytest_collection_modifyitems", "pytest_ignore_collect"})
 _HEAL_PYTEST_CONFIG_NAMES = frozenset({"pytest.toml", ".pytest.toml", "pytest.ini", ".pytest.ini", "tox.ini", "setup.cfg",
@@ -1427,9 +1434,19 @@ def _heal_dotted(node: ast.AST, aliases: dict[str, str]) -> str:
 	return ".".join(reversed(parts))
 
 
-def _heal_test_only_counts(tree: ast.Module, count_tests: bool) -> dict[str, int]:
-	"""Tests, asserts and skip/collection-control uses in one parsed test file."""
+def _heal_test_only_counts(tree: ast.Module, count_tests: bool) -> dict:
+	"""Tests, asserts and skip/exit/collection-control uses in one parsed test file.
+
+	``controls`` counts each kind of control separately, so removing one
+	(an old skip) cannot pay for adding another (a process exit); ``skips``
+	is their total.
+	"""
 	aliases: dict[str, str] = {}
+	controls: dict[str, int] = {}
+
+	def control(kind: str) -> None:
+		controls[kind] = controls.get(kind, 0) + 1
+
 	for node in ast.walk(tree):
 		if isinstance(node, ast.Import):
 			for alias in node.names:
@@ -1437,8 +1454,23 @@ def _heal_test_only_counts(tree: ast.Module, count_tests: bool) -> dict[str, int
 					aliases[alias.asname] = alias.name
 		elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
 			for alias in node.names:
+				if alias.name == "*" and node.module.split(".", 1)[0] in _HEAL_STAR_MODULE_ROOTS:
+					control(f"star:{node.module}")
 				aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
-	functions = classes = asserts = skips = 0
+	# `SystemExit` caught or expected (`except SystemExit`, `pytest.raises(SystemExit)`,
+	# `isinstance(e, SystemExit)`) checks an exit; it does not cause one.
+	exempt: set[int] = set()
+	for node in ast.walk(tree):
+		checked: list[ast.AST] = []
+		if isinstance(node, ast.ExceptHandler) and node.type is not None:
+			checked = [node.type]
+		elif isinstance(node, ast.Call) and node.args and _heal_dotted(node.func, aliases) in {"pytest.raises",
+			"isinstance", "issubclass", "self.assertRaises", "self.assertRaisesRegex"}:
+			checked = node.args[1:2] if _heal_dotted(node.func, aliases) in {"isinstance", "issubclass"} else node.args[:1]
+		for item in checked:
+			exempt.update(id(leaf) for leaf in ast.walk(item)
+				if isinstance(leaf, (ast.Name, ast.Attribute)) and _heal_dotted(leaf, aliases) == "SystemExit")
+	functions = classes = asserts = 0
 	if count_tests:
 		for node in tree.body:
 			if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
@@ -1452,22 +1484,32 @@ def _heal_test_only_counts(tree: ast.Module, count_tests: bool) -> dict[str, int
 		elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
 			and isinstance(node.func.value, ast.Name) and node.func.value.id == "self" and node.func.attr.startswith("assert"):
 			asserts += 1
-		if isinstance(node, (ast.Attribute, ast.Name)):
+		if isinstance(node, (ast.Attribute, ast.Name)) and id(node) not in exempt:
 			dotted = _heal_dotted(node, aliases)
 			if dotted in _HEAL_SKIP_NAMES or dotted.startswith(_HEAL_SKIP_PREFIXES):
-				skips += 1
+				control(dotted)
+			elif not dotted and isinstance(node, ast.Attribute) and node.attr in _HEAL_DYNAMIC_ATTRS:
+				control(f"dynamic:{node.attr}")
+		if isinstance(node, ast.Call) and _heal_dotted(node.func, aliases) in {"getattr", "builtins.getattr"} and len(node.args) >= 2:
+			target = _heal_dotted(node.args[0], aliases).split(".", 1)[0]
+			name = node.args[1]
+			if target in _HEAL_STAR_MODULE_ROOTS or not (isinstance(name, ast.Constant) and isinstance(name.value, str)) \
+				or name.value in _HEAL_DYNAMIC_ATTRS:
+				control("getattr")
 		if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
 			targets = node.targets if isinstance(node, ast.Assign) else [node.target]
 			for target in targets:
 				for leaf in ast.walk(target):
-					if (isinstance(leaf, ast.Name) and leaf.id in _HEAL_COLLECTION_NAMES) \
-						or (isinstance(leaf, ast.Attribute) and leaf.attr in _HEAL_COLLECTION_NAMES):
-						skips += 1
+					if isinstance(leaf, ast.Name) and leaf.id in _HEAL_COLLECTION_NAMES:
+						control(f"assign:{leaf.id}")
+					elif isinstance(leaf, ast.Attribute) and leaf.attr in _HEAL_COLLECTION_NAMES:
+						control(f"assign:{leaf.attr}")
 		# Any pytest_* hook (e.g. pytest_runtest_makereport rewriting outcomes) is a collection/run control.
 		if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
 			and (node.name in _HEAL_COLLECTION_HOOKS or node.name.startswith("pytest_")):
-			skips += 1
-	return {"test_functions": functions, "test_methods": classes, "asserts": asserts, "skips": skips}
+			control(f"hook:{node.name}")
+	return {"test_functions": functions, "test_methods": classes, "asserts": asserts,
+		"skips": sum(controls.values()), "controls": controls}
 
 
 def run_heal_test_only_weakening_check(lock_file: str, base_dir: str, edited_dir: str) -> tuple[dict, int]:
@@ -1498,7 +1540,7 @@ def run_heal_test_only_weakening_check(lock_file: str, base_dir: str, edited_dir
 			for key in ("test_functions", "test_methods", "asserts"):
 				if after[key] < before[key]:
 					raise _HealWeakeningRefused(f"{key}_dropped", path)
-			if after["skips"] > before["skips"]:
+			if any(count > before["controls"].get(kind, 0) for kind, count in after["controls"].items()):
 				raise _HealWeakeningRefused("skip_added", path)
 	except _HealWeakeningRefused as refused:
 		return {"decision": "refuse", "reason": refused.reason, "path": refused.path}, EXIT_AUTOMATION_UNGRANTED
