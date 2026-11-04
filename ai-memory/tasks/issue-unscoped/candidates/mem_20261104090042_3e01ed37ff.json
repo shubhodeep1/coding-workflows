@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_gh_retry_fallback_contract.py:559 | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `test_sweep_snapshot_parse_failure_marks_incomplete_behaviour` returns silently when jq or bash is missing, so the test passes without running any assertion.\n  WHY: A CI image without jq would hide a regression in the parse-failure path. Sonnet rated this NIT (confidence 1); minimax and glm raised it only as a hardening suggestion (risk score 1). Suggested fix: `pytest.skip(...)` or an assertion that the tools are present.\n- external check run copilot-pull-request-reviewer (job 126473070588); pre-push gate entries tests/test_review_autofix_provider_outage_contract.py::test_label_contract_and_reporter_skip and tests/test_workflow_checkout_integration_ref_audit.py | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot reviewer check failed with 422 custom_instructions_too_large, and two pre-push gate entries failed. None of these map to any hunk in the diff.\n  WHY: They are environmental or inherited failures that edits to the changed files cannot fix. Severity is NIT in both sources; confidence is 2 (sonnet) and 3 (glm), and the highest is kept. minimax noted the same signals as informational only.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_gh_retry_fallback_contract.py:(`test_sweep_snapshot_parse_failure_marks_incomplete_behaviour`, early `return` when `shutil.which(\"jq\")` or `shutil.which(\"bash\")` is None) | severity=NIT | confidence=1\n  PROBLEM: If jq or bash is missing, the behavioural test passes without running any assertion.\n  WHY: A CI image without jq would hide a regression in the behavioural check. The contract test would still run. This is a hardening point only.\n- external check run copilot-pull-request-reviewer, job 126473070588; pre-push gate entries tests/test_review_autofix_provider_outage_contract.py::test_label_contract_and_reporter_skip and tests/test_workflow_checkout_integration_ref_audit.py | severity=NIT | confidence=2\n  PROBLEM: None of these external signals can be mapped to a hunk in this diff.\n  WHY: Editing the sweep step, the test or the changelog fragment cannot fix them. The Copilot failure is the bot's own prompt budget. The gate entries read files this PR does not touch.\n- HARDENING_SUGGESTIONS: tests/test_workflow_gh_retry_fallback_contract.py, `test_sweep_snapshot_parse_failure_marks_incomplete_behaviour`. Use `pytest.skip(...)` or assert the tools are present (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_gh_retry_fallback_contract.py:559 | (hardening suggestion only)\n  PROBLEM: `if shutil.which(\"jq\") is None or shutil.which(\"bash\") is None: return` makes the behavioural test pass silently when jq or bash is absent.\n  WHY: On a CI image without jq, a future regression in the parse-failure path would no longer be caught. Suggested fix: replace `return` with `pytest.skip(...)` and add `import pytest` (about 2 lines). HARDENING_RISK_SCORE: 1\n- (informational, not a finding) The two pre-push gate entries and the failed copilot-pull-request-reviewer check (422 custom_instructions_too_large) cannot be mapped to any hunk in the changed files and are pre-existing or environmental.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- external check run (not in the diff): copilot-pull-request-reviewer, run 41799969903, job 126473070588 | severity=NIT | confidence=3\n  PROBLEM: The only failed check run is the Copilot reviewer bot failing with 422 custom_instructions_too_large while loading AGENTS.md/CLAUDE.md. It does not map to any hunk in the three changed files, and the pre-push gate entries are environmental or inherited.\n  WHY: The Copilot job fails on any PR in this repository with these custom instructions, and no edit in this diff can fix or worsen it. It is surfaced so the editor can confirm rather than fix.\n- tests/test_workflow_gh_retry_fallback_contract.py:559 | (hardening suggestion only)\n  PROBLEM: The behavioural test returns silently when jq or bash is missing, so a CI image without jq would skip the runtime check while the suite stays green.\n  WHY: Suggested fix: replace the silent `return` with a `pytest.skip`-style call or `assert shutil.which(\"jq\")` (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "40ee8dcb20960d19e0189926be591c58b14984989196b58a376b13b65b68558a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8816,
+    "run_id": "41799951254",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41799951254",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104090042_3e01ed37ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8816,
+    "run_id": "41799951254"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T09:00:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
