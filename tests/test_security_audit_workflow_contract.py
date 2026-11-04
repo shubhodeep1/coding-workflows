@@ -4919,8 +4919,30 @@ def test_security_audit_consolidated_followup_depends_on_highest_same_file_prede
 	bodies = final_state.get("issue_create_bodies", [])
 	assert len(bodies) == 1
 	assert bodies[0].count("Depends on:") == 1
+	# The open file_b.py predecessor wins over the higher-numbered closed one,
+	# so a merged #9105 cannot release the fix while #9100 is still open.
+	assert "\n- Depends on: #9100\n" in bodies[0]
+	assert security_dependency.security_dependency_number({"body": bodies[0], "labels": ["ai:security"], "number": 9200}) == 9100
+	comment = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "- New follow-up issues planned this run: 1" in comment
+
+
+def test_security_audit_consolidated_followup_falls_back_to_highest_closed_predecessor() -> None:
+	findings = [
+		_finding_payload("old-b", file_path="file_b.py"),
+		_finding_payload("old-c", file_path="file_c.py"),
+		*_p5b_findings(),
+	]
+	existing = [
+		{"number": 9100, "state": "closed", "body": "<!-- ai:security-finding:old-b -->\nRefs #9000\n"},
+		{"number": 9105, "state": "closed", "body": "<!-- ai:security-finding:old-c -->\nRefs #9000\n"},
+	]
+	proc, final_state, _ = _run_p5b_audit(findings, api_issues=existing)
+	assert proc.returncode == 0, proc.stderr
+	bodies = final_state.get("issue_create_bodies", [])
+	assert len(bodies) == 1
+	assert bodies[0].count("Depends on:") == 1
 	assert "\n- Depends on: #9105\n" in bodies[0]
-	assert security_dependency.security_dependency_number({"body": bodies[0], "labels": ["ai:security"], "number": 9200}) == 9105
 
 
 @pytest.mark.parametrize("env", [

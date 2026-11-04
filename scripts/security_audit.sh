@@ -3466,6 +3466,9 @@ def leading_marker_ids(body: str) -> list[str]:
 
 existing_finding_ids: set[str] = set()
 existing_finding_numbers: dict[str, int] = {}
+# Issue state per finding ID, so the consolidated follow-up can depend on an
+# open same-file predecessor (stuck-states P5b).
+existing_finding_open: dict[str, bool] = {}
 now_utc = datetime.now(timezone.utc)
 
 for issue in existing_followup_issues:
@@ -3481,6 +3484,7 @@ for issue in existing_followup_issues:
 			existing_finding_ids.add(finding_id)
 			if isinstance(issue.get("number"), int) and issue["number"] > 0:
 				existing_finding_numbers[finding_id] = issue["number"]
+				existing_finding_open[finding_id] = str(issue.get("state") or "").lower() == "open"
 
 # Every surviving finding without a marked follow-up gets its own issue; there
 # is no per-run or per-week cap.
@@ -3545,7 +3549,7 @@ comment_lines = [
 	f"- Suppressed invalid findings: {int(summary.get('suppressed_invalid', 0))}",
 	f"- Suppressed out-of-scope findings: {int(summary.get('suppressed_out_of_scope', 0))}",
 	*([f"- Suppressed upstream-managed findings (reported below, not filed; fix them in coding-workflows): {int(summary.get('suppressed_upstream_managed', 0))}"] if summary.get("suppressed_upstream_managed") else []),
-	f"- New follow-up issues planned this run: {len(planned_followups)}",
+	f"- New follow-up issues planned this run: {(1 if planned_followups else 0) if consolidate_active else len(planned_followups)}",
 	f"- Findings skipped because a marked follow-up issue already exists: {skipped_existing_count}",
 	*([f"- Follow-up mode: consolidated ({len(planned_followups)} findings in one issue)"] if consolidate_active else []),
 ]
@@ -3599,7 +3603,10 @@ for idx, finding in enumerate(findings):
 	file_key = hashlib.sha256(str(finding["file"]).encode("utf-8")).hexdigest()
 	finding_id = str(finding["finding_id"])
 	if finding_id in existing_finding_ids:
-		index_lines.append(f"-\t-\t{file_key}\t{existing_finding_numbers.get(finding_id, 0)}\n")
+		# The title column of an existing row carries `open` for an open issue
+		# (read only by the consolidated `Depends on` choice), else `-`.
+		existing_state = "open" if existing_finding_open.get(finding_id) else "-"
+		index_lines.append(f"-\t{existing_state}\t{file_key}\t{existing_finding_numbers.get(finding_id, 0)}\n")
 		continue
 	if consolidate_active:
 		# Filed below as one consolidated issue (stuck-states P5b).
@@ -3747,6 +3754,9 @@ gh_retry gh issue comment "${TRACKER_NUMBER}" \
 	--body-file "${TRACKER_COMMENT_FILE}"
 
 declare -A LAST_FOLLOWUP_BY_FILE=()
+# Highest open follow-up per file (existing open issues and issues filed in
+# this run); only the consolidated `Depends on` choice reads it.
+declare -A LAST_OPEN_FOLLOWUP_BY_FILE=()
 while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLLOWUP_EXISTING_NUMBER; do
 	if [ "${FOLLOWUP_EXISTING_NUMBER}" != "0" ]; then
 		[[ "${FOLLOWUP_EXISTING_NUMBER}" =~ ^[1-9][0-9]*$ ]] || {
@@ -3754,6 +3764,11 @@ while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLL
 			exit 1
 		}
 		LAST_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_EXISTING_NUMBER}"
+		if [ "${FOLLOWUP_TITLE}" = "open" ] \
+				&& { [ -z "${LAST_OPEN_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]:-}" ] \
+					|| [ "${FOLLOWUP_EXISTING_NUMBER}" -gt "${LAST_OPEN_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]}" ]; }; then
+			LAST_OPEN_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_EXISTING_NUMBER}"
+		fi
 		continue
 	fi
 	[ -n "${FOLLOWUP_BODY_PATH}" ] || continue
@@ -3762,16 +3777,26 @@ while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLL
 		# Consolidated follow-up (stuck-states P5b): it touches several files but
 		# may carry only one `Depends on` line (scripts/security_dependency.py
 		# holds an issue with repeated lines), so depend on the highest-numbered
-		# same-file predecessor across all of them.
+		# same-file predecessor across all of them that is still open. A closed
+		# predecessor would release the hold (once ai:merged) while another
+		# file's open predecessor is still being fixed, so a closed one is used
+		# only when none is open.
 		IFS='+' read -r -a FOLLOWUP_FILE_KEYS <<< "${FOLLOWUP_FILE_KEY#multi:}"
 		FOLLOWUP_DEPENDS_ON=""
+		FOLLOWUP_DEPENDS_ON_ANY=""
 		for FOLLOWUP_MULTI_KEY in "${FOLLOWUP_FILE_KEYS[@]}"; do
-			FOLLOWUP_MULTI_PREDECESSOR="${LAST_FOLLOWUP_BY_FILE[${FOLLOWUP_MULTI_KEY}]:-}"
+			FOLLOWUP_MULTI_PREDECESSOR="${LAST_OPEN_FOLLOWUP_BY_FILE[${FOLLOWUP_MULTI_KEY}]:-}"
 			if [[ "${FOLLOWUP_MULTI_PREDECESSOR}" =~ ^[1-9][0-9]*$ ]] \
 					&& { [ -z "${FOLLOWUP_DEPENDS_ON}" ] || [ "${FOLLOWUP_MULTI_PREDECESSOR}" -gt "${FOLLOWUP_DEPENDS_ON}" ]; }; then
 				FOLLOWUP_DEPENDS_ON="${FOLLOWUP_MULTI_PREDECESSOR}"
 			fi
+			FOLLOWUP_MULTI_PREDECESSOR="${LAST_FOLLOWUP_BY_FILE[${FOLLOWUP_MULTI_KEY}]:-}"
+			if [[ "${FOLLOWUP_MULTI_PREDECESSOR}" =~ ^[1-9][0-9]*$ ]] \
+					&& { [ -z "${FOLLOWUP_DEPENDS_ON_ANY}" ] || [ "${FOLLOWUP_MULTI_PREDECESSOR}" -gt "${FOLLOWUP_DEPENDS_ON_ANY}" ]; }; then
+				FOLLOWUP_DEPENDS_ON_ANY="${FOLLOWUP_MULTI_PREDECESSOR}"
+			fi
 		done
+		FOLLOWUP_DEPENDS_ON="${FOLLOWUP_DEPENDS_ON:-${FOLLOWUP_DEPENDS_ON_ANY}}"
 		if [ -n "${FOLLOWUP_DEPENDS_ON}" ]; then
 			printf '\n- Depends on: #%s\n' "${FOLLOWUP_DEPENDS_ON}" >> "${FOLLOWUP_BODY_PATH}"
 		fi
@@ -3799,6 +3824,7 @@ while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLL
 	}
 	for FOLLOWUP_MULTI_KEY in "${FOLLOWUP_FILE_KEYS[@]}"; do
 		LAST_FOLLOWUP_BY_FILE["${FOLLOWUP_MULTI_KEY}"]="${FOLLOWUP_NUMBER}"
+		LAST_OPEN_FOLLOWUP_BY_FILE["${FOLLOWUP_MULTI_KEY}"]="${FOLLOWUP_NUMBER}"
 	done
 done < "${FOLLOWUP_INDEX_FILE}"
 
