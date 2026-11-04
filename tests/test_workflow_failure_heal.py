@@ -3352,7 +3352,8 @@ def test_autofix_report_counts_interleaved_post_editor_failures() -> None:
 
 
 def test_autofix_report_changes_lost_without_retry_still_reports() -> None:
-	# The retry-unavailable path posts a failure comment and needs a person.
+	# The retry-unavailable paths need a person: a PR failure comment when push
+	# is allowed, otherwise (redispatched unset) only a Telegram WARNING.
 	for redispatched in ("skipped_budget_unavailable_or_exhausted", "false", None):
 		with tempfile.TemporaryDirectory(prefix="heal-autofix-changes-lost-") as tmp_name:
 			tmp = Path(tmp_name)
