@@ -44,7 +44,10 @@ def _extract_staleness_function() -> str:
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	start = script.index(STALENESS_SIGNATURE)
 	end = script.index("\n}\n", start) + 3
-	return script[start:end]
+	body = script[start:end]
+	# A brace-only inner line would end the slice early; fail loudly instead.
+	assert "INTEGRATION_STALE_ALERT_SENT" in body and "tg_notify " in body, body
+	return body
 
 
 def _run_staleness(date_script: str, alert_hours: str) -> dict:
