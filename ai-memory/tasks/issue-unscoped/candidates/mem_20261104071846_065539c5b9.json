@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md / CLAUDE.md:Entire file | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `copilot-pull-request-reviewer` check (run 41544551704) fails with `custom_instructions_too_large` because agents.md and CLAUDE.md are loaded as custom instructions.\n  WHY: The source labelled it SEVERITY: NIT (mapped to low) and called it an infrastructure/configuration issue, not a defect in the PR code.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md / CLAUDE.md:Entire file | severity=low | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check (run 41544551704) fails with `custom_instructions_too_large` (\"Prompt too big after adding system message\") because agents.md and CLAUDE.md are loaded as custom instructions.\n  WHY: The reviewer tool fails to initialize, preventing automated reviews. This is an infrastructure/configuration issue and not a defect in the submitted PR code.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (satisfied, no gap reported):\n  Requirement: \"Update `tests/e2e_smoke_canary.txt` so it is exactly these three lines: status: ok / run_id: 40608957733 / updated-by: ai-pipeline, with trailing newline. Only modify this file.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: none \u2014 the PR diff (the only hunk, in tests/e2e_smoke_canary.txt) replaces the old `decompose-run: 41445772297` line with exactly `run_id: 40608957733` and `updated-by: ai-pipeline`; the working-tree file at review time contains exactly the three required lines with a trailing newline (verified by read). No other file is touched, satisfying the sole-file constraint.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7397abe04c671f417f9f16d6726ee210a0bcb5542de1e93dc95b1e1a1be0d541",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41786595877",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41786595877",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104071846_065539c5b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41786595877"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-04T07:18:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
