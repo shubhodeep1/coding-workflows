@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update the smoke canary B marker\n\nPlanning ref: `orchestrator/project-8783` at `1bf09113182d30722de27cf62619001aa7e7c678`. \"Integration branch mismatch\" is false.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue asks for one line to change in one existing data file. No helpers, workflows or scheduler wiring are involved, so the existing file is the only thing to reuse. Widening or narrowing the scope would go against the issue's \"touch ONLY\" rule.\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\n- None. This is a data-only edit: replace line 2, `decompose-run: 41445772297`, with `decompose-run: 41746468580`. Line 1 stays `status: ok`, and the file ends with one trailing newline.\n\n## Data structures affected\n- None.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Do not edit the advisory test file\n- Chosen: Leave `tests/test_review_conflict_resolve_smoke_deterministic.py` unchanged.\n- Alternatives considered: Update that test because the decomposition lists it under \"Expected files\".\n- Why: The issue says to touch only the canary file. The only match for `canary_b` in that test is a comment at line 80, and it does not assert the marker value, so the test does not depend on the change.\n\n## Security considerations\n- No trust boundaries, endpoints or external inputs are touched. The file is static test data with no secrets in it.\n- \u00a721: the PR body may use a closing keyword for this sub-issue. It must not use one for tracking issue #8783; use `Refs #8783` for that.\n\n## Risks and edge cases\n- Conflict: the advisory \"Expected files\" list includes `tests/test_review_conflict_resolve_smoke_deterministic.py`, but the issue says to touch only the canary file. The issue's instruction wins (see D1).\n- The file needs exactly two lines, a single trailing newline and no CRLF line endings.\n\n## Testing considerations\n- `cat -A tests/e2e_smoke_canary_b.txt` should print `status: ok$` and `decompose-run: 41746468580$`.\n- `git diff --stat` should list only `tests/e2e_smoke_canary_b.txt`.\n\n## Pre-execution self-check\n- The plan meets every acceptance criterion and changes one file only.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "cee59eea1f71b675b99f597ed42dfa9a0d3a785829b5f7d5c9d25151203003b4",
+  "lineage": {
+    "issue_number": 8785,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41747599401",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41747599401",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8785"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261104003713_db684077a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8785,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41747599401"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8785",
+  "timestamps": {
+    "created_at": "2026-11-04T00:37:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
