@@ -169,6 +169,15 @@ def test_item_cap_warning_truncates_and_strips_the_bad_value(_no_rounds_env: pyt
 	assert "\x1b" not in err and "'x[31m" + "y" * 26 + "'" in err
 
 
+def test_item_cap_variable_with_too_many_digits_is_clamped(_no_rounds_env: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	# Python 3.11+ int() raises ValueError past 4300 digits; decide() must still run.
+	_no_rounds_env.setenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, "9" * 5000)
+	assert ledger.decide(7, "blocked", FP, [], None, NOW)["max_rounds_per_item"] == ledger.MAX_ROUNDS_PER_ITEM_CEILING
+	assert "out of range 1-5; using 5" in capsys.readouterr().err
+	assert ledger.resolve_max_rounds_per_item("0004") == 4
+	assert ledger.resolve_max_rounds_per_item("0" * 5000) == ledger.MAX_ROUNDS_PER_ITEM_FLOOR
+
+
 def test_explicit_item_cap_argument_wins_over_the_variable(_no_rounds_env: pytest.MonkeyPatch) -> None:
 	_no_rounds_env.setenv(ledger.UNBLOCK_MAX_ROUNDS_ENV, "5")
 	decision = ledger.decide(7, "blocked", FP, _rounds(2), None, NOW, max_rounds_per_item=2)

@@ -826,7 +826,10 @@ def resolve_max_rounds_per_item(raw: str | None = None) -> int:
 			file=sys.stderr,
 		)
 		return MAX_ROUNDS_PER_ITEM
-	number = int(value)
+	# int() refuses more than 4300 digits on Python 3.11+ (ValueError); any value
+	# longer than 3 significant digits is above the ceiling, so skip the parse.
+	digits = value.lstrip("0") or "0"
+	number = int(digits) if len(digits) <= 3 else MAX_ROUNDS_PER_ITEM_CEILING + 1
 	clamped = min(max(number, MAX_ROUNDS_PER_ITEM_FLOOR), MAX_ROUNDS_PER_ITEM_CEILING)
 	if clamped != number:
 		shown = value[:32]
