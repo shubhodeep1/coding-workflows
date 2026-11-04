@@ -35,6 +35,7 @@ the contract the code now upholds.
 
 from __future__ import annotations
 
+import importlib.util
 import inspect
 import io
 import json
@@ -681,6 +682,30 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	)
 	final_state = json.loads(json_line)
 	assert final_state["final_merge_status"] == "superseded-by-main"
+
+# SHELL-001: the check_integration_branch_staleness clock-read cases live in
+# tests/test_orchestrate_integration_staleness_clock.py and are collected here,
+# since CI already runs this file and ci.yml was outside that issue's file
+# grant. A name clash would hide a test, so it fails loudly.
+def _collect_staleness_clock_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"orchestrate_integration_staleness_clock_cases",
+		Path(__file__).resolve().parent / "test_orchestrate_integration_staleness_clock.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 4, f"only {collected} staleness clock cases collected"
+
+
+_collect_staleness_clock_cases()
+
 
 def _invoke_test(func) -> None:
 	params = list(inspect.signature(func).parameters)

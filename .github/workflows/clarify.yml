@@ -330,6 +330,11 @@ jobs:
           elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
             echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
             exit 1
+          elif [ "${resolver_rc}" -eq 2 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+            # Exit 2 = resolver API failure (retries exhausted or permanent error).
+            # With routing off, keep the legacy default-branch fallback, matching the exit-75 policy.
+            echo "::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
+            exit 1
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
