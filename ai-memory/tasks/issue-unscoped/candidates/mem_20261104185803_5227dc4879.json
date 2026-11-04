@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:(Workflow failure context) | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The copilot-pull-request-reviewer check failed in Actions run 41544551704 with `custom_instructions_too_large` (HTTP 422) while constructing its prompt. openai_gpt-6-luna attributed it to CLAUDE.md and agents.md, whereas google_gemini-3_1-flash-lite attributed it to .github/workflows/review_autofix.yml.\n  WHY: Prompt construction returns HTTP 422 before the review runs, so the check fails and automatic CI validation of the PR is prevented. Both reviewers rated this MAJOR, which is mapped to high. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) noted the same failure as not caused by this PR and did not report it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:(Workflow failure context) | severity=high | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check failed in Actions run 41544551704 with `custom_instructions_too_large`.\n  WHY: Prompt construction returns HTTP 422 before the review runs, preventing automatic CI validation of the PR. The repository's combined custom instructions and context exceeded the reviewer's prompt limit. The source labelled this MAJOR, which is mapped to high.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- CLAUDE.md and agents.md:Custom instructions loaded from both files for `copilot-pull-request-reviewer` | severity=high | confidence=5\n  PROBLEM: The reviewer check failed while constructing its prompt with `custom_instructions_too_large`.\n  WHY: Actions run 41544551704 returned HTTP 422 before the review ran, causing the check to fail. The source labelled this MAJOR, which is mapped to high.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9e56b4c0efe2de24f21bda5b5523dabb09db6fda7d0467c174849d441231b175",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41890609142",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41890609142",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261104185803_5227dc4879",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41890609142"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-04T18:58:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
