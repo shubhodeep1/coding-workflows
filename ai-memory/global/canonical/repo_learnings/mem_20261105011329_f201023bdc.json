@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "When changing polling, unblock, or security-audit behavior, check whether both the workflow definition and its invoked scripts need updates. Add tests for script behavior and workflow contracts so the two remain aligned.",
+  "fingerprint": "b4e30cfa55ebd3bec2df3a5226da135706d4a3d67f5f386ec2a867ca909a61c4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41946227783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41946227783",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8787",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8788",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8821",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8825",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8827",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8791",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8792",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8823",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8826",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8828"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261105011329_f201023bdc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Orchestration changes commonly span workflow YAML, shell scripts, and contract tests.",
+  "timestamps": {
+    "created_at": "2026-11-05T01:13:29Z",
+    "promoted_at": "2026-11-05T01:14:17Z",
+    "superseded_at": null
+  }
+}
