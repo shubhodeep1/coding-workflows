@@ -751,11 +751,14 @@ def _spare_per_hour(probe: dict[str, Any], gate: float, now: float) -> float | N
 	Quota left in a window is lost at its reset, so the account whose spare
 	quota expires soonest is used first, and an account that just reset is
 	saved for later in its week. ``None`` without a 7-day reading or reset
-	time. The 5-hour window does not change the rank; it only gates.
+	time, or with a negative (malformed) 7-day reading. The 5-hour window
+	does not change the rank; it only gates.
 	"""
 	seven_day = probe.get("seven_day")
 	reset = _int_or_none(probe.get("seven_day_resets_at"))
 	if seven_day is None or reset is None:
+		return None
+	if float(seven_day) < 0:
 		return None
 	hours = max((reset - now) / 3600, _SPARE_PER_HOUR_MIN_HOURS)
 	return max(gate - max(float(seven_day), 0.0), 0.0) / hours
