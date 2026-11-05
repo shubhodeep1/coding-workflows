@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:2 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The canary file content contains `run_id: 40831286935` instead of the required `run_id: alt-40831286935`.\n  WHY: The task requirement specifies the `alt-` prefix and the mismatch likely causes the CI failures in `tests/test_implement_post_codex_recovery.py`; severity is not stated by the source, so medium is assigned. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) found the file already holds `run_id: alt-40831286935`, so they disagree.\n- .github/workflows/review_autofix.yml | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The `copilot-pull-request-reviewer` check run 41549900517 failed with `custom_instructions_too_large` (422), blocking the automated PR review.\n  WHY: The reviewer check failed to initialize, so no automated feedback was produced. Minimax rated it NIT (confidence 3, advisory, not caused by the diff); gemini treated it as a defect, and the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary.txt:2 | confidence=5\n  PROBLEM: The canary file content contains `run_id: 40831286935` instead of the required `run_id: alt-40831286935`.\n  WHY: The task requirement specifies the `alt-` prefix, and the mismatch likely causes the CI failures observed in `tests/test_implement_post_codex_recovery.py`. The automated editor's summary falsely claims \"Already satisfied,\" preventing the fix from being applied correctly.\n- .github/workflows/review_autofix.yml | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check run 41549900517 failed with a `custom_instructions_too_large` (422) error, blocking the automated PR review pipeline.\n  WHY: The reviewer check failed to initialize, resulting in no automated feedback for this PR. This infra-level failure should be addressed to allow reviewers to process the PR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/e2e_smoke_canary.txt (not the cause; flagged for awareness) | severity=NIT | confidence=3\n  PROBLEM: The `copilot-pull-request-reviewer` check (PR head SHA 3e9378e63fc32e51197d75f638fa1b4cf439901d, check run 41549900517) exited 1 with `custom_instructions_too_large` (HTTP 422) before creating a review request.\n  WHY: The Copilot reviewer's prompt-assembly step exceeded its token budget when it loaded the repository's `AGENTS.md` and `CLAUDE.md` as custom instructions. This is an infrastructure limit of the third-party reviewer, out of scope for this PR, and the log_tail has no reference to `tests/e2e_smoke_canary.txt` or the diff hunks.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9277005deefdf7613b17b7af81f31ae0991a1f17cc86c516f71b206f1e7c1aee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41968279617",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41968279617",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105044223_2b2ea63f41",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41968279617"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T04:42:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
