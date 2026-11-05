@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8859,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8859\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8861\",\"pr_number\":8861,\"branch\":\"ai/issue-8859\",\"run_id\":\"42001267368\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42001267368\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/orchestrate_poll.yml\",\"README.md\",\"agents.d/stuck-states-p8b-dependency-wait-resume.md\",\"changelog.d/stuck-states-p8b-dependency-wait-resume.md\",\"docs/plans/confine-human-steps-to-activation-plan.md\",\"scripts/dependency_wait_resume.py\",\"tests/test_dependency_wait_resume.py\",\"tests/test_orchestrate_poll_workflow_contract.py\"]}",
+  "fingerprint": "2c46ad7b79c5558c1d32764e8b92ccd0a18b118d323edf59d6582440b42758cc",
+  "lineage": {
+    "issue_number": 8859,
+    "parent_ids": [],
+    "pr_number": 8861,
+    "run_id": "42001267368",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42001267368",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8861"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261105095031_f56d4ad648",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8859,
+    "level": "run",
+    "pr_number": 8861,
+    "run_id": "42001267368"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8859: https://github.com/shubhodeep1/coding-workflows/pull/8861",
+  "timestamps": {
+    "created_at": "2026-11-05T09:50:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
