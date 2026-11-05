@@ -178,7 +178,9 @@ def test_merged_pr_gets_one_answer_and_repeat_tick_is_noop(capsys: pytest.Captur
 	assert body.startswith("/answer [auto-answered-by-poller]")
 	assert f"<!-- AI_DEPENDENCY_WAIT_RESUMED_V1 issue=10 target=pr:{REPO}#7 since={SINCE} outcome=answer -->" in body
 	assert "outcome=resumed" in out
-	assert gh.label_ops == []
+	# plan.yml's /answer gate needs ai:blocked: the swap happens before the comment.
+	assert gh.label_ops == [("add", 10, dwr.BLOCKED_LABEL), ("remove", 10, dwr.WAIT_LABEL)]
+	assert gh.issues[10]["labels"] == {dwr.BLOCKED_LABEL}
 	_scan(gh, capsys)
 	assert len(gh.posted) == 1
 
@@ -191,6 +193,38 @@ def test_pr_closed_unmerged_reclarifies() -> None:
 	assert len(gh.posted) == 1
 	assert gh.posted[0][1].startswith("/reclarify")
 	assert "outcome=reclarify -->" in gh.posted[0][1]
+	assert dwr.WAIT_LABEL not in gh.issues[10]["labels"]
+	assert ("add", 10, dwr.BLOCKED_LABEL) not in gh.label_ops
+
+
+def test_half_applied_seed_is_finished_without_second_marker() -> None:
+	gh = FakeGitHub()
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, body="Depends on: #4")
+	original_add = gh.add_labels
+	gh.add_labels = lambda number, labels: False  # type: ignore[method-assign]
+	_scan(gh)
+	assert len(gh.posted) == 1 and gh.issues[20]["labels"] == {dwr.BLOCKED_LABEL}
+	gh.add_labels = original_add  # type: ignore[method-assign]
+	_scan(gh)
+	assert len(gh.posted) == 1
+	assert gh.issues[20]["labels"] == {dwr.WAIT_LABEL}
+
+
+def test_resumed_issue_is_not_reseeded_when_blocked_again() -> None:
+	gh = FakeGitHub()
+	resumed = f"<!-- AI_DEPENDENCY_WAIT_RESUMED_V1 issue=20 target=issue:{REPO}#4 since={SINCE} outcome=answer -->"
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, [_c(_wait_body(kind="issue", number=4)), _c(resumed)], body="Depends on: #4")
+	_scan(gh)
+	assert gh.posted == [] and gh.label_ops == []
+
+
+def test_failed_label_swap_posts_no_answer() -> None:
+	gh = FakeGitHub()
+	gh.add_issue(10, {dwr.WAIT_LABEL}, [_c(_wait_body())])
+	gh.targets[(REPO, 7)] = _pr("MERGED", True, SHA)
+	gh.add_labels = lambda number, labels: False  # type: ignore[method-assign]
+	_scan(gh)
+	assert gh.posted == []
 
 
 @pytest.mark.parametrize(("labels", "prefix"), (((dwr.MERGED_LABEL,), "/answer"), ((), "/reclarify")))

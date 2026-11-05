@@ -548,9 +548,26 @@ def resume(gh: Any, issue: IssueSnapshot, wait: dict[str, Any], decision: str) -
 		f"{command}\n\n_{reason}: {target}._\n"
 		f"<!-- {RESUME_MARKER} issue={issue.number} target={target} since={wait['since']} outcome={outcome_token} -->"
 	)
+	if decision == "resume_answer":
+		# plan.yml's /answer gate accepts ai:blocked (-> ai:planning) but not the
+		# wait label, so swap labels BEFORE posting: the comment starts plan.yml
+		# at once. A failed swap posts nothing; the next tick retries.
+		if not gh.add_labels(issue.number, [BLOCKED_LABEL]):
+			return "read_failed"
+		issue.labels.add(BLOCKED_LABEL)
+		if not gh.remove_label(issue.number, WAIT_LABEL):
+			return "read_failed"
+		issue.labels.discard(WAIT_LABEL)
 	if not gh.comment(issue.number, body):
+		if decision == "resume_answer" and gh.add_labels(issue.number, [WAIT_LABEL]):
+			# Put the issue back in the waiting scan so the next tick retries.
+			gh.remove_label(issue.number, BLOCKED_LABEL)
 		return "read_failed"
 	issue.comments.append({"author": "", "body": body, "created_at": ""})
+	if decision == "resume_reclarify" and gh.remove_label(issue.number, WAIT_LABEL):
+		# clarify.yml adds ai:clarification but never removes the wait label.
+		# A failed removal is retried by the already_resumed branch of scan().
+		issue.labels.discard(WAIT_LABEL)
 	return "resumed" if decision == "resume_answer" else "reclarified"
 
 
@@ -594,7 +611,16 @@ def seed_blocked(gh: Any, issue: IssueSnapshot, dependency: int, repo: str, logi
 	if not issue.ensure_full_history(gh):
 		return "read_failed"
 	if any(WAIT_MARKER_TOKEN in comment["body"] for _index, comment in _trusted(issue.comments, login)):
-		return ""
+		found = newest_trusted_wait(issue.comments, login, repo, issue.number, now)
+		if found is None or found[1] is None or already_resumed(issue.comments, login, issue.number, found[1]["since"], found[0]):
+			return ""
+		# A seed whose marker posted but whose label change failed: finish it
+		# without a second marker, or the issue stays ai:blocked for good.
+		if not gh.add_labels(issue.number, [WAIT_LABEL]):
+			return "read_failed"
+		if not gh.remove_label(issue.number, BLOCKED_LABEL):
+			_log(issue.number, f"issue:{repo}#{dependency}", "seeded", "blocked_label_kept")
+		return "seeded"
 	payload = {"kind": "issue", "repo": repo, "number": dependency, "since": _iso(now), "source": "seed"}
 	body = (
 		f"Waiting on dependency: issue={repo}#{dependency}\n\n"
@@ -606,7 +632,8 @@ def seed_blocked(gh: Any, issue: IssueSnapshot, dependency: int, repo: str, logi
 		return "read_failed"
 	if not gh.add_labels(issue.number, [WAIT_LABEL]):
 		return "read_failed"
-	gh.remove_label(issue.number, BLOCKED_LABEL)
+	if not gh.remove_label(issue.number, BLOCKED_LABEL):
+		_log(issue.number, f"issue:{repo}#{dependency}", "seeded", "blocked_label_kept")
 	return "seeded"
 
 
@@ -615,6 +642,10 @@ def switch_off(gh: Any, issue: IssueSnapshot, repo: str, login: str, now: dt.dat
 		return "read_failed"
 	found = newest_trusted_wait(issue.comments, login, repo, issue.number, now)
 	after_index = found[0] if found else -1
+	if found is not None and found[1] is not None and already_resumed(issue.comments, login, issue.number, found[1]["since"], found[0]):
+		# Already resumed into another phase: drop the stale wait label only,
+		# never add ai:blocked beside the issue's current phase label.
+		return "disabled_moved" if gh.remove_label(issue.number, WAIT_LABEL) else "read_failed"
 	if not _has_trusted_disabled(issue.comments, login, issue.number, after_index):
 		body = (
 			"Automatic dependency resume is disabled (`DEPENDENCY_WAIT_RESUME_ENABLED=false`), so this issue moves "
@@ -689,6 +720,9 @@ def scan(gh: Any, repo: str, now: dt.datetime | None = None) -> dict[str, int]:
 			continue
 		index, wait = found
 		if already_resumed(issue.comments, login, issue.number, wait["since"], index):
+			# Retry a wait-label removal that failed after the resume comment.
+			if WAIT_LABEL in issue.labels and gh.remove_label(issue.number, WAIT_LABEL):
+				issue.labels.discard(WAIT_LABEL)
 			latch = clear_latch(gh, issue, login, wait)
 			_log(issue.number, target_label(wait), latch or "already_resumed")
 			continue
