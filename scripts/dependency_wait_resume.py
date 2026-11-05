@@ -618,6 +618,10 @@ def seed_blocked(gh: Any, issue: IssueSnapshot, dependency: int, repo: str, logi
 			# Only finish this helper's own half-applied seed for the same
 			# dependency; never undo a deliberate move back to ai:blocked.
 			return ""
+		if found[0] != len(issue.comments) - 1:
+			# A failed label write leaves the seed marker as the newest comment;
+			# any later comment (latch, /answer, planner) means it was applied.
+			return ""
 		# A seed whose marker posted but whose label change failed: finish it
 		# without a second marker, or the issue stays ai:blocked for good.
 		if not gh.add_labels(issue.number, [WAIT_LABEL]):

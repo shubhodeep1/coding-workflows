@@ -247,6 +247,15 @@ def test_seed_recovery_ignores_marker_for_other_dependency_or_non_seed() -> None
 	assert gh.posted == [] and gh.label_ops == []
 
 
+def test_seed_recovery_skips_reblocked_issue_with_later_comment() -> None:
+	gh = FakeGitHub()
+	seed = _c(_wait_body(kind="issue", number=4, since=OLD_SINCE, extra={"source": "seed"}))
+	latch = _c(f"<!-- ai:needs-human-latch reason=dependency_wait target=issue:{REPO}#4 since={OLD_SINCE} -->")
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, [seed, latch, _c("/answer", author="human")], body="Depends on: #4")
+	_scan(gh)
+	assert gh.posted == [] and gh.label_ops == []
+
+
 def test_escalation_text_tells_human_to_swap_to_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
 	gh = FakeGitHub()
 	gh.add_issue(10, {dwr.WAIT_LABEL}, [_c(_wait_body(kind="issue", number=4, since=OLD_SINCE))])
