@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:entire file | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The root `agents.md` custom-instruction document is too large, so the `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large` (HTTP 422) and produces no review.\n  WHY: The check exits with code 1 before any review begins. Severity disagreement: google_gemini-3_1-flash-lite said BLOCKER and openai_gpt-6-luna said MAJOR; the highest, BLOCKER, is mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:Entire root custom-instruction document | severity=BLOCKER | confidence=5\n  PROBLEM: The root `agents.md` file is too large, causing the `copilot-pull-request-reviewer` CI job to fail with a `custom_instructions_too_large` (HTTP 422) error.\n  WHY: The reviewer automation injects `agents.md` as custom instructions into every review request, so the prompt exceeds the model's instruction limit and the CI job crashes before the review begins.\n- TASK_GAP (reviewer concluded no gap exists) | severity=NIT | confidence=4\n  Requirement: \"Update its content so it is exactly these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention)\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The reviewer notes that the diff introduces `run_id` and `updated-by` correctly and that byte-level verification confirms the file content is correct. It concludes \"No gap exists.\"\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:Entire root custom-instruction document loaded by the Copilot PR reviewer | severity=MAJOR | confidence=5\n  PROBLEM: The reviewer fails to construct its review request because the custom instructions exceed the prompt size limit.\n  WHY: The check exits with code 1 and produces no review, and the PR check log reports `custom_instructions_too_large` (HTTP 422).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8d9713472ea5b3c9b37ff33fda856ce95a4ff6392144ef3b11cbbf8847279d60",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "42045787678",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42045787678",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105144320_61eb6927db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "42045787678"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T14:43:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
