@@ -6255,10 +6255,14 @@ def test_standalone_stall_recovery_no_longer_skips_claude_labelled_issues() -> N
 
 def test_standalone_security_followup_releases_only_after_prerequisite_merges() -> None:
 	dependent_body = "<!-- ai:security-finding:SEC-TEST -->\n- Depends on: #701\n"
-	for closed, labels, expected in (
-		(False, [], "security_dependency_held"),
-		(True, [], "security_dependency_held"),
-		(True, ["ai:merged"], "security_dependency_released"),
+	# Stuck-states P8c: a predecessor closed without ai:merged now releases
+	# the hold by default; DEPENDENCY_WAIT_RESUME_ENABLED=false keeps the
+	# previous hold.
+	for closed, labels, resume, expected, release_count in (
+		(False, [], None, "security_dependency_held", 0),
+		(True, [], None, "security_dependency_released_unmerged", 1),
+		(True, [], "false", "security_dependency_held", 0),
+		(True, ["ai:merged"], None, "security_dependency_released", 1),
 	):
 		state = _base_state(status="in_progress")
 		state["waves"][0]["issues"][0]["status"] = "merged"
@@ -6267,12 +6271,18 @@ def test_standalone_security_followup_releases_only_after_prerequisite_merges() 
 			issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security"], 701: labels},
 			issue_bodies={700: dependent_body}, issue_closed={701: closed},
 			issue_comments={700: []}, mock_gh_issue_list_label_filter=True,
+			env_overrides={"DEPENDENCY_WAIT_RESUME_ENABLED": resume} if resume else None,
 		)
 		assert f"STALL_SKIP issue=700 reason={expected}" in result["stdout"] + result["stderr"]
-		if closed and not labels:
+		if closed and not labels and resume == "false":
 			assert "detail=closed_without_ai_merged" in result["stdout"] + result["stderr"]
+			assert result["issues"]["700"]["comments"] == []
 		releases = [c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]
-		assert len(releases) == (1 if closed and labels else 0)
+		assert len(releases) == release_count
+		if closed and not labels and resume is None:
+			assert releases[0]["body"] == (
+				"/reclarify\n<!-- AI_SECURITY_DEPENDENCY_RELEASED_V1 reason=predecessor_unmerged issue=700 depends_on=701 -->"
+			)
 
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "merged"
@@ -6298,6 +6308,308 @@ def test_standalone_security_followup_releases_only_after_prerequisite_merges() 
 		mock_gh_issue_list_label_filter=True,
 	)
 	assert len([c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]) == 2
+
+
+_SECURITY_HOLD_BODY = "<!-- ai:security-finding:SEC-TEST -->\n- Depends on: #701\n"
+# The latch marker ends with the episode's held_since (`held_since=<ts> -->`).
+_SECURITY_HOLD_LATCH = "<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=701 "
+_SECURITY_HOLD_PIPELINE_LOGIN = "github-actions[bot]"
+
+
+def _security_hold_state_comment(held_since: object, *, depends_on: int = 701, escalated: object = 0) -> dict:
+	return {
+		"body": "<!-- AI_STANDALONE_STALL_STATE_V1\n" + json.dumps({
+			"schema_version": 1, "last_seen_phase": "", "status_since_ts": 0, "stall_recovery_count": 0,
+			"security_dependency_depends_on": depends_on,
+			"security_dependency_held_since_ts": held_since,
+			"security_dependency_escalated_ts": escalated,
+		}) + "\nAI_STANDALONE_STALL_STATE_V1 -->",
+		"user": {"login": _SECURITY_HOLD_PIPELINE_LOGIN}, "author_association": "OWNER",
+		"created_at": "2026-01-01T00:00:01Z",
+	}
+
+
+def _security_hold_latch_comment(reason: str = "security_dependency_wait", *, login: str = _SECURITY_HOLD_PIPELINE_LOGIN, created_at: str = "2026-01-01T00:00:02Z", held_since: object = 1) -> dict:
+	marker = f"{_SECURITY_HOLD_LATCH}held_since={held_since} -->" if reason == "security_dependency_wait" else f"<!-- ai:needs-human-latch reason={reason} -->"
+	return {"body": f"Waiting.\n\n{marker}", "user": {"login": login}, "author_association": "OWNER", "created_at": created_at}
+
+
+def _run_security_hold_tick(*, comments=None, labels=None, closed=False, predecessor_labels=None, env=None, fail_get=None, fail_comment_post=False, fail_edit=False, store_extra=None, tracking_issues_override=None, events=None) -> dict:
+	"""One standalone tick for security follow-up #700 that depends on #701 (stuck-states P8c)."""
+	# By default the pipeline login added the latch label, as the escalation does.
+	if events is None:
+		events = [{"event": "labeled", "label": {"name": "ai:needs-human"}, "actor": {"login": _SECURITY_HOLD_PIPELINE_LOGIN}, "created_at": "2026-01-01T00:00:03Z"}]
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	kwargs = {}
+	if env:
+		kwargs["env_overrides"] = env
+	if fail_get:
+		kwargs["fail_issue_get_for"] = fail_get
+	if fail_comment_post:
+		kwargs["fail_issue_comment_post_for"] = [700]
+	if fail_edit:
+		kwargs["fail_issue_edit_for"] = [700]
+	if store_extra:
+		kwargs["mock_store_extra"] = store_extra
+	if tracking_issues_override is not None:
+		kwargs["tracking_issues_override"] = tracking_issues_override
+	return _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security", *(labels or [])], 701: list(predecessor_labels or [])},
+		issue_bodies={700: _SECURITY_HOLD_BODY}, issue_closed={701: closed},
+		issue_comments={700: list(comments or [])}, mock_gh_issue_list_label_filter=True,
+		issue_events={700: list(events)},
+		**kwargs,
+	)
+
+
+def _security_hold_log(result: dict) -> str:
+	return result["stdout"] + result["stderr"]
+
+
+def _security_hold_latches(result: dict) -> list[dict]:
+	return [c for c in result["issues"]["700"]["comments"] if _SECURITY_HOLD_LATCH in c["body"]]
+
+
+def _security_hold_state_comments(result: dict) -> list[dict]:
+	return [c for c in result["issues"]["700"]["comments"] if c["body"].startswith("<!-- AI_STANDALONE_STALL_STATE_V1\n")]
+
+
+def test_security_hold_records_held_since_once_per_episode() -> None:
+	import time
+
+	now = int(time.time())
+	first = _run_security_hold_tick()
+	log = _security_hold_log(first)
+	assert "STALL_SKIP issue=700 reason=security_dependency_hold_recorded action=none" in log
+	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=open action=none" in log
+	assert len(first["issues"]["700"]["comments"]) == 1
+	recorded = _extract_latest_standalone_state(first["issues"]["700"]["comments"])
+	assert recorded["security_dependency_depends_on"] == 701
+	assert now - 5 <= recorded["security_dependency_held_since_ts"] <= int(time.time()) + 5
+	assert recorded["security_dependency_escalated_ts"] == 0
+
+	# A recorded, not-yet-due hold costs no write.
+	recent = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 86400)])
+	log = _security_hold_log(recent)
+	assert "security_dependency_hold_recorded" not in log
+	assert "security_dependency_escalated" not in log
+	assert len(recent["issues"]["700"]["comments"]) == 1
+	assert "ai:needs-human" not in recent["issues"]["700"]["labels"]
+
+	# Missing, invalid or future values and a changed dependency restart the episode in place.
+	for seeded in (
+		_security_hold_state_comment(now + 30 * 86400),
+		_security_hold_state_comment("abc"),
+		_security_hold_state_comment(-5),
+		_security_hold_state_comment(now - 8 * 86400, depends_on=650),
+	):
+		reset = _run_security_hold_tick(comments=[seeded])
+		log = _security_hold_log(reset)
+		assert "STALL_SKIP issue=700 reason=security_dependency_hold_recorded action=none" in log, seeded
+		assert "security_dependency_escalated" not in log, seeded
+		states = _security_hold_state_comments(reset)
+		assert len(states) == 1, seeded
+		restarted = _extract_latest_standalone_state(states)
+		assert restarted["security_dependency_depends_on"] == 701
+		assert now - 5 <= restarted["security_dependency_held_since_ts"] <= int(time.time()) + 5
+
+
+def test_security_hold_escalates_once_after_escalate_days() -> None:
+	import time
+
+	now = int(time.time())
+	due = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400)])
+	log = _security_hold_log(due)
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalated action=needs_human" in log
+	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=open action=none" in log
+	assert "ai:needs-human" in due["issues"]["700"]["labels"]
+	latches = _security_hold_latches(due)
+	assert len(latches) == 1
+	assert "#700 -> #701 (open)" in latches[0]["body"]
+	assert "waited at least 8 days" in latches[0]["body"]
+	assert latches[0]["body"].rstrip().endswith(f"held_since={now - 8 * 86400} -->")
+	assert not any(c["body"].startswith("/reclarify") for c in due["issues"]["700"]["comments"])
+	assert _extract_latest_standalone_state(_security_hold_state_comments(due))["security_dependency_escalated_ts"] >= now
+
+	# The next tick sees the label (and escalated_ts) and stays quiet.
+	again = _run_security_hold_tick(comments=due["issues"]["700"]["comments"], labels=["ai:needs-human"])
+	assert "security_dependency_escalated" not in _security_hold_log(again)
+	assert len(_security_hold_latches(again)) == 1
+	labelled = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400)], labels=["ai:needs-human"])
+	assert "security_dependency_escalated" not in _security_hold_log(labelled)
+	assert _security_hold_latches(labelled) == []
+
+	# After a human removed the label, the recorded escalated_ts keeps the episode quiet.
+	removed = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400, escalated=now - 86400), _security_hold_latch_comment(held_since=now - 8 * 86400)])
+	assert "security_dependency_escalated" not in _security_hold_log(removed)
+	assert "ai:needs-human" not in removed["issues"]["700"]["labels"]
+	assert len(_security_hold_latches(removed)) == 1
+
+	# A latch comment for this episode without the label (a lost label edit) gets the label, no second comment.
+	held = now - 8 * 86400
+	marker_only = _run_security_hold_tick(comments=[_security_hold_state_comment(held), _security_hold_latch_comment(held_since=held)])
+	log = _security_hold_log(marker_only)
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalated detail=marker_present action=needs_human" in log
+	assert "ai:needs-human" in marker_only["issues"]["700"]["labels"]
+	assert len(_security_hold_latches(marker_only)) == 1
+	assert _extract_latest_standalone_state(_security_hold_state_comments(marker_only))["security_dependency_escalated_ts"] >= now
+
+	# A latch comment left by an earlier, released episode does not suppress this one.
+	stale = _run_security_hold_tick(comments=[_security_hold_state_comment(held), _security_hold_latch_comment(held_since=held - 30 * 86400)])
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalated action=needs_human" in _security_hold_log(stale)
+	assert "ai:needs-human" in stale["issues"]["700"]["labels"]
+	assert len(_security_hold_latches(stale)) == 2
+
+	# A marker copied by another account does not.
+	forged = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400), _security_hold_latch_comment(login="stranger", held_since=now - 8 * 86400)])
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalated action=needs_human" in _security_hold_log(forged)
+	assert "ai:needs-human" in forged["issues"]["700"]["labels"]
+
+
+def test_security_hold_escalation_failures_retry_and_forged_state_is_ignored() -> None:
+	import time
+
+	now = int(time.time())
+	held = now - 8 * 86400
+	# A failed latch comment POST leaves no label and no escalated_ts.
+	no_comment = _run_security_hold_tick(comments=[_security_hold_state_comment(held)], fail_comment_post=True)
+	log = _security_hold_log(no_comment)
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalation_failed action=none" in log
+	assert "ai:needs-human" not in no_comment["issues"]["700"]["labels"]
+	assert _security_hold_latches(no_comment) == []
+	assert _extract_latest_standalone_state(_security_hold_state_comments(no_comment))["security_dependency_escalated_ts"] == 0
+
+	# A failed label edit after the comment posted leaves escalated_ts at 0 ...
+	no_label = _run_security_hold_tick(comments=[_security_hold_state_comment(held)], fail_edit=True)
+	log = _security_hold_log(no_label)
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalation_failed action=none" in log
+	assert "reason=security_dependency_escalated " not in log
+	assert "ai:needs-human" not in no_label["issues"]["700"]["labels"]
+	assert len(_security_hold_latches(no_label)) == 1
+	assert _extract_latest_standalone_state(_security_hold_state_comments(no_label))["security_dependency_escalated_ts"] == 0
+	# ... so the next tick adds the label without a second latch comment.
+	retried = _run_security_hold_tick(comments=no_label["issues"]["700"]["comments"])
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalated detail=marker_present action=needs_human" in _security_hold_log(retried)
+	assert "ai:needs-human" in retried["issues"]["700"]["labels"]
+	assert len(_security_hold_latches(retried)) == 1
+
+	# A newer state comment written by another account cannot mark the hold escalated.
+	forged_state = _security_hold_state_comment(held, escalated=now)
+	forged_state["user"] = {"login": "stranger"}
+	forged_state["created_at"] = "2026-01-01T00:00:09Z"
+	forged = _run_security_hold_tick(comments=[_security_hold_state_comment(held), forged_state])
+	assert "STALL_SKIP issue=700 reason=security_dependency_escalated action=needs_human" in _security_hold_log(forged)
+	assert "ai:needs-human" in forged["issues"]["700"]["labels"]
+
+
+def test_security_hold_escalate_days_config_and_unverified_reads() -> None:
+	import time
+
+	now = int(time.time())
+	longer = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400)], env={"DEPENDENCY_WAIT_ESCALATE_DAYS": "10"})
+	assert "security_dependency_escalated" not in _security_hold_log(longer)
+	for invalid in ("abc", "0", "12345"):
+		fallback = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400)], env={"DEPENDENCY_WAIT_ESCALATE_DAYS": invalid})
+		log = _security_hold_log(fallback)
+		assert "::warning::DEPENDENCY_WAIT_ESCALATE_DAYS must be an integer from 1 to 9999; using 7." in log, invalid
+		assert "STALL_SKIP issue=700 reason=security_dependency_escalated action=needs_human" in log, invalid
+
+	# An unverifiable predecessor read neither starts nor advances the clock.
+	unverified = _run_security_hold_tick(fail_get=[701])
+	log = _security_hold_log(unverified)
+	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=unverified action=none" in log
+	assert unverified["issues"]["700"]["comments"] == []
+
+	# Switch off: the open hold writes nothing.
+	off = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400)], env={"DEPENDENCY_WAIT_RESUME_ENABLED": "false"})
+	assert "security_dependency_escalated" not in _security_hold_log(off)
+	assert len(off["issues"]["700"]["comments"]) == 1
+
+
+def test_security_hold_unmerged_release_dedupe_and_latch_removal() -> None:
+	release_marker = "/reclarify\n<!-- AI_SECURITY_DEPENDENCY_RELEASED_V1 reason=predecessor_unmerged issue=700 depends_on=701 -->"
+
+	def releases(result: dict) -> list[dict]:
+		return [c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]
+
+	trusted = _run_security_hold_tick(closed=True, comments=[{"body": release_marker, "user": {"login": _SECURITY_HOLD_PIPELINE_LOGIN}, "author_association": "OWNER"}])
+	assert len(releases(trusted)) == 1
+	assert "security_dependency_released_unmerged" not in _security_hold_log(trusted)
+	untrusted = _run_security_hold_tick(closed=True, comments=[{"body": release_marker, "user": {"login": "stranger"}, "author_association": "OWNER"}])
+	assert len(releases(untrusted)) == 2
+	assert "STALL_SKIP issue=700 reason=security_dependency_released_unmerged action=reclarify" in _security_hold_log(untrusted)
+
+	# Release removes this hold's own latch.
+	cleared = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=[_security_hold_latch_comment()])
+	log = _security_hold_log(cleared)
+	assert "STALL_SKIP issue=700 reason=security_dependency_latch_cleared action=none" in log
+	assert "ai:needs-human" not in cleared["issues"]["700"]["labels"]
+	assert len(releases(cleared)) == 1
+	# A failed latch removal posts no release marker, so the next tick retries both.
+	failed = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=[_security_hold_latch_comment()], fail_edit=True)
+	log = _security_hold_log(failed)
+	assert "STALL_SKIP issue=700 reason=security_dependency_retrigger_failed detail=latch_clear_failed action=none" in log
+	assert "ai:needs-human" in failed["issues"]["700"]["labels"]
+	assert releases(failed) == []
+	retried = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=failed["issues"]["700"]["comments"])
+	assert "STALL_SKIP issue=700 reason=security_dependency_latch_cleared action=none" in _security_hold_log(retried)
+	assert "ai:needs-human" not in retried["issues"]["700"]["labels"]
+	assert len(releases(retried)) == 1
+	merged = _run_security_hold_tick(closed=True, predecessor_labels=["ai:merged"], labels=["ai:needs-human"], comments=[_security_hold_latch_comment()])
+	assert "STALL_SKIP issue=700 reason=security_dependency_latch_cleared action=none" in _security_hold_log(merged)
+	assert "ai:needs-human" not in merged["issues"]["700"]["labels"]
+
+	# A later latch for another reason, or one written by another account, is left alone.
+	for comments in (
+		[_security_hold_latch_comment(), _security_hold_latch_comment("staged_support_rebase_conflict", created_at="2026-01-01T00:00:05Z")],
+		[_security_hold_latch_comment(login="stranger")],
+	):
+		kept = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=comments)
+		assert "security_dependency_latch_cleared" not in _security_hold_log(kept)
+		assert "ai:needs-human" in kept["issues"]["700"]["labels"]
+		assert len(releases(kept)) == 1
+
+	# A person re-added ai:needs-human after the hold's latch: the label stays, the release still posts.
+	relabelled = _run_security_hold_tick(
+		closed=True, labels=["ai:needs-human"], comments=[_security_hold_latch_comment()],
+		events=[
+			{"event": "labeled", "label": {"name": "ai:needs-human"}, "actor": {"login": _SECURITY_HOLD_PIPELINE_LOGIN}, "created_at": "2026-01-01T00:00:03Z"},
+			{"event": "unlabeled", "label": {"name": "ai:needs-human"}, "actor": {"login": "workflow-owner"}, "created_at": "2026-01-02T00:00:00Z"},
+			{"event": "labeled", "label": {"name": "ai:needs-human"}, "actor": {"login": "workflow-owner"}, "created_at": "2026-01-03T00:00:00Z"},
+		],
+	)
+	log = _security_hold_log(relabelled)
+	assert "STALL_SKIP issue=700 reason=security_dependency_latch_kept detail=labeled_by_other action=none" in log
+	assert "security_dependency_latch_cleared" not in log
+	assert "ai:needs-human" in relabelled["issues"]["700"]["labels"]
+	assert len(releases(relabelled)) == 1
+
+	# Switch off: the unmerged closure stays held and the latch stays.
+	off = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=[_security_hold_latch_comment()], env={"DEPENDENCY_WAIT_RESUME_ENABLED": "off"})
+	log = _security_hold_log(off)
+	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=closed_without_ai_merged action=none" in log
+	assert "ai:needs-human" in off["issues"]["700"]["labels"]
+	assert releases(off) == []
+
+
+def test_security_hold_merged_release_waits_for_the_pipeline_login() -> None:
+	"""Without the pipeline login the latch cannot be checked, so no release marker strands ai:needs-human.
+
+	An idle tick (no tracking issue) reaches the release without the sweep-level identity guard.
+	"""
+	no_identity = _run_security_hold_tick(
+		closed=True, predecessor_labels=["ai:merged"], labels=["ai:needs-human"],
+		comments=[_security_hold_latch_comment()], store_extra={"fail_user_lookup": True},
+		tracking_issues_override=[],
+	)
+	assert "STALL_SKIP issue=700 reason=security_dependency_identity_unavailable action=none" in _security_hold_log(no_identity)
+	assert "ai:needs-human" in no_identity["issues"]["700"]["labels"]
+	assert not any(c["body"].startswith("/reclarify") for c in no_identity["issues"]["700"]["comments"])
+	# Without the latch label the merged release does not need the login.
+	unlabelled = _run_security_hold_tick(closed=True, predecessor_labels=["ai:merged"], store_extra={"fail_user_lookup": True}, tracking_issues_override=[])
+	assert "STALL_SKIP issue=700 reason=security_dependency_released action=reclarify" in _security_hold_log(unlabelled)
 
 
 def _run_pr_dependency_tick(*, merged: bool, files: dict[str, str], comments: list[dict] | None = None, extra: dict | None = None) -> dict:

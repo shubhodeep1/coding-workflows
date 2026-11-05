@@ -705,6 +705,7 @@ jobs:
         id: clarify_route
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}

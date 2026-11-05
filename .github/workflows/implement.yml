@@ -2359,6 +2359,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
@@ -2805,6 +2806,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"
