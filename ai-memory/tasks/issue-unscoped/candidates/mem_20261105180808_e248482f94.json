@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_blocked_verify.sh:237 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The retry prompt in prompt() asks for \"STATUS: NEEDS_CLARIFICATION followed by Q<ID> questions\" but does not mention the `QUESTIONS:` header that the clarify.yml parse step needs (clarify.yml:2033 awk `/QUESTIONS:/{f=1}`), so a retry answer with bare Q lines and no header passes the gate at clarify.yml:1890 and replaces CODEX_OUTPUT_FILE.\n  WHY: Without the header, Q_COUNT=0 and clarify.yml:2046 logs \"NEEDS_CLARIFICATION with no actual questions; treating as clear\", so a BLOCKED: answer the gate should have kept is parsed as clear, no questions are posted and ai:blocked is lost; both reviewers rated it SEVERITY: MAJOR, mapped here to high; anthropic_claude-sonnet-5_5 and minimax_minimax-m3 raised the same issue only as a HARDENING_SUGGESTION (risk score 1) and reported no defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/clarify_blocked_verify.sh: prompt(), the sentence \"answer STATUS: CLEAR, or STATUS: NEEDS_CLARIFICATION followed by Q<ID> questions.\"\n  PROBLEM: The parse step (clarify.yml line 2033) takes questions only from below a `QUESTIONS:` header, so a headerless retry answer would pass the gate and then be treated as clear (line 2046).\n  WHY: The risk is low because the retry prompt keeps the original output format (clarify.yml lines 1635-1647), which includes the header. Suggested fix: reword the sentence and update test_prompt_appends_one_block_and_keeps_input in tests/test_clarify_blocked_verify.py (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/clarify_blocked_verify.sh:prompt() function, line 237 (in the injected Python block) | severity=MAJOR | confidence=4\n  PROBLEM: The retry prompt does not tell the model to put clarification questions under a QUESTIONS: header.\n  WHY: The parse step in .github/workflows/clarify.yml extracts questions only from below a QUESTIONS: header, so a headerless NEEDS_CLARIFICATION answer is treated as STATUS: CLEAR, which loses the ai:blocked state.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/clarify_blocked_verify.sh: lines 237 (the prompt() block sentence \"answer STATUS: CLEAR, or STATUS: NEEDS_CLARIFICATION followed by Q<ID> questions\")\n  PROBLEM: The Parse Codex output step (clarify.yml line 2033) extracts questions only after a `QUESTIONS:` header, and the retry block does not name that header.\n  WHY: A headerless retry answer would pass the line-anchored gate and then hit the `NEEDS_CLARIFICATION with no actual questions; treating as clear` branch. Suggested fix: reword the sentence and update `test_prompt_appends_one_block_and_keeps_input` (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/clarify_blocked_verify.sh:prompt() retry block wording, line ~237; interacting with .github/workflows/clarify.yml:1890 (gate S regex) and clarify.yml:2031-2046 (Parse Codex output) | severity=MAJOR | confidence=4\n  PROBLEM: The retry block asks for \"STATUS: NEEDS_CLARIFICATION followed by Q<ID> questions\" and the gate (clarify.yml:1890) accepts that answer, but the parser only posts questions found under a `QUESTIONS:` header (clarify.yml:2033); without it Q_COUNT=0 and clarify.yml:2046 sets needs_clarification=false.\n  WHY: An original fence-free `BLOCKED:` answer would go to ai:blocked (clarify.yml:2001-2023), but a headerless retry answer passes the gate as \"resolved\" and is then parsed as clear, so no questions are posted and ai:blocked is lost. This is the exact loss the gate's comment at clarify.yml:1883-1886 says it must prevent.\n- HARDENING_SUGGESTION: scripts/clarify_blocked_verify.sh: prompt() retry block, line ~237\n  PROBLEM: The instruction does not mention the `QUESTIONS:` header that the parser requires (clarify.yml:2033).\n  WHY: Suggested fix: reword the instruction, update test_prompt_appends_one_block_and_keeps_input, and optionally add a headerless stub mode to test_plan_clarify_blocked_output.py (about 3 lines). HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a570bbfd43fc6ac93a72ec3ce26c444c09701912c4ad34e643790994230e3649",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8877,
+    "run_id": "42078026035",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42078026035",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105180808_e248482f94",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8877,
+    "run_id": "42078026035"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T18:08:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
