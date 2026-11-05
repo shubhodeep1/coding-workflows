@@ -3258,8 +3258,12 @@ source `tools/claude-pool-broker/`). A job that hosts a Claude role runs
    and that `job_workflow_ref` is a coding-workflows workflow, then returns
    the pool; anything else is `403` with a reason code;
 3. the action masks every token, probes each account with Haiku 4.5, and
-   writes the accounts under the `0.95` gate, least used first, to
-   `$RUNNER_TEMP/claude-pool`; its post step deletes them.
+   writes the accounts under the `0.95` gate to `$RUNNER_TEMP/claude-pool`,
+   the one whose spare 7-day quota expires soonest first (7-day headroom
+   under the gate divided by the hours until that account's 7-day reset;
+   accounts without a reset time follow, least used first, see
+   `choose_account` in `scripts/claude_engine.py`); its post step deletes
+   them.
 
 Its outputs are `available` (`true`/`false`), `reason`, `accounts`,
 `pool_dir` and `probes` (the probe records as a JSON list: account name,
