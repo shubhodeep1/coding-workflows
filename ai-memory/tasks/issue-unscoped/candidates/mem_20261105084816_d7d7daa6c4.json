@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:1-1508 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with errorCode `custom_instructions_too_large` because CLAUDE.md (1508 lines) plus agents.md (5410 lines) overflow the action's prompt budget, so a check stays red.\n  WHY: Source severity=MAJOR (mapped to high). The reviewer says this is a base-branch condition not introduced by the PR, that there is no in-PR fix, and that neither CLAUDE.md, agents.md nor the canary should be edited in response.\n- .claude/hooks/prepush_affected_tests.py:387-397, :800-824 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The PR body's pre-push gate labels 7 failures in `tests/test_implement_post_codex_recovery.py` as \"caused by this change\", although the file only mentions the canary path inside string literals and none of the named tests read the canary.\n  WHY: Source severity=NIT (mapped to low). Rule 3 text-reference selection runs the whole file, and the merge-base `git archive` baseline mislabels failures. No code change is warranted in this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP (listed under TASK COMPLETENESS / INTENT GAPS, but the reviewer itself concludes there is no gap) | severity=NIT | confidence=5\n  Requirement: Update `tests/e2e_smoke_canary.txt` to contain exactly these three lines: `status: ok`, `run_id: 40932430968`, and `updated-by: ai-pipeline` with a trailing newline.\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: The PR diff (original_pr_diff.patch) shows the file content was modified from `status: ok\\ndecompose-run: 41445772297` to `status: ok\\nrun_id: 40932430968\\nupdated-by: ai-pipeline`. This matches the requirement precisely. However, the last run diff and current PR diff status confirm this change is already present in the branch. There are no gaps in the implementation as requested.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- CLAUDE.md:1-1508 (together with agents.md:1-5410) | severity=MAJOR | confidence=5\n  PROBLEM: The only failing check-run on the PR head is `copilot-pull-request-reviewer`. It aborts with errorCode `custom_instructions_too_large` (\"Prompt too big after adding system message\"), so a required check stays red.\n  WHY: The action concatenates the repo-root instruction files into the system message and enforces its prompt budget (MaxPromptTokens=110000). CLAUDE.md (1508 lines) plus agents.md (5410 lines) overflow it. This is a base-branch condition that reproduces for any PR, not a defect introduced here. There is no in-PR fix, because the linked issue restricts the change to `tests/e2e_smoke_canary.txt`. Do not edit `CLAUDE.md`, `agents.md` or the canary in response.\n- .claude/hooks/prepush_affected_tests.py:387-397 and :800-824 | severity=NIT | confidence=4\n  PROBLEM: The PR body's \"Pre-push test gate\" section lists 7 failures in `tests/test_implement_post_codex_recovery.py` as \"Failures caused by this change\", but this change cannot cause them.\n  WHY: Rule 3 selects any test file whose text matches the changed path, and the canary path appears in that file only in string literals (lines 5060 and 5779). The merge-base `git archive` baseline (:977-994) mislabels failures. None of the seven named tests reads the canary. The repository's own CI runs that file at `.github/workflows/ci.yml:930` and no CI check-run failed. No code change is warranted in this PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d8a938a981a29000f6a446d824a1e67c539912298005844a2e71ff2847678aec",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41995110605",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41995110605",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105084816_d7d7daa6c4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41995110605"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T08:48:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
