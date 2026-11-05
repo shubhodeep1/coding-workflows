@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:no changed line (PR-head check run `copilot-pull-request-reviewer`, SHA 90413e3967c6771e95affc97a9bc25e5002ad81c) | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The external `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\") before producing a review.\n  WHY: The failure is not mapped to a defect in the canary diff; both reviewers rated it NIT (mapped here to low), and the confidence values were 5 and 4.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/e2e_smoke_canary.txt:PR-head check run `copilot-pull-request-reviewer` for SHA `90413e3967c6771e95affc97a9bc25e5002ad81c` | severity=NIT | confidence=5\n  PROBLEM: The check fails with `custom_instructions_too_large` before producing a review.\n  WHY: The check-run log reports \"Prompt too big after adding system message\" and exits with code 1. The failure is not mapped to a defect in the canary diff.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:no changed line; PR-head check run `copilot-pull-request-reviewer` (run 41544333941), head SHA 90413e3967c6771e95affc97a9bc25e5002ad81c | severity=NIT | confidence=4\n  PROBLEM: The only failed check-run is the external Copilot reviewer action, which aborts with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\") before producing any review.\n  WHY: The failure comes from the repo's custom instructions size against the Copilot prompt budget, not from the changed canary file. No edit permitted by the issue's constraint (\"Only modify tests/e2e_smoke_canary.txt\") can resolve it. It is surfaced for editor/operator awareness only.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6438ecd7e2d9a7b37fea3e0e42430b3856f9a49a71c5a16fd85b3e41d3a85efc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "42040995186",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42040995186",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105141651_721d5134d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "42040995186"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T14:16:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
