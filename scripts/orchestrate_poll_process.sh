@@ -32734,6 +32734,7 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 				break
 			fi
 		done <<< "${_STANDALONE_CONFLICT_ATTEMPTS_STATE["${S_PR}"]:-}"
+		# The loaded check repeats the outer guard on purpose: "0" only for a whole thread.
 		if [ "${_conflict_sweep_found}" != "true" ] && [ "${_conflict_sweep_loaded}" = "1" ]; then
 			_conflict_sweep_prior="0"
 		fi
