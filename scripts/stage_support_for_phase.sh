@@ -99,7 +99,9 @@ case "${stage_support_phase}" in
 		# gh_helpers.sh sources emit_event.sh from its own directory first.
 		# clarify_blocked_verify.sh (stuck-states P9b) is optional: a support
 		# ref older than it must not stop clarify; Run Codex skips the retry.
-		stage_support_optional_scripts=(emit_event.sh clarify_blocked_verify.sh)
+		# dependency_wait_resume.py (stuck-states P8a-2) parses and parks
+		# WAITING: answers; without it a WAITING: line takes the BLOCKED path.
+		stage_support_optional_scripts=(emit_event.sh clarify_blocked_verify.sh dependency_wait_resume.py)
 		stage_support_data_files=(clarify_sandbox/Dockerfile)
 		stage_support_host_python_scripts=(
 			pr_dependency.py load_workflow_overlay.py security_dependency.py
@@ -122,7 +124,9 @@ case "${stage_support_phase}" in
 			clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh
 		)
 		# gh_helpers.sh sources emit_event.sh from its own directory first.
-		stage_support_optional_scripts=(emit_event.sh)
+		# dependency_wait_resume.py (stuck-states P8a-2) is optional, as for
+		# clarify: without it a WAITING: plan answer takes the BLOCKED path.
+		stage_support_optional_scripts=(emit_event.sh dependency_wait_resume.py)
 		# clarify_isolated_run.sh (called by run_plan_codex.sh for PLAN) reads
 		# the Claude settings template and the sandbox Dockerfile from its own
 		# directory or CLARIFY_ISOLATION_SUPPORT_DIR.
