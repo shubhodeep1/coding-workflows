@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-05T21:10:01Z",
+  "issue_number": 8881,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/ai_labels.py:1142; cited_path=scripts/ai_labels.py; files_touched=agents.d/stuck-states-p8d-generic-seed.md, changelog.d/stuck-states-p8d-generic-seed.md, scripts/dependency_wait_resume.py, tests/test_dependency_wait_resume.py.",
+  "phase": "review_autofix",
+  "pr_number": 8882,
+  "record_id": "lesson_20261105211001_bcd9d94de6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ai_labels.py",
+    "agents.d/stuck-states-p8d-generic-seed.md",
+    "changelog.d/stuck-states-p8d-generic-seed.md",
+    "scripts/dependency_wait_resume.py",
+    "tests/test_dependency_wait_resume.py"
+  ]
+}
