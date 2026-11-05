@@ -267,7 +267,29 @@ def test_seed_recovery_skips_silent_reblock_without_comment() -> None:
 		{"event": "unlabeled", "label": {"name": dwr.WAIT_LABEL}, "actor": {"login": "human"}},
 	]
 	_scan(gh)
-	assert gh.posted == [] and gh.label_ops == []
+	assert gh.label_ops == []
+	assert len(gh.posted) == 1 and f"<!-- {dwr.SEED_DECLINED_MARKER} issue=20 -->" in gh.posted[0][1]
+	assert gh.event_reads == [20]
+	# The note bounds the events read to one: later ticks skip without it.
+	_scan(gh)
+	assert len(gh.posted) == 1 and gh.event_reads == [20] and gh.label_ops == []
+
+
+def test_seed_recovery_skips_events_read_after_later_trusted_comment() -> None:
+	gh = FakeGitHub()
+	seed = _c(_wait_body(kind="issue", number=4, extra={"source": "seed"}))
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, [seed, _c("planner note")], body="Depends on: #4")
+	_scan(gh)
+	assert gh.event_reads == [] and gh.posted == [] and gh.label_ops == []
+
+
+def test_seed_recovery_tolerates_malformed_event_payload() -> None:
+	gh = FakeGitHub()
+	seed = _c(_wait_body(kind="issue", number=4, extra={"source": "seed"}))
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, [seed], body="Depends on: #4")
+	gh.events[20] = [{"event": "labeled", "label": "oops", "actor": "oops"}]
+	_scan(gh)
+	assert gh.issues[20]["labels"] == {dwr.WAIT_LABEL}
 
 
 def test_half_applied_seed_finished_even_after_unrelated_comment() -> None:
@@ -420,8 +442,10 @@ def test_seeding_happens_once_and_skips_excluded_labels(capsys: pytest.CaptureFi
 	# Seeded marker is honoured on the next tick; no second seed, and a
 	# deliberate move back to ai:blocked is not undone.
 	gh.issues[20]["labels"] = {dwr.BLOCKED_LABEL}
-	_scan(gh, capsys)
-	assert [n for n, _ in gh.posted] == [20]
+	out = _scan(gh, capsys)
+	assert [n for n, _ in gh.posted] == [20, 20]
+	assert dwr.SEED_DECLINED_MARKER in gh.posted[1][1]
+	assert "outcome=seed_declined" in out
 	assert gh.issues[20]["labels"] == {dwr.BLOCKED_LABEL}
 
 

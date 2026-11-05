@@ -29,8 +29,10 @@ Batching contract (§14):
 - **Conditional reads.** One paginated REST comments read (at most 10 pages)
   only when a write is due and the 30-comment window is incomplete, and one
   paginated ``issues/<n>/events`` read only when clearing this wait's own
-  ``ai:needs-human`` latch or when a blocked issue already carries a trusted
-  seed marker (to tell a half-applied seed from a deliberate move back).
+  ``ai:needs-human`` latch or when a blocked issue's newest trusted comment is
+  its seed marker (to tell a half-applied seed from a deliberate move back).
+  A deliberate move back gets one ``AI_DEPENDENCY_WAIT_SEED_DECLINED_V1``
+  note, so that read happens at most once per issue.
 - **Writes.** At most one idempotent ``/answer`` or ``/reclarify`` comment per
   resolved dependent (deduplicated by ``AI_DEPENDENCY_WAIT_RESUMED_V1``), and
   one comment plus one label change per escalation, seed or switch-off move.
@@ -72,6 +74,7 @@ RESUME_MARKER_RE = re.compile(
 	r"<!--\s*AI_DEPENDENCY_WAIT_RESUMED_V1 issue=([0-9]{1,10}) target=(\S{1,200}) since=(\S{1,64}) outcome=(answer|reclarify)\s*-->"
 )
 DISABLED_MARKER = "AI_DEPENDENCY_WAIT_DISABLED_V1"
+SEED_DECLINED_MARKER = "AI_DEPENDENCY_WAIT_SEED_DECLINED_V1"
 DISABLED_MARKER_RE = re.compile(r"<!--\s*AI_DEPENDENCY_WAIT_DISABLED_V1 issue=([0-9]{1,10})\s*-->")
 LATCH_MARKER_PREFIX = "<!-- ai:needs-human-latch "
 LATCH_MARKER_RE = re.compile(r"<!-- ai:needs-human-latch reason=dependency_wait target=(\S{1,200}) since=(\S{1,64}) -->")
@@ -619,18 +622,28 @@ def seed_blocked(gh: Any, issue: IssueSnapshot, dependency: int, repo: str, logi
 			# Only finish this helper's own half-applied seed for the same
 			# dependency; never undo a deliberate move back to ai:blocked.
 			return ""
+		if any(index > found[0] for index, _comment in _trusted(issue.comments, login)):
+			# A failed label write posts nothing after the seed marker, so a
+			# later pipeline comment (latch, decline note, ...) means the seed
+			# was applied: leave the issue alone without an events read.
+			return ""
 		events = gh.label_events(issue.number)
 		if events is None:
 			return "read_failed"
 		if any(
 			event.get("event") == "labeled"
-			and ((event.get("label") or {}).get("name")) == WAIT_LABEL
-			and ((event.get("actor") or {}).get("login")) == login
+			and isinstance(event.get("label"), dict) and event["label"].get("name") == WAIT_LABEL
+			and isinstance(event.get("actor"), dict) and event["actor"].get("login") == login
 			for event in events
 		):
 			# The pipeline applied the wait label before; it was removed on
-			# purpose (with or without a comment), so leave the issue alone.
-			return ""
+			# purpose. Post one note so later ticks skip without an events read.
+			body = (
+				f"This issue was moved back to `{BLOCKED_LABEL}` after it waited on #{dependency}, so the poller "
+				f"no longer moves it to `{WAIT_LABEL}`. Reply `/answer` to resume it.\n"
+				f"<!-- {SEED_DECLINED_MARKER} issue={issue.number} -->"
+			)
+			return "seed_declined" if gh.comment(issue.number, body) else "read_failed"
 		# A seed whose marker posted but whose label change failed: finish it
 		# without a second marker, or the issue stays ai:blocked for good.
 		if not gh.add_labels(issue.number, [WAIT_LABEL]):
