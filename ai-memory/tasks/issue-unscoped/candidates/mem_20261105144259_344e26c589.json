@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/:N/A | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI check-run `copilot-pull-request-reviewer` failed with `Prompt too big after adding system message`.\n  WHY: Repository instruction files (e.g., AGENTS.md, CLAUDE.md) exceed the Copilot reviewer's prompt budget, causing a 422 error; the reviewer states this is an infrastructure failure unrelated to the canary change (reported as MAJOR, mapped to high).\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: NONE \u2014 the file content matches the linked issue spec byte for byte and no other file is changed; no runtime-correctness issue found.\n  WHY: Reported as a NIT with no defect; the reviewer states it does not fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/:N/A | severity=MAJOR | confidence=5\n  PROBLEM: CI check-run `copilot-pull-request-reviewer` failed with `Prompt too big after adding system message`.\n  WHY: Repository instruction files (e.g., AGENTS.md, CLAUDE.md) have grown too large for the Copilot PR reviewer's prompt budget, causing a 422 error and blocking PR review. This is an infrastructure failure unrelated to the code changes in `tests/e2e_smoke_canary.txt`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:lines 1-3 | severity=NIT | confidence=5\n  PROBLEM: NONE \u2014 the file content matches the linked issue spec byte for byte (`status: ok`, `run_id: 40831286935`, `updated-by: ai-pipeline`, trailing newline), and the PR changes no other file. No runtime-correctness issue found in the diff.\n  WHY: It does not fail; no defect exists in the changed hunk.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a25f3aa50a6193578953bc989b3ef9ee853db408f63330b21a4b447cc09d70fa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "42045798647",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42045798647",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105144259_344e26c589",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "42045798647"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T14:42:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
