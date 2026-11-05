@@ -121,6 +121,7 @@ class FakeGitHub:
 		for label in labels:
 			self.label_ops.append(("add", number, label))
 			self.issues[number]["labels"].add(label)
+			self.events.setdefault(number, []).append({"event": "labeled", "label": {"name": label}, "actor": {"login": self.login}})
 		return True
 
 	def remove_label(self, number: int, label: str) -> bool:
@@ -252,8 +253,40 @@ def test_seed_recovery_skips_reblocked_issue_with_later_comment() -> None:
 	seed = _c(_wait_body(kind="issue", number=4, since=OLD_SINCE, extra={"source": "seed"}))
 	latch = _c(f"<!-- ai:needs-human-latch reason=dependency_wait target=issue:{REPO}#4 since={OLD_SINCE} -->")
 	gh.add_issue(20, {dwr.BLOCKED_LABEL}, [seed, latch, _c("/answer", author="human")], body="Depends on: #4")
+	gh.events[20] = [{"event": "labeled", "label": {"name": dwr.WAIT_LABEL}, "actor": {"login": LOGIN}}]
 	_scan(gh)
 	assert gh.posted == [] and gh.label_ops == []
+
+
+def test_seed_recovery_skips_silent_reblock_without_comment() -> None:
+	gh = FakeGitHub()
+	seed = _c(_wait_body(kind="issue", number=4, extra={"source": "seed"}))
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, [seed], body="Depends on: #4")
+	gh.events[20] = [
+		{"event": "labeled", "label": {"name": dwr.WAIT_LABEL}, "actor": {"login": LOGIN}},
+		{"event": "unlabeled", "label": {"name": dwr.WAIT_LABEL}, "actor": {"login": "human"}},
+	]
+	_scan(gh)
+	assert gh.posted == [] and gh.label_ops == []
+
+
+def test_half_applied_seed_finished_even_after_unrelated_comment() -> None:
+	gh = FakeGitHub()
+	seed = _c(_wait_body(kind="issue", number=4, extra={"source": "seed"}))
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, [seed, _c("ping", author="someone")], body="Depends on: #4")
+	_scan(gh)
+	assert gh.posted == []
+	assert gh.issues[20]["labels"] == {dwr.WAIT_LABEL}
+
+
+def test_seed_recovery_events_read_failure_writes_nothing(capsys: pytest.CaptureFixture) -> None:
+	gh = FakeGitHub()
+	seed = _c(_wait_body(kind="issue", number=4, extra={"source": "seed"}))
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, [seed], body="Depends on: #4")
+	gh.label_events = lambda number: None  # type: ignore[method-assign]
+	out = _scan(gh, capsys)
+	assert gh.posted == [] and gh.label_ops == []
+	assert "outcome=read_failed" in out
 
 
 def test_escalation_text_tells_human_to_swap_to_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -384,10 +417,12 @@ def test_seeding_happens_once_and_skips_excluded_labels(capsys: pytest.CaptureFi
 	assert payload == {"kind": "issue", "repo": REPO, "number": 4, "since": "2026-11-05T12:00:00Z", "source": "seed"}
 	assert gh.issues[20]["labels"] == {dwr.WAIT_LABEL}
 	assert "seeded=1" in out
-	# Seeded marker is honoured on the next tick; no second seed.
+	# Seeded marker is honoured on the next tick; no second seed, and a
+	# deliberate move back to ai:blocked is not undone.
 	gh.issues[20]["labels"] = {dwr.BLOCKED_LABEL}
 	_scan(gh, capsys)
 	assert [n for n, _ in gh.posted] == [20]
+	assert gh.issues[20]["labels"] == {dwr.BLOCKED_LABEL}
 
 
 def test_switch_off_moves_waiting_to_blocked_without_target_reads(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:

@@ -29,7 +29,8 @@ Batching contract (§14):
 - **Conditional reads.** One paginated REST comments read (at most 10 pages)
   only when a write is due and the 30-comment window is incomplete, and one
   paginated ``issues/<n>/events`` read only when clearing this wait's own
-  ``ai:needs-human`` latch.
+  ``ai:needs-human`` latch or when a blocked issue already carries a trusted
+  seed marker (to tell a half-applied seed from a deliberate move back).
 - **Writes.** At most one idempotent ``/answer`` or ``/reclarify`` comment per
   resolved dependent (deduplicated by ``AI_DEPENDENCY_WAIT_RESUMED_V1``), and
   one comment plus one label change per escalation, seed or switch-off move.
@@ -618,9 +619,17 @@ def seed_blocked(gh: Any, issue: IssueSnapshot, dependency: int, repo: str, logi
 			# Only finish this helper's own half-applied seed for the same
 			# dependency; never undo a deliberate move back to ai:blocked.
 			return ""
-		if found[0] != len(issue.comments) - 1:
-			# A failed label write leaves the seed marker as the newest comment;
-			# any later comment (latch, /answer, planner) means it was applied.
+		events = gh.label_events(issue.number)
+		if events is None:
+			return "read_failed"
+		if any(
+			event.get("event") == "labeled"
+			and ((event.get("label") or {}).get("name")) == WAIT_LABEL
+			and ((event.get("actor") or {}).get("login")) == login
+			for event in events
+		):
+			# The pipeline applied the wait label before; it was removed on
+			# purpose (with or without a comment), so leave the issue alone.
 			return ""
 		# A seed whose marker posted but whose label change failed: finish it
 		# without a second marker, or the issue stays ai:blocked for good.
