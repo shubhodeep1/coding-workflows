@@ -189,6 +189,7 @@ def _run_bash_case(case_id: str, args: list[str], **kwargs) -> subprocess.Comple
 	# CI run 37102511377 hid stderr behind CalledProcessError, whose message
 	# repeats the whole bash -c script. Report only the case id, exit status
 	# and a bounded stderr tail; never the args, env or script text.
+	kwargs.pop("check", None)
 	result = subprocess.run(args, capture_output=True, text=True, check=False, **kwargs)
 	if result.returncode != 0:
 		stderr_tail = (result.stderr or "")[-_BASH_CASE_STDERR_TAIL_CHARS:]
