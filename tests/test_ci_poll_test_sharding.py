@@ -3149,10 +3149,10 @@ POLL_GROUP_TWO_8772_BOUNDARY_MODULES = (
 	"tests/test_ai_memory_sync_reference_files.py",
 	"tests/test_workflow_untrusted_input_contract.py",
 )
-POLL_GROUP_TWO_8772_MODULE_COUNT = 52
+POLL_GROUP_TWO_8772_MODULE_COUNT = 53
 # sha256 of the sorted, newline-joined module paths, so swapping an interior
 # module for another one is caught too.
-POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "a9fd35d08c872bb8b425964f565525d2255fc50964f0e19f26676959e7f03757"
+POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "e6795c8ab682e4d23b64fe87175b904f97ea243d51cd562adf8c2f7831ccc24f"
 
 
 class MovedPollGroupTwo8772StepsContractTest(unittest.TestCase):

@@ -655,6 +655,28 @@ def test_repair_labels_terminal_phase_drops_needs_human():
 	assert payload["remove"] == ["ai:blocked", "ai:needs-human"]
 
 
+WAITING_ON_DEPENDENCY_LABEL = "ai:waiting-on-dependency"
+
+
+def test_contract_declares_waiting_on_dependency_issue_phase():
+	contract = ai_labels.load_label_contract(CONTRACT_PATH)
+	assert contract["labels"][WAITING_ON_DEPENDENCY_LABEL]["color"] == "fbca04"
+	issue_phase = next(group for group in contract["phase_groups"] if group["name"] == "issue_phase")
+	members = issue_phase["members"]
+	assert WAITING_ON_DEPENDENCY_LABEL in members
+	assert members.index(WAITING_ON_DEPENDENCY_LABEL) + 1 == members.index("ai:blocked")
+
+
+def test_repair_labels_waiting_on_dependency_beats_stage_but_not_latches():
+	assert _repair(f"ai:planning,{WAITING_ON_DEPENDENCY_LABEL}")["remove"] == ["ai:planning"]
+	blocked_payload = _repair(f"ai:blocked,{WAITING_ON_DEPENDENCY_LABEL}")
+	assert blocked_payload["add"] == []
+	assert blocked_payload["remove"] == [WAITING_ON_DEPENDENCY_LABEL]
+	needs_human_payload = _repair(f"ai:needs-human,{WAITING_ON_DEPENDENCY_LABEL}")
+	assert needs_human_payload["add"] == []
+	assert needs_human_payload["remove"] == []
+
+
 def _label_page(labels: list[dict[str, str]]) -> _FakeHTTPResponse:
 	return _FakeHTTPResponse(labels)
 
