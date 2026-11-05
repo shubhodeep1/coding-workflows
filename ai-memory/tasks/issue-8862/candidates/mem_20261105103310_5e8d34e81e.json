@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply workflow-optimization-2026-10-03 recommendations (clarify-route contract diagnostics + processing report)\",\"issues\":[{\"id\":\"wfopt-1003-clarify-contract-diagnostics\",\"title\":\"Clarify-route contract tests: report case id, exit status and bounded stderr on failure; record wfopt-2026-10-03 verdicts\",\"priority\":1}],\"dependency_edges\":[]}",
+  "fingerprint": "7f706a12ac461dd2df457dd09258a2c244fd0acaf423435d487d51d1c487c3b5",
+  "lineage": {
+    "issue_number": 8862,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42010389811",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42010389811",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261105103310_5e8d34e81e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8862,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42010389811"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply workflow-optimization-2026-10-03 recommendations (clarify-route contract diagnostics + processing report)' into 1 issues (tracking #8862)",
+  "timestamps": {
+    "created_at": "2026-11-05T10:33:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
