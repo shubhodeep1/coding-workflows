@@ -5,13 +5,30 @@
   "entry_id": "processed_command_8859_6654275297_approved",
   "issue_number": 8859,
   "metadata": {
+    "branch": "ai/issue-8859",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/orchestrate_poll.yml",
+      "README.md",
+      "agents.d/stuck-states-p8b-dependency-wait-resume.md",
+      "changelog.d/stuck-states-p8b-dependency-wait-resume.md",
+      "docs/plans/confine-human-steps-to-activation-plan.md",
+      "scripts/dependency_wait_resume.py",
+      "tests/test_dependency_wait_resume.py",
+      "tests/test_orchestrate_poll_workflow_contract.py"
+    ],
+    "issue_number": 8859,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8859",
+    "pr_number": 8861,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8861",
+    "run_attempt": "1",
+    "run_id": "42001267368",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42001267368"
   },
   "run_attempt": 1,
   "run_id": "42001267368",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-05T09:19:39Z",
+  "status": "completed",
+  "timestamp": "2026-11-05T09:51:00Z",
   "workflow": "implement"
 }
