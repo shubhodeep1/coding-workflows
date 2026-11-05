@@ -24388,7 +24388,8 @@ PY
     # dispatch_rb_judge action (see execute_stall_recovery_action).
     # ai:split-to-project (Q152): the orchestrator project owns the plan and
     # close_plan_split_source_if_needed closes the issue at completion.
-    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:split-to-project" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
+    # ai:waiting-on-dependency (stuck-states P8): the dependency-wait resume scan owns it.
+    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:split-to-project" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:waiting-on-dependency" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
       continue
     fi
 

@@ -2339,6 +2339,41 @@ def test_split_to_project_label_is_a_dedicated_phase():
 	assert '[ "${phase}" = "ai:split-to-project" ]' in skip
 
 
+def test_waiting_on_dependency_label_priority_and_dedicated_handler():
+	# Stuck-states P8 / confine plan Phase 4a: the dependency-wait label sits
+	# right after ai:blocked, so human latches still win but it outranks every
+	# failure and stage label. The resume scan owns it, so stall recovery
+	# (managed and standalone) leaves it alone.
+	assert orchestrate_lib.determine_phase(["ai:planning", "ai:waiting-on-dependency"]) == "ai:waiting-on-dependency"
+	assert orchestrate_lib.determine_phase(["ai:plan-failed", "ai:waiting-on-dependency"]) == "ai:waiting-on-dependency"
+	assert orchestrate_lib.determine_phase(["ai:waiting-on-dependency", "ai:blocked"]) == "ai:blocked"
+	assert orchestrate_lib.determine_phase(["ai:waiting-on-dependency", "ai:needs-human"]) == "ai:needs-human"
+	priority = orchestrate_lib.PHASE_LABELS_PRIORITY
+	assert priority.index("ai:waiting-on-dependency") == priority.index("ai:blocked") + 1
+	assert "ai:waiting-on-dependency" in orchestrate_lib.DEDICATED_HANDLER_PHASES
+	assert "ai:waiting-on-dependency" not in orchestrate_lib.TERMINAL_PHASES
+	text = (Path(__file__).resolve().parent.parent / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	skip = next(line for line in text.splitlines() if '[ "${phase}" = "ai:needs-human" ] || ' in line and "ai:validation-fixing" in line)
+	assert '[ "${phase}" = "ai:waiting-on-dependency" ]' in skip
+
+
+def test_detect_stalls_skips_waiting_on_dependency_phase():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["last_seen_phase"] = "ai:waiting-on-dependency"
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels={"10": ["ai:planning", "ai:waiting-on-dependency"], "11": []},
+		threshold_minutes=1,
+		now_ts=10_000,
+	)
+
+	assert stalls == []
+
+
 def test_detect_stalls_skips_capacity_wait_phase():
 	state = _make_state()
 	issue = state["waves"][0]["issues"][0]
