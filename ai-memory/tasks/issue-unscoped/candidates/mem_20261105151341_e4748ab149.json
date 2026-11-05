@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:1795-1825 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The instruction files loaded by the Copilot PR reviewer exceed its custom-instructions prompt limit, so the copilot-pull-request-reviewer check-run fails with custom_instructions_too_large (HTTP 422).\n  WHY: Severity disagreement: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rated it NIT, while google_gemini-3_1-flash-lite and openai_gpt-6-luna rated it MAJOR, so the highest is used. anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash and minimax_minimax-m3 (in its summary) note that the failure is external and that no code in this PR can fix it. The fold adds only about 53 lines.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.md:1795-1825 | severity=NIT | confidence=2\n  PROBLEM: The failed copilot-pull-request-reviewer check-run on head 35329be3 hit custom_instructions_too_large (HTTP 422). The cause is the bot's instruction-size limit, not defective code or documentation.\n  WHY: The merge adds only about 53 lines to an agents.md that is already over 5,000 lines. No in-repo gate fails for this PR, and the finding is reported only because failed check-runs must be surfaced.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:1795-1825 | severity=MAJOR | confidence=4\n  PROBLEM: The added agent context causes the Copilot PR reviewer to exceed its custom-instructions prompt limit.\n  WHY: The copilot-pull-request-reviewer check-run fails with custom_instructions_too_large before producing a review, blocking automated PR reviews.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:1795-1825 | severity=MAJOR | confidence=4\n  PROBLEM: The PR adds substantial instruction text to agents.md, which the Copilot PR reviewer loads as a custom instruction file. That reviewer failed with custom_instructions_too_large on this head.\n  WHY: The check-run log shows the review request was rejected because the prompt was too large, so Copilot review cannot complete on the current revision.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md:1795-1825 | severity=NIT | confidence=4\n  PROBLEM: The repository's instruction files exceed the hosted Copilot reviewer's custom-instructions prompt limit, so its check-run fails before producing any review (run 42048790496, job 127318949520).\n  WHY: The bot builds its prompt from the repo instruction files at review time. No code path in this merge-commit diff can change that, and the size problem is pre-existing and cumulative across many folds.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3d46906c16cdb31379091d09d5a3dfa5e6c60ec22c6ff859af34a0495f576330",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8878,
+    "run_id": "42048765122",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42048765122",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105151341_e4748ab149",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8878,
+    "run_id": "42048765122"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T15:13:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
