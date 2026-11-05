@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:32527-32531,32785-32792 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: A failed open-PR list fetch falls back to `[]`, so the new STANDALONE_CONFLICT_SWEEP_SUMMARY prints `listed=0 list_truncated=false`, the same line an empty repo produces.\n  WHY: The coverage telemetry cannot tell an API outage from an empty sweep. All four reviewers rated this NIT; the highest confidence given was 4.\n- AGENTS.md/CLAUDE.md:repository root | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The repository's AGENTS.md and CLAUDE.md exceed the copilot-pull-request-reviewer prompt limit, so that check fails with custom_instructions_too_large.\n  WHY: Severity disagreement: gemini rated it MAJOR with confidence 4. minimax rated it NIT with confidence 3, called it pre-existing, and said no change is needed in this PR. The highest severity is used here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Log endpoint-template counts, attempts, elapsed time, and list truncation; this also reduces rate-limit exposure.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh, the `STANDALONE_CONFLICT_SWEEP_SUMMARY` emission (line 32792)\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The summary fields are listed, prefiltered_draft, skipped_integration, batch_clean, rest_fetched, api_updated, dispatched, dispatch_inflight, dispatch_failed, unresolved_same_head, list_limit and list_truncated. Per-endpoint attempts and sweep elapsed time are not emitted.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh: `CONFLICT_SWEEP_LISTED=\"${STANDALONE_COUNT:-}\"` and the summary echo; upstream `STANDALONE_PRS` fallback to \"[]\" | severity=NIT | confidence=3\n  PROBLEM: A failed open-PR fetch prints `listed=0 list_truncated=false`, the same line an empty repo produces.\n  WHY: Nothing breaks, and the sweep does no work either way. Only the coverage signal is ambiguous.\n- Other categories (security, correctness, concurrency, performance, index-contract, naming, trust-boundary, task completeness): NONE.\n- Unrelated note: copilot-pull-request-reviewer fails with custom_instructions_too_large because AGENTS.md and CLAUDE.md exceed that tool's prompt limit. The diff does not touch those files.\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- AGENTS.md / CLAUDE.md:Repository root | severity=MAJOR | confidence=4\n  PROBLEM: The pre-existing repository context size exceeds the prompt limit for the copilot-pull-request-reviewer CI check.\n  WHY: The CI check fails with custom_instructions_too_large, which prevents PR validation and merge.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:32527-32531, 32785-32792 | severity=NIT | confidence=4\n  PROBLEM: The summary derives every field from `STANDALONE_COUNT`, which is 0 both for an empty repo and when `gh pr list` failed, because the `|| echo \"[]\"` fallback swallows the exit status.\n  WHY: An outage is reported as an idle repo, so the line cannot show whether the sweep covered the PRs.\n- .github/workflows/ci.yml / copilot-pull-request-reviewer check run (Actions run 41990264679, job 127120564473) | severity=NIT | confidence=3\n  PROBLEM: One check-run on the PR head is red because custom_instructions_too_large is raised while the copilot reviewer assembles instructions from AGENTS.md and CLAUDE.md.\n  WHY: This is a pre-existing repository condition and the diff touches neither file. It is surfaced only so the editor does not treat the run as green.\n- TASK_GAP: Requirement: \"Log endpoint-template counts, attempts, elapsed time, and list truncation; this also reduces rate-limit exposure.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, the `STANDALONE_CONFLICT_SWEEP_SUMMARY` emission (line 32792)\n  Evidence of absence: Counts and list truncation are present, but attempts and elapsed time are absent.\n  ISSUE_CONFIDENCE: 3 (SEVERITY: NIT)\n- HARDENING_SUGGESTIONS (2 related items): capture the `gh pr list` exit status and add `list_failed` to the summary (about 6 lines); log `sweep_secs` in the summary (about 4 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:32527-32531, 32785-32792 | severity=NIT | confidence=4\n  PROBLEM: When the open-PR list request fails, the fallback sets `STANDALONE_PRS` to `[]`, and the summary reports `listed=0 list_truncated=false`. A successful empty result produces the same line.\n  WHY: The coverage telemetry presents an API failure as a completed sweep with no PRs.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:32527-32531, 32785-32792 | severity=NIT | confidence=4\n  PROBLEM: The `STANDALONE_CONFLICT_SWEEP_SUMMARY` cannot distinguish a failed `gh pr list` fetch from a repository with zero open PRs.\n  WHY: During a transient API failure, log analysis reads the summary as \"repo had no open PRs\", which masks the outage.\n- Note: the copilot-pull-request-reviewer `custom_instructions_too_large` failure is a pre-existing repository-context-size issue, not a defect in this diff.\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "04c3ab6cde9875901e6b741779adf5592aa29ade91f95c9c94a2a09addcca24f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8852,
+    "run_id": "41993488940",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41993488940",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105084311_d1a5211045",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8852,
+    "run_id": "41993488940"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T08:43:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
