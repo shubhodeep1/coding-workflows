@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "Polling and phase-transition work commonly touches `.github/workflows/orchestrate_poll.yml` together with `scripts/orchestrate_poll_process.sh` or related libraries. When changing this behavior, check both the workflow wiring and the processing logic, and extend the workflow/process contract tests to protect their interaction.",
+  "fingerprint": "dedd0b70f4122b8088d1f37216f5b8d1c6bd040099ba430237313fbc70cbe518",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42040450576",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42040450576",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8844",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8857",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8859",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8860",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8863",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8853",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8858",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8861",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8864",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8865"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261105140052_fdd6acfb34",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator behavior is split across workflow YAML and processing scripts, so changes often need coordinated updates and contract tests.",
+  "timestamps": {
+    "created_at": "2026-11-05T14:00:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
