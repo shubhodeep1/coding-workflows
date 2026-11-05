@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import subprocess
 
 import yaml
@@ -13,6 +14,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Upper bound on the stderr tail a failing bash case reports.
 _BASH_CASE_STDERR_TAIL_CHARS = 2000
+# Token shapes scrubbed from that tail: GitHub tokens, AWS access keys,
+# OpenRouter/OpenAI-style keys and PEM private-key blocks.
+_BASH_CASE_SECRET_RE = re.compile(
+	r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{20,}"
+	r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"
+)
 
 PHASE_WORKFLOWS = {
 	"clarify": (
@@ -188,11 +195,12 @@ def _clarify_bash_snippet() -> str:
 def _run_bash_case(case_id: str, args: list[str], **kwargs) -> subprocess.CompletedProcess:
 	# CI run 37102511377 hid stderr behind CalledProcessError, whose message
 	# repeats the whole bash -c script. Report only the case id, exit status
-	# and a bounded stderr tail; never the args, env or script text.
+	# and a bounded, token-redacted stderr tail; never the args, env or
+	# script text.
 	kwargs.pop("check", None)
 	result = subprocess.run(args, capture_output=True, text=True, check=False, **kwargs)
 	if result.returncode != 0:
-		stderr_tail = (result.stderr or "")[-_BASH_CASE_STDERR_TAIL_CHARS:]
+		stderr_tail = _BASH_CASE_SECRET_RE.sub("<redacted>", (result.stderr or "")[-_BASH_CASE_STDERR_TAIL_CHARS:])
 		raise AssertionError(f"case={case_id} exit={result.returncode} stderr_tail={stderr_tail!r}")
 	return result
 
@@ -202,7 +210,7 @@ def test_run_bash_case_reports_case_exit_and_bounded_stderr() -> None:
 		"# SCRIPT_TEXT_MARKER_8862_DO_NOT_LEAK\n"
 		"printf 'HEAD_TOKEN_8862' >&2\n"
 		"printf '%*s' 2500 '' | tr ' ' e >&2\n"
-		"printf 'TAIL_TOKEN_8862' >&2\n"
+		"printf 'TAIL_TOKEN_8862 ghp_%s' 'abcdefghijklmnopqrstuvwxyz0123456789' >&2\n"
 		"exit 7\n"
 	)
 	raised = False
@@ -219,6 +227,8 @@ def test_run_bash_case_reports_case_exit_and_bounded_stderr() -> None:
 	assert "TAIL_TOKEN_8862" in message, message[-200:]
 	assert "SCRIPT_TEXT_MARKER_8862_DO_NOT_LEAK" not in message
 	assert "HEAD_TOKEN_8862" not in message
+	assert "ghp_abcdefghijklmnopqrstuvwxyz0123456789" not in message
+	assert "<redacted>" in message, message[-200:]
 	assert len(message) <= _BASH_CASE_STDERR_TAIL_CHARS + 200, len(message)
 
 
