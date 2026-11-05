@@ -298,6 +298,9 @@ for correctness.
 5. Label registration: color and description in `label_helpers.sh`, `_AI_PHASE_LABELS`, `label_contract.v1.json`, `PHASE_LABELS_PRIORITY` (after `ai:blocked`), `DEDICATED_HANDLER_PHASES` (so standalone stall recovery skips it). Update `test_ai_labels.py`, `test_label_helpers_phase_transition_contract.py`, `test_ai_label_precreation_contract.py`. Add a fragment.
 
 ### Phase 4b
+
+> **Delivered by stuck-states P8b (Refs #8291).** `scripts/dependency_wait_resume.py` and the `orchestrate_poll.yml` step "Resume dependency waits" implement this phase as widened by `docs/plans/remove-unattended-pipeline-stuck-states-plan.md` P8: `issue` targets and one-time `Depends on: #N` seeding are added, a target closed unmerged gets `/reclarify`, the release check treats `compare/<sha>...stable` status `ahead` or `identical` as released (not `behind`, per P10), and escalation adds `ai:needs-human` with a latch comment while keeping `ai:waiting-on-dependency` instead of swapping to `ai:blocked` with a CRITICAL page.
+
 1. `scripts/dependency_wait_resume.py` [new]. Docstring states the input, output, API-call count and fail-open behaviour (§15).
    - **Call 1:** one GraphQL query for open issues labelled `ai:waiting-on-dependency` with their last 30 comments. When no issue is waiting, it exits here.
    - **Markers:** take the newest trusted `AI_DEPENDENCY_WAIT_V1` marker per issue. Trusted means authored by the PAT identity, using the same trust check as `security_pass_unblock_filed_advisory_followups`.
