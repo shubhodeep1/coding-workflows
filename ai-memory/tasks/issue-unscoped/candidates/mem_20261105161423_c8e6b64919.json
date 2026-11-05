@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- (external GitHub check, not a repository file):N/A | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The copilot-pull-request-reviewer check fails with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\") while loading the AGENTS.md and CLAUDE.md custom instructions.\n  WHY: The check exits with code 1 before reviewing anything, and no canary edit can fix it. The reviewers rated it NIT and agree it is unrelated to the diff.\n- tests/test_implement_post_codex_recovery.py:5060,5779 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The PR description lists failures in tests/test_implement_post_codex_recovery.py as caused by this change.\n  WHY: Severity disagreement: google_gemini-3_1-flash-lite rated it MAJOR (confidence 5), taking the failures as real CI failures. z-ai_glm-5_3-flash rated it NIT (confidence 4), noting that the test file only mentions the canary in string literals at lines 5060 and 5779 and the failures are a gate-report misclassification, not a diff defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- (external GitHub check, not a repository file) copilot-pull-request-reviewer check-run, run 41544333941, job 125616096789 | severity=NIT | confidence=5\n  PROBLEM: The Copilot reviewer aborts with `custom_instructions_too_large` (422) while loading the AGENTS.md and CLAUDE.md custom instructions. The merge commit enlarged those files, and the canary diff has no part in this.\n  WHY: The check exits with code 1 before it reviews anything, and no edit to the canary can fix it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:CI Test Suite Failure | severity=MAJOR | confidence=5\n  PROBLEM: The PR description identifies multiple test failures in tests/test_implement_post_codex_recovery.py as \"Failures caused by this change\".\n  WHY: These tests exit with failure status, causing the CI suite to fail and preventing clean PR verification.\n- N/A (External GitHub Check) copilot-pull-request-reviewer | severity=NIT | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check failed with \"Error creating PR review request: Error: Prompt too big after adding system message\" (errorCode: 'custom_instructions_too_large').\n  WHY: The CI job exits with code 1 and cannot complete its review process.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_implement_post_codex_recovery.py:lines 5060 and 5779 (string literals only); tests/e2e_smoke_canary.txt:1-3 | severity=NIT | confidence=4\n  PROBLEM: The pre-push gate report lists test_implement_post_codex_recovery.py failures as \"caused by this change\", but that file references the canary only in string literals (lines 5060 and 5779) and never reads it. The PR description itself classifies the other 4 failures as inherited.\n  WHY: It does not fail at runtime. The misclassification is in the gate report, not the diff, and the failing tests are pre-existing or infra state unrelated to the three-line text change.\n- copilot-pull-request-reviewer check-run, run 41544333941, job 125616096789 | severity=NIT | confidence=4\n  PROBLEM: The check fails with `custom_instructions_too_large` (HTTP 422) while building its prompt from AGENTS.md/CLAUDE.md custom instructions grown by the merge commit.\n  WHY: This is external reviewer-tooling infrastructure, not mappable to any diff hunk, and no code edit in this PR can address it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "814c1bac9404acbdd1252c8a3b8b62e12b6a81738b8c563b716d11b7683d8259",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "42060844653",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42060844653",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105161423_c8e6b64919",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "42060844653"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T16:14:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
