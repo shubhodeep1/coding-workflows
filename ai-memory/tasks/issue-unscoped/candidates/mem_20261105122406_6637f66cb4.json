@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The `copilot-pull-request-reviewer` check-run (run 41544551704) fails with `custom_instructions_too_large` (\"Prompt too big after adding system message\"), so the PR cannot pass CI.\n  WHY: The failure comes from the size of the repository's custom instructions (AGENTS.md and CLAUDE.md), not from the canary diff, and editing the diff cannot fix it. Severity disagrees: sonnet rated it NIT with confidence 3, gemini rated it MAJOR with confidence 5. The highest severity is used, with MAJOR mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=NIT | confidence=3\n  PROBLEM: The failed `copilot-pull-request-reviewer` check-run (run 41544551704) fails with `Prompt too big after adding system message` (`custom_instructions_too_large`), before any diff content is evaluated.\n  WHY: The cause is the size of the repository's AGENTS.md and CLAUDE.md custom instructions, so editing the three-line canary file cannot fix or cause it. The reviewer saw no fix to make in this PR's diff.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:N/A | severity=MAJOR | confidence=5\n  PROBLEM: The PR head has a failing check-run `copilot-pull-request-reviewer` (run 41544551704, job 125616826829).\n  WHY: The job fails with `custom_instructions_too_large` due to infrastructure limits, not due to the changes in `tests/e2e_smoke_canary.txt`. It is not actionable by code changes but prevents the PR from passing CI.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (no gap found): Requirement: \"Update its content so it is **exactly** these three lines ... status: ok / run_id: 40608957733 / updated-by: ai-pipeline\" and \"Only modify tests/e2e_smoke_canary.txt\".\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: none. The PR diff, and the file on current HEAD (verified with a read), contain exactly the three lines with a trailing newline, and no other file is changed.\n  ISSUE_CONFIDENCE: 5 (requirement fully met; no gap)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2752cc69828cbb19a87765d04e45ef9c754fd78e54162c5064e9012082ead8da",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "42025315356",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42025315356",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105122406_6637f66cb4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "42025315356"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T12:24:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
