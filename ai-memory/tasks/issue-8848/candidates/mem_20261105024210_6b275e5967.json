@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8848,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8848\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8851\",\"pr_number\":8851,\"branch\":\"ai/issue-8848\",\"run_id\":\"41954245894\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41954245894\",\"changed_files\":[\"agents.d/wfopt-2026-10-02-memory-records-considered.md\",\"changelog.d/wfopt-2026-10-02-memory-records-considered.md\",\"scripts/ai_memory.py\",\"scripts/ai_memory_lib.py\",\"tests/test_ai_memory_cli.py\"]}",
+  "fingerprint": "27c05b8d30d85a8de37bf2a3ddc02072d0fb10553aaa918297c1c5bd4cf2e668",
+  "lineage": {
+    "issue_number": 8848,
+    "parent_ids": [],
+    "pr_number": 8851,
+    "run_id": "41954245894",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41954245894",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8851"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261105024210_6b275e5967",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8848,
+    "level": "run",
+    "pr_number": 8851,
+    "run_id": "41954245894"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8848: https://github.com/shubhodeep1/coding-workflows/pull/8851",
+  "timestamps": {
+    "created_at": "2026-11-05T02:42:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
