@@ -1514,6 +1514,10 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	# work and the poller closes the source issue when it completes.
 	"ai:split-to-project",
 	"ai:blocked",
+	# Dependency wait (stuck-states P8 / confine plan Phase 4a): the item waits
+	# on a PR, issue or release. Human latches (ai:needs-human, ai:blocked)
+	# outrank it; it outranks every failure and stage label.
+	"ai:waiting-on-dependency",
 	"ai:clarify-failed",
 	"ai:clarify-respond-failed",
 	"ai:plan-failed",
@@ -1584,6 +1588,9 @@ DEDICATED_HANDLER_PHASES: set[str] = {
 	# Plan split source issue (Q152): close_plan_split_source_if_needed owns it.
 	"ai:split-to-project",
 	"ai:blocked",
+	# Dependency wait (stuck-states P8): the dependency-wait resume scan owns
+	# it, so detect_stalls and the failure-fingerprint breaker skip it.
+	"ai:waiting-on-dependency",
 	"ai:implementation-failed",
 	"ai:validating",
 	"ai:validation-fixing",
