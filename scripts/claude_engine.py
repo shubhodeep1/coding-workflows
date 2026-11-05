@@ -790,7 +790,8 @@ def choose_account(probes: list[dict[str, Any]], gate: float, now: float | None 
 	2. accounts with a 7-day reading but no reset time, the lowest
 	``max(five_hour, seven_day)`` first, where a missing ``five_hour``
 	reading counts as no 5-hour limit;
-	3. accounts whose probe succeeded without a ``seven_day`` reading.
+	3. accounts whose probe succeeded without a usable ``seven_day`` reading
+	(missing, or negative and so malformed).
 
 	A window at or over the gate, or a ``rejected`` status, gates the
 	account; a probe error skips it. ``order`` lists every usable account in
