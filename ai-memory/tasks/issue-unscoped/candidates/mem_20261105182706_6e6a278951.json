@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:Lines 1890, 1896-1903; parser behavior at lines 2031-2057 (Run Codex step, clarify_bv_scan perl, S branch of the BLOCKED-verify retry gate) | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The retry gate accepts any unfenced `STATUS: NEEDS_CLARIFICATION` line as shape S without checking for a `QUESTIONS:` section, and that answer then replaces the original `BLOCKED:` answer in CODEX_OUTPUT_FILE.\n  WHY: The parser (line 2046) finds no questions and treats the result as clear, so the original blocked answer is lost, no questions are posted and the issue does not receive `ai:blocked`. The reviewers disagree on severity: openai_gpt-6-luna rated it MAJOR and z-ai_glm-5_3-flash rated it NIT. z-ai_glm-5_3-flash called it a residual exposure: the last run's prompt now asks for the header and did not make the exposure worse, and the prior editor declined to tighten the gate.\n- scripts/clarify_blocked_verify.sh:prompt() retry block, the sentence changed in the last run (\"answer STATUS: CLEAR, or STATUS: NEEDS_CLARIFICATION with Q<ID> questions under a QUESTIONS: header (the output format above)\") | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The reviewer checked the reworded retry prompt against the parser and found it correct and consistent with the parser, the gate and the updated test in tests/test_clarify_blocked_verify.py (test_prompt_appends_one_block_and_keeps_input); it reports no defect.\n  WHY: N/A \u2014 verified consistent; no runtime failure path found in the modified lines (source severity NIT).\n- scripts/clarify_blocked_verify.sh:`if [ \"${clarify_bv_rc}\" -eq 0 ]; then` inside the `check` mode call in clarify.yml | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The exit-code handling around `bash \"${clarify_bv_helper}\" check ...` (0 = proceed, 3 = skip, any other value = error log) may not explicitly cover a `check` exit code other than these.\n  WHY: The reviewer concluded that the logic is safe, because `clarify_bv_rc` is initialized to 0 and changes only on error or skip, and found no runtime failure path. The source stated no severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement clarify retry mechanism for BLOCKED: answers that cite a tracked path.\n  expected_change_site: .github/workflows/clarify.yml, scripts/clarify_blocked_verify.sh\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: All requirements appear to be met. The retry mechanism is implemented, tested, and integrated into `clarify.yml` with a configurable gate. The inventory and changelog are updated.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/clarify_blocked_verify.sh:`if [ \"${clarify_bv_rc}\" -eq 0 ]; then` inside the `check` mode call in clarify.yml | confidence=2\n  PROBLEM: Exit code 3 (skip) correctly gates prompt-building and exit code 1 is handled by the `-ne 0 && -ne 3` error-log block. The reviewer questions whether gating is explicit for other `check` exit codes.\n  WHY: The current logic is actually safe because `clarify_bv_rc` is initialized to 0 and only modified on error or skip. No runtime failure path identified.\n- TASK_GAP\n  Requirement: Implement clarify retry mechanism for BLOCKED: answers that cite a tracked path.\n  Expected change site: .github/workflows/clarify.yml, scripts/clarify_blocked_verify.sh\n  Evidence of absence: All requirements appear to be met. The retry mechanism is implemented, tested, and integrated into `clarify.yml` with a configurable gate. The inventory and changelog are updated.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/clarify.yml:Lines 1890, 1896-1903; parser behavior at lines 2031-2057. | severity=MAJOR | confidence=5\n  PROBLEM: The retry gate accepts any unfenced `STATUS: NEEDS_CLARIFICATION` line without checking for a `QUESTIONS:` section before replacing the original `BLOCKED:` answer.\n  WHY: If the retry omits `QUESTIONS:`, the parser finds no questions and treats the result as clear. The original blocked answer is lost, so the issue does not receive `ai:blocked`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/clarify.yml:Run Codex step, clarify_bv_scan perl (S branch of the BLOCKED-verify retry gate) | severity=NIT | confidence=3\n  PROBLEM: The gate accepts an unfenced, line-anchored \"STATUS: NEEDS_CLARIFICATION\" as shape S without a QUESTIONS: header, the answer replaces CODEX_OUTPUT_FILE, and parse line 2046 treats it as clear. The last run mitigated this only at the prompt level, the prior editor declined to tighten the gate, and the reviewer records it as residual.\n  WHY: A headerless \"STATUS: NEEDS_CLARIFICATION\" followed by bare Q1 lines passes the gate and overwrites the original BLOCKED: answer, so the issue is parsed as clear and zero questions are posted. HARDENING: in the perl scan, set $status only when a /^QUESTIONS:$/ line follows, or require both $status and a QUESTIONS: line in the END block for shape S (~3 lines). HARDENING_RISK_SCORE: 2.\n- scripts/clarify_blocked_verify.sh:prompt() retry block, the sentence changed in the last run (\"answer STATUS: CLEAR, or STATUS: NEEDS_CLARIFICATION with Q<ID> questions under a QUESTIONS: header (the output format above)\") | severity=NIT | confidence=2\n  PROBLEM: The wording change is correct and grounded. clarify.yml line 2033 reads questions only from below a QUESTIONS: header, and line 2046 warns \"NEEDS_CLARIFICATION with no actual questions; treating as clear\". The test assertion in tests/test_clarify_blocked_verify.py (test_prompt_appends_one_block_and_keeps_input) matches the new text, and the gate still accepts the requested STATUS: form. No defect in the change itself.\n  WHY: N/A \u2014 verified consistent; no runtime failure path found in the modified lines.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ff4ad3a2ab5ba8fd8fd1a45293a91c29bc4e6a7166b5292b68c3162d3f2261fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8877,
+    "run_id": "42081623683",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42081623683",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105182706_6e6a278951",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8877,
+    "run_id": "42081623683"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T18:27:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
