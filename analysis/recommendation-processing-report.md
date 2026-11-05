@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (128)
+## Processed source docs (130)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -134,6 +134,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-09-22-3.md`
 - `analysis/workflow-optimization-2026-09-23.md`
 - `analysis/workflow-optimization-2026-09-26.md`
+- `analysis/workflow-optimization-2026-10-02.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1921,4 +1922,41 @@ Source commit: `22368d37acedfd955de34c60d7c7c8d276d6f715`
 | Redundant Re-Fetch (REUSE) / Dead Calls (DEAD-API) | informational | The doc reports none. |
 | Pipeline Flow Bottlenecks | informational | Covered by the Exec, Speed and Reliability rows above. |
 | Per-Repo Breakdown | informational | Covered by the Exec, Cost and GH API audit rows above. |
+| Metrics Appendix | informational | No separate recommendation. |
+
+### `analysis/workflow-optimization-2026-10-02.md`
+Source doc: `analysis/workflow-optimization-2026-10-02.md`
+Processed: 2026-11-05
+Source commit: `ef9f747a1ac2c3db74c12989d378ee4298a808a0`
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| Exec 1 / Reliability 1, parse-failure class part (sanitized reviewer parse-failure class) | applied | `REVIEWER_ATTEMPT_RESULT` in `scripts/review_run_reviewers.sh` now reports `failure_class=malformed_structured_output` and ends with an optional 10th field, `output_bytes=<int>`; no model text is logged. The terminal-outcome part was already in place: `finalize_reason=reviewers_failed` in `scripts/review_autofix_step_iteration_summary.sh` / `scripts/review_autofix_step_post_editor_summary.sh`, with the reviewers-failure evidence feeding `AUTOFIX_FAILURE_HEADLINE`. Changelog `changelog.d/wfopt-2026-10-02-reviewer-malformed-class.md` (Refs #8845). |
+| Exec 4 / Reliability 2 / Speed 2 logging part / GH API audit `orchestrate_poll` row / Orchestrator Health conflict attribution | applied | `STANDALONE_CONFLICT_SWEEP_SUMMARY` (listed, prefiltered, skipped, REST-fetched, updated, dispatched, `list_truncated`, `list_failed`) and one `STANDALONE_CONFLICT_DISPATCH_OUTCOME` line per conflicted PR in `scripts/orchestrate_poll_process.sh`. Logging only: no gate is bypassed and `CONFLICT_SWEEP_FIXED` keeps its legacy meaning. Changelog `changelog.d/wfopt-2026-10-02-conflict-sweep-outcome.md` (Refs #8845). |
+| Exec 3 / Cost 1 / Prompt Cache stable-prefix fingerprint | applied | `REVIEWER_PROMPT_COMPONENTS pass=… static_bytes=… total_bytes=… static_prefix_sha256=…` per assembled prompt in `scripts/review_run_reviewers.sh`; log-only, fail-open, prompt bytes unchanged. Changelog `changelog.d/wfopt-2026-10-02-reviewer-prompt-components.md` (Refs #8845). |
+| AI Memory Health, `records_considered` | applied | `records_considered` in the `retrieve` JSON output and the `AI_MEMORY_TELEMETRY` line in `scripts/ai_memory.py`, pinned by `test_retrieve_reports_records_considered_above_records_selected` in `tests/test_ai_memory_cli.py`. Changelog `changelog.d/wfopt-2026-10-02-memory-records-considered.md` (Refs #8845). |
+| Exec 2 / Speed 2, draft prefilter | already-implemented | `isDraft` is in the `STANDALONE_PRS` list query (`--json number,headRefName,headRefOid,baseRefName,isDraft,…`) in `scripts/orchestrate_poll_process.sh`, and drafts are skipped before the GraphQL aliases and REST reads. |
+| Speed 1, per-slot timing | already-implemented | `REVIEWER_ATTEMPT_RESULT` duration, `wd_reason`, `stall_state` and `failure_class` in `scripts/review_run_reviewers.sh` (#8097). |
+| Reliability 3 / GH API audit `review_autofix` check-run and `cancel_on_pr_close` rows | already-implemented | `CHECK_RUNS_WAIT_EXIT` with polls/waited_s and the pending-identity lines in `scripts/collect_pr_check_runs_context.py`; `.github/workflows/cancel_on_pr_close.yml` counts unlinked active runs and logs when it preserves runs. |
+| AI Memory Health, duration split | already-implemented | `clone_ms` / `write_ms` / `push_ms` in `scripts/ai_memory.py` telemetry. |
+| SEC-001 (`github.ref_name` in `run:` bodies) | already-implemented | `.github/workflows/workflow-log-analysis.yml` reads `GITHUB_REF_NAME` from the environment, and `.github/workflows/test-and-mark-stable.yml` binds `DISPATCH_REF_NAME` through `env:`. |
+| SEC-002 (raw response in `gh_api_json_to_file` logs) | already-implemented | `gh_api_json_to_file` in `scripts/gh_helpers.sh` logs `bytes=`, `sha256=` and `category=` only (#8095). |
+| BUG-002 (`_mt_upsert_comment` swallowed write failure) | already-implemented | `_mt_upsert_comment` in `scripts/review_merge_train.sh` returns `write_rc`, the PATCH/POST status. |
+| EXPR-001 (`implement.yml` support-staging body size) | already-implemented | The `Stage workflow support files` body in `.github/workflows/implement.yml` passes values through `STAGE_*` `env:`. |
+| DEAD-001 (`CURRENT_FLOOR`) | already-implemented | `CURRENT_FLOOR` is no longer in `scripts/review_issue_ledger.sh`. |
+| BUG-001 (watchdog queue pagination) | rejected | Obsolete: `scripts/claude_issue_queue_watchdog.sh` and its labels are retired. |
+| Speed 3 (repeated no-op review dispatches) | rejected | Obsolete: the `claude_fixer_awaiting_session` gate is retired, capacity-wait PRs are skipped, and the dispatch tracker plus per-head attempt markers already dedupe. |
+| Cost 2 (bound prompt growth), Cost 3 (format-repair retry) | rejected | Behaviour changes the doc says must be measured first; the instrumentation (`REVIEWER_PROMPT_COMPONENTS`, `malformed_structured_output`) now exists. |
+| Model policy | rejected | Advisory only; no change requested. |
+| Exec 5 coverage / Metrics Appendix collection gaps (`GH_API_SUMMARY` per job), check-run snapshot reuse | rejected | Cross-cutting with no single place to emit, counters inside subshells are lost, and the reduction is unquantified. |
+| Prompt Cache prompt-ordering trial | rejected | An experiment that changes the prompt, not a safe code change. |
+| Orchestrator Health age-in-state / judge-cycle counters, queue-timestamp collection | rejected | Too broad with no concrete spec; the state-snapshot artifact already captures per-tick state. |
+| `claude_twin_sync` diagnostics | rejected | No actionable code change. |
+| API-001, API-002, API-003, API-004, BATCH-001, MERGE-001 | rejected | Tagged RISKY_SKIP by the doc itself. |
+| DUP-001, DUP-002 | rejected | Security-sensitive staging refactors; the pre-bootstrap inline `gh_retry` copies are an intentional fallback. Verification-gated, matching earlier ledger deferrals. |
+| DEBT-001 (warning-level ShellCheck gate) | rejected | Needs a human-reviewed warning baseline, and the doc warns against promoting warnings wholesale. |
+| Semble "not the speed bottleneck" note | informational | No separate recommendation. |
+| Redundant Re-Fetch (REUSE) / Dead Calls (DEAD-API) | informational | The doc reports none. |
+| Pipeline Flow Bottlenecks | informational | Covered by the Exec, Speed and Reliability rows above. |
+| Per-Repo Breakdown | informational | Covered by the Exec, Reliability and Cost rows above. |
 | Metrics Appendix | informational | No separate recommendation. |

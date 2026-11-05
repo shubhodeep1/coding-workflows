@@ -130,6 +130,7 @@ def test_empty_effective_prompt_is_guarded_before_launch() -> None:
 
 
 NO_TEXT_LINE = "OpenCode structured reviewer output contained no text events."
+MALFORMED_LINE = "OpenCode structured reviewer output was malformed."
 
 
 def _extract_shell_function(text: str, name: str) -> str:
@@ -209,6 +210,19 @@ def _run_line(*args: str) -> str:
 		("1", "", '{"error":{"code":400}}\n', "", "provider_request_invalid"),
 		("1", "", None, "", "exit_nonzero"),
 		("garbage", "", None, "", "ok"),
+		("1", "", MALFORMED_LINE + "\n", "", "malformed_structured_output"),
+		("0", "", MALFORMED_LINE + "\n", "", "malformed_structured_output"),
+		("1", "", "unterminated stderr" + MALFORMED_LINE + "\n", "", "malformed_structured_output"),
+		("1", "", MALFORMED_LINE + " quoted later\n", "", "exit_nonzero"),
+		("1", "", "HTTP 429 Too Many Requests\n" + MALFORMED_LINE + "\n", "", "rate_limit"),
+		("124", "", MALFORMED_LINE + "\n", "", "timeout"),
+		("1", "idle_timeout", MALFORMED_LINE + "\n", "", "timeout"),
+		("143", "max_steps", MALFORMED_LINE + "\n", "", "max_steps"),
+		("1", "", MALFORMED_LINE + "\n", "killed", "stall_guard"),
+		("143", "tool_repeat", MALFORMED_LINE + "\n", "", "tool_repeat"),
+		("1", "", "503 Service Unavailable\n" + MALFORMED_LINE + "\n", "", "server_error"),
+		("1", "", "error: HTTP 400\n" + MALFORMED_LINE + "\n", "", "provider_request_invalid"),
+		("1", "", NO_TEXT_LINE + "\n" + MALFORMED_LINE + "\n", "", "empty_structured_output"),
 	],
 )
 def test_reviewer_attempt_result_failure_class(tmp_path, rc, wd, stderr, stall, expected):
@@ -224,7 +238,7 @@ def test_reviewer_attempt_result_never_leaks_stderr(tmp_path) -> None:
 	assert line == (
 		"REVIEWER_ATTEMPT_RESULT pass=pass2 slot=slot_a attempt=1 model=openai/gpt-6-luna "
 		"exit_code=1 duration_secs=5 wd_reason=none stall_state=none "
-		"failure_class=provider_request_invalid"
+		"failure_class=provider_request_invalid output_bytes=0"
 	)
 
 
@@ -239,7 +253,8 @@ def test_reviewer_attempt_result_line_defaults() -> None:
 	line = _run_line("", "", "", "", "x", "-4", "", "weird", "Bad Class!")
 	assert line == (
 		"REVIEWER_ATTEMPT_RESULT pass=unknown slot=unknown attempt=0 model=unknown "
-		"exit_code=0 duration_secs=0 wd_reason=none stall_state=none failure_class=exit_nonzero"
+		"exit_code=0 duration_secs=0 wd_reason=none stall_state=none failure_class=exit_nonzero "
+		"output_bytes=0"
 	)
 
 
@@ -298,7 +313,113 @@ def test_reviewer_attempt_result_prelaunch_helper_line(tmp_path) -> None:
 	assert proc.returncode == 0, proc.stderr
 	expected = (
 		"REVIEWER_ATTEMPT_RESULT pass=pass1 slot=slot_b attempt=2 model=unknown "
-		"exit_code=1 duration_secs=0 wd_reason=none stall_state=none failure_class=exit_nonzero"
+		"exit_code=1 duration_secs=0 wd_reason=none stall_state=none failure_class=exit_nonzero "
+		"output_bytes=0"
 	)
 	assert proc.stdout.strip() == expected
 	assert log.read_text(encoding="utf-8").strip() == expected
+
+
+# ---------------------------------------------------------------------------
+# REVIEWER_ATTEMPT_RESULT output_bytes field + malformed class (wfopt-2026-10-02)
+# ---------------------------------------------------------------------------
+
+
+_BASE_LINE_ARGS = ("pass2", "slot_a", "1", "openai/gpt-6-luna", "1", "5", "none", "", "exit_nonzero")
+
+
+def _output_bytes_measure_snippet() -> str:
+	attempt = _extract_shell_function(_script_text(), "execute_reviewer_attempt")
+	start = attempt.find('reviewer_attempt_result_output_bytes="$(wc -c')
+	assert start != -1, "expected the raw structured output byte-count measurement"
+	end = attempt.find("esac\n", start)
+	assert end != -1
+	return attempt[start : end + len("esac\n")]
+
+
+def test_reviewer_attempt_result_output_bytes_is_last_numeric_field() -> None:
+	line = _run_line(*_BASE_LINE_ARGS, "123")
+	assert line.endswith(" failure_class=exit_nonzero output_bytes=123")
+	last = line.rsplit(" ", 1)[1]
+	assert last.startswith("output_bytes=")
+	assert last.split("=", 1)[1].isdigit()
+
+
+@pytest.mark.parametrize("value", ["abc", "-5", "1;id", "", "12 34", "$(id)", None])
+def test_reviewer_attempt_result_output_bytes_invalid_falls_back_to_zero(value) -> None:
+	args = _BASE_LINE_ARGS if value is None else (*_BASE_LINE_ARGS, value)
+	line = _run_line(*args)
+	assert line.endswith(" output_bytes=0")
+
+
+def test_reviewer_attempt_result_malformed_fixture_never_leaks_output(tmp_path) -> None:
+	sentinel = "SENTINEL_SECRET_xyz"
+	text = _script_text()
+	measure = _output_bytes_measure_snippet()
+	structured = tmp_path / "structured.json"
+	payload = ('{"type":"text","part":{"text":"' + sentinel + '"\n').encode("utf-8")
+	structured.write_bytes(payload)
+	stderr_path = tmp_path / "stderr.txt"
+	stderr_path.write_text(MALFORMED_LINE + "\n", encoding="utf-8")
+
+	cls_fn = _extract_shell_function(text, "reviewer_attempt_result_failure_class")
+	line_fn = _extract_shell_function(text, "reviewer_attempt_result_line")
+	script = (
+		f"set -euo pipefail\n{cls_fn}\n{line_fn}\n"
+		'tmp_structured_output="$1"\n'
+		"reviewer_attempt_result_output_bytes=0\n"
+		f"{measure}"
+		'cls="$(reviewer_attempt_result_failure_class 1 "" "$2" "")"\n'
+		'reviewer_attempt_result_line pass1 slot_c 1 openai/gpt-6-luna 1 7 none none "${cls}" '
+		'"${reviewer_attempt_result_output_bytes}"\n'
+	)
+	proc = subprocess.run(
+		["bash", "-c", script, "x", str(structured), str(stderr_path)],
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert proc.returncode == 0, proc.stderr
+	line = proc.stdout.strip()
+	assert sentinel not in line
+	assert line == (
+		"REVIEWER_ATTEMPT_RESULT pass=pass1 slot=slot_c attempt=1 model=openai/gpt-6-luna "
+		"exit_code=1 duration_secs=7 wd_reason=none stall_state=none "
+		f"failure_class=malformed_structured_output output_bytes={len(payload)}"
+	)
+
+
+def test_reviewer_attempt_result_output_bytes_missing_file_is_zero(tmp_path) -> None:
+	measure = _output_bytes_measure_snippet()
+	missing = tmp_path / "missing.json"
+	script = (
+		"set -euo pipefail\n"
+		'tmp_structured_output="$1"\n'
+		"reviewer_attempt_result_output_bytes=0\n"
+		f"{measure}"
+		'printf "%s\\n" "${reviewer_attempt_result_output_bytes}"\n'
+	)
+	proc = subprocess.run(
+		["bash", "-c", script, "x", str(missing)], capture_output=True, text=True, check=False
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.strip() == "0"
+
+
+def test_reviewer_attempt_result_output_bytes_measured_before_strip_and_passed() -> None:
+	text = _script_text()
+	attempt = _extract_shell_function(text, "execute_reviewer_attempt")
+	assert "local reviewer_attempt_result_output_bytes=0" in attempt
+	measure = attempt.find('reviewer_attempt_result_output_bytes="$(wc -c')
+	strip = attempt.find('reviewer_strip_opencode_output_file "${tmp_structured_output}"')
+	materialize = attempt.find("reviewer_materialize_opencode_json_text ")
+	assert measure != -1 and strip != -1 and materialize != -1
+	assert measure < strip < materialize
+	calls = re.findall(
+		r'reviewer_attempt_result_text="\$\(reviewer_attempt_result_line [^\n]*\)"', attempt
+	)
+	assert len(calls) == 2, calls
+	for call in calls:
+		assert '"${reviewer_attempt_result_class}" "${reviewer_attempt_result_output_bytes}"' in call
+	prelaunch = _extract_shell_function(text, "reviewer_attempt_result_emit_prelaunch")
+	assert '"none" "none" "exit_nonzero" "0"' in prelaunch
