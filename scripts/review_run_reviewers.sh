@@ -4012,6 +4012,7 @@ reviewer_attempt_result_failure_class() {
   local stall_state="${4:-}"
   local has_stderr=false
   local no_text=false
+  local malformed=false
 
   case "${cmd_rc}" in
     ''|*[!0-9]*) cmd_rc=0 ;;
@@ -4023,9 +4024,13 @@ reviewer_attempt_result_failure_class() {
     if grep -Eq 'OpenCode structured reviewer output contained no text events\.$' "${stderr_file}" 2>/dev/null; then
       no_text=true
     fi
+    # The malformed marker is appended the same way, so anchor it identically.
+    if grep -Eq 'OpenCode structured reviewer output was malformed\.$' "${stderr_file}" 2>/dev/null; then
+      malformed=true
+    fi
   fi
 
-  if [ "${cmd_rc}" = "0" ] && [ "${no_text}" = false ]; then
+  if [ "${cmd_rc}" = "0" ] && [ "${no_text}" = false ] && [ "${malformed}" = false ]; then
     printf 'ok\n'; return 0
   fi
   if [ "${wd_reason}" = "max_steps" ]; then
@@ -4066,15 +4071,22 @@ reviewer_attempt_result_failure_class() {
   fi
   # The no-text marker is appended for any attempt without a text event,
   # including watchdog kills, stalls and provider errors, so it only names
-  # the class when no more specific cause matched above.
+  # the class when no more specific cause matched above. The malformed marker
+  # gets the same lowest-specific precedence: a watchdog kill or provider
+  # error can also leave unparseable JSON behind.
   if [ "${no_text}" = true ]; then
     printf 'empty_structured_output\n'; return 0
+  fi
+  if [ "${malformed}" = true ]; then
+    printf 'malformed_structured_output\n'; return 0
   fi
   printf 'exit_nonzero\n'
   return 0
 }
 
-# Builds the sanitized REVIEWER_ATTEMPT_RESULT line (#8097). Reads no files.
+# Builds the sanitized REVIEWER_ATTEMPT_RESULT line (#8097). Reads no files;
+# the optional 10th arg output_bytes is a caller-measured integer (default 0)
+# appended as the last field so the existing field order stays stable.
 reviewer_attempt_result_line() {
   local pass="${1:-}"
   local slot="${2:-}"
@@ -4085,6 +4097,7 @@ reviewer_attempt_result_line() {
   local wd_reason="${7:-}"
   local stall_state="${8:-}"
   local failure_class="${9:-}"
+  local output_bytes="${10:-}"
   local token_re='^[A-Za-z0-9._/:-]+$'
 
   [[ "${pass}" =~ ${token_re} ]] || pass="unknown"
@@ -4099,9 +4112,10 @@ reviewer_attempt_result_line() {
     *) stall_state="none" ;;
   esac
   [[ "${failure_class}" =~ ^[a-z_]+$ ]] || failure_class="exit_nonzero"
+  [[ "${output_bytes}" =~ ^[0-9]+$ ]] || output_bytes="0"
 
-  printf 'REVIEWER_ATTEMPT_RESULT pass=%s slot=%s attempt=%s model=%s exit_code=%s duration_secs=%s wd_reason=%s stall_state=%s failure_class=%s\n' \
-    "${pass}" "${slot}" "${attempt}" "${model}" "${exit_code}" "${duration}" "${wd_reason}" "${stall_state}" "${failure_class}"
+  printf 'REVIEWER_ATTEMPT_RESULT pass=%s slot=%s attempt=%s model=%s exit_code=%s duration_secs=%s wd_reason=%s stall_state=%s failure_class=%s output_bytes=%s\n' \
+    "${pass}" "${slot}" "${attempt}" "${model}" "${exit_code}" "${duration}" "${wd_reason}" "${stall_state}" "${failure_class}" "${output_bytes}"
   return 0
 }
 
@@ -4118,7 +4132,7 @@ reviewer_attempt_result_emit_prelaunch() {
   if [[ "${start_time:-}" =~ ^[0-9]+$ ]] && [[ "${prelaunch_end}" =~ ^[0-9]+$ ]] && [ "${prelaunch_end}" -ge "${start_time}" ]; then
     prelaunch_duration=$(( prelaunch_end - start_time ))
   fi
-  prelaunch_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${prelaunch_rc}" "${prelaunch_duration}" "none" "none" "exit_nonzero" 2>/dev/null || true)"
+  prelaunch_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${prelaunch_rc}" "${prelaunch_duration}" "none" "none" "exit_nonzero" "0" 2>/dev/null || true)"
   if [ -n "${prelaunch_text}" ]; then
     if [ -n "${log_file:-}" ]; then
       printf '%s\n' "${prelaunch_text}" | tee -a "${log_file}" || true
@@ -4279,6 +4293,7 @@ execute_reviewer_attempt() {
   local reviewer_attempt_result_end=""
   local reviewer_attempt_result_duration=0
   local reviewer_attempt_result_text=""
+  local reviewer_attempt_result_output_bytes=0
 
   REVIEWER_ATTEMPT_OUTCOME="failed"
   REVIEWER_ATTEMPT_RETRYABLE_CLASS=""
@@ -4560,6 +4575,13 @@ execute_reviewer_attempt() {
   fi
   rm -f "${stall_status_file}"
 
+  # Log-only byte count of the raw structured output, taken before ANSI
+  # stripping or deletion; never logs the output text itself.
+  reviewer_attempt_result_output_bytes="$(wc -c 2>/dev/null < "${tmp_structured_output}" || echo 0)"
+  reviewer_attempt_result_output_bytes="$(printf '%s' "${reviewer_attempt_result_output_bytes}" | tr -d '[:space:]')"
+  case "${reviewer_attempt_result_output_bytes}" in
+    ''|*[!0-9]*) reviewer_attempt_result_output_bytes=0 ;;
+  esac
   reviewer_strip_opencode_output_file "${tmp_structured_output}"
   reviewer_strip_opencode_output_file "${tmp_stderr}"
   reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}" || reviewer_materialize_rc=$?
@@ -4607,7 +4629,7 @@ execute_reviewer_attempt() {
     if [[ "${start_time:-}" =~ ^[0-9]+$ ]] && [[ "${reviewer_attempt_result_end}" =~ ^[0-9]+$ ]] && [ "${reviewer_attempt_result_end}" -ge "${start_time}" ]; then
       reviewer_attempt_result_duration=$(( reviewer_attempt_result_end - start_time ))
     fi
-    reviewer_attempt_result_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${cmd_rc}" "${reviewer_attempt_result_duration}" "${wd_reason}" "${stall_state}" "${reviewer_attempt_result_class}" 2>/dev/null || true)"
+    reviewer_attempt_result_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${cmd_rc}" "${reviewer_attempt_result_duration}" "${wd_reason}" "${stall_state}" "${reviewer_attempt_result_class}" "${reviewer_attempt_result_output_bytes}" 2>/dev/null || true)"
     if [ -n "${reviewer_attempt_result_text}" ]; then
       if [ -n "${log_file:-}" ]; then
         printf '%s\n' "${reviewer_attempt_result_text}" | tee -a "${log_file}" || true
@@ -4683,7 +4705,7 @@ execute_reviewer_attempt() {
   if [[ "${start_time:-}" =~ ^[0-9]+$ ]] && [[ "${reviewer_attempt_result_end}" =~ ^[0-9]+$ ]] && [ "${reviewer_attempt_result_end}" -ge "${start_time}" ]; then
     reviewer_attempt_result_duration=$(( reviewer_attempt_result_end - start_time ))
   fi
-  reviewer_attempt_result_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${cmd_rc}" "${reviewer_attempt_result_duration}" "${wd_reason}" "${stall_state}" "${reviewer_attempt_result_class}" 2>/dev/null || true)"
+  reviewer_attempt_result_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${cmd_rc}" "${reviewer_attempt_result_duration}" "${wd_reason}" "${stall_state}" "${reviewer_attempt_result_class}" "${reviewer_attempt_result_output_bytes}" 2>/dev/null || true)"
   if [ -n "${reviewer_attempt_result_text}" ]; then
     if [ -n "${log_file:-}" ]; then
       printf '%s\n' "${reviewer_attempt_result_text}" | tee -a "${log_file}" || true
