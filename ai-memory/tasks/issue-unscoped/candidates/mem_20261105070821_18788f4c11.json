@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update its content so it is exactly these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention)\"\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer reported no gap. It said the new content (status: ok, run_id: 40608957733, updated-by: ai-pipeline) is correct per the requirements and the file ends with a newline. It labelled the entry SEVERITY: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"Update its content so it is exactly these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention)\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The PR diff shows the file was modified to `status: ok`, `run_id: 40608957733`, `updated-by: ai-pipeline`. The original file had `decompose-run: 41445772297`. The new content is correct per the requirements. The reviewer verified via the editor summaries that the file ends with a newline and matches the three-line requirement, and found no gaps.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9629dfdbf594f463afd1e9cb9ca0806df000d0f04f3342f3510ab569d153e5a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41983861661",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41983861661",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105070821_18788f4c11",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41983861661"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T07:08:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
