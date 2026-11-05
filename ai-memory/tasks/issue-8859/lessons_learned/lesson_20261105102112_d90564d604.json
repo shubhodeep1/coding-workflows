@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-05T10:21:12Z",
+  "issue_number": 8859,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 010 as out-of-scope; anchor=agents.d/stuck-states-p8b-dependency-wait-resume.md:1-12; cited_path=workflow-templates/CLAUDE.md, Copilot reviewer custom-instruction size (agents.md fold); files_touched=.github/workflows/ci.yml, .github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p8b-dependency-wait-resume.md, changelog.d/stuck-states-p8b-dependency-wait-resume.md, docs/plans/confine-human-steps-to-activation-plan.md, scripts/dependency_wait_resume.py, tests/test_dependency_wait_resume.py, tests/test_orchestrate_poll_workflow_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8861,
+  "record_id": "lesson_20261105102112_d90564d604",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "workflow-templates/CLAUDE.md, Copilot reviewer custom-instruction size (agents.md fold)",
+    "agents.d/stuck-states-p8b-dependency-wait-resume.md",
+    ".github/workflows/ci.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "changelog.d/stuck-states-p8b-dependency-wait-resume.md",
+    "docs/plans/confine-human-steps-to-activation-plan.md",
+    "scripts/dependency_wait_resume.py",
+    "tests/test_dependency_wait_resume.py",
+    "tests/test_orchestrate_poll_workflow_contract.py"
+  ]
+}

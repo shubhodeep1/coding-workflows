@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-11-05T10:21:12Z",
+  "issue_number": 8859,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 009 as out-of-scope; anchor=.github/workflows/clarify.yml:2321-2348; cited_path=.github/workflows/clarify.yml, scripts/ai_labels.py, .github/workflows/plan.yml (P3a fingerprint block), README.md P2/P11 env rows, changelog.d/stuck-states-p11a-retired-label-drain.md; files_touched=.github/workflows/ci.yml, .github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p8b-dependency-wait-resume.md, changelog.d/stuck-states-p8b-dependency-wait-resume.md, docs/plans/confine-human-steps-to-activation-plan.md, scripts/dependency_wait_resume.py, tests/test_dependency_wait_resume.py, tests/test_orchestrate_poll_workflow_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8861,
+  "record_id": "lesson_20261105102112_03ea8c2606",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/clarify.yml, scripts/ai_labels.py, .github/workflows/plan.yml (P3a fingerprint block), README.md P2/P11 env rows, changelog.d/stuck-states-p11a-retired-label-drain.md",
+    ".github/workflows/clarify.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/stuck-states-p8b-dependency-wait-resume.md",
+    "changelog.d/stuck-states-p8b-dependency-wait-resume.md",
+    "docs/plans/confine-human-steps-to-activation-plan.md",
+    "scripts/dependency_wait_resume.py",
+    "tests/test_dependency_wait_resume.py",
+    "tests/test_orchestrate_poll_workflow_contract.py"
+  ]
+}
