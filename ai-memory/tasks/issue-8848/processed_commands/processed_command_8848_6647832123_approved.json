@@ -5,13 +5,26 @@
   "entry_id": "processed_command_8848_6647832123_approved",
   "issue_number": 8848,
   "metadata": {
+    "branch": "ai/issue-8848",
+    "changed_files": [
+      "agents.d/wfopt-2026-10-02-memory-records-considered.md",
+      "changelog.d/wfopt-2026-10-02-memory-records-considered.md",
+      "scripts/ai_memory.py",
+      "scripts/ai_memory_lib.py",
+      "tests/test_ai_memory_cli.py"
+    ],
+    "issue_number": 8848,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8848",
+    "pr_number": 8851,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8851",
+    "run_attempt": "1",
+    "run_id": "41954245894",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41954245894"
   },
   "run_attempt": 1,
   "run_id": "41954245894",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-05T02:18:59Z",
+  "status": "completed",
+  "timestamp": "2026-11-05T02:42:39Z",
   "workflow": "implement"
 }
