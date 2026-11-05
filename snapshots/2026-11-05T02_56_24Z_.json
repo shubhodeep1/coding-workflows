@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-04T03:14:32Z",
+  "tick_at": "2026-11-05T02:56:24Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -15,13 +15,13 @@
   },
   "tracking_issues": [
     {
-      "current_wave": 7,
-      "integration_ahead_by": "102",
+      "current_wave": 13,
+      "integration_ahead_by": "115",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
+        "in_progress": 1,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -97,23 +97,23 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "1",
+      "integration_ahead_by": "0",
       "issue_counts": {
         "closed": 0,
-        "done": 0,
+        "done": 2,
         "implementation_failed": 0,
-        "in_progress": 2,
+        "in_progress": 1,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 8796,
+      "number": 8845,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Apply workflow-optimization-2026-10-01 recommendations (resolver exit-2 fail-closed, staleness clock read, processing report)",
-      "total_waves": 2,
+      "title": "[Orchestrator] Apply workflow-optimization-2026-10-02 analysis recommendations (validated subset)",
+      "total_waves": 3,
       "wave_complete": false
     }
   ]
