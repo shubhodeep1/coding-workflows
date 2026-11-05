@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-05T08:49:39Z",
+  "issue_number": 8383,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.claude/hooks/prepush_affected_tests.py:387-397; cited_path=.claude/hooks/prepush_affected_tests.py; files_touched=tests/e2e_smoke_canary.txt.",
+  "phase": "review_autofix",
+  "pr_number": 8389,
+  "record_id": "lesson_20261105084939_1241010ce3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".claude/hooks/prepush_affected_tests.py",
+    "tests/e2e_smoke_canary.txt"
+  ]
+}
