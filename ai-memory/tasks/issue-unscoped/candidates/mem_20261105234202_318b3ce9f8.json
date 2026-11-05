@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:2 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The canary file content `run_id: alt-40831286935` causes smoke verification and recovery test failures.\n  WHY: The Phase 4b verification pipeline (scripts/stable_e2e_step_verify_bait_removed.sh:17 and tests/test_e2e_editor_smoke_canary.py:133-141) expects a strictly numeric `run_id` matching the CI `GITHUB_RUN_ID`, so the `alt-` string fails the byte-for-byte comparison. (Severity was not stated by the source; medium is a placeholder. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) judged this a false positive because issue #8337 explicitly requires the `alt-` prefix.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary.txt:2 | confidence=5\n  PROBLEM: The canary file content `run_id: alt-40831286935` causes smoke verification and recovery test failures.\n  WHY: The Phase 4b verification pipeline (scripts/stable_e2e_step_verify_bait_removed.sh:17 and tests/test_e2e_editor_smoke_canary.py:133-141) expects a strictly numeric `run_id` matching the CI `GITHUB_RUN_ID`. The provided string `alt-40831286935` fails the byte-for-byte comparison against the expected run ID, causing the smoke test suite to crash.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ef567bea73c5be919678fd077b30c30992efa6acba25f809efebf90d6c1c789e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "42129957301",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42129957301",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105234202_318b3ce9f8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "42129957301"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T23:42:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
