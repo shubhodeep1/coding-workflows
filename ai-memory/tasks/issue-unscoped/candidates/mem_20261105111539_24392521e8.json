@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- analysis/recommendation-processing-report.md:1982 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The \"Reliability 1, inventory-parity preflight\" evidence cites `.claude/hooks/prepush_affected_tests.py`, which these reviewers say does not exist (the only copy is `workflow-templates/.claude/hooks/prepush_affected_tests.py`).\n  WHY: A reader following the evidence reaches a missing file. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT and google_gemini-3_1-flash-lite rated it MAJOR. minimax_minimax-m3 and z-ai_glm-5_3-flash checked the tree and rejected the claim as a false positive, saying the live copy exists at that path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The issue context asks for \"bounded, redacted stderr.\"\n  expected_change_site: `_run_bash_case` in `tests/test_phase_wrapper_predicate_contract.py`\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `_run_bash_case` slices `result.stderr` to 2000 characters and puts it directly in the assertion message. It does not redact stderr, and the self-test does not verify redaction.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- analysis/recommendation-processing-report.md:1982 | severity=NIT | confidence=5\n  PROBLEM: The \"Reliability 1, inventory-parity preflight\" evidence cell cites `.claude/hooks/prepush_affected_tests.py`, which the reviewer says does not exist. The only copy is `workflow-templates/.claude/hooks/prepush_affected_tests.py`. The \"already-implemented\" verdict is correct and only the cited path is wrong.\n  WHY: A reader following the evidence reaches a missing file. The issue asked for evidence to be re-verified and corrected where the code moved.\n- HARDENING_SUGGESTION: tests/test_phase_wrapper_predicate_contract.py, `_run_bash_case` (forwarding of `**kwargs` to `subprocess.run`). A caller passing `check=True` would raise `CalledProcessError`, bypassing the bounded message, and also cause a \"multiple values for keyword argument\" TypeError. No current call site passes `check`. Suggested fix: `kwargs.pop(\"check\", None)` (about 1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- analysis/recommendation-processing-report.md:1982 | severity=MAJOR | confidence=5\n  PROBLEM: Incorrect file path citation for \"Reliability 1, inventory-parity preflight\".\n  WHY: The reported path `.claude/hooks/prepush_affected_tests.py` does not exist. It should be `workflow-templates/.claude/hooks/prepush_affected_tests.py`.\n- HARDENING_SUGGESTION: tests/test_phase_wrapper_predicate_contract.py:188. The `_run_bash_case` helper forwards `**kwargs` to `subprocess.run`, and a future caller passing `check=True` would trigger a TypeError for multiple values of keyword argument 'check'. Suggested fix: `kwargs.pop(\"check\", None)` before forwarding. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- (No findings reported.) The reviewer rejected the anthropic_claude-sonnet-5_5 path claim as a false positive. It says `.claude/hooks/prepush_affected_tests.py` exists as the live copy, alongside the `workflow-templates/` copy. It also says the file is indexed in `docs/INVENTORY.md:434` and registered in `.claude/settings.json:146`.\n- HARDENING_SUGGESTION: tests/test_phase_wrapper_predicate_contract.py, `_run_bash_case` (line 188, signature `**kwargs`). If a future caller passes `check=True`, `subprocess.run` raises `CalledProcessError` (whose message repeats the full bash -c script) before the helper can build the bounded stderr_tail AssertionError. Suggested fix: `kwargs.pop(\"check\", None)` (about 1 line). HARDENING_RISK_SCORE: 2\n- Informational note (NIT, confidence 4): analysis/recommendation-processing-report.md, Speed 4 row at line 1984. The evidence attributes the `clone_ms`/`write_ms`/`push_ms`/`push_attempts`/`push_retry_reasons` emission to `scripts/ai_memory.py`. The actual emission is in `scripts/ai_memory_lib.py:3369-3570`, and `scripts/ai_memory.py:400-404,749-753` only reads the fields back. The \"already-implemented\" verdict is correct and only the file attribution is imprecise.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: The issue context asks for \"bounded, redacted stderr.\"\n  Expected change site: `_run_bash_case` in `tests/test_phase_wrapper_predicate_contract.py`.\n  Evidence of absence: `_run_bash_case` slices `result.stderr` to 2000 characters and includes it directly in the assertion message. It does not redact stderr, and the self-test does not verify redaction.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (No findings reported.) The reviewer rejected the anthropic_claude-sonnet-5_5 claim as a false positive. It says `.claude/hooks/prepush_affected_tests.py` exists, with line 431 reading `add(INVENTORY_GUARD, \"registry:inventory_parity\")` and `INVENTORY_GUARD = \"tests/inventory_parity.py\"` at line 88. It says the report row at analysis/recommendation-processing-report.md:1982 is accurate as written.\n- Verification summary: the helper `_run_bash_case` at tests/test_phase_wrapper_predicate_contract.py:188-196 matches the spec. All four former `check=True` call sites were converted. The self-test math was verified. The report count, list item and appended entry are correct. The spot-checked \"already-implemented\" evidence citations resolve. The inherited failing tests are unrelated to this change.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f416ed44caad5eadd1ed0703eeae046a15d38eb361230ead2ebd78d60e1b2203",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8865,
+    "run_id": "42014918752",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42014918752",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105111539_24392521e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8865,
+    "run_id": "42014918752"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T11:15:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
