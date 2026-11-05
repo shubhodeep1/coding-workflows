@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:(check-run copilot-pull-request-reviewer) | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The copilot-pull-request-reviewer check-run failed with HTTP 422 (prompt too big / custom_instructions_too_large), which prevents automated validation of the PR.\n  WHY: It is an infrastructure/configuration failure, not caused by the canary diff. Severity disagreement: gemini said MAJOR and glm said NIT, so the highest is used. The reviewers also cite different files: gemini cites .github/workflows/review_autofix.yml and glm cites .github/workflows/ci.yml.\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The file content matches the linked-issue requirement (`status: ok`, `run_id: 40932430968`, `updated-by: ai-pipeline`) with a trailing newline.\n  WHY: The reviewer states this is a confirmation, not a defect (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:(via PR check-run; copilot-pull-request-reviewer check-run) | severity=MAJOR | confidence=5\n  PROBLEM: The PR review check-run failed due to \"Prompt too big after adding system message\" (HTTP 422).\n  WHY: It is an infrastructure/configuration failure in the reviewer pipeline itself rather than the PR logic, but it prevents validation of the PR within the automated suite.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=NIT | confidence=5\n  PROBLEM: The file content matches the linked-issue requirement with a trailing newline, and the PR touches only this file.\n  WHY: The reviewer says this is a confirmation, not a defect.\n- .github/workflows/ci.yml:(copilot-pull-request-reviewer check, not in the PR diff; head SHA 8559bd1, failure custom_instructions_too_large, HTTP 422, exit code 1) | severity=NIT | confidence=4\n  PROBLEM: The failed check run is a prompt-construction failure caused by oversized custom instructions (AGENTS.md + CLAUDE.md), not by the canary diff.\n  WHY: The canary text change cannot cause or fix it, and only reducing AGENTS.md/CLAUDE.md would address it, which is outside this PR's one-file scope.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6d5e203aa5a558667f9cde379f8d3cdcd5d1b3d3e86f886fefc5057306ad6fad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "42019642954",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42019642954",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105114811_c259cb23fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "42019642954"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T11:48:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
