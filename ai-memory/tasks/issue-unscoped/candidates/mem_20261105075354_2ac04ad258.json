@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:18817-18824 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `_security_dependency_clear_latch` removes `ai:needs-human` whenever the latest latch comment from the pipeline login is for this security hold, so it also removes the label when a person added it later for a different reason without writing a newer latch comment.\n  WHY: When the predecessor is released, the poller removes that hand-added human gate and posts the release marker, so the issue moves on without the gate. The reviewer rated this MAJOR, mapped here to high. Reviewers disagree on whether to report it: anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash noted it in their review notes as a known limitation that an earlier editor round accepted and that the last-run diff did not change, and they did not report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:_security_dependency_clear_latch, lines 18817-18824 | severity=MAJOR | confidence=4\n  PROBLEM: The function removes `ai:needs-human` when the latest pipeline-authored latch comment is for this security hold. A human can add the same label for a separate reason without adding a newer latch comment, so the security comment still matches.\n  WHY: When the predecessor is released, the poller removes the manually added human gate and posts the release marker. The issue then proceeds without that gate.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b0a98a6d0513475eab1202c0b6c2003fa9e570569e36b380143a607c499256ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8853,
+    "run_id": "41987950181",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41987950181",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105075354_2ac04ad258",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8853,
+    "run_id": "41987950181"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T07:53:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
