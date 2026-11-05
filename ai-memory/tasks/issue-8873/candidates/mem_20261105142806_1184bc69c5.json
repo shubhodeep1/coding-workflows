@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8873,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8873\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8877\",\"pr_number\":8877,\"branch\":\"ai/issue-8873\",\"run_id\":\"42037806256\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42037806256\",\"changed_files\":[\".github/workflows/clarify.yml\",\"README.md\",\"agents.d/stuck-states-p9b-clarify-blocked-verify.md\",\"changelog.d/stuck-states-p9b-clarify-blocked-verify.md\",\"scripts/clarify_blocked_verify.sh\",\"scripts/stage_support_for_phase.sh\",\"tests/test_ci_wires_every_test_file.py\",\"tests/test_clarify_blocked_verify.py\",\"tests/test_plan_clarify_blocked_output.py\"]}",
+  "fingerprint": "30ff9431cd0709a4c3a70a0fdd104572c47e3a82104393b5b36badebf665d102",
+  "lineage": {
+    "issue_number": 8873,
+    "parent_ids": [],
+    "pr_number": 8877,
+    "run_id": "42037806256",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42037806256",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8877"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261105142806_1184bc69c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8873,
+    "level": "run",
+    "pr_number": 8877,
+    "run_id": "42037806256"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8873: https://github.com/shubhodeep1/coding-workflows/pull/8877",
+  "timestamps": {
+    "created_at": "2026-11-05T14:28:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
