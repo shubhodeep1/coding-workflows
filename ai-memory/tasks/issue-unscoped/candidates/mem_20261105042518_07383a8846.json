@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:n/a | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The infrastructure check 'copilot-pull-request-reviewer' fails with \"custom_instructions_too_large\" and blocks PR merging.\n  WHY: The combined CLAUDE.md and agents.md instruction payload exceeds the Copilot prompt limit. Severity disagreement: gemini said BLOCKER, minimax said MAJOR, so the highest is used. minimax located it at tests/e2e_smoke_canary.txt and called it pre-existing and inherited, not a defect in this PR. sonnet-5_5 and glm-5_3-flash noted the same failure but did not report it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml (copilot-pull-request-reviewer check-run) | severity=BLOCKER | confidence=5\n  PROBLEM: The infrastructure check 'copilot-pull-request-reviewer' is failing due to a \"custom_instructions_too_large\" error, blocking PR merging.\n  WHY: The combined size of the custom instructions (CLAUDE.md, agents.md) exceeds the Copilot review check's prompt limit, preventing it from performing reviews.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/e2e_smoke_canary.txt (PR head SHA e540dbc18770bafdac9f8861d6f6b3b123f57ccd) | severity=MAJOR | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` CI check fails on the PR head with `custom_instructions_too_large` (CLAUDE.md + agents.md payload exceeds Copilot's prompt limit, run 41544382408/job/125616255928). Reported as an inherited note, not a defect in this PR.\n  WHY: Copilot returns status 1 before reviewing the PR, so the check leaves a failed status on the head and blocks merge. The failure is pre-existing on the merge-base, and the fix paths sit outside this PR's permitted scope.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7464e225493ae8f7c92f2b03f99fa26089770a89e732acb0a719c20863723e0f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41965165955",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41965165955",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105042518_07383a8846",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41965165955"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T04:25:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
