@@ -1,0 +1,25 @@
+{
+  "discovered_at": "2026-11-05T06:42:03Z",
+  "issue_number": 8844,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=copilot-pull-request-reviewer:1-1; cited_path=copilot-pull-request-reviewer; files_touched=.github/workflows/clarify.yml, .github/workflows/implement.yml, .github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p8c-security-hold.md, changelog.d/stuck-states-p8c-security-hold.md, scripts/orchestrate_poll_process.sh, scripts/security_dependency.py, tests/test_orchestrate_poll_process.py, tests/test_orchestrate_poll_workflow_contract.py, tests/test_phase_wrapper_predicate_contract.py, tests/test_security_dependency.py.",
+  "phase": "review_autofix",
+  "pr_number": 8853,
+  "record_id": "lesson_20261105064203_427bb55058",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer",
+    ".github/workflows/clarify.yml",
+    ".github/workflows/implement.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/stuck-states-p8c-security-hold.md",
+    "changelog.d/stuck-states-p8c-security-hold.md",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/security_dependency.py",
+    "tests/test_orchestrate_poll_process.py",
+    "tests/test_orchestrate_poll_workflow_contract.py",
+    "tests/test_phase_wrapper_predicate_contract.py",
+    "tests/test_security_dependency.py"
+  ]
+}
