@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-05T14:45:28Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=CLAUDE.md:n/a; cited_path=CLAUDE.md, agents.md; files_touched=analysis/recommendation-processing-report.md, analysis/workflow-optimization-2026-10-03.md, tests/test_phase_wrapper_predicate_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8866,
+  "record_id": "lesson_20261105144528_a152cd6757",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "CLAUDE.md, agents.md",
+    "CLAUDE.md",
+    "analysis/recommendation-processing-report.md",
+    "analysis/workflow-optimization-2026-10-03.md",
+    "tests/test_phase_wrapper_predicate_contract.py"
+  ]
+}
