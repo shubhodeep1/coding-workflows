@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Reviewer workflow updates have been paired with tests for prompt components, malformed reviewer results, and attempt isolation. When modifying reviewer inputs or retries, preserve boundaries between attempts and test the relevant prompt or parsing contract.",
+  "fingerprint": "13529d4cd7445745fac54905cc2743ad02df69e7b8b011c9a8db9fde49ee9f7d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42040450576",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42040450576",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8844",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8857",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8859",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8860",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8863",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8853",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8858",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8861",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8864",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8865"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261105140430_f163128bb1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer-pipeline changes benefit from focused tests for prompt composition and per-attempt isolation.",
+  "timestamps": {
+    "created_at": "2026-11-05T14:04:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
