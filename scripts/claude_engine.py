@@ -37,8 +37,9 @@ stdout, diagnostics to stderr):
     with its denial status, for the smoke run's context and P5 gates.
   * ``probe-parse --account A [--exit-code N] < transcript`` — one Haiku
     probe transcript to a usage record (spike S8).
-  * ``choose [--gate G] < probes.json`` — the least-used account under the
-    gate (ties to the alphabetically first name), or why none is usable.
+  * ``choose [--gate G] < probes.json`` — the usable accounts under the
+    gate, the one whose spare 7-day quota expires soonest first (ties to the
+    alphabetically first name), or why none is usable.
 
 Exit codes: 0 success; 1 the input describes a failure (``extract`` found
 no result); 2 invalid arguments or input.
@@ -757,7 +758,7 @@ def _spare_per_hour(probe: dict[str, Any], gate: float, now: float) -> float | N
 	if seven_day is None or reset is None:
 		return None
 	hours = max((reset - now) / 3600, _SPARE_PER_HOUR_MIN_HOURS)
-	return max(gate - float(seven_day), 0.0) / hours
+	return max(gate - max(float(seven_day), 0.0), 0.0) / hours
 
 
 def _usable_at(probe: dict[str, Any], gate: float) -> int | None:
@@ -779,12 +780,12 @@ def choose_account(probes: list[dict[str, Any]], gate: float, now: float | None 
 	the alphabetically first name:
 
 	1. accounts with a 7-day reading and reset time, the highest
-	   ``(gate - seven_day) / hours until the 7-day reset`` first
-	   (``_spare_per_hour``; ``now`` is epoch seconds, default the current
-	   time);
+	``(gate - seven_day) / hours until the 7-day reset`` first
+	(``_spare_per_hour``; ``now`` is epoch seconds, default the current
+	time);
 	2. accounts with a 7-day reading but no reset time, the lowest
-	   ``max(five_hour, seven_day)`` first, where a missing ``five_hour``
-	   reading counts as no 5-hour limit;
+	``max(five_hour, seven_day)`` first, where a missing ``five_hour``
+	reading counts as no 5-hour limit;
 	3. accounts whose probe succeeded without a ``seven_day`` reading.
 
 	A window at or over the gate, or a ``rejected`` status, gates the
