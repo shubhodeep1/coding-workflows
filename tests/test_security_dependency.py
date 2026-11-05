@@ -222,4 +222,4 @@ def test_resume_switch_reaches_every_gate_and_the_poller():
 		assert "security_dependency.py\" security-dependency" in body, step
 	assert 'export DEPENDENCY_WAIT_RESUME_ENABLED="${_security_dependency_resume_enabled}"' in poller
 	assert "<!-- AI_SECURITY_DEPENDENCY_RELEASED_V1 reason=predecessor_unmerged issue=${issue_num} depends_on=${_security_dependency_depends_on} -->" in poller
-	assert "<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=${depends_on} -->" in poller
+	assert "<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=${depends_on} held_since=${_sdh_held} -->" in poller

@@ -18709,9 +18709,20 @@ _security_dependency_hold_age_check() {
   local _sdh_age_days
   local _sdh_held_iso
   local _sdh_body
+  local _sdh_marker
+  local _sdh_trusted_comments
   _sdh_now="$(date -u +%s)"
+  # The hold keys gate escalation, so they are read only from state
+  # comments the pipeline login wrote (one cached /user read per tick).
+  unblock_trusted_login >/dev/null 2>&1 || true
+  _sdh_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+  if [ -z "${_sdh_login}" ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_identity_unavailable action=none"
+    return 0
+  fi
   for _sdh_pass in 1 2; do
-    _sdh_state="$(_extract_standalone_state_json_from_comments "${comments_json}")"
+    _sdh_trusted_comments="$(printf '%s' "${comments_json:-[]}" | jq -c --arg login "${_sdh_login}" '[(. // [])[] | select((.user.login // "") == $login)]' 2>/dev/null || echo '[]')"
+    _sdh_state="$(_extract_standalone_state_json_from_comments "${_sdh_trusted_comments}")"
     _sdh_fields="$(printf '%s' "${_sdh_state}" | jq -r '[(.security_dependency_depends_on // 0), (.security_dependency_held_since_ts // 0), (.security_dependency_escalated_ts // 0)] | map(tostring) | join(" ")' 2>/dev/null || echo "0 0 0")"
     read -r _sdh_dep _sdh_held _sdh_esc <<<"${_sdh_fields}"
     [[ "${_sdh_dep:-}" =~ ^[0-9]{1,12}$ ]] || _sdh_dep=0
@@ -18734,7 +18745,7 @@ _security_dependency_hold_age_check() {
     fi
     _sdh_complete="true"
   done
-  _sdh_comment_id="$(_extract_standalone_state_comment_id_from_comments "${comments_json}")"
+  _sdh_comment_id="$(_extract_standalone_state_comment_id_from_comments "${_sdh_trusted_comments}")"
   if [ "${_sdh_action}" = "record" ]; then
     _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson dep "${depends_on}" --argjson now "${_sdh_now}" \
       '. + {security_dependency_depends_on: $dep, security_dependency_held_since_ts: $now, security_dependency_escalated_ts: 0}')" || return 0
@@ -18742,31 +18753,34 @@ _security_dependency_hold_age_check() {
     echo "STALL_SKIP issue=${issue_num} reason=security_dependency_hold_recorded action=none"
     return 0
   fi
-  unblock_trusted_login >/dev/null 2>&1 || true
-  _sdh_login="${UNBLOCK_TRUSTED_LOGIN:-}"
-  if [ -z "${_sdh_login}" ]; then
-    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_identity_unavailable action=none"
-    return 0
-  fi
-  if printf '%s' "${comments_json}" | jq -e --arg login "${_sdh_login}" \
-    --arg marker "<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=${depends_on} -->" '
+  # The marker carries this episode's held_since, so a latch comment left by
+  # an earlier, released episode on the same predecessor never matches.
+  _sdh_marker="<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=${depends_on} held_since=${_sdh_held} -->"
+  if printf '%s' "${comments_json}" | jq -e --arg login "${_sdh_login}" --arg marker "${_sdh_marker}" '
     any(.[]; ((.user.login // "") == $login) and ((.body // "") | contains($marker)))' >/dev/null 2>&1; then
-    # Already escalated (an earlier state write may have failed): record it
-    # so later ticks stay at action=none and make no paginated read.
+    # The latch comment exists but the label does not (an earlier label edit
+    # failed, or its response was lost): add the label, then record it.
+    ensure_label_exists "ai:needs-human"
+    if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1; then
+      echo "::warning::[standalone-stall] could not label security follow-up #${issue_num} ai:needs-human; retrying next tick." >&2
+      echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalation_failed action=none"
+      return 0
+    fi
     _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson now "${_sdh_now}" '. + {security_dependency_escalated_ts: $now}')" || return 0
     write_standalone_state_json "${issue_num}" "${_sdh_state}" "${_sdh_comment_id}"
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalated detail=marker_present action=needs_human"
     return 0
   fi
   _sdh_age_days=$(((_sdh_now - _sdh_held) / 86400))
   _sdh_held_iso="$(date -u -d "@${_sdh_held}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "${_sdh_held}")"
-  _sdh_body="Security follow-up #${issue_num} has waited ${_sdh_age_days} days for its predecessor.
+  _sdh_body="Security follow-up #${issue_num} has waited at least ${_sdh_age_days} days for its predecessor.
 
 Dependency chain: #${issue_num} -> #${depends_on} (open)
 Held since: ${_sdh_held_iso}
 
 The hold stays in place. It releases automatically when #${depends_on} is closed with \`ai:merged\` or closed without merging.
 
-<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=${depends_on} -->"
+${_sdh_marker}"
   # The latch comment goes first: _security_dependency_clear_latch removes the
   # label only when this comment exists, so a failed POST must leave no label.
   if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${_sdh_body}" >/dev/null 2>&1; then
@@ -18776,7 +18790,11 @@ The hold stays in place. It releases automatically when #${depends_on} is closed
   fi
   ensure_label_exists "ai:needs-human"
   if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1; then
-    echo "::warning::[standalone-stall] could not label security follow-up #${issue_num} ai:needs-human after posting its latch comment." >&2
+    # escalated_ts stays 0, so the next tick finds this latch comment and
+    # retries the label in the marker_present branch above.
+    echo "::warning::[standalone-stall] could not label security follow-up #${issue_num} ai:needs-human after posting its latch comment; retrying next tick." >&2
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalation_failed action=none"
+    return 0
   fi
   _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson now "${_sdh_now}" '. + {security_dependency_escalated_ts: $now}')" || return 0
   write_standalone_state_json "${issue_num}" "${_sdh_state}" "${_sdh_comment_id}"
