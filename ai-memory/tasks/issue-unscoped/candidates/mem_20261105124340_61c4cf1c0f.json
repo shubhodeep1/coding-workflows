@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_phase_wrapper_predicate_contract.py:196-205 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `_run_bash_case` truncates stderr to the last 2000 characters before redacting, so a token or PEM block that straddles the cut is left partial and no longer matches `_BASH_CASE_SECRET_RE`.\n  WHY: The partial secret can appear in the assertion message and in CI logs. Redacting first and then slicing fixes it in one line. Reviewers rated this NIT, and the highest confidence given was 4.\n- tests/test_phase_wrapper_predicate_contract.py:208-232 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The self-test `test_run_bash_case_reports_case_exit_and_bounded_stderr` exercises only the `ghp_` branch of `_BASH_CASE_SECRET_RE`. The `github_pat_`, `AKIA`, `sk-` and PEM branches have no test pin.\n  WHY: A later edit that breaks one of those branches would pass CI and leak that secret shape into failure messages. Reviewers rated this NIT, and the highest confidence given was 3.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_phase_wrapper_predicate_contract.py:`_run_bash_case` (stderr_tail line) | severity=NIT | confidence=1\n  PROBLEM: stderr is cut to the last 2000 characters before redaction. A token or PEM block that straddles the cut keeps a partial secret in the assertion message.\n  WHY: This can only happen if a bash case writes a secret to stderr and fails. Redacting first and then truncating removes the gap.\n- tests/test_phase_wrapper_predicate_contract.py:208-232 (`test_run_bash_case_reports_case_exit_and_bounded_stderr`) | severity=NIT | confidence=2\n  PROBLEM: The self-test exercises only the `ghp_` branch. The `github_pat_`, `AKIA`, `sk-` and PEM branches have no pin.\n  WHY: A later edit could break those branches while CI still passes. This is a coverage gap in a test helper, not a runtime defect.\n- HARDENING_SUGGESTIONS: redact before slicing in `_run_bash_case`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_phase_wrapper_predicate_contract.py:196-200 (`_run_bash_case`) | confidence=4\n  PROBLEM: Redaction is applied after truncation of the stderr tail.\n  WHY: A secret that straddles the 2000-character boundary is only partly matched by the redaction regex. It can leak in the assertion message.\n- tests/test_phase_wrapper_predicate_contract.py:208-232 (`test_run_bash_case_reports_case_exit_and_bounded_stderr`) | confidence=3\n  PROBLEM: The self-test validates only the `ghp_` branch of `_BASH_CASE_SECRET_RE`.\n  WHY: The `github_pat_`, `AKIA`, `sk-` and PEM branches are not tested. A later regex change could break them without CI noticing, leading to unredacted secret leakage.\n- HARDENING_SUGGESTIONS: redact the full stderr before truncating, in one line. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_phase_wrapper_predicate_contract.py:14-21 and 198-205 (`_run_bash_case`) | severity=NIT | confidence=4\n  PROBLEM: stderr is truncated to 2000 characters before redaction. A token or PEM block that straddles the cut is left partial and no longer matches the regex.\n  WHY: A failing script whose stderr ends in a token can leak the secret prefix into the AssertionError message and into pytest/log capture.\n- tests/test_phase_wrapper_predicate_contract.py:208-232 (`test_run_bash_case_reports_case_exit_and_bounded_stderr`), reported as a hardening suggestion\n  PROBLEM: The redaction regex has five shapes, but the self-test exercises only `ghp_`. The other four have no test pin.\n  WHY: A later edit that breaks one branch would pass CI.\n- HARDENING_SUGGESTIONS: (1) extend the self-test to cover the other four shapes, HARDENING_RISK_SCORE: 2. (2) redact before truncating, HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_phase_wrapper_predicate_contract.py:203-204 | severity=NIT | confidence=4\n  PROBLEM: The helper truncates stderr before redacting it. A token that starts before the cutoff loses its prefix, and the remaining suffix no longer matches the redaction pattern.\n  WHY: A failing subprocess that writes a token across the cutoff puts the unredacted suffix in the assertion message, which is emitted in CI logs.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_phase_wrapper_predicate_contract.py:203 (`_run_bash_case`) | severity=NIT | confidence=3\n  PROBLEM: The stderr tail is truncated to 2000 characters before redaction. A PEM block or token that straddles the cut is left without its markers, so it is not matched by `_BASH_CASE_SECRET_RE`.\n  WHY: Any secret crossing the cut point is printed unredacted into CI logs. Redacting first and then truncating closes this in one line.\n- tests/test_phase_wrapper_predicate_contract.py:19-22 and 208-232 | severity=NIT | confidence=3\n  PROBLEM: The regex pins five token shapes, but the self-test exercises only `ghp_`. The `github_pat_`, `AKIA`, `sk-` and PEM branches have no regression pin.\n  WHY: A later edit that breaks one of those branches would pass CI, and that secret shape would be emitted verbatim in failure messages.\n- HARDENING_SUGGESTIONS: (1) redact before slicing, HARDENING_RISK_SCORE: 1. (2) add one representative value of each remaining shape to the existing fixture, HARDENING_RISK_SCORE: 2.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "77dc3b32776ed1edbb25b025c77e7a802074ac8d59feaeff8080a94ddfccec6d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8866,
+    "run_id": "42026896914",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42026896914",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105124340_61c4cf1c0f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8866,
+    "run_id": "42026896914"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T12:43:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
