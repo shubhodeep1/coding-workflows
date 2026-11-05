@@ -10787,6 +10787,7 @@ def test_reviewer_pass2_still_launches_when_shadow_would_skip(tmp_path: Path) ->
 			_reviewer_bash_function("reviewer_any_path_matches_regex"),
 			_reviewer_pass2_shadow_helper_block(),
 			'assemble_reviewer_prompt() { : > "$1"; }',
+			'log_reviewer_prompt_components() { :; }',
 			'run_reviewer_pass() { printf "%s %s\\n" "$1" "$3" > "${PASS2_MARKER}"; echo 2; }',
 			"PASS2_DIFF_LOC=10",
 			"PASS2_DIFF_LARGE_LOC=200",
