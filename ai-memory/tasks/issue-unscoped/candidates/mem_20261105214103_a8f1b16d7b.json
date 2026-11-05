@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (reported as \"none\", all acceptance criteria met; SEVERITY: NIT) | confidence=5\n  Requirement: \"make tests/e2e_smoke_canary.txt contain exactly two lines, ending with a trailing newline: `status: ok` / `decompose-run: 41941001401`; no other file is modified.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: none \u2014 the PR diff (tests/e2e_smoke_canary.txt:2) changes exactly that one line from `decompose-run: 41445772297` to `decompose-run: 41941001401`; line 1 is untouched (`status: ok`), the file is the only changed file per pr_changed_files.txt, and the prior editor runs verified 38 bytes with trailing newline. All acceptance criteria are met.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d5ea307366d83f4dc4e7e5a35bde140a3c49f2f459f155aba5e83e8ab51cfefd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8842,
+    "run_id": "42113298174",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42113298174",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105214103_a8f1b16d7b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8842,
+    "run_id": "42113298174"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T21:41:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
