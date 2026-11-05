@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- copilot-pull-request-reviewer:CI check-run failure | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The copilot-pull-request-reviewer check-run failed due to \"Prompt too big after adding system message\".\n  WHY: It blocks CI validation of the PR, though the reviewer says it is likely unrelated to the canary text changes. The source gave no severity, so low is a placeholder.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- copilot-pull-request-reviewer:CI check-run failure | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check-run failed due to \"Prompt too big after adding system message\".\n  WHY: This prevents the CI pipeline from validating the PR properly. It is likely unrelated to the canary text changes, but the infrastructure failure blocks the review status.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "594d2be011b75d3a11bcf7f47a616d2ca2b9abbdbccdceccfdf4c4a85c7b9597",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "42023661121",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42023661121",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105121248_d9f36a930d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "42023661121"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T12:12:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
