@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_labels.py:266-279, 1142 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The 180-second deadline does not bound an in-progress API request.\n  WHY: `_drain_retired_label()` checks the deadline at line 1142, but `_github_api_request()` can retry each request up to three times with a 120-second timeout per attempt at lines 266-279. A timed-out request can be retried for up to 360 seconds before the next deadline check, so the job can hit the 5-minute workflow timeout (`.github/workflows/sync_ai_labels.yml:43`) before the drain reports a deferred result and exits cleanly. The source gave severity MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/ai_labels.py:`_drain_retired_label()` checks the deadline at line 1142, but `_github_api_request()` can retry each request up to three times with a 120-second timeout per attempt at lines 266-279. The workflow timeout is 5 minutes (`.github/workflows/sync_ai_labels.yml:43`). | severity=MAJOR | confidence=5\n  PROBLEM: The 180-second deadline does not bound an in-progress API request.\n  WHY: A timed-out request can be retried for up to 360 seconds before control reaches the next deadline check. The job can hit its 5-minute timeout before the drain reports a deferred result and exits cleanly.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "f1d42a95c843e2174710701b835ca9d2e7d65d276f8f5eb8be5a489afb36eb03",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8882,
+    "run_id": "42107084894",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42107084894",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105210742_2081e83dc7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8882,
+    "run_id": "42107084894"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T21:07:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
