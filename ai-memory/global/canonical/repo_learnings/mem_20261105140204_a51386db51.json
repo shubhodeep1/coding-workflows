@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "State-related work has involved the label contract, shell helpers, orchestration libraries, and phase-transition tests together. When introducing or changing a state, verify that its label representation and transition behavior stay consistent across those layers.",
+  "fingerprint": "b176b2a8ad246ef33147ac940880da23b34983cd4fe1f23bea540b963e1daac7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42040450576",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42040450576",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8844",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8857",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8859",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8860",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8863",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8853",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8858",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8861",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8864",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8865"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261105140204_a51386db51",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow state and label changes are cross-cutting contracts, not isolated label edits.",
+  "timestamps": {
+    "created_at": "2026-11-05T14:02:04Z",
+    "promoted_at": "2026-11-05T14:02:41Z",
+    "superseded_at": null
+  }
+}
