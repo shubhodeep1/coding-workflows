@@ -32534,6 +32534,18 @@ STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
 echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
 
 CONFLICT_SWEEP_FIXED=0
+# Structured sweep telemetry (STANDALONE_CONFLICT_DISPATCH_OUTCOME /
+# STANDALONE_CONFLICT_SWEEP_SUMMARY). Diagnostics only: CONFLICT_SWEEP_FIXED
+# and its "Fixed: N" line keep their legacy meaning (update + dispatch ok).
+CONFLICT_SWEEP_PREFILTERED_DRAFT=0
+CONFLICT_SWEEP_SKIPPED_INTEGRATION=0
+CONFLICT_SWEEP_BATCH_CLEAN=0
+CONFLICT_SWEEP_REST_FETCHED=0
+CONFLICT_SWEEP_API_UPDATED=0
+CONFLICT_SWEEP_DISPATCHED=0
+CONFLICT_SWEEP_DISPATCH_INFLIGHT=0
+CONFLICT_SWEEP_DISPATCH_FAILED=0
+CONFLICT_SWEEP_UNRESOLVED_SAME_HEAD=0
 DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
 
 # Input: the open-PR snapshot, in bounded 30-PR batches. Output: numbers
@@ -32626,23 +32638,28 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	# Do not let the standalone sweep duplicate update-branch / review
 	# dispatches or overwrite that path's state transitions.
 	if [[ "${S_HEAD}" == orchestrator/project-* ]]; then
+		CONFLICT_SWEEP_SKIPPED_INTEGRATION=$(( ${CONFLICT_SWEEP_SKIPPED_INTEGRATION:-0} + 1 ))
 		continue
 	fi
 
 	if [[ "${S_BASE}" == orchestrator/project-* ]]; then
+		CONFLICT_SWEEP_SKIPPED_INTEGRATION=$(( ${CONFLICT_SWEEP_SKIPPED_INTEGRATION:-0} + 1 ))
 		continue
 	fi
 	if [[ "${S_HEAD}" == claude/* ]] && [ "${S_DRAFT}" = "true" ]; then
 		echo "  PR #${S_PR} is a draft claude/* PR; skipping standalone conflict recovery."
+		CONFLICT_SWEEP_PREFILTERED_DRAFT=$(( ${CONFLICT_SWEEP_PREFILTERED_DRAFT:-0} + 1 ))
 		continue
 	fi
 	if [[ "${S_HEAD_OID}" =~ ^[0-9a-f]{40}$ ]] && [ "${_STANDALONE_CLEAN_PRS["${S_PR}"]:-}" = "${S_HEAD_OID}" ]; then
+		CONFLICT_SWEEP_BATCH_CLEAN=$(( ${CONFLICT_SWEEP_BATCH_CLEAN:-0} + 1 ))
 		continue
 	fi
 
 	# Check mergeable state via REST API (dirty == merge conflicts)
 	# _safe_gh_jq → clean empty stdout on failure so the `|| echo '{}'`
 	# fallback stays valid JSON for the downstream jq reads.
+	CONFLICT_SWEEP_REST_FETCHED=$(( ${CONFLICT_SWEEP_REST_FETCHED:-0} + 1 ))
 	S_PR_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" || echo '{}')"
 	[ -n "${S_PR_JSON}" ] || S_PR_JSON='{}'
 	S_STATE="$(echo "${S_PR_JSON}" | jq -r '.state // ""')"
@@ -32688,11 +32705,52 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	# silence stdout while preserving stderr diagnostics; stage 2 handles
 	# the permanent-failure path.
 	S_HEAD_SHA="$(echo "${S_PR_JSON}" | jq -r '.head.sha // ""')"
+	# Outcome telemetry (diagnostics only, no API call): the head is logged
+	# only as 40-hex, and prior attempts come only from the marker maps the
+	# batch above already loaded, filtered to the pipeline's own login as
+	# _standalone_conflict_count_attempt does. UNBLOCK_TRUSTED_LOGIN is read,
+	# never resolved here (unblock_trusted_login may call the API); anything
+	# missing leaves "unknown".
+	_conflict_sweep_outcome_head="unknown"
+	if [[ "${S_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+		_conflict_sweep_outcome_head="${S_HEAD_SHA}"
+	fi
+	_conflict_sweep_prior="unknown"
+	_conflict_sweep_loaded="${_STANDALONE_CONFLICT_STATE_LOADED["${S_PR}"]:-}"
+	# Only a whole-thread window ("1") counts; a "partial" window stays
+	# "unknown" (issue #8847: missing or partial state is never inferred).
+	if [ "${_conflict_sweep_loaded}" = "1" ] &&
+		[ "${_conflict_sweep_outcome_head}" != "unknown" ] && [ -n "${UNBLOCK_TRUSTED_LOGIN:-}" ]; then
+		_conflict_sweep_found="false"
+		while IFS='|' read -r _conflict_sweep_m_id _conflict_sweep_m_author _conflict_sweep_m_head _conflict_sweep_m_attempts _conflict_sweep_m_alerted; do
+			[ -n "${_conflict_sweep_m_id}${_conflict_sweep_m_author}" ] || continue
+			if [ "${_conflict_sweep_m_author}" = "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+				_conflict_sweep_found="true"
+				if [ "${_conflict_sweep_m_head}" != "${_conflict_sweep_outcome_head}" ]; then
+					_conflict_sweep_prior="0"
+				elif [[ "${_conflict_sweep_m_attempts}" =~ ^[0-9]+$ ]]; then
+					_conflict_sweep_prior="${_conflict_sweep_m_attempts}"
+				fi
+				break
+			fi
+		done <<< "${_STANDALONE_CONFLICT_ATTEMPTS_STATE["${S_PR}"]:-}"
+		# The loaded check repeats the outer guard on purpose: "0" only for a whole thread.
+		if [ "${_conflict_sweep_found}" != "true" ] && [ "${_conflict_sweep_loaded}" = "1" ]; then
+			_conflict_sweep_prior="0"
+		fi
+	fi
+	_conflict_sweep_update_branch="skipped_no_sha"
+	_conflict_sweep_dispatch="not_attempted"
 	if [ -n "${S_HEAD_SHA}" ] && GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}/update-branch" \
 		-X PUT -f expected_head_sha="${S_HEAD_SHA}" >/dev/null; then
 		echo "  PR #${S_PR} branch updated via API. Synchronize event will re-trigger review."
 		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
+		CONFLICT_SWEEP_API_UPDATED=$(( ${CONFLICT_SWEEP_API_UPDATED:-0} + 1 ))
+		echo "STANDALONE_CONFLICT_DISPATCH_OUTCOME pr=${S_PR} head=${_conflict_sweep_outcome_head} update_branch=ok dispatch=not_attempted prior_attempts_same_head=${_conflict_sweep_prior} resolution=branch_updated"
 		continue
+	fi
+	if [ -n "${S_HEAD_SHA}" ]; then
+		_conflict_sweep_update_branch="failed"
 	fi
 
 	# Stage 2: Dispatch review workflow for conflict resolution.
@@ -32702,13 +32760,36 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
 		tg_send_msg "Standalone PR #${S_PR} has merge conflicts. Review workflow dispatched for resolution."$'\n'"PR: $(_gh_url "pull/${S_PR}")" "DEBUG" >/dev/null 2>&1 || true
 		_standalone_conflict_count_attempt "${S_PR}" "${S_HEAD_SHA}" "${_dispatch_rc}"
+		_conflict_sweep_dispatch="ok"
+		CONFLICT_SWEEP_DISPATCHED=$(( ${CONFLICT_SWEEP_DISPATCHED:-0} + 1 ))
 	elif [ "${_dispatch_rc}" -eq 2 ]; then
 		echo "  PR #${S_PR}: autofix already in progress, skipping dispatch."
+		_conflict_sweep_dispatch="inflight"
+		CONFLICT_SWEEP_DISPATCH_INFLIGHT=$(( ${CONFLICT_SWEEP_DISPATCH_INFLIGHT:-0} + 1 ))
 	else
 		tg_send_msg "Standalone PR #${S_PR} has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${S_PR}")" "DEBUG" >/dev/null 2>&1 || true
 		_standalone_conflict_count_attempt "${S_PR}" "${S_HEAD_SHA}" "${_dispatch_rc}"
+		_conflict_sweep_dispatch="failed"
+		CONFLICT_SWEEP_DISPATCH_FAILED=$(( ${CONFLICT_SWEEP_DISPATCH_FAILED:-0} + 1 ))
 	fi
+	# Unresolved: the trusted marker for this same head already recorded at
+	# least one earlier attempt and the PR is still dirty.
+	_conflict_sweep_resolution="pending"
+	if [[ "${_conflict_sweep_prior}" =~ ^[0-9]+$ ]] && [ "${_conflict_sweep_prior}" -ge 1 ]; then
+		_conflict_sweep_resolution="unresolved_same_head"
+		CONFLICT_SWEEP_UNRESOLVED_SAME_HEAD=$(( ${CONFLICT_SWEEP_UNRESOLVED_SAME_HEAD:-0} + 1 ))
+	fi
+	echo "STANDALONE_CONFLICT_DISPATCH_OUTCOME pr=${S_PR} head=${_conflict_sweep_outcome_head} update_branch=${_conflict_sweep_update_branch} dispatch=${_conflict_sweep_dispatch} prior_attempts_same_head=${_conflict_sweep_prior} resolution=${_conflict_sweep_resolution}"
 done
+
+CONFLICT_SWEEP_LISTED="${STANDALONE_COUNT:-}"
+[[ "${CONFLICT_SWEEP_LISTED}" =~ ^[0-9]+$ ]] || CONFLICT_SWEEP_LISTED=0
+_conflict_sweep_truncated="false"
+# list_limit must match the --limit 3000 on the gh pr list call above.
+if [ "${CONFLICT_SWEEP_LISTED}" -ge 3000 ]; then
+	_conflict_sweep_truncated="true"
+fi
+echo "STANDALONE_CONFLICT_SWEEP_SUMMARY listed=${CONFLICT_SWEEP_LISTED} prefiltered_draft=${CONFLICT_SWEEP_PREFILTERED_DRAFT:-0} skipped_integration=${CONFLICT_SWEEP_SKIPPED_INTEGRATION:-0} batch_clean=${CONFLICT_SWEEP_BATCH_CLEAN:-0} rest_fetched=${CONFLICT_SWEEP_REST_FETCHED:-0} api_updated=${CONFLICT_SWEEP_API_UPDATED:-0} dispatched=${CONFLICT_SWEEP_DISPATCHED:-0} dispatch_inflight=${CONFLICT_SWEEP_DISPATCH_INFLIGHT:-0} dispatch_failed=${CONFLICT_SWEEP_DISPATCH_FAILED:-0} unresolved_same_head=${CONFLICT_SWEEP_UNRESOLVED_SAME_HEAD:-0} list_limit=3000 list_truncated=${_conflict_sweep_truncated}"
 
 echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 

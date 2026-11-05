@@ -13,6 +13,7 @@ single page when the pipeline is really stuck.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import shutil
@@ -620,3 +621,27 @@ def test_review_rb_judge_emits_merge_and_reissue_status():
 	script = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
 	assert script.count('echo "judge_action=merge" >> "$GITHUB_OUTPUT"') == script.count('judge_merge_status=')
 	assert 'echo "judge_reissue_created=${RB_REISSUE_CREATED:-false}" >> "$GITHUB_OUTPUT"' in script
+
+
+# The standalone conflict sweep outcome telemetry cases live in
+# tests/test_orchestrate_poll_conflict_sweep_outcome.py and are collected here,
+# since CI already runs this file and ci.yml was outside that issue's file
+# grant. A name clash would hide a test, so it fails loudly.
+def _collect_conflict_sweep_outcome_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"orchestrate_poll_conflict_sweep_outcome_cases",
+		Path(__file__).resolve().parent / "test_orchestrate_poll_conflict_sweep_outcome.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 6, f"only {collected} conflict sweep outcome cases collected"
+
+
+_collect_conflict_sweep_outcome_cases()
