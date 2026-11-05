@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:n/a | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `copilot-pull-request-reviewer` check-run failed on PR head `e540dbc18770bafdac9f8861d6f6b3b123f57ccd` with `custom_instructions_too_large` (HTTP 422), an external CI surface that the canary diff cannot have caused.\n  WHY: The reviewer labelled it advisory and NIT, not actionable in this PR, because the issue forbids touching other files. Severity is mapped from NIT to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/e2e_smoke_canary.txt:n/a | severity=low | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check-run failed on PR head `e540dbc18770bafdac9f8861d6f6b3b123f57ccd` with `custom_instructions_too_large` (HTTP 422), an external CI surface that the canary diff cannot have caused.\n  WHY: The reviewer labelled it advisory and NIT, not actionable in this PR, because the issue forbids touching other files. Severity is mapped from NIT to low.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e91c3a9cd4c8b77d27d3c788c6288cbd3b80333ab1e2d1cb79d6471f34019889",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "42082890466",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42082890466",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105182811_6ef69ce3ea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "42082890466"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T18:28:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
