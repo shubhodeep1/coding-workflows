@@ -227,6 +227,35 @@ def test_failed_label_swap_posts_no_answer() -> None:
 	assert gh.posted == []
 
 
+def test_failed_answer_post_keeps_wait_label_even_when_rollback_fails(capsys: pytest.CaptureFixture) -> None:
+	gh = FakeGitHub()
+	gh.add_issue(10, {dwr.WAIT_LABEL}, [_c(_wait_body())])
+	gh.targets[(REPO, 7)] = _pr("MERGED", True, SHA)
+	gh.comment_fail = True
+	gh.remove_label = lambda number, label: False  # type: ignore[method-assign]
+	out = _scan(gh, capsys)
+	assert gh.posted == []
+	assert dwr.WAIT_LABEL in gh.issues[10]["labels"]
+	assert "detail=rollback_failed" in out
+
+
+def test_seed_recovery_ignores_marker_for_other_dependency_or_non_seed() -> None:
+	gh = FakeGitHub()
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, [_c(_wait_body(kind="issue", number=4, extra={"source": "seed"}))], body="Depends on: #5")
+	gh.add_issue(21, {dwr.BLOCKED_LABEL}, [_c(_wait_body(kind="issue", number=4))], body="Depends on: #4")
+	_scan(gh)
+	assert gh.posted == [] and gh.label_ops == []
+
+
+def test_escalation_text_tells_human_to_swap_to_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+	gh = FakeGitHub()
+	gh.add_issue(10, {dwr.WAIT_LABEL}, [_c(_wait_body(kind="issue", number=4, since=OLD_SINCE))])
+	gh.targets[(REPO, 4)] = _issue("OPEN")
+	_scan(gh)
+	assert len(gh.posted) == 1
+	assert f"replace `{dwr.WAIT_LABEL}` with `{dwr.BLOCKED_LABEL}`" in gh.posted[0][1]
+
+
 @pytest.mark.parametrize(("labels", "prefix"), (((dwr.MERGED_LABEL,), "/answer"), ((), "/reclarify")))
 def test_issue_target_closed(labels: tuple, prefix: str) -> None:
 	gh = FakeGitHub()

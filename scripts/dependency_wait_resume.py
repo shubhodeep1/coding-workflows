@@ -550,23 +550,22 @@ def resume(gh: Any, issue: IssueSnapshot, wait: dict[str, Any], decision: str) -
 	)
 	if decision == "resume_answer":
 		# plan.yml's /answer gate accepts ai:blocked (-> ai:planning) but not the
-		# wait label, so swap labels BEFORE posting: the comment starts plan.yml
-		# at once. A failed swap posts nothing; the next tick retries.
+		# wait label, so add ai:blocked BEFORE posting: the comment starts plan.yml
+		# at once. The wait label stays until the comment has posted, so a failed
+		# post (or a failed rollback) never drops the issue out of the waiting scan.
 		if not gh.add_labels(issue.number, [BLOCKED_LABEL]):
 			return "read_failed"
 		issue.labels.add(BLOCKED_LABEL)
-		if not gh.remove_label(issue.number, WAIT_LABEL):
-			return "read_failed"
-		issue.labels.discard(WAIT_LABEL)
 	if not gh.comment(issue.number, body):
-		if decision == "resume_answer" and gh.add_labels(issue.number, [WAIT_LABEL]):
-			# Put the issue back in the waiting scan so the next tick retries.
-			gh.remove_label(issue.number, BLOCKED_LABEL)
+		if decision == "resume_answer" and not gh.remove_label(issue.number, BLOCKED_LABEL):
+			# Both labels remain: the issue stays in the waiting scan and retries.
+			_log(issue.number, target, "read_failed", "rollback_failed")
 		return "read_failed"
 	issue.comments.append({"author": "", "body": body, "created_at": ""})
-	if decision == "resume_reclarify" and gh.remove_label(issue.number, WAIT_LABEL):
-		# clarify.yml adds ai:clarification but never removes the wait label.
-		# A failed removal is retried by the already_resumed branch of scan().
+	if gh.remove_label(issue.number, WAIT_LABEL):
+		# clarify.yml adds ai:clarification and plan.yml adds ai:planning, but
+		# neither removes the wait label. A failed removal is retried by the
+		# already_resumed branch of scan().
 		issue.labels.discard(WAIT_LABEL)
 	return "resumed" if decision == "resume_answer" else "reclarified"
 
@@ -579,7 +578,8 @@ def escalate(gh: Any, issue: IssueSnapshot, login: str, wait: dict[str, Any], da
 		body = (
 			f"This issue has waited more than {days} day(s) on its dependency {target} "
 			f"(waiting since {wait['since']}). It keeps `{WAIT_LABEL}` and still resumes on its own when the "
-			f"dependency lands; reply `/answer` to resume it now.\n"
+			f"dependency lands. To resume it now, replace `{WAIT_LABEL}` with `{BLOCKED_LABEL}` and then reply "
+			f"`/answer` (the plan workflow does not act on `/answer` while only the wait label is set).\n"
 			f"<!-- ai:needs-human-latch reason=dependency_wait target={target} since={wait['since']} -->"
 		)
 		if not gh.comment(issue.number, body):
@@ -613,6 +613,10 @@ def seed_blocked(gh: Any, issue: IssueSnapshot, dependency: int, repo: str, logi
 	if any(WAIT_MARKER_TOKEN in comment["body"] for _index, comment in _trusted(issue.comments, login)):
 		found = newest_trusted_wait(issue.comments, login, repo, issue.number, now)
 		if found is None or found[1] is None or already_resumed(issue.comments, login, issue.number, found[1]["since"], found[0]):
+			return ""
+		if found[1]["source"] != "seed" or found[1]["kind"] != "issue" or found[1]["number"] != dependency:
+			# Only finish this helper's own half-applied seed for the same
+			# dependency; never undo a deliberate move back to ai:blocked.
 			return ""
 		# A seed whose marker posted but whose label change failed: finish it
 		# without a second marker, or the issue stays ai:blocked for good.
