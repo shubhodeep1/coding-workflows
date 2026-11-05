@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-05T11:10:53Z",
+  "issue_number": 8860,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/clarify.yml:2330-2349; cited_path=.github/workflows/clarify.yml, .github/workflows/plan.yml, scripts/ai_labels.py, README.md, agents.d/stuck-states-p11a-retired-label-drain.md, agents.d/stuck-states-p3a-fingerprint-markers.md, changelog.d/stuck-states-p3a-fingerprint-markers.md; files_touched=.github/ai/label_contract.v1.json, changelog.d/stuck-states-p8a-waiting-label.md, scripts/label_helpers.sh, scripts/orchestrate_lib.py, scripts/orchestrate_poll_process.sh, tests/test_ai_labels.py, tests/test_label_helpers_phase_transition_contract.py, tests/test_orchestrate_lib.py.",
+  "phase": "review_autofix",
+  "pr_number": 8864,
+  "record_id": "lesson_20261105111053_f652bfb10c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/clarify.yml, .github/workflows/plan.yml, scripts/ai_labels.py, README.md, agents.d/stuck-states-p11a-retired-label-drain.md, agents.d/stuck-states-p3a-fingerprint-markers.md, changelog.d/stuck-states-p3a-fingerprint-markers.md",
+    ".github/workflows/clarify.yml",
+    ".github/ai/label_contract.v1.json",
+    "changelog.d/stuck-states-p8a-waiting-label.md",
+    "scripts/label_helpers.sh",
+    "scripts/orchestrate_lib.py",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_ai_labels.py",
+    "tests/test_label_helpers_phase_transition_contract.py",
+    "tests/test_orchestrate_lib.py"
+  ]
+}
