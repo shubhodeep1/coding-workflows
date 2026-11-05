@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Upper bound on the stderr tail a failing bash case reports.
+_BASH_CASE_STDERR_TAIL_CHARS = 2000
 
 PHASE_WORKFLOWS = {
 	"clarify": (
@@ -181,6 +185,42 @@ def _clarify_bash_snippet() -> str:
 	return blocks[0]
 
 
+def _run_bash_case(case_id: str, args: list[str], **kwargs) -> subprocess.CompletedProcess:
+	# CI run 37102511377 hid stderr behind CalledProcessError, whose message
+	# repeats the whole bash -c script. Report only the case id, exit status
+	# and a bounded stderr tail; never the args, env or script text.
+	result = subprocess.run(args, capture_output=True, text=True, check=False, **kwargs)
+	if result.returncode != 0:
+		stderr_tail = (result.stderr or "")[-_BASH_CASE_STDERR_TAIL_CHARS:]
+		raise AssertionError(f"case={case_id} exit={result.returncode} stderr_tail={stderr_tail!r}")
+	return result
+
+
+def test_run_bash_case_reports_case_exit_and_bounded_stderr() -> None:
+	script = (
+		"# SCRIPT_TEXT_MARKER_8862_DO_NOT_LEAK\n"
+		"printf 'HEAD_TOKEN_8862' >&2\n"
+		"printf '%*s' 2500 '' | tr ' ' e >&2\n"
+		"printf 'TAIL_TOKEN_8862' >&2\n"
+		"exit 7\n"
+	)
+	raised = False
+	message = ""
+	try:
+		_run_bash_case("selftest:bounded", ["bash", "-c", script])
+	except AssertionError as error:
+		raised = True
+		message = str(error)
+	if not raised:
+		raise AssertionError("expected failure")
+	assert "case=selftest:bounded" in message, message[:200]
+	assert "exit=7" in message, message[:200]
+	assert "TAIL_TOKEN_8862" in message, message[-200:]
+	assert "SCRIPT_TEXT_MARKER_8862_DO_NOT_LEAK" not in message
+	assert "HEAD_TOKEN_8862" not in message
+	assert len(message) <= _BASH_CASE_STDERR_TAIL_CHARS + 200, len(message)
+
+
 def test_clarify_reclarify_clause_is_pinned_in_every_wrapper() -> None:
 	for relative_path in PHASE_WORKFLOWS["clarify"]:
 		text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
@@ -190,7 +230,6 @@ def test_clarify_reclarify_clause_is_pinned_in_every_wrapper() -> None:
 def test_reclarify_classifiers_agree_with_the_job_predicate() -> None:
 	import os
 	import shutil
-	import subprocess
 	import sys
 
 	sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -200,20 +239,22 @@ def test_reclarify_classifiers_agree_with_the_job_predicate() -> None:
 	poller = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	jq_line = next(line for line in poller.splitlines() if line.startswith("RECLARIFY_COMMAND_JQ_DEF="))
 	cases = list(RECLARIFY_CASES) + [("x" * 70000 + "\n/reclarify", True)]
-	for body, expected in cases:
+	for index, (body, expected) in enumerate(cases):
 		assert _model_reclarify_clause(body) is expected, body[:80]
 		assert orchestrate_lib.is_reclarify_command_body(body) is expected, body[:80]
-		bash = subprocess.run(
+		bash = _run_bash_case(
+			f"reclarify-bash:{index}",
 			["bash", "-c", "set -euo pipefail\n" + snippet + '\nprintf %s "${_rc_is_command}"'],
-			env={"COMMENT_BODY": body, "PATH": os.environ["PATH"]}, capture_output=True, text=True, check=True,
+			env={"COMMENT_BODY": body, "PATH": os.environ["PATH"]},
 		)
 		assert bash.stdout == ("true" if expected else "false"), body[:80]
 		if shutil.which("jq") is None:
 			# The poller itself needs jq; CI runners carry it.
 			continue
-		jq = subprocess.run(
+		jq = _run_bash_case(
+			f"reclarify-jq:{index}",
 			["bash", "-c", jq_line + '\njq -n --arg b "${COMMENT_BODY}" "${RECLARIFY_COMMAND_JQ_DEF}"\' $b | is_reclarify_command\''],
-			env={"COMMENT_BODY": body, "PATH": os.environ["PATH"]}, capture_output=True, text=True, check=True,
+			env={"COMMENT_BODY": body, "PATH": os.environ["PATH"]},
 		)
 		assert jq.stdout.strip() == ("true" if expected else "false"), body[:80]
 
@@ -384,7 +425,6 @@ def _release_block() -> str:
 
 def _run_release_block(body: str, association: str, comment_login: str, token_login: str = "pipeline-bot", login_fail: bool = False, forced: str = "true", source_comment: str = "") -> dict:
 	import os
-	import subprocess
 	import tempfile
 
 	with tempfile.TemporaryDirectory() as workdir:
@@ -409,7 +449,7 @@ def _run_release_block(body: str, association: str, comment_login: str, token_lo
 			"STUB_SOURCE_COMMENT": source_comment,
 			"GITHUB_REPOSITORY": "o/r",
 		}
-		result = subprocess.run(["bash", "-c", script], env=env, cwd=workdir, capture_output=True, text=True, check=True)
+		result = _run_bash_case(f"release-block:{association}:{comment_login}", ["bash", "-c", script], env=env, cwd=workdir)
 	last = result.stdout.strip().splitlines()[-1]
 	values = dict(part.split("=", 1) for part in last.split())
 	values["stdout"] = result.stdout
@@ -561,7 +601,6 @@ def test_clarify_route_restarts_a_verified_release_as_automated() -> None:
 	import json
 	import os
 	import shutil
-	import subprocess
 	import tempfile
 
 	# The route step needs jq; CI runners carry it. Fail rather than pass
@@ -607,7 +646,7 @@ def test_clarify_route_restarts_a_verified_release_as_automated() -> None:
 				"GITHUB_REPOSITORY": "o/r",
 			}
 			script = step["run"].replace("${{ github.repository }}", "o/r")
-			result = subprocess.run(["bash", "-c", script], env=env, cwd=workdir, capture_output=True, text=True, check=True)
+			result = _run_bash_case(f"clarify-route:{association}:{login}", ["bash", "-c", script], env=env, cwd=workdir)
 			outputs = dict(line.split("=", 1) for line in output_path.read_text(encoding="utf-8").splitlines() if "=" in line)
 			for key, value in expected.items():
 				assert outputs.get(key) == value, (association, login, key, outputs, result.stdout)
