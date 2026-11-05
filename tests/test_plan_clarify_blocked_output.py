@@ -807,6 +807,7 @@ if grep -q AI_CLARIFY_BLOCKED_RETRY_V1 "$1"; then
   case "${STUB_RETRY}" in
     clear) printf 'STATUS: CLEAR\n' > "$2" ;;
     blocked) printf 'BLOCKED: README.md is still missing\n' > "$2" ;;
+    waiting) printf 'WAITING: pr=owner/repo#7\n' > "$2" ;;
     fail) printf 'partial\n' > "$2"; exit 1 ;;
     empty) : > "$2" ;;
     prose) printf "I can't answer this one.\n" > "$2" ;;
@@ -1071,3 +1072,206 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+# ---------------------------------------------------------------------------
+# Stuck-states P8a-2 (Refs #8291): WAITING: lines park the issue on its dependency
+# ---------------------------------------------------------------------------
+
+WAITING_SENTENCE = (
+	"Sequencing wait: when the only blocker is another pull request that has not merged, an upstream change "
+	"not yet in the `shubhodeep1/coding-workflows` `@stable` release, or another issue in this repository that "
+	"must be finished first, emit exactly one line `WAITING: pr=<owner>/<repo>#<N>`, "
+	"`WAITING: release=shubhodeep1/coding-workflows@stable contains=shubhodeep1/coding-workflows#<N>` or "
+	"`WAITING: issue=<owner>/<repo>#<N>` instead of `BLOCKED:`. `pr` names this repository or "
+	"`shubhodeep1/coding-workflows`; `issue` names this repository and never this issue."
+)
+WAIT_HELPER = REPO_ROOT / "scripts" / "dependency_wait_resume.py"
+
+
+def _step_body(workflow: Path, step_name: str) -> str:
+	"""The dedented run: body of one step, with the github.* expressions this suite needs filled in."""
+	lines = _read(workflow).splitlines()
+	start = next(i for i, line in enumerate(lines) if line.strip() == f"- name: {step_name}")
+	stop = next(i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("- name: "))
+	block = lines[start:stop]
+	run = next(i for i, line in enumerate(block) if line.strip() == "run: |")
+	body = textwrap.dedent("\n".join(block[run + 1:])) + "\n"
+	for expr, value in (
+		("${{ github.repository }}", "owner/repo"),
+		("${{ github.server_url }}", "https://github.com"),
+		("${{ github.run_id }}", "1"),
+	):
+		body = body.replace(expr, value)
+	assert "${{" not in body
+	return body
+
+
+def _step_text(workflow: Path, step_name: str) -> str:
+	text = _read(workflow)
+	start = text.index(f"      - name: {step_name}\n")
+	end = text.find("\n      - name:", start + 1)
+	return text[start:end]
+
+
+def _norm(text: str) -> str:
+	return " ".join(text.split())
+
+
+def test_waiting_rule_is_in_every_live_and_template_prompt() -> None:
+	for path in (
+		PROMPT_PLAN, PROMPT_CLARIFY, REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt",
+		REPO_ROOT / "prompts" / "_templates" / "mode-clarify.txt", PLAN_RUNNER, CLARIFY_WF,
+	):
+		assert WAITING_SENTENCE in _norm(_read(path)), path
+	for path in (PROMPT_PLAN, REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt", PLAN_RUNNER):
+		assert WAITING_SENTENCE + " Emit no plan with it, and end with `STATUS: NOT_CLEAR`." in _norm(_read(path)), path
+	for path in (PROMPT_CLARIFY, REPO_ROOT / "prompts" / "_templates" / "mode-clarify.txt"):
+		assert "Or, for a sequencing wait:\nWAITING: <target>\n" in _read(path)
+	assert "Or, for a sequencing wait (point 10):\n          WAITING: <target>\n" in _read(CLARIFY_WF)
+
+
+def _run_parse(tmp: Path, workflow: Path, step: str, output: str, *, helper: bool = True, enabled: str = "true") -> dict[str, str]:
+	(tmp / "rt").mkdir(exist_ok=True)
+	bundle = tmp / "bundle"
+	bundle.mkdir(exist_ok=True)
+	if helper:
+		(bundle / "dependency_wait_resume.py").write_text(_read(WAIT_HELPER), encoding="utf-8")
+	(tmp / "o.txt").write_text(output, encoding="utf-8")
+	for name in ("go", "ge"):
+		(tmp / name).write_text("", encoding="utf-8")
+	env = {
+		"PATH": "/usr/bin:/bin", "HOME": str(tmp), "CODEX_OUTPUT_FILE": str(tmp / "o.txt"), "RUNTIME_DIR": str(tmp / "rt"),
+		"SUPPORT_SCRIPTS_DIR": str(bundle), "GITHUB_OUTPUT": str(tmp / "go"), "GITHUB_ENV": str(tmp / "ge"),
+		"GITHUB_REPOSITORY": "owner/repo", "ISSUE_NUMBER": "5", "DEPENDENCY_WAIT_RESUME_ENABLED": enabled,
+		"PLAN_SELF_CHECK_ENABLED": "true",
+	}
+	result = subprocess.run(["bash", "-c", _step_body(workflow, step)], env=env, capture_output=True, text=True, timeout=60, check=False)
+	assert result.returncode == 0, result.stdout + result.stderr
+	outputs: dict[str, str] = {}
+	lines = _read(tmp / "go").splitlines()
+	index = 0
+	while index < len(lines):
+		key, sep, value = lines[index].partition("=")
+		if not sep and "<<" in lines[index]:
+			key, delim = lines[index].split("<<", 1)
+			end = lines.index(delim, index + 1)
+			outputs[key] = "\n".join(lines[index + 1:end])
+			index = end + 1
+			continue
+		outputs[key] = value
+		index += 1
+	outputs["_stderr"] = result.stderr
+	outputs["_stdout"] = result.stdout
+	return outputs
+
+
+PARSE_STEPS = ((CLARIFY_WF, "Parse Codex output"), (PLAN_WF, "Parse planning output"))
+
+
+def test_waiting_line_is_parsed_before_blocked_in_both_parse_steps() -> None:
+	for workflow, step in PARSE_STEPS:
+		text = _step_text(workflow, step)
+		assert "DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}" in text
+		assert text.index("parse-waiting") < text.index("BLOCKED_REASON=\"$(perl")
+		assert '[ -f "${DEP_WAIT_HELPER}" ] && [ ! -L "${DEP_WAIT_HELPER}" ]' in text
+		assert "DEPENDENCY_WAIT_PARK op=parse outcome=skip reason=helper_missing" in text
+		with tempfile.TemporaryDirectory() as td:
+			valid = _run_parse(Path(td), workflow, step, "STATUS: CLEAR\nBLOCKED: other\nWAITING: pr=owner/repo#7\n")
+		assert valid["blocked"] == "true" and valid["needs_clarification"] == "false"
+		assert valid["blocked_reason"] == "WAITING: pr:owner/repo#7"
+		assert (valid["waiting"], valid["waiting_kind"], valid["waiting_repo"], valid["waiting_number"]) == ("true", "pr", "owner/repo", "7")
+		with tempfile.TemporaryDirectory() as td:
+			invalid = _run_parse(Path(td), workflow, step, "WAITING: pr=other/repo#7\nBLOCKED: the real reason\n")
+		assert invalid["waiting"] == "false" and invalid["blocked"] == "true" and invalid["blocked_reason"] == "the real reason"
+		with tempfile.TemporaryDirectory() as td:
+			missing = _run_parse(Path(td), workflow, step, "STATUS: CLEAR\nWAITING: pr=owner/repo#7\n", helper=False)
+		assert missing["waiting"] == "false" and missing["blocked"] == "true"
+		assert missing["blocked_reason"] == "WAITING: pr=owner/repo#7"
+		assert "reason=helper_missing" in missing["_stdout"]
+		with tempfile.TemporaryDirectory() as td:
+			off = _run_parse(Path(td), workflow, step, "WAITING: pr=owner/repo#7\n", enabled="false")
+		assert off["waiting"] == "false" and off["blocked"] == "true"
+		with tempfile.TemporaryDirectory() as td:
+			fenced = _run_parse(Path(td), workflow, step, "```\nWAITING: pr=owner/repo#7\n```\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n")
+		assert fenced["waiting"] == "false" and fenced["blocked"] == "false"
+
+
+PARK_STUBS = {
+	"gh_helpers.sh": 'gh_retry() { echo "gh_retry $*" >> "${STUB_LOG}"; }\n',
+	"label_helpers.sh": 'ensure_label_exists() { echo "ensure_label_exists $*" >> "${STUB_LOG}"; }\n',
+	"tg_helpers.sh": 'tg_send_tracked() { echo "tg $3 $2" | head -1 >> "${STUB_LOG}"; }\n',
+	"dependency_wait_resume.py": (
+		"import json, os, sys\n"
+		"open(os.environ['STUB_LOG'], 'a').write('park ' + ' '.join(sys.argv[1:]) + '\\n')\n"
+		"print(json.dumps({'status': os.environ['STUB_PARK_STATUS'], 'target': 'pr:owner/repo#7'}))\n"
+	),
+}
+HANDLER_STEPS = ((CLARIFY_WF, "Handle blocked clarification output", "clarify"), (PLAN_WF, "Handle blocked planning output", "plan"))
+
+
+def _run_handler(tmp: Path, workflow: Path, step: str, *, status: str, waiting: str = "true") -> list[str]:
+	bundle = tmp / "bundle"
+	bundle.mkdir()
+	for name, text in PARK_STUBS.items():
+		(bundle / name).write_text(text, encoding="utf-8")
+	(tmp / "rt").mkdir()
+	env = {
+		"PATH": "/usr/bin:/bin", "HOME": str(tmp), "SUPPORT_SCRIPTS_DIR": str(bundle), "RUNTIME_DIR": str(tmp / "rt"),
+		"STUB_LOG": str(tmp / "log"), "STUB_PARK_STATUS": status, "ISSUE_NUMBER": "5", "ISSUE_URL": "https://github.com/owner/repo/issues/5",
+		"BLOCKED_REASON": "WAITING: pr:owner/repo#7", "WAITING_PARSED": waiting, "WAITING_KIND": "pr",
+		"WAITING_REPO": "owner/repo", "WAITING_NUMBER": "7", "PLAN_COMMENT_FILE": str(tmp / "rt" / "plan_comment.md"),
+	}
+	result = subprocess.run(["bash", "-c", _step_body(workflow, step)], env=env, capture_output=True, text=True, timeout=60, check=False)
+	assert result.returncode == 0, result.stdout + result.stderr
+	return _read(tmp / "log").splitlines()
+
+
+def test_blocked_handlers_park_a_wait_and_fall_back_to_blocked() -> None:
+	for workflow, step, phase in HANDLER_STEPS:
+		text = _step_text(workflow, step)
+		for row in ("WAITING_PARSED:", "WAITING_KIND:", "WAITING_REPO:", "WAITING_NUMBER:",
+			"DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}",
+			"DEPENDENCY_WAIT_ESCALATE_DAYS: ${{ vars.DEPENDENCY_WAIT_ESCALATE_DAYS || '7' }}"):
+			assert row in text, (step, row)
+		with tempfile.TemporaryDirectory() as td:
+			parked = _run_handler(Path(td), workflow, step, status="parked")
+		assert parked[0] == "ensure_label_exists ai:waiting-on-dependency owner/repo"
+		assert parked[1].startswith("park park --repo owner/repo --issue-number 5 --kind pr --target-repo owner/repo --number 7 ")
+		assert f"--phase {phase} --run-url https://github.com/owner/repo/actions/runs/1" in parked[1]
+		assert "--remove-label ai:blocked" in parked[2] and "--add-label" not in parked[2]
+		assert parked[3].startswith("tg CRITICAL ") and "waiting on dependency for issue #5: pr:owner/repo#7" in parked[3]
+		assert len(parked) == 4 and not any("ai:blocked owner/repo" in line for line in parked)
+		with tempfile.TemporaryDirectory() as td:
+			fallback = _run_handler(Path(td), workflow, step, status="already_resolved")
+		assert "ensure_label_exists ai:blocked owner/repo" in fallback
+		assert any("--add-label ai:blocked" in line for line in fallback)
+		assert any("(dependency wait not parked: already_resolved)" in line for line in fallback if line.startswith("tg "))
+		with tempfile.TemporaryDirectory() as td:
+			plain = _run_handler(Path(td), workflow, step, status="parked", waiting="false")
+		assert not any(line.startswith("park ") for line in plain) and "ensure_label_exists ai:blocked owner/repo" in plain
+
+
+def test_waiting_helper_is_optional_for_clarify_and_plan_staging() -> None:
+	stage = _read(STAGE_SUPPORT)
+	for phase in ("clarify", "plan"):
+		block = re.search(r"^\t" + phase + r"\)\n(.*?)^\t\t;;", stage, re.MULTILINE | re.DOTALL)
+		assert block
+		optional = re.search(r"stage_support_optional_scripts=\((.*?)\)", block.group(1), re.DOTALL)
+		assert optional and "dependency_wait_resume.py" in optional.group(1).split()
+		required = re.search(r"stage_support_required_scripts=\((.*?)\)", block.group(1), re.DOTALL)
+		assert required and "dependency_wait_resume.py" not in required.group(1).split()
+	for workflow in (CLARIFY_WF, PLAN_WF):
+		assert "scripts/dependency_wait_resume.py" not in _read(workflow)
+
+
+def test_blocked_verify_retry_accepts_a_waiting_answer() -> None:
+	run_codex = _read(CLARIFY_WF).split("- name: Run Codex", 1)[1].split("- name: Semantic cache store", 1)[0]
+	assert "if (/^\\s*WAITING:\\s*\\S/i) { $blocked = 1; exit; }" in run_codex
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_blocked_verify(Path(tmp), "waiting")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert len(calls) == 2, calls
+		assert _read(Path(tmp) / "o.txt") == "WAITING: pr=owner/repo#7\n"
+	assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=still_blocked exit_code=0"
+	assert "^\\s*WAITING:\\s*.+$" in _read(CLARIFY_WF)
