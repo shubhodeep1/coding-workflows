@@ -27,6 +27,10 @@ UNWIRED_ALLOWLIST: dict[str, str] = {
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_orchestrate_integration_ahead_by_gate.py, which collects them"
 	),
+	"tests/test_clarify_blocked_verify.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_plan_clarify_blocked_output.py, which collects them"
+	),
 	"tests/test_orchestrate_poll_conflict_sweep_outcome.py": (
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_alert_levels_human_only.py, which collects them"
