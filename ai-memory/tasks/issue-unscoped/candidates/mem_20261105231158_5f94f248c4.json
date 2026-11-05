@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR introduces a pre-push test gate failure in the recovery test suite.\n  WHY: The tests likely hardcode the old format of tests/e2e_smoke_canary.txt, so the updated canary breaks the recovery verification.\n- tests/test_promote_main_cycle.py:unspecified | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Multiple inherited test failures (tests/test_promote_main_cycle.py, tests/test_review_autofix_review_pipeline_contract.py, tests/test_review_merge_train.py, tests/test_smoke_alert_silencing_contract.py).\n  WHY: These tests likely depend on the e2e_smoke_canary.txt format or presence as a smoke signal, so changing it causes cascading failures.\n- External check-run `copilot-pull-request-reviewer`, run 41549900517, job 125634616239 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The PR-head reviewer check failed with `custom_instructions_too_large` (HTTP 422) and produced no review result.\n  WHY: The check could not create its review request; the log does not tie this to the canary change, so it is not a defect in the changed file.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=MAJOR | confidence=4\n  PROBLEM: The PR introduces a pre-push test gate failure in the recovery test suite.\n  WHY: The tests likely hardcode the old format of tests/e2e_smoke_canary.txt, so the updated canary breaks the recovery verification.\n- tests/test_promote_main_cycle.py:unspecified | severity=MAJOR | confidence=3\n  PROBLEM: Multiple inherited test failures (tests/test_promote_main_cycle.py, tests/test_review_autofix_review_pipeline_contract.py, tests/test_review_merge_train.py, tests/test_smoke_alert_silencing_contract.py).\n  WHY: These tests likely depend on the e2e_smoke_canary.txt format or presence as a smoke signal, so changing it causes cascading failures.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- External check-run `copilot-pull-request-reviewer`, run 41549900517, job 125634616239 | severity=MAJOR | confidence=5\n  PROBLEM: The PR-head reviewer check did not produce a review result (`custom_instructions_too_large`, HTTP 422, \"Prompt too big after adding system message\").\n  WHY: The check could not create its review request. The failure log does not connect this to the canary change, so it does not identify a defect in the changed file.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f9cdaf7a503a0049053207f61195a133a1e392b1e72ab1961243d6a69aaeee4b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "42126296643",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42126296643",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105231158_5f94f248c4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "42126296643"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T23:11:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
