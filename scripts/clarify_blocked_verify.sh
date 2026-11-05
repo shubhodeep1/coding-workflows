@@ -81,9 +81,28 @@ bad_parts = {".git", ".ai", ".codex", ".codex-workflow-src", ".codex-workflow-sr
 key_suffixes = (".pem", ".key", ".p12", ".pfx", ".keystore")
 
 
+# Mirrors the pass-2 credential rules of scripts/clarify_isolated_run.sh
+# (pass2_credential_names, pass2_secret_tails, pass2_config_exts,
+# pass2_secret_name, the .jks/.tfstate tails). They apply to every path here,
+# so a credential-shaped name the snapshot may withhold is never listed.
+pass2_credential_names = {".ssh", ".aws", ".azure", ".kube", ".config", ".docker", ".npmrc", ".netrc", ".pypirc",
+                          ".pgpass", ".git-credentials", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"}
+pass2_secret_tails = ("_secret", "_secrets", "_credential", "_credentials", "-secret", "-secrets", "-credential", "-credentials")
+pass2_config_exts = ("json", "yaml", "yml", "toml", "ini", "env", "txt", "conf", "cfg", "properties", "xml")
+
+
+def pass2_secret_name(lower):
+	stem, _, ext = lower.rpartition(".")
+	return (lower in ("secret", "credential") or lower.endswith(pass2_secret_tails)
+		or (bool(stem) and ext in pass2_config_exts and (stem in ("secret", "secrets", "credential", "credentials")
+			or stem.endswith(pass2_secret_tails + (".secret", ".secrets", ".credential", ".credentials")))))
+
+
 def sensitive(parts):
 	return (not parts or any(part.lower() in bad_parts or part.lower().startswith(".env") for part in parts)
-		or any(part.lower().endswith(key_suffixes) for part in parts))
+		or any(part.lower().endswith(key_suffixes) for part in parts)
+		or any(part.lower() in pass2_credential_names or part.lower().endswith((".jks", ".tfstate"))
+			or pass2_secret_name(part.lower()) for part in parts))
 
 
 def log(outcome, reason, paths=0, sample=None):
@@ -109,7 +128,10 @@ def blocked_reason(text):
 
 
 def path_tokens(reason):
+	"""Return (paths, bare): path-like tokens, and extensionless one-segment
+	names (Makefile, LICENSE) that count only as an exact tracked file."""
 	found = []
+	bare = []
 	for raw in PATH_TOKEN_RE.findall(reason):
 		if "://" in raw:
 			continue
@@ -118,19 +140,25 @@ def path_tokens(reason):
 			token = token[2:]
 		token = token.rstrip(".,;:!?")
 		token = LINE_SUFFIX_RE.sub("", token)
+		had_slash = "/" in token
 		token = token.rstrip("/")
 		if not token or not PATH_NAME_RE.match(token) or token.startswith("/"):
 			continue
 		parts = token.split("/")
 		if ".." in parts or "//" in token:
 			continue
-		if "/" not in token and not PATH_EXT_RE.search(token):
+		if not had_slash and not PATH_EXT_RE.search(token):
+			# A root directory needs its trailing slash (docs/); a bare word is
+			# kept apart so prose cannot use up the MAX_TOKENS path slots.
+			if token not in bare and len(bare) < MAX_TOKENS:
+				bare.append(token)
 			continue
 		if token not in found:
 			found.append(token)
 		if len(found) >= MAX_TOKENS:
 			break
-	return [token for token in found if not sensitive(token.split("/"))]
+	keep = lambda token: not sensitive(token.split("/"))
+	return [token for token in found if keep(token)], [token for token in bare if keep(token)]
 
 
 def listable(path):
@@ -146,13 +174,15 @@ def check(output_file, prompt_file, listing_out, root):
 		if MARKER.encode("ascii") in handle.read():
 			log("skip", "already_retried")
 			return 3
-	candidates = path_tokens(reason)
-	if not candidates:
+	candidates, bare = path_tokens(reason)
+	if not candidates and not bare:
 		log("skip", "no_tracked_path")
 		return 3
 	raw = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True).stdout
 	tracked = [os.fsdecode(entry) for entry in raw.split(b"\0") if entry]
 	tracked_set = set(tracked)
+	room = MAX_TOKENS - len(candidates)
+	candidates += [token for token in bare if token in tracked_set and token not in candidates][:max(0, room)]
 	lines = []
 	present = []
 	size = 0

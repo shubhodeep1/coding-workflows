@@ -946,6 +946,20 @@ def test_blocked_verify_skips_without_the_bundle_helper() -> None:
 		], support
 
 
+def test_blocked_verify_skip_line_is_silent_when_off_or_fenced() -> None:
+	cases = (
+		{"support": "legacy", "enabled": "false"},
+		{"support": "missing", "enabled": "OFF"},
+		{"support": "legacy", "first": "```text\nBLOCKED: README.md\n```\nSTATUS: CLEAR"},
+	)
+	for case in cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			result, calls = _run_blocked_verify(Path(tmp), "clear", **case)
+			assert result.returncode == 0, (case, result.stdout + result.stderr)
+			assert len(calls) == 1, (case, calls)
+		assert _blocked_verify_lines(result) == [], case
+
+
 def test_blocked_verify_leaves_other_outputs_and_the_off_switch_alone() -> None:
 	cases = (
 		{"first": "STATUS: CLEAR"},

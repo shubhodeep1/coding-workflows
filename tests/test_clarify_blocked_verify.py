@@ -150,6 +150,39 @@ def test_tokens_are_capped_at_twenty() -> None:
 	assert "paths=20 " in _log(result)
 
 
+def test_extensionless_root_file_and_root_directory_retry() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, listing = _check(Path(tmp), "BLOCKED: the Makefile is missing and so is docs/\n", extra=("Makefile",))
+	assert result.returncode == 0, result.stderr
+	lines = listing.splitlines()
+	assert lines[0].startswith("- docs/ (tracked directory, ")
+	assert lines[1] == "- Makefile (tracked file)"
+	assert _log(result).endswith("paths=2 sample=docs,Makefile")
+
+
+def test_untracked_bare_words_do_not_retry() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, listing = _check(Path(tmp), "BLOCKED: need the production API key from the owner\n")
+	assert result.returncode == 3, result.stderr
+	assert listing == ""
+	assert "reason=no_tracked_path" in _log(result)
+
+
+def test_pass2_credential_names_are_dropped() -> None:
+	extra = ("db-credentials.yaml", "config/prod_secret.json", "config/app.json", "deploy/.npmrc", "deploy/run.sh")
+	reason = "BLOCKED: db-credentials.yaml config/prod_secret.json deploy/.npmrc are missing\n"
+	with tempfile.TemporaryDirectory() as tmp:
+		result, listing = _check(Path(tmp), reason, extra=extra)
+	assert result.returncode == 3, result.stderr
+	assert listing == ""
+	with tempfile.TemporaryDirectory() as tmp:
+		result, listing = _check(Path(tmp), "BLOCKED: the config/ and deploy/ directories are absent\n", extra=extra)
+	assert result.returncode == 0, result.stderr
+	for secret in ("prod_secret", ".npmrc", "credentials"):
+		assert secret not in listing and secret not in result.stderr, secret
+	assert "(tracked directory, 1 files" in listing
+
+
 def test_marker_in_prompt_means_already_retried() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		result, listing = _check(Path(tmp), "BLOCKED: README.md\n", prompt=f"x\n=== {MARKER} ===\n")
@@ -236,6 +269,15 @@ def test_sensitive_rules_mirror_the_snapshot() -> None:
 	assert 'part.lower().startswith(".env")' in helper and 'part.lower().startswith(".env")' in snapshot
 	assert '(".pem", ".key", ".p12", ".pfx", ".keystore")' in helper
 	assert '(".pem", ".key", ".p12", ".pfx", ".keystore")' in snapshot
+	for name in ("pass2_credential_names",):
+		assert _python_set(helper.replace("\n                          ", " "), name) == _python_set(snapshot.replace("\n                          ", " "), name)
+	for line in (
+		'pass2_secret_tails = ("_secret", "_secrets", "_credential", "_credentials", "-secret", "-secrets", "-credential", "-credentials")',
+		'pass2_config_exts = ("json", "yaml", "yml", "toml", "ini", "env", "txt", "conf", "cfg", "properties", "xml")',
+		'stem.endswith(pass2_secret_tails + (".secret", ".secrets", ".credential", ".credentials"))',
+		'part.lower().endswith((".jks", ".tfstate"))',
+	):
+		assert line in helper and line in snapshot, line
 
 
 def test_blocked_rule_mirrors_the_parse_step() -> None:
