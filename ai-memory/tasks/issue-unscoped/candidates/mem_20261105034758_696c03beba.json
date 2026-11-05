@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- n/a (external check-run `copilot-pull-request-reviewer`, Actions run 41544551704, job 125616826829) | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The external Copilot reviewer check failed with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\") because `AGENTS.md` and `CLAUDE.md` exceed its prompt budget.\n  WHY: The check exits with code 1 before any review runs, and the failure maps to no changed line, so no edit to the canary file can fix it. The reviewers rated it NIT, mapped here to low, and raised it only so the failure is not silently dropped.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- n/a (external check-run `copilot-pull-request-reviewer`, Actions run 41544551704, job 125616826829; no repository file or line applies) | severity=NIT | confidence=4\n  PROBLEM: The external Copilot reviewer check failed because the instruction files (`AGENTS.md` and `CLAUDE.md`) are too large for its prompt budget.\n  WHY: The check exits with code 1 before any review runs. The failure does not map to any changed line, and no edit to the canary file can fix it. It is reported only so the failed check is not silently dropped.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- n/a (external check-run `copilot-pull-request-reviewer`, Actions run 41544551704, job 125616826829) | severity=NIT | confidence=4\n  PROBLEM: The check fails with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\") because the repo's `AGENTS.md` and `CLAUDE.md` custom instructions exceed the external reviewer's prompt budget. The failure does not map to any changed line, and this 3-line canary edit cannot fix it.\n  WHY: The reviewer request exits code 1 before completing a review of the PR head.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9261bc9313bf5406dd047e9095c22ffbe1085f5ecff41c484192df677c98be7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41961285500",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41961285500",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105034758_696c03beba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41961285500"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T03:47:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
