@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (130)
+## Processed source docs (131)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -135,6 +135,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-09-23.md`
 - `analysis/workflow-optimization-2026-09-26.md`
 - `analysis/workflow-optimization-2026-10-02.md`
+- `analysis/workflow-optimization-2026-10-03.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1960,3 +1961,47 @@ Source commit: `ef9f747a1ac2c3db74c12989d378ee4298a808a0`
 | Pipeline Flow Bottlenecks | informational | Covered by the Exec, Speed and Reliability rows above. |
 | Per-Repo Breakdown | informational | Covered by the Exec, Reliability and Cost rows above. |
 | Metrics Appendix | informational | No separate recommendation. |
+
+### `analysis/workflow-optimization-2026-10-03.md`
+Source doc: `analysis/workflow-optimization-2026-10-03.md`
+Processed: 2026-11-05
+Source commit: `5d4268567f57c68ff27d5f87ae72c5e01da5e4a7`
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| Reliability 1, failure-diagnostics part (case id, exit status, bounded stderr, no shell command) | applied | `_run_bash_case` in `tests/test_phase_wrapper_predicate_contract.py` replaces the four `check=True` bash call sites (`reclarify-bash:<i>`, `reclarify-jq:<i>`, `release-block:<association>:<login>`, `clarify-route:<association>:<login>`) and reports `case=… exit=… stderr_tail=<repr of the last 2000 chars>` without the args or script text; pinned by `test_run_bash_case_reports_case_exit_and_bounded_stderr`. Runs inside the existing `Clarify loop guard unit tests` step. |
+| Exec 1 / Cost 1 / Per-Repo action 1 (cost-collector parsing and dedup) | already-implemented | `CODEX_TOKENS_RE` in `scripts/cost_audit.py` is line-anchored and `_dedupe_structured_cost_telemetry_full_logs` is in `scripts/collect_workflow_logs.py`; fixtures `test_parse_log_ignores_codex_tokens_used_mid_sentence` in `tests/test_cost_audit_semble_metrics.py` and `test_apply_cost_telemetry_from_full_logs_dedupes_parent_child_codex_usage` in `tests/test_collect_workflow_logs.py`. |
+| Exec 3 / Speed 1 / Cost 2, timing part | already-implemented | `REVIEWER_ATTEMPT_RESULT` in `scripts/review_run_reviewers.sh` (#8097). The proposed `REVIEW_MODEL_TIMING_V1` was not added. |
+| Speed 3 / Reliability 2 / GH API check-run polling row | already-implemented | `CHECK_RUNS_WAIT_PENDING` and `CHECK_RUNS_WAIT_EXIT` (status `ready`, `timeout` or `api_error`) in `scripts/collect_pr_check_runs_context.py`. |
+| Speed 4 / AI Memory Health push logging | already-implemented | `clone_ms`, `write_ms`, `push_ms`, `push_attempts` and `push_retry_reasons` are produced by `persist_memory_operation` in `scripts/ai_memory_lib.py` and copied into telemetry by `scripts/ai_memory.py`. |
+| Exec 4 / Reliability 4 (classify Semble fallbacks by origin) | already-implemented | `semble_contract_test_fallbacks` and `semble_runtime_fallbacks` in `scripts/cost_audit.py`. |
+| Exec 5 / Reliability 3 (validation-dispatch gaps) | already-implemented | `.github/workflows/review_autofix.yml` raises `::error::Standalone validation was required for merged PR #… but could not be dispatched` and keeps the `ai:orchestrator-validate-required` label (2026-10-01-2 precedent). |
+| Exec 5 / Orchestrator Health skip reasons | already-implemented | `AI_PHASE_GATE_V1` in `.github/workflows/clarify.yml`, `plan.yml`, `implement.yml` and `orchestrate_clarify_respond.yml`. |
+| Orchestrator Health merge-train hold reasons | already-implemented | `MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE`, `MERGE_TRAIN_RELEASE_ACTIVE`, `MERGE_TRAIN_RELEASE_CLAIM_SKIPPED` and `MERGE_TRAIN_RELEASE_SUMMARY` in `scripts/review_merge_train.sh`. |
+| Prompt Cache prefix hash and dynamic-section byte counts | already-implemented | `REVIEWER_PROMPT_COMPONENTS` in `scripts/review_run_reviewers.sh`. |
+| Reliability 1, inventory-parity preflight | already-implemented | The pre-push gate's `registry:inventory_parity` (`.claude/hooks/prepush_affected_tests.py`, `tests/inventory_parity.py`). `scripts/smoke_review_dispatch.sh` does not exist; that failure was branch-local. |
+| SEC-001 (review dispatch from unmerged refs) | already-implemented | `_mt_dispatch_review` in `scripts/review_merge_train.sh` logs `MERGE_TRAIN_DISPATCHED … ref=default`; `scripts/review_autofix_step_post_commit_retrigger.sh` and `scripts/review_autofix_step_changes_lost_redispatch.sh` dispatch with `-f pr_number=` and no `--ref`. |
+| BUG-001 (sweep active-status snapshot) | already-implemented | The `active_snapshot_incomplete` gate in `.github/workflows/review_autofix_sweep.yml`. |
+| BUG-002 (merge-train release dedup guard) | already-implemented | `_mt_inflight_review_branches` in `scripts/review_merge_train.sh` uses a paginated, status-scoped listing and leaves PRs queued on an incomplete read. |
+| BUG-003 (judge pre-action merged-PR refresh) | already-implemented | In `scripts/review_rb_judge.sh` a failed refresh leaves `RB_LIVE_HEAD_SHA` empty, so fix, close_and_reissue and the security-converted fix are refused with `judge_skip_reason=head_unverified`. |
+| BUG-004 (`_mt_upsert_comment` swallowed write failure) | already-implemented | `_mt_upsert_comment` in `scripts/review_merge_train.sh` returns `write_rc`. |
+| EXPR-001 (`implement.yml` support-staging body size) | already-implemented | The `Stage workflow support files` step in `.github/workflows/implement.yml` passes values through `STAGE_*` `env:`. |
+| CONSIST-001 (GraphQL `.errors` in batched helpers) | already-implemented | gh exits non-zero when a GraphQL response has errors (documented at the `ORPHAN_FIXUP_CLOSE` lookup in `scripts/orchestrate_poll_process.sh`), so `_fetch_candidate_issue_details_graphql` and `_fetch_linked_pr_status_graphql` drop that batch and its keys become cache misses for the existing fallback. The extra warning would be measurement-only. |
+| Speed 1 parallelism / Cost 2 reviewer pruning | rejected | The doc defers both until verdict parity is shown; quality risk is high. |
+| Speed 2 (CI test re-sharding) | rejected | No slow case is named; the `CI_SUBTEST_*` timing in `.github/workflows/ci.yml` is the existing measurement. |
+| Speed 3 early exit | rejected | The doc keeps the timeout until a remaining check is proven nonessential. |
+| Reliability 1, actionlint preflight | rejected | The `Actionlint` step already runs in the first-tier `static-checks` job in `.github/workflows/ci.yml`, which has no `needs:`. |
+| Cost 3 (Semble counters and suppression), Memory selection score, `GH_API_CALL_V1`, `ORCH_TRANSITION_V1`, time-in-state and queue timestamps | rejected | Measurement-only; `GH_API_RETRY` / `GH_PAT_BUDGET`, `POLL_PROGRESS` and the state snapshot already cover these (precedent). |
+| Claude PR sweep row (GH API audit) | rejected | `scripts/claude_pr_sweep.py` does not exist. |
+| API-001, BATCH-001, MERGE-001, MERGE-002, MERGE-003 | rejected | Tagged RISKY_SKIP by the doc itself. |
+| BATCH-002 | rejected | Tagged NEEDS_VERIFICATION by the doc itself. |
+| DUP-001, DUP-002 | rejected | Refactor-only (minimal-change rule). |
+| DEBT-001 (`review_autofix.yml` size headroom) | rejected | The 480,000-byte guard is enforced by `tests/test_workflow_file_size_limit.py`. |
+| DEAD-001 (`PR_HEAD_SHA` in `scripts/review_rb_judge.sh`) | rejected | Removing an identifier needs explicit approval (naming-immutability rule). |
+| Cost 4 (CI preflight / cache preservation) | informational | Covered by the Reliability 1 rows above. |
+| Serena | informational | Disabled in inspected runs; no recommendation. |
+| Review-sweep micro-optimization note | informational | The doc calls the 14 dispatches legitimate work. |
+| Pipeline Flow Bottlenecks | informational | Covered by the Exec, Speed and Reliability rows above. |
+| Per-Repo Breakdown | informational | Covered by the Exec, Cost and Reliability rows above. |
+| Metrics Appendix | informational | No separate recommendation. |
+| Redundant Re-Fetch (REUSE) / Dead Calls (DEAD-API) | informational | The doc reports none. |
