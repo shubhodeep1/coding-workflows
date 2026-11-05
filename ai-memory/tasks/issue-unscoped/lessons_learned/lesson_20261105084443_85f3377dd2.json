@@ -1,0 +1,33 @@
+{
+  "discovered_at": "2026-11-05T08:44:43Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=AGENTS.md / CLAUDE.md:(repository root, not in diff); cited_path=AGENTS.md; files_touched=.github/workflows/ci.yml, agents.d/wfopt-2026-10-02-conflict-sweep-outcome.md, agents.d/wfopt-2026-10-02-memory-records-considered.md, agents.d/wfopt-2026-10-02-reviewer-malformed-class.md, agents.d/wfopt-2026-10-02-reviewer-prompt-components.md, analysis/recommendation-processing-report.md, analysis/workflow-optimization-2026-10-02.md, scripts/ai_memory.py, scripts/ai_memory_lib.py, scripts/orchestrate_poll_process.sh, scripts/review_run_reviewers.sh, tests/test_ai_memory_cli.py, tests/test_alert_levels_human_only.py, tests/test_ci_poll_test_sharding.py, tests/test_ci_wires_every_test_file.py, tests/test_orchestrate_poll_conflict_sweep_outcome.py, tests/test_review_autofix_review_pipeline_contract.py, tests/test_review_reviewer_attempt_prompt_isolation.py, tests/test_review_reviewer_prompt_components.py.",
+  "phase": "review_autofix",
+  "pr_number": 8852,
+  "record_id": "lesson_20261105084443_85f3377dd2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md",
+    "AGENTS.md / CLAUDE.md",
+    ".github/workflows/ci.yml",
+    "agents.d/wfopt-2026-10-02-conflict-sweep-outcome.md",
+    "agents.d/wfopt-2026-10-02-memory-records-considered.md",
+    "agents.d/wfopt-2026-10-02-reviewer-malformed-class.md",
+    "agents.d/wfopt-2026-10-02-reviewer-prompt-components.md",
+    "analysis/recommendation-processing-report.md",
+    "analysis/workflow-optimization-2026-10-02.md",
+    "scripts/ai_memory.py",
+    "scripts/ai_memory_lib.py",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/review_run_reviewers.sh",
+    "tests/test_ai_memory_cli.py",
+    "tests/test_alert_levels_human_only.py",
+    "tests/test_ci_poll_test_sharding.py",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_orchestrate_poll_conflict_sweep_outcome.py",
+    "tests/test_review_autofix_review_pipeline_contract.py",
+    "tests/test_review_reviewer_attempt_prompt_isolation.py",
+    "tests/test_review_reviewer_prompt_components.py"
+  ]
+}
