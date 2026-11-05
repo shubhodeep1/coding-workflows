@@ -234,7 +234,7 @@ def prompt(prompt_in, listing, prompt_out):
 		+ listing_bytes
 		+ b"A source file in the repository is codebase state, not an external input. Read it from /source; "
 		b"if it is absent there it was excluded from the snapshot (see the exclusions block, if any). "
-		b"Do not emit BLOCKED: for these paths' presence or absence; answer STATUS: CLEAR, or STATUS: NEEDS_CLARIFICATION followed by Q<ID> questions. "
+		b"Do not emit BLOCKED: for these paths' presence or absence; answer STATUS: CLEAR, or STATUS: NEEDS_CLARIFICATION with Q<ID> questions under a QUESTIONS: header (the output format above). "
 		b"BLOCKED: remains correct only for a genuinely external scalar input.\n"
 		b"=== END " + MARKER.encode("ascii") + b" ===\n"
 	)
