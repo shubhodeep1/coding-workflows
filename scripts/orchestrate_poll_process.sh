@@ -18574,8 +18574,12 @@ _extract_standalone_state_json_from_comments() {
     return
   fi
 
+  # Stuck-states P8c: the security-dependency hold keys are kept only when
+  # present (integers; anything unparsable becomes 0) so states without a
+  # hold episode keep their existing shape.
   echo "${extracted}" | jq -c '
-    {
+    . as $sdh_src
+    | {
       schema_version: 1,
       last_seen_phase: (.last_seen_phase // ""),
       status_since_ts: ((.status_since_ts // 0) | tonumber),
@@ -18586,6 +18590,10 @@ _extract_standalone_state_json_from_comments() {
       failure_fingerprints: (if (.failure_fingerprints | type) == "array" then .failure_fingerprints[-5:] else [] end),
       updated_ts: ((.updated_ts // 0) | tonumber)
     }
+    + ([ "security_dependency_depends_on", "security_dependency_held_since_ts", "security_dependency_escalated_ts" ]
+      | map(select(. as $k | $sdh_src | has($k)))
+      | map({key: ., value: ($sdh_src[.] | (try (tonumber | floor) catch 0))})
+      | from_entries)
   ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
 }
 
@@ -18637,6 +18645,160 @@ ${STANDALONE_STATE_MARKER_CLOSE}"
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
       -f body="${comment_body}" >/dev/null 2>&1 || true
+  fi
+}
+
+# Stuck-states P8c: security-dependency hold age, escalation and release
+# helpers for run_standalone_stall_recovery. The hold episode lives in the
+# standalone stall state (security_dependency_depends_on,
+# security_dependency_held_since_ts, security_dependency_escalated_ts; UTC
+# epoch seconds). Markers count only when the pipeline login wrote them.
+#
+# Prints the issue's complete comment history. The cached candidate window
+# is complete when it came from a full read ("complete") or holds fewer than
+# 100 comments ("true"); otherwise one bounded paginated read runs (the same
+# fallback the release path uses, because the GraphQL batch cannot prove a
+# marker absent beyond 100 comments). Returns 1 when that read fails.
+_security_dependency_complete_comments() {
+  local issue_num="$1"
+  local comments_json="$2"
+  local cache_available="$3"
+  local _sdc_fetched
+  if [ "${cache_available}" = "complete" ] \
+    || { [ "${cache_available}" = "true" ] && [ "$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null || echo 100)" -lt 100 ]; }; then
+    printf '%s' "${comments_json}"
+    return 0
+  fi
+  if ! _sdc_fetched="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+    || ! printf '%s' "${_sdc_fetched}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    return 1
+  fi
+  printf '%s' "${_sdc_fetched}"
+}
+
+# True when the label-name array carries ai:needs-human. Kept local (not
+# has_label) because `$label` is a reserved word that jq 1.6 rejects.
+_security_dependency_has_needs_human() {
+  printf '%s' "${1:-[]}" | jq -e '(. // []) | map(if type == "object" then (.name // "") else . end) | index("ai:needs-human") != null' >/dev/null 2>&1
+}
+
+# Records held_since once per hold episode (reset when depends_on changes or
+# the stored value is missing, invalid or in the future) and, after
+# escalate_days, labels ai:needs-human once with a latch comment naming the
+# dependency chain. The hold itself is unchanged: the caller still skips the
+# issue. Steady state (recorded, not yet due, or already escalated) makes no
+# API call.
+_security_dependency_hold_age_check() {
+  local issue_num="$1"
+  local depends_on="$2"
+  local comments_json="$3"
+  local labels_json="$4"
+  local cache_available="$5"
+  local escalate_days="$6"
+  local _sdh_now
+  local _sdh_state
+  local _sdh_fields
+  local _sdh_dep
+  local _sdh_held
+  local _sdh_esc
+  local _sdh_action="none"
+  local _sdh_pass
+  local _sdh_complete="false"
+  local _sdh_comment_id
+  local _sdh_login
+  local _sdh_age_days
+  local _sdh_held_iso
+  local _sdh_body
+  _sdh_now="$(date -u +%s)"
+  for _sdh_pass in 1 2; do
+    _sdh_state="$(_extract_standalone_state_json_from_comments "${comments_json}")"
+    _sdh_fields="$(printf '%s' "${_sdh_state}" | jq -r '[(.security_dependency_depends_on // 0), (.security_dependency_held_since_ts // 0), (.security_dependency_escalated_ts // 0)] | map(tostring) | join(" ")' 2>/dev/null || echo "0 0 0")"
+    read -r _sdh_dep _sdh_held _sdh_esc <<<"${_sdh_fields}"
+    [[ "${_sdh_dep:-}" =~ ^[0-9]{1,12}$ ]] || _sdh_dep=0
+    [[ "${_sdh_held:-}" =~ ^[0-9]{1,12}$ ]] || _sdh_held=0
+    [[ "${_sdh_esc:-}" =~ ^[0-9]{1,12}$ ]] || _sdh_esc=0
+    _sdh_action="none"
+    if [ "${_sdh_dep}" != "${depends_on}" ] || [ "${_sdh_held}" -le 0 ] || [ "${_sdh_held}" -gt "${_sdh_now}" ]; then
+      _sdh_action="record"
+    elif [ $((_sdh_now - _sdh_held)) -ge $((escalate_days * 86400)) ] && [ "${_sdh_esc}" -eq 0 ] \
+      && ! _security_dependency_has_needs_human "${labels_json}"; then
+      _sdh_action="escalate"
+    fi
+    [ "${_sdh_action}" != "none" ] || return 0
+    [ "${_sdh_complete}" != "true" ] || break
+    # A write is due: re-read from the complete history so a state comment
+    # or latch marker beyond the cached window is never duplicated.
+    if ! comments_json="$(_security_dependency_complete_comments "${issue_num}" "${comments_json}" "${cache_available}")"; then
+      echo "STALL_SKIP issue=${issue_num} reason=security_dependency_comments_unavailable action=none"
+      return 0
+    fi
+    _sdh_complete="true"
+  done
+  _sdh_comment_id="$(_extract_standalone_state_comment_id_from_comments "${comments_json}")"
+  if [ "${_sdh_action}" = "record" ]; then
+    _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson dep "${depends_on}" --argjson now "${_sdh_now}" \
+      '. + {security_dependency_depends_on: $dep, security_dependency_held_since_ts: $now, security_dependency_escalated_ts: 0}')" || return 0
+    write_standalone_state_json "${issue_num}" "${_sdh_state}" "${_sdh_comment_id}"
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_hold_recorded action=none"
+    return 0
+  fi
+  unblock_trusted_login >/dev/null 2>&1 || true
+  _sdh_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+  if [ -z "${_sdh_login}" ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_identity_unavailable action=none"
+    return 0
+  fi
+  if printf '%s' "${comments_json}" | jq -e --arg login "${_sdh_login}" \
+    --arg marker "<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=${depends_on} -->" '
+    any(.[]; ((.user.login // "") == $login) and ((.body // "") | contains($marker)))' >/dev/null 2>&1; then
+    return 0
+  fi
+  ensure_label_exists "ai:needs-human"
+  if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1; then
+    echo "::warning::[standalone-stall] could not label security follow-up #${issue_num} ai:needs-human; retrying next tick." >&2
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalation_failed action=none"
+    return 0
+  fi
+  _sdh_age_days=$(((_sdh_now - _sdh_held) / 86400))
+  _sdh_held_iso="$(date -u -d "@${_sdh_held}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "${_sdh_held}")"
+  _sdh_body="Security follow-up #${issue_num} has waited ${_sdh_age_days} days for its predecessor.
+
+Dependency chain: #${issue_num} -> #${depends_on} (open)
+Held since: ${_sdh_held_iso}
+
+The hold stays in place. It releases automatically when #${depends_on} is closed with \`ai:merged\` or closed without merging.
+
+<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=${depends_on} -->"
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${_sdh_body}" >/dev/null 2>&1; then
+    echo "::warning::[standalone-stall] could not post the security-dependency latch comment on #${issue_num}." >&2
+  fi
+  _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson now "${_sdh_now}" '. + {security_dependency_escalated_ts: $now}')" || return 0
+  write_standalone_state_json "${issue_num}" "${_sdh_state}" "${_sdh_comment_id}"
+  echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalated action=needs_human"
+}
+
+# On release, removes ai:needs-human only when the latest latch comment the
+# pipeline login wrote is this hold's own (reason=security_dependency_wait).
+# Any other latch is left alone; a failed removal is only a warning.
+_security_dependency_clear_latch() {
+  local issue_num="$1"
+  local comments_json="$2"
+  local labels_json="$3"
+  local trusted_login="$4"
+  local _sdl_latest
+  _security_dependency_has_needs_human "${labels_json}" || return 0
+  [ -n "${trusted_login}" ] || return 0
+  _sdl_latest="$(printf '%s' "${comments_json}" | jq -r --arg login "${trusted_login}" '
+    [.[] | select(((.user.login // "") == $login) and ((.body // "") | contains("<!-- ai:needs-human-latch")))]
+    | sort_by(.created_at // "") | last | .body // ""' 2>/dev/null || true)"
+  case "${_sdl_latest}" in
+    *"<!-- ai:needs-human-latch reason=security_dependency_wait "*) ;;
+    *) return 0 ;;
+  esac
+  if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:needs-human" >/dev/null 2>&1; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_latch_cleared action=none"
+  else
+    echo "::warning::[standalone-stall] could not remove ai:needs-human from security follow-up #${issue_num}." >&2
   fi
 }
 
@@ -23872,6 +24034,25 @@ run_standalone_stall_recovery() {
   local _security_dependency_issue_file="${RUNTIME_DIR}/standalone_security_dependency_issue.json"
   local _security_dependency_verdict
   local _security_dependency_status
+  local _security_dependency_reason
+  local _security_dependency_depends_on
+  local _security_dependency_login
+  local _security_dependency_release_marker
+  # Stuck-states P8c: parsed once per sweep. The switch is exported so the
+  # security_dependency.py verdict below uses the same value.
+  local _security_dependency_resume_enabled="true"
+  local _security_dependency_escalate_days="7"
+  case "$(printf '%s' "${DEPENDENCY_WAIT_RESUME_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    true|1|yes|on) _security_dependency_resume_enabled="true" ;;
+    false|0|no|off) _security_dependency_resume_enabled="false" ;;
+    *) echo "::warning::DEPENDENCY_WAIT_RESUME_ENABLED is not a boolean; using true." ;;
+  esac
+  export DEPENDENCY_WAIT_RESUME_ENABLED="${_security_dependency_resume_enabled}"
+  if [[ "${DEPENDENCY_WAIT_ESCALATE_DAYS:-7}" =~ ^[0-9]{1,4}$ ]] && [ "$((10#${DEPENDENCY_WAIT_ESCALATE_DAYS:-7}))" -ge 1 ]; then
+    _security_dependency_escalate_days="$((10#${DEPENDENCY_WAIT_ESCALATE_DAYS:-7}))"
+  else
+    echo "::warning::DEPENDENCY_WAIT_ESCALATE_DAYS must be an integer from 1 to 9999; using 7."
+  fi
   local _pr_dependency_verdict
   local _pr_dependency_status
   local _pr_dependency_reason
@@ -23939,10 +24120,58 @@ run_standalone_stall_recovery() {
         'dependency closed without ai:merged') _security_dependency_status="closed_without_ai_merged" ;;
         *) _security_dependency_status="unverified" ;;
       esac
+      # Stuck-states P8c: only a verified open predecessor ages the hold;
+      # unverified verdicts neither start nor advance the clock.
+      if [ "${_security_dependency_status}" = "open" ] && [ "${_security_dependency_resume_enabled}" = "true" ]; then
+        _security_dependency_depends_on="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.depends_on // empty' 2>/dev/null || true)"
+        if [[ "${_security_dependency_depends_on}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+          _security_dependency_hold_age_check "${issue_num}" "${_security_dependency_depends_on}" "${comments_json}" \
+            "${labels_json}" "${_standalone_staged_support_cache_available}" "${_security_dependency_escalate_days}" || true
+        fi
+      fi
       echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held detail=${_security_dependency_status} action=none"
       continue
     fi
     if [ "${_security_dependency_status}" = "ready" ]; then
+      _security_dependency_reason="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.reason // empty' 2>/dev/null || true)"
+      _security_dependency_depends_on="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.depends_on // empty' 2>/dev/null || true)"
+    fi
+    if [ "${_security_dependency_status}" = "ready" ] && [ "${_security_dependency_reason}" = "dependency closed without ai:merged" ]; then
+      # Stuck-states P8c: the predecessor was closed without ai:merged, so it
+      # can no longer race this follow-up. Post one trusted /reclarify with
+      # the AI_SECURITY_DEPENDENCY_RELEASED_V1 marker; clarify then re-checks
+      # whether the finding still applies. Nothing is posted when the
+      # pipeline login or the complete comment history cannot be read.
+      if [ "${_security_dependency_resume_enabled}" != "true" ] || ! [[ "${_security_dependency_depends_on}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+        echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held detail=closed_without_ai_merged action=none"
+        continue
+      fi
+      unblock_trusted_login >/dev/null 2>&1 || true
+      _security_dependency_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+      if [ -z "${_security_dependency_login}" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=security_dependency_identity_unavailable action=none"
+        continue
+      fi
+      if ! comments_json="$(_security_dependency_complete_comments "${issue_num}" "${comments_json}" "${_standalone_staged_support_cache_available}")"; then
+        comments_json='[]'
+        echo "STALL_SKIP issue=${issue_num} reason=security_dependency_comments_unavailable action=none"
+        continue
+      fi
+      _security_dependency_release_marker="<!-- AI_SECURITY_DEPENDENCY_RELEASED_V1 reason=predecessor_unmerged issue=${issue_num} depends_on=${_security_dependency_depends_on} -->"
+      if ! printf '%s' "${comments_json}" | jq -e --arg marker "${_security_dependency_release_marker}" --arg login "${_security_dependency_login}" '
+        any(.[]; ((.user.login // "") == $login)
+          and ((.body // "") | startswith("/reclarify\n" + $marker)))' >/dev/null 2>&1; then
+        _security_dependency_clear_latch "${issue_num}" "${comments_json}" "${labels_json}" "${_security_dependency_login}" || true
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+          -f body="/reclarify
+${_security_dependency_release_marker}" >/dev/null; then
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_released_unmerged action=reclarify"
+        else
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed action=none"
+        fi
+        continue
+      fi
+    elif [ "${_security_dependency_status}" = "ready" ]; then
       # An unavailable or full comment window cannot prove the release
       # marker absent. Fetch complete history only on that rare path.
       if [ "${_standalone_staged_support_cache_available}" != "true" ] || [ "$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null || echo 100)" -ge 100 ]; then
@@ -23954,6 +24183,11 @@ run_standalone_stall_recovery() {
       if ! printf '%s' "${comments_json}" | jq -e --arg marker "<!-- ai:security-dependency-released:${issue_num} -->" '
         any(.[]; ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
           and ((.body // "") | startswith("/reclarify\n" + $marker)))' >/dev/null 2>&1; then
+        # Stuck-states P8c: drop this hold's own ai:needs-human latch first.
+        if [ "${_security_dependency_resume_enabled}" = "true" ] && _security_dependency_has_needs_human "${labels_json}"; then
+          unblock_trusted_login >/dev/null 2>&1 || true
+          _security_dependency_clear_latch "${issue_num}" "${comments_json}" "${labels_json}" "${UNBLOCK_TRUSTED_LOGIN:-}" || true
+        fi
         if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
           -f body="/reclarify
 <!-- ai:security-dependency-released:${issue_num} -->" >/dev/null; then
@@ -24119,6 +24353,10 @@ if phase != last:
 elif not state.get("status_since_ts"):
     state["status_since_ts"] = now
     state["updated_ts"] = now
+# Stuck-states P8c: an issue reaches this point only when it is not held, so
+# the next ordinary state write ends any security-dependency hold episode.
+for _sdh_key in ("security_dependency_depends_on", "security_dependency_held_since_ts", "security_dependency_escalated_ts"):
+    state.pop(_sdh_key, None)
 state["schema_version"] = 1
 print(json.dumps(state, separators=(",", ":")))
 PY

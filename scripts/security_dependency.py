@@ -19,12 +19,20 @@ prints one JSON object, ``{"status": "none" | "ready" | "held", "reason": …,
 (fail closed). ``--number-only`` skips the prerequisite read. Otherwise the
 command makes one REST read of issue #N (``gh api repos/<repo>/issues/<n>``)
 and only when the issue declares a dependency.
+
+Stuck-states P8c: a predecessor closed without ``ai:merged`` can no longer
+race the follow-up, so that case is ``ready`` (reason ``dependency closed
+without ai:merged``) and the standalone poller re-clarifies the follow-up.
+With ``DEPENDENCY_WAIT_RESUME_ENABLED`` off (``false``/``0``/``no``/``off``)
+it stays ``held`` as before. The default (on) lives here because the helper
+is staged from a git ref and may run without the workflow's env row.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -34,6 +42,12 @@ from typing import Any
 SECURITY_DEPENDENCY_RE = re.compile(r"(?m)^- Depends on: #([1-9][0-9]{0,9})$")
 SECURITY_DEPENDENCY_LINE_RE = re.compile(r"(?mi)^\s*-?\s*Depends\s+on\s*:")
 SECURITY_FINDING_MARKER = "<!-- ai:security-finding:"
+
+
+def _dependency_wait_resume_enabled() -> bool:
+	"""DEPENDENCY_WAIT_RESUME_ENABLED, default on; only an explicit off value disables it."""
+	value = os.environ.get("DEPENDENCY_WAIT_RESUME_ENABLED", "true").strip().lower()
+	return value not in ("false", "0", "no", "off")
 
 
 def _label_names(issue: dict[str, Any]) -> list[str]:
@@ -88,6 +102,9 @@ def security_dependency_verdict(issue: Any, prerequisite: Any) -> dict[str, Any]
 		return {"status": "held", "reason": "dependency state or labels unreadable", "depends_on": dependency_number}
 	if prerequisite["state"] == "closed" and "ai:merged" in _label_names(prerequisite):
 		return {"status": "ready", "reason": "dependency merged", "depends_on": dependency_number}
+	if prerequisite["state"] == "closed" and _dependency_wait_resume_enabled():
+		# Stuck-states P8c: an abandoned predecessor releases the hold.
+		return {"status": "ready", "reason": "dependency closed without ai:merged", "depends_on": dependency_number}
 	return {"status": "held", "reason": "dependency open" if prerequisite["state"] == "open" else "dependency closed without ai:merged", "depends_on": dependency_number}
 
 

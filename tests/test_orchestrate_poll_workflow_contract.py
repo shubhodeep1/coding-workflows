@@ -405,6 +405,27 @@ def test_validation_harness_hold_env_is_wired_into_both_poller_steps() -> None:
 	yaml.safe_load(wf)
 
 
+DEPENDENCY_WAIT_ENV_LINES = (
+	"DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}",
+	"DEPENDENCY_WAIT_ESCALATE_DAYS: ${{ vars.DEPENDENCY_WAIT_ESCALATE_DAYS || '7' }}",
+)
+
+
+def test_dependency_wait_env_is_wired_into_both_poller_steps() -> None:
+	"""Refs #8291 (P8c): the security-dependency hold switches reach every full-poller step."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	for step_name in ("Process each tracking issue", STANDALONE_SWEEP_STEP):
+		block = _step_block(wf, step_name)
+		for line in DEPENDENCY_WAIT_ENV_LINES:
+			assert block.count(line) == 1, (step_name, line)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'case "$(printf \'%s\' "${DEPENDENCY_WAIT_RESUME_ENABLED:-true}" | tr \'[:upper:]\' \'[:lower:]\')" in' in poller
+	assert '[[ "${DEPENDENCY_WAIT_ESCALATE_DAYS:-7}" =~ ^[0-9]{1,4}$ ]]' in poller
+	security_dependency = (REPO_ROOT / "scripts" / "security_dependency.py").read_text(encoding="utf-8")
+	assert 'os.environ.get("DEPENDENCY_WAIT_RESUME_ENABLED", "true")' in security_dependency
+	yaml.safe_load(wf)
+
+
 HARNESS_HEAL_AUTO_REVALIDATE_ENV_LINES = (
 	"HARNESS_HEAL_AUTO_REVALIDATE_ENABLED: ${{ vars.HARNESS_HEAL_AUTO_REVALIDATE_ENABLED || 'true' }}",
 )
@@ -646,6 +667,7 @@ def main() -> int:
 	test_standalone_recovery_sweep_runs_without_tracking_issues()
 	test_engine_and_claude_steps_run_on_idle_ticks_when_needed()
 	test_validation_harness_hold_env_is_wired_into_both_poller_steps()
+	test_dependency_wait_env_is_wired_into_both_poller_steps()
 	test_harness_heal_auto_revalidate_env_is_wired_into_both_poller_steps()
 	test_harness_heal_auto_revalidate_log_prefix_is_registered()
 	test_release_blocker_reporter_env_is_wired_into_both_poller_steps()
