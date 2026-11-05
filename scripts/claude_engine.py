@@ -725,10 +725,11 @@ def _max_utilization(probe: dict[str, Any]) -> float | None:
 
 	A missing ``five_hour`` reading means the account has no 5-hour limit
 	(many accounts no longer report one), so it ranks by ``seven_day`` alone.
-	A missing ``seven_day`` reading is unknown and returns ``None``.
+	A missing ``seven_day`` reading is unknown and returns ``None``, and so
+	does a negative (malformed) one, so it ranks last instead of first.
 	"""
 	seven_day = probe.get("seven_day")
-	if seven_day is None:
+	if seven_day is None or float(seven_day) < 0:
 		return None
 	five_hour = probe.get("five_hour")
 	return seven_day if five_hour is None else max(five_hour, seven_day)
