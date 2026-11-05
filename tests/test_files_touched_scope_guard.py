@@ -1012,6 +1012,43 @@ def test_plan_files_outside_files_touched_uses_the_implement_matcher() -> None:
 	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body + scope_marker) == ["backend/withdrawal_flow.py"]
 
 
+# Consumer tele-funtoken-msg-scoring #5101: the planner put its Scope-mode
+# lines right under the Files bullets, and the justification named files it
+# chose NOT to change. The plan was held with plan_files_outside_files_touched.
+_SCOPE_MODE_PLAN = ("## Files likely to change\n- `ft.games/app.py`\n- `tests/test_wof_spin.py`\n"
+	"- `changelog.d/5101-wof-spin.md` (new)\n\nScope-mode: Hold Scope\n"
+	"Reuse-audit: extends _safe_record_streaks_quests_wof_spin\n"
+	"Scope-mode justification: deeper fixes would edit `ft.games/db_indexes.py` and "
+	"`ft.games/streaks_quests.py`, which are outside the protected scope.\n\n"
+	"## Automation / wiring\n- No new script.\n")
+
+
+def test_plan_file_paths_stop_at_scope_mode_metadata() -> None:
+	listed = ["ft.games/app.py", "tests/test_wof_spin.py", "changelog.d/5101-wof-spin.md"]
+	assert guard.extract_plan_file_paths(_SCOPE_MODE_PLAN) == listed
+	body = _body("ft.games/app.py", "tests/test_wof_spin.py", "changelog.d/*.md")
+	assert guard.plan_files_outside_files_touched(_SCOPE_MODE_PLAN, body, issue_number=5101) == []
+	# Bold or differently cased lead-ins end the list too.
+	for lead in ("**Scope-mode:** Hold Scope", "reuse-audit: extends f", "Implementation-time estimate: 20 minutes",
+			"__Scope-mode justification__: see `ft.games/db_indexes.py`"):
+		plan = f"## Files likely to change\n- `a/b.py`\n{lead}\n- `c/d.py`\n"
+		assert guard.extract_plan_file_paths(plan) == ["a/b.py"], lead
+	# A bullet that merely mentions the word does not end the list.
+	assert guard.extract_plan_file_paths(
+		"## Files likely to change\n- `a/b.py` (Scope-mode: n/a)\n- `c/d.py`\n") == ["a/b.py", "c/d.py"]
+	# The protected-path scan still reads the whole section (fails closed).
+	protected = _SCOPE_MODE_PLAN.replace("`ft.games/db_indexes.py`", "`scripts/x.sh`")
+	assert "scripts/x.sh" in guard.extract_plan_automation_paths(protected)
+
+
+def test_plan_prompt_copies_keep_scope_mode_out_of_the_files_section() -> None:
+	rule = ("   Put the `Scope-mode:`, `Reuse-audit:` and `Scope-mode justification:` lines after\n"
+		"   Testing considerations, never inside `## Files likely to change`: the plan approval\n"
+		"   gate reads a file the justification names there as a file the plan changes.\n")
+	for relative in ("prompts/mode-plan.txt", "prompts/_templates/mode-plan.txt", "scripts/run_plan_codex.sh"):
+		assert (REPO_ROOT / relative).read_text(encoding="utf-8").count(rule) == 1, relative
+
+
 def test_own_issue_fragments_are_allowed_for_issue_body_scopes() -> None:
 	"""Consumer tele-funtoken-msg-scoring#4815 (run 40055496344): an exact
 	files_touched list without changelog.d refused the fragment CLAUDE.md §20

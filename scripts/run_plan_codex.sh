@@ -102,6 +102,9 @@ Create a structured implementation plan that includes:
    `true`. Place it immediately after the `Reuse-audit:` line when that line is
    present; otherwise place it immediately after the `Scope-mode:` line. When the
    current render is `false`, include the block whenever `Scope-mode:` is present.
+   Put the `Scope-mode:`, `Reuse-audit:` and `Scope-mode justification:` lines after
+   Testing considerations, never inside `## Files likely to change`: the plan approval
+   gate reads a file the justification names there as a file the plan changes.
 11. Diagrams/failure-modes requirement gate (current render: `PLAN_DIAGRAMS_OPTIONAL={{PLAN_DIAGRAMS_OPTIONAL}}`):
    when the current render is `true`, plans may include the following sections
    between `API/interface changes.` and `Risks and edge cases.` only when they
