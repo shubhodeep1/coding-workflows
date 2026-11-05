@@ -18751,12 +18751,10 @@ _security_dependency_hold_age_check() {
   if printf '%s' "${comments_json}" | jq -e --arg login "${_sdh_login}" \
     --arg marker "<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=${depends_on} -->" '
     any(.[]; ((.user.login // "") == $login) and ((.body // "") | contains($marker)))' >/dev/null 2>&1; then
-    return 0
-  fi
-  ensure_label_exists "ai:needs-human"
-  if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1; then
-    echo "::warning::[standalone-stall] could not label security follow-up #${issue_num} ai:needs-human; retrying next tick." >&2
-    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalation_failed action=none"
+    # Already escalated (an earlier state write may have failed): record it
+    # so later ticks stay at action=none and make no paginated read.
+    _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson now "${_sdh_now}" '. + {security_dependency_escalated_ts: $now}')" || return 0
+    write_standalone_state_json "${issue_num}" "${_sdh_state}" "${_sdh_comment_id}"
     return 0
   fi
   _sdh_age_days=$(((_sdh_now - _sdh_held) / 86400))
@@ -18769,8 +18767,16 @@ Held since: ${_sdh_held_iso}
 The hold stays in place. It releases automatically when #${depends_on} is closed with \`ai:merged\` or closed without merging.
 
 <!-- ai:needs-human-latch reason=security_dependency_wait depends_on=${depends_on} -->"
+  # The latch comment goes first: _security_dependency_clear_latch removes the
+  # label only when this comment exists, so a failed POST must leave no label.
   if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${_sdh_body}" >/dev/null 2>&1; then
-    echo "::warning::[standalone-stall] could not post the security-dependency latch comment on #${issue_num}." >&2
+    echo "::warning::[standalone-stall] could not post the security-dependency latch comment on #${issue_num}; retrying next tick." >&2
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalation_failed action=none"
+    return 0
+  fi
+  ensure_label_exists "ai:needs-human"
+  if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1; then
+    echo "::warning::[standalone-stall] could not label security follow-up #${issue_num} ai:needs-human after posting its latch comment." >&2
   fi
   _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson now "${_sdh_now}" '. + {security_dependency_escalated_ts: $now}')" || return 0
   write_standalone_state_json "${issue_num}" "${_sdh_state}" "${_sdh_comment_id}"
