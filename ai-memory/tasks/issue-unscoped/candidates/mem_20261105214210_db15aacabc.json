@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/:unspecified | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `copilot-pull-request-reviewer` check-run failed with a network connectivity issue (HTTP 422 `custom_instructions_too_large` and a firewall block for `api.github.com`).\n  WHY: The reviewer calls this an infrastructure failure in the CI/review pipeline, likely from excessive instruction size or transient runner connectivity. Other reviewers saw the same failure and judged it external and not caused by the diff. Gemini's severity was MAJOR, which is mapped here to high.\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push test gate reports failures in `test_review_pipeline_integration_chain_module_runs_clean`, `test_staged_support_guard_marks_only_auto_release_safe_conflicts`, etc.\n  WHY: The reviewer says these failures are inherited from the merge-base or transient, and that they look unrelated to the diff, which only changes a static canary file. Gemini's severity was MAJOR, which is mapped here to high. Other reviewers judged the failures inherited or not attributable to the diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/:unspecified | severity=MAJOR | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check-run failed with a network connectivity issue (HTTP 422 `custom_instructions_too_large` and a firewall block for `api.github.com`).\n  WHY: This is an infrastructure failure in the CI/review pipeline, likely from excessive instruction size or transient runner connectivity.\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=MAJOR | confidence=4\n  PROBLEM: The pre-push test gate reports failures in `test_review_pipeline_integration_chain_module_runs_clean`, `test_staged_support_guard_marks_only_auto_release_safe_conflicts`, etc.\n  WHY: The failures are marked as inherited from the merge-base or transient, and they appear unrelated to the diff, which only modifies a static canary file.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a97022057d05b60b8329c1db2840577b7e4e6c9979c19127d8b3f28bde208eca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "42113335449",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42113335449",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105214210_db15aacabc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "42113335449"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T21:42:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
