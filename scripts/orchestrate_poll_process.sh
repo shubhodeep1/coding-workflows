@@ -18821,6 +18821,24 @@ _security_dependency_clear_latch() {
     *"<!-- ai:needs-human-latch reason=security_dependency_wait "*) ;;
     *) return 0 ;;
   esac
+  # Only the label this hold added may be removed: when the newest
+  # `labeled` event for ai:needs-human came from anyone else (a person
+  # re-gating the issue without a latch comment), the label stays. One
+  # paginated events read, only at release time with the label present.
+  local _sdl_events
+  local _sdl_labeler
+  if ! _sdl_events="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/events?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+    || ! printf '%s' "${_sdl_events}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    echo "::warning::[standalone-stall] could not read label events for security follow-up #${issue_num}; retrying next tick." >&2
+    return 1
+  fi
+  _sdl_labeler="$(printf '%s' "${_sdl_events}" | jq -r '
+    [.[] | select((.event // "") == "labeled" and ((.label.name // "") == "ai:needs-human"))]
+    | last | .actor.login // ""' 2>/dev/null || true)"
+  if [ "${_sdl_labeler}" != "${trusted_login}" ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_latch_kept detail=labeled_by_other action=none"
+    return 0
+  fi
   if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:needs-human" >/dev/null 2>&1; then
     echo "STALL_SKIP issue=${issue_num} reason=security_dependency_latch_cleared action=none"
   else

@@ -6334,8 +6334,11 @@ def _security_hold_latch_comment(reason: str = "security_dependency_wait", *, lo
 	return {"body": f"Waiting.\n\n{marker}", "user": {"login": login}, "author_association": "OWNER", "created_at": created_at}
 
 
-def _run_security_hold_tick(*, comments=None, labels=None, closed=False, predecessor_labels=None, env=None, fail_get=None, fail_comment_post=False, fail_edit=False, store_extra=None, tracking_issues_override=None) -> dict:
+def _run_security_hold_tick(*, comments=None, labels=None, closed=False, predecessor_labels=None, env=None, fail_get=None, fail_comment_post=False, fail_edit=False, store_extra=None, tracking_issues_override=None, events=None) -> dict:
 	"""One standalone tick for security follow-up #700 that depends on #701 (stuck-states P8c)."""
+	# By default the pipeline login added the latch label, as the escalation does.
+	if events is None:
+		events = [{"event": "labeled", "label": {"name": "ai:needs-human"}, "actor": {"login": _SECURITY_HOLD_PIPELINE_LOGIN}, "created_at": "2026-01-01T00:00:03Z"}]
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "merged"
 	kwargs = {}
@@ -6356,6 +6359,7 @@ def _run_security_hold_tick(*, comments=None, labels=None, closed=False, predece
 		issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security", *(labels or [])], 701: list(predecessor_labels or [])},
 		issue_bodies={700: _SECURITY_HOLD_BODY}, issue_closed={701: closed},
 		issue_comments={700: list(comments or [])}, mock_gh_issue_list_label_filter=True,
+		issue_events={700: list(events)},
 		**kwargs,
 	)
 
@@ -6566,6 +6570,21 @@ def test_security_hold_unmerged_release_dedupe_and_latch_removal() -> None:
 		assert "security_dependency_latch_cleared" not in _security_hold_log(kept)
 		assert "ai:needs-human" in kept["issues"]["700"]["labels"]
 		assert len(releases(kept)) == 1
+
+	# A person re-added ai:needs-human after the hold's latch: the label stays, the release still posts.
+	relabelled = _run_security_hold_tick(
+		closed=True, labels=["ai:needs-human"], comments=[_security_hold_latch_comment()],
+		events=[
+			{"event": "labeled", "label": {"name": "ai:needs-human"}, "actor": {"login": _SECURITY_HOLD_PIPELINE_LOGIN}, "created_at": "2026-01-01T00:00:03Z"},
+			{"event": "unlabeled", "label": {"name": "ai:needs-human"}, "actor": {"login": "workflow-owner"}, "created_at": "2026-01-02T00:00:00Z"},
+			{"event": "labeled", "label": {"name": "ai:needs-human"}, "actor": {"login": "workflow-owner"}, "created_at": "2026-01-03T00:00:00Z"},
+		],
+	)
+	log = _security_hold_log(relabelled)
+	assert "STALL_SKIP issue=700 reason=security_dependency_latch_kept detail=labeled_by_other action=none" in log
+	assert "security_dependency_latch_cleared" not in log
+	assert "ai:needs-human" in relabelled["issues"]["700"]["labels"]
+	assert len(releases(relabelled)) == 1
 
 	# Switch off: the unmerged closure stays held and the latch stays.
 	off = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=[_security_hold_latch_comment()], env={"DEPENDENCY_WAIT_RESUME_ENABLED": "off"})
