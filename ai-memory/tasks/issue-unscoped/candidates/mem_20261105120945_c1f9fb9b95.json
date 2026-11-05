@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR description's pre-push test gate lists failures in `tests/test_implement_post_codex_recovery.py` caused by this change.\n  WHY: CI indicates these tests fail, and the failure should be addressed rather than dismissed as a false positive without concrete evidence. Severity is stated as MAJOR in the source (mapped to high).\n- CLAUDE.md and agents.md:N/A | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with HTTP 422 `custom_instructions_too_large` because the combined CLAUDE.md and agents.md custom-instruction payload exceeds the prompt budget.\n  WHY: The check run exits with code 1 and blocks automated review. Severity disagreement: gemini and luna say MAJOR, glm says NIT (it notes the failure is not introduced by this one-file PR). The highest, MAJOR (mapped to high), is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `tests/e2e_smoke_canary.txt` so it is exactly three specific lines with a trailing newline.\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff for `tests/e2e_smoke_canary.txt` modifies the lines but does not ensure the strict POSIX trailing newline requirement. The reviewer noted the file might already contain it. Source severity: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=MAJOR | confidence=4\n  PROBLEM: The PR description's pre-push test gate lists failures in `tests/test_implement_post_codex_recovery.py` caused by this change.\n  WHY: CI indicates these tests fail. Earlier editor summaries call them false positives, but the failure must be addressed with concrete evidence.\n- .github/workflows/review_autofix.yml (failed check-run: copilot-pull-request-reviewer):N/A | severity=MAJOR | confidence=5\n  PROBLEM: The Copilot PR reviewer check fails with HTTP 422 `custom_instructions_too_large` because the total payload size of `CLAUDE.md` and `agents.md` exceeds the prompt budget.\n  WHY: This is a persistent infrastructure failure that blocks review-autofix for the PR. The one-file canary change does not directly cause it.\n- TASK_GAP:\n  Requirement: Update `tests/e2e_smoke_canary.txt` so it is exactly three specific lines with a trailing newline.\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: The PR diff modifies the lines but does not ensure the strict POSIX trailing newline. The current implementation might already contain it, but the task requires exactly those lines.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- CLAUDE.md and agents.md:N/A | severity=MAJOR | confidence=5\n  PROBLEM: The check fails while creating its review request with HTTP 422 `custom_instructions_too_large`.\n  WHY: Check run 41544551704 exits with code 1, leaving `copilot-pull-request-reviewer` failed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CLAUDE.md:N/A | severity=NIT | confidence=4\n  PROBLEM: The GitHub Copilot PR reviewer job fails at startup because the repository's custom instructions (built from AGENTS.md and CLAUDE.md at the PR head) exceed its prompt-size budget. This is a repo-level problem, not introduced by this PR's one-file change, and no edit within this PR's scope can fix it.\n  WHY: The check job exits with code 1 before any review runs (check-run `copilot-pull-request-reviewer`, run 41544551704), so it will keep failing until CLAUDE.md/AGENTS.md shrink below the Copilot limit.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9b495350d149f318ddf6cb8fb9c376c8b30f66733a9e455fb6f383e579ce9ef9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "42023182603",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42023182603",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105120945_c1f9fb9b95",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "42023182603"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T12:09:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
