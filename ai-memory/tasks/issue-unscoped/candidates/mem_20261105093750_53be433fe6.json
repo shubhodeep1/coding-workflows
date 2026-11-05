@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- analysis/recommendation-processing-report.md:1935 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The triage row enumerating the `STANDALONE_CONFLICT_SWEEP_SUMMARY` fields was not updated to include the new `list_failed=<true|false>` field added at scripts/orchestrate_poll_process.sh:32798.\n  WHY: The report now understates the emitted field set; no runtime failure. The reviewer rated it NIT, mapped here to low. The fix is to append `, list_failed` to that cell.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- analysis/recommendation-processing-report.md:1935 | severity=NIT | confidence=4\n  PROBLEM: The last run added a `list_failed=<true|false>` field to the `STANDALONE_CONFLICT_SWEEP_SUMMARY` line (scripts/orchestrate_poll_process.sh:32798) but did not update the triage row that enumerates that line's fields. The Evidence column still reads \"`STANDALONE_CONFLICT_SWEEP_SUMMARY` (listed, prefiltered, skipped, REST-fetched, updated, dispatched, `list_truncated`)\".\n  WHY: No runtime failure. The report is read by humans and by workflow-log analysis tooling, and it now understates the emitted field set. The fix is to append `, `list_failed``.\n- HARDENING (scripts/orchestrate_poll_process.sh:32529-32537, risk score 2): The `if ! STANDALONE_PRS=\"$(gh_retry gh pr list ... --limit 3000 2>/dev/null)\"` block still discards stderr. An operator who sees `list_failed=true` therefore cannot tell a transient rate limit from a permanent 404/422 or a permission error. Suggested fix: drop `2>/dev/null` for this call, or emit one `::warning::` line with the endpoint class and stderr byte count only (1-3 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2eb574652b717e30010ea13fe8e0a4f3092253b356ca265687d134441f883331",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8852,
+    "run_id": "41999445240",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41999445240",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105093750_53be433fe6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8852,
+    "run_id": "41999445240"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T09:37:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
