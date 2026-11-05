@@ -698,6 +698,158 @@ def test_record_run_event_telemetry_defaults_phase_timings_to_zero() -> None:
 	assert entries[0]["push_retry_reasons"] == []
 
 
+def _retrieve_argv(issue_number: int, output_file: Path, *extra: str) -> list[str]:
+	return [
+		"retrieve",
+		"--memory-branch",
+		"ai-memory",
+		"--memory-root",
+		"ai-memory",
+		"--role",
+		"implementation",
+		"--issue-number",
+		str(issue_number),
+		"--output-file",
+		str(output_file),
+		*extra,
+	]
+
+
+def _retrieve_telemetry_entries(stderr: str) -> list[dict]:
+	return [entry for entry in _extract_ai_memory_telemetry(stderr) if entry.get("op") == "retrieve"]
+
+
+def test_retrieve_reports_records_considered_above_records_selected() -> None:
+	now_text = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+	with _stub_ai_memory_cli_branch() as store_root, tempfile.TemporaryDirectory(prefix="ai-memory-cli-retrieve-") as out_dir:
+		memory_root = store_root / "ai-memory"
+		summaries = [
+			"Records considered alpha candidate",
+			"Records considered beta candidate",
+			"Records considered gamma candidate",
+		]
+		records = [
+			_write_candidate_record(
+				memory_root,
+				issue_number=4801,
+				pr_number=pr_number,
+				summary=summary,
+				created_at=now_text,
+			)
+			for pr_number, summary in zip([None, 1, 2], summaries)
+		]
+		assert len({record["record_id"] for record in records}) == 3
+		output_file = Path(out_dir) / "context.txt"
+		with _temporary_env(AI_MEMORY_ENABLED="true"):
+			exit_code, stdout, stderr = _run_ai_memory_cli(_retrieve_argv(4801, output_file, "--max", "1"))
+
+	assert exit_code == 0
+	payload = json.loads(stdout)
+	assert payload["records_selected"] == 1
+	assert payload["records_considered"] == 3
+	assert payload["records_considered"] >= payload["records_selected"]
+	entries = _retrieve_telemetry_entries(stderr)
+	assert len(entries) == 1
+	assert entries[0]["records_selected"] == 1
+	assert entries[0]["records_considered"] == 3
+	telemetry_lines = [line for line in stderr.splitlines() if line.startswith("AI_MEMORY_TELEMETRY: ")]
+	for summary in summaries:
+		assert all(summary not in line for line in telemetry_lines)
+
+
+def test_retrieve_records_considered_exceeds_selected_when_token_budget_binds() -> None:
+	now_text = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+	with _stub_ai_memory_cli_branch() as store_root, tempfile.TemporaryDirectory(prefix="ai-memory-cli-retrieve-") as out_dir:
+		memory_root = store_root / "ai-memory"
+		for pr_number, summary in zip(
+			[None, 1, 2],
+			[
+				"Token budget alpha candidate",
+				"Token budget beta candidate",
+				"Token budget gamma candidate",
+			],
+		):
+			_write_candidate_record(
+				memory_root,
+				issue_number=4805,
+				pr_number=pr_number,
+				summary=summary,
+				created_at=now_text,
+			)
+		output_file = Path(out_dir) / "context.txt"
+		# No --max: the 1-token budget is the only selection limit.
+		with _temporary_env(AI_MEMORY_ENABLED="true", AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION="1"):
+			exit_code, stdout, stderr = _run_ai_memory_cli(_retrieve_argv(4805, output_file))
+
+	assert exit_code == 0
+	payload = json.loads(stdout)
+	assert payload["token_budget"] == 1
+	assert payload["records_considered"] == 3
+	assert payload["records_selected"] == 1
+	entries = _retrieve_telemetry_entries(stderr)
+	assert len(entries) == 1
+	assert entries[0]["records_considered"] == 3
+	assert entries[0]["records_selected"] == 1
+
+
+def test_retrieve_records_considered_zero_when_no_eligible_records() -> None:
+	with _stub_ai_memory_cli_branch(), tempfile.TemporaryDirectory(prefix="ai-memory-cli-retrieve-") as out_dir:
+		output_file = Path(out_dir) / "context.txt"
+		with _temporary_env(AI_MEMORY_ENABLED="true"):
+			exit_code, stdout, stderr = _run_ai_memory_cli(_retrieve_argv(4802, output_file))
+
+	assert exit_code == 0
+	payload = json.loads(stdout)
+	assert payload["records_considered"] == 0
+	assert payload["records_selected"] == 0
+	assert payload["miss_reason"] == "no_eligible_records"
+	entries = _retrieve_telemetry_entries(stderr)
+	assert len(entries) == 1
+	assert entries[0]["records_considered"] == 0
+	assert entries[0]["miss_reason"] == "no_eligible_records"
+
+
+def test_retrieve_records_considered_zero_when_disabled() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-memory-cli-retrieve-") as out_dir:
+		output_file = Path(out_dir) / "context.txt"
+		with _temporary_env(AI_MEMORY_ENABLED="false"):
+			exit_code, stdout, stderr = _run_ai_memory_cli(_retrieve_argv(4803, output_file))
+
+	assert exit_code == 0
+	payload = json.loads(stdout)
+	assert payload["enabled"] is False
+	assert payload["miss_reason"] == "disabled"
+	assert payload["records_considered"] == 0
+	assert payload["records_selected"] == 0
+	entries = _retrieve_telemetry_entries(stderr)
+	assert len(entries) == 1
+	assert entries[0]["records_considered"] == 0
+	assert entries[0]["records_selected"] == 0
+
+
+def test_retrieve_records_considered_zero_when_branch_unavailable() -> None:
+	def _raise_missing_branch(_repo_root, *, memory_branch, memory_root_relative):
+		raise ai_memory_lib.MemoryGitError("couldn't find remote ref ai-memory")
+
+	with tempfile.TemporaryDirectory(prefix="ai-memory-cli-retrieve-") as out_dir:
+		output_file = Path(out_dir) / "context.txt"
+		with _temporary_env(AI_MEMORY_ENABLED="true"), _patched_module_attrs(
+			ai_memory,
+			read_memory_root_from_branch=_raise_missing_branch,
+		):
+			exit_code, stdout, stderr = _run_ai_memory_cli(_retrieve_argv(4804, output_file))
+
+	assert exit_code == 0
+	payload = json.loads(stdout)
+	assert payload["miss_reason"] == "branch_unavailable"
+	assert payload["records_considered"] == 0
+	assert payload["records_selected"] == 0
+	entries = _retrieve_telemetry_entries(stderr)
+	assert len(entries) == 1
+	assert entries[0]["records_considered"] == 0
+	assert entries[0]["miss_reason"] == "branch_unavailable"
+
+
 def main() -> int:
 	for name, value in sorted(globals().items()):
 		if name.startswith("test_") and callable(value):
