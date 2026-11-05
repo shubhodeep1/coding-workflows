@@ -16707,6 +16707,7 @@ validation_harness_hold_tick() {
 # local (no API call).
 # ---------------------------------------------------------------------------
 HHAR_POSTED_COMMENT_JSON=""
+declare -gA _HHAR_PIN_DATE_CACHE=()  # "<pin sha>" -> committer date (empty when unread)
 
 # One HARNESS_HEAL_AUTO_REVALIDATE log line. Args: outcome heal_issue [reason]
 _harness_heal_auto_revalidate_log() {
@@ -16718,6 +16719,7 @@ _harness_heal_auto_revalidate_log() {
 harness_heal_auto_revalidate() {
   local hhar_login hhar_marker hhar_outcome hhar_issue hhar_marker_line hhar_rc
   local hhar_body hhar_response_file hhar_id hhar_now hhar_comment
+  local hhar_pin hhar_pin_epoch hhar_heal_epoch
   HHAR_POSTED_COMMENT_JSON=""
   # Switch off: silent, so the off path matches the output before #8291.
   [ "${HARNESS_HEAL_AUTO_REVALIDATE_ENABLED:-true}" != "false" ] || return 0
@@ -16788,6 +16790,34 @@ harness_heal_auto_revalidate() {
   if [ "${VHH_ISSUE_MERGED}" != "true" ]; then
     _harness_heal_auto_revalidate_log "skip" "${hhar_issue}" "heal_closed_unmerged"
     return 0
+  fi
+  # Wait until the consumer's validate.yml pin carries the fix, as the hold
+  # resume does: the pin commit must be no older than the heal close, or the
+  # only retry would rerun the old harness. The source repository pins a
+  # branch (promote-candidate), so it skips this check.
+  if [ "${GITHUB_REPOSITORY:-}" != "shubhodeep1/coding-workflows" ]; then
+    if ! validation_harness_pin >/dev/null; then
+      _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "pin_unresolved"
+      return 0
+    fi
+    hhar_pin="${_VALIDATION_HARNESS_PIN_VALUE}"
+    if [ -z "${_HHAR_PIN_DATE_CACHE[${hhar_pin}]+set}" ]; then
+      # §14 API budget: one GET of the pin commit per distinct pin per poller
+      # process, memoized; the compare the hold uses needs a support commit
+      # this parked project no longer has.
+      _HHAR_PIN_DATE_CACHE[${hhar_pin}]="$(gh_retry _safe_gh_jq "repos/shubhodeep1/coding-workflows/commits/${hhar_pin}" \
+        --jq '(.commit.committer.date // "")' 2>/dev/null || echo '')"
+    fi
+    hhar_pin_epoch="$(_iso8601_to_epoch "${_HHAR_PIN_DATE_CACHE[${hhar_pin}]}" || echo '')"
+    hhar_heal_epoch="$(_iso8601_to_epoch "${VHH_ISSUE_CLOSED_AT}" || echo '')"
+    if [ -z "${hhar_pin_epoch}" ] || [ -z "${hhar_heal_epoch}" ]; then
+      _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "pin_date_unknown"
+      return 0
+    fi
+    if [ "${hhar_heal_epoch}" -gt "${hhar_pin_epoch}" ]; then
+      _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "heal_closed_after_pin"
+      return 0
+    fi
   fi
 
   hhar_body="/revalidate harness heal issue shubhodeep1/coding-workflows#${hhar_issue} merged

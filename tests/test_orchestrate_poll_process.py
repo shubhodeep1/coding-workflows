@@ -17080,10 +17080,20 @@ _HHAR_PREFIX = "HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=192 "
 
 def _run_parked_harness_tick(
 	*, comments: list | None = None, heal: dict | None = _HHAR_MERGED, env: dict | None = None,
-	store: dict | None = None, hold: bool = False,
+	store: dict | None = None, hold: bool = False, pin: str | None = _HOLD_PIN_NEW,
+	pin_date: str | None = _HOLD_PIN_DATE,
 ) -> dict:
 	"""A project parked failed with ai:harness-broken; no hold unless `hold`."""
 	extra: dict = {}
+	if pin:
+		extra["git_show_blobs"] = {
+			_HOLD_WRAPPER_PATH: (
+				"jobs:\n  v:\n    uses: shubhodeep1/coding-workflows/.github/workflows/"
+				f"validate.yml@{pin} # stable\n"
+			),
+		}
+		if pin_date:
+			extra["commit_dates"] = {pin: pin_date}
 	if heal is not None:
 		extra["issue_extra_fields"] = {_HOLD_HEAL_ISSUE: heal}
 	extra.update(store or {})
@@ -17209,6 +17219,21 @@ def test_harness_heal_auto_revalidate_needs_a_trusted_routable_marker():
 		_assert_hhar_still_parked(result)
 
 
+def test_harness_heal_auto_revalidate_waits_for_the_pin_to_carry_the_fix():
+	# The heal merged after the consumer's pinned release was cut: the only
+	# retry must wait, or it would rerun the old harness.
+	cases = (
+		({"pin_date": "2026-02-01T10:00:00Z"}, "heal_closed_after_pin"),
+		({"pin": None}, "pin_unresolved"),
+		({"pin_date": None}, "pin_date_unknown"),
+	)
+	for kwargs, reason in cases:
+		result = _run_parked_harness_tick(**kwargs)
+		out = result["stdout"] + result["stderr"]
+		assert f"{_HHAR_PREFIX}outcome=waiting heal_issue={_HOLD_HEAL_ISSUE} reason={reason}" in out, (reason, out)
+		_assert_hhar_still_parked(result)
+
+
 def test_harness_heal_auto_revalidate_post_failure_keeps_project_parked():
 	result = _run_parked_harness_tick(store={"fail_issue_comment_post_for": [192]})
 	out = result["stdout"] + result["stderr"]
@@ -17230,12 +17255,15 @@ def test_harness_heal_auto_revalidate_pending_human_revalidate_wins():
 _HHAR_STUBS = """
 set -euo pipefail
 TRACKING_NUM=192
-GITHUB_REPOSITORY=owner/repo
+GITHUB_REPOSITORY="${STUB_REPO:-owner/repo}"
 validation_harness_hold_active() { return 1; }
 unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN="${STUB_LOGIN}"; printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"; }
 validation_harness_route_login() { printf 'pipeline-bot'; }
 validation_harness_marker() { printf '%s' "${STUB_MARKER}"; }
-_validation_harness_hold_issue_state() { echo "ISSUE_READ $1"; VHH_ISSUE_STATE=closed; VHH_ISSUE_MERGED=true; return 0; }
+_validation_harness_hold_issue_state() { echo "ISSUE_READ $1"; VHH_ISSUE_STATE=closed; VHH_ISSUE_MERGED=true; VHH_ISSUE_CLOSED_AT=2026-02-01T11:00:00Z; return 0; }
+declare -gA _HHAR_PIN_DATE_CACHE=()
+validation_harness_pin() { _VALIDATION_HARNESS_PIN_VALUE="${STUB_PIN}"; [ -n "${STUB_PIN}" ]; }
+gh_retry() { printf '%s' "${STUB_PIN_DATE}"; }
 gh_retry_to_file() { local out="$1"; shift; echo "POST_CALL" >&2; printf '%s' "${STUB_POST_RESPONSE}" > "${out}"; return "${STUB_POST_RC}"; }
 tg_notify() { :; }
 """
@@ -17244,7 +17272,8 @@ tg_notify() { :; }
 def _run_hhar_unit(**env: str) -> subprocess.CompletedProcess:
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	fns = (
-		_extract_bash_function(script, "_harness_heal_auto_revalidate_log() {")
+		_extract_bash_function(script, "_iso8601_to_epoch() {")
+		+ _extract_bash_function(script, "_harness_heal_auto_revalidate_log() {")
 		+ _extract_bash_function(script, "harness_heal_auto_revalidate() {")
 	)
 	snippet = _HHAR_STUBS + fns + (
@@ -17262,6 +17291,8 @@ def _run_hhar_unit(**env: str) -> subprocess.CompletedProcess:
 		"STUB_MARKER": json.dumps({"outcome": "opened", "issue": _HOLD_HEAL_ISSUE}),
 		"STUB_POST_RESPONSE": json.dumps({"id": 55}),
 		"STUB_POST_RC": "0",
+		"STUB_PIN": "c" * 40,
+		"STUB_PIN_DATE": "2026-02-01T12:00:00Z",
 	}
 	base.update(env)
 	return _run_bash_snippet(snippet, base)
@@ -17304,6 +17335,22 @@ def test_harness_heal_auto_revalidate_post_outcomes_unit():
 		assert f"::warning::{_HHAR_PREFIX}outcome=post_failed heal_issue={_HOLD_HEAL_ISSUE} reason={reason}" in failed.stdout
 		assert "POSTED=\n" in failed.stdout
 		assert "COMMENTS=[]\n" in failed.stdout
+
+
+def test_harness_heal_auto_revalidate_pin_wait_unit():
+	for env, reason in (
+		({"STUB_PIN_DATE": "2026-02-01T10:00:00Z"}, "heal_closed_after_pin"),
+		({"STUB_PIN": ""}, "pin_unresolved"),
+		({"STUB_PIN_DATE": ""}, "pin_date_unknown"),
+	):
+		result = _run_hhar_unit(**env)
+		assert result.returncode == 0, result.stderr
+		assert f"{_HHAR_PREFIX}outcome=waiting heal_issue={_HOLD_HEAL_ISSUE} reason={reason}" in result.stdout, (env, result.stdout)
+		assert "POST_CALL" not in result.stderr
+		assert "POSTED=\n" in result.stdout
+	# The source repository pins a branch, so it skips the pin check.
+	own = _run_hhar_unit(STUB_REPO="shubhodeep1/coding-workflows", STUB_PIN="")
+	assert f"{_HHAR_PREFIX}outcome=posted heal_issue={_HOLD_HEAL_ISSUE}" in own.stdout, own.stdout
 
 
 def test_harness_heal_auto_revalidate_config_defaults_and_invalid_value():
