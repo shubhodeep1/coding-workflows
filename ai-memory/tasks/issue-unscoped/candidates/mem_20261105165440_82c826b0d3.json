@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_engine.py:723-734,761-762,821-834 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, anthropic_claude-sonnet-5_5]\n  PROBLEM: A negative seven_day reading with no five_hour is excluded from reset-aware ranking by the guard in _spare_per_hour, but _max_utilization still returns the raw negative value, so choose_account puts the malformed account first in the eligible fallback group.\n  WHY: The malformed probe can still be selected first, which the PR's \"cannot inflate headroom and rank an account first\" claim says it cannot. Severity disagreement: minimax says MAJOR, openai says NIT, and sonnet reports it only as a low-risk hardening suggestion (score 1). The highest, MAJOR, is mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description states \"a malformed probe cannot inflate headroom and rank an account first\"; a negative seven_day reading should fall into the group with no reset time and sort after valid reset-aware readings.\n  expected_change_site: scripts/claude_engine.py `_max_utilization` (lines 723-734) or the routing block of `choose_account` (lines 821-831); plus a test in tests/test_claude_engine.py\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The new guard is only in `_spare_per_hour` (lines 761-762), `_max_utilization` is unchanged, and neither new test (`test_choose_uses_the_spare_quota_that_expires_soonest_first`, `test_choose_ranks_accounts_without_a_reset_time_after_those_with_one`) uses a negative seven_day.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- (No findings reported.) The reviewer checked a negative seven_day reading with no 5-hour reading and chose not to report it, because the old `choose_account` ranked it the same way. It gave this as a hardening suggestion only: scripts/claude_engine.py `_max_utilization`, line 734, clamp with `max(value, 0.0)` (optional, about 2 lines changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_engine.py:_max_utilization (lines 723-734); choose_account (lines 821-834); _spare_per_hour (lines 761-762) | severity=MAJOR | confidence=5\n  PROBLEM: The guard `if float(seven_day) < 0: return None` was added only to `_spare_per_hour`. `_max_utilization` still returns the raw negative seven_day when five_hour is None, so the malformed probe is appended to `eligible` with peak=-0.5 and sorts first.\n  WHY: With probes A (five_hour None, seven_day -0.5, with a reset time) and B (seven_day 0.5, no reset time), choose_account gives order [\"A\",\"B\"] and selects A. `_is_number` (line 236) and `window()` (line 559) let negatives through, and neither new test uses a negative seven_day.\n- TASK_GAP:\n  Requirement: PR description states \"a malformed probe cannot inflate headroom and rank an account first\", and the editor summary says a negative seven_day reading now counts as 0 and falls into the group of accounts with no reset time. Tests in `tests/test_claude_engine.py` are meant to lock this behaviour.\n  Expected change site: `scripts/claude_engine.py` `_max_utilization` (lines 723-734) or the routing block of `choose_account` (lines 821-831); companion test in `tests/test_claude_engine.py` exercising a probe with negative `seven_day`, no `five_hour`, and a present `seven_day_resets_at` alongside a valid account with no reset time.\n  Evidence of absence: Only `_spare_per_hour` was changed (lines 761-762). `_max_utilization` is unchanged, so the negative value still flows into `peak` and into `eligible`. Neither new test builds the malformed probe.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_engine.py:761-762, 821-832 | severity=NIT | confidence=4\n  PROBLEM: A negative seven_day reading is excluded from reset-aware ranking, but its negative value stays as the fallback rank. When five_hour is missing, _max_utilization returns it, and it sorts ahead of valid accounts in eligible.\n  WHY: If one account has a negative seven_day reading and a reset time, and another usable account has a valid reading but no reset time, both enter eligible. The malformed account's negative peak sorts first and can become the selected account.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "4916a084ab8f4142600b155145a688912edb26759cf5f854ada2969532e23dbc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8879,
+    "run_id": "42065676904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42065676904",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105165440_82c826b0d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8879,
+    "run_id": "42065676904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T16:54:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
