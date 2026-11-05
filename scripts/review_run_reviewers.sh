@@ -3277,6 +3277,71 @@ assemble_reviewer_prompt() {
   } > "${target_file}"
 }
 
+# Byte count of one reviewer prompt input file, for the log-only
+# REVIEWER_PROMPT_COMPONENTS line (wfopt 2026-10-02, Refs #8845). Prints `0`
+# for an empty path, a non-regular or unreadable file, or any non-integer
+# `wc` result. Never prints file content.
+reviewer_prompt_component_bytes() {
+  local component_path="${1:-}"
+  local component_bytes="0"
+  if [ -n "${component_path}" ] && [ -f "${component_path}" ] && [ -r "${component_path}" ]; then
+    component_bytes="$(wc -c < "${component_path}" 2>/dev/null | tr -d '[:space:]' || printf '0')"
+  fi
+  if ! [[ "${component_bytes}" =~ ^[0-9]+$ ]]; then
+    component_bytes="0"
+  fi
+  printf '%s\n' "${component_bytes}"
+}
+
+# Log-only, fail-open per-component size line for one assembled reviewer
+# prompt (measurement only; never changes prompt bytes, order or budgets).
+# Usage: log_reviewer_prompt_components <pass_label> <assembled_file> \
+#          <prompt_body_file> [extra_context_file]
+# Counts the raw input files assemble_reviewer_prompt reads (README is the
+# raw trimmed file before UNTRUSTED_DATA framing), so the component sum does
+# not equal total_bytes: separators, hints, the memory placeholder and the
+# checklist block are not counted separately. static_prefix_sha256 is the
+# first 12 hex of the static context's sha256 (pattern from
+# gh_api_json_to_file in scripts/gh_helpers.sh), or `unavailable`. Never logs
+# file content or paths; the label is printed only when it matches
+# ^[A-Za-z0-9._-]+$, else `unknown`. Callers wrap it in `if !` and emit a
+# single ::warning:: on failure.
+log_reviewer_prompt_components() {
+  local rpc_pass="${1:-}"
+  local rpc_assembled_file="${2:-}"
+  local rpc_body_file="${3:-}"
+  local rpc_extra_file="${4:-}"
+  local rpc_static_file="${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}"
+  local rpc_readme_file=""
+  local rpc_static_bytes rpc_readme_bytes rpc_memory_bytes rpc_body_bytes
+  local rpc_semble_bytes rpc_extra_bytes rpc_total_bytes
+  local rpc_sha=""
+  local rpc_line
+  if ! [[ "${rpc_pass}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    rpc_pass="unknown"
+  fi
+  if [ -n "${RUNTIME_DIR:-}" ]; then
+    rpc_readme_file="${RUNTIME_DIR}/static_readme_trimmed.txt"
+  fi
+  rpc_static_bytes="$(reviewer_prompt_component_bytes "${rpc_static_file}")" || rpc_static_bytes="0"
+  rpc_readme_bytes="$(reviewer_prompt_component_bytes "${rpc_readme_file}")" || rpc_readme_bytes="0"
+  rpc_memory_bytes="$(reviewer_prompt_component_bytes "${MEMORY_CONTEXT_FILE:-}")" || rpc_memory_bytes="0"
+  rpc_body_bytes="$(reviewer_prompt_component_bytes "${rpc_body_file}")" || rpc_body_bytes="0"
+  rpc_semble_bytes="$(reviewer_prompt_component_bytes "${REVIEWER_SEMBLE_CONTEXT_FILE:-}")" || rpc_semble_bytes="0"
+  rpc_extra_bytes="$(reviewer_prompt_component_bytes "${rpc_extra_file}")" || rpc_extra_bytes="0"
+  rpc_total_bytes="$(reviewer_prompt_component_bytes "${rpc_assembled_file}")" || rpc_total_bytes="0"
+  if [ -f "${rpc_static_file}" ] && [ -r "${rpc_static_file}" ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      rpc_sha="$(sha256sum < "${rpc_static_file}" 2>/dev/null | cut -c1-12 || true)"
+    elif command -v shasum >/dev/null 2>&1; then
+      rpc_sha="$(shasum -a 256 < "${rpc_static_file}" 2>/dev/null | cut -c1-12 || true)"
+    fi
+  fi
+  [[ "${rpc_sha}" =~ ^[0-9a-f]{12}$ ]] || rpc_sha="unavailable"
+  rpc_line="REVIEWER_PROMPT_COMPONENTS pass=${rpc_pass} static_bytes=${rpc_static_bytes} readme_bytes=${rpc_readme_bytes} memory_bytes=${rpc_memory_bytes} body_bytes=${rpc_body_bytes} semble_bytes=${rpc_semble_bytes} extra_bytes=${rpc_extra_bytes} total_bytes=${rpc_total_bytes} static_prefix_sha256=${rpc_sha}"
+  printf '%s\n' "${rpc_line}"
+}
+
 # Assemble the default (pass 1 / single-pass) prompt.
 assemble_reviewer_prompt "${REVIEWER_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
 
@@ -3296,6 +3361,9 @@ if [ -f "${REVIEWER_PROMPT_FILE}" ]; then
   echo "Reviewer prompt assembled size: ${reviewer_prompt_assembled_bytes} bytes (codex stdin cap: ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES})."
   if [ "${reviewer_prompt_assembled_bytes}" -ge "${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}" ]; then
     echo "::warning::Reviewer prompt is ${reviewer_prompt_assembled_bytes} bytes, at or over codex's ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}-character turn/start stdin cap. Reviewers will fail with 'Input exceeds the maximum length'. Raise REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES to tighten the embed budget or shrink the reviewer static context (${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}) / memory / semble context."
+  fi
+  if ! log_reviewer_prompt_components "default" "${REVIEWER_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"; then
+    echo "::warning::REVIEWER_PROMPT_COMPONENTS could not be computed for pass=default; continuing (log-only)."
   fi
 fi
 
@@ -5996,6 +6064,9 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     echo "=== PASS 1: Broad sweep (xhigh reasoning) ==="
     PASS1_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass1.txt"
     assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
+    if ! log_reviewer_prompt_components "pass1" "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"; then
+      echo "::warning::REVIEWER_PROMPT_COMPONENTS could not be computed for pass=pass1; continuing (log-only)."
+    fi
 
     pass1_successful="$(run_reviewer_pass "pass1" "${PASS1_PROMPT_FILE}" "xhigh")"
     echo "Pass 1 complete: ${pass1_successful} reviewers successful."
@@ -6107,6 +6178,9 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   echo "=== PASS 2: Deep review (${PASS2_REASONING} reasoning — ${PASS2_GATE_NOTE}) ==="
   PASS2_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass2.txt"
   assemble_reviewer_prompt "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"
+  if ! log_reviewer_prompt_components "pass2" "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"; then
+    echo "::warning::REVIEWER_PROMPT_COMPONENTS could not be computed for pass=pass2; continuing (log-only)."
+  fi
 
   pass2_successful="$(run_reviewer_pass "review" "${PASS2_PROMPT_FILE}" "${PASS2_REASONING}")"
   echo "Pass 2 complete: ${pass2_successful} reviewers successful."
