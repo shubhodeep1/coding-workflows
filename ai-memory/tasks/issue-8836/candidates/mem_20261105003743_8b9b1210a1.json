@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue asks for one line to change in one data file, and it lists the exact content the file must end up with. Nothing new is needed: no helper, script, workflow wiring or supervisor. I checked the advisory expected file `tests/test_review_conflict_resolve_smoke_deterministic.py`. Its only mention of this file is a comment on line 80 that names the path as an example. It never checks the file's content, so it needs no edit. The issue also says to touch only the canary file. The complete fix and the minimal fix are the same, so the Boil-the-Lake rule makes no difference here (\u00a76 order: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed).\n\nPlanning ref: HEAD `ef9f747a1ac2c3db74c12989d378ee4298a808a0` on branch `orchestrator/project-8834`. It matches the integration branch: mismatch is false.\n\nAutomation surface (\u00a720.E): no script is added or extended. Only an existing data file changes. Nothing is wired into a scheduler, no supervisor is needed, there is no database work, and no entry goes in the removal registry.\n\n## Functions or modules to implement\n- None. Replace line 2 of `tests/e2e_smoke_canary_b.txt` so the file contains exactly `status: ok\\ndecompose-run: 41941001401\\n`.\n\n## Data structures affected\n- None. The file stays at two lines with a single trailing newline. The current file has LF line endings, two lines, and line 2 reads `decompose-run: 41445772297`.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Leave the deterministic smoke test unchanged\n- Chosen: edit only `tests/e2e_smoke_canary_b.txt`.\n- Alternatives considered: also editing `tests/test_review_conflict_resolve_smoke_deterministic.py`, which the decomposition lists as an expected file.\n- Why: that test only names the file in a comment (line 80) and does not check its content. The issue's scope rules forbid editing any other file.\n\n## Security considerations\n- This change crosses no trust boundary and adds no endpoint or input path. The file is plain text, not executable, and holds no secrets.\n- Abuse cases: none apply.\n\n## Potential risks or edge cases\n- Conflict: the decomposition lists the deterministic test as an expected file, but the issue body says to touch only the canary file. I followed the issue body (see D1).\n- Keep exactly one trailing newline and no CRLF line endings.\n- The sibling issue edits a different file, so the two changes should not conflict.\n\n## Testing considerations\n- `head -n1` should print `status: ok`.\n- `sed -n 2p` should print `decompose-run: 41941001401`.\n- `wc -l` should report 2.\n- `git diff --stat` should list only `tests/e2e_smoke_canary_b.txt`.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "f64c9af649025fb095f91dfce1708c7f8d881e4f60ff742746973fd749c88b15",
+  "lineage": {
+    "issue_number": 8836,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41942126572",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41942126572",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8836"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261105003743_8b9b1210a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8836,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41942126572"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8836",
+  "timestamps": {
+    "created_at": "2026-11-05T00:37:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
