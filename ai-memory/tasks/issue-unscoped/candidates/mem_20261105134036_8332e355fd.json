@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The external `copilot-pull-request-reviewer` check-run (run 41544551704) fails with HTTP 422 `custom_instructions_too_large` (\"Prompt too big after adding system message\") because AGENTS.md and CLAUDE.md exceed its prompt budget.\n  WHY: The failure comes from the external reviewer's prompt-size limit and cannot be fixed by editing the canary. Severity is NIT from sonnet and glm, and gemini gave no severity. Confidence ranges from 2 to 5.\n- tests/test_implement_post_codex_recovery.py:1 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push test gate lists 8 failures in `tests/test_implement_post_codex_recovery.py` (e.g. `test_review_pipeline_integration_chain_module_runs_clean`).\n  WHY: These failures block merge. Two other reviewers (sonnet, glm) state the file references the canary only as string literals, so the failures are not caused by this change.\n- tests/test_promote_main_cycle.py:tests/test_promote_main_cycle.py::test_non_code_changes_do_not_start_a_cycle | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `test_non_code_changes_do_not_start_a_cycle` fails in CI, and the failure is inherited from the merge-base.\n  WHY: The failing CI blocks PR merge.\n- tests/test_review_autofix_review_pipeline_contract.py:N/A | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test suite fails in CI, and the failure is inherited.\n  WHY: The failing CI blocks PR merge.\n- tests/test_review_merge_train.py:N/A | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test suite fails in CI, and the failure is inherited.\n  WHY: The failing CI blocks PR merge.\n- tests/test_smoke_alert_silencing_contract.py:N/A | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test suite fails in CI, and the failure is inherited.\n  WHY: The failing CI blocks PR merge.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/e2e_smoke_canary.txt:N/A | severity=NIT | confidence=2\n  PROBLEM: The external `copilot-pull-request-reviewer` check-run (run 41544551704) fails with HTTP 422 `custom_instructions_too_large` (\"Prompt too big after adding system message\").\n  WHY: The failure comes from the external reviewer's prompt-size limit, so it cannot be tied to this diff. The merge commit f64a6c5 is the likely cause. Editing the canary cannot fix it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:1 | confidence=4\n  PROBLEM: The pre-push test gate lists 8 failures (e.g. `test_review_pipeline_integration_chain_module_runs_clean`).\n  WHY: The failures block merge. The editor must verify whether the tests are brittle or whether the canary update impacted pipeline state.\n- tests/test_promote_main_cycle.py:tests/test_promote_main_cycle.py::test_non_code_changes_do_not_start_a_cycle | confidence=5\n  PROBLEM: This test is an inherited CI failure (also failing on the merge-base).\n  WHY: The failing CI blocks PR merge.\n- tests/test_review_autofix_review_pipeline_contract.py:N/A | confidence=5\n  PROBLEM: This test suite is an inherited CI failure.\n  WHY: The suite is failing in CI.\n- tests/test_review_merge_train.py:N/A | confidence=5\n  PROBLEM: This test suite is an inherited CI failure.\n  WHY: The suite is failing in CI.\n- tests/test_smoke_alert_silencing_contract.py:N/A | confidence=5\n  PROBLEM: This test suite is an inherited CI failure.\n  WHY: The suite is failing in CI.\n- CLAUDE.md; agents.md:N/A | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check failed with HTTP 422 (\"Prompt too big after adding system message\").\n  WHY: The large size of `CLAUDE.md` and `agents.md` blocks PR reviews from the Copilot reviewer bot.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=NIT | confidence=4\n  PROBLEM: The external `copilot-pull-request-reviewer` check-run (run 41544551704, head f64a6c5) fails with HTTP 422 `custom_instructions_too_large`.\n  WHY: The external reviewer's prompt budget is exceeded by the repo instruction files. The failure is not reachable from the canary change and cannot be fixed by editing the canary. No in-scope fix exists.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "05e18ac9e55413878e6f1da66b474bfead8c656348b6fe2cac2a52d09654b2c0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "42036242110",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42036242110",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105134036_8332e355fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "42036242110"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T13:40:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
