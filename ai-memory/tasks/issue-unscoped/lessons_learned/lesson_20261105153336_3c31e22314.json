@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-05T15:33:36Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=copilot-pull-request-reviewer (PR check, not a repository file):1; cited_path=copilot-pull-request-reviewer check (run 42050873918, job 127326319917); files_touched=README.md, changelog.d/claude-pool-reset-aware-ranking.md, scripts/claude_engine.py, tests/test_claude_engine.py.",
+  "phase": "review_autofix",
+  "pr_number": 8879,
+  "record_id": "lesson_20261105153336_3c31e22314",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer check (run 42050873918, job 127326319917)",
+    "copilot-pull-request-reviewer (PR check, not a repository file)",
+    "README.md",
+    "changelog.d/claude-pool-reset-aware-ranking.md",
+    "scripts/claude_engine.py",
+    "tests/test_claude_engine.py"
+  ]
+}
