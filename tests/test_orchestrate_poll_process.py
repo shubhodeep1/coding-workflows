@@ -2588,7 +2588,8 @@ if args[0] == 'api':
 				'state': issue_state,
 				'state_reason': issue_ext.get('state_reason', issue.get('state_reason', '')),
 				'closed_at': issue_ext.get('closed_at'),
-				'labels': [{'name': l} for l in issue.get('labels', [])],
+				# Opt-in heal-issue labels (harness heal auto-revalidate, #8291).
+				'labels': [{'name': l} for l in issue_ext.get('labels', issue.get('labels', []))],
 			}
 			import subprocess as _sp
 			p = _sp.run(['jq', '-rc', jq], input=json.dumps(issue_obj), capture_output=True, text=True)
@@ -17066,6 +17067,361 @@ def test_validation_harness_hold_tick_runs_after_stale_pin_block_and_documents_a
 	for fn in ("_validation_harness_hold_compare() {", "_validation_harness_hold_issue_state() {"):
 		body = _extract_bash_function(script, fn)
 		assert "§14/§15 API budget" in body and "memoized" in body
+
+
+# ---------------------------------------------------------------------------
+# Tests: harness heal auto-revalidate (stuck-states P7b, Refs #8291)
+# ---------------------------------------------------------------------------
+
+_HHAR_MARKER = f"<!-- AI_HARNESS_HEAL_REVALIDATE_V1 heal={_HOLD_HEAL_ISSUE} -->"
+_HHAR_MERGED = {"closed": True, "state_reason": "completed", "closed_at": "2026-02-01T11:00:00Z", "labels": ["ai:merged"]}
+_HHAR_PREFIX = "HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=192 "
+
+
+def _run_parked_harness_tick(
+	*, comments: list | None = None, heal: dict | None = _HHAR_MERGED, env: dict | None = None,
+	store: dict | None = None, hold: bool = False, pin: str | None = _HOLD_PIN_NEW,
+	pin_date: str | None = _HOLD_PIN_DATE,
+) -> dict:
+	"""A project parked failed with ai:harness-broken; no hold unless `hold`."""
+	extra: dict = {}
+	if pin:
+		extra["git_show_blobs"] = {
+			_HOLD_WRAPPER_PATH: (
+				"jobs:\n  v:\n    uses: shubhodeep1/coding-workflows/.github/workflows/"
+				f"validate.yml@{pin} # stable\n"
+			),
+		}
+		if pin_date:
+			extra["commit_dates"] = {pin: pin_date}
+	if heal is not None:
+		extra["issue_extra_fields"] = {_HOLD_HEAL_ISSUE: heal}
+	extra.update(store or {})
+	overrides = {
+		"VALIDATION_HARNESS_ROUTE_LOGIN": _HARNESS_ROUTE_LOGIN,
+		"VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED": "false",
+		"CWS_DEFAULT_BRANCH": "main",
+	}
+	overrides.update(env or {})
+	return _run_poller(
+		state=_harness_held_failed_state(with_hold=hold),
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed", "ai:harness-broken"],
+		tracking_comments=[_harness_route_comment()] if comments is None else comments,
+		capture_telegram_calls=True,
+		env_overrides=overrides,
+		mock_store_extra=extra,
+	)
+
+
+def _hhar_auto_comments(result: dict) -> list[str]:
+	return [b for b in _harness_comment_bodies(result) if _HHAR_MARKER in b and b.startswith("/revalidate")]
+
+
+def _assert_hhar_still_parked(result: dict) -> None:
+	output = result["stdout"] + result["stderr"]
+	ls = result.get("latest_state") or result["state_on_disk"]
+	assert ls["status"] == "failed", output
+	assert result["validation_dispatches"] == [], output
+	assert "ai:harness-broken" in result["tracking_labels"]
+	assert _hhar_auto_comments(result) == [], output
+
+
+def test_harness_heal_auto_revalidate_posts_and_resets_on_merged_heal_issue():
+	result = _run_parked_harness_tick()
+	output = result["stdout"] + result["stderr"]
+	auto = _hhar_auto_comments(result)
+	assert len(auto) == 1, output
+	assert auto[0].startswith(f"/revalidate harness heal issue shubhodeep1/coding-workflows#{_HOLD_HEAL_ISSUE} merged")
+	assert auto[0].rstrip().splitlines()[-1] == _HHAR_MARKER
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", output
+	assert ls["validation_cycle"] == 1
+	assert "validation_last_raw_status" not in ls
+	assert len(result["validation_dispatches"]) == 1, output
+	assert "ai:harness-broken" not in result["tracking_labels"]
+	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert "ai:validating" in result["tracking_labels"]
+	assert any("## 🔁 Validation reset via /revalidate" in b for b in _harness_comment_bodies(result))
+	assert f"{_HHAR_PREFIX}outcome=posted heal_issue={_HOLD_HEAL_ISSUE}" in output, output
+	assert _harness_api_reads(result) == (0, 1), result["api_calls"]
+	assert any(n["level"] == "DEBUG" and "posted /revalidate" in n["message"] for n in result["telegram_notifications"])
+
+
+def test_harness_heal_auto_revalidate_once_only_marker_is_trusted_only():
+	earlier = {
+		"body": f"Validation was resumed after the harness fix.\n\n{_HHAR_MARKER}\n",
+		"user": {"login": "github-actions[bot]"},
+		"author_association": "NONE",
+	}
+	result = _run_parked_harness_tick(comments=[_harness_route_comment(), earlier])
+	output = result["stdout"] + result["stderr"]
+	assert f"{_HHAR_PREFIX}outcome=skip heal_issue={_HOLD_HEAL_ISSUE} reason=already_posted" in output, output
+	assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+	_assert_hhar_still_parked(result)
+
+	forged = {**earlier, "user": {"login": "outsider"}}
+	untrusted = _run_parked_harness_tick(comments=[_harness_route_comment(), forged])
+	out2 = untrusted["stdout"] + untrusted["stderr"]
+	assert f"{_HHAR_PREFIX}outcome=posted heal_issue={_HOLD_HEAL_ISSUE}" in out2, out2
+	assert len(_hhar_auto_comments(untrusted)) == 1
+	assert len(untrusted["validation_dispatches"]) == 1
+
+
+def test_harness_heal_auto_revalidate_waits_for_open_or_skips_unmerged_heal_issue():
+	open_result = _run_parked_harness_tick(heal={"closed": False})
+	out = open_result["stdout"] + open_result["stderr"]
+	assert f"{_HHAR_PREFIX}outcome=waiting heal_issue={_HOLD_HEAL_ISSUE} reason=heal_open" in out, out
+	assert _harness_api_reads(open_result) == (0, 1), open_result["api_calls"]
+	_assert_hhar_still_parked(open_result)
+
+	unmerged = _run_parked_harness_tick(heal={**_HHAR_MERGED, "labels": []})
+	out = unmerged["stdout"] + unmerged["stderr"]
+	assert f"{_HHAR_PREFIX}outcome=skip heal_issue={_HOLD_HEAL_ISSUE} reason=heal_closed_unmerged" in out, out
+	_assert_hhar_still_parked(unmerged)
+
+	unread = _run_parked_harness_tick(store={"fail_issue_get_for": [int(_HOLD_HEAL_ISSUE)]})
+	out = unread["stdout"] + unread["stderr"]
+	assert f"{_HHAR_PREFIX}outcome=waiting heal_issue={_HOLD_HEAL_ISSUE} reason=heal_read_failed" in out, out
+	_assert_hhar_still_parked(unread)
+
+
+def test_harness_heal_auto_revalidate_skips_active_hold_and_switch_off():
+	held = _run_parked_harness_tick(hold=True)
+	out = held["stdout"] + held["stderr"]
+	assert f"{_HHAR_PREFIX}outcome=skip heal_issue=none reason=hold_active" in out, out
+	assert _harness_api_reads(held) == (0, 0), held["api_calls"]
+	assert _hhar_auto_comments(held) == []
+	assert held["validation_dispatches"] == []
+
+	for value in ("false", "FALSE"):
+		off = _run_parked_harness_tick(env={"HARNESS_HEAL_AUTO_REVALIDATE_ENABLED": value})
+		out = off["stdout"] + off["stderr"]
+		assert "HARNESS_HEAL_AUTO_REVALIDATE" not in out, out
+		assert _harness_api_reads(off) == (0, 0), off["api_calls"]
+		_assert_hhar_still_parked(off)
+
+
+def test_harness_heal_auto_revalidate_needs_a_trusted_routable_marker():
+	cases = (
+		([], "no_route_marker"),
+		([_harness_route_comment(login="outsider")], "no_route_marker"),
+		([_harness_route_comment(outcome="bounced")], "route_bounced"),
+		([_harness_route_comment(outcome="already-fixed")], "route_already-fixed"),
+		([_harness_route_comment(issue="none")], "route_opened"),
+	)
+	for comments, reason in cases:
+		result = _run_parked_harness_tick(comments=comments)
+		out = result["stdout"] + result["stderr"]
+		assert f"{_HHAR_PREFIX}outcome=skip heal_issue=none reason={reason}" in out, (reason, out)
+		assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+		_assert_hhar_still_parked(result)
+
+
+def test_harness_heal_auto_revalidate_waits_for_the_pin_to_carry_the_fix():
+	# The heal merged after the consumer's pinned release was cut: the only
+	# retry must wait, or it would rerun the old harness.
+	cases = (
+		({"pin_date": "2026-02-01T10:00:00Z"}, "heal_closed_after_pin"),
+		({"pin": None}, "pin_unresolved"),
+		({"pin_date": None}, "pin_date_unknown"),
+	)
+	for kwargs, reason in cases:
+		result = _run_parked_harness_tick(**kwargs)
+		out = result["stdout"] + result["stderr"]
+		assert f"{_HHAR_PREFIX}outcome=waiting heal_issue={_HOLD_HEAL_ISSUE} reason={reason}" in out, (reason, out)
+		_assert_hhar_still_parked(result)
+
+
+def test_harness_heal_auto_revalidate_post_failure_keeps_project_parked():
+	result = _run_parked_harness_tick(store={"fail_issue_comment_post_for": [192]})
+	out = result["stdout"] + result["stderr"]
+	assert f"::warning::{_HHAR_PREFIX}outcome=post_failed heal_issue={_HOLD_HEAL_ISSUE} reason=post_error" in out, out
+	assert result["state_on_disk"]["status"] == "failed"
+	assert result["validation_dispatches"] == []
+	assert "ai:harness-broken" in result["tracking_labels"]
+
+
+def test_harness_heal_auto_revalidate_pending_human_revalidate_wins():
+	result = _run_parked_harness_tick(comments=[_harness_route_comment(), "/revalidate"])
+	out = result["stdout"] + result["stderr"]
+	assert "HARNESS_HEAL_AUTO_REVALIDATE" not in out, out
+	assert _hhar_auto_comments(result) == []
+	assert result["latest_state"]["status"] == "validating", out
+	assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+
+
+_HHAR_STUBS = """
+set -euo pipefail
+TRACKING_NUM=192
+GITHUB_REPOSITORY="${STUB_REPO:-owner/repo}"
+validation_harness_hold_active() { return 1; }
+unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN="${STUB_LOGIN}"; printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"; }
+validation_harness_route_login() { printf 'pipeline-bot'; }
+validation_harness_marker() { printf '%s' "${STUB_MARKER}"; }
+_validation_harness_hold_issue_state() { echo "ISSUE_READ $1"; VHH_ISSUE_STATE=closed; VHH_ISSUE_MERGED=true; VHH_ISSUE_CLOSED_AT=2026-02-01T11:00:00Z; return 0; }
+declare -gA _HHAR_PIN_DATE_CACHE=()
+validation_harness_pin() { _VALIDATION_HARNESS_PIN_VALUE="${STUB_PIN}"; [ -n "${STUB_PIN}" ]; }
+gh_retry() { printf '%s' "${STUB_PIN_DATE}"; }
+gh_retry_to_file() { local out="$1"; shift; echo "POST_CALL" >&2; printf '%s' "${STUB_POST_RESPONSE}" > "${out}"; return "${STUB_POST_RC}"; }
+tg_notify() { :; }
+"""
+
+
+def _run_hhar_unit(**env: str) -> subprocess.CompletedProcess:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fns = (
+		_extract_bash_function(script, "_iso8601_to_epoch() {")
+		+ _extract_bash_function(script, "_harness_heal_auto_revalidate_log() {")
+		+ _extract_bash_function(script, "harness_heal_auto_revalidate() {")
+	)
+	snippet = _HHAR_STUBS + fns + (
+		'\nharness_heal_auto_revalidate\n'
+		'echo "POSTED=${HHAR_POSTED_COMMENT_JSON}"\n'
+		'echo "COMMENTS=${COMMENTS}"\n'
+	)
+	base = {
+		"HARNESS_HEAL_AUTO_REVALIDATE_ENABLED": "true",
+		"ENABLE_VALIDATION": "true",
+		"COMMENTS_FETCH_OK": "true",
+		"COMMENTS_FOR_TRACKING_NUM": "192",
+		"COMMENTS": "[]",
+		"STUB_LOGIN": "github-actions[bot]",
+		"STUB_MARKER": json.dumps({"outcome": "opened", "issue": _HOLD_HEAL_ISSUE}),
+		"STUB_POST_RESPONSE": json.dumps({"id": 55}),
+		"STUB_POST_RC": "0",
+		"STUB_PIN": "c" * 40,
+		"STUB_PIN_DATE": "2026-02-01T12:00:00Z",
+	}
+	base.update(env)
+	return _run_bash_snippet(snippet, base)
+
+
+def test_harness_heal_auto_revalidate_fails_closed_without_comments_or_identity():
+	for env, reason, heal in (
+		({"COMMENTS_FETCH_OK": "false"}, "comments_unavailable", "none"),
+		({"COMMENTS_FOR_TRACKING_NUM": "7"}, "comments_unavailable", "none"),
+		({"STUB_LOGIN": ""}, "identity_unavailable", "none"),
+		({"COMMENTS": "{}"}, "comments_unavailable", _HOLD_HEAL_ISSUE),
+		({"ENABLE_VALIDATION": "false"}, "validation_disabled", "none"),
+	):
+		result = _run_hhar_unit(**env)
+		assert result.returncode == 0, result.stderr
+		assert f"{_HHAR_PREFIX}outcome=skip heal_issue={heal} reason={reason}" in result.stdout, (env, result.stdout)
+		assert "ISSUE_READ" not in result.stdout
+		assert "POST_CALL" not in result.stderr
+		assert "POSTED=\n" in result.stdout
+
+
+def test_harness_heal_auto_revalidate_post_outcomes_unit():
+	ok = _run_hhar_unit()
+	assert ok.returncode == 0, ok.stderr
+	assert f"ISSUE_READ {_HOLD_HEAL_ISSUE}" in ok.stdout
+	posted_line = next(l for l in ok.stdout.splitlines() if l.startswith("POSTED="))
+	posted = json.loads(posted_line[len("POSTED="):])
+	assert posted["id"] == 55
+	assert posted["user"] == {"login": "github-actions[bot]"}
+	assert posted["author_association"] == "OWNER"
+	assert posted["body"].rstrip().splitlines()[-1] == _HHAR_MARKER
+	assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", posted["created_at"])
+	comments_line = next(l for l in ok.stdout.splitlines() if l.startswith("COMMENTS="))
+	assert json.loads(comments_line[len("COMMENTS="):]) == [posted]
+	assert f"{_HHAR_PREFIX}outcome=posted heal_issue={_HOLD_HEAL_ISSUE}" in ok.stdout
+
+	for env, reason in (({"STUB_POST_RC": "1"}, "post_error"), ({"STUB_POST_RESPONSE": "{}"}, "no_comment_id")):
+		failed = _run_hhar_unit(**env)
+		assert failed.returncode == 0, failed.stderr
+		assert f"::warning::{_HHAR_PREFIX}outcome=post_failed heal_issue={_HOLD_HEAL_ISSUE} reason={reason}" in failed.stdout
+		assert "POSTED=\n" in failed.stdout
+		assert "COMMENTS=[]\n" in failed.stdout
+
+
+def test_harness_heal_auto_revalidate_pin_wait_unit():
+	for env, reason in (
+		({"STUB_PIN_DATE": "2026-02-01T10:00:00Z"}, "heal_closed_after_pin"),
+		({"STUB_PIN": ""}, "pin_unresolved"),
+		({"STUB_PIN_DATE": ""}, "pin_date_unknown"),
+	):
+		result = _run_hhar_unit(**env)
+		assert result.returncode == 0, result.stderr
+		assert f"{_HHAR_PREFIX}outcome=waiting heal_issue={_HOLD_HEAL_ISSUE} reason={reason}" in result.stdout, (env, result.stdout)
+		assert "POST_CALL" not in result.stderr
+		assert "POSTED=\n" in result.stdout
+	# The source repository pins a branch, so it skips the pin check.
+	own = _run_hhar_unit(STUB_REPO="shubhodeep1/coding-workflows", STUB_PIN="")
+	assert f"{_HHAR_PREFIX}outcome=posted heal_issue={_HOLD_HEAL_ISSUE}" in own.stdout, own.stdout
+
+
+def test_harness_heal_auto_revalidate_config_defaults_and_invalid_value():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("# Harness heal auto-revalidate (Refs #8291, stuck-states plan P7 item 1)")
+	block = script[start:script.index("\nesac\n", start) + len("\nesac\n")]
+	report = '\necho "auto=${HARNESS_HEAL_AUTO_REVALIDATE_ENABLED}"\n'
+	for value, expected, warned in (
+		(None, "true", False), ("", "true", False), ("TRUE", "true", False),
+		("False", "false", False), ("maybe-secret", "true", True),
+	):
+		env = {} if value is None else {"HARNESS_HEAL_AUTO_REVALIDATE_ENABLED": value}
+		run_env = {k: v for k, v in os.environ.items() if k != "HARNESS_HEAL_AUTO_REVALIDATE_ENABLED"}
+		run_env.update(env)
+		result = subprocess.run(["bash", "-c", block + report], env=run_env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		assert f"auto={expected}" in result.stdout, (value, result.stdout)
+		warning = "::warning::HARNESS_HEAL_AUTO_REVALIDATE config=HARNESS_HEAL_AUTO_REVALIDATE_ENABLED outcome=default reason=invalid_value"
+		assert (warning in result.stdout) is warned
+		assert "secret" not in result.stdout
+
+
+def test_validation_harness_issue_state_reads_four_field_cache():
+	fn = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), "_validation_harness_hold_issue_state() {")
+	snippet = (
+		'declare -gA _VALIDATION_HARNESS_ISSUE_CACHE=()\n'
+		'_VALIDATION_HARNESS_ISSUE_CACHE[900]="closed|completed|2026-02-01T11:00:00Z|true"\n'
+		'_VALIDATION_HARNESS_ISSUE_CACHE[901]="closed|not_planned|2026-02-02T00:00:00Z|false"\n'
+		'_VALIDATION_HARNESS_ISSUE_CACHE[902]="open|||junk"\n'
+		+ fn
+		+ '\nfor n in 900 901 902; do _validation_harness_hold_issue_state "$n"; '
+		'echo "$n rc=$? ${VHH_ISSUE_STATE}|${VHH_ISSUE_STATE_REASON}|${VHH_ISSUE_CLOSED_AT}|${VHH_ISSUE_MERGED}"; done\n'
+	)
+	result = _run_bash_snippet(snippet, {})
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.splitlines() == [
+		"900 rc=0 closed|completed|2026-02-01T11:00:00Z|true",
+		"901 rc=0 closed|not_planned|2026-02-02T00:00:00Z|false",
+		"902 rc=0 open|||false",
+	], result.stdout
+
+
+def test_validation_harness_marker_route_latest_ignores_fingerprint():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn = _extract_bash_function(script, "validation_harness_marker() {")
+	other_fp = "e" * 64
+	comments = [
+		{**_harness_route_comment(issue="800"), "id": 1, "created_at": "2026-01-01T00:00:01Z"},
+		{**_harness_route_comment(issue="900", fp=other_fp), "id": 2, "created_at": "2026-01-01T00:00:02Z"},
+		{**_harness_route_comment(issue="999", login="outsider"), "id": 3, "created_at": "2026-01-01T00:00:03Z"},
+	]
+	snippet = (
+		'validation_harness_route_login() { printf "pipeline-bot"; }\n' + fn
+		+ '\nvalidation_harness_marker route-latest any | jq -r .issue'
+		+ f'\nvalidation_harness_marker route {_HARNESS_OWNER_FP} | jq -r .issue'
+		+ '\nvalidation_harness_marker route-latest other; echo "[$?]"\n'
+	)
+	result = _run_bash_snippet(snippet, {"COMMENTS": json.dumps(comments)})
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.splitlines() == ["900", "800", "[0]"], result.stdout
+
+
+def test_harness_heal_auto_revalidate_runs_inside_revalidate_gate():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	gate = script.index("# /revalidate — manual reset from validation-failed")
+	call = script.index("harness_heal_auto_revalidate || true", gate)
+	handoff = script.index('REVALIDATE_COMMENT_JSON="${HHAR_POSTED_COMMENT_JSON}"', call)
+	consume = script.index('REVALIDATE_COMMENT_BODY="$(printf', gate)
+	assert gate < call < handoff < consume
+	assert script.index("harness_heal_auto_revalidate() {") > script.index("validation_harness_hold_tick() {")
+	assert "§14 API budget" in script[gate:call]
 
 
 # ---------------------------------------------------------------------------

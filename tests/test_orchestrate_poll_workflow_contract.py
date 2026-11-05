@@ -405,6 +405,30 @@ def test_validation_harness_hold_env_is_wired_into_both_poller_steps() -> None:
 	yaml.safe_load(wf)
 
 
+HARNESS_HEAL_AUTO_REVALIDATE_ENV_LINES = (
+	"HARNESS_HEAL_AUTO_REVALIDATE_ENABLED: ${{ vars.HARNESS_HEAL_AUTO_REVALIDATE_ENABLED || 'true' }}",
+)
+
+
+def test_harness_heal_auto_revalidate_env_is_wired_into_both_poller_steps() -> None:
+	"""Refs #8291 (P7b): the auto-revalidate switch reaches every step that runs the full poller."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	for step_name in ("Process each tracking issue", STANDALONE_SWEEP_STEP):
+		block = _step_block(wf, step_name)
+		for line in HARNESS_HEAL_AUTO_REVALIDATE_ENV_LINES:
+			assert line in block, (step_name, line)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'case "$(printf \'%s\' "${HARNESS_HEAL_AUTO_REVALIDATE_ENABLED:-}" | tr \'[:upper:]\' \'[:lower:]\')" in' in poller
+	assert "harness_heal_auto_revalidate() {" in poller
+	yaml.safe_load(wf)
+
+
+def test_harness_heal_auto_revalidate_log_prefix_is_registered() -> None:
+	agents_text = _agents_text_with_fragments()
+	assert "- `HARNESS_HEAL_AUTO_REVALIDATE`" in agents_text
+	assert "LOG_PREFIX.name=HARNESS_HEAL_AUTO_REVALIDATE" in agents_text
+
+
 RELEASE_BLOCKER_POLLER_ENV_LINES = (
 	"RELEASE_BLOCKER_HEAL_ENABLED: ${{ vars.RELEASE_BLOCKER_HEAL_ENABLED || 'true' }}",
 	"RELEASE_BLOCKER_HEAL_PY: scripts/workflow_failure_heal.py",
@@ -622,6 +646,8 @@ def main() -> int:
 	test_standalone_recovery_sweep_runs_without_tracking_issues()
 	test_engine_and_claude_steps_run_on_idle_ticks_when_needed()
 	test_validation_harness_hold_env_is_wired_into_both_poller_steps()
+	test_harness_heal_auto_revalidate_env_is_wired_into_both_poller_steps()
+	test_harness_heal_auto_revalidate_log_prefix_is_registered()
 	test_release_blocker_reporter_env_is_wired_into_both_poller_steps()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	test_find_tracking_step_maps_standalone_recovery_switch()
