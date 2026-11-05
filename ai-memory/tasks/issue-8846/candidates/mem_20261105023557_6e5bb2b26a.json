@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8846,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8846\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8850\",\"pr_number\":8850,\"branch\":\"ai/issue-8846\",\"run_id\":\"41954226313\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41954226313\",\"changed_files\":[\"agents.d/wfopt-2026-10-02-reviewer-malformed-class.md\",\"changelog.d/wfopt-2026-10-02-reviewer-malformed-class.md\",\"scripts/review_run_reviewers.sh\",\"tests/test_review_reviewer_attempt_prompt_isolation.py\"]}",
+  "fingerprint": "642762768ba73eaa34c4a77b10efa5971e85970d2af598ccbcfc05ff98606df6",
+  "lineage": {
+    "issue_number": 8846,
+    "parent_ids": [],
+    "pr_number": 8850,
+    "run_id": "41954226313",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41954226313",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8850"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261105023557_6e5bb2b26a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8846,
+    "level": "run",
+    "pr_number": 8850,
+    "run_id": "41954226313"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8846: https://github.com/shubhodeep1/coding-workflows/pull/8850",
+  "timestamps": {
+    "created_at": "2026-11-05T02:35:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
