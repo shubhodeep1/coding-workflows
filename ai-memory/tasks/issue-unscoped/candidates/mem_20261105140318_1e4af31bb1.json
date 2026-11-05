@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "The repository has a test asserting that CI wires every test file. When adding tests, check that the CI workflow discovers or invokes them; a test file that passes locally may otherwise be absent from the automated suite.",
+  "fingerprint": "209bea53cbee064c92db5f42aba6e51c57f038bf48a632e560e5037bbbcb510c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42040450576",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42040450576",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8844",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8857",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8859",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8860",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8863",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8853",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8858",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8861",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8864",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8865"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261105140318_1e4af31bb1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "New test files need explicit CI coverage.",
+  "timestamps": {
+    "created_at": "2026-11-05T14:03:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
