@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-plan.txt:65-67 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The three added lines take prompts/mode-plan.txt to 253 lines, over the DEFAULT tier limit of 250 enforced by tests/prompt_size_budget.py.\n  WHY: The static-checks CI job fails on head 4f7092d and blocks merge. All three reviewers rated it BLOCKER, which is mapped to critical. The anthropic reviewer also says the same text in prompts/_templates/mode-plan.txt and scripts/run_plan_codex.sh must change identically, and that tests/test_files_touched_scope_guard.py and tests/test_plan_codex_step_extraction.py pin the text and must be updated.\n- prompts/_templates/mode-plan.txt:(total file length) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The file exceeds the DEFAULT tier limit of 250 lines enforced by tests/prompt_size_budget.py.\n  WHY: The static-checks CI job fails and prevents PR merge. The reviewer rated it BLOCKER, which is mapped to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The same change has to be ported to main (same code there at ef9f747), or the next main \u2192 stable promotion reverts it.\"\n  expected_change_site: The corresponding plan prompt copies and scripts/files_touched_scope_guard.py on the main branch\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no corresponding port to main, so the next main-to-stable promotion would revert the change. Both reviewers rated it MAJOR. The anthropic reviewer saw the same item and declined to report it, because a separate branch is outside this PR's diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- prompts/mode-plan.txt:65-67 | severity=BLOCKER | confidence=5\n  PROBLEM: The three added lines in item 10 take the file from 250 to 253 lines, over the DEFAULT limit of 250 set in tests/prompt_size_budget.py (line 14). Static-checks run 42124334295 logs `FAIL: .../prompts/mode-plan.txt: 253 lines exceeds DEFAULT limit of 250`.\n  WHY: The static-checks check-run on head 4f7092d is red, which blocks merge. The PR description does not list tests/prompt_size_budget.py among the checks run. The suggested fix is to add no net lines, for example by folding the rule into the existing item 10 text. prompts/_templates/mode-plan.txt and scripts/run_plan_codex.sh carry the same text and must change identically. tests/test_files_touched_scope_guard.py::test_plan_prompt_copies_keep_scope_mode_out_of_the_files_section pins the 3-line rule. tests/test_plan_codex_step_extraction.py pins the bytes, lines and sha256 of the inline prompt.\n- (Other sections: NONE. The reviewer declined to report two pass-1 items: the port to main, which is outside this PR's diff, and the copilot-pull-request-reviewer `custom_instructions_too_large` 422 failure, which maps to no code site in the diff. HARDENING_RISK_SCORE: 0.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- prompts/mode-plan.txt:253 (total file length) | severity=BLOCKER | confidence=5\n  PROBLEM: The file exceeds the DEFAULT tier limit of 250 lines enforced by tests/prompt_size_budget.py.\n  WHY: The static-checks CI job fails on head 4f7092dcb56bfe9b882b31bc3edd87f9a3d0f1a6, preventing PR merge.\n- prompts/_templates/mode-plan.txt:(total file length exceeds the 250-line limit) | severity=BLOCKER | confidence=5\n  PROBLEM: The file exceeds the DEFAULT tier limit of 250 lines enforced by tests/prompt_size_budget.py.\n  WHY: The static-checks CI job fails, preventing PR merge.\n- TASK_GAP:\n  Requirement: \"The same change has to be ported to main (same code there at ef9f747), or the next main \u2192 stable promotion reverts it.\"\n  Expected change site: The corresponding plan prompt copies and scripts/files_touched_scope_guard.py on the main branch.\n  Evidence of absence: The PR diff contains no port to the main branch; the changes are only present in the target branch of this PR, meaning the next main-to-stable promotion will revert these changes.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- prompts/mode-plan.txt:65-67 (the file is marked `# tier: DEFAULT` at line 1) | severity=BLOCKER | confidence=5\n  PROBLEM: The three added lines bring the prompt to 253 lines, exceeding the DEFAULT tier limit of 250 enforced by `tests/prompt_size_budget.py`.\n  WHY: The static-checks job runs this budget check and fails on `prompts/mode-plan.txt`, blocking the PR.\n- TASK_GAP:\n  Requirement: \u201cThe same change has to be ported to `main` (same code there at `ef9f747`), or the next `main \u2192 stable` promotion reverts it.\u201d\n  Expected change site: The corresponding plan prompt copies and `scripts/files_touched_scope_guard.py` on `main`.\n  Evidence of absence: The PR changes the seven listed files on its target branch, but its diff contains no corresponding port to `main`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "4d3e4b5ef96754c606e02cadb1db2460bbc60c78974551bd83fc528ab4ebb5be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8884,
+    "run_id": "42124334381",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42124334381",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105230731_198fb0a2de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8884,
+    "run_id": "42124334381"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T23:07:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
