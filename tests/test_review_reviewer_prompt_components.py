@@ -140,7 +140,7 @@ class ReviewerPromptComponentsTest(unittest.TestCase):
 
 	def test_counts_match_fixture_sizes_and_total_matches_assembled_file(self):
 		with tempfile.TemporaryDirectory(prefix="rpc-") as tmp:
-			proc, paths, assembled = _run(Path(tmp))
+			proc, _paths, assembled = _run(Path(tmp))
 			fields = self._parse(proc)
 			for key in ("static", "readme", "memory", "body", "semble", "extra"):
 				with self.subTest(component=key):
@@ -197,7 +197,7 @@ class ReviewerPromptComponentsTest(unittest.TestCase):
 
 	def test_no_fixture_content_or_paths_are_logged(self):
 		with tempfile.TemporaryDirectory(prefix="rpc-") as tmp:
-			proc, paths, _assembled = _run(Path(tmp))
+			proc, _paths, _assembled = _run(Path(tmp))
 			self._parse(proc)
 			output = proc.stdout + proc.stderr
 			for key, value in SENTINELS.items():

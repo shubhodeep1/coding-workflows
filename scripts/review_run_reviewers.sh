@@ -3359,11 +3359,11 @@ if [ -f "${REVIEWER_PROMPT_FILE}" ]; then
     reviewer_prompt_assembled_bytes=0
   fi
   echo "Reviewer prompt assembled size: ${reviewer_prompt_assembled_bytes} bytes (codex stdin cap: ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES})."
-  if [ "${reviewer_prompt_assembled_bytes}" -ge "${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}" ]; then
-    echo "::warning::Reviewer prompt is ${reviewer_prompt_assembled_bytes} bytes, at or over codex's ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}-character turn/start stdin cap. Reviewers will fail with 'Input exceeds the maximum length'. Raise REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES to tighten the embed budget or shrink the reviewer static context (${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}) / memory / semble context."
-  fi
   if ! log_reviewer_prompt_components "default" "${REVIEWER_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"; then
     echo "::warning::REVIEWER_PROMPT_COMPONENTS could not be computed for pass=default; continuing (log-only)."
+  fi
+  if [ "${reviewer_prompt_assembled_bytes}" -ge "${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}" ]; then
+    echo "::warning::Reviewer prompt is ${reviewer_prompt_assembled_bytes} bytes, at or over codex's ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}-character turn/start stdin cap. Reviewers will fail with 'Input exceeds the maximum length'. Raise REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES to tighten the embed budget or shrink the reviewer static context (${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}) / memory / semble context."
   fi
 fi
 
