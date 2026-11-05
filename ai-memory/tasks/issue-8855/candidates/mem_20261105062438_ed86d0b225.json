@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8855,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8855\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8856\",\"pr_number\":8856,\"branch\":\"ai/issue-8855\",\"run_id\":\"41975694384\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41975694384\",\"changed_files\":[\".github/workflows/ci.yml\",\"agents.d/wfopt-2026-10-02-reviewer-prompt-components.md\",\"changelog.d/wfopt-2026-10-02-reviewer-prompt-components.md\",\"scripts/review_run_reviewers.sh\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_review_reviewer_prompt_components.py\"]}",
+  "fingerprint": "85587d89ac45ea54f9bd92ab995a9e7a4538381c068206507888039b4cda7409",
+  "lineage": {
+    "issue_number": 8855,
+    "parent_ids": [],
+    "pr_number": 8856,
+    "run_id": "41975694384",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41975694384",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8856"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261105062438_ed86d0b225",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8855,
+    "level": "run",
+    "pr_number": 8856,
+    "run_id": "41975694384"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8855: https://github.com/shubhodeep1/coding-workflows/pull/8856",
+  "timestamps": {
+    "created_at": "2026-11-05T06:24:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
