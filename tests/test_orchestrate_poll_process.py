@@ -6539,6 +6539,16 @@ def test_security_hold_unmerged_release_dedupe_and_latch_removal() -> None:
 	assert "STALL_SKIP issue=700 reason=security_dependency_latch_cleared action=none" in log
 	assert "ai:needs-human" not in cleared["issues"]["700"]["labels"]
 	assert len(releases(cleared)) == 1
+	# A failed latch removal posts no release marker, so the next tick retries both.
+	failed = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=[_security_hold_latch_comment()], fail_edit=True)
+	log = _security_hold_log(failed)
+	assert "STALL_SKIP issue=700 reason=security_dependency_retrigger_failed detail=latch_clear_failed action=none" in log
+	assert "ai:needs-human" in failed["issues"]["700"]["labels"]
+	assert releases(failed) == []
+	retried = _run_security_hold_tick(closed=True, labels=["ai:needs-human"], comments=failed["issues"]["700"]["comments"])
+	assert "STALL_SKIP issue=700 reason=security_dependency_latch_cleared action=none" in _security_hold_log(retried)
+	assert "ai:needs-human" not in retried["issues"]["700"]["labels"]
+	assert len(releases(retried)) == 1
 	merged = _run_security_hold_tick(closed=True, predecessor_labels=["ai:merged"], labels=["ai:needs-human"], comments=[_security_hold_latch_comment()])
 	assert "STALL_SKIP issue=700 reason=security_dependency_latch_cleared action=none" in _security_hold_log(merged)
 	assert "ai:needs-human" not in merged["issues"]["700"]["labels"]

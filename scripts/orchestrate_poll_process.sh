@@ -18687,7 +18687,7 @@ _security_dependency_has_needs_human() {
 # escalate_days, labels ai:needs-human once with a latch comment naming the
 # dependency chain. The hold itself is unchanged: the caller still skips the
 # issue. Steady state (recorded, not yet due, or already escalated) makes no
-# API call.
+# API call beyond the per-tick cached /user read (unblock_trusted_login).
 _security_dependency_hold_age_check() {
   local issue_num="$1"
   local depends_on="$2"
@@ -18803,7 +18803,9 @@ ${_sdh_marker}"
 
 # On release, removes ai:needs-human only when the latest latch comment the
 # pipeline login wrote is this hold's own (reason=security_dependency_wait).
-# Any other latch is left alone; a failed removal is only a warning.
+# Any other latch is left alone. Returns 1 when the removal fails, so the
+# caller skips posting its release marker and the next tick retries both
+# (once the marker exists the release path never runs again).
 _security_dependency_clear_latch() {
   local issue_num="$1"
   local comments_json="$2"
@@ -18822,7 +18824,8 @@ _security_dependency_clear_latch() {
   if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:needs-human" >/dev/null 2>&1; then
     echo "STALL_SKIP issue=${issue_num} reason=security_dependency_latch_cleared action=none"
   else
-    echo "::warning::[standalone-stall] could not remove ai:needs-human from security follow-up #${issue_num}." >&2
+    echo "::warning::[standalone-stall] could not remove ai:needs-human from security follow-up #${issue_num}; retrying next tick." >&2
+    return 1
   fi
 }
 
@@ -24185,7 +24188,10 @@ run_standalone_stall_recovery() {
       if ! printf '%s' "${comments_json}" | jq -e --arg marker "${_security_dependency_release_marker}" --arg login "${_security_dependency_login}" '
         any(.[]; ((.user.login // "") == $login)
           and ((.body // "") | startswith("/reclarify\n" + $marker)))' >/dev/null 2>&1; then
-        _security_dependency_clear_latch "${issue_num}" "${comments_json}" "${labels_json}" "${_security_dependency_login}" || true
+        if ! _security_dependency_clear_latch "${issue_num}" "${comments_json}" "${labels_json}" "${_security_dependency_login}"; then
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed detail=latch_clear_failed action=none"
+          continue
+        fi
         if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
           -f body="/reclarify
 ${_security_dependency_release_marker}" >/dev/null; then
@@ -24210,7 +24216,10 @@ ${_security_dependency_release_marker}" >/dev/null; then
         # Stuck-states P8c: drop this hold's own ai:needs-human latch first.
         if [ "${_security_dependency_resume_enabled}" = "true" ] && _security_dependency_has_needs_human "${labels_json}"; then
           unblock_trusted_login >/dev/null 2>&1 || true
-          _security_dependency_clear_latch "${issue_num}" "${comments_json}" "${labels_json}" "${UNBLOCK_TRUSTED_LOGIN:-}" || true
+          if ! _security_dependency_clear_latch "${issue_num}" "${comments_json}" "${labels_json}" "${UNBLOCK_TRUSTED_LOGIN:-}"; then
+            echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed detail=latch_clear_failed action=none"
+            continue
+          fi
         fi
         if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
           -f body="/reclarify
