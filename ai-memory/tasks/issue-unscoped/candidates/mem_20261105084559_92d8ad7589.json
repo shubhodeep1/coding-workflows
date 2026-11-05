@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md, agents.md (scripts/assemble_agents.py:14) | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The copilot-pull-request-reviewer check (Actions run 41544382408, job 125616255928) fails with `custom_instructions_too_large` (HTTP 422) because the AGENTS.md and CLAUDE.md root instruction files are too large for the system prompt. The reviewer says this is not caused by the PR diff.\n  WHY: The app composes both root instruction files into the system message and rejects the oversized payload; the reviewer rated it MAJOR but says the editor must not edit these files, because issue #8363 restricts the change to tests/e2e_smoke_canary.txt.\n- tests/test_implement_post_codex_recovery.py:5060 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The seven failures in tests/test_implement_post_codex_recovery.py that the PR description attributes to this change cannot come from this diff. The canary path appears there only in fixture strings (:5060, :5779), and the failing tests (:3465, :5470) use isolated temp git repos.\n  WHY: The syntax validator inspects only *.js, *.sh and *.yml/*.yaml (scripts/validate_changed_files_syntax.sh:175, :191, :256), so a .txt canary is never validated. The reviewer rated this NIT and says no repository change is warranted in this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- CLAUDE.md, agents.md (scripts/assemble_agents.py:14) | severity=high | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check (Actions run 41544382408, job 125616255928) fails with `custom_instructions_too_large` (HTTP 422) because the AGENTS.md and CLAUDE.md root instruction files are too large for the system prompt. The reviewer says this is not caused by the PR diff.\n  WHY: The app composes both root instruction files into the system message and rejects the oversized payload; the reviewer rated it MAJOR but says the editor must not edit these files, because issue #8363 restricts the change to tests/e2e_smoke_canary.txt.\n- tests/test_implement_post_codex_recovery.py:5060 | severity=low | confidence=4\n  PROBLEM: The seven failures in tests/test_implement_post_codex_recovery.py that the PR description attributes to this change cannot come from this diff. The canary path appears there only in fixture strings (:5060, :5779), and the failing tests (:3465, :5470) use isolated temp git repos.\n  WHY: The syntax validator inspects only *.js, *.sh and *.yml/*.yaml (scripts/validate_changed_files_syntax.sh:175, :191, :256), so a .txt canary is never validated. The reviewer rated this NIT and says no repository change is warranted in this PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3d6c85fd5ae3bff6425bd4d8790ac07a72751e1920d48c36b8ab6099a76e61c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41994328115",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41994328115",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105084559_92d8ad7589",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41994328115"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T08:45:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
