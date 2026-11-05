@@ -1884,11 +1884,16 @@ jobs:
                 # mentions "STATUS: CLEAR" mid-sentence, or a fenced example,
                 # does not count: it would parse as clear and lose ai:blocked.
                 clarify_bv_scan="$(perl -ne '
+                  # Parse step reads NEEDS_CLARIFICATION anywhere, fences included, and questions only
+                  # below QUESTIONS:; without Q<ID> lines there it parses as clear.
+                  $needs = 1 if /STATUS:.*NEEDS_CLARIFICATION/i;
                   if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
                   next if $in_code;
                   if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { $blocked = 1; exit; }
                   $status = 1 if /^\s*(?:#+\s*)?(?:\*\*)?STATUS:(?:\*\*)?\s*(?:\*\*)?(?:CLEAR|NEEDS_CLARIFICATION)\b/i;
-                  END { print $blocked ? "B" : ($status ? "S" : ""); }
+                  $qs = 1 if $q_hdr && /^\s*(?:>\s*)*\*?\*?Q[0-9]+/;
+                  $q_hdr = 1 if /QUESTIONS:/i;
+                  END { print $blocked ? "B" : (($status && (!$needs || $qs)) ? "S" : ""); }
                 ' "${clarify_bv_output}" 2>/dev/null || true)"
                 if [ "${clarify_bv_scan}" = "B" ]; then
                   clarify_bv_still="1"
@@ -1896,7 +1901,7 @@ jobs:
                 if [ "${clarify_bv_scan}" = "B" ] || [ "${clarify_bv_scan}" = "S" ]; then
                   clarify_bv_shape="ok"
                 else
-                  echo "BLOCKED-verify retry answer has no STATUS: or BLOCKED: line; keeping the original answer."
+                  echo "BLOCKED-verify retry answer has no usable STATUS: or BLOCKED: line; keeping the original answer."
                 fi
               fi
               if [ -n "${clarify_bv_shape}" ]; then
