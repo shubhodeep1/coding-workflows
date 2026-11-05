@@ -97,7 +97,9 @@ case "${stage_support_phase}" in
 			workflow_failure_heal_evidence.sh
 		)
 		# gh_helpers.sh sources emit_event.sh from its own directory first.
-		stage_support_optional_scripts=(emit_event.sh)
+		# clarify_blocked_verify.sh (stuck-states P9b) is optional: a support
+		# ref older than it must not stop clarify; Run Codex skips the retry.
+		stage_support_optional_scripts=(emit_event.sh clarify_blocked_verify.sh)
 		stage_support_data_files=(clarify_sandbox/Dockerfile)
 		stage_support_host_python_scripts=(
 			pr_dependency.py load_workflow_overlay.py security_dependency.py

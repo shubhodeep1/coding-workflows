@@ -1476,6 +1476,8 @@ jobs:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY || '15' }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED: ${{ vars.CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED || 'true' }}
+          # Stuck-states P9b: retry once when BLOCKED: cites a tracked path.
+          CLARIFY_BLOCKED_VERIFY_ENABLED: ${{ vars.CLARIFY_BLOCKED_VERIFY_ENABLED || 'true' }}
           CLARIFY_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
         run: |
           set -euo pipefail
@@ -1798,6 +1800,126 @@ jobs:
               exit 1
             fi
           done
+
+          # Stuck-states P9b (Refs #8291): a BLOCKED: answer whose reason
+          # cites a path git tracks at the checked-out ref is re-run once in
+          # this step, with the tracked-path listing appended to a copy of the
+          # prompt (marker AI_CLARIFY_BLOCKED_RETRY_V1). Every other case, a
+          # failed retry (including Claude capacity, exit 80) and a second
+          # BLOCKED keep today's flow: the parse step reads CODEX_OUTPUT_FILE.
+          # This block never fails the step. The helper runs only from the
+          # verified support bundle, never from a scripts/ copy in the issue
+          # checkout; CLARIFY_BLOCKED_VERIFY_ENABLED=false turns it off.
+          clarify_bv_helper=""
+          clarify_bv_skip_reason=""
+          if [ -z "${SUPPORT_SCRIPTS_DIR:-}" ]; then
+            clarify_bv_skip_reason="legacy_support"
+          elif [ -f "${SUPPORT_SCRIPTS_DIR}/clarify_blocked_verify.sh" ] && [ ! -L "${SUPPORT_SCRIPTS_DIR}/clarify_blocked_verify.sh" ]; then
+            clarify_bv_helper="${SUPPORT_SCRIPTS_DIR}/clarify_blocked_verify.sh"
+          else
+            clarify_bv_skip_reason="helper_missing"
+          fi
+          if [ -z "${clarify_bv_helper}" ]; then
+            # Silent while the switch is off or no unfenced BLOCKED: line exists,
+            # as the helper is (same switch and fence rules).
+            case "${CLARIFY_BLOCKED_VERIFY_ENABLED:-true}" in
+              [Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]|[Oo][Ff][Ff]) clarify_bv_skip_reason="" ;;
+            esac
+            clarify_bv_blocked=""
+            if [ -n "${clarify_bv_skip_reason}" ]; then
+              clarify_bv_blocked="$(perl -ne '
+                if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
+                next if $in_code;
+                if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { print "1"; exit; }
+              ' "${CODEX_OUTPUT_FILE}" 2>/dev/null || true)"
+            fi
+            if [ -n "${clarify_bv_blocked}" ]; then
+              echo "CLARIFY_BLOCKED_VERIFY stage=verify outcome=skip reason=${clarify_bv_skip_reason} paths=0 sample=none"
+            fi
+          else
+            clarify_bv_rc=0
+            clarify_bv_listing="${RUNTIME_DIR}/clarify_blocked_verify_listing.txt"
+            clarify_bv_prompt="${RUNTIME_DIR}/codex_prompt_blocked_retry.txt"
+            clarify_bv_original="${RUNTIME_DIR}/codex_output_blocked_original.txt"
+            clarify_bv_output="${RUNTIME_DIR}/codex_output_blocked_retry.txt"
+            clarify_bv_log="${RUNTIME_DIR}/codex_log_blocked_retry.txt"
+            bash "${clarify_bv_helper}" check "${CODEX_OUTPUT_FILE}" "${CODEX_PROMPT_FILE}" "${clarify_bv_listing}" || clarify_bv_rc=$?
+            if [ "${clarify_bv_rc}" -eq 0 ]; then
+              bash "${clarify_bv_helper}" prompt "${CODEX_PROMPT_FILE}" "${clarify_bv_listing}" "${clarify_bv_prompt}" || clarify_bv_rc=$?
+            fi
+            if [ "${clarify_bv_rc}" -eq 0 ]; then
+              cp -- "${CODEX_OUTPUT_FILE}" "${clarify_bv_original}" || clarify_bv_rc=1
+            fi
+            if [ "${clarify_bv_rc}" -ne 0 ] && [ "${clarify_bv_rc}" -ne 3 ]; then
+              echo "CLARIFY_BLOCKED_VERIFY stage=verify outcome=skip reason=error exit_code=${clarify_bv_rc} paths=0 sample=none"
+            fi
+            if [ "${clarify_bv_rc}" -eq 0 ]; then
+              clarify_engine_name="Codex"
+              if [ "${CLARIFY_ENGINE}" = "claude" ]; then clarify_engine_name="Claude"; fi
+              echo "${clarify_engine_name} clarify BLOCKED-verify retry (one attempt)..."
+              clarify_bv_engine_rc=0
+              : > "${clarify_bv_output}" 2>/dev/null || true
+              : > "${clarify_attempt_stderr_file}" 2>/dev/null || true
+              if [ "${CLARIFY_ENGINE}" = "claude" ]; then
+                _clarify_attempt_stderr_capture_start || true
+                bash "${SUPPORT_SCRIPTS_DIR}/clarify_isolated_run.sh" "${clarify_bv_prompt}" "${clarify_bv_output}" "${clarify_bv_log}" claude CLARIFY || clarify_bv_engine_rc=$?
+                _clarify_attempt_stderr_capture_stop || true
+                if [ "${clarify_bv_engine_rc}" -eq 75 ]; then
+                  # Claude unavailable: this retry runs the codex path, as the loop does.
+                  CLARIFY_ENGINE="codex"
+                  clarify_engine_name="Codex"
+                  echo "Claude unavailable for the BLOCKED-verify retry; falling back to Codex."
+                  clarify_bv_engine_rc=0
+                fi
+              fi
+              if [ "${CLARIFY_ENGINE}" != "claude" ]; then
+                bash "${SUPPORT_SCRIPTS_DIR}/clarify_isolated_run.sh" "${clarify_bv_prompt}" "${clarify_bv_output}" "${clarify_bv_log}" || clarify_bv_engine_rc=$?
+              fi
+              clarify_bv_still=""
+              clarify_bv_shape=""
+              if [ "${clarify_bv_engine_rc}" -eq 0 ] && grep -q '[^[:space:]]' "${clarify_bv_output}" 2>/dev/null; then
+                # Only a terminal answer replaces the known BLOCKED: one: an
+                # unfenced BLOCKED: line (B) or an unfenced line that starts
+                # with STATUS: CLEAR / NEEDS_CLARIFICATION (S). Prose that only
+                # mentions "STATUS: CLEAR" mid-sentence, or a fenced example,
+                # does not count: it would parse as clear and lose ai:blocked.
+                clarify_bv_scan="$(perl -ne '
+                  # Parse step reads NEEDS_CLARIFICATION anywhere, fences included, and questions only
+                  # below QUESTIONS:; without Q<ID> lines there it parses as clear.
+                  $needs = 1 if /STATUS:.*NEEDS_CLARIFICATION/i;
+                  if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
+                  next if $in_code;
+                  if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { $blocked = 1; exit; }
+                  $status = 1 if /^\s*(?:#+\s*)?(?:\*\*)?STATUS:(?:\*\*)?\s*(?:\*\*)?(?:CLEAR|NEEDS_CLARIFICATION)\b/i;
+                  $qs = 1 if $q_hdr && /^\s*(?:>\s*)*\*?\*?Q[0-9]+/;
+                  $q_hdr = 1 if /QUESTIONS:/i;
+                  END { print $blocked ? "B" : (($status && (!$needs || $qs)) ? "S" : ""); }
+                ' "${clarify_bv_output}" 2>/dev/null || true)"
+                if [ "${clarify_bv_scan}" = "B" ]; then
+                  clarify_bv_still="1"
+                fi
+                if [ "${clarify_bv_scan}" = "B" ] || [ "${clarify_bv_scan}" = "S" ]; then
+                  clarify_bv_shape="ok"
+                else
+                  echo "BLOCKED-verify retry answer has no usable STATUS: or BLOCKED: line; keeping the original answer."
+                fi
+              fi
+              if [ -n "${clarify_bv_shape}" ]; then
+                if cp -- "${clarify_bv_output}" "${CODEX_OUTPUT_FILE}"; then
+                  if [ -n "${clarify_bv_still}" ]; then
+                    echo "CLARIFY_BLOCKED_VERIFY stage=retry outcome=still_blocked exit_code=0"
+                  else
+                    echo "CLARIFY_BLOCKED_VERIFY stage=retry outcome=resolved exit_code=0"
+                  fi
+                else
+                  cp -- "${clarify_bv_original}" "${CODEX_OUTPUT_FILE}" || true
+                  echo "CLARIFY_BLOCKED_VERIFY stage=retry outcome=failed exit_code=0"
+                fi
+              else
+                echo "CLARIFY_BLOCKED_VERIFY stage=retry outcome=failed exit_code=${clarify_bv_engine_rc}"
+              fi
+            fi
+          fi
 
       - name: Semantic cache store
         if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'))
