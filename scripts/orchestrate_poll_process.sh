@@ -32524,11 +32524,17 @@ echo "========================================"
 
 # Collect the complete open-PR snapshot; drafts are excluded before any
 # per-PR API work. gh pr list's default 30 / old 100 limit missed live PRs.
-STANDALONE_PRS="$(gh_retry gh pr list \
+# A failed list read still falls back to "[]"; the flag only lets the sweep
+# summary tell an API failure from a repository with no open PRs.
+_conflict_sweep_list_failed="false"
+if ! STANDALONE_PRS="$(gh_retry gh pr list \
 	--repo "${GITHUB_REPOSITORY}" \
 	--state open \
 	--json number,headRefName,headRefOid,baseRefName,isDraft,isCrossRepository,headRepositoryOwner \
-	--limit 3000 2>/dev/null || echo "[]")"
+	--limit 3000 2>/dev/null)"; then
+	STANDALONE_PRS="[]"
+	_conflict_sweep_list_failed="true"
+fi
 
 STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
 echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
@@ -32789,7 +32795,7 @@ _conflict_sweep_truncated="false"
 if [ "${CONFLICT_SWEEP_LISTED}" -ge 3000 ]; then
 	_conflict_sweep_truncated="true"
 fi
-echo "STANDALONE_CONFLICT_SWEEP_SUMMARY listed=${CONFLICT_SWEEP_LISTED} prefiltered_draft=${CONFLICT_SWEEP_PREFILTERED_DRAFT:-0} skipped_integration=${CONFLICT_SWEEP_SKIPPED_INTEGRATION:-0} batch_clean=${CONFLICT_SWEEP_BATCH_CLEAN:-0} rest_fetched=${CONFLICT_SWEEP_REST_FETCHED:-0} api_updated=${CONFLICT_SWEEP_API_UPDATED:-0} dispatched=${CONFLICT_SWEEP_DISPATCHED:-0} dispatch_inflight=${CONFLICT_SWEEP_DISPATCH_INFLIGHT:-0} dispatch_failed=${CONFLICT_SWEEP_DISPATCH_FAILED:-0} unresolved_same_head=${CONFLICT_SWEEP_UNRESOLVED_SAME_HEAD:-0} list_limit=3000 list_truncated=${_conflict_sweep_truncated}"
+echo "STANDALONE_CONFLICT_SWEEP_SUMMARY listed=${CONFLICT_SWEEP_LISTED} prefiltered_draft=${CONFLICT_SWEEP_PREFILTERED_DRAFT:-0} skipped_integration=${CONFLICT_SWEEP_SKIPPED_INTEGRATION:-0} batch_clean=${CONFLICT_SWEEP_BATCH_CLEAN:-0} rest_fetched=${CONFLICT_SWEEP_REST_FETCHED:-0} api_updated=${CONFLICT_SWEEP_API_UPDATED:-0} dispatched=${CONFLICT_SWEEP_DISPATCHED:-0} dispatch_inflight=${CONFLICT_SWEEP_DISPATCH_INFLIGHT:-0} dispatch_failed=${CONFLICT_SWEEP_DISPATCH_FAILED:-0} unresolved_same_head=${CONFLICT_SWEEP_UNRESOLVED_SAME_HEAD:-0} list_limit=3000 list_truncated=${_conflict_sweep_truncated} list_failed=${_conflict_sweep_list_failed:-false}"
 
 echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 

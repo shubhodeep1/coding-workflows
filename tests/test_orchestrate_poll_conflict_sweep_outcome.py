@@ -45,7 +45,7 @@ SUMMARY_RE = re.compile(
 	r"skipped_integration=(?P<skipped_integration>[0-9]+) batch_clean=(?P<batch_clean>[0-9]+) "
 	r"rest_fetched=(?P<rest_fetched>[0-9]+) api_updated=(?P<api_updated>[0-9]+) dispatched=(?P<dispatched>[0-9]+) "
 	r"dispatch_inflight=(?P<dispatch_inflight>[0-9]+) dispatch_failed=(?P<dispatch_failed>[0-9]+) "
-	r"unresolved_same_head=(?P<unresolved_same_head>[0-9]+) list_limit=3000 list_truncated=(?P<list_truncated>true|false)$"
+	r"unresolved_same_head=(?P<unresolved_same_head>[0-9]+) list_limit=3000 list_truncated=(?P<list_truncated>true|false) list_failed=(?P<list_failed>true|false)$"
 )
 
 
@@ -319,6 +319,7 @@ def test_sweep_outcome_prefilters_are_counted_without_rest_reads():
 		"dispatch_failed": "0",
 		"unresolved_same_head": "0",
 		"list_truncated": "false",
+		"list_failed": "false",
 	}
 
 
@@ -326,15 +327,18 @@ def test_sweep_outcome_empty_list_summary():
 	result = _run_sweep([], {})
 	assert result["outcomes"] == {}
 	assert result["summary"]["listed"] == "0"
-	assert all(value == "0" for key, value in result["summary"].items() if key not in ("listed", "list_truncated"))
+	assert all(value == "0" for key, value in result["summary"].items() if key not in ("listed", "list_truncated", "list_failed"))
 	assert result["summary"]["list_truncated"] == "false"
 
 
-def _run_summary_block(standalone_count: str) -> str:
+def _run_summary_block(standalone_count: str, list_failed: str | None = None) -> str:
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	end = script.index(LOOP_END)
 	block = script[script.index('CONFLICT_SWEEP_LISTED="${STANDALONE_COUNT:-}"', script.index(LOOP_START)):end]
-	body = "set -euo pipefail\n" + (f"STANDALONE_COUNT={shlex.quote(standalone_count)}\n" if standalone_count else "") + block
+	body = "set -euo pipefail\n" + (f"STANDALONE_COUNT={shlex.quote(standalone_count)}\n" if standalone_count else "")
+	if list_failed is not None:
+		body += f"_conflict_sweep_list_failed={shlex.quote(list_failed)}\n"
+	body += block
 	result = subprocess.run(["bash", "-c", body], capture_output=True, text=True, check=False)
 	assert result.returncode == 0, result.stderr
 	return result.stdout.strip()
@@ -345,6 +349,17 @@ def test_sweep_outcome_summary_flags_truncation_at_list_limit():
 		match = SUMMARY_RE.match(_run_summary_block(count))
 		assert match, count
 		assert (match["listed"], match["list_truncated"]) == (listed, truncated), count
+		assert match["list_failed"] == "false", count
+
+
+def test_sweep_outcome_summary_reports_failed_list_read():
+	match = SUMMARY_RE.match(_run_summary_block("0", list_failed="true"))
+	assert match
+	assert (match["listed"], match["list_failed"]) == ("0", "true")
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fetch = script[script.index('_conflict_sweep_list_failed="false"'):script.index('STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq')]
+	assert 'if ! STANDALONE_PRS="$(gh_retry gh pr list' in fetch
+	assert 'STANDALONE_PRS="[]"' in fetch and '_conflict_sweep_list_failed="true"' in fetch
 
 
 def test_sweep_outcome_static_contract():
