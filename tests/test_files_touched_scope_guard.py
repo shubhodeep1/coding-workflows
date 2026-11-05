@@ -1042,9 +1042,8 @@ def test_plan_file_paths_stop_at_scope_mode_metadata() -> None:
 
 
 def test_plan_prompt_copies_keep_scope_mode_out_of_the_files_section() -> None:
-	rule = ("   Put the `Scope-mode:`, `Reuse-audit:` and `Scope-mode justification:` lines after\n"
-		"   Testing considerations, never inside `## Files likely to change`: the plan approval\n"
-		"   gate reads a file the justification names there as a file the plan changes.\n")
+	rule = ("   whenever `Scope-mode:` is present. Put these three lines after Testing considerations,\n"
+		"   never inside `## Files likely to change`: the plan approval gate reads a file named there as changed.\n")
 	for relative in ("prompts/mode-plan.txt", "prompts/_templates/mode-plan.txt", "scripts/run_plan_codex.sh"):
 		assert (REPO_ROOT / relative).read_text(encoding="utf-8").count(rule) == 1, relative
 

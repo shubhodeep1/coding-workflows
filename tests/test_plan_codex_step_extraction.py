@@ -45,10 +45,10 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # Merging #8339 and #8327 keeps both additions (260 -> 261 lines,
 # 17_142 -> 17_308 bytes); with #8335 the prompt is 270 lines, 17_996 bytes.
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"737ed6e515a085c03ed791df73cf21a2f3236aaabda6f57228e8172d3465db52"
+	"a9ce63aafa64bb6cc8ab48e98a3b5b941c417c789228f16836a8bcee70e76ece"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 18_247
-PRE_EXTRACTION_PROMPT_LINES = 273
+PRE_EXTRACTION_PROMPT_BYTES = 18_031
+PRE_EXTRACTION_PROMPT_LINES = 270
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
