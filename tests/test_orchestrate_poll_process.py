@@ -6334,7 +6334,7 @@ def _security_hold_latch_comment(reason: str = "security_dependency_wait", *, lo
 	return {"body": f"Waiting.\n\n{marker}", "user": {"login": login}, "author_association": "OWNER", "created_at": created_at}
 
 
-def _run_security_hold_tick(*, comments=None, labels=None, closed=False, predecessor_labels=None, env=None, fail_get=None, fail_comment_post=False, fail_edit=False) -> dict:
+def _run_security_hold_tick(*, comments=None, labels=None, closed=False, predecessor_labels=None, env=None, fail_get=None, fail_comment_post=False, fail_edit=False, store_extra=None, tracking_issues_override=None) -> dict:
 	"""One standalone tick for security follow-up #700 that depends on #701 (stuck-states P8c)."""
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "merged"
@@ -6347,6 +6347,10 @@ def _run_security_hold_tick(*, comments=None, labels=None, closed=False, predece
 		kwargs["fail_issue_comment_post_for"] = [700]
 	if fail_edit:
 		kwargs["fail_issue_edit_for"] = [700]
+	if store_extra:
+		kwargs["mock_store_extra"] = store_extra
+	if tracking_issues_override is not None:
+		kwargs["tracking_issues_override"] = tracking_issues_override
 	return _run_poller(
 		state=state, enable_validation="false", max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security", *(labels or [])], 701: list(predecessor_labels or [])},
@@ -6569,6 +6573,24 @@ def test_security_hold_unmerged_release_dedupe_and_latch_removal() -> None:
 	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=closed_without_ai_merged action=none" in log
 	assert "ai:needs-human" in off["issues"]["700"]["labels"]
 	assert releases(off) == []
+
+
+def test_security_hold_merged_release_waits_for_the_pipeline_login() -> None:
+	"""Without the pipeline login the latch cannot be checked, so no release marker strands ai:needs-human.
+
+	An idle tick (no tracking issue) reaches the release without the sweep-level identity guard.
+	"""
+	no_identity = _run_security_hold_tick(
+		closed=True, predecessor_labels=["ai:merged"], labels=["ai:needs-human"],
+		comments=[_security_hold_latch_comment()], store_extra={"fail_user_lookup": True},
+		tracking_issues_override=[],
+	)
+	assert "STALL_SKIP issue=700 reason=security_dependency_identity_unavailable action=none" in _security_hold_log(no_identity)
+	assert "ai:needs-human" in no_identity["issues"]["700"]["labels"]
+	assert not any(c["body"].startswith("/reclarify") for c in no_identity["issues"]["700"]["comments"])
+	# Without the latch label the merged release does not need the login.
+	unlabelled = _run_security_hold_tick(closed=True, predecessor_labels=["ai:merged"], store_extra={"fail_user_lookup": True}, tracking_issues_override=[])
+	assert "STALL_SKIP issue=700 reason=security_dependency_released action=reclarify" in _security_hold_log(unlabelled)
 
 
 def _run_pr_dependency_tick(*, merged: bool, files: dict[str, str], comments: list[dict] | None = None, extra: dict | None = None) -> dict:

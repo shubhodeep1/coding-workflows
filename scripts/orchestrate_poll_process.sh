@@ -24216,6 +24216,12 @@ ${_security_dependency_release_marker}" >/dev/null; then
         # Stuck-states P8c: drop this hold's own ai:needs-human latch first.
         if [ "${_security_dependency_resume_enabled}" = "true" ] && _security_dependency_has_needs_human "${labels_json}"; then
           unblock_trusted_login >/dev/null 2>&1 || true
+          # The latch clear is a no-op without the login; posting the marker
+          # then would strand ai:needs-human, so wait for the next tick.
+          if [ -z "${UNBLOCK_TRUSTED_LOGIN:-}" ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=security_dependency_identity_unavailable action=none"
+            continue
+          fi
           if ! _security_dependency_clear_latch "${issue_num}" "${comments_json}" "${labels_json}" "${UNBLOCK_TRUSTED_LOGIN:-}"; then
             echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed detail=latch_clear_failed action=none"
             continue
