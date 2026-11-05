@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"It is >= records_selected for a fixture with more eligible records than the budget fits.\"\n  expected_change_site: tests/test_ai_memory_cli.py, test_retrieve_reports_records_considered_above_records_selected\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The test passes --max 1 at line 744, so selection is capped by max records, not the token budget, and its short fixture records (below the default token budget) never exercise token-budget exclusion, so the requested budget-driven case is untested; the implementation (records_considered = len(scored), scripts/ai_memory_lib.py:2681) is correct for both caps, so this is a test-coverage gap only (severity NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP\nRequirement: \"It is >= records_selected for a fixture with more eligible records than the budget fits.\"\nExpected change site: tests/test_ai_memory_cli.py, test_retrieve_reports_records_considered_above_records_selected\nEvidence of absence: The test passes --max 1 at line 744, making that the selection limit. It does not set a token budget, and its short fixture records do not exercise token-budget selection. The test therefore verifies the --max case, not the requested case where the token budget excludes eligible records.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\nRequirement: \"it is >= records_selected for a fixture with more eligible records than the budget fits\"\nExpected change site: tests/test_ai_memory_cli.py, test_retrieve_reports_records_considered_above_records_selected\nEvidence of absence: The test at lines 722-757 passes --max 1 (line 744) as the selection cap. It does not set a token budget and its short fixture summaries do not exceed the default token_budget=1600, so the test exercises only the --max cap mechanism, not the token-budget cap. The implementation is correct for both caps (records_considered = len(scored) is set at line 2681, before either cap runs), so this is a test-coverage gap rather than a runtime defect.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP\nRequirement: \"It is >= records_selected for a fixture with more eligible records than the budget fits.\"\nExpected change site: tests/test_ai_memory_cli.py, test_retrieve_reports_records_considered_above_records_selected\nEvidence of absence: The test uses --max 1 at line 744, so it tests the maximum-records selection limit. Its short fixture does not exercise records being excluded by the token budget; no test in the PR verifies the requested token-budget case.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP 1\nRequirement: \"it is >= records_selected for a fixture with more eligible records than the budget fits\" (LINKED ISSUE #8848, Tests section)\nExpected change site: tests/test_ai_memory_cli.py, test_retrieve_reports_records_considered_above_records_selected (around line 744)\nEvidence of absence: The test passes --max 1 (line 744) so selection is bounded by max_records, not by the token budget; the fixture's three short summaries (~10 estimated tokens each) fit easily under the implementation role's default budget of 900 (scripts/ai_memory_lib.py:2523, _resolve_token_budget), so the token-budget exclusion branch (used_tokens + line_tokens > record_budget at scripts/ai_memory_lib.py:2633) is never exercised. The requested budget-driven case is untested; the >= invariant itself is still asserted.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0852502c119bbbbb237b9aad72f68d3df4793cc017782691bea1ee7f27007bfc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8851,
+    "run_id": "41956880157",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41956880157",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105030110_7bbb32236d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8851,
+    "run_id": "41956880157"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T03:01:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
