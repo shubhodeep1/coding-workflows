@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: PR CI check-runs report a regression failure in this test suite directly caused by the canary file update.\n  WHY: The CI integration indicates the canary change broke test expectations in `test_implement_post_codex_recovery.py` (source severity MAJOR); anthropic_claude-sonnet-5_5 and minimax_minimax-m3 disagree and say the canary path appears there only as string literals in fixture text.\n- .github/workflows/review_autofix.yml:N/A | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with HTTP 422 `custom_instructions_too_large` because the combined AGENTS.md/CLAUDE.md payload exceeds the reviewer's prompt limit.\n  WHY: The review pipeline fails before it produces a review, which blocks automated PR review and merging. Severity disagreement: gemini gave MAJOR and glm gave NIT, so the highest is used. glm notes the failure is not caused by this diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py | severity=MAJOR | confidence=4\n  PROBLEM: PR CI check-runs report a regression failure in this test suite directly caused by the canary file update.\n  WHY: The CI integration indicates the canary change broke test expectations in `test_implement_post_codex_recovery.py`, contradicting claims that the update has no impact on existing tests.\n- .github/workflows/review_autofix.yml (copilot-pull-request-reviewer) | severity=MAJOR | confidence=5\n  PROBLEM: The repository-level check `copilot-pull-request-reviewer` fails with HTTP 422 (custom_instructions_too_large).\n  WHY: The combined custom-instruction payload (e.g. `AGENTS.md` + `CLAUDE.md`) exceeds the reviewer's prompt limit, so the review pipeline fails before it creates a review request. This blocks automated PR review and merging.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows (repo-root custom instructions loaded by external check); AGENTS.md / CLAUDE.md at repository root; failing check-run `copilot-pull-request-reviewer` (run 41544551704, job 125616826829) on head f64a6c52c111e231706e6c9e83344eaa357bc793 | severity=NIT | confidence=4\n  PROBLEM: The external Copilot PR reviewer check fails before producing a review with HTTP 422 `custom_instructions_too_large`. The combined AGENTS.md/CLAUDE.md custom-instruction payload exceeds its prompt limit (log: \"Prompt too big after adding system message, errorCode: custom_instructions_too_large\").\n  WHY: The check loads repo-root AGENTS.md and CLAUDE.md as custom instructions. Their combined size on this PR (e.g. CLAUDE.md ~1000-line rewrite plus agents.md growth visible in the last merge-resolve commit) exceeds the reviewer's max prompt tokens, so the action exits 1. The reviewer notes this is NOT caused by the PR diff (a 3-line canary text file) and should not be fixed within this canary PR.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "412d6773a2a55b43a5fa54ee4ab42164f9a0ced00fa4b678979c02b62a38e76c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41972741710",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41972741710",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105052523_3ae23de06e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41972741710"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T05:25:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
