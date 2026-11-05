@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- copilot-pull-request-reviewer (GitHub Actions check; no repository source file):Job 127167772451, run 42004508549 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The copilot-pull-request-reviewer check fails with `custom_instructions_too_large` (HTTP 422) after loading AGENTS.md and CLAUDE.md, so the prompt exceeds Copilot's limit.\n  WHY: The failure is not tied to this PR's diff, which touches neither file. Both reviewers rated it NIT; confidence is 2 from anthropic_claude-sonnet-5_5 and 5 from openai_gpt-6-luna.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- copilot-pull-request-reviewer check (no repository source file) | severity=NIT | confidence=2\n  PROBLEM: The check fails with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\") after Copilot loaded AGENTS.md and CLAUDE.md.\n  WHY: This PR touches neither file, so the failure is Copilot's own prompt-size limit and no line of the diff causes or worsens it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- copilot-pull-request-reviewer (GitHub Actions check; no repository source file):Job 127167772451, run 42004508549 | severity=NIT | confidence=5\n  PROBLEM: The check fails before reviewing the PR because the assembled prompt exceeds Copilot's limit.\n  WHY: The check remains red on this PR. The failure is not tied to the last-run report edit, and the provided evidence does not identify a changed code site that can correct it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "078779a7102c421c67be3b4bb8f2d47deca17bb05f343920e7931f92b2be081a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8852,
+    "run_id": "42007150379",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42007150379",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105101158_296fec082b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8852,
+    "run_id": "42007150379"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T10:11:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
