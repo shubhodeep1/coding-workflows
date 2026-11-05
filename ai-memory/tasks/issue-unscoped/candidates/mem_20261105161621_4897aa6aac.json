@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_engine.py:761 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: In `_spare_per_hour`, a negative `seven_day` reading is clamped to 0.0 and so gets the maximum headroom, and the malformed account ranks first.\n  WHY: Malformed telemetry outranks valid accounts, so the ranking is inverted. Both reviewers rated it NIT (mapped to low). anthropic_claude-sonnet-5_5 saw the same edge but judged it unreachable and did not report it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_engine.py:761 | severity=low (source: NIT) | confidence=3\n  PROBLEM: The headroom calculation treats negative seven_day usage as 0.0.\n  WHY: Malformed telemetry (negative usage) is treated as having maximum headroom, so the affected account is wrongly ranked ahead of accounts with valid usage.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_engine.py:761 | severity=low (source: NIT) | confidence=3\n  PROBLEM: The clamp `max(float(seven_day), 0.0)` only bounds the inner subtraction, so a negative `seven_day` yields `gate / hours`, the maximum spare-per-hour, and the malformed account ranks first.\n  WHY: A malformed probe with negative utilization would be chosen first in `choose_account`, which inverts the ranking's intent.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "f5d81620bb8b729322dcf332c788de2f361f3a1ee4b4dd45e154101d749647ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8879,
+    "run_id": "42060200078",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42060200078",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105161621_4897aa6aac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8879,
+    "run_id": "42060200078"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-05T16:16:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
