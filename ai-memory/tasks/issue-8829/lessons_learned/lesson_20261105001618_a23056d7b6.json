@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-05T00:16:18Z",
+  "issue_number": 8829,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=scripts/ai_labels.py:40, 1142-1143, 1319; cited_path=scripts/ai_labels.py; files_touched=.github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p7b-harness-auto-revalidate.md, changelog.d/stuck-states-p7b-harness-auto-revalidate.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrate_poll_process.py, tests/test_orchestrate_poll_workflow_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8830,
+  "record_id": "lesson_20261105001618_a23056d7b6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ai_labels.py",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/stuck-states-p7b-harness-auto-revalidate.md",
+    "changelog.d/stuck-states-p7b-harness-auto-revalidate.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrate_poll_process.py",
+    "tests/test_orchestrate_poll_workflow_contract.py"
+  ]
+}

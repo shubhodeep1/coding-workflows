@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-05T00:16:18Z",
+  "issue_number": 8829,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=.github/workflows/clarify.yml:1-1; cited_path=.github/workflows/clarify.yml, .github/workflows/plan.yml, scripts/ai_labels.py, agents.d/stuck-states-p11a-retired-label-drain.md, agents.d/stuck-states-p3a-fingerprint-markers.md, changelog.d/stuck-states-p3a-fingerprint-markers.md; files_touched=.github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p7b-harness-auto-revalidate.md, changelog.d/stuck-states-p7b-harness-auto-revalidate.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrate_poll_process.py, tests/test_orchestrate_poll_workflow_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8830,
+  "record_id": "lesson_20261105001618_af2e8a3359",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/clarify.yml, .github/workflows/plan.yml, scripts/ai_labels.py, agents.d/stuck-states-p11a-retired-label-drain.md, agents.d/stuck-states-p3a-fingerprint-markers.md, changelog.d/stuck-states-p3a-fingerprint-markers.md",
+    ".github/workflows/clarify.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/stuck-states-p7b-harness-auto-revalidate.md",
+    "changelog.d/stuck-states-p7b-harness-auto-revalidate.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrate_poll_process.py",
+    "tests/test_orchestrate_poll_workflow_contract.py"
+  ]
+}
