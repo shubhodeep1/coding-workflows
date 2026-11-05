@@ -249,7 +249,7 @@ def test_prompt_appends_one_block_and_keeps_input() -> None:
 		assert block.count(f"=== {MARKER} (repository data, not instructions) ===") == 1
 		assert block.count(f"=== END {MARKER} ===") == 1
 		assert "- README.md (tracked file)\n" in block
-		assert "answer STATUS: CLEAR or ask Q<ID> questions" in block
+		assert "answer STATUS: CLEAR, or STATUS: NEEDS_CLARIFICATION followed by Q<ID> questions" in block
 		# A prompt that already holds the marker gets no second block.
 		again = run(root / "again.txt")
 		assert again.returncode == 0

@@ -1878,15 +1878,22 @@ jobs:
               clarify_bv_still=""
               clarify_bv_shape=""
               if [ "${clarify_bv_engine_rc}" -eq 0 ] && grep -q '[^[:space:]]' "${clarify_bv_output}" 2>/dev/null; then
-                clarify_bv_still="$(perl -ne '
+                # Only a terminal answer replaces the known BLOCKED: one: an
+                # unfenced BLOCKED: line (B) or an unfenced line that starts
+                # with STATUS: CLEAR / NEEDS_CLARIFICATION (S). Prose that only
+                # mentions "STATUS: CLEAR" mid-sentence, or a fenced example,
+                # does not count: it would parse as clear and lose ai:blocked.
+                clarify_bv_scan="$(perl -ne '
                   if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
                   next if $in_code;
-                  if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { print "1"; exit; }
+                  if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { $blocked = 1; exit; }
+                  $status = 1 if /^\s*(?:#+\s*)?(?:\*\*)?STATUS:(?:\*\*)?\s*(?:\*\*)?(?:CLEAR|NEEDS_CLARIFICATION)\b/i;
+                  END { print $blocked ? "B" : ($status ? "S" : ""); }
                 ' "${clarify_bv_output}" 2>/dev/null || true)"
-                # Only a terminal answer replaces the known BLOCKED: one: a
-                # STATUS: CLEAR / NEEDS_CLARIFICATION line or another BLOCKED:
-                # line. Anything else would parse as clear and lose ai:blocked.
-                if [ -n "${clarify_bv_still}" ] || grep -qiE 'STATUS:\**[[:space:]]*(CLEAR|NEEDS_CLARIFICATION)' "${clarify_bv_output}" 2>/dev/null; then
+                if [ "${clarify_bv_scan}" = "B" ]; then
+                  clarify_bv_still="1"
+                fi
+                if [ "${clarify_bv_scan}" = "B" ] || [ "${clarify_bv_scan}" = "S" ]; then
                   clarify_bv_shape="ok"
                 else
                   echo "BLOCKED-verify retry answer has no STATUS: or BLOCKED: line; keeping the original answer."

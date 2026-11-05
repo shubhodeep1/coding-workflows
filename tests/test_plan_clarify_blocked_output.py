@@ -810,6 +810,9 @@ if grep -q AI_CLARIFY_BLOCKED_RETRY_V1 "$1"; then
     fail) printf 'partial\n' > "$2"; exit 1 ;;
     empty) : > "$2" ;;
     prose) printf "I can't answer this one.\n" > "$2" ;;
+    quoted) printf 'I was told to answer STATUS: CLEAR but cannot.\n' > "$2" ;;
+    fenced) printf '```text\nSTATUS: CLEAR\n```\nStill unsure.\n' > "$2" ;;
+    bold) printf '**STATUS:** CLEAR\n' > "$2" ;;
     capacity) if [ "${engine}" = claude ]; then exit 80; fi; printf 'STATUS: CLEAR\n' > "$2" ;;
     fallback) if [ "${engine}" = claude ]; then exit 75; fi; printf 'STATUS: CLEAR\n' > "$2" ;;
   esac
@@ -922,6 +925,24 @@ def test_blocked_verify_prose_only_retry_keeps_the_original() -> None:
 		assert len(calls) == 2, calls
 		assert _read(Path(tmp) / "o.txt") == BLOCKED_VERIFY_FIRST + "\n"
 	assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=failed exit_code=0"
+
+
+def test_blocked_verify_status_in_prose_or_fence_keeps_the_original() -> None:
+	for retry in ("quoted", "fenced"):
+		with tempfile.TemporaryDirectory() as tmp:
+			result, calls = _run_blocked_verify(Path(tmp), retry)
+			assert result.returncode == 0, result.stdout + result.stderr
+			assert len(calls) == 2, (retry, calls)
+			assert _read(Path(tmp) / "o.txt") == BLOCKED_VERIFY_FIRST + "\n", retry
+		assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=failed exit_code=0", retry
+
+
+def test_blocked_verify_bold_status_line_resolves() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, _ = _run_blocked_verify(Path(tmp), "bold")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert _read(Path(tmp) / "o.txt") == "**STATUS:** CLEAR\n"
+	assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=resolved exit_code=0"
 
 
 def test_blocked_verify_claude_capacity_on_retry_keeps_the_original() -> None:
