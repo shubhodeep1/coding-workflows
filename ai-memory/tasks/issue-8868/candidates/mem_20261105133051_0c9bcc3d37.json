@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: overwrite `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `5d4268567f57c68ff27d5f87ae72c5e01da5e4a7` on branch `main`. The planning context reports \"Integration branch mismatch: unknown\", not `true`, so planning goes ahead.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n- No code changes. Replace the whole file so its bytes are exactly `status: ok\\nrun_id: 42033466954\\nupdated-by: ai-pipeline\\n`. That is three lines, with a newline after the last one.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names one file and its exact new content, and forbids touching anything else. The plan changes only that file. No helper, script or workflow wiring is needed, so there is nothing to reuse or wire into a schedule (\u00a720 does not apply). There is no new script, supervisor, database work or removal-registry entry.\n\n## Data structures affected\n- None.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file\n- Chosen: Write the three required lines over the entire file, ending with a trailing newline.\n- Alternatives considered: Editing the existing lines in place.\n- Why: The issue asks for a full replacement. The current file is `status: ok`, then `decompose-run: 41445772297`, with no trailing newline. Overwriting it guarantees an exact match.\n\n## Security considerations\n- No trust boundary, endpoint, secret or money-handling surface is touched. The file is static test data.\n- External input: the file content comes from the issue text, which was checked as plain literal lines with no executable content.\n\n## Risks and edge cases\n- The current file has no trailing newline and has a different second line. The implementer must write the content byte-exact and include the final newline.\n- Earlier review runs raised findings about `AGENTS.md` and `CLAUDE.md` (the external Copilot reviewer check) that were outside the plan's scope, and the consolidator rejected them. Those files must not be edited.\n\n## Testing considerations\n- After writing, confirm the file is exactly right with `cmp` against `printf 'status: ok\\nrun_id: 42033466954\\nupdated-by: ai-pipeline\\n'`.\n- Confirm `git diff --stat` lists only `tests/e2e_smoke_canary.txt`.\n- No contract tests are needed.\n\n## Pre-execution self-check\n- Every requirement in the issue is covered.\n- Exactly one file changes, and the current content was read before planning.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "1b748e909279c3bedf2a78baa9db54515bbf8ecf3c59671c857f5d7a2fda7b5d",
+  "lineage": {
+    "issue_number": 8868,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42035611221",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42035611221",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8868"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261105133051_0c9bcc3d37",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8868,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42035611221"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8868",
+  "timestamps": {
+    "created_at": "2026-11-05T13:30:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
