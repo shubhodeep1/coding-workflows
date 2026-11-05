@@ -32717,7 +32717,9 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 	_conflict_sweep_prior="unknown"
 	_conflict_sweep_loaded="${_STANDALONE_CONFLICT_STATE_LOADED["${S_PR}"]:-}"
-	if { [ "${_conflict_sweep_loaded}" = "1" ] || [ "${_conflict_sweep_loaded}" = "partial" ]; } &&
+	# Only a whole-thread window ("1") counts; a "partial" window stays
+	# "unknown" (issue #8847: missing or partial state is never inferred).
+	if [ "${_conflict_sweep_loaded}" = "1" ] &&
 		[ "${_conflict_sweep_outcome_head}" != "unknown" ] && [ -n "${UNBLOCK_TRUSTED_LOGIN:-}" ]; then
 		_conflict_sweep_found="false"
 		while IFS='|' read -r _conflict_sweep_m_id _conflict_sweep_m_author _conflict_sweep_m_head _conflict_sweep_m_attempts _conflict_sweep_m_alerted; do

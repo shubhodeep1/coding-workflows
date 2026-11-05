@@ -229,10 +229,24 @@ def test_sweep_outcome_newer_untrusted_marker_does_not_shadow_trusted_one():
 		{13: _dirty("ai/issue-13", HEAD_A)},
 		dispatch_rc={13: 1},
 		attempts_state={13: f"60|intruder|{HEAD_A}|0|0\n55|bot|{HEAD_A}|3|1"},
-		loaded={13: "partial"},
+		loaded={13: "1"},
 	)
 	assert result["outcomes"]["13"]["prior"] == "3"
 	assert result["outcomes"]["13"]["resolution"] == "unresolved_same_head"
+
+
+def test_sweep_outcome_partial_window_is_unknown_even_with_trusted_marker():
+	# Issue #8847: partial state is reported as unknown / pending, never inferred.
+	prs = [_pr(18, "ai/issue-18", HEAD_A)]
+	result = _run_sweep(
+		prs,
+		{18: _dirty("ai/issue-18", HEAD_A)},
+		dispatch_rc={18: 0},
+		attempts_state={18: f"55|bot|{HEAD_A}|3|1"},
+		loaded={18: "partial"},
+	)
+	assert (result["outcomes"]["18"]["prior"], result["outcomes"]["18"]["resolution"]) == ("unknown", "pending")
+	assert result["summary"]["unresolved_same_head"] == "0"
 
 
 def test_sweep_outcome_untrusted_or_other_head_markers_do_not_count():
