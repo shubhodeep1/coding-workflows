@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-05T03:52:45Z",
+  "issue_number": 8847,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=(external CI check-run; no repository file):1-1; cited_path=AGENTS.md, CLAUDE.md (copilot-pull-request-reviewer custom instructions); files_touched=agents.d/wfopt-2026-10-02-conflict-sweep-outcome.md, changelog.d/wfopt-2026-10-02-conflict-sweep-outcome.md, scripts/orchestrate_poll_process.sh, tests/test_alert_levels_human_only.py, tests/test_ci_wires_every_test_file.py, tests/test_orchestrate_poll_conflict_sweep_outcome.py.",
+  "phase": "review_autofix",
+  "pr_number": 8854,
+  "record_id": "lesson_20261105035245_2b58ca43d9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md, CLAUDE.md (copilot-pull-request-reviewer custom instructions)",
+    "(external CI check-run; no repository file)",
+    "agents.d/wfopt-2026-10-02-conflict-sweep-outcome.md",
+    "changelog.d/wfopt-2026-10-02-conflict-sweep-outcome.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_alert_levels_human_only.py",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_orchestrate_poll_conflict_sweep_outcome.py"
+  ]
+}
