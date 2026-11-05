@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:whole file (1508 lines) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The copilot-pull-request-reviewer check-run (job 126976082956, head 35690b5914e4072b4bd83d2c7e9adb6148570a82) fails with \"Error creating PR review request: Error: Prompt too big after adding system message (statusCode: 422, errorCode: \"custom_instructions_too_large\")\" because CLAUDE.md (1508 lines) and agents.md (5444 lines) are loaded as custom instructions.\n  WHY: The failure is attributable to the root instruction files, not the PR diff, which touches only the two-line fixture tests/e2e_smoke_canary_b.txt, and fixing it would modify files that issue #8838 forbids changing, so the reviewer rated it NIT (non-actionable infrastructure failure) for this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- CLAUDE.md:whole file (1508 lines) | severity=low | confidence=3\n  PROBLEM: The copilot-pull-request-reviewer check-run (job 126976082956, head 35690b5914e4072b4bd83d2c7e9adb6148570a82) fails with \"Error creating PR review request: Error: Prompt too big after adding system message (statusCode: 422, errorCode: \"custom_instructions_too_large\")\" because CLAUDE.md (1508 lines) and agents.md (5444 lines) are loaded as custom instructions.\n  WHY: The failure is attributable to the root instruction files, not the PR diff, which touches only the two-line fixture tests/e2e_smoke_canary_b.txt, and fixing it would modify files that issue #8838 forbids changing, so the reviewer rated it NIT (non-actionable infrastructure failure) for this PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d1ce3fedb891e62005b194d35d55539c05be594a739fa894e077528a97a9abc5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8841,
+    "run_id": "41998918387",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41998918387",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105091353_12df455d5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8841,
+    "run_id": "41998918387"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T09:13:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
