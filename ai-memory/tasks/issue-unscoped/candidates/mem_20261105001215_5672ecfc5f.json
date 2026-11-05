@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- N/A (external check-run `copilot-pull-request-reviewer`, Actions run 41544333941, job 125616096789):N/A | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The external Copilot review agent aborted with \"Prompt too big after adding system message\" (errorCode `custom_instructions_too_large`, statusCode 422) because its custom instructions (AGENTS.md and CLAUDE.md) are too large, and the failure cannot be mapped to `tests/e2e_smoke_canary.txt`.\n  WHY: The check exits with code 1 before any review begins, and the cause is the instruction file size on the merge base rather than the canary content, so it is not actionable in this PR (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- N/A (external check-run `copilot-pull-request-reviewer`, Actions run 41544333941, job 125616096789):N/A | severity=low | confidence=5\n  PROBLEM: The external Copilot review agent aborted with \"Prompt too big after adding system message\" (errorCode `custom_instructions_too_large`, statusCode 422) because its custom instructions (AGENTS.md and CLAUDE.md) are too large, and the failure cannot be mapped to `tests/e2e_smoke_canary.txt`.\n  WHY: The check exits with code 1 before any review begins, and the cause is the instruction file size on the merge base rather than the canary content, so it is not actionable in this PR (source severity NIT).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "35d8a8c774f9e2426d0a1443b82179238a8bc240cef883e460c358c084257962",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "41938231051",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41938231051",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261105001215_5672ecfc5f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "41938231051"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-05T00:12:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
