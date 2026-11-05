@@ -200,7 +200,7 @@ def _run_bash_case(case_id: str, args: list[str], **kwargs) -> subprocess.Comple
 	kwargs.pop("check", None)
 	result = subprocess.run(args, capture_output=True, text=True, check=False, **kwargs)
 	if result.returncode != 0:
-		stderr_tail = _BASH_CASE_SECRET_RE.sub("<redacted>", (result.stderr or "")[-_BASH_CASE_STDERR_TAIL_CHARS:])
+		stderr_tail = _BASH_CASE_SECRET_RE.sub("<redacted>", result.stderr or "")[-_BASH_CASE_STDERR_TAIL_CHARS:]
 		raise AssertionError(f"case={case_id} exit={result.returncode} stderr_tail={stderr_tail!r}")
 	return result
 
@@ -211,6 +211,8 @@ def test_run_bash_case_reports_case_exit_and_bounded_stderr() -> None:
 		"printf 'HEAD_TOKEN_8862' >&2\n"
 		"printf '%*s' 2500 '' | tr ' ' e >&2\n"
 		"printf 'TAIL_TOKEN_8862 ghp_%s' 'abcdefghijklmnopqrstuvwxyz0123456789' >&2\n"
+		"printf ' github_pat_%s AKIA%s sk-%s' 'PAT8862abcdefghijklmnopqrstuv' 'AKID8862ABCDEFGH' 'SKEY8862abcdefghijklmnopqrstuv' >&2\n"
+		"printf ' -----BEGIN RSA PRIVATE KEY----- PEMBODY8862' >&2\n"
 		"exit 7\n"
 	)
 	raised = False
@@ -229,7 +231,18 @@ def test_run_bash_case_reports_case_exit_and_bounded_stderr() -> None:
 	assert "HEAD_TOKEN_8862" not in message
 	assert "ghp_abcdefghijklmnopqrstuvwxyz0123456789" not in message
 	assert "<redacted>" in message, message[-200:]
+	for leaked in ("PAT8862", "AKID8862", "SKEY8862", "PEMBODY8862", "BEGIN RSA PRIVATE KEY"):
+		assert leaked not in message, leaked
 	assert len(message) <= _BASH_CASE_STDERR_TAIL_CHARS + 200, len(message)
+	# A token straddling the 2000-character cut is redacted before the cut,
+	# so its suffix never reaches the message.
+	straddle = "printf '%*s' 2500 '' | tr ' ' e >&2; printf 'ghp_abcdefghijklmnopSTRADDLESECRET8862xy' >&2; printf '%*s' 1980 '' | tr ' ' f >&2; exit 3\n"
+	try:
+		_run_bash_case("selftest:straddle", ["bash", "-c", straddle])
+	except AssertionError as error:
+		assert "STRADDLESECRET8862" not in str(error), str(error)[:200]
+	else:
+		raise AssertionError("expected straddle failure")
 
 
 def test_clarify_reclarify_clause_is_pinned_in_every_wrapper() -> None:
