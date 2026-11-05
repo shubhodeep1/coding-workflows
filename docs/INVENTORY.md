@@ -323,6 +323,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/security_audit_upstream_report.sh` — Send a consumer audit's high/critical findings on unmodified synced files to coding-workflows' heal intake as one OIDC-bound `synced_security_finding` report (issue #7623).
 - `scripts/security_audit_fp_exclusions.json` — JSON asset for editable security-audit false-positive exclusions.
 - `scripts/security_dependency.py` — Hold a generated security follow-up until the issue it depends on has merged (issue #4934).
+- `scripts/dependency_wait_resume.py` — Poller step "Resume dependency waits": resume, re-clarify or escalate `ai:waiting-on-dependency` issues and seed blocked `Depends on: #N` issues into the wait (stuck-states P8b, Refs #8291).
 - `scripts/pr_dependency.py` — Hold a trusted standalone issue that declares `- Depends on PR: #N` until that PR merged into the default branch and a declared string is on it (issue #7228).
 - `scripts/security_pass_skip.py` — Decide whether the security pass skips a follow-up issue (verified-trust rules, #4623).
 - `scripts/semble_helpers.sh` — semble_helpers.sh — shared, sourceable Semble query helpers.
