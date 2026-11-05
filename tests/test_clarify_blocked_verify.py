@@ -160,6 +160,18 @@ def test_extensionless_root_file_and_root_directory_retry() -> None:
 	assert _log(result).endswith("paths=2 sample=docs,Makefile")
 
 
+def test_many_prose_words_do_not_hide_a_tracked_root_file() -> None:
+	prose = " ".join(f"word{i}" for i in range(30))
+	with tempfile.TemporaryDirectory() as tmp:
+		result, listing = _check(Path(tmp), f"BLOCKED: {prose} Makefile is missing\n", extra=("Makefile",))
+	assert result.returncode == 0, result.stderr
+	assert listing == "- Makefile (tracked file)\n"
+
+
+def test_git_listing_has_a_timeout() -> None:
+	assert 'check=True, timeout=120).stdout' in HELPER.read_text(encoding="utf-8")
+
+
 def test_untracked_bare_words_do_not_retry() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		result, listing = _check(Path(tmp), "BLOCKED: need the production API key from the owner\n")

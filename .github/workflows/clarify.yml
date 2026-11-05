@@ -1875,13 +1875,25 @@ jobs:
               if [ "${CLARIFY_ENGINE}" != "claude" ]; then
                 bash "${SUPPORT_SCRIPTS_DIR}/clarify_isolated_run.sh" "${clarify_bv_prompt}" "${clarify_bv_output}" "${clarify_bv_log}" || clarify_bv_engine_rc=$?
               fi
+              clarify_bv_still=""
+              clarify_bv_shape=""
               if [ "${clarify_bv_engine_rc}" -eq 0 ] && grep -q '[^[:space:]]' "${clarify_bv_output}" 2>/dev/null; then
+                clarify_bv_still="$(perl -ne '
+                  if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
+                  next if $in_code;
+                  if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { print "1"; exit; }
+                ' "${clarify_bv_output}" 2>/dev/null || true)"
+                # Only a terminal answer replaces the known BLOCKED: one: a
+                # STATUS: CLEAR / NEEDS_CLARIFICATION line or another BLOCKED:
+                # line. Anything else would parse as clear and lose ai:blocked.
+                if [ -n "${clarify_bv_still}" ] || grep -qiE 'STATUS:\**[[:space:]]*(CLEAR|NEEDS_CLARIFICATION)' "${clarify_bv_output}" 2>/dev/null; then
+                  clarify_bv_shape="ok"
+                else
+                  echo "BLOCKED-verify retry answer has no STATUS: or BLOCKED: line; keeping the original answer."
+                fi
+              fi
+              if [ -n "${clarify_bv_shape}" ]; then
                 if cp -- "${clarify_bv_output}" "${CODEX_OUTPUT_FILE}"; then
-                  clarify_bv_still="$(perl -ne '
-                    if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
-                    next if $in_code;
-                    if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { print "1"; exit; }
-                  ' "${CODEX_OUTPUT_FILE}" 2>/dev/null || true)"
                   if [ -n "${clarify_bv_still}" ]; then
                     echo "CLARIFY_BLOCKED_VERIFY stage=retry outcome=still_blocked exit_code=0"
                   else

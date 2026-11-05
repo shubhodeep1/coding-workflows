@@ -74,6 +74,7 @@ PATH_NAME_RE = re.compile(r"^[A-Za-z0-9_.@+-][A-Za-z0-9._/@+-]{0,239}$")
 PATH_EXT_RE = re.compile(r"\.[A-Za-z0-9]{1,8}$")
 LINE_SUFFIX_RE = re.compile(r":[0-9]+(?::[0-9]+)?$")
 MAX_TOKENS = 20
+MAX_BARE_WORDS = 500
 MAX_LISTING_BYTES = 8192
 MAX_EXAMPLES = 3
 # Mirrors bad_parts and sensitive() in scripts/clarify_isolated_run.sh.
@@ -150,7 +151,9 @@ def path_tokens(reason):
 		if not had_slash and not PATH_EXT_RE.search(token):
 			# A root directory needs its trailing slash (docs/); a bare word is
 			# kept apart so prose cannot use up the MAX_TOKENS path slots.
-			if token not in bare and len(bare) < MAX_TOKENS:
+			# check() caps bare words after the tracked-set filter; this bound
+			# only limits work on a pathological reason line.
+			if token not in bare and len(bare) < MAX_BARE_WORDS:
 				bare.append(token)
 			continue
 		if token not in found:
@@ -178,7 +181,7 @@ def check(output_file, prompt_file, listing_out, root):
 	if not candidates and not bare:
 		log("skip", "no_tracked_path")
 		return 3
-	raw = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True).stdout
+	raw = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True, timeout=120).stdout
 	tracked = [os.fsdecode(entry) for entry in raw.split(b"\0") if entry]
 	tracked_set = set(tracked)
 	room = MAX_TOKENS - len(candidates)
