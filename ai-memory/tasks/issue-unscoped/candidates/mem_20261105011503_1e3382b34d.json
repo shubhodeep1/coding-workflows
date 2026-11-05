@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "For changes to stuck-state handling, the merged work commonly includes a changelog entry and sometimes an agent-specific guidance file, in addition to code and tests. Check these documentation locations when planning similar changes.",
+  "fingerprint": "362a7074d8cca17457ccaf3a89e7912561379b79fbcff8a5cbc6d6e34b316cc7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41946227783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41946227783",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8787",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8788",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8821",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8825",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8827",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8791",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8792",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8823",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8826",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8828"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261105011503_1e3382b34d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Behavioral changes to stuck-state workflows are often documented alongside implementation and tests.",
+  "timestamps": {
+    "created_at": "2026-11-05T01:15:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
