@@ -757,6 +757,41 @@ def test_retrieve_reports_records_considered_above_records_selected() -> None:
 		assert all(summary not in line for line in telemetry_lines)
 
 
+def test_retrieve_records_considered_exceeds_selected_when_token_budget_binds() -> None:
+	now_text = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+	with _stub_ai_memory_cli_branch() as store_root, tempfile.TemporaryDirectory(prefix="ai-memory-cli-retrieve-") as out_dir:
+		memory_root = store_root / "ai-memory"
+		for pr_number, summary in zip(
+			[None, 1, 2],
+			[
+				"Token budget alpha candidate",
+				"Token budget beta candidate",
+				"Token budget gamma candidate",
+			],
+		):
+			_write_candidate_record(
+				memory_root,
+				issue_number=4805,
+				pr_number=pr_number,
+				summary=summary,
+				created_at=now_text,
+			)
+		output_file = Path(out_dir) / "context.txt"
+		# No --max: the 1-token budget is the only selection limit.
+		with _temporary_env(AI_MEMORY_ENABLED="true", AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION="1"):
+			exit_code, stdout, stderr = _run_ai_memory_cli(_retrieve_argv(4805, output_file))
+
+	assert exit_code == 0
+	payload = json.loads(stdout)
+	assert payload["token_budget"] == 1
+	assert payload["records_considered"] == 3
+	assert payload["records_selected"] == 1
+	entries = _retrieve_telemetry_entries(stderr)
+	assert len(entries) == 1
+	assert entries[0]["records_considered"] == 3
+	assert entries[0]["records_selected"] == 1
+
+
 def test_retrieve_records_considered_zero_when_no_eligible_records() -> None:
 	with _stub_ai_memory_cli_branch(), tempfile.TemporaryDirectory(prefix="ai-memory-cli-retrieve-") as out_dir:
 		output_file = Path(out_dir) / "context.txt"
