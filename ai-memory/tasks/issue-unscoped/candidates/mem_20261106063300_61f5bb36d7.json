@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:5060, 5779 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The copilot-pull-request-reviewer check fails with \"Prompt too big after adding system message\", which the reviewer attributes to the merge-resolve commit `e540dbc` changing CLAUDE.md or agents.md.\n  WHY: The reviewer automation cannot run on the PR head because of prompt size limits, which blocks validation. The source rated this BLOCKER, and the other reviewers called the failure unrelated infrastructure.\n- CLAUDE.md and agents.md:1-1508 / 1-5410 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The large merge-resolution commit `e540dbc` increased the size of CLAUDE.md and agents.md, so the reviewer workflow hits the \"custom_instructions_too_large\" error (422 status code).\n  WHY: CI validation and review tasks are blocked because the reviewer service cannot process the prompt. The source rated this BLOCKER, and minimax_minimax-m3 and z-ai_glm-5_3-flash called the failure pre-existing infrastructure unrelated to this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `tests/e2e_smoke_canary.txt` to contain exactly `status: ok`, `run_id: 40876853022`, `updated-by: ai-pipeline`\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer states the PR diff already updates the file to the required content and that the task is complete. It rated this NIT, so it is not a real gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:5060, 5779 | severity=BLOCKER | confidence=4\n  PROBLEM: The copilot-pull-request-reviewer check fails with \"Prompt too big after adding system message\", which the reviewer attributes to the merge-resolve commit `e540dbc` changing CLAUDE.md or agents.md.\n  WHY: The reviewer automation cannot run on the PR head because of size limits in custom instructions or system prompts, which blocks validation.\n- CLAUDE.md and agents.md:1-1508 / 1-5410 | severity=BLOCKER | confidence=5\n  PROBLEM: The large merge-resolution commit `e540dbc` increased the size of CLAUDE.md and agents.md (or other files in the prompt context), so the reviewer workflow hits the \"custom_instructions_too_large\" error (422 status code).\n  WHY: CI validation and review tasks are blocked because the reviewer service cannot process the prompt.\n- TASK_GAP: tests/e2e_smoke_canary.txt | severity=NIT | confidence=5\n  Requirement: Update `tests/e2e_smoke_canary.txt` to contain exactly `status: ok`, `run_id: 40876853022`, `updated-by: ai-pipeline`\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The PR diff shows the file already updated to the required content, and the content on disk was verified to match exactly. The task is complete.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2adca2935c7f0dd5c8848159a358ed9a1b0fe02152ff227734a6eea0b8713a70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "42173636124",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42173636124",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106063300_61f5bb36d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "42173636124"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T06:33:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
