@@ -348,6 +348,53 @@ def test_complete_context_still_merges_as_before(tmp_path: Path) -> None:
 	assert any(c.startswith(f"status owner/repo {SHA} success") for c in result["calls"])
 
 
+@pytest.mark.parametrize(("action", "is_final"), [("merge", "false"), ("merge_with_followup", "false"), ("fix", "true")])
+def test_complete_context_reaches_the_merge_stage(tmp_path: Path, action: str, is_final: str) -> None:
+	"""A complete context passes the deferral and the security hold and reaches the merge commands.
+
+	The block runs from the merge-action evaluation up to the merge error
+	capture helpers (#7659), which sit right before the unchanged
+	`gh pr merge` dispatch. The security gate stub passes, so reaching the end
+	means the run proceeds to merge exactly as before this change.
+	"""
+	text = _text()
+	start = text.index(GATE_START_ANCHOR)
+	end = text.index("# BEGIN rb-judge merge error capture (#7659)", start)
+	calls = tmp_path / "calls.log"
+	output = tmp_path / "github_output"
+	output.write_text("", encoding="utf-8")
+	script = (
+		"set -uo pipefail\n"
+		'gh_retry() { printf \'gh_retry %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
+		'review_head_gate_post_status() { printf \'status %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
+		'_resilient_phase_swap() { printf \'phase_swap %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
+		'rb_security_merge_gate() { printf \'security_gate\\n\' >> "${CALL_LOG}"; return 0; }\n'
+		+ text[start:end]
+		+ "\necho REACHED_MERGE_STAGE\n"
+	)
+	env = {
+		"PATH": "/usr/bin:/bin",
+		"CALL_LOG": str(calls),
+		"GITHUB_OUTPUT": str(output),
+		"RB_ACTION": action,
+		"IS_FINAL": is_final,
+		"PR_ALREADY_MERGED": "false",
+		"POST_REVIEW_HEAD_REF": "feature/x",
+		"RB_JUDGED_HEAD_SHA": SHA,
+		"REPOSITORY": "owner/repo",
+		"PR_NUMBER": "42",
+		"RB_JUDGE_COMMENTS_INCOMPLETE": "false",
+		"RB_JUDGE_COMMENTS_INCOMPLETE_REASONS": "",
+	}
+	result = _bash(script, env, tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert "REACHED_MERGE_STAGE" in result.stdout
+	assert "RB_JUDGE_CONTEXT_INCOMPLETE" not in result.stdout + result.stderr
+	assert output.read_text(encoding="utf-8") == ""
+	log_lines = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+	assert log_lines == ["security_gate"]
+
+
 @requires_jq
 @pytest.mark.parametrize("incomplete", [True, False])
 def test_helper_flag_reaches_the_merge_gate_end_to_end(tmp_path: Path, incomplete: bool) -> None:
