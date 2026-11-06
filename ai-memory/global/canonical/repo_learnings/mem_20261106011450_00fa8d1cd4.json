@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "The repository has a dedicated `tests/test_ci_wires_every_test_file.py` check, and it has been updated alongside workflow and test additions. When introducing a test file, verify that CI includes it rather than assuming discovery is automatic.",
+  "fingerprint": "ec6930d3b44bf0ba094ab4a710d04a78ee776490b71f8600d8314d39159b019a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42142006107",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42142006107",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8859",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8860",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8863",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8873",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8881",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8861",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8864",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8865",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8877",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8882"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261106011450_00fa8d1cd4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Keep CI test discovery in sync when adding test files.",
+  "timestamps": {
+    "created_at": "2026-11-06T01:14:50Z",
+    "promoted_at": "2026-11-06T01:15:27Z",
+    "superseded_at": null
+  }
+}
