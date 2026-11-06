@@ -1218,9 +1218,10 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 					# extensionless `docs/guide`) so the scope check sees them.
 					if globlike or ("/" in token and "`" not in token and not _plan_grant_path(token)):
 						loose.append(token)
-					elif not backticked and _plan_grant_path(token):
+					elif _plan_grant_path(token):
 						# extract_plan_file_paths skips a bullet nested under a
-						# planner metadata line; check it here (fail closed).
+						# planner metadata line, backticked or not; check it
+						# here (fail closed).
 						loose.append(_plan_grant_path(token))
 			candidates: list[str] = []
 			for path in files + protected + loose:
