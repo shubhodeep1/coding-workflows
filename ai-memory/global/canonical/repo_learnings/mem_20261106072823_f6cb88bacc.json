@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Multiple merged changes touched `.github/workflows/ci.yml` alongside `tests/test_ci_wires_every_test_file.py`. When adding a test module, check whether the CI workflow or its wiring contract also needs updating so the new test is actually run.",
+  "fingerprint": "56634d09e406e5b6d75f2657c814324a0c517554e71c56a51537e10c2715aeb3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42180683229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42180683229",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8896",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8897",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8898",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8908",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8909",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8903",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8904",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8906",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8910",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8911"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261106072823_f6cb88bacc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Keep CI\u2019s explicit test-file wiring synchronized when adding tests.",
+  "timestamps": {
+    "created_at": "2026-11-06T07:28:23Z",
+    "promoted_at": "2026-11-06T07:29:04Z",
+    "superseded_at": null
+  }
+}
