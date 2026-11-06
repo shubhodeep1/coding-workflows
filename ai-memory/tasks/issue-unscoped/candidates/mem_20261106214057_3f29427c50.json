@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The change in tests/e2e_smoke_canary.txt is causing test failures in tests/test_implement_post_codex_recovery.py as reported by the pre-push test gate.\n  WHY: The reviewer claims the tests depend on the canary file content, so the update caused the failures. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) say the failures are unrelated to the diff, because that test file only references the canary path inside string literals. Severity was not stated by the source, so medium is a placeholder.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the content of tests/e2e_smoke_canary.txt to exactly three lines (status: ok, run_id: 40932430968, updated-by: ai-pipeline).\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The file content was updated correctly, but the reviewer says the change caused test regressions, so the implementation is incomplete or incompatible with existing test dependencies. Severity was given as MAJOR. Other reviewers found no gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:N/A (CI failure) | confidence=4\n  PROBLEM: The change in tests/e2e_smoke_canary.txt is causing test failures in tests/test_implement_post_codex_recovery.py as reported by the pre-push test gate.\n  WHY: The tests depend on the canary file content, and the update has caused these tests to fail, indicating an incorrect assumption in the test suite or an incomplete update.\n- TASK_GAP:\n  Requirement: Update the content of tests/e2e_smoke_canary.txt to exactly three lines (status: ok, run_id: 40932430968, updated-by: ai-pipeline).\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The file content has been updated correctly; however, the task completion resulted in test regressions, indicating the implementation is incomplete or incompatible with existing test dependencies.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "68bfc8af52377215264e68f29c769d55b42019c4cdcdac01e017fa12f66a637b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "42297345822",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42297345822",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106214057_3f29427c50",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "42297345822"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T21:40:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
