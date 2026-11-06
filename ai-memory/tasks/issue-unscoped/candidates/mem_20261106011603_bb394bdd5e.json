@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Merged stuck-state changes repeatedly touched scripts or workflow files together with `agents.d` guidance and `changelog.d` entries; some also updated the README. When extending one of these workflows, check all of these layers for consistency.",
+  "fingerprint": "9e2c4b849b3ea3b78450806e328c198420ef1ff12ad733b4bc030225ec31c6ef",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42142006107",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42142006107",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8859",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8860",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8863",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8873",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8881",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8861",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8864",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8865",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8877",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8882"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261106011603_bb394bdd5e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Stuck-state workflow changes often span implementation, agent guidance, changelog, and user-facing documentation.",
+  "timestamps": {
+    "created_at": "2026-11-06T01:16:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
