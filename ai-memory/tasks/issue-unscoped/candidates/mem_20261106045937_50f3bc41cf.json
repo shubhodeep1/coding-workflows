@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `copilot-pull-request-reviewer` check (run 41544382408) failed with `custom_instructions_too_large`, which is unrelated to the diff. The reviewer called it a non-blocking observation.\n  WHY: The Copilot reviewer job aborts before it produces a review. The cause is the Copilot custom-instruction size budget, not the canary file. The source severity was NIT, mapped to low.\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The pre-push test gate reports failures that it classifies as caused by this change. The test files reference the canary path only in fixture strings.\n  WHY: The gate's classifier flags any test that mentions the path, though no test reads the file's content. The source severity was NIT, mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=NIT | confidence=4\n  PROBLEM: The `copilot-pull-request-reviewer` check (run 41544382408) on head e540dbc exited with code 1. The log shows `custom_instructions_too_large` / `Prompt too big after adding system message` after loading `AGENTS.md` + `CLAUDE.md`.\n  WHY: The Copilot reviewer job aborts before producing a review, so the PR has no completed Copilot review. The canary diff is byte-correct (55 bytes, three lines, trailing newline), and the cause is independent of this PR.\n- tests/e2e_smoke_canary.txt:1-3 | severity=NIT | confidence=4\n  PROBLEM: The pre-push test gate reports one failure \"caused by this change\" plus four inherited failures, all in test files that do not read the canary file's content.\n  WHY: The gate's content-aware heuristic flags any test that mentions the path, even as a string literal (e.g. lines 5060 and 5779 of `tests/test_implement_post_codex_recovery.py`). No behavior depends on the new bytes, and fixing it is out of scope of issue #8363.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0e3af42dd3114b36b67ec244f06a7f76d6133dab798182e9314fdcf14aa2ebe5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "42164216523",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42164216523",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106045937_50f3bc41cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "42164216523"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T04:59:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
