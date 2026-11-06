@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:1209-1221 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: Inside a metadata block, run_heal_plan_scope_gate checks only the leading token or span of a nested bullet, so further file paths on the same line are never checked against the heal scope.\n  WHY: An out-of-scope file named later on the line can pass the gate, which is fail-open. Severity differs: gemini rated it MAJOR (mapped to high), glm rated it NIT, and sonnet-5_5 judged the same behaviour intentional and did not report it. The highest is used.\n- tests/test_files_touched_scope_guard.py:entire test suite | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push test gate persistently fails on the test suite.\n  WHY: The change cannot be verified as correct and regressions may be present.\n- tests/test_orchestrate_lib.py:3650-3688 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate attributes a failure in test_render_expected_files_section_has_no_allowlist to this change, but none of the symbols changed in the last run are on that test's path.\n  WHY: A stale or environmental attribution can misdirect repair attempts.\n- .github/workflows (external check):failed check-run copilot-pull-request-reviewer | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The check fails with HTTP 422 custom_instructions_too_large because of the size of the repository's AGENTS.md and CLAUDE.md.\n  WHY: No file in this PR feeds that payload, so the failure is external to the diff, and a clean CI result is not confirmed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:1218-1221 | severity=MAJOR | confidence=4\n  PROBLEM: The in_metadata logic only extracts the first token of a bullet line when inside a metadata block.\n  WHY: If a nested bullet contains multiple file paths, only the first is checked against the heal scope, so an out-of-scope file could bypass the gate.\n- tests/test_files_touched_scope_guard.py:Entire test suite | severity=MAJOR | confidence=4\n  PROBLEM: Persistent failure in the pre-push test gate.\n  WHY: The test suite fails, so the changes cannot be verified as correct and regressions may be present.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:1209-1215 | severity=NIT | confidence=3\n  PROBLEM: Inside a metadata block the heal pass collects only a nested bullet's leading backticked span or leading non-backticked token. A backticked span later on the same line, such as `  - also rewrites `e/out.py``, is never collected.\n  WHY: A heal plan with an out-of-scope file named mid-line on a nested bullet under Scope-mode metadata is approved with heal_scope_verified. The check is narrower than the changelog wording implies.\n- tests/test_orchestrate_lib.py:3650-3688 | severity=NIT | confidence=3\n  PROBLEM: The pre-push gate classifies tests/test_orchestrate_lib.py as a failure caused by this change, but the test exercises only symbols that the last run did not change.\n  WHY: No path from the last-run diff reaches this test, so the attribution is stale or environmental, and a misclassification can misdirect repair attempts.\n- .github/workflows (external check):failed check-run copilot-pull-request-reviewer | severity=NIT | confidence=5\n  PROBLEM: The check fails with HTTP 422 custom_instructions_too_large after building custom instructions from AGENTS.md and CLAUDE.md.\n  WHY: No file in this PR feeds that payload, so the failure is external to the diff. CI green is not confirmed (collection_status: timeout, three runs in progress).\n- HARDENING_SUGGESTIONS: scripts/files_touched_scope_guard.py:1214-1215 | HARDENING_RISK_SCORE=2\n  PROBLEM: Mid-line backticked spans on nested bullets inside a metadata block bypass the heal scope check.\n  WHY: Suggested fix: also collect _PLAN_GRANT_BACKTICK_RE.findall(bullet.group(1)) spans for in-metadata nested bullets (about 2 lines changed).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "50f92f15b937fe4506a4358db32959afc232e75945c92eadc5b80ba814e372d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8893,
+    "run_id": "42159717826",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42159717826",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106042150_b6361ede47",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8893,
+    "run_id": "42159717826"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T04:21:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
