@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Make append-only, minimal edits\" and \"Do not reformat files unless required for the fix.\"\n  expected_change_site: tests/test_clarify_respond_standalone.py (should differ only by the appended collector for the new test module)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: tests/test_clarify_respond_standalone.py lines 300 (test_fallback_guard_checks_later_recommended_answer) and 412 (test_data_guard_rewrites_emphasized_decisions_before_posting) changed from two tabs plus a space to two tabs before \"--clarification-file\" (reviewers also cite 299\u2013300 and 411\u2013412), whitespace-only and unrelated to the fix, the claimed restoration never landed because commit 469c158 touched only changelog.d/8896-issue-title-env-newline.md. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Make append-only, minimal edits.\" Section 9 adds \"Do not reformat files unless required for the fix.\" and \"Do not change formats, types, or unrelated logic.\"\nExpected change site: tests/test_clarify_respond_standalone.py should change only by appending the collector for the new test module at the end of the file.\nEvidence of absence: Lines 300 (in test_fallback_guard_checks_later_recommended_answer) and 412 (in test_data_guard_rewrites_emphasized_decisions_before_posting) start with two tabs and no trailing space before `\"--clarification-file\"`. The base had two tabs plus one space. The PR diff still shows both hunks as whitespace-only changes. The previous autofix summary said it restored this indentation, but the last commit (469c158) touched only changelog.d/8896-issue-title-env-newline.md. Run-time behaviour is unchanged.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nFile: tests/test_clarify_respond_standalone.py\nLine or code reference: line 300 (test_fallback_guard_checks_later_recommended_answer) and line 412 (test_data_guard_rewrites_emphasized_decisions_before_posting)\nProblem: Two unrelated whitespace-only edits remain. The continuation line lost a leading space (two tabs plus a space -> two tabs) at both line 300 and line 412. The issue's constraints require \"append-only, minimal edits\" and \"Do not reformat files unless required for the fix.\" The previous AI autofix editor claimed to restore the indentation (PR comment 6675955422), but the LAST RUN DIFF (commit 469c158) touches only changelog.d/8896-issue-title-env-newline.md, so the fix never landed.\nWhy it fails at runtime: Functionally identical, so no runtime defect. The failure is against the task spec.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \u201cMake append-only, minimal edits\u201d and \u201cDo not reformat files unless required for the fix.\u201d\nExpected change site: `tests/test_clarify_respond_standalone.py`; only the new-test collector should be added.\nEvidence of absence: The PR diff also changes indentation at lines 299\u2013300 and 411\u2013412 in existing tests, unrelated to the collector or issue-title fix.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Make append-only, minimal edits\" (LINKED ISSUE, Constraints); \"Do not reformat files unless required for the fix\" (\u00a79).\nExpected change site: `tests/test_clarify_respond_standalone.py` should differ from the merge-base only by the appended `_collect_github_env_issue_title_newline_cases` collector (lines 489-512).\nEvidence of absence: Whitespace-only continuation-line changes remain at lines 300 (`test_fallback_guard_checks_later_recommended_answer`) and 412 (`test_data_guard_rewrites_emphasized_decisions_before_posting`), two tabs plus a space became two tabs. The most recent autofix commit (469c158) touched only `changelog.d/8896-issue-title-env-newline.md`, so the claimed restoration never landed.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bb882e6adc6a8df3a27dc0e76430ec6d2dfd2008bc56e0d873e17fbd1142a4e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8906,
+    "run_id": "42155939385",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42155939385",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106035248_1d5cf3eec6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8906,
+    "run_id": "42155939385"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T03:52:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
