@@ -1012,6 +1012,87 @@ def test_plan_files_outside_files_touched_uses_the_implement_matcher() -> None:
 	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body + scope_marker) == ["backend/withdrawal_flow.py"]
 
 
+# Consumer tele-funtoken-msg-scoring #5101: the planner put its Scope-mode
+# lines right under the Files bullets, and the justification named files it
+# chose NOT to change. The plan was held with plan_files_outside_files_touched.
+_SCOPE_MODE_PLAN = ("## Files likely to change\n- `ft.games/app.py`\n- `tests/test_wof_spin.py`\n"
+	"- `changelog.d/5101-wof-spin.md` (new)\n\nScope-mode: Hold Scope\n"
+	"Reuse-audit: extends _safe_record_streaks_quests_wof_spin\n"
+	"Scope-mode justification: deeper fixes would edit `ft.games/db_indexes.py` and "
+	"`ft.games/streaks_quests.py`, which are outside the protected scope.\n\n"
+	"## Automation / wiring\n- No new script.\n")
+
+
+def test_plan_file_paths_stop_at_scope_mode_metadata() -> None:
+	listed = ["ft.games/app.py", "tests/test_wof_spin.py", "changelog.d/5101-wof-spin.md"]
+	assert guard.extract_plan_file_paths(_SCOPE_MODE_PLAN) == listed
+	body = _body("ft.games/app.py", "tests/test_wof_spin.py", "changelog.d/*.md")
+	assert guard.plan_files_outside_files_touched(_SCOPE_MODE_PLAN, body, issue_number=5101) == []
+	# Bold, differently cased, listed or nested lead-ins are skipped too; the
+	# file bullet after them is still read.
+	for lead in ("**Scope-mode:** Hold Scope", "reuse-audit: extends f", "Implementation-time estimate: 20 minutes",
+			"__Scope-mode justification__: see `ft.games/db_indexes.py`",
+			"- **Scope-mode:** Hold Scope, not `ft.games/db_indexes.py`", "10. Reuse-audit: extends `e/f.py`",
+			"    - **Scope-mode:** Hold Scope, not `x/y.py`"):
+		plan = f"## Files likely to change\n- `a/b.py`\n{lead}\n- `c/d.py`\n"
+		assert guard.extract_plan_file_paths(plan) == ["a/b.py", "c/d.py"], lead
+	# The justification's prose continuation is skipped up to the next file bullet.
+	assert guard.extract_plan_file_paths("## Files likely to change\nScope-mode: Hold Scope\n"
+		"Scope-mode justification: deeper fixes would edit\n`x/rejected.py`, out of scope.\n- `a/b.py`\n") == ["a/b.py"]
+	# Metadata before the bullets does not hide them from the files_touched check.
+	before = "## Files likely to change\nScope-mode: Hold Scope\n- `a/b.py`\n- `e/out.py`\n"
+	assert guard.plan_files_outside_files_touched(before, _body("a/b.py")) == ["e/out.py"]
+	# A bullet that merely mentions the word does not end the list.
+	assert guard.extract_plan_file_paths(
+		"## Files likely to change\n- `a/b.py` (Scope-mode: n/a)\n- `c/d.py`\n") == ["a/b.py", "c/d.py"]
+	# The protected-path scan still reads the whole section (fails closed).
+	protected = _SCOPE_MODE_PLAN.replace("`ft.games/db_indexes.py`", "`scripts/x.sh`")
+	assert "scripts/x.sh" in guard.extract_plan_automation_paths(protected)
+	# The heal-scope gate still checks an exact file listed after the metadata.
+	with tempfile.TemporaryDirectory() as tmp:
+		plan_file, scope_file = Path(tmp, "plan.md"), Path(tmp, "scope.txt")
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n- `e/out.py`\n",
+			encoding="utf-8")
+		scope_file.write_text("a/b.py\n", encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "heal_scope_plan_out_of_scope"
+		assert record["denied_paths"] == ["e/out.py"]
+		# A non-backticked bullet nested under a metadata line is still checked.
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n  - e/out.py\n",
+			encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
+		# So is a backticked one.
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n  - `e/out.py`\n",
+			encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
+		# A later file on a nested bullet led by a directory-shaped token is checked too.
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n  - `docs/guide`, `e/out.py`\n",
+			encoding="utf-8")
+		scope_file.write_text("a/b.py\ndocs/**\n", encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
+		scope_file.write_text("a/b.py\n", encoding="utf-8")
+		# A later file on a nested bullet that starts with a file is checked too.
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n  - `a/b.py`, `e/out.py`\n",
+			encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
+		# Files named only in the justification prose do not hold a heal plan.
+		plan_file.write_text(_SCOPE_MODE_PLAN, encoding="utf-8")
+		scope_file.write_text("ft.games/app.py\ntests/test_wof_spin.py\nchangelog.d/*.md\n", encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_IN_SCOPE and record["denied_paths"] == [], record
+
+
+def test_plan_prompt_copies_keep_scope_mode_out_of_the_files_section() -> None:
+	rule = ("   whenever `Scope-mode:` is present. Put these three lines after Testing considerations,\n"
+		"   never inside `## Files likely to change`: the plan approval gate reads a file named there as changed.\n")
+	for relative in ("prompts/mode-plan.txt", "prompts/_templates/mode-plan.txt", "scripts/run_plan_codex.sh"):
+		assert (REPO_ROOT / relative).read_text(encoding="utf-8").count(rule) == 1, relative
+
+
 def test_own_issue_fragments_are_allowed_for_issue_body_scopes() -> None:
 	"""Consumer tele-funtoken-msg-scoring#4815 (run 40055496344): an exact
 	files_touched list without changelog.d refused the fragment CLAUDE.md §20

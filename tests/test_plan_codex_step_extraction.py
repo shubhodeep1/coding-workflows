@@ -44,10 +44,12 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # (tele-funtoken-msg-scoring#4992; 260 -> 269 lines, 17_142 -> 17_830 bytes).
 # Merging #8339 and #8327 keeps both additions (260 -> 261 lines,
 # 17_142 -> 17_308 bytes); with #8335 the prompt is 270 lines, 17_996 bytes.
+# Consumer tele-funtoken-msg-scoring #5101 reworded rule 10 so the Scope-mode
+# lines stay out of the Files section (270 lines, 17_996 -> 18_031 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"61a2d67cf6b6f0a3b7183068b690a8afc7ca9f33780fcfabedc5fbe14c829fc6"
+	"a9ce63aafa64bb6cc8ab48e98a3b5b941c417c789228f16836a8bcee70e76ece"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 17_996
+PRE_EXTRACTION_PROMPT_BYTES = 18_031
 PRE_EXTRACTION_PROMPT_LINES = 270
 
 
