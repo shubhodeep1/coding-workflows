@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:3224 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The copilot-pull-request-reviewer CI check-run failed with custom_instructions_too_large.\n  WHY: The assembled reviewer prompt is too large, so the PR review pipeline cannot run successfully even though the code change is correct. Severity was given as MAJOR and is mapped here to high. Other reviewers judged this failure external and not attributable to the diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:3224 | severity=MAJOR | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer CI check-run failed with custom_instructions_too_large.\n  WHY: The reviewer infrastructure is failing to process the PR because the assembled prompt is too large. This prevents the PR review pipeline from running successfully despite the actual code change being correct.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9caee9ef6244e96ef8cd22f952699bdd04485f32c4a564a8bc7e95e3acc064f2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "42253094109",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42253094109",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106164156_a77dd26944",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "42253094109"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T16:41:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
