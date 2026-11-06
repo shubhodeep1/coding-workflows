@@ -1666,6 +1666,11 @@ jobs:
           bash scripts/dev/test_write_guard.sh
           bash scripts/dev/test_watchdog_helpers.sh
 
+      - name: Write guard root-path pattern tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_write_guard_root_pattern_chars.py
+
       - name: Targeted file context contract tests
         run: |
           set -euo pipefail
