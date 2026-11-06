@@ -297,7 +297,7 @@ def test_fallback_guard_checks_later_recommended_answer(tmp_path: Path) -> None:
 	assert answers.rstrip("\n") == "Q1: B\nQ2: A"
 	result = subprocess.run(
 		[sys.executable, str(ROOT / "scripts" / "clarify_data_provision_guard.py"),
-		"--clarification-file", str(clarification_path), "--answers-file", str(answer_path)],
+		 "--clarification-file", str(clarification_path), "--answers-file", str(answer_path)],
 		capture_output=True, text=True, check=True,
 	)
 	assert "Q1: B\nQ2: B" in result.stdout
@@ -409,7 +409,7 @@ def test_data_guard_rewrites_emphasized_decisions_before_posting(tmp_path: Path)
 	answers.write_text("**DECISIONS:**\n**Q1**: **B**\n**Q2**: **A**\n\n**RATIONALE:**\nQ2: This needs a URL.\n", encoding="utf-8")
 	result = subprocess.run(
 		[sys.executable, str(ROOT / "scripts" / "clarify_data_provision_guard.py"),
-		"--clarification-file", str(clarification), "--answers-file", str(answers)],
+		 "--clarification-file", str(clarification), "--answers-file", str(answers)],
 		capture_output=True, text=True, check=True,
 	)
 	assert "Q2: B\n" in result.stdout and "Q2: overrode A -> B" in result.stdout
