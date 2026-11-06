@@ -195,6 +195,8 @@ def main() -> int:
 		if args.tracking_body_file and args.tracking_body_file.exists():
 			issue["body"] = args.tracking_body_file.read_text(encoding="utf-8")
 
+	labels_from_file = issue is not None and bool(issue["labels"])
+
 	if issue is None or not issue["body"] or not issue["labels"]:
 		fetched_issue = _fetch_issue(args.repo, tracking_num)
 		if fetched_issue is None:
@@ -210,6 +212,15 @@ def main() -> int:
 				issue["labels"] = fetched_issue["labels"]
 			if not issue["body"]:
 				issue["body"] = fetched_issue["body"]
+
+	if TRACKING_LABEL not in issue["labels"] and labels_from_file:
+		# A non-empty --tracking-labels-file can be an incomplete poller
+		# snapshot (a failed label read cached as [] and then extended by
+		# another label write). Re-read the labels once before failing
+		# closed; keep the file labels when the fresh read fails.
+		fresh_issue = _fetch_issue(args.repo, tracking_num)
+		if fresh_issue is not None and fresh_issue["labels"]:
+			issue["labels"] = fresh_issue["labels"]
 
 	if TRACKING_LABEL not in issue["labels"]:
 		# Branch matches orchestrator/project-N but the linked issue lacks

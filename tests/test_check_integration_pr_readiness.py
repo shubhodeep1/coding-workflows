@@ -373,7 +373,8 @@ def test_main_fails_closed_when_tracking_labels_file_lacks_tracking_label():
 			labels_file = Path(tmp) / "labels.txt"
 			labels_file.write_text("enhancement\n", encoding="utf-8")
 			mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or True
-			mod._fetch_issue = lambda repo, n: (_ for _ in ()).throw(AssertionError("_fetch_issue should not run when file inputs are complete"))
+			fetch_calls: list[int] = []
+			mod._fetch_issue = lambda repo, n: fetch_calls.append(n) or {"labels": ["enhancement"], "body": "- [x] shipped A\n"}
 			sys.argv = [
 				"check_integration_pr_readiness.py",
 				"--head-ref", "orchestrator/project-2734",
@@ -386,9 +387,46 @@ def test_main_fails_closed_when_tracking_labels_file_lacks_tracking_label():
 			with contextlib.redirect_stderr(stderr):
 				rc = mod.main()
 		assert rc == 0
+		# The file labels lack the tracking label, so they are re-read once.
+		assert fetch_calls == [2734], fetch_calls
 		assert len(posted) == 1, posted
 		assert posted[0][0] == "failure"
 		assert "not labeled ai:orchestrator-tracking" in posted[0][1]
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_rereads_labels_when_labels_file_snapshot_is_stale():
+	# A non-empty but stale --tracking-labels-file must not post a false
+	# failure when the live issue still carries the tracking label.
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		with tempfile.TemporaryDirectory() as tmp:
+			body_file = Path(tmp) / "body.md"
+			body_file.write_text("- [x] shipped A\n", encoding="utf-8")
+			labels_file = Path(tmp) / "labels.txt"
+			labels_file.write_text("ai:integration-backpressure\n", encoding="utf-8")
+			mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or True
+			mod._fetch_issue = lambda repo, n: {"labels": [mod.TRACKING_LABEL, "ai:integration-backpressure"], "body": "- [x] shipped A\n"}
+			sys.argv = [
+				"check_integration_pr_readiness.py",
+				"--head-ref", "orchestrator/project-2734",
+				"--head-sha", "deadbeef",
+				"--repo", "owner/repo",
+				"--tracking-body-file", str(body_file),
+				"--tracking-labels-file", str(labels_file),
+			]
+			rc = mod.main()
+		assert rc == 0
+		assert len(posted) == 1, posted
+		assert posted[0][0] == "success"
+		assert "not labeled" not in posted[0][1]
 	finally:
 		sys.argv = old_argv
 		mod._post_commit_status = original_post
