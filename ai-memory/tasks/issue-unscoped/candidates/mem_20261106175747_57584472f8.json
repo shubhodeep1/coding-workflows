@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:5060-5779 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push test gate failures in the PR metadata (in `tests/test_implement_post_codex_recovery.py`) appear to be spurious results caused by the environment, not by the canary file change.\n  WHY: The failing tests reference the canary file path only within fixture strings and do not assert on its content, so the failures are unrelated to this diff. The reviewer labelled it SEVERITY: NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:5060, 5779 | severity=NIT | confidence=4\n  PROBLEM: The pre-push test gate failures in the PR metadata (in `tests/test_implement_post_codex_recovery.py`) appear to be spurious results caused by the environment, not by the canary file change.\n  WHY: The failing tests reference the canary file path only within fixture strings and do not assert on its content, so the failures are unrelated to this diff.\n- TASK_GAP (task-completeness section):\n  Requirement: Update the content of `tests/e2e_smoke_canary.txt` to be exactly the three lines: `status: ok\\nrun_id: 40876853022\\nupdated-by: ai-pipeline\\n`\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: The PR diff correctly implements this change. The file now contains the required three lines with the correct trailing newline.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7db500209e948a7bd260abfc70d8812e6d88eb78f2505a92e69a2486c2d3356b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "42264879724",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42264879724",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106175747_57584472f8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "42264879724"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T17:57:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
