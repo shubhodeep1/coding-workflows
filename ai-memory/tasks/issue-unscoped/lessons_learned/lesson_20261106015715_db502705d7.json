@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-06T01:57:15Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=CLAUDE.md:1; cited_path=CLAUDE.md, agents.md; files_touched=changelog.d/consumer-5101-plan-files-scope-mode-metadata.md, prompts/_templates/mode-plan.txt, prompts/mode-plan.txt, scripts/files_touched_scope_guard.py, scripts/run_plan_codex.sh, tests/test_files_touched_scope_guard.py, tests/test_plan_codex_step_extraction.py.",
+  "phase": "review_autofix",
+  "pr_number": 8893,
+  "record_id": "lesson_20261106015715_db502705d7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "CLAUDE.md, agents.md",
+    "CLAUDE.md",
+    "changelog.d/consumer-5101-plan-files-scope-mode-metadata.md",
+    "prompts/_templates/mode-plan.txt",
+    "prompts/mode-plan.txt",
+    "scripts/files_touched_scope_guard.py",
+    "scripts/run_plan_codex.sh",
+    "tests/test_files_touched_scope_guard.py",
+    "tests/test_plan_codex_step_extraction.py"
+  ]
+}
