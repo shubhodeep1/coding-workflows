@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-06T09:42:53Z",
+  "issue_number": 8837,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/review_autofix.yml:N/A; cited_path=.github/workflows/review_autofix.yml; files_touched=tests/e2e_smoke_canary.txt.",
+  "phase": "review_autofix",
+  "pr_number": 8842,
+  "record_id": "lesson_20261106094253_b700bf7bd3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix.yml",
+    "tests/e2e_smoke_canary.txt"
+  ]
+}
