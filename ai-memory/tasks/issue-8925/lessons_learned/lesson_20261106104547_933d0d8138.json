@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-06T10:45:47Z",
+  "issue_number": 8925,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=AGENTS.md:1; cited_path=AGENTS.md; files_touched=changelog.d/8925-readiness-fail-closed-missing-tracking-label.md, scripts/check_integration_pr_readiness.py, tests/test_check_integration_pr_readiness.py.",
+  "phase": "review_autofix",
+  "pr_number": 8927,
+  "record_id": "lesson_20261106104547_933d0d8138",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md",
+    "changelog.d/8925-readiness-fail-closed-missing-tracking-label.md",
+    "scripts/check_integration_pr_readiness.py",
+    "tests/test_check_integration_pr_readiness.py"
+  ]
+}
