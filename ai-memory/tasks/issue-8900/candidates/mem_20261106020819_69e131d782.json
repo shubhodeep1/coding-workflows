@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: quote the `HEAD^{tree}` revision in `scripts/workspace_init.sh` (SHELL-001)\n\nPlanning ref: `orchestrator/project-8895` @ `b79b58cf49a9555c4152d764efa6aaec782fc2d9` (Integration branch mismatch: false). This sub-issue links back to tracking issue #8895 with `Refs #8895` only, never an auto-close keyword.\n\nScope-mode: Hold Scope\nReuse-audit: extends workspace_init.sh fingerprint fallback\nScope-mode justification: The issue asks for exactly one change: quote the git revision argument on the fingerprint fallback line of `scripts/workspace_init.sh`. I ran `shellcheck scripts/workspace_init.sh` on the planning ref and it reports only the two SC1083 warnings on line 111, both for this argument. One quoting fix removes every finding in the file. Nothing larger is needed, and nothing further is cut out. The fuller option and the shortcut are the same one-line edit, so the Boil the Lake rule does not change the outcome. Order of priorities (\u00a76): Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed. Behaviour stays the same and the shell's intent becomes explicit.\n\n## Files likely to change\n- `scripts/workspace_init.sh`\n\n## Functions or modules to implement\n- The fingerprint resolver function in `scripts/workspace_init.sh` (the block at lines 100\u2013118 that reads `WORKSPACE_FINGERPRINT_FILE`, then falls back to the git tree of `source_path`, then to `none`). Change only line 111:\n  - Before: `fingerprint=\"$(git -C \"${source_path}\" rev-parse HEAD^{tree} 2>/dev/null || true)\"`\n  - After: `fingerprint=\"$(git -C \"${source_path}\" rev-parse \"HEAD^{tree}\" 2>/dev/null || true)\"`\n- Keep the leading two tabs on that line. Do not reformat any other line. The `|| true` fallback, the `[ -n \"${fingerprint}\" ]` check and the final `printf 'none\\n'` stay exactly as they are.\n- The rest of the repo already quotes this argument: `scripts/orchestrate_poll_process.sh:11513` uses `rev-parse 'HEAD^{tree}'`. Double quotes are used here, as the issue specifies. Both forms pass the same literal string to git.\n\n## Data structures affected\n- None. The fingerprint value, the cache-key format (`workspace-v1-<id>-<fingerprint>-<run>`) and the step outputs are unchanged.\n\n## API or interface changes\n- None. No CLI, env var or output-key changes.\n\n## Decisions\n### D1 \u2014 Change no test files\n- Chosen: Edit only `scripts/workspace_init.sh`. The tests are run but not edited.\n- Alternatives considered: Add a contract assertion to `tests/test_workspace_init.py` that pins the quoted form, or touch the other \"expected files\" from the decomposition (`tests/test_ci_poll_test_sharding.py`, `tests/test_claude_engine_utility_roles.py`, `tests/test_conflict_manifest_union_contract.py`, `tests/test_review_host_python_safe_path.py`, `tests/test_review_pr_tree_python_isolation.py`, `tests/test_workspace_cache_maintenance.py`).\n- Why: The issue allows a new assertion only \"if an existing test already inspects this line\". I grepped those files for `rev-parse` and `tree}` and none of them inspects line 111. They read `workspace_init.sh` for other things: the sharding registry, the `.claude` materialization comment, the stage/metadata invocation and the Python safe path. The decomposition list is advisory, and the issue's \"Change only this line\" constraint takes precedence.\n\n### D2 \u2014 Use double quotes, not single quotes\n- Chosen: `\"HEAD^{tree}\"`.\n- Alternatives considered: `'HEAD^{tree}'`, which `orchestrate_poll_process.sh` uses.\n- Why: The issue names the double-quoted form. There is no `$` or backslash inside, so both forms produce the same argument, and following the issue keeps the reviewer diff unambiguous.\n\n## Security considerations\n- Trust boundaries: none touched. `source_path` is already quoted. The revision string is a constant literal and contains no external input.\n- Authorization: no new endpoint or surface.\n- Input validation: unchanged.\n- Abuse cases: none introduced. Quoting removes the theoretical risk of shell brace/glob interpretation, though `{tree}` has no comma or range and is not expanded today. Secrets and money handling do not apply.\n\n## Risks and edge cases\n- Behaviour is identical. Bash passes `HEAD^{tree}` literally both before and after the change, because a single-word brace with no comma or range is not expanded and there are no glob metacharacters (`^` is not a glob character in bash's default mode).\n- Non-git `source_path`, as in the existing tests that use a plain `mkdir` source directory: `rev-parse` still fails, `|| true` swallows the failure, and the function still falls through to `none` or the env override.\n- Conflict check: the issue's line number (111) and quoted text match the planning ref exactly, so there is no conflict.\n- `tests/test_conflict_manifest_union_contract.py` only mentions `workspace_init.sh` in a docstring. Its own `HEAD^{tree}` calls go through a Python argv and are unaffected.\n\n## Testing considerations\nRun these on the edited tree:\n1. `bash -n scripts/workspace_init.sh` must exit 0.\n2. `shellcheck scripts/workspace_init.sh` must exit 0. `/usr/bin/shellcheck` is available, and on the planning ref the only findings are the two SC1083 warnings on line 111.\n3. `PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_workspace_init.py tests/test_workspace_cache_maintenance.py tests/test_review_host_python_safe_path.py tests/test_claude_engine_utility_roles.py -q` must pass unchanged.\n4. `git diff --stat` must show `scripts/workspace_init.sh | 2 +-` and nothing else.\n\nNo new test file, so no CI sharding registry update is needed.\n\n## Pre-execution self-check\n- The edit is one line in one file, matching the issue's \"Change only this line\" constraint.\n- The line text is verified against `b79b58cf\u2026` and the ShellCheck finding was reproduced locally.\n- No test currently inspects the line, so the issue's own rule means no assertion is added.\n- No workflow YAML is touched, so the \u00a724 size limit does not apply. No `agents.md` edit, no new script and no supervisor, so \u00a725 and \u00a720 do not apply.\n- The PR body must use `Refs #8895`, never a closing keyword against the tracking issue.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "60dbff810cd00bcc34c2509ddafd5756a5ddca50c44ec05121e55dcc40a9cc00",
+  "lineage": {
+    "issue_number": 8900,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42147828718",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42147828718",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8900"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261106020819_69e131d782",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8900,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42147828718"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8900",
+  "timestamps": {
+    "created_at": "2026-11-06T02:08:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
