@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml (or infrastructure configuration):N/A | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI infrastructure failure (copilot-pull-request-reviewer) fails with HTTP 422 errorCode \"custom_instructions_too_large\" before performing any review.\n  WHY: The failure is attributed to the repository instruction files (CLAUDE.md/AGENTS.md) exceeding the agent's prompt-size limits, not to the canary update, so it cannot be mapped to the PR diff. Severity is not stated by the source; low is the closest fit. anthropic_claude-sonnet-5_5 noted the same failure as a NIT (confidence 5) in its notes rather than as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nNote: the copilot-pull-request-reviewer check fails with custom_instructions_too_large (HTTP 422). The reviewer called it a third-party size limit not caused by this change, SEVERITY: NIT, ISSUE_CONFIDENCE: 5. It was not raised as a finding.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml (or infrastructure configuration):N/A | confidence=5\n  PROBLEM: CI infrastructure failure (copilot-pull-request-reviewer).\n  WHY: The check fails with an HTTP 422 error (errorCode: \"custom_instructions_too_large\") before performing any review. The failure is attributed to the CLAUDE.md/AGENTS.md instruction files exceeding the agent's prompt-size limits, not to a defect in the canary update, so it cannot be mapped to the PR diff.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "77a65bc10b4351201645bb209b4ef84f8ee71e2d576d52333734b611039c9363",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "42243061561",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42243061561",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106153629_6ffee997ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "42243061561"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T15:36:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
