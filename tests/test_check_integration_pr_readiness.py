@@ -360,7 +360,8 @@ def test_main_fails_closed_when_tracking_label_missing():
 
 def test_main_fails_closed_when_tracking_labels_file_lacks_tracking_label():
 	# Poller input shape: --tracking-body-file + --tracking-labels-file
-	# with a non-tracking label must fail closed without fetching.
+	# with a non-tracking label re-reads the labels once, then fails
+	# closed when the live labels still lack the tracking label.
 	mod = _import()
 	posted: list[tuple[str, str, str]] = []
 	original_post = mod._post_commit_status
