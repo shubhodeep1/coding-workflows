@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run shellcheck scripts/workspace_init.sh if it is available, and bash -n.\"\n  expected_change_site: PR-head validation evidence for scripts/workspace_init.sh (PR description pre-push test gate section)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR description's validation summary lists six test files and shellcheck but not bash -n, and no artifact records the syntax check having run (severity NIT per all three reviewers).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: Run shellcheck scripts/workspace_init.sh if it is available, and bash -n.\nExpected change site: PR-head validation of scripts/workspace_init.sh\nEvidence of absence: The PR description confirms that only shellcheck was executed; there is no evidence that the mandatory bash -n syntax check was performed on the modified script.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Run shellcheck scripts/workspace_init.sh if it is available, and bash -n.\"\nExpected change site: PR-head validation of scripts/workspace_init.sh.\nEvidence of absence: The reported validation summary lists six test files and shellcheck, but does not list bash -n.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Run `shellcheck scripts/workspace_init.sh` if it is available, and `bash -n`.\"\nExpected change site: PR-head validation evidence for scripts/workspace_init.sh (PR description pre-push test gate section).\nEvidence of absence: The PR description's test-gate summary enumerates 7 runs (six test files plus `shellcheck`) but does not list `bash -n` anywhere; no artifact in the PR context records the syntax check having run. The code deliverable itself is met and the one-line quoted edit is trivially syntax-valid by inspection, so severity stays NIT.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2447e9a8f44aa49e1e341c3ab8b3f12a412c52a9d68bcce0adb46f510a2ccc2d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8901,
+    "run_id": "42149578137",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42149578137",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106025709_a109060c60",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8901,
+    "run_id": "42149578137"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T02:57:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
