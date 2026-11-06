@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:3224-3258 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The copilot-pull-request-reviewer check fails with `custom_instructions_too_large` (HTTP 422), \"Prompt too big after adding system message\", because the repository custom instructions (AGENTS.md / CLAUDE.md) exceed the bot's prompt limit. The reviewers cite different locations for it: anthropic_claude-sonnet-5_5 cites agents.md and CLAUDE.md (check-run 41544333941, job 125616096789), and google_gemini-3_1-flash-lite cites .github/workflows/review_autofix.yml 3224-3258.\n  WHY: The bot exits before it reviews anything. Severity disagreement: google_gemini-3_1-flash-lite rated it MAJOR and anthropic_claude-sonnet-5_5 rated it NIT because no hunk in this PR touches those files. The highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.md and CLAUDE.md (pr_check_runs_context.txt, failed[0]) | severity=NIT | confidence=4\n  PROBLEM: The check-run \"copilot-pull-request-reviewer\" (run 41544333941, job 125616096789) fails with `custom_instructions_too_large` (HTTP 422), \"Prompt too big after adding system message\".\n  WHY: The bot exits 1 before reviewing. No hunk in this PR touches those files, so the failure comes from the size of the files already in the repository and cannot be fixed within this PR's scope.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml (or upstream templates):3224-3258 | severity=MAJOR | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer job fails with \"custom_instructions_too_large\" (HTTP 422) during prompt construction, blocking the reviewer pipeline.\n  WHY: The custom instruction payload (derived from CLAUDE.md/AGENTS.md) exceeds the bot's token limit. The reviewer calls this a systemic issue, not a bug in the PR's logic.\n- TASK_GAP (satisfied, reported as NIT, confidence 5):\n  Requirement: \"Update the file `tests/e2e_smoke_canary.txt` so it is exactly these three lines: `status: ok`, `run_id: 40831286935` and `updated-by: ai-pipeline` (with a trailing newline).\"\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: The file already contains the required content (3 lines, 55 bytes), so the task is fully satisfied.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "418cbc39c17a4f969d8b0b0a389168ff22b6d48f96b40ab96891ad5fc4abdf7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "42218304523",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42218304523",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106124104_8002f19317",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "42218304523"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T12:41:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
