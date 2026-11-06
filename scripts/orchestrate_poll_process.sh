@@ -29070,9 +29070,9 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         _rb_legacy_issue_raw=""
         _rb_legacy_review_raw=""
         _rb_legacy_issue_raw="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null)" || { _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}issue_comments_read_failed"; _rb_legacy_issue_raw=""; }
-        RB_PR_ISSUE_COMMENTS="$(printf '%s' "${_rb_legacy_issue_raw}" | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null)" || { RB_PR_ISSUE_COMMENTS='[]'; if [ "${_rb_ctx_incomplete_reasons#*issue_comments_read_failed}" = "${_rb_ctx_incomplete_reasons}" ]; then _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}issue_comments_read_failed"; fi; }
+        RB_PR_ISSUE_COMMENTS="$(printf '%s' "${_rb_legacy_issue_raw}" | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null)" || { RB_PR_ISSUE_COMMENTS='[]'; if [ "${_rb_ctx_incomplete_reasons#*issue_comments_read_failed}" = "${_rb_ctx_incomplete_reasons}" ]; then _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}issue_comments_parse_failed"; fi; }
         _rb_legacy_review_raw="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" 2>/dev/null)" || { _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}review_comments_read_failed"; _rb_legacy_review_raw=""; }
-        RB_PR_REVIEW_COMMENTS="$(printf '%s' "${_rb_legacy_review_raw}" | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null)" || { RB_PR_REVIEW_COMMENTS='[]'; if [ "${_rb_ctx_incomplete_reasons#*review_comments_read_failed}" = "${_rb_ctx_incomplete_reasons}" ]; then _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}review_comments_read_failed"; fi; }
+        RB_PR_REVIEW_COMMENTS="$(printf '%s' "${_rb_legacy_review_raw}" | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null)" || { RB_PR_REVIEW_COMMENTS='[]'; if [ "${_rb_ctx_incomplete_reasons#*review_comments_read_failed}" = "${_rb_ctx_incomplete_reasons}" ]; then _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}review_comments_parse_failed"; fi; }
         [ -n "${RB_PR_ISSUE_COMMENTS}" ] || RB_PR_ISSUE_COMMENTS='[]'
         [ -n "${RB_PR_REVIEW_COMMENTS}" ] || RB_PR_REVIEW_COMMENTS='[]'
         unset _rb_legacy_issue_raw _rb_legacy_review_raw
@@ -30179,7 +30179,11 @@ ${RB_FIX_DESC}
                 fi
               else
                 echo "  Judge produced no file changes."
-                if [ "${RB_TARGET_MERGED}" = "true" ]; then
+                if [ "${RB_TARGET_MERGED}" = "true" ] && [ "${_rb_ctx_comments_incomplete:-false}" = "true" ]; then
+                  # BUG-002: keep ai:review-blocked; a "no outstanding fixes" verdict on incomplete comment context is withheld.
+                  echo "  [review-blocked] Deferred for merged PR #${RB_PR} (issue #${rb_issue}): comment context incomplete; no-fix close-out withheld this tick."
+                  RB_SKIP_RETRY_INCREMENT="true"
+                elif [ "${RB_TARGET_MERGED}" = "true" ]; then
                   echo "  No follow-up needed — merged PR has no outstanding fixes."
                   gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' 2>/dev/null || true

@@ -394,3 +394,66 @@ def test_poller_rb_incomplete_log_line_shape_in_source() -> None:
 		in block
 	)
 	assert "tr -cd 'a-z0-9_,'" in block
+
+
+# ---------------------------------------------------------------------------
+# No-fix chain (runtime)
+# ---------------------------------------------------------------------------
+
+
+def _rb_incomplete_no_fix_chain() -> str:
+	text = POLLER.read_text(encoding="utf-8")
+	start = text.index('echo "  Judge produced no file changes."')
+	stop = text.index('echo "  Treating as merge decision."', start)
+	return text[start:stop]
+
+
+def _run_no_fix_chain(tmp_path: Path, incomplete: str, merged: str) -> subprocess.CompletedProcess[str]:
+	env = _rb_incomplete_setup(tmp_path, {})
+	body = (
+		"RB_PR=9\nrb_issue=42\nGITHUB_REPOSITORY=o/r\nRB_SKIP_RETRY_INCREMENT=false\n"
+		f"_rb_ctx_comments_incomplete={incomplete}\nRB_TARGET_MERGED={merged}\n"
+		"gh_retry() { echo \"GH $*\"; }\ntg_notify() { echo TG; }\n_gh_url() { echo url; }\n"
+		+ _rb_incomplete_no_fix_chain()
+		+ "echo TREAT\nfi\necho \"SKIP=${RB_SKIP_RETRY_INCREMENT}\"\n"
+	)
+	return _rb_incomplete_run(tmp_path, env, body, source_helpers=False)
+
+
+@pytest.mark.parametrize("merged", ["true", "false"])
+def test_poller_rb_incomplete_no_fix_chain_defers_on_incomplete(tmp_path: Path, merged: str) -> None:
+	result = _run_no_fix_chain(tmp_path, "true", merged)
+	assert result.returncode == 0, result.stderr
+	assert "TREAT" not in result.stdout
+	assert "GH " not in result.stdout
+	assert "TG" not in result.stdout
+	assert "comment context incomplete" in result.stdout
+	assert "SKIP=true" in result.stdout
+
+
+@pytest.mark.parametrize(("merged", "expect_treat"), [("true", False), ("false", True)])
+def test_poller_rb_incomplete_no_fix_chain_complete_is_unchanged(tmp_path: Path, merged: str, expect_treat: bool) -> None:
+	result = _run_no_fix_chain(tmp_path, "false", merged)
+	assert result.returncode == 0, result.stderr
+	assert ("TREAT" in result.stdout) is expect_treat
+	assert "comment context incomplete" not in result.stdout
+	assert "SKIP=false" in result.stdout
+	if merged == "true":
+		assert "--remove-label ai:review-blocked" in result.stdout
+		assert "TG" in result.stdout
+
+
+@_requires_jq_rb_incomplete
+def test_poller_rb_incomplete_legacy_transform_failure_reason(tmp_path: Path) -> None:
+	env = _rb_incomplete_setup(tmp_path, {"comments.json": "not json {", "review.json": []})
+	body = (
+		"unset -f gh_pr_with_all_comments _gh_pr_with_all_comments_rest\n"
+		+ _POLLER_PREFIX_RB_INCOMPLETE
+		+ _rb_incomplete_assembly_block()
+		+ _REPORT_RB_INCOMPLETE
+	)
+	result = _rb_incomplete_run(tmp_path, env, body, source_helpers=True)
+	assert result.returncode == 0, result.stderr
+	assert _rb_incomplete_lines(result.stderr) == [
+		"::warning::RB_JUDGE_CONTEXT_INCOMPLETE pr=9 reasons=issue_comments_parse_failed action=defer_merge source=poller"
+	]
