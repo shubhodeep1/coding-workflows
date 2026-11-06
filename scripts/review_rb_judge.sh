@@ -1380,9 +1380,10 @@ fi
 # BUG-002: the comments helper marks a context with a failed read as
 # `comments_incomplete: true` (strict boolean) plus `incomplete_reasons`. Only
 # closed [a-z_] tokens (at most 8) are kept, since they reach logs, the
-# trusted prompt note and a PR comment.
-if [ -z "${RB_JUDGE_CONTEXT_EMPTY_REASON}" ] \
-  && printf '%s' "${PR_CONTEXT_JSON}" | jq -e '.comments_incomplete == true' >/dev/null 2>&1; then
+# trusted prompt note and a PR comment. Probed before the empty-context
+# fallback below, so a helper that exits nonzero but still reports the field
+# also defers the merge (RB_JUDGE_CONTEXT_EMPTY handling is unchanged).
+if printf '%s' "${PR_CONTEXT_JSON}" | jq -e '.comments_incomplete == true' >/dev/null 2>&1; then
   RB_JUDGE_COMMENTS_INCOMPLETE="true"
   RB_JUDGE_HELPER_INCOMPLETE_REASONS="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -r '[(.incomplete_reasons // [])[]? | strings | select(test("\\A[a-z_]{1,64}\\z"))] | .[:8] | join(",")' 2>/dev/null || true)"
   if [ -n "${RB_JUDGE_HELPER_INCOMPLETE_REASONS}" ]; then

@@ -74,7 +74,9 @@ def _bash(script: str, env: dict[str, str], cwd: Path) -> subprocess.CompletedPr
 	return subprocess.run(["bash", "-c", script], env=env, cwd=cwd, capture_output=True, text=True, check=False, timeout=60)
 
 
-def _run_context(tmp_path: Path, helper_json: str | None, *, fail: tuple[str, ...] = (), pipefail: bool = True) -> dict:
+def _run_context(
+	tmp_path: Path, helper_json: str | None, *, fail: tuple[str, ...] = (), pipefail: bool = True, helper_rc: int = 0
+) -> dict:
 	"""Run the context assembly block. ``helper_json=None`` drives the legacy branch."""
 	bindir = tmp_path / "bin"
 	bindir.mkdir(exist_ok=True)
@@ -96,7 +98,7 @@ def _run_context(tmp_path: Path, helper_json: str | None, *, fail: tuple[str, ..
 		prelude += "unset -f gh_pr_with_all_comments _gh_pr_with_all_comments_rest 2>/dev/null || true\n"
 	else:
 		(tmp_path / "helper.json").write_text(helper_json, encoding="utf-8")
-		prelude += 'gh_pr_with_all_comments() { cat "${FAKE_GH_DIR}/helper.json"; }\n'
+		prelude += f'gh_pr_with_all_comments() {{ cat "${{FAKE_GH_DIR}}/helper.json"; return {int(helper_rc)}; }}\n'
 	script = (
 		prelude
 		+ _marker_block(CTX_BEGIN, CTX_END)
@@ -181,6 +183,17 @@ def test_all_invalid_reasons_report_unspecified(tmp_path: Path, reasons) -> None
 	assert result["rc"] == 0, result["stderr"]
 	assert result["flag"] == "true"
 	assert result["incomplete_lines"] == ["::warning::RB_JUDGE_CONTEXT_INCOMPLETE pr=7 reasons=unspecified action=defer_merge"]
+
+
+@requires_jq
+def test_nonzero_helper_exit_with_incomplete_flag_still_defers(tmp_path: Path) -> None:
+	payload = '{"meta":{},"comments":[],"review_comments":[],"comments_incomplete":true,"incomplete_reasons":["issue_comments_read_failed"]}'
+	result = _run_context(tmp_path, payload, helper_rc=1)
+	assert result["rc"] == 0, result["stderr"]
+	assert result["flag"] == "true"
+	assert result["ctx"] == "{}"
+	assert "::warning::RB_JUDGE_CONTEXT_EMPTY pr=7 reason=assembly_failed" in result["stderr"]
+	assert len(result["incomplete_lines"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +346,61 @@ def test_complete_context_still_merges_as_before(tmp_path: Path) -> None:
 		"judge_skip_reason=orchestrator_integration_pr",
 	]
 	assert any(c.startswith(f"status owner/repo {SHA} success") for c in result["calls"])
+
+
+@requires_jq
+@pytest.mark.parametrize("incomplete", [True, False])
+def test_helper_flag_reaches_the_merge_gate_end_to_end(tmp_path: Path, incomplete: bool) -> None:
+	"""Helper JSON -> context block -> flag -> merge gate, in one shell."""
+	doc = {"meta": {}, "comments": [], "review_comments": []}
+	if incomplete:
+		doc.update(comments_incomplete=True, incomplete_reasons=["issue_comments_read_failed"])
+	(tmp_path / "helper.json").write_text(json.dumps(doc), encoding="utf-8")
+	calls = tmp_path / "calls.log"
+	output = tmp_path / "github_output"
+	output.write_text("", encoding="utf-8")
+	script = (
+		"set -uo pipefail\n"
+		"RB_JUDGE_COMMENTS_INCOMPLETE=false\nRB_JUDGE_COMMENTS_INCOMPLETE_REASONS=\n"
+		"REPOSITORY=owner/repo\nPR_NUMBER=42\nPRELOADED_PR_META='{}'\n"
+		'gh_pr_with_all_comments() { cat "${FAKE_GH_DIR}/helper.json"; }\n'
+		'gh_retry() { printf \'gh_retry %s\\n\' "$(printf \'%s\' "$*" | tr \'\\n\' \' \')" >> "${CALL_LOG}"; return 0; }\n'
+		'review_head_gate_post_status() { printf \'status %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
+		'_resilient_phase_swap() { printf \'phase_swap %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
+		'rb_security_merge_gate() { printf \'security_gate\\n\' >> "${CALL_LOG}"; return 0; }\n'
+		+ _marker_block(CTX_BEGIN, CTX_END)
+		+ "\n"
+		+ _gate_block()
+		+ "\necho FELLTHROUGH\n"
+	)
+	env = {
+		"PATH": os.environ["PATH"],
+		"FAKE_GH_DIR": str(tmp_path),
+		"CALL_LOG": str(calls),
+		"GITHUB_OUTPUT": str(output),
+		"RB_ACTION": "merge",
+		"IS_FINAL": "false",
+		"PR_ALREADY_MERGED": "false",
+		"POST_REVIEW_HEAD_REF": "feature/x",
+		"RB_JUDGED_HEAD_SHA": SHA,
+	}
+	result = _bash(script, env, tmp_path)
+	assert result.returncode == 0, result.stderr
+	log = calls.read_text(encoding="utf-8") if calls.exists() else ""
+	if incomplete:
+		assert "FELLTHROUGH" not in result.stdout
+		assert output.read_text(encoding="utf-8").splitlines() == DEFER_OUTPUTS
+		assert "action=merge_withheld judge_action=merge" in result.stdout
+		assert "action=defer_merge" in result.stderr
+		actions = [line for line in log.splitlines() if "issues/42/comments" not in line]
+		assert not any("pr merge" in c or "ai:ready-to-merge" in c for c in actions)
+		assert not any(c.startswith(("status ", "phase_swap", "security_gate")) for c in actions)
+		assert sum("issues/42/comments" in line for line in log.splitlines()) == 1
+	else:
+		assert "FELLTHROUGH" in result.stdout
+		assert output.read_text(encoding="utf-8") == ""
+		assert "RB_JUDGE_CONTEXT_INCOMPLETE" not in result.stdout + result.stderr
+		assert log == ""
 
 
 def test_gate_runs_before_every_merge_site() -> None:
