@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:(Test suite failure) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Regression in test suite execution: the pre-push gate reports failures in tests/test_implement_post_codex_recovery.py attributed to the canary file change.\n  WHY: The reviewer claims the test suite relies on the previous canary content, so the test code needs updating (source severity=MAJOR; other reviewers disputed this and said the file only mentions the canary path in string literals).\n- External CI check `copilot-pull-request-reviewer`:(Run 41544404053, job 125616328401) | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI infrastructure failure: the automated PR reviewer failed with \"Prompt too big after adding system message\" (custom_instructions_too_large, 422).\n  WHY: The failure stops the automated review pipeline from completing and giving feedback (source severity=NIT; other reviewers called it an external issue unrelated to the diff).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:(Test suite failure) | severity=MAJOR | confidence=4\n  PROBLEM: Regression in test suite execution\n  WHY: The PR description and the pre-push gate report failures in tests/test_implement_post_codex_recovery.py caused by the changes in tests/e2e_smoke_canary.txt. The test suite appears to rely on the previous content of the canary file, causing runtime assertion failures.\n- External CI check `copilot-pull-request-reviewer`:(Run 41544404053, job 125616328401) | severity=NIT | confidence=5\n  PROBLEM: CI infrastructure failure\n  WHY: The automated PR reviewer failed due to infrastructure limits (\"Prompt too big after adding system message\", \"custom_instructions_too_large\", error 422). This failure prevents the automated review pipeline from completing and providing feedback.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cb43ff7eb71f3cf0044be4e26a6dad7f0a2b032137161f0d5fa137d38bb5dd27",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "42133752151",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42133752151",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106001326_52c143e3ea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "42133752151"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T00:13:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
