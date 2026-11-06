@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The update to `tests/e2e_smoke_canary.txt` triggered test regressions (e.g. test_review_pipeline_integration_chain_module_runs_clean), as indicated by the pre-push test gate (\"Failures caused by this change: 1\").\n  WHY: The test suite fails in CI, preventing the PR from merging. Severity was not stated by the source, so medium is assigned from the stated impact. Other reviewers (sonnet-5_5, minimax-m3, glm-5_3-flash) disputed this and said the failures are inherited from the merge-base and that no test reads the canary's content.\n- .github/workflows/review_autofix.yml:unspecified | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The review check run failed with `custom_instructions_too_large` because the combined custom instructions (AGENTS.md, CLAUDE.md) exceed the `copilot-pull-request-reviewer` prompt limit.\n  WHY: The reviewer check stays in a failed state and blocks the PR review pipeline. Severity was not stated by the source, so medium is assigned from the stated impact. Other reviewers (sonnet-5_5, minimax-m3, glm-5_3-flash) said this is an external failure unrelated to the canary change.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update its content so it is exactly these three lines... (no more, no less, with a trailing newline after the final line per POSIX file convention)\"\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not explicitly show the required trailing newline, so verification is impossible, and the associated test failures suggest the smoke test contract may be compromised. Source severity: MAJOR. Other reviewers (sonnet-5_5, minimax-m3, glm-5_3-flash) confirmed the trailing newline is present.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:unspecified | confidence=5\n  PROBLEM: The update to `tests/e2e_smoke_canary.txt` triggered test regressions (e.g. test_review_pipeline_integration_chain_module_runs_clean), as indicated by the pre-push test gate (\"Failures caused by this change: 1\").\n  WHY: The test suite fails in CI, preventing the PR from merging.\n- .github/workflows/review_autofix.yml:unspecified | confidence=5\n  PROBLEM: The review check run failed with `custom_instructions_too_large` because the combined custom instructions (AGENTS.md, CLAUDE.md) exceed the `copilot-pull-request-reviewer` prompt limit.\n  WHY: The reviewer check stays in a failed state, blocking the PR review pipeline and preventing automation from evaluating the canary change.\n- TASK_GAP:\n  Requirement: \"Update its content so it is exactly these three lines... (no more, no less, with a trailing newline after the final line per POSIX file convention)\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The PR diff does not explicitly show the required trailing newline, so verification is impossible, and the associated test failures suggest the smoke test contract may be compromised by the file content or format change.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1dcef8c8604cb5a3ce829249b98fae43fdfbff0acfcd2e77878db690a671ccba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "42232099148",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42232099148",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106142756_7d579ffbf8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "42232099148"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T14:27:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
