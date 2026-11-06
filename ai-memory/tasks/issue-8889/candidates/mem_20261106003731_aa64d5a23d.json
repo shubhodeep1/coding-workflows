@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update the run ID in `tests/e2e_smoke_canary.txt` (canary-a)\n\nPlanning ref: `orchestrator/project-8888` @ `b79b58cf49a9555c4152d764efa6aaec782fc2d9`. Integration branch mismatch: false.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: This changes one line in an existing data file. The file currently reads `status: ok` and then `decompose-run: 41445772297`, each line ending in a newline. The edit replaces only the run ID on line 2, which keeps the file at exactly two lines with a trailing newline. No new code, helper or interface is needed. The issue says to touch only this one file, so the scope stays as stated.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n- None. Replace line 2 `decompose-run: 41445772297` with `decompose-run: 42136542904`.\n\n## Data structures affected\n- None. The canary file keeps its two-line `key: value` layout.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Edit only the canary file and not the advisory test files\n- Chosen: change only `tests/e2e_smoke_canary.txt`.\n- Alternatives considered: also edit the 11 advisory test files that mention the canary path.\n- Why: searching `tests/*.py` for `41445772297` and `decompose-run` found no matches, so no test depends on the run ID. The issue's scope rules also say to edit no other file.\n\n## Security considerations\n- No trust boundary, endpoint, secret or money-handling surface is touched. The run ID is a public workflow-run number.\n\n## Risks and edge cases\n- The two tests below do not apply to this file, so I am not counting them:\n  - `tests/e2e_smoke_canary_b.txt` is a sibling file and must not be touched.\n  - The search pattern `e2e_smoke_canary.txt` also matches `e2e_smoke_canary_b.txt`. That match is irrelevant here.\n- Conflict with the issue: the issue lists 11 test files as \"Expected files\", but none of them refers to the run ID. They need no change.\n- The file must still end with exactly one trailing newline after the edit.\n\n## Testing considerations\n- `head -n1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 42136542904`.\n- `wc -l tests/e2e_smoke_canary.txt` prints 2.\n- `git diff --stat` lists only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\nThe plan meets every acceptance criterion with a single-line edit.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "192e7f1da66143b9957a94982da29e660e69b450b7af9e85868857ffaeb44677",
+  "lineage": {
+    "issue_number": 8889,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42137578742",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42137578742",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8889"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261106003731_aa64d5a23d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8889,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42137578742"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8889",
+  "timestamps": {
+    "created_at": "2026-11-06T00:37:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
