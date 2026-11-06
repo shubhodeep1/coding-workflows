@@ -729,9 +729,9 @@ _PLAN_GRANT_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _PLAN_GRANT_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(\S+)")
 # The planner's metadata lines (mode-plan.txt items 7-10). A plan sometimes
 # puts them right under the Files bullets with no heading in between,
-# sometimes as a list item.
+# sometimes as a list item, possibly nested at any indent.
 _PLAN_FILES_METADATA_RE = re.compile(
-	r"^\s{0,3}(?:(?:[-*+]|\d+[.)])\s+)?(?:\*\*|__)?(?:Scope-mode(?: justification)?|Reuse-audit|Implementation-time estimate)(?:\*\*|__)?\s*:",
+	r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\*\*|__)?(?:Scope-mode(?: justification)?|Reuse-audit|Implementation-time estimate)(?:\*\*|__)?\s*:",
 	re.IGNORECASE)
 _PLAN_GRANT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@+-]+$")
 # A root file is any name with a letter-led extension (the same rule as a
@@ -798,12 +798,23 @@ def extract_plan_file_paths(plan_text: str) -> list[str]:
 		return []
 	seen: set[str] = set()
 	paths: list[str] = []
+	skip_indent: int | None = None
 	for line in section.splitlines():
-		# A planner metadata line ends the exact list: its prose names files
-		# the plan chose not to change (consumer tele-funtoken-msg-scoring
-		# #5101). The protected-path scan still reads the whole section.
+		# A planner metadata line and its prose continuation are skipped: the
+		# prose names files the plan chose not to change (consumer
+		# tele-funtoken-msg-scoring #5101). Reading resumes at a blank line or
+		# at a list item no deeper than the metadata line, so files listed
+		# before or after the metadata are still checked. The protected-path
+		# scan still reads the whole section.
+		indent = len(line) - len(line.lstrip())
 		if _PLAN_FILES_METADATA_RE.match(line):
-			break
+			skip_indent = indent
+			continue
+		if skip_indent is not None:
+			if not line.strip() or (_PLAN_GRANT_BULLET_RE.match(line) and indent <= skip_indent):
+				skip_indent = None
+			else:
+				continue
 		candidates = _PLAN_GRANT_BACKTICK_RE.findall(line)
 		# The bullet's first token counts even when the line also has
 		# backticked spans (`- README.md — use `parse()``): otherwise a

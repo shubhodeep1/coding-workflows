@@ -1028,18 +1028,35 @@ def test_plan_file_paths_stop_at_scope_mode_metadata() -> None:
 	assert guard.extract_plan_file_paths(_SCOPE_MODE_PLAN) == listed
 	body = _body("ft.games/app.py", "tests/test_wof_spin.py", "changelog.d/*.md")
 	assert guard.plan_files_outside_files_touched(_SCOPE_MODE_PLAN, body, issue_number=5101) == []
-	# Bold or differently cased lead-ins end the list too.
+	# Bold, differently cased, listed or nested lead-ins are skipped too; the
+	# file bullet after them is still read.
 	for lead in ("**Scope-mode:** Hold Scope", "reuse-audit: extends f", "Implementation-time estimate: 20 minutes",
 			"__Scope-mode justification__: see `ft.games/db_indexes.py`",
-			"- **Scope-mode:** Hold Scope, not `ft.games/db_indexes.py`", "10. Reuse-audit: extends `e/f.py`"):
+			"- **Scope-mode:** Hold Scope, not `ft.games/db_indexes.py`", "10. Reuse-audit: extends `e/f.py`",
+			"    - **Scope-mode:** Hold Scope, not `x/y.py`"):
 		plan = f"## Files likely to change\n- `a/b.py`\n{lead}\n- `c/d.py`\n"
-		assert guard.extract_plan_file_paths(plan) == ["a/b.py"], lead
+		assert guard.extract_plan_file_paths(plan) == ["a/b.py", "c/d.py"], lead
+	# The justification's prose continuation is skipped up to the next file bullet.
+	assert guard.extract_plan_file_paths("## Files likely to change\nScope-mode: Hold Scope\n"
+		"Scope-mode justification: deeper fixes would edit\n`x/rejected.py`, out of scope.\n- `a/b.py`\n") == ["a/b.py"]
+	# Metadata before the bullets does not hide them from the files_touched check.
+	before = "## Files likely to change\nScope-mode: Hold Scope\n- `a/b.py`\n- `e/out.py`\n"
+	assert guard.plan_files_outside_files_touched(before, _body("a/b.py")) == ["e/out.py"]
 	# A bullet that merely mentions the word does not end the list.
 	assert guard.extract_plan_file_paths(
 		"## Files likely to change\n- `a/b.py` (Scope-mode: n/a)\n- `c/d.py`\n") == ["a/b.py", "c/d.py"]
 	# The protected-path scan still reads the whole section (fails closed).
 	protected = _SCOPE_MODE_PLAN.replace("`ft.games/db_indexes.py`", "`scripts/x.sh`")
 	assert "scripts/x.sh" in guard.extract_plan_automation_paths(protected)
+	# The heal-scope gate still checks an exact file listed after the metadata.
+	with tempfile.TemporaryDirectory() as tmp:
+		plan_file, scope_file = Path(tmp, "plan.md"), Path(tmp, "scope.txt")
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n- `e/out.py`\n",
+			encoding="utf-8")
+		scope_file.write_text("a/b.py\n", encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "heal_scope_plan_out_of_scope"
+		assert record["denied_paths"] == ["e/out.py"]
 
 
 def test_plan_prompt_copies_keep_scope_mode_out_of_the_files_section() -> None:
