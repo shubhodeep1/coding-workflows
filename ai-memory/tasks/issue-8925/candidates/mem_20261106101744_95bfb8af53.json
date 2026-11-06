@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8925,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8925\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8927\",\"pr_number\":8927,\"branch\":\"ai/issue-8925\",\"run_id\":\"42200265408\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42200265408\",\"changed_files\":[\"changelog.d/8925-readiness-fail-closed-missing-tracking-label.md\",\"scripts/check_integration_pr_readiness.py\",\"tests/test_check_integration_pr_readiness.py\"]}",
+  "fingerprint": "64f669657bfb54d6bb1ec9e1d16fd1b4802dd543d8918cb3fd5e03c74b09c71b",
+  "lineage": {
+    "issue_number": 8925,
+    "parent_ids": [],
+    "pr_number": 8927,
+    "run_id": "42200265408",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42200265408",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8927"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261106101744_95bfb8af53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8925,
+    "level": "run",
+    "pr_number": 8927,
+    "run_id": "42200265408"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8925: https://github.com/shubhodeep1/coding-workflows/pull/8927",
+  "timestamps": {
+    "created_at": "2026-11-06T10:17:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
