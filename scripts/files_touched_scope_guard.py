@@ -825,6 +825,12 @@ PIPELINE_PLAN_GRANT_REASON = "pipeline_plan_grant"
 PIPELINE_PLAN_TOO_LARGE_REASON = "plan_too_large_for_grant"
 _PLAN_GRANT_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _PLAN_GRANT_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(\S+)")
+# The planner's metadata lines (mode-plan.txt items 7-10). A plan sometimes
+# puts them right under the Files bullets with no heading in between,
+# sometimes as a list item, possibly nested at any indent.
+_PLAN_FILES_METADATA_RE = re.compile(
+	r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\*\*|__)?(?:Scope-mode(?: justification)?|Reuse-audit|Implementation-time estimate)(?:\*\*|__)?\s*:",
+	re.IGNORECASE)
 _PLAN_GRANT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@+-]+$")
 # A root file is any name with a letter-led extension (the same rule as a
 # nested last segment), so a planned `main.c` or `app.php` is never left out of
@@ -890,7 +896,23 @@ def extract_plan_file_paths(plan_text: str) -> list[str]:
 		return []
 	seen: set[str] = set()
 	paths: list[str] = []
+	skip_indent: int | None = None
 	for line in section.splitlines():
+		# A planner metadata line and its prose continuation are skipped: the
+		# prose names files the plan chose not to change (consumer
+		# tele-funtoken-msg-scoring #5101). Reading resumes at a blank line or
+		# at a list item no deeper than the metadata line, so files listed
+		# before or after the metadata are still checked. The protected-path
+		# scan still reads the whole section.
+		indent = len(line) - len(line.lstrip())
+		if _PLAN_FILES_METADATA_RE.match(line):
+			skip_indent = indent
+			continue
+		if skip_indent is not None:
+			if not line.strip() or (_PLAN_GRANT_BULLET_RE.match(line) and indent <= skip_indent):
+				skip_indent = None
+			else:
+				continue
 		candidates = _PLAN_GRANT_BACKTICK_RE.findall(line)
 		# The bullet's first token counts even when the line also has
 		# backticked spans (`- README.md — use `parse()``): otherwise a
@@ -1267,11 +1289,37 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 			# them back from the Files section: a heal plan never approves a
 			# path set it cannot name exactly.
 			loose: list[str] = []
+			heal_skip_indent: int | None = None
 			for line in (_plan_files_section(plan_text) or "").splitlines():
-				raw_tokens = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
 				bullet = _PLAN_GRANT_BULLET_RE.match(line)
-				if bullet:
-					raw_tokens.append((bullet.group(1), False))
+				# Skip planner metadata the way extract_plan_file_paths does: its
+				# prose names files the plan chose not to change (#5101).
+				line_indent = len(line) - len(line.lstrip())
+				if _PLAN_FILES_METADATA_RE.match(line):
+					heal_skip_indent = line_indent
+					continue
+				in_metadata = False
+				if heal_skip_indent is not None:
+					if not line.strip() or (bullet and line_indent <= heal_skip_indent):
+						heal_skip_indent = None
+					else:
+						in_metadata = True
+				if in_metadata:
+					# Only a nested bullet that starts with a file is checked
+					# (fail closed); prose lines and mid-line spans are not.
+					if not bullet:
+						continue
+					lead_span = re.match(r"`([^`\n]+)`", bullet.group(1).lstrip("*_"))
+					raw_tokens = [(lead_span.group(1), True)] if lead_span else [(bullet.group(1), False)]
+					if _plan_grant_path(raw_tokens[0][0].strip()) or "/" in raw_tokens[0][0]:
+						# A bullet that starts with a file or a path-shaped
+						# token (`docs/guide`) lists files: check its other
+						# backticked spans too (fail closed).
+						raw_tokens += [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
+				else:
+					raw_tokens = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
+					if bullet:
+						raw_tokens.append((bullet.group(1), False))
 				for raw, backticked in raw_tokens:
 					raw = raw.strip()
 					if not backticked:
@@ -1294,6 +1342,11 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 					# extensionless `docs/guide`) so the scope check sees them.
 					if globlike or ("/" in token and "`" not in token and not _plan_grant_path(token)):
 						loose.append(token)
+					elif _plan_grant_path(token):
+						# extract_plan_file_paths skips a bullet nested under a
+						# planner metadata line, backticked or not; check it
+						# here (fail closed).
+						loose.append(_plan_grant_path(token))
 			candidates: list[str] = []
 			for path in files + protected + loose:
 				if path not in candidates:
