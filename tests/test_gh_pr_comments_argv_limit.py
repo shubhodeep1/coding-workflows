@@ -393,6 +393,22 @@ def test_rest_helper_flags_review_comments_read_failure(tmp_path: Path) -> None:
 
 
 @requires_jq
+def test_rest_helper_flags_meta_read_failure_alone(tmp_path: Path) -> None:
+	env = _setup(tmp_path, {"comments.json": _raw_comments(), "review.json": SMALL_REVIEW})
+	_mark_failed(tmp_path, "meta")
+	result = _run(tmp_path, env, "_gh_pr_with_all_comments_rest o r 3 > out.json")
+	assert result.returncode == 0, result.stderr
+	out = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+	assert list(out.keys()) == INCOMPLETE_KEYS
+	assert out["meta"] == {}
+	assert [c["body"] for c in out["comments"]] == _expected_bodies()
+	assert out["review_comments"] == [{"author": "rev", "path": "a.py", "line": 3, "body": "nit"}]
+	assert out["comments_incomplete"] is True
+	assert out["incomplete_reasons"] == ["pr_meta_read_failed"]
+	assert _incomplete_lines(result.stderr) == [_incomplete_warning("3", "pr_meta_read_failed")]
+
+
+@requires_jq
 def test_rest_helper_flags_meta_and_both_comment_failures_in_order(tmp_path: Path) -> None:
 	env = _setup(tmp_path, {})
 	_mark_failed(tmp_path, "meta", "comments", "review")
