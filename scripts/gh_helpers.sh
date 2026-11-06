@@ -1566,6 +1566,23 @@ curl_gh_api()
 #   "review_comments": [{"author", "path", "line", "body"}]
 # }
 #
+# Incomplete-context signal (BUG-002): when the PR metadata read (not
+# preloaded), the issue-comments read or the review-comments read fails
+# (gh_retry exits non-zero, or its jq transform fails), the value still
+# falls back to {} / [] so the shape is unchanged, and two additive
+# top-level keys are appended after "review_comments":
+#   "comments_incomplete": true,
+#   "incomplete_reasons": [subset of "pr_meta_read_failed",
+#     "issue_comments_read_failed", "review_comments_read_failed", in that
+#     order]
+# plus one stderr line:
+#   ::warning::PR_COMMENTS_CONTEXT_INCOMPLETE helper=gh_pr_with_all_comments
+#     owner=<o> repo=<r> pr=<n> reasons=<csv>
+# Both keys are absent (never false) when every read succeeded, so the
+# complete output stays byte-identical to the H4 parity fixtures. A read
+# that succeeds with empty stdout is not flagged. Response bodies and gh
+# stderr are never logged.
+#
 # Manual fixture capture (H4 parity):
 #   source scripts/gh_helpers.sh
 #   _gh_pr_with_all_comments_rest OWNER REPO PR_NUMBER \
@@ -1582,6 +1599,13 @@ _gh_pr_with_all_comments_rest()
 	local repo_path="${owner}/${repo}"
 
 	local meta_json comments_json review_comments_json
+	# BUG-002: capture each gh_retry status on its own instead of through the
+	# `gh_retry ... | jq -s 'add // []' || echo '[]'` pipeline. Without
+	# pipefail a failed read printed nothing, jq turned the empty stdin into
+	# [] with exit 0, and the failure looked like a PR with no comments. The
+	# `x="$(...)" || rc=$?` / `if ...; then` forms keep callers under set -e
+	# alive; printf is a builtin, so large bodies never reach argv (#7658).
+	local _prc_raw="" _prc_rc=0 _prc_reasons=""
 	if [ -n "${preloaded_meta_json}" ] && echo "${preloaded_meta_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
 		meta_json="$(echo "${preloaded_meta_json}" | jq -c '{
 			title: (.title // ""),
@@ -1591,28 +1615,57 @@ _gh_pr_with_all_comments_rest()
 			head_sha: (.head_sha // .head.sha // .headSha // "")
 		}' 2>/dev/null || echo '{}')"
 	else
-		meta_json="$(gh_retry gh api "repos/${repo_path}/pulls/${pr_number}" 2>/dev/null \
-			| jq -c '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null \
-			|| echo '{}')"
+		_prc_rc=0
+		_prc_raw="$(gh_retry gh api "repos/${repo_path}/pulls/${pr_number}" 2>/dev/null)" || _prc_rc=$?
+		if [ "${_prc_rc}" -eq 0 ] && meta_json="$(printf '%s' "${_prc_raw}" \
+			| jq -c '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null)"; then
+			:
+		else
+			meta_json='{}'
+			_prc_reasons="${_prc_reasons:+${_prc_reasons},}pr_meta_read_failed"
+		fi
+		_prc_raw=""
 	fi
-	comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/issues/${pr_number}/comments" 2>/dev/null \
-		| jq -c -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null \
-		|| echo '[]')"
-	review_comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/pulls/${pr_number}/comments" 2>/dev/null \
-		| jq -c -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null \
-		|| echo '[]')"
+	_prc_rc=0
+	_prc_raw="$(gh_retry gh api --paginate "repos/${repo_path}/issues/${pr_number}/comments" 2>/dev/null)" || _prc_rc=$?
+	if [ "${_prc_rc}" -eq 0 ] && comments_json="$(printf '%s' "${_prc_raw}" \
+		| jq -c -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null)"; then
+		:
+	else
+		comments_json='[]'
+		_prc_reasons="${_prc_reasons:+${_prc_reasons},}issue_comments_read_failed"
+	fi
+	_prc_raw=""
+	_prc_rc=0
+	_prc_raw="$(gh_retry gh api --paginate "repos/${repo_path}/pulls/${pr_number}/comments" 2>/dev/null)" || _prc_rc=$?
+	if [ "${_prc_rc}" -eq 0 ] && review_comments_json="$(printf '%s' "${_prc_raw}" \
+		| jq -c -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null)"; then
+		:
+	else
+		review_comments_json='[]'
+		_prc_reasons="${_prc_reasons:+${_prc_reasons},}review_comments_read_failed"
+	fi
+	_prc_raw=""
+
+	if [ -n "${_prc_reasons}" ]; then
+		echo "::warning::PR_COMMENTS_CONTEXT_INCOMPLETE helper=gh_pr_with_all_comments owner=${owner} repo=${repo} pr=${pr_number} reasons=${_prc_reasons}" >&2
+	fi
 
 	# Pass the JSON through process substitution, never through argv: Linux
 	# caps a single argument at 131,072 bytes (MAX_ARG_STRLEN), and a PR's
 	# issue comments can serialize past that, so `--argjson` made jq exit 126
 	# ("Argument list too long") with no output (issue #7658;
 	# tele-funtoken-msg-scoring PR #3933, run 39131897079). An empty input
-	# degrades to {} / [].
+	# degrades to {} / []. The reason CSV holds only fixed tokens (< 100
+	# bytes), so --arg is safe; jq object `+` keeps key order, so the output
+	# is byte-identical to the pre-BUG-002 shape when nothing failed.
 	jq -cn \
 		--slurpfile meta <(printf '%s' "${meta_json}") \
 		--slurpfile comments <(printf '%s' "${comments_json}") \
 		--slurpfile review_comments <(printf '%s' "${review_comments_json}") \
-		'{meta: ($meta[0] // {}), comments: ($comments[0] // []), review_comments: ($review_comments[0] // [])}'
+		--arg incomplete_reasons_csv "${_prc_reasons}" \
+		'{meta: ($meta[0] // {}), comments: ($comments[0] // []), review_comments: ($review_comments[0] // [])}
+		+ (if $incomplete_reasons_csv == "" then {} else {comments_incomplete: true, incomplete_reasons: ($incomplete_reasons_csv | split(","))} end)'
 }
 
 # ---------------------------------------------------------------
@@ -1641,6 +1694,12 @@ _gh_pr_with_all_comments_rest()
 #
 # All fallback paths emit:
 #   ::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments ...
+#
+# On the REST fallback only, a failed metadata / issue-comments /
+# review-comments read appends "comments_incomplete": true and
+# "incomplete_reasons": [...] and logs PR_COMMENTS_CONTEXT_INCOMPLETE (see
+# _gh_pr_with_all_comments_rest). The keys are absent, never false, when
+# the context is complete; the GraphQL success path never emits them.
 # ---------------------------------------------------------------
 gh_pr_with_all_comments()
 {
