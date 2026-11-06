@@ -1,0 +1,4 @@
+<!-- changelog: security -->
+- **Removing the `ai:orchestrator-tracking` label no longer turns an integration PR's readiness check green.** The readiness status now fails closed when the tracking label is missing, unless the PR carries the override label.
+
+`scripts/check_integration_pr_readiness.py` used to post a neutral `success` on the `orchestrator/integration-pr-not-ready` context when an `orchestrator/project-<N>` head pointed at an issue without `ai:orchestrator-tracking`, without checking the task list. It now posts `failure`, logs `::error::[integration-pr-readiness] issue #N is not labeled ai:orchestrator-tracking; ...`, and names `ai:override-incomplete-merge` as the escape valve. With that override label on the PR, it posts `success` with a description that records the missing tracking label. Exit codes are unchanged: 0 after a posted status, 1 when the status POST fails. Refs #8924.
