@@ -99,9 +99,9 @@ Create a structured implementation plan that includes:
    necessary, emit `Reuse-audit: net-new (Layer 3) — <justification>` instead.
 10. Scope-mode justification requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit
    a one-paragraph `Scope-mode justification:` block when the current render is
-   `true`. Place it immediately after the `Reuse-audit:` line when that line is
-   present; otherwise place it immediately after the `Scope-mode:` line. When the
-   current render is `false`, include the block whenever `Scope-mode:` is present.
+   `true`, right after `Reuse-audit:` (else `Scope-mode:`); when `false`, include it
+   whenever `Scope-mode:` is present. Put these three lines after Testing considerations,
+   never inside `## Files likely to change`: the plan approval gate reads a file named there as changed.
 11. Diagrams/failure-modes requirement gate (current render: `PLAN_DIAGRAMS_OPTIONAL={{PLAN_DIAGRAMS_OPTIONAL}}`):
    when the current render is `true`, plans may include the following sections
    between `API/interface changes.` and `Risks and edge cases.` only when they
