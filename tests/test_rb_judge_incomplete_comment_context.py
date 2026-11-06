@@ -395,6 +395,78 @@ def test_complete_context_reaches_the_merge_stage(tmp_path: Path, action: str, i
 	assert log_lines == ["security_gate"]
 
 
+# Fake gh for the merge dispatch: records every call, succeeds.
+FAKE_GH_RECORD = r"""#!/usr/bin/env bash
+printf 'gh %s\n' "$*" >> "${CALL_LOG}"
+exit 0
+"""
+
+
+@pytest.mark.parametrize("incomplete", ["false", "true"])
+def test_merge_arm_dispatches_gh_pr_merge_only_for_a_complete_context(tmp_path: Path, incomplete: str) -> None:
+	"""Run the real `merge` arm: a complete context issues the head-bound merge."""
+	text = _text()
+	start = text.index(GATE_START_ANCHOR)
+	arm = text.index('case "${RB_ACTION}" in\n  merge)', text.index("# END rb-judge merge error capture (#7659)"))
+	end = text.index("\n  fix)\n", arm)
+	bindir = tmp_path / "bin"
+	bindir.mkdir()
+	gh = bindir / "gh"
+	gh.write_text(FAKE_GH_RECORD, encoding="utf-8")
+	gh.chmod(0o755)
+	calls = tmp_path / "calls.log"
+	output = tmp_path / "github_output"
+	output.write_text("", encoding="utf-8")
+	script = (
+		"set -uo pipefail\n"
+		'gh_retry() { "$@"; }\n'
+		"_safe_gh_jq() { printf '%s' '{\"state\":\"open\",\"mergeable\":true}'; }\n"
+		"_pr_base_fresh_for_merge() { return 0; }\n"
+		"_pr_wait_for_required_checks() { return 0; }\n"
+		'review_head_gate_post_status() { printf \'status %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
+		'ensure_label_exists() { printf \'ensure_label %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
+		'_resilient_phase_swap() { printf \'phase_swap %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
+		'rb_security_merge_gate() { printf \'security_gate\\n\' >> "${CALL_LOG}"; return 0; }\n'
+		+ text[start:end]
+		+ "\nesac\necho REACHED_END\n"
+	)
+	env = {
+		"PATH": f"{bindir}:/usr/bin:/bin",
+		"TMPDIR": str(tmp_path),
+		"CALL_LOG": str(calls),
+		"GITHUB_OUTPUT": str(output),
+		"RB_ACTION": "merge",
+		"IS_FINAL": "false",
+		"PR_ALREADY_MERGED": "false",
+		"POST_REVIEW_HEAD_REF": "feature/x",
+		"RB_JUDGED_HEAD_SHA": SHA,
+		"REPOSITORY": "owner/repo",
+		"PR_NUMBER": "42",
+		"ENABLE_AUTO_MERGE": "true",
+		"ISSUE_NUMBERS": "7",
+		"RB_MERGE_METHOD_FLAG": "--squash",
+		"RB_JUDGE_COMMENTS_INCOMPLETE": incomplete,
+		"RB_JUDGE_COMMENTS_INCOMPLETE_REASONS": "issue_comments_read_failed",
+	}
+	result = _bash(script, env, tmp_path)
+	assert result.returncode == 0, result.stderr
+	log_lines = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+	merges = [line for line in log_lines if line.startswith("gh pr merge ")]
+	outputs = output.read_text(encoding="utf-8").splitlines()
+	if incomplete == "false":
+		assert "REACHED_END" in result.stdout
+		assert merges == [f"gh pr merge 42 --repo owner/repo --squash --auto --match-head-commit {SHA}"]
+		assert f"status owner/repo {SHA} success review-blocked judge approved" in log_lines
+		assert "phase_swap 7 ai:ready-to-merge" in log_lines
+		assert outputs == ["judge_handled=true", "judge_action=merge", "judge_merge_status=merge_requested"]
+		assert "RB_JUDGE_CONTEXT_INCOMPLETE" not in result.stdout + result.stderr
+	else:
+		assert "REACHED_END" not in result.stdout
+		assert merges == []
+		assert not any(line.startswith(("status ", "phase_swap", "ensure_label")) for line in log_lines)
+		assert outputs == DEFER_OUTPUTS
+
+
 @requires_jq
 @pytest.mark.parametrize("incomplete", [True, False])
 def test_helper_flag_reaches_the_merge_gate_end_to_end(tmp_path: Path, incomplete: bool) -> None:
@@ -540,6 +612,25 @@ def test_review_state_downgrade(tmp_path: Path, incomplete: str, state: str, exp
 	assert f"STATE={expected}" in result.stdout.splitlines()
 	downgraded = expected != state
 	assert ("action=approve_downgraded" in result.stdout) is downgraded
+
+
+@pytest.mark.parametrize(("state", "downgraded"), [("APPROVE", "true"), ("REQUEST_CHANGES", "false")])
+def test_audit_label_names_the_cause_of_the_posted_state(tmp_path: Path, state: str, downgraded: str) -> None:
+	"""Only the incomplete-context downgrade is labelled "approval withheld"; break-glass keeps its label."""
+	script = "set -euo pipefail\n" + _marker_block(DOWNGRADE_BEGIN, DOWNGRADE_END) + '\necho "DOWNGRADED=${RB_JUDGE_APPROVAL_DOWNGRADED}"\n'
+	env = {
+		"PATH": os.environ["PATH"],
+		"PR_NUMBER": "42",
+		"RB_JUDGE_COMMENTS_INCOMPLETE": "true",
+		"RB_OUTBOUND_REVIEW_STATE": state,
+	}
+	result = _bash(script, env, tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert f"DOWNGRADED={downgraded}" in result.stdout.splitlines()
+	text = _text()
+	label = text.index("(PR comment context incomplete; approval withheld)")
+	guard = text.rindex('if [ "${RB_JUDGE_APPROVAL_DOWNGRADED:-false}" = "true" ]; then', 0, label)
+	assert label - guard < 200
 
 
 def test_prompt_note_is_flag_guarded_and_precedes_inline_comments() -> None:

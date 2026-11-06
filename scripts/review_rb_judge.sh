@@ -1952,11 +1952,15 @@ RB_OUTBOUND_REVIEW_STATE="$(resolve_review_state_for_post "${RB_LOGICAL_REVIEW_S
 # An APPROVE can satisfy required-review protection and fire an auto-merge
 # enrolled in an earlier cycle, so it is merge-enabling: post it as COMMENT
 # when the PR comment context could not be fully read.
+# RB_JUDGE_APPROVAL_DOWNGRADED records that this block (not break-glass)
+# changed the posted state, so the audit comment names the right cause.
+RB_JUDGE_APPROVAL_DOWNGRADED="false"
 if [ "${RB_JUDGE_COMMENTS_INCOMPLETE:-false}" = "true" ]; then
   case "${RB_OUTBOUND_REVIEW_STATE:-}" in
     APPROVE|APPROVE_WITH_COMMENTS)
       echo "RB_JUDGE_CONTEXT_INCOMPLETE pr=${PR_NUMBER:-unknown} reasons=${RB_JUDGE_COMMENTS_INCOMPLETE_REASONS:-unspecified} action=approve_downgraded review_state=${RB_OUTBOUND_REVIEW_STATE}"
       RB_OUTBOUND_REVIEW_STATE="COMMENT"
+      RB_JUDGE_APPROVAL_DOWNGRADED="true"
       ;;
   esac
 fi
@@ -2132,7 +2136,7 @@ RB_JUDGE_COMMENT_FILE="${RUNTIME_DIR}/rb_judge_comment.md"
     echo "**Logical review state:** ${RB_LOGICAL_REVIEW_STATE}"
   fi
   if [ -n "${RB_OUTBOUND_REVIEW_STATE}" ] && [ "${RB_OUTBOUND_REVIEW_STATE}" != "${RB_LOGICAL_REVIEW_STATE}" ]; then
-    if [ "${RB_JUDGE_COMMENTS_INCOMPLETE:-false}" = "true" ]; then
+    if [ "${RB_JUDGE_APPROVAL_DOWNGRADED:-false}" = "true" ]; then
       echo "**Posted review state:** ${RB_OUTBOUND_REVIEW_STATE} (PR comment context incomplete; approval withheld)"
     else
       echo "**Posted review state:** ${RB_OUTBOUND_REVIEW_STATE} (break-glass override)"
