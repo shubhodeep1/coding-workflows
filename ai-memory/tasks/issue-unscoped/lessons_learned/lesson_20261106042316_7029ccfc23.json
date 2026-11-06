@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-06T04:23:16Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=.github/workflows:1-1; cited_path=.github/workflows (failed external check-run `copilot-pull-request-reviewer`); files_touched=changelog.d/8893-heal-gate-nested-metadata-bullet.md, changelog.d/consumer-5101-plan-files-scope-mode-metadata.md, prompts/_templates/mode-plan.txt, prompts/mode-plan.txt, scripts/files_touched_scope_guard.py, scripts/run_plan_codex.sh, tests/test_files_touched_scope_guard.py, tests/test_plan_codex_step_extraction.py.",
+  "phase": "review_autofix",
+  "pr_number": 8893,
+  "record_id": "lesson_20261106042316_7029ccfc23",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows (failed external check-run `copilot-pull-request-reviewer`)",
+    ".github/workflows",
+    "changelog.d/8893-heal-gate-nested-metadata-bullet.md",
+    "changelog.d/consumer-5101-plan-files-scope-mode-metadata.md",
+    "prompts/_templates/mode-plan.txt",
+    "prompts/mode-plan.txt",
+    "scripts/files_touched_scope_guard.py",
+    "scripts/run_plan_codex.sh",
+    "tests/test_files_touched_scope_guard.py",
+    "tests/test_plan_codex_step_extraction.py"
+  ]
+}
