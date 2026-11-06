@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update `tests/e2e_smoke_canary_b.txt`\n\nPlanning ref: `orchestrator/project-8915` @ `13257581f145bf16b3012780e8b33437b412eca5` (Integration branch mismatch: false)\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue fully specifies a two-line data edit to one existing file and says to touch nothing else. The decomposition also lists `tests/test_review_conflict_resolve_smoke_deterministic.py` as a possible file, so I checked it. It mentions `tests/e2e_smoke_canary_b.txt` only in a comment on line 80. It does not use the run ID `41445772297` or check the file's contents, so it needs no change. Changing it would break the issue's scope rule, and earlier runs of this smoke test had review findings rejected as out of scope for the same reason.\n\n## Functions or modules to implement\n- None. This is a data-file edit only.\n\n## Data structures affected\n- `tests/e2e_smoke_canary_b.txt`: line 2 changes from `decompose-run: 41445772297` to `decompose-run: 42175571733`. Line 1 stays `status: ok`, and the file keeps one trailing newline and exactly 2 lines.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Leave the deterministic smoke test unchanged\n- Chosen: Edit only the canary file.\n- Alternatives considered: Also update `tests/test_review_conflict_resolve_smoke_deterministic.py`, as the decomposition's advisory list suggests.\n- Why: That test only names the canary file in a comment and does not check the run ID, so the issue's \"touch only this file\" rule wins.\n\n## Security considerations\n- No trust boundaries, endpoints, external input or secrets are involved. There is no abuse case.\n\n## Risks and edge cases\n- Conflict: the advisory \"Expected files\" list includes the test file, but the issue says not to touch it. The plan follows the issue.\n- Make sure the file ends with exactly one newline and has no third line.\n\n## Testing considerations\n- Acceptance checks: `head -n1` prints `status: ok`, `sed -n 2p` prints `decompose-run: 42175571733`, `wc -l` prints 2, and `git diff --stat` lists only this file.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "644ce8f054af18c5e426635434e4106ef0395ecf47d7c80b753f91c385d48e7a",
+  "lineage": {
+    "issue_number": 8917,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42176672475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42176672475",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8917"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261106065242_9dd848c28c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8917,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42176672475"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8917",
+  "timestamps": {
+    "created_at": "2026-11-06T06:52:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
