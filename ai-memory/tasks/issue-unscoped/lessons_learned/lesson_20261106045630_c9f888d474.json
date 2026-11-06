@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-06T04:56:30Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=AGENTS.md:1-1; cited_path=AGENTS.md; files_touched=changelog.d/8893-heal-gate-nested-metadata-bullet.md, changelog.d/consumer-5101-plan-files-scope-mode-metadata.md, prompts/_templates/mode-plan.txt, prompts/mode-plan.txt, scripts/files_touched_scope_guard.py, scripts/run_plan_codex.sh, tests/test_files_touched_scope_guard.py, tests/test_plan_codex_step_extraction.py.",
+  "phase": "review_autofix",
+  "pr_number": 8893,
+  "record_id": "lesson_20261106045630_c9f888d474",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md",
+    "changelog.d/8893-heal-gate-nested-metadata-bullet.md",
+    "changelog.d/consumer-5101-plan-files-scope-mode-metadata.md",
+    "prompts/_templates/mode-plan.txt",
+    "prompts/mode-plan.txt",
+    "scripts/files_touched_scope_guard.py",
+    "scripts/run_plan_codex.sh",
+    "tests/test_files_touched_scope_guard.py",
+    "tests/test_plan_codex_step_extraction.py"
+  ]
+}
