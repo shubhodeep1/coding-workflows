@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- external check-run copilot-pull-request-reviewer (run 41544382408, job 125616255928):log_tail | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The copilot-pull-request-reviewer check-run fails with HTTP 422 custom_instructions_too_large (\"Prompt too big after adding system message\") because the AGENTS.md/CLAUDE.md custom instructions are too large.\n  WHY: The reviewer job exits before reviewing anything. The cause is unrelated to the canary diff, and the single-file constraint of the issue means this PR cannot fix it. All three reviewers rated it NIT. The file attributions differ: google_gemini-3_1-flash-lite cited .github/workflows/review_autofix.yml, and minimax_minimax-m3 cited tests/e2e_smoke_canary.txt.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- external check-run copilot-pull-request-reviewer (run 41544382408, job 125616255928):log_tail shows \"Prompt too big after adding system message\", errorCode custom_instructions_too_large, statusCode 422 | severity=NIT | confidence=4\n  PROBLEM: The third-party Copilot reviewer job fails because the repository's custom instruction files (AGENTS.md and CLAUDE.md) are too large. The PR diff only touches tests/e2e_smoke_canary.txt, so it did not cause this failure.\n  WHY: The job exits with code 1 before it reviews anything. The issue forbids touching any file other than the canary, so no fix is possible in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml (copilot-pull-request-reviewer):Infrastructure/Check-run | severity=NIT | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check-run failed with custom_instructions_too_large (HTTP 422).\n  WHY: The reviewer tooling rejects the oversized AGENTS.md/CLAUDE.md files before reviewing the diff. The PR changes are correct, but the Copilot review job will consistently fail until the repository's custom instructions size is reduced. This is an infrastructure issue and not a bug in the PR code.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/e2e_smoke_canary.txt (no diff-side fix available):external check-run copilot-pull-request-reviewer (run 41544382408, job 125616255928) | severity=NIT | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check-run fails with HTTP 422, errorCode custom_instructions_too_large (\"Prompt too big after adding system message\"). The log shows it built 2 custom instructions named [\"AGENTS.md\",\"CLAUDE.md\"] and then errored before creating a review request. This is unrelated to the canary diff.\n  WHY: The reviewer process cannot start, so no Copilot review is produced. The failure cannot be fixed within the scope of issue #8363 and is not caused by the canary change. It is out of scope for this PR.\n- Task completeness verification: the file contains exactly the three required lines, only tests/e2e_smoke_canary.txt was modified, and no new directories were created. No task gaps.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8156dcbcb09a6ed586b35c3f77c9d7f146c2654881798afdb67933427a1f7568",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "42296033640",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42296033640",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106213323_6fb8c4de11",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "42296033640"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T21:33:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
