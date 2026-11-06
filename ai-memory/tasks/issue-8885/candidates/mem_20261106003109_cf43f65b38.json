@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) The review/autofix pipeline (`review_autofix.yml` and its `scripts/review_autofix_step_*.sh` helpers) (RECOMMENDED)\nB) The clarify, plan or implement phase workflows and their prompts (`prompts/mode-*.txt`)\nC) The orchestrator (`orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`)\nD) The AI memory subsystem (`scripts/ai_memory.py`, `scripts/memory_helpers.sh`)\nE) Documentation only (README.md, docs/, agents.d fragments)\nF) Something else. Please name the file, workflow or feature.\nQ2: What kind of \"better\" do you mean?\nChoices:\nA) Fix a specific bug or failure. Please give the run ID, log excerpt or PR number. (RECOMMENDED)\nB) Cut cost or runtime (tokens, API calls, workflow duration)\nC) Make it more reliable (fewer flaky failures, better retry or self-heal)\nD) Add a new capability. Please describe what it should do.\nE) Make it clearer (logs, docs, error messages)\nQ3: How will we know it's done?\nChoices:\nA) A specific failing scenario or run now passes. Please give the reference. (RECOMMENDED)\nB) A measurable target is met (for example, X% fewer tokens or Y minutes faster). Please state it.\nC) New contract tests that pin the described behavior pass in CI\nQ4: How large a change is acceptable?\nChoices:\nA) Surgical: change only existing code paths, plus tests and a changelog.d entry (RECOMMENDED)\nB) Moderate: new helper scripts or prompt changes are allowed, wired into existing workflows\nC) Broad: a multi-wave orchestrator project is acceptable",
+  "fingerprint": "912247f8c643748b93b1903216ae7f8287842fb3a89588fbbb5bf6351822ad4f",
+  "lineage": {
+    "issue_number": 8885,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42136969206",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42136969206",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261106003109_cf43f65b38",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8885,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42136969206"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8885 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-06T00:31:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
