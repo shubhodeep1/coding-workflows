@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:PR-head copilot-pull-request-reviewer check | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI failure (custom_instructions_too_large) from the copilot-pull-request-reviewer check.\n  WHY: The reviewer action failed with this error, preventing PR merge, although the change to the canary file is logically correct. The source severity was BLOCKER, mapped to critical. Other reviewers judged this an external infrastructure failure unrelated to the diff and did not report it.\n- tests/test_implement_post_codex_recovery.py:Pre-push test gate | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Multiple test suite failures in the pre-push gate, as reported in the PR description.\n  WHY: Test suite failures prevent the PR from being merged. The source severity was BLOCKER, mapped to critical. Other reviewers judged these failures unrelated to the plain-text canary change and did not report them.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary.txt:PR-head copilot-pull-request-reviewer check | severity=BLOCKER | confidence=5\n  PROBLEM: CI failure (custom_instructions_too_large).\n  WHY: The reviewer action failed with this error, preventing PR merge, although the change to the canary file itself is logically correct.\n- tests/test_implement_post_codex_recovery.py:Pre-push test gate | severity=BLOCKER | confidence=5\n  PROBLEM: Multiple test suite failures in the pre-push gate (as reported in the PR description).\n  WHY: Test suite failures prevent the PR from being merged.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e5a2b3092f1c7754fdfea1da4a2bdc5dbe292b82512980324a0b1bf9a4fe55d6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "42210818413",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42210818413",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106115550_9342136207",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "42210818413"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T11:55:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
