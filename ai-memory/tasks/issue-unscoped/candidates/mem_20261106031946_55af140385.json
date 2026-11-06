@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/tg_helpers.sh:451-491 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: In `_tg_tracking_write`, if curl exits non-zero after headers arrive (e.g. `--max-time 30` expires mid-transfer), `%{http_code}` can still print the received status, so the warning reads `http=200` for a failed write.\n  WHY: Only the diagnostic line is inaccurate, because the `rc` check still detects the failure, the PATCH retry still runs and the helper still returns 0. Reviewers rated it NIT. z-ai suggests clearing `http_code` to \"000\" when `rc` is non-zero.\n- tests/test_tg_tracking_write_status.py:(PATCH-failure test cases) | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The tests trigger `sleep 2` in the helper without stubbing it in the fake curl harness.\n  WHY: This adds about 2 seconds to each of the two PATCH-failure tests. Disputed: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash found that the harness does stub `sleep` (z-ai cites tests/test_tg_tracking_write_status.py:132), and judged the finding invalid.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/tg_helpers.sh:`_tg_tracking_write` (`http_code=$(curl ... -w '%{http_code}' ...) || rc=$?` capture and the `[[ \"${http_code}\" =~ ^[0-9][0-9][0-9]$ ]] || http_code=\"000\"` normalisation) | severity=NIT | confidence=2\n  PROBLEM: If curl exits non-zero after the headers arrive (e.g. `--max-time 30` expires mid-transfer), `%{http_code}` can still print the received status, so the warning reads `http=200` for a failed write.\n  WHY: Only the diagnostic line is affected. The `rc == 0` success check still detects the failure, the PATCH retry still runs and the helper returns 0.\n- Other categories (security, concurrency, error paths, performance, DB, naming, trust boundary, task completeness): NONE. The reviewer rejected a pass-1 finding about unstubbed `sleep` in the tests, because the harness defines `sleep()`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/tg_helpers.sh:451-491 | confidence=3\n  PROBLEM: curl's `--max-time` behaviour when headers are partially received can make curl exit non-zero while `http_code` still holds the partial response status (e.g. 200).\n  WHY: The log could report `http=200` alongside an error, which is slightly misleading. The function checks both the exit code and the status, so functionality is unaffected.\n- tests/test_tg_tracking_write_status.py:(tests using PATCH-failure cases) | confidence=2\n  PROBLEM: The tests trigger `sleep 2` in the helper without stubbing it in the fake curl harness.\n  WHY: This adds about 2 seconds to each of the two PATCH-failure test cases. It is a minor test-harness efficiency issue.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/tg_helpers.sh:473-481 | severity=NIT | confidence=3\n  PROBLEM: When curl exits non-zero after the HTTP status line was received (e.g. `--max-time 30` expires mid-body), `http_code` keeps the received code (e.g. 200) while `rc=28`. The retry/failure decision at 478 is correct, but line 481 keeps `http_code=200` and the warning at 489 prints `http=200`, contradicting the fragment's claim that `http=000` marks a transport failure or timeout.\n  WHY: An operator reading `TG_TRACKING_WRITE_FAILED ... http=200` for a timed-out POST may conclude the comment exists, so the diagnostic is wrong for the timeout case it was built to surface. The last run did not fix it.\n- scripts/tg_helpers.sh:473-477 | severity=NIT | confidence=2\n  PROBLEM: None new. The token is passed only via `-H` with stderr discarded and `-o /dev/null`, and is never interpolated into the warning line (489). The reviewer marked this \"no qualifying issue \u2014 NONE\".\n  WHY: N/A, no defect.\n- TASK COMPLETENESS: no unmet requirements (NONE). The reviewer checked the status capture, warning format, PATCH-only single retry, tests, agents.d fragment and CI wiring, and found all present.\n- HARDENING_SUGGESTIONS: scripts/tg_helpers.sh line 481. Add `[ \"${rc}\" -ne 0 ] && http_code=\"000\"` after the regex fallback (about 1 line changed). HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e9ef5f506e8602f47cc411b6cf7790b9ac8612038e13dcff55bd7507fc80c909",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8903,
+    "run_id": "42153480510",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42153480510",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106031946_55af140385",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8903,
+    "run_id": "42153480510"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T03:19:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
