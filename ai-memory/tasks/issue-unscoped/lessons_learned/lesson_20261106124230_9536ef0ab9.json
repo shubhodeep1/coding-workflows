@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-06T12:42:30Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=.github/workflows/ci.yml:1-1; cited_path=check-run copilot-pull-request-reviewer (external GitHub App check); files_touched=.github/workflows/ci.yml, analysis/recommendation-processing-report.md, analysis/workflow-optimization-2026-10-06.md, changelog.d/8925-readiness-fail-closed-missing-tracking-label.md, scripts/check_integration_pr_readiness.py, scripts/write_guard.sh, tests/test_check_integration_pr_readiness.py, tests/test_write_guard_root_pattern_chars.py.",
+  "phase": "review_autofix",
+  "pr_number": 8929,
+  "record_id": "lesson_20261106124230_9536ef0ab9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "check-run copilot-pull-request-reviewer (external GitHub App check)",
+    ".github/workflows/ci.yml",
+    "analysis/recommendation-processing-report.md",
+    "analysis/workflow-optimization-2026-10-06.md",
+    "changelog.d/8925-readiness-fail-closed-missing-tracking-label.md",
+    "scripts/check_integration_pr_readiness.py",
+    "scripts/write_guard.sh",
+    "tests/test_check_integration_pr_readiness.py",
+    "tests/test_write_guard_root_pattern_chars.py"
+  ]
+}
