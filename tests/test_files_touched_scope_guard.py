@@ -1030,7 +1030,8 @@ def test_plan_file_paths_stop_at_scope_mode_metadata() -> None:
 	assert guard.plan_files_outside_files_touched(_SCOPE_MODE_PLAN, body, issue_number=5101) == []
 	# Bold or differently cased lead-ins end the list too.
 	for lead in ("**Scope-mode:** Hold Scope", "reuse-audit: extends f", "Implementation-time estimate: 20 minutes",
-			"__Scope-mode justification__: see `ft.games/db_indexes.py`"):
+			"__Scope-mode justification__: see `ft.games/db_indexes.py`",
+			"- **Scope-mode:** Hold Scope, not `ft.games/db_indexes.py`", "10. Reuse-audit: extends `e/f.py`"):
 		plan = f"## Files likely to change\n- `a/b.py`\n{lead}\n- `c/d.py`\n"
 		assert guard.extract_plan_file_paths(plan) == ["a/b.py"], lead
 	# A bullet that merely mentions the word does not end the list.

@@ -728,9 +728,10 @@ PIPELINE_PLAN_TOO_LARGE_REASON = "plan_too_large_for_grant"
 _PLAN_GRANT_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _PLAN_GRANT_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(\S+)")
 # The planner's metadata lines (mode-plan.txt items 7-10). A plan sometimes
-# puts them right under the Files bullets with no heading in between.
+# puts them right under the Files bullets with no heading in between,
+# sometimes as a list item.
 _PLAN_FILES_METADATA_RE = re.compile(
-	r"^\s{0,3}(?:\*\*|__)?(?:Scope-mode(?: justification)?|Reuse-audit|Implementation-time estimate)(?:\*\*|__)?\s*:",
+	r"^\s{0,3}(?:(?:[-*+]|\d+[.)])\s+)?(?:\*\*|__)?(?:Scope-mode(?: justification)?|Reuse-audit|Implementation-time estimate)(?:\*\*|__)?\s*:",
 	re.IGNORECASE)
 _PLAN_GRANT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@+-]+$")
 # A root file is any name with a letter-led extension (the same rule as a
