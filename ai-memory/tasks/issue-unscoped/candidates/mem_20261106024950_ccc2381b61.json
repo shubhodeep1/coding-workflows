@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_agents_fragment_contract.py:74-82 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate attributes five failing test files (test_agents_fragment_contract, test_files_touched_scope_guard, test_gh_api_write_guard, test_pr_watch_guard, test_workflow_checkout_integration_ref_audit) to this change, but their assertions read files the PR never touches.\n  WHY: The only overlap is the one-line pytest command change in .github/workflows/ci.yml, so this is pre-existing live-copy/template parity drift that nothing in the PR's scope can fix; the reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CLAUDE.md changelog rule (\u00a720/\u00a720.A) \u2014 \"Add exactly one fragment when the PR changes observable behaviour\" (changelog.d/<issue-or-pr>-<slug>.md); the PR adds a 30-second timeout, a PATCH retry and the TG_TRACKING_WRITE_FAILED warning\n  expected_change_site: changelog.d/8898-tg-tracking-write-status.md (or changelog.d/wfopt-2026-10-03-2-tg-tracking-write.md)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: pr_changed_files.txt and the commit stat list only ci.yml, the agents.d fragment, scripts/tg_helpers.sh and two test files, with no changelog.d/ fragment added (changelog.d/ holds only fragments from other PRs); severity NIT per all reviewers\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\nRequirement: CLAUDE.md changelog rule (\"Create `changelog.d/<issue-or-pr>-<slug>.md`\", one fragment per PR) for changes in defaults, thresholds, retries and failure modes; this PR adds a 30-second timeout, a one-time PATCH retry and the TG_TRACKING_WRITE_FAILED warning.\nExpected change site: changelog.d/8898-tg-tracking-write-status.md, using the `<!-- changelog: fixed -->` marker.\nEvidence of absence: pr_changed_files.txt and the commit stat list only ci.yml, the agents.d fragment, scripts/tg_helpers.sh and two test files; no changelog.d/ file is added.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\nHardening suggestion (HARDENING_RISK_SCORE: 1): scripts/tg_helpers.sh line 487, where `phase` is interpolated into a `::warning::` command without validation; not exploitable today, so the suggested fix is to skip it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"Add exactly one fragment when the PR changes observable behaviour\" (per CLAUDE.md \u00a720).\nExpected change site: A new file under changelog.d/ (e.g., changelog.d/8898-tg-tracking-write-status.md).\nEvidence of absence: The PR diff (pr_changed_files.txt) contains no new file under changelog.d/, despite the new TG_TRACKING_WRITE_FAILED warning and the retry/timeout logic.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\nHardening suggestion (HARDENING_RISK_SCORE: 1): scripts/tg_helpers.sh _tg_tracking_write (line 487); validate issue_num and msg_id as numeric before logging the warning, to prevent workflow-command forgery. Estimated 2 lines.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nTASK_GAP:\nRequirement: CLAUDE.md \u00a720A \u2014 \"Add exactly one fragment when the PR changes observable behaviour\", including defaults, thresholds, retries and failure modes.\nExpected change site: changelog.d/8898-tg-tracking-write-status.md (or changelog.d/wfopt-2026-10-03-2-tg-tracking-write.md).\nEvidence of absence: git diff --stat shows only ci.yml, the agents.d fragment, scripts/tg_helpers.sh and two test files; changelog.d/ is in files_touched but no fragment was added. Three observable changes are uncovered: the 30-second --max-time bound, the one-shot 2-second-delayed PATCH retry, and the new TG_TRACKING_WRITE_FAILED stderr warning.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\nNote: the five pre-push gate contract-test failures are attributed to this PR, but none of those tests reference files in the diff, so parity drift is the likely cause. The copilot-pull-request-reviewer failure is an upstream tooling error (custom_instructions_too_large, HTTP 422).\nHardening suggestion (HARDENING_RISK_SCORE: 1): scripts/tg_helpers.sh _tg_tracking_write line 487; issue_num, phase and msg_id are interpolated into a `::warning::` command without validation. Suggested fix is a numeric guard on issue_num and msg_id, about 3 lines.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nTASK_GAP:\nRequirement: CLAUDE.md \u00a720 requires exactly one changelog fragment when a PR changes observable behavior; this PR adds a 30-second timeout, a PATCH retry and TG_TRACKING_WRITE_FAILED warnings.\nExpected change site: changelog.d/<issue-or-pr>-<slug>.md\nEvidence of absence: The PR diff changes scripts/tg_helpers.sh but adds no changelog.d fragment.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\nHARDENING_SUGGESTIONS: NONE (HARDENING_RISK_SCORE: 0)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_agents_fragment_contract.py:74-82 (also tests/test_files_touched_scope_guard.py:36-41, tests/test_gh_api_write_guard.py:604-612 and 1074-1119, tests/test_pr_watch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py:70-88) | severity=low | confidence=3\n  PROBLEM: The pre-push gate classifies these five test files as failures caused by this change, but every assertion they make reads files this PR never touches.\n  WHY: The only overlap is the one-line ci.yml pytest command change, which cannot affect them; this is pre-existing parity drift that no edit within the PR's files_touched scope can fix (reviewer rated it NIT).\nTASK_GAP:\nRequirement: CLAUDE.md \u00a720.A \u2014 \"Add exactly one fragment when the PR changes observable behaviour\" (new TG_TRACKING_WRITE_FAILED warning, `--max-time 30` bound, one-retry PATCH; the plan grant includes `changelog.d/*` in files_touched).\nExpected change site: a new `changelog.d/wfopt-2026-10-03-2-tg-tracking-write.md` (or `changelog.d/8898-tg-tracking-write-status.md`).\nEvidence of absence: pr_changed_files.txt lists only .github/workflows/ci.yml, agents.d/wfopt-2026-10-03-2-tg-tracking-write.md, scripts/tg_helpers.sh, tests/test_tg_tracking_write_status.py and tests/test_tracking_comment_cap.py; changelog.d/ holds five fragments for other PRs and none for this change.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\nHardening suggestion (HARDENING_RISK_SCORE: 1): scripts/tg_helpers.sh line 487; issue_num and msg_id are interpolated into the workflow-command line without a numeric check. Suggested fix is a numeric guard, about 2 lines.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c6412b079a38d99c9157d2a7279f4c55b06cbcfd47c3c29a2895e2d00ea23c81",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8903,
+    "run_id": "42150631794",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42150631794",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106024950_ccc2381b61",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8903,
+    "run_id": "42150631794"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T02:49:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
