@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:809-817 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In extract_plan_file_paths, the metadata skip ends only at a blank line or a list item with indent <= the metadata line's indent, so a file bullet nested deeper than the metadata line is dropped from the grant as continuation prose.\n  WHY: The dropped file is missing from the proposed files_touched grant and plan_files_outside_files_touched cannot hold on it, so the implement-time scope guard later rejects the commit; the failure is closed and does not over-grant. All reviewers rated it NIT.\n- scripts/files_touched_scope_guard.py:814 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: A blank line ends the metadata skip unconditionally, so a multi-paragraph Scope-mode justification puts its backticked paths back into the extracted file list.\n  WHY: This can reproduce the plan_files_outside_files_touched hold; it is a residual edge case, not a regression, and the new prompt rule makes the layout unlikely.\n- (CI check-run, not mappable to the diff) copilot-pull-request-reviewer | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot reviewer check failed with \"Prompt too big after adding system message\" (custom_instructions_too_large, 422).\n  WHY: The repository's custom instructions exceed the Copilot prompt budget; none of the changed files feeds that agent, so the failure is unrelated to the diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/files_touched_scope_guard.py:809-817 | severity=low | confidence=2\n  PROBLEM: The metadata skip resumes only at a blank line or a list item with indent <= the metadata line's indent. A file bullet nested deeper than a column-0 `Scope-mode:` line is dropped, and a multi-paragraph justification re-admits its backticked paths after the first blank line.\n  WHY: The first case makes the implement-time guard refuse the commit (a stall, not an over-grant). The second can reproduce the plan_files_outside_files_touched hold. Both are residual edge cases, not regressions.\n- CI note (copilot-pull-request-reviewer) | severity=low | confidence=2\n  PROBLEM: The check failed with \"Prompt too big after adding system message\" (custom_instructions_too_large, 422). Several other checks were still running, so there is no confirmed test result.\n  WHY: The error is about the size of the repository's custom instructions, and none of the seven changed files feeds that agent.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:809-817 | severity=low | confidence=3\n  PROBLEM: The resume rule for metadata skipping in extract_plan_file_paths prematurely drops nested file bullets.\n  WHY: File bullets indented deeper than the metadata line are treated as prose and ignored, which can cause plan_files_outside_files_touched holds for plans that use nested lists.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/files_touched_scope_guard.py:813-817 | severity=low | confidence=3\n  PROBLEM: After a metadata line at the start of the section, the parser discards a deeper-indented file bullet as metadata continuation instead of extracting it.\n  WHY: The omitted file is missing from the grant built at lines 999-1013, so the implement-time scope guard rejects a commit to it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:813-817 | severity=low | confidence=3\n  PROBLEM: A Files-section file bullet nested deeper than the metadata line is treated as prose continuation and dropped from extract_plan_file_paths.\n  WHY: The dropped file never enters plan_paths, so plan_files_outside_files_touched (line 889-908) cannot hold on it and build_pipeline_plan_grant_body (line 834) omits it from the grant. The implement-time guard then blocks the commit. This fails closed.\n- scripts/files_touched_scope_guard.py:814 | severity=low | confidence=3\n  PROBLEM: A blank line ends the metadata skip unconditionally. A multi-paragraph Scope-mode justification, or one whose continuation is a bullet at indent <= the metadata indent, re-opens extraction.\n  WHY: The rejected file in the second paragraph is read as a changed file again, which re-triggers the plan_files_outside_files_touched hold. This is a residual limitation, not a regression.\n- (CI check-run, not mappable to the diff) copilot-pull-request-reviewer | severity=low | confidence=2\n  PROBLEM: Head SHA f51a0ea9, Actions run 42141185553: the check failed with \"Prompt too big after adding system message\" (custom_instructions_too_large, 422).\n  WHY: The repository's custom instructions exceed the Copilot prompt budget, which is unrelated to this diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0ec1d85e64c31d6bec5c5fddd9ed323f8c23a190c6882a629ebb32f5fbd485dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8893,
+    "run_id": "42141170715",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42141170715",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106012409_ae3f2ee595",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8893,
+    "run_id": "42141170715"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T01:24:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
