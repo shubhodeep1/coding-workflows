@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (132)
+## Processed source docs (133)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -137,6 +137,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-10-02.md`
 - `analysis/workflow-optimization-2026-10-03.md`
 - `analysis/workflow-optimization-2026-10-03-2.md`
+- `analysis/workflow-optimization-2026-10-06.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -2046,3 +2047,37 @@ Sibling work for this doc was tracked under Refs #8895. The squash-merge PR numb
 | Orchestrator skip-reason, heal-latency and conflict-heal counters; Pipeline Flow queue timestamps | rejected | Instrumentation-only with no defect behind it, or data not available to the collector. |
 | Per-Repo Breakdown / Metrics Appendix | informational | Covered by the rows above. |
 | Redundant Re-Fetch (REUSE) / Dead Calls (DEAD-API) | informational | The doc reports none. |
+
+### `analysis/workflow-optimization-2026-10-06.md`
+Source doc: `analysis/workflow-optimization-2026-10-06.md`
+Processed: 2026-11-06
+Source commit: `d254ed5138b4e3d668952548d630bce7267b7251`
+
+Sibling work for this doc was tracked under Refs #8924. The squash-merge PR numbers are not visible on this ref (flattened history), so applied rows cite their changelog fragment, or describe the change where no fragment is visible, instead of a guessed PR number.
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| BUG-002 (`orchestrator/project-<N>` readiness passed when issue `N` lacked `ai:orchestrator-tracking`) | applied | `scripts/check_integration_pr_readiness.py` now posts a `failure` status and logs `::error::[integration-pr-readiness] issue #N is not labeled ai:orchestrator-tracking; readiness cannot be verified` when the tracking label is missing; with the `ai:override-incomplete-merge` label (`OVERRIDE_LABEL`) on the PR it posts `success` and logs a notice instead; tests `tests/test_check_integration_pr_readiness.py`; fragment `changelog.d/8925-readiness-fail-closed-missing-tracking-label.md`. Refs #8924. |
+| SHELL-001 (SC2295: unquoted repo root in the prefix-strip expansions) | applied | Both expansions in `write_guard_check()` in `scripts/write_guard.sh` now quote the root (`${write_guard_config_log_path#"${write_guard_root_dir}"/}`), so glob characters in the repo root are matched literally; test `tests/test_write_guard_root_pattern_chars.py` (3 tests pass on this ref); fragment `changelog.d/8924-write-guard-root-path-literal.md`. Refs #8924. |
+| SEC-001 (`${{ github.ref_name }}` interpolated into `run:` bodies) | already-implemented | No `${{ github.ref_name }}` expression appears inside any `run:` body under `.github/workflows/`. `test-and-mark-stable.yml` passes it through `env: DISPATCH_REF_NAME`, `mark-stable.yml` has no use, and `workflow-log-analysis.yml` uses it only in `concurrency.group`. The remaining uses in other workflows are `env:`, `concurrency`, `with:`/matrix values or input descriptions (the one in-body mention in `nightly-validation-selftest.yml` is a Bash comment, not an expression). |
+| BUG-001 (readiness status not re-evaluated when the tracking issue body changes) | already-implemented | The tracking-body-sync in `scripts/orchestrate_poll_process.sh` re-runs `check_integration_pr_readiness.py` against the open final PR's live head whenever the rendered body changes and logs `TRACKING_BODY_READINESS_REFRESH issue=<n> pr=<n> sha=<sha>`. |
+| BUG-003 (`_mt_upsert_comment` hid PATCH/POST failures with `\|\| true`) | already-implemented | `_mt_upsert_comment` in `scripts/review_merge_train.sh` captures the PATCH or POST status in `write_rc` and returns it, so callers can see a failed write. |
+| SEC-002 / SEC-003 (`gh_retry` logged full argv; `gh_api_json_to_file` logged raw response lines) | already-implemented | `gh_retry` logs through `_gh_cmd_log_summary` in `scripts/gh_helpers.sh` (bounded, credential-free summary), and `gh_api_json_to_file` logs only `bytes=`, `sha256=` and `category=` for a malformed response (#8095). |
+| Exec 1 / Speed 3 / Reliability 1 / Pipeline clarify-to-plan (staged `codex_stall_guard.sh` rejected `--engine`; `PLANNING_GUARD_PRECHECK`) | already-implemented | Root cause fixed: `_AI_ENGINE_SUPPORT_REQUIRED` in `scripts/ai_engine.sh` lists `scripts/codex_stall_guard.sh` next to itself, so both stage from one source, and `scripts/codex_stall_guard.sh` parses `--engine`. The extra preflight and exit-2 non-retryable classification are rejected: they would check for a mismatch that can no longer occur. |
+| Exec 4 / Cost 1 / Reliability 3 / Merge-push row (bounded retry on a transient server-error push rejection) | already-implemented | The "Push all pending commits" step in `.github/workflows/review_autofix.yml` has `AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED` (default `'true'`), a bounded transient push retry without force-push. |
+| Reliability 4 (separate runtime from contract-test Semble fallbacks) | already-implemented | `scripts/cost_audit.py` counts `semble_contract_test_fallbacks` and `semble_runtime_fallbacks` separately. |
+| Exec 2 / Reliability 2 (CI judge-safety and security-test regressions; `CI_TEST_FAILURE` marker) | rejected | The failures were specific to the 2026-10-05/06 window; the doc itself says to keep the guards, and the marker is instrumentation only. |
+| Speed 4 (early judge-safety CI signal) | rejected | Early gating can hide failures, and the doc establishes no wall-time saving for mandatory full CI. |
+| Exec 3 / Speed 1 / Speed 2 / Cost 5 (runner/handoff timestamps, `CHECK_WAIT`, overlapping reviewer work with pending-check waits, cancellation cost) | rejected | Instrumentation only, or medium-risk concurrency and stale-context changes with no established saving. |
+| Exec 5 / Cost 2 / Cost 3 / Cost 4 / Prompt Cache & Memory System section | rejected | Diagnostic experiments (per-phase model counters, prefix restructuring, Semble/Serena outcome comparison) that need a quality baseline before any change. |
+| AI Memory Health (`push_duration_ms`, retry reason category) | rejected | `push_attempts` is already recorded in memory telemetry (`scripts/ai_memory.py`); the doc identifies no defect behind the extra fields. |
+| GH API Call Audit (`GH_API_CALL` per-endpoint counters) | rejected | `GH_PAT_BUDGET ... used_in_job=` in `scripts/gh_helpers.sh` already gives per-job usage, and the doc establishes no call reduction. |
+| Orchestrator Health (`command_claim_age_ms`, skip reason, `ORCHESTRATOR_TRANSITION`) | rejected | Instrumentation only, with no defect behind it. |
+| BUG-004 (`closingIssuesReferences(first: 50)` without `pageInfo` in the deterministic-skip step) | rejected | Issues past the 50th are only left unlabelled, never wrongly labelled; the step's comment in `.github/workflows/review_autofix.yml` says the orchestrator stall cron picks up any lag; the doc marks it NEEDS VERIFICATION; and growth of `review_autofix.yml` is held back for the 480,000-byte guard. |
+| API-001, API-002, BATCH-001, BATCH-002, MERGE-001 | rejected | The doc itself tags them RISKY_SKIP (retry classification, pagination or race-sensitive paths). |
+| BATCH-003 (aliased label mutations for linked issues) | rejected | Tagged NEEDS_VERIFICATION, and it depends on BUG-004, which is rejected. |
+| DUP-001, DUP-002, DUP-003 | rejected | Refactor only (minimal-change rule). |
+| EXPR-001 (`implement.yml` "Stage workflow support files" body size) | rejected | Static headroom only; no expression-size breach (earlier precedent). |
+| DEAD-001 (`RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE`, `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE`) | rejected | Both identifiers are still assigned in `scripts/review_run_reviewers.sh`; removing identifiers needs explicit approval (naming-immutability rule). |
+| Per-Repo Breakdown / Metrics Appendix / `break_glass_count` and `context_budget_warn_count` note | informational | Summary and coverage data; no actionable change. |
+| Redundant Re-Fetch (REUSE) / Dead Calls (DEAD-API) | informational | The doc reports no findings. |
