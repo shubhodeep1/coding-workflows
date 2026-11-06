@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- PR DESCRIPTION:\"Closes https://github.com/shubhodeep1/coding-workflows/issues/8337\" | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR description uses the \"Closes\" auto-close keyword against issue #8337, which this reviewer treats as a tracking issue.\n  WHY: Per \u00a721, merging would auto-close the tracking issue and stop the orchestrator state machine, so \"Refs #8337\" should be used (reviewer severity=BLOCKER; mapped to critical). Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) could not verify the `ai:orchestrator-tracking` label and judged it likely a sub-issue canary task where the keyword is correct, so they did not report it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- PR DESCRIPTION (UNTRUSTED PR INTENT CONTEXT):\"Closes https://github.com/shubhodeep1/coding-workflows/issues/8337\" | severity=BLOCKER | confidence=5\n  PROBLEM: The PR description uses the \"Closes\" auto-close keyword against the tracking issue #8337.\n  WHY: Per \u00a721, merging this PR will automatically close the tracking issue #8337 and kill the orchestrator's state machine for this project. \"Refs #8337\" must be used instead.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7d85a42f5d423858e89ec6639535e8cd02dd10acd2e82acbfabc9bd4e91a2df5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "42239098128",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42239098128",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106151212_7223fae3ac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "42239098128"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T15:12:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
