@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:801-817 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: After a metadata line, the `skip_indent` handling in `extract_plan_file_paths` resumes only at a blank line or a file bullet at the same or shallower indent, so a file bullet nested deeper than the metadata line is skipped as prose.\n  WHY: The skipped bullet is missing from the exact-path grant. Plan approval fails closed because the implement-time files_touched guard refuses the commit. In the heal gate (`run_heal_plan_scope_gate`), a non-backticked skipped bullet escapes the loose pass too, so the heal could approve an out-of-scope path (the glm reviewer says this, at confidence 3). Both reviewers rated it NIT.\n- tests/test_plan_codex_step_extraction.py:45-51 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The history comment still says \"with #8335 the prompt is 270 lines, 17_996 bytes\", but `PRE_EXTRACTION_PROMPT_BYTES` is now 18_031.\n  WHY: The assertions use the real constants, so there is no runtime failure. The stale comment misleads later maintainers. Both reviewers rated it NIT.\n- CLAUDE.md; agents.md:(copilot-pull-request-reviewer check, head f51a0ea9b26cf0fbea6abaf70437329aa728f01f) | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The copilot-pull-request-reviewer check fails with HTTP 422 `custom_instructions_too_large` (\"Prompt too big after adding system message\").\n  WHY: The check fails before it reads the diff, and the changed hunks do not cause it. Both reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/files_touched_scope_guard.py:809-817 | severity=low | confidence=2\n  PROBLEM: After a metadata line, reading resumes only at a blank line or a file bullet at the same or shallower indent, so a file bullet nested deeper is treated as prose and skipped.\n  WHY: The skipped bullet is missing from the plan grant, and the files_touched guard refuses the commit. This fails closed. The earlier autofix pass accepted it on purpose. (Source severity: NIT)\n- tests/test_plan_codex_step_extraction.py:45-51 | severity=low | confidence=5\n  PROBLEM: The comment still says \"with #8335 the prompt is 270 lines, 17_996 bytes\", but the constant `PRE_EXTRACTION_PROMPT_BYTES = 18_031` has changed.\n  WHY: The real assertions use the constants, so only maintainers are misled. (Source severity: NIT)\n- .github (failed check-run `copilot-pull-request-reviewer`):log tail shows `custom_instructions_too_large`, HTTP 422 | severity=low | confidence=5\n  PROBLEM: The Copilot reviewer rejects the repository's `AGENTS.md` and `CLAUDE.md` as too large.\n  WHY: The check fails before it reads the diff, and none of the changed files feed it. (Source severity: NIT)\n- HARDENING: scripts/files_touched_scope_guard.py, the `skip_indent` loop at lines 809-817. Skipped continuation lines are not logged. Suggested fix: emit one stderr diagnostic when a skipped line contains a backticked path-like token (3-4 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- CLAUDE.md; agents.md:copilot-pull-request-reviewer check failure (HTTP 422, custom_instructions_too_large) for head f51a0ea9b26cf0fbea6abaf70437329aa728f01f | severity=low | confidence=5\n  PROBLEM: The reviewer check cannot complete with the repository's current custom-instructions payload.\n  WHY: The check fails before reviewing the PR, leaving it red. The changed hunks do not cause this. (Source severity: NIT)\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:801-817 (vs line 1174) | severity=low | confidence=3\n  PROBLEM: The new skip logic can hide a file bullet nested deeper than the metadata line and not backticked from the exact-path list. Plan approval fails closed. In the heal path, `run_heal_plan_scope_gate` builds `files` from `extract_plan_file_paths`, and the loose pass excludes exact non-backticked bullet tokens (line 1219), so neither pass checks the skipped bullet.\n  WHY: A heal plan with `Scope-mode: Hold` at indent N followed by a non-backticked nested bullet naming an out-of-scope exact path gets decision=approve without that path in denied_paths. The mitigations are that backticked and globlike tokens are still caught (lines 1194-1220), the prompt now instructs metadata after Testing considerations, and the layout is unusual. (Source severity: NIT)\n- tests/test_plan_codex_step_extraction.py:45-46 vs 50 | severity=low | confidence=5\n  PROBLEM: The history comment still says \"with #8335 the prompt is 270 lines, 17_996 bytes\", but the constant below was updated to 18_031.\n  WHY: The assertions at lines 123-125 enforce the real values, so only maintainers are misled. (Source severity: NIT)\n- HARDENING: scripts/files_touched_scope_guard.py, `extract_plan_file_paths` line 814 (resume condition). A non-backticked file bullet nested deeper than the metadata line is invisible to both the exact list and the heal gate's loose pass. Suggested fix: also resume reading when the line is a bullet at any indent whose first token is a valid exact path (2-4 lines). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "60deb09b83377b94c2616333b130ad34e7d5533050e6091705af05be225b1dfd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8893,
+    "run_id": "42141169529",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42141169529",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106015600_68bdcbeae5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8893,
+    "run_id": "42141169529"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T01:56:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
