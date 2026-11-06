@@ -24,6 +24,7 @@ fake ``gh`` on PATH.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -473,3 +474,29 @@ def test_incomplete_prefix_registered_in_fragment() -> None:
 	assert "LOG_PREFIX.name=PR_COMMENTS_CONTEXT_INCOMPLETE" in fragment
 	assert "- `PR_COMMENTS_CONTEXT_INCOMPLETE`" in fragment
 	assert "::warning::PR_COMMENTS_CONTEXT_INCOMPLETE helper=gh_pr_with_all_comments" in GH_HELPERS.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# BUG-002 poller caller half: tests/test_poller_rb_judge_incomplete_context.py
+# runs in CI through this file (ci.yml is outside that issue's file grant).
+# ---------------------------------------------------------------------------
+
+
+def _collect_poller_rb_incomplete_context_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"poller_rb_judge_incomplete_context_cases",
+		Path(__file__).resolve().parent / "test_poller_rb_judge_incomplete_context.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 8, f"only {collected} poller rb incomplete-context cases collected"
+
+
+_collect_poller_rb_incomplete_context_cases()
