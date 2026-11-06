@@ -1191,11 +1191,32 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 			# them back from the Files section: a heal plan never approves a
 			# path set it cannot name exactly.
 			loose: list[str] = []
+			heal_skip_indent: int | None = None
 			for line in (_plan_files_section(plan_text) or "").splitlines():
-				raw_tokens = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
 				bullet = _PLAN_GRANT_BULLET_RE.match(line)
-				if bullet:
-					raw_tokens.append((bullet.group(1), False))
+				# Skip planner metadata the way extract_plan_file_paths does: its
+				# prose names files the plan chose not to change (#5101).
+				line_indent = len(line) - len(line.lstrip())
+				if _PLAN_FILES_METADATA_RE.match(line):
+					heal_skip_indent = line_indent
+					continue
+				in_metadata = False
+				if heal_skip_indent is not None:
+					if not line.strip() or (bullet and line_indent <= heal_skip_indent):
+						heal_skip_indent = None
+					else:
+						in_metadata = True
+				if in_metadata:
+					# Only a nested bullet that starts with a file is checked
+					# (fail closed); prose lines and mid-line spans are not.
+					if not bullet:
+						continue
+					lead_span = re.match(r"`([^`\n]+)`", bullet.group(1).lstrip("*_"))
+					raw_tokens = [(lead_span.group(1), True)] if lead_span else [(bullet.group(1), False)]
+				else:
+					raw_tokens = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
+					if bullet:
+						raw_tokens.append((bullet.group(1), False))
 				for raw, backticked in raw_tokens:
 					raw = raw.strip()
 					if not backticked:

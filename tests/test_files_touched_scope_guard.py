@@ -1067,6 +1067,11 @@ def test_plan_file_paths_stop_at_scope_mode_metadata() -> None:
 			encoding="utf-8")
 		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
 		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
+		# Files named only in the justification prose do not hold a heal plan.
+		plan_file.write_text(_SCOPE_MODE_PLAN, encoding="utf-8")
+		scope_file.write_text("ft.games/app.py\ntests/test_wof_spin.py\nchangelog.d/*.md\n", encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_IN_SCOPE and record["denied_paths"] == [], record
 
 
 def test_plan_prompt_copies_keep_scope_mode_out_of_the_files_section() -> None:
