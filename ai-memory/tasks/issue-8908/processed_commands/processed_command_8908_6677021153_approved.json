@@ -5,13 +5,26 @@
   "entry_id": "processed_command_8908_6677021153_approved",
   "issue_number": 8908,
   "metadata": {
+    "branch": "ai/issue-8908",
+    "changed_files": [
+      "changelog.d/8908-poller-rb-judge-incomplete-context.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_ci_wires_every_test_file.py",
+      "tests/test_gh_pr_comments_argv_limit.py",
+      "tests/test_poller_rb_judge_incomplete_context.py"
+    ],
+    "issue_number": 8908,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8908",
+    "pr_number": 8911,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8911",
+    "run_attempt": "1",
+    "run_id": "42163587965",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42163587965"
   },
   "run_attempt": 1,
   "run_id": "42163587965",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-06T04:38:49Z",
+  "status": "completed",
+  "timestamp": "2026-11-06T05:32:56Z",
   "workflow": "implement"
 }
