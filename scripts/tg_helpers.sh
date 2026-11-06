@@ -479,6 +479,11 @@ _tg_tracking_write()
 			return 0
 		fi
 		[[ "${http_code}" =~ ^[0-9][0-9][0-9]$ ]] || http_code="000"
+		# A curl failure after headers arrived (e.g. --max-time mid-body) can
+		# still print the received status; report it as a transport failure.
+		if [ "${rc}" -ne 0 ]; then
+			http_code="000"
+		fi
 		if [ "${attempt}" -lt "${max_attempts}" ]; then
 			sleep 2 || true
 		fi
