@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "The repository has focused tests for PR-comment argument limits and tracking-comment caps. When adding or changing comment operations, preserve the relevant size bounds and test behavior at the limit rather than relying on unbounded command-line arguments or comment bodies.",
+  "fingerprint": "695322c0bd3a23ced54dd85bc371bec00d83308ff7c3f4d7d8c4b78eba880f45",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42180683229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42180683229",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8896",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8897",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8898",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8908",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8909",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8903",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8904",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8906",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8910",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8911"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261106073055_d0931bc803",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Guard GitHub CLI comment operations against oversized argument lists and comments.",
+  "timestamps": {
+    "created_at": "2026-11-06T07:30:55Z",
+    "promoted_at": "2026-11-06T07:31:33Z",
+    "superseded_at": null
+  }
+}

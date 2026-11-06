@@ -38,11 +38,11 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "candidate",
+  "status": "promoted",
   "summary": "Guard GitHub CLI comment operations against oversized argument lists and comments.",
   "timestamps": {
     "created_at": "2026-11-06T07:30:55Z",
-    "promoted_at": null,
+    "promoted_at": "2026-11-06T07:31:33Z",
     "superseded_at": null
   }
 }
