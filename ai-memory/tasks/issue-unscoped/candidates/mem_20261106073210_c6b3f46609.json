@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.76,
+  "details": "Clarify workflows have a dedicated test for newlines in issue titles. When transferring issue-derived values through `$GITHUB_ENV` or between workflow steps, use a representation that safely handles embedded newlines and verify it with a regression test.",
+  "fingerprint": "602197a87dcb5caab583378d4f4632c758b707c4330ed8560da6428bcc40fdc0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42180683229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42180683229",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8896",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8897",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8898",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8908",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8909",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8903",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8904",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8906",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8910",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8911"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261106073210_c6b3f46609",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Handle issue titles as untrusted multiline data when passing them through GitHub Actions environment files.",
+  "timestamps": {
+    "created_at": "2026-11-06T07:32:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
