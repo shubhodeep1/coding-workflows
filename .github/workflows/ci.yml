@@ -1106,7 +1106,7 @@ jobs:
       - name: Tracking issue comment cap tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py tests/test_tg_helpers_cleanup.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py tests/test_tg_helpers_cleanup.py tests/test_tg_tracking_write_status.py
 
       - name: Daily consumer health check tests
         run: |
