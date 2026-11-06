@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-06T03:57:40Z",
+  "issue_number": 8898,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=tests/test_agents_fragment_contract.py:unknown; cited_path=tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py; files_touched=.github/workflows/ci.yml, agents.d/wfopt-2026-10-03-2-tg-tracking-write.md, changelog.d/8898-tg-tracking-write-status.md, scripts/tg_helpers.sh, tests/test_tg_tracking_write_status.py, tests/test_tracking_comment_cap.py.",
+  "phase": "review_autofix",
+  "pr_number": 8903,
+  "record_id": "lesson_20261106035740_bfc9d41097",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py",
+    "tests/test_agents_fragment_contract.py",
+    ".github/workflows/ci.yml",
+    "agents.d/wfopt-2026-10-03-2-tg-tracking-write.md",
+    "changelog.d/8898-tg-tracking-write-status.md",
+    "scripts/tg_helpers.sh",
+    "tests/test_tg_tracking_write_status.py",
+    "tests/test_tracking_comment_cap.py"
+  ]
+}
