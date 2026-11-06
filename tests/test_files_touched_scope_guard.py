@@ -1067,6 +1067,13 @@ def test_plan_file_paths_stop_at_scope_mode_metadata() -> None:
 			encoding="utf-8")
 		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
 		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
+		# A later file on a nested bullet led by a directory-shaped token is checked too.
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n  - `docs/guide`, `e/out.py`\n",
+			encoding="utf-8")
+		scope_file.write_text("a/b.py\ndocs/**\n", encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
+		scope_file.write_text("a/b.py\n", encoding="utf-8")
 		# A later file on a nested bullet that starts with a file is checked too.
 		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n  - `a/b.py`, `e/out.py`\n",
 			encoding="utf-8")
