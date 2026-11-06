@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-05T02:29:09Z",
+  "tick_at": "2026-11-06T01:43:20Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -15,14 +15,14 @@
   },
   "tracking_issues": [
     {
-      "current_wave": 13,
-      "integration_ahead_by": "115",
+      "current_wave": 16,
+      "integration_ahead_by": "125",
       "issue_counts": {
         "closed": 0,
-        "done": 0,
+        "done": 1,
         "implementation_failed": 0,
-        "in_progress": 1,
-        "merged": 0,
+        "in_progress": 0,
+        "merged": 1,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -102,18 +102,18 @@
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 3,
+        "in_progress": 0,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
-        "review_blocked": 0,
+        "review_blocked": 1,
         "skipped": 0
       },
-      "number": 8845,
+      "number": 8894,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Apply workflow-optimization-2026-10-02 analysis recommendations (validated subset)",
-      "total_waves": 3,
+      "title": "[E2E Smoke Test] Review-Blocked Simulation (run 42136542904)",
+      "total_waves": 1,
       "wave_complete": false
     }
   ]
