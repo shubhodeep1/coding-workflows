@@ -484,6 +484,8 @@ _tg_tracking_write()
 		fi
 		attempt=$((attempt + 1))
 	done
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || issue_num=0
+	[[ "${msg_id}" =~ ^[0-9]+$ ]] || msg_id=0
 	echo "::warning::TG_TRACKING_WRITE_FAILED issue=${issue_num} op=${op} phase=${phase} msg_id=${msg_id} http=${http_code}" >&2
 	return 0
 }
