@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ (Check-run: copilot-pull-request-reviewer) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI check copilot-pull-request-reviewer failed with \"Prompt too big after adding system message\".\n  WHY: The reviewer pipeline terminates early due to infrastructure/configuration limits, preventing a complete review (source severity MAJOR).\n- tests/test_implement_post_codex_recovery.py:(Test suite) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push test gate reports failures in tests/test_implement_post_codex_recovery.py.\n  WHY: The test suite fails in the CI environment for this PR; the reviewer considers it unrelated to the plain-text file change but says it must be addressed or confirmed as an infra false positive (source severity MAJOR).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ (Check-run: copilot-pull-request-reviewer) | severity=high | confidence=4\n  PROBLEM: CI check copilot-pull-request-reviewer failed with \"Prompt too big after adding system message\".\n  WHY: The reviewer pipeline terminates early due to infrastructure/configuration limits, preventing a complete review (source severity MAJOR).\n- tests/test_implement_post_codex_recovery.py:(Test suite) | severity=high | confidence=4\n  PROBLEM: The pre-push test gate reports failures in tests/test_implement_post_codex_recovery.py.\n  WHY: The test suite fails in the CI environment for this PR; the reviewer considers it unrelated to the plain-text file change but says it must be addressed or confirmed as an infra false positive (source severity MAJOR).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "954a0bd22579ad55a98af1d9b767a9135bdb3f3b98f0b96653ef8aaefa3d1999",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "42207025353",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42207025353",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106111114_160aebcdf8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "42207025353"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T11:11:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
