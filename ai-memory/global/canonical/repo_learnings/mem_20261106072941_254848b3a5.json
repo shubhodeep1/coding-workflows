@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Recent changes address incomplete context in both poller and review-judge paths, and separately in PR comment handling. When a workflow relies on fetched comments or review context, make completeness an explicit concern rather than assuming the available data is exhaustive.",
+  "fingerprint": "7a0231ef53aa5365761ba1bf3b84e620c49b8ab896a6858716d737def2f7d283",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42180683229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42180683229",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8896",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8897",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8898",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8908",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8909",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8903",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8904",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8906",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8910",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8911"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261106072941_254848b3a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Treat GitHub comment and review context as potentially incomplete across workflow stages.",
+  "timestamps": {
+    "created_at": "2026-11-06T07:29:41Z",
+    "promoted_at": "2026-11-06T07:30:18Z",
+    "superseded_at": null
+  }
+}
