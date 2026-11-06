@@ -30249,6 +30249,10 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
       # assemble is logged once as RB_JUDGE_CONTEXT_EMPTY.
       _rb_ctx_rc=0
       _rb_ctx_empty_reason=""
+      # BUG-002: set when a comment read failed (helper `comments_incomplete`
+      # or a failed legacy paginated read); merges are deferred this tick.
+      _rb_ctx_comments_incomplete=false
+      _rb_ctx_incomplete_reasons=""
       RB_PR_CONTEXT_JSON=""
       if type gh_pr_with_all_comments >/dev/null 2>&1; then
         RB_PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}")" || _rb_ctx_rc=$?
@@ -30256,9 +30260,34 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         RB_PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}")" || _rb_ctx_rc=$?
       else
         printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${GITHUB_REPOSITORY%%/*} repo=${GITHUB_REPOSITORY##*/} pr=${RB_PR}" >&2
-        RB_PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
-        RB_PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
+        # BUG-002: read each page set first so a failed read is detected
+        # (no pipefail reliance); same two API calls as before.
+        _rb_legacy_issue_raw=""
+        _rb_legacy_review_raw=""
+        _rb_legacy_issue_raw="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null)" || { _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}issue_comments_read_failed"; _rb_legacy_issue_raw=""; }
+        RB_PR_ISSUE_COMMENTS="$(printf '%s' "${_rb_legacy_issue_raw}" | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null)" || { RB_PR_ISSUE_COMMENTS='[]'; if [ "${_rb_ctx_incomplete_reasons#*issue_comments_read_failed}" = "${_rb_ctx_incomplete_reasons}" ]; then _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}issue_comments_parse_failed"; fi; }
+        _rb_legacy_review_raw="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" 2>/dev/null)" || { _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}review_comments_read_failed"; _rb_legacy_review_raw=""; }
+        RB_PR_REVIEW_COMMENTS="$(printf '%s' "${_rb_legacy_review_raw}" | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null)" || { RB_PR_REVIEW_COMMENTS='[]'; if [ "${_rb_ctx_incomplete_reasons#*review_comments_read_failed}" = "${_rb_ctx_incomplete_reasons}" ]; then _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}review_comments_parse_failed"; fi; }
+        [ -n "${RB_PR_ISSUE_COMMENTS}" ] || RB_PR_ISSUE_COMMENTS='[]'
+        [ -n "${RB_PR_REVIEW_COMMENTS}" ] || RB_PR_REVIEW_COMMENTS='[]'
+        unset _rb_legacy_issue_raw _rb_legacy_review_raw
         RB_PR_CONTEXT_JSON="$(jq -cn --slurpfile meta <(printf '%s' "${RB_PRELOADED_META}") --slurpfile comments <(printf '%s' "${RB_PR_ISSUE_COMMENTS}") --slurpfile review_comments <(printf '%s' "${RB_PR_REVIEW_COMMENTS}") '{meta: ($meta[0] // {}), comments: ($comments[0] // []), review_comments: ($review_comments[0] // [])}' 2>/dev/null)" || _rb_ctx_rc=$?
+      fi
+      # BUG-002: read the helper's incomplete signal before an assembly or
+      # shape failure resets the context to {}. Reasons are untrusted, so they
+      # are reduced to [a-z0-9_,] and capped before reaching the log or prompt.
+      if [ -n "${RB_PR_CONTEXT_JSON}" ] && printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -e 'type == "object" and .comments_incomplete == true' >/dev/null 2>&1; then
+        _rb_ctx_comments_incomplete=true
+        _rb_ctx_helper_reasons="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -r '[.incomplete_reasons[]? | strings] | join(",")' 2>/dev/null)" || _rb_ctx_helper_reasons=""
+        if [ -n "${_rb_ctx_helper_reasons}" ]; then
+          _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}${_rb_ctx_helper_reasons}"
+        fi
+        unset _rb_ctx_helper_reasons
+      fi
+      if [ "${_rb_ctx_comments_incomplete}" = "true" ]; then
+        _rb_ctx_incomplete_reasons="$(printf '%s' "${_rb_ctx_incomplete_reasons}" | tr -cd 'a-z0-9_,' | cut -c1-200)" || _rb_ctx_incomplete_reasons=""
+        [ -n "${_rb_ctx_incomplete_reasons}" ] || _rb_ctx_incomplete_reasons="unknown"
+        printf '%s\n' "::warning::RB_JUDGE_CONTEXT_INCOMPLETE pr=${RB_PR} reasons=${_rb_ctx_incomplete_reasons} action=defer_merge source=poller" >&2
       fi
       if [ "${_rb_ctx_rc}" -ne 0 ] || [ -z "${RB_PR_CONTEXT_JSON}" ]; then
         _rb_ctx_empty_reason="assembly_failed"
@@ -30703,6 +30732,9 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo "Review-blocked retry: $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
         echo "Retries exhausted: ${IS_FINAL}"
         echo "Protected-path fixes: unavailable (the orchestrator rejects any fix that stages a path under .github/, scripts/, prompts/, .claude/ or workflow-templates/)"
+        if [ "${_rb_ctx_comments_incomplete:-false}" = "true" ]; then
+          echo "Comment context: incomplete (reasons: ${_rb_ctx_incomplete_reasons:-unknown}). One or more PR comment reads failed, so the comment sections above may be missing reviewer findings; do not treat a missing finding as resolved. The orchestrator will not merge this PR on this tick."
+        fi
         if [ "${IS_FINAL}" = "true" ]; then
           echo
           echo "IMPORTANT: This is the FINAL attempt. You MUST choose 'merge',"
@@ -30899,6 +30931,30 @@ sys.exit(1)
 
       echo "  Judge decision for #${rb_issue}: ${RB_ACTION}"
       echo "  Justification: ${RB_JUSTIFICATION}"
+
+      # BEGIN rb judge incomplete-context merge gate (BUG-002)
+      # A merge-enabling outcome decided on incomplete comment context is
+      # withheld this tick: no judge comment, no label, no merge/auto-merge,
+      # no retry bump. Non-merge outcomes fall through unchanged.
+      if [ "${_rb_ctx_comments_incomplete:-false}" = "true" ]; then
+        _rb_incomplete_defer=false
+        case "${RB_ACTION}" in
+          merge|merge_with_followup) _rb_incomplete_defer=true ;;
+          fix)
+            if [ "${IS_FINAL}" = "true" ]; then
+              _rb_incomplete_defer=true
+            fi
+            ;;
+        esac
+        if [ "${_rb_incomplete_defer}" = "true" ]; then
+          unset _rb_incomplete_defer
+          echo "  [review-blocked] Merge deferred for PR #${RB_PR} (issue #${rb_issue}): comment context incomplete; judge action ${RB_ACTION} withheld this tick."
+          rb_cleanup_combined_workspace
+          continue
+        fi
+        unset _rb_incomplete_defer
+      fi
+      # END rb judge incomplete-context merge gate (BUG-002)
 
       # Post judge assessment to PR
       RB_COMMENT="## Orchestrator Review-Blocked Judge — Issue #${rb_issue}
@@ -31318,11 +31374,18 @@ ${RB_FIX_DESC}
                 fi
               else
                 echo "  Judge produced no file changes."
-                if [ "${RB_TARGET_MERGED}" = "true" ]; then
+                if [ "${RB_TARGET_MERGED}" = "true" ] && [ "${_rb_ctx_comments_incomplete:-false}" = "true" ]; then
+                  # BUG-002: keep ai:review-blocked; a "no outstanding fixes" verdict on incomplete comment context is withheld.
+                  echo "  [review-blocked] Deferred for merged PR #${RB_PR} (issue #${rb_issue}): comment context incomplete; no-fix close-out withheld this tick."
+                  RB_SKIP_RETRY_INCREMENT="true"
+                elif [ "${RB_TARGET_MERGED}" = "true" ]; then
                   echo "  No follow-up needed — merged PR has no outstanding fixes."
                   gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' 2>/dev/null || true
                   tg_notify "Orchestrator judge found no fixes needed for merged PR #${RB_PR} (issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
+                elif [ "${_rb_ctx_comments_incomplete:-false}" = "true" ]; then
+                  echo "  [review-blocked] Merge deferred for PR #${RB_PR} (issue #${rb_issue}): comment context incomplete; no-fix merge withheld this tick."
+                  RB_SKIP_RETRY_INCREMENT="true"
                 else
                   echo "  Treating as merge decision."
                   ensure_label_exists "ai:ready-to-merge"
