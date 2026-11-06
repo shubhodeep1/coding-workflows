@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:N/A | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI check-run copilot-pull-request-reviewer failed due to an infrastructure error (prompt-size limit and a firewall block on api.github.com).\n  WHY: The reviewer marked it SEVERITY: NIT, which maps to low. It said the failure is not caused by the file change but must be addressed to permit PR merge.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary.txt:N/A (CI Check-run failure) | severity=NIT | confidence=5\n  PROBLEM: CI check-run copilot-pull-request-reviewer failed due to an infrastructure error.\n  WHY: The CI runner failed to complete the review pipeline due to a prompt-size limit error and an infrastructure firewall block (api.github.com blocked). This is an infrastructure failure and is not caused by the file change, but must be addressed to permit PR merge.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a893261809b049014aea8e66a3ba1643e9ee49f8f8b5d82896587b9334ee1cd2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8892,
+    "run_id": "42142190327",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42142190327",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106013912_c071137178",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8892,
+    "run_id": "42142190327"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T01:39:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
