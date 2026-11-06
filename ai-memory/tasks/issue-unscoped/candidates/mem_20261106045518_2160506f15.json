@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:1214-1219 | severity=nit | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Extra backticked spans on a nested metadata bullet are collected only when the lead token passes `_plan_grant_path`, so a directory or extensionless lead token such as `docs/guide` drops later spans like `e/out.py`.\n  WHY: The heal gate approves (`heal_scope_verified`) a plan naming a file outside the heal scope, and the implement-time guard then refuses the commit and stalls the run. It fails closed, so this is not a bypass.\n- scripts/files_touched_scope_guard.py:814 and 1205 | severity=nit | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The metadata skip ends at any list item indented no deeper than the metadata line, not only at a file bullet, so a prose bullet such as `- Rejected: ft.games/db_indexes.py ...` resumes reading and its tokens are collected as plan files.\n  WHY: A plan that mixes prose bullets into the Scope-mode block is still held with `plan_files_outside_files_touched` or `heal_scope_plan_out_of_scope`, which is the #5101 hold the PR set out to remove. It fails closed.\n- (external check-run, not a diff file) | severity=nit | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The check-run `copilot-pull-request-reviewer` on head 3fb4ca1 failed with HTTP 422 `custom_instructions_too_large` because GitHub's Copilot reviewer rejects AGENTS.md/CLAUDE.md as too large.\n  WHY: It is unrelated to any hunk in this PR, and no runtime failure path exists in the changed code.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/files_touched_scope_guard.py:1214-1219 | severity=NIT | confidence=4\n  PROBLEM: A nested bullet under a metadata line whose lead token is a directory or extensionless token, such as `- `docs/guide`, `e/out.py``, fails `_plan_grant_path`, so the later backticked spans (`e/out.py`) are never added.\n  WHY: With a heal scope of `docs/**`, the gate approves (`heal_scope_verified`) a plan listing `e/out.py`, which is outside the scope. The implement-time scope guard then refuses the commit, which only stalls the run.\n- scripts/files_touched_scope_guard.py:814 and 1205 | severity=NIT | confidence=3\n  PROBLEM: The metadata skip ends at any list item indented no deeper than the metadata line (`extract_plan_file_paths` line 814, `run_heal_plan_scope_gate` line 1205), so a prose bullet such as `- Rejected: ft.games/db_indexes.py ...` resumes reading and its tokens are collected as plan files.\n  WHY: A plan that mixes prose bullets into the Scope-mode block is still held with `plan_files_outside_files_touched` or `heal_scope_plan_out_of_scope`. It fails closed and grants nothing extra.\n- HARDENING_SUGGESTIONS: scripts/files_touched_scope_guard.py run_heal_plan_scope_gate lines 1216-1219; change the condition to `if lead_span or _plan_grant_path(raw_tokens[0][0].strip()):` (about 1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/files_touched_scope_guard.py:1216-1219 | severity=NIT | confidence=4\n  PROBLEM: Additional backticked paths on a nested metadata bullet are collected only when its first token is an exact file path. For `- \\`docs/guide\\`, \\`e/out.py\\``, `_plan_grant_path(\"docs/guide\")` rejects the token, so `e/out.py` is never checked.\n  WHY: With `a/b.py` and `docs/**` in the heal scope, a plan listing `a/b.py` followed by that nested bullet passes the scope check. The later implementation guard then rejects an edit to `e/out.py`, stalling the run.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:1214-1219 | severity=NIT | confidence=4\n  PROBLEM: The metadata-nested-bullet scan collects the bullet's other backticked spans only when the lead token passes `_plan_grant_path`. A directory-shaped lead token such as `` - `docs/guide`, `e/out.py` `` fails it (extensionless last segment `guide` is rejected at line 783-784), so `e/out.py` is never checked against the heal scope.\n  WHY: The heal gate approves (`heal_scope_verified`) a plan naming a file outside the heal scope, and the implement-time guard then refuses the commit and stalls the run. It fails closed, so it is a residual approval/hold mismatch, not a bypass.\n- (external check-run, not a diff file) | severity=NIT | confidence=4\n  PROBLEM: The failed check-run `copilot-pull-request-reviewer` on head 3fb4ca1 shows HTTP 422 `custom_instructions_too_large` while building custom instructions from AGENTS.md/CLAUDE.md.\n  WHY: It is unrelated to any hunk in this PR, and no runtime failure path exists in the changed code.\n- HARDENING_SUGGESTIONS: scripts/files_touched_scope_guard.py run_heal_plan_scope_gate lines 1214-1219; also collect the extra spans when the lead is directory-shaped, e.g. `if _plan_grant_path(lead) or (\"/\" in lead and not lead.endswith(\"/\") and \"*\" not in lead):` (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "99d4fdfba3d4b02267dd90c7a3938688076a619cfb2de76a686aa561725a6c9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8893,
+    "run_id": "42163357927",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42163357927",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106045518_2160506f15",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8893,
+    "run_id": "42163357927"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T04:55:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
