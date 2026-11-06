@@ -1067,6 +1067,11 @@ def test_plan_file_paths_stop_at_scope_mode_metadata() -> None:
 			encoding="utf-8")
 		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
 		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
+		# A later file on a nested bullet that starts with a file is checked too.
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n  - `a/b.py`, `e/out.py`\n",
+			encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
 		# Files named only in the justification prose do not hold a heal plan.
 		plan_file.write_text(_SCOPE_MODE_PLAN, encoding="utf-8")
 		scope_file.write_text("ft.games/app.py\ntests/test_wof_spin.py\nchangelog.d/*.md\n", encoding="utf-8")

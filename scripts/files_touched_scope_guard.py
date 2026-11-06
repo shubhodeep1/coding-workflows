@@ -1213,6 +1213,10 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 						continue
 					lead_span = re.match(r"`([^`\n]+)`", bullet.group(1).lstrip("*_"))
 					raw_tokens = [(lead_span.group(1), True)] if lead_span else [(bullet.group(1), False)]
+					if _plan_grant_path(raw_tokens[0][0].strip()):
+						# A bullet that starts with a file lists files: check
+						# its other backticked spans too (fail closed).
+						raw_tokens += [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
 				else:
 					raw_tokens = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
 					if bullet:
