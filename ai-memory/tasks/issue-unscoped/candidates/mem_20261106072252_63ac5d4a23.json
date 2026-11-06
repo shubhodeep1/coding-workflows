@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- (external check-run `copilot-pull-request-reviewer` on head e540dbc18770bafdac9f8861d6f6b3b123f57ccd, run 41544382408/job/125616255928; not in diff):(no line given) | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot review check fails with `custom_instructions_too_large` (statusCode 422) because the custom instructions built from AGENTS.md and CLAUDE.md are too big, so no review is produced.\n  WHY: The reviewer rated it MAJOR and said the diff does not cause it. The oversize content is already on the merge base, and issue #8363 forbids touching files other than `tests/e2e_smoke_canary.txt`, so it cannot be fixed in this PR. Severity \"MAJOR\" is mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (external check-run `copilot-pull-request-reviewer` on head e540dbc18770bafdac9f8861d6f6b3b123f57ccd, run 41544382408/job/125616255928; not in diff):(no line given) | severity=MAJOR | confidence=4\n  PROBLEM: The PR head's only required CI review check fails before producing a review, with `Error: Prompt too big after adding system message (errorCode: custom_instructions_too_large, statusCode 422)`. The reviewer says the canary-file diff does not cause this.\n  WHY: The Copilot review action exits 1 whenever the head carries the current AGENTS.md/CLAUDE.md, so the review cannot complete. The reviewer notes the issue forbids touching other files, so the editor should ignore it with a reason.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "67af4639f262285a1cd775bb7958b3cac55835110ebb96e2fa0fb2d8b446228b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "42179169786",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42179169786",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106072252_63ac5d4a23",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "42179169786"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T07:22:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
