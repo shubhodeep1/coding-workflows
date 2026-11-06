@@ -1106,7 +1106,7 @@ jobs:
       - name: Tracking issue comment cap tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py tests/test_tg_helpers_cleanup.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py tests/test_tg_helpers_cleanup.py tests/test_tg_tracking_write_status.py
 
       - name: Daily consumer health check tests
         run: |
@@ -1702,6 +1702,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_head_binding.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_enable_auto_merge_cdpath.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_draft_skip.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_rb_judge_incomplete_comment_context.py
 
       # Moved from orchestrate-poll (2), which took 19m28s of its 20 minutes on
       # main (run 39245970945, budget-watch issue #7697). It left this job in
