@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-06T06:23:37Z",
+  "issue_number": 8908,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=n/a:n/a; cited_path=AGENTS.md; files_touched=changelog.d/8908-poller-rb-judge-incomplete-context.md, scripts/orchestrate_poll_process.sh, tests/test_ci_wires_every_test_file.py, tests/test_gh_pr_comments_argv_limit.py, tests/test_poller_rb_judge_incomplete_context.py.",
+  "phase": "review_autofix",
+  "pr_number": 8911,
+  "record_id": "lesson_20261106062337_dc774f695c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md",
+    "n/a",
+    "changelog.d/8908-poller-rb-judge-incomplete-context.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_gh_pr_comments_argv_limit.py",
+    "tests/test_poller_rb_judge_incomplete_context.py"
+  ]
+}
