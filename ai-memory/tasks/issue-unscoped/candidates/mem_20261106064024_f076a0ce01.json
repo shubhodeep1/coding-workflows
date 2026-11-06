@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:2132-2142 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, anthropic_claude-sonnet-5_5]\n  PROBLEM: The audit message \"Posted review state ... approval withheld\" prints for any state difference while the incomplete-context flag is set, so a break-glass override that turns REQUEST_CHANGES into COMMENT is wrongly blamed on incomplete context.\n  WHY: The text is cosmetic and does not affect merge gating. Reviewers rated it NIT, which maps to low. Sonnet gave confidence 2 and Gemini gave 4.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"a complete context still merges as before.\"\n  expected_change_site: tests/test_rb_judge_incomplete_comment_context.py (test_complete_context_reaches_the_merge_stage, test_complete_context_still_merges_as_before)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The tests stop at the `# BEGIN rb-judge merge error capture (#7659)` marker and never execute or assert a `gh pr merge` dispatch, tests/test_rb_judge_incomplete_comment_context.py:361-373. Severity disagrees: Sonnet rated it NIT with confidence 2, while Gemini and Luna rated it MAJOR with confidence 5. The gap is not raised by minimax_minimax-m3 or z-ai_glm-5_3-flash. GLM considers it addressed, at most a residual NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_rb_judge.sh:~2135 | severity=low (NIT) | confidence=2\n  PROBLEM: The \"Posted review state ... approval withheld\" text prints for any state difference while the flag is set, so the audit text can mislead when break-glass turns REQUEST_CHANGES into COMMENT on an incomplete context.\n  WHY: It is cosmetic, sits in a pre-existing comment block, does not touch merge gating, and is not worth a change.\nTASK_GAP:\n- Requirement: \"a complete context still merges as before.\"\n  Expected change site: tests/test_rb_judge_incomplete_comment_context.py (test_complete_context_reaches_the_merge_stage, test_complete_context_still_merges_as_before)\n  Evidence of absence: The tests stop at the `# BEGIN rb-judge merge error capture (#7659)` marker and never run a `gh pr merge` dispatch. This is a test-strength nit, not a missing deliverable. The merge dispatch code is unchanged, and the blocks before it are exercised.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh:~2137 (audit log at lines 2132-2142) | severity=low (NIT) | confidence=4\n  PROBLEM: The audit message blames approval withholding on incomplete context even when the review state change is caused by a \"break-glass\" override.\n  WHY: If a logical state such as REQUEST_CHANGES is changed to COMMENT as a break-glass override, the audit log falsely claims \"approval withheld\" for incomplete context.\nTASK_GAP:\n- Requirement: \"a complete context still merges as before.\"\n  Expected change site: tests/test_rb_judge_incomplete_comment_context.py, complete-context merge-path tests.\n  Evidence of absence: `test_complete_context_reaches_the_merge_stage` and `test_complete_context_still_merges_as_before` verify the gate logic but do not execute or assert the actual merge dispatch (`gh pr merge`), which runs after the `# BEGIN rb-judge merge error capture (#7659)` marker. They only confirm the path reaches the merge stage without being deferred.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"a complete context still merges as before.\"\n  Expected change site: tests/test_rb_judge_incomplete_comment_context.py, complete-context merge-path tests.\n  Evidence of absence: `test_complete_context_reaches_the_merge_stage` extracts the script only through the line before the merge error-capture block (tests/test_rb_judge_incomplete_comment_context.py:361-373), then asserts its own `REACHED_MERGE_STAGE` marker. It never executes or asserts a `gh pr merge` call. The end-to-end helper test likewise checks only that the gate falls through.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4ff1f146d41af5e4ae05f517b3cad90ad1b683d3f3c3b09fb3d8ba257749cdce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8910,
+    "run_id": "42173779047",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42173779047",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106064024_f076a0ce01",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8910,
+    "run_id": "42173779047"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T06:40:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
