@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The same change has to be ported to `main`,\" or the next main-to-stable promotion will revert it.\n  expected_change_site: The `main`-branch counterparts of scripts/files_touched_scope_guard.py, the plan prompt copies, and their associated tests.\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR changes only the seven files listed in pr_changed_files.txt and contains only stable-branch changes, with no main-branch counterpart or linked commit implementing the port. Severity MAJOR per both reviewers. Note: anthropic_claude-sonnet-5_5 and minimax_minimax-m3 judged this not a gap because the PR description names it as a separate follow-up PR on another branch.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"The same change has to be ported to main,\" or the next main-to-stable promotion will revert it.\n  Expected change site: The main-branch counterparts of scripts/files_touched_scope_guard.py and the plan-prompt copies, with their associated tests.\n  Evidence of absence: The PR description explicitly states this change lands on stable and that the same change has to be ported to main. The current PR diff contains only changes for the stable branch. No corresponding main-branch changes are present in the PR diff or proposed as a linked commit.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The same change has to be ported to `main`,\" to prevent the next `main \u2192 stable` promotion from reverting it.\n  Expected change site: The `main`-branch counterparts of `scripts/files_touched_scope_guard.py`, the plan prompt copies, and their associated tests.\n  Evidence of absence: The PR changes only the seven files listed in `pr_changed_files.txt`; none is a `main`-branch counterpart or implements the port.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "821e4a37f76d6b30b546cacc903b4545242c26bdf5fe25a6d82c6ad2c84b154d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8884,
+    "run_id": "42138393469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42138393469",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106005647_8eab967c1c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8884,
+    "run_id": "42138393469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T00:56:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
