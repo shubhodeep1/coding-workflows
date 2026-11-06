@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- (none):check run 41544333941 / job 125616096789 (copilot-pull-request-reviewer) | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: External reviewer bot failed with `custom_instructions_too_large` before completing its review.\n  WHY: The failure is in the bot's own infrastructure and not in any file changed by this PR. The reviewer rated it NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (none):check run 41544333941 / job 125616096789 (copilot-pull-request-reviewer) | severity=NIT | confidence=5\n  PROBLEM: External reviewer bot failed with `custom_instructions_too_large` before completing its review.\n  WHY: The bot's custom-instruction payload exceeded its provider limit. The failure is in the bot's infrastructure and not in any file changed by this PR.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "db059539be4b7ae40d851684767a6acb8367184b6e8bfc314a00bf95e4cdd7d5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "42275866847",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42275866847",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106191202_a10eda326a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "42275866847"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T19:12:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
