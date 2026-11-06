@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=NIT | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The third-party check-run `copilot-pull-request-reviewer` (run 41544404053) failed with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\") before analyzing the PR.\n  WHY: The failure is infrastructural. The oversized prompt comes from AGENTS.md/CLAUDE.md, not from the 3-line canary change, so editing this PR cannot fix it. Both reviewers rated it NIT with confidence 3 and 4, and the ledger keeps the higher confidence. The z-ai reviewer cited no repo file (File: N/A).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/e2e_smoke_canary.txt:lines 1-3 | severity=NIT | confidence=3\n  PROBLEM: The check-run `copilot-pull-request-reviewer` (run 41544404053) exits 1 with `custom_instructions_too_large` (HTTP 422) before it analyzes the PR. The log maps to no line of the changed file, and the oversized input is the AGENTS.md and CLAUDE.md instruction files.\n  WHY: The failure is infrastructural and does not come from this change, which matches the issue exactly. Editing the canary cannot fix it. It is reported only because the check-run rule requires every failed check to be surfaced.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- N/A (third-party Actions job `copilot-pull-request-reviewer`, run 41544404053, job 125616328401; no repo-relative file in the diff) | severity=NIT | confidence=4\n  PROBLEM: The Copilot PR-review check exits 1 before reviewing anything, leaving the PR check failed. The log shows `Error creating PR review request: Error: Prompt too big after adding system message` (statusCode 422).\n  WHY: The failure occurs in the review bot's prompt assembly (combined AGENTS.md/CLAUDE.md exceed its limit), not in any code this PR changes. It was surfaced under the unmapped-check-run rule and needs no edit to this PR.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "274a14c860efb09f816c4a7628577a3350172ef44daa0ccc8e4a5ab0518f94a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "42262306271",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42262306271",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106174259_16d11954a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "42262306271"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T17:42:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
