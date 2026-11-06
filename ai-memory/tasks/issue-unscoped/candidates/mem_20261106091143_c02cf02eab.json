@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5451, 5536-5585 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The Telegram judge-decision `case \"${JUDGE_SKIP_REASON}\"` has no `comments_context_incomplete)` arm, so the reason falls through to `*)` at 5583. That arm uses the default CRITICAL alert level and a \"Needs human intervention\" message.\n  WHY: The PR comment (`scripts/review_autofix_step_post_review_blocked_comment.sh:59-62`) says no action is required for this transient deferral, but the same run pages an admin with a CRITICAL alert. Severity disagreement: sonnet and luna rated it NIT, gemini rated it BLOCKER (highest used). Sonnet suggests a `DEBUG` arm like `head_unverified`.\n- scripts/review_autofix_step_post_review_blocked_comment.sh:56-61 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR-comment arm for `comments_context_incomplete` is not mirrored in the matching `review_autofix.yml` workflow branch.\n  WHY: The Telegram alert logic needs an explicit arm that sets `JUDGE_ALERT_LEVEL=\"DEBUG\"`, or the alert stays inconsistent with the judge's deferral logic. Gemini rated this MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement the `comments_context_incomplete` arm in the Telegram notification step of `.github/workflows/review_autofix.yml`.\n  expected_change_site: .github/workflows/review_autofix.yml around line 5557 (Telegram judge-decision case)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `scripts/review_autofix_step_post_review_blocked_comment.sh` gets the case, but `.github/workflows/review_autofix.yml` has no arm to downgrade the alert to `DEBUG`, so the generic \"needs human intervention\" alert persists.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml:5536-5585 (`stale_head)` and `head_unverified)` arms at 5557-5563, default `*)` at 5583) | severity=NIT | confidence=5\n  PROBLEM: There is no `comments_context_incomplete)` arm in the Telegram judge-decision case, so the reason falls into `*)`. That arm sends \"autofix exhausted ... Needs human intervention\" at CRITICAL level.\n  WHY: The PR comment says no action is needed, while the same run pages an admin with a CRITICAL alert. The fix is a 3-line `DEBUG` arm like `head_unverified`. The editor deferred it, so it is a follow-up NIT, not a blocker.\n- HARDENING_SUGGESTIONS: add `comments_context_incomplete)` after `head_unverified)` (line 5563) with the \"Stall recovery will retry automatically\" message and `JUDGE_ALERT_LEVEL=\"DEBUG\"` (about 3 lines). HARDENING_RISK_SCORE: 1.\n- Notes: the three pre-push test failures and the `copilot-pull-request-reviewer` `custom_instructions_too_large` failure are not attributable to this PR. No task gaps were reported.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:5451 | severity=BLOCKER | confidence=5\n  PROBLEM: The Telegram notification logic for review-blocked cases hardcodes `JUDGE_ALERT_LEVEL=\"CRITICAL\"` and falls through to a generic \"needs human intervention\" message.\n  WHY: When the judge defers a merge with `comments_context_incomplete`, the notification step pages a human with a CRITICAL alert for a transient issue.\n- scripts/review_autofix_step_post_review_blocked_comment.sh:56-61 | severity=MAJOR | confidence=5\n  PROBLEM: The `comments_context_incomplete` message is not reflected in the corresponding workflow branch in `.github/workflows/review_autofix.yml`.\n  WHY: The workflow needs an explicit arm that sets `JUDGE_ALERT_LEVEL=\"DEBUG\"`. Without it, the alert logic is inconsistent with the judge's deferral logic.\n- TASK_GAP: Requirement: Implement the `comments_context_incomplete` arm in the Telegram notification step of `.github/workflows/review_autofix.yml`. | Expected change site: .github/workflows/review_autofix.yml around line 5557 | Evidence of absence: the case exists in `scripts/review_autofix_step_post_review_blocked_comment.sh`, but the workflow YAML has no arm to downgrade the alert to `DEBUG`. | SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_post_review_blocked_comment.sh:59-61; .github/workflows/review_autofix.yml:5451, 5536-5584 | severity=NIT | confidence=5\n  PROBLEM: The new PR comment says no action is required unless the incomplete comment read repeats, but the Telegram skip-reason switch has no `comments_context_incomplete` arm.\n  WHY: With `judge_skip_reason=comments_context_incomplete` and `judge_handled` unset, the workflow takes the default arm. `JUDGE_ALERT_LEVEL` stays `CRITICAL` and the message says human intervention is needed, which contradicts the PR comment for a transient deferral.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "38033111520ece87f4af2dc443b20870b04f2927d195cc77c23038b05616e713",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8907,
+    "run_id": "42190984991",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42190984991",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106091143_c02cf02eab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8907,
+    "run_id": "42190984991"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T09:11:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
