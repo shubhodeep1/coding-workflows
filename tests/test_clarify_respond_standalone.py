@@ -297,7 +297,7 @@ def test_fallback_guard_checks_later_recommended_answer(tmp_path: Path) -> None:
 	assert answers.rstrip("\n") == "Q1: B\nQ2: A"
 	result = subprocess.run(
 		[sys.executable, str(ROOT / "scripts" / "clarify_data_provision_guard.py"),
-		 "--clarification-file", str(clarification_path), "--answers-file", str(answer_path)],
+		"--clarification-file", str(clarification_path), "--answers-file", str(answer_path)],
 		capture_output=True, text=True, check=True,
 	)
 	assert "Q1: B\nQ2: B" in result.stdout
@@ -409,7 +409,7 @@ def test_data_guard_rewrites_emphasized_decisions_before_posting(tmp_path: Path)
 	answers.write_text("**DECISIONS:**\n**Q1**: **B**\n**Q2**: **A**\n\n**RATIONALE:**\nQ2: This needs a URL.\n", encoding="utf-8")
 	result = subprocess.run(
 		[sys.executable, str(ROOT / "scripts" / "clarify_data_provision_guard.py"),
-		 "--clarification-file", str(clarification), "--answers-file", str(answers)],
+		"--clarification-file", str(clarification), "--answers-file", str(answers)],
 		capture_output=True, text=True, check=True,
 	)
 	assert "Q2: B\n" in result.stdout and "Q2: overrode A -> B" in result.stdout
@@ -486,3 +486,27 @@ def test_runtime_clarify_prompt_keeps_placeholder_rule() -> None:
 	assert "Missing critical information (credentials," not in inline
 	assert "private credential, a not-yet-existing commit SHA" not in inline
 	assert "Only when the task depends on the content of an auth-walled or" in inline
+
+
+# The SEC-002 issue-title GITHUB_ENV cases live in
+# tests/test_github_env_issue_title_newline.py and are collected here, since
+# CI already runs this file and ci.yml was outside that issue's file grant.
+# A name clash would hide a test, so it fails loudly.
+def _collect_github_env_issue_title_newline_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"github_env_issue_title_newline_cases",
+		Path(__file__).resolve().parent / "test_github_env_issue_title_newline.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 4, f"only {collected} issue-title GITHUB_ENV cases collected"
+
+
+_collect_github_env_issue_title_newline_cases()
