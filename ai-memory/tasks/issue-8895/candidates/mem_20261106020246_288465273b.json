@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply validated recommendations from analysis/workflow-optimization-2026-10-03-2.md\",\"issues\":[{\"id\":\"sec002-github-env-issue-title-newline\",\"title\":\"Harden ISSUE_TITLE GITHUB_ENV writes against CR/LF injection in clarify workflows\",\"priority\":1},{\"id\":\"bug002-pr-comments-incomplete-signal\",\"title\":\"gh_pr_with_all_comments: signal incomplete comment context instead of silently returning []\",\"priority\":1},{\"id\":\"bug002-rb-judge-honor-incomplete-context\",\"title\":\"review_rb_judge.sh: defer merge decisions when PR comment context is incomplete\",\"priority\":2},{\"id\":\"bug002-poller-judge-honor-incomplete-context\",\"title\":\"orchestrate_poll_process.sh rb-judge path: defer merge when PR comment context is incomplete\",\"priority\":2},{\"id\":\"bug004-tg-tracking-write-status\",\"title\":\"tg_helpers: check HTTP status of Telegram tracking-comment writes and report untracked message IDs\",\"priority\":3},{\"id\":\"merge-train-release-reason-counts\",\"title\":\"Merge train: add per-reason counts to MERGE_TRAIN_RELEASE_SUMMARY\",\"priority\":4},{\"id\":\"shell001-quote-head-tree-revision\",\"title\":\"workspace_init.sh: quote the HEAD^{tree} git revision argument (ShellCheck SC1083)\",\"priority\":6},{\"id\":\"final-report-and-source-doc-removal\",\"title\":\"Record verdicts for workflow-optimization-2026-10-03-2.md and delete the source doc\",\"priority\":8}],\"dependency_edges\":[{\"from\":\"bug002-pr-comments-incomplete-signal\",\"to\":\"bug002-rb-judge-honor-incomplete-context\"},{\"from\":\"bug002-pr-comments-incomplete-signal\",\"to\":\"bug002-poller-judge-honor-incomplete-context\"},{\"from\":\"sec002-github-env-issue-title-newline\",\"to\":\"final-report-and-source-doc-removal\"},{\"from\":\"bug002-rb-judge-honor-incomplete-context\",\"to\":\"final-report-and-source-doc-removal\"},{\"from\":\"bug002-poller-judge-honor-incomplete-context\",\"to\":\"final-report-and-source-doc-removal\"},{\"from\":\"bug004-tg-tracking-write-status\",\"to\":\"final-report-and-source-doc-removal\"},{\"from\":\"merge-train-release-reason-counts\",\"to\":\"final-report-and-source-doc-removal\"},{\"from\":\"shell001-quote-head-tree-revision\",\"to\":\"final-report-and-source-doc-removal\"}]}",
+  "fingerprint": "6d47457f964da44331ab565a4a42ce939fce9a4aa822ab6614c701ebfe1e7fd8",
+  "lineage": {
+    "issue_number": 8895,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42146727938",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42146727938",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261106020246_288465273b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8895,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42146727938"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply validated recommendations from analysis/workflow-optimization-2026-10-03-2.md' into 8 issues (tracking #8895)",
+  "timestamps": {
+    "created_at": "2026-11-06T02:02:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
