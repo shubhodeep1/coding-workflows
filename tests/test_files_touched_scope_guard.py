@@ -1057,6 +1057,11 @@ def test_plan_file_paths_stop_at_scope_mode_metadata() -> None:
 		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
 		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "heal_scope_plan_out_of_scope"
 		assert record["denied_paths"] == ["e/out.py"]
+		# A non-backticked bullet nested under a metadata line is still checked.
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n  - e/out.py\n",
+			encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
 
 
 def test_plan_prompt_copies_keep_scope_mode_out_of_the_files_section() -> None:

@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **The heal plan gate checks a file bullet nested under a Scope-mode line.** `extract_plan_file_paths` skips a bullet indented deeper than a `Scope-mode:` / `Reuse-audit:` line as part of its prose. In `run_heal_plan_scope_gate` (`scripts/files_touched_scope_guard.py`) such a bullet without backticks was then checked by neither pass, so a heal plan could be approved while it listed a file outside the verified heal scope. The gate now also checks every unbackticked bullet that names an exact file, and holds the plan when that file is out of scope.
