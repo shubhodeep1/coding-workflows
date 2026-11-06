@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:809-817,1194-1224 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In run_heal_plan_scope_gate, the new `elif not backticked and _plan_grant_path(token):` branch (line 1221) skips backticked bullets nested under a Scope-mode/Reuse-audit metadata line, and extract_plan_file_paths also skips them (line 817), so an out-of-scope backticked file such as `e/out.py` reaches neither `files` nor `loose`.\n  WHY: The gate approves a heal plan that names an out-of-scope file, and the edit is refused only later at implement time. All four reviewers rated this MAJOR (mapped to high), so there is no severity disagreement. The suggested fix is `elif _plan_grant_path(token):` plus a backticked nested-bullet regression test.\n- tests/test_files_touched_scope_guard.py:Suite-wide | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test suite failures in test_files_touched_scope_guard.py and test_orchestrate_lib.py are claimed to indicate regressions from the change.\n  WHY: Another reviewer (z-ai_glm-5_3-flash) dropped this as a finding, because the same tests fail with the edits removed (sandbox causes). Only the Gemini reviewer reported it.\n- .github/workflows / CI (check-run copilot-pull-request-reviewer on head a27cd31b) | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot reviewer check fails with HTTP 422 custom_instructions_too_large (\"Prompt too big after adding system message\") and cannot be mapped to any changed file.\n  WHY: It fails regardless of diff content, so it is not a diff defect. Fixing it would need trimming AGENTS.md/CLAUDE.md, which is out of scope. Rated NIT (mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/files_touched_scope_guard.py:1194-1224 (run_heal_plan_scope_gate, new `elif not backticked and _plan_grant_path(token):` branch), interacting with extract_plan_file_paths lines 809-817 | severity=MAJOR | confidence=5\n  PROBLEM: A backticked file bullet nested under a Scope-mode/Reuse-audit line is checked by neither pass, because the closed gap covers only unbackticked bullets.\n  WHY: `denied` stays empty and the gate approves a heal plan listing an out-of-scope file. The regression test covers only the unbackticked form. The fix is `elif _plan_grant_path(token):`.\n- HARDENING_SUGGESTIONS: change the line 1221 condition to `elif _plan_grant_path(token):` and add a backticked nested bullet test (1 code line, 3 test lines). HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:1221 | severity=MAJOR | confidence=5\n  PROBLEM: The heal gate logic excludes backticked file bullets nested under metadata lines by explicitly checking `not backticked`.\n  WHY: A heal plan listing an out-of-scope file as a backticked nested bullet bypasses the heal gate check and is incorrectly approved.\n- tests/test_files_touched_scope_guard.py:Suite-wide | severity=MAJOR | confidence=4\n  PROBLEM: The test suite fails when the changes are applied.\n  WHY: The failures in test_files_touched_scope_guard.py and test_orchestrate_lib.py are said to indicate regressions or incompatibility with the existing test environment.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/files_touched_scope_guard.py:813-817,1221-1224 | severity=MAJOR | confidence=5\n  PROBLEM: The new heal-scope check adds an exact path only when the bullet is unbackticked. A backticked nested bullet under a metadata line is skipped by extract_plan_file_paths and then excluded by the second pass.\n  WHY: The gate approves the plan instead of holding it. The downstream transfer guard rejects the out-of-scope edit only after the heal has proceeded to implementation.\n- HARDENING_SUGGESTIONS: check exact paths regardless of backticks (lines 1221-1224) and add a regression case for a nested backticked out-of-scope path (2 lines). HARDENING_RISK_SCORE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:1221-1224 (also 809-817, 1201-1204) | severity=MAJOR | confidence=5\n  PROBLEM: The nested-file hole is closed only for non-backticked bullets. A backticked bullet nested under a metadata line is dropped by extract_plan_file_paths (line 817) and by both branches in the heal-gate second pass. The `\"`\" in raw` guard at line 1202 discards the unbackticked token.\n  WHY: The gate approves a plan that names an out-of-scope file, contradicting its contract at lines 1190-1192 and the changelog fragment changelog.d/8893-heal-gate-nested-metadata-bullet.md. The out-of-scope edit is refused only later by the heal implement preflight (reason=out_of_heal_scope). The regression test at tests/test_files_touched_scope_guard.py lines 1061-1064 covers only the unbackticked form. The fix is `elif _plan_grant_path(token):` plus a backticked test expecting denied_paths == [\"e/out.py\"].\n- .github/workflows / CI (check-run copilot-pull-request-reviewer on head a27cd31b) | severity=NIT | confidence=4\n  PROBLEM: The Copilot reviewer check fails with HTTP 422 custom_instructions_too_large and cannot be mapped to any changed file.\n  WHY: It fails regardless of diff content, and fixing it would require trimming AGENTS.md/CLAUDE.md, which is out of scope.\n- HARDENING_SUGGESTIONS: tests/test_files_touched_scope_guard.py, test_plan_file_paths_stop_at_scope_mode_metadata, lines 1061-1064. Add one more round with `  - \\`e/out.py\\`` and the same assertions (4 lines). HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0a97ebcac333c10333aeab4c39e686baf37216e01cb162b3d5848e4f74b1b665",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8893,
+    "run_id": "42150238328",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42150238328",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106024510_93b991db2c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8893,
+    "run_id": "42150238328"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-06T02:45:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
