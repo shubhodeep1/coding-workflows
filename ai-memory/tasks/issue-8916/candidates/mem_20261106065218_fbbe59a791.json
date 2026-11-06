@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update the decompose-run ID in the smoke canary file\n\nPlanning ref: `orchestrator/project-8915` @ `13257581f145bf16b3012780e8b33437b412eca5`. The integration branch does not mismatch.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a one-line data edit. In `tests/e2e_smoke_canary.txt`, line 2 changes from `decompose-run: 41445772297` to `decompose-run: 42175571733`. Line 1 stays `status: ok`, and the file keeps its single trailing newline.\n\n## Data structures affected\nOnly `tests/e2e_smoke_canary.txt`, a plain-text file with two lines. I checked its current contents with `cat -A` and they match the issue exactly: two lines, each ending in a newline.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Leave the advisory \"Expected files\" test modules unedited\n- Chosen: edit only `tests/e2e_smoke_canary.txt`.\n- Alternatives considered: also editing the 11 test modules in the advisory \"Expected files\" list.\n- Why: the issue's scope rules say to touch only the canary file. A search of the repo shows those tests mention the file path `e2e_smoke_canary.txt` but not the old value `41445772297`. The only other file with that value is `tests/e2e_smoke_canary_b.txt`, which the issue says not to touch. None of the tests depend on the run ID, so none need to change.\n\n## Security considerations\nNo trust boundaries, endpoints, secrets or money-handling paths are involved. The new value is a public run ID.\n\n## Risks and edge cases\n- Conflict noted: the advisory \"Expected files\" list includes 11 test modules, but the issue's scope rules allow only the canary file. The scope rules take precedence, as set out in D1.\n- Don't leave a duplicate `decompose-run:` line, and don't leave the file without its final newline.\n- `tests/e2e_smoke_canary_b.txt` still holds the old ID. That is intended.\n\n## Testing considerations\nCheck the acceptance criteria:\n- `head -n1` prints `status: ok`.\n- `sed -n 2p` prints `decompose-run: 42175571733`.\n- `wc -l` reports 2.\n- `git diff --stat` lists only the canary file.\n\nOptionally, run `pytest tests/test_review_merge_train.py -q` as a sanity check. These tests depend only on the file path, not its contents.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a single-line replacement in one file and explicitly limits the change to that file. No helper or new structure is needed. Leaving out the unrelated test modules follows the issue's instructions without shrinking the scope it asks for. That also fits the \u00a76 priority order of Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "508730ff316dc5252de021b3e26f3acac0b51d27bcb99b343c870748b77fe3ae",
+  "lineage": {
+    "issue_number": 8916,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42176677837",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42176677837",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8916"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261106065218_fbbe59a791",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8916,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42176677837"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8916",
+  "timestamps": {
+    "created_at": "2026-11-06T06:52:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
