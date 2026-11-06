@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push gate reports a failure in tests/test_implement_post_codex_recovery.py, including test_review_pipeline_integration_chain_module_runs_clean and test_staged_support_guard_marks_only_auto_release_safe_conflicts.\n  WHY: The updated canary content likely violates hardcoded test assumptions (source severity BLOCKER; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash dispute it, saying the canary path appears there only in string literals at lines 5060 and 5779).\n- tests/e2e_smoke_canary.txt:3 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR diff does not explicitly verify the presence of a trailing newline character.\n  WHY: POSIX and the task instructions require a trailing newline, and a missing one could cause EOF or formatting errors in tools that read the file (source severity NIT; z-ai_glm-5_3-flash states the file does have a trailing newline).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the canary file to be exactly the three lines `status: ok`, `run_id: 40932430968`, `updated-by: ai-pipeline`, with a trailing newline.\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The diff updates the content, but the pre-push test gate failure indicates the change is incomplete against the broader repository test expectations (source severity BLOCKER).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:N/A (test suite failure) | severity=BLOCKER | confidence=4\n  PROBLEM: The pre-push gate reports 1 failure caused by this change, including test_review_pipeline_integration_chain_module_runs_clean and test_staged_support_guard_marks_only_auto_release_safe_conflicts.\n  WHY: The updated canary file content likely violates hardcoded assumptions in the test suite, causing regressions in the integration chain and staged support guards.\n- tests/e2e_smoke_canary.txt:3 | severity=NIT | confidence=3\n  PROBLEM: The PR diff does not explicitly verify the presence of a trailing newline character.\n  WHY: POSIX standards and the task instructions require a trailing newline. Without it, some tools or tests reading the file may report unexpected EOF errors or formatting warnings.\n- TASK_GAP: tests/e2e_smoke_canary.txt | severity=BLOCKER | confidence=4\n  Requirement: Update the canary file to be exactly the three lines: `status: ok`, `run_id: 40932430968`, `updated-by: ai-pipeline`, with a trailing newline.\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The PR diff achieves the content update, but the accompanying pre-push test gate failure indicates that the change is incomplete regarding the broader repository contract (test expectations).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0cca08f44c2396d30f30ecc09a0a67829de4b40a72e4853584309d777216d2d0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "42210814289",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42210814289",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106114244_0d3efe9060",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "42210814289"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T11:42:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
