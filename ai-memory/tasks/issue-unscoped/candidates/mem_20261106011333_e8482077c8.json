@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.85,
+  "details": "When changing orchestration behavior, check whether the corresponding workflow YAML contract also needs updating, and test both the processing script and workflow wiring. Multiple merged changes pair tests for `orchestrate_poll_process.sh` with `orchestrate_poll.yml` contract tests.",
+  "fingerprint": "0f8102ce27b865990c23edfebfd3e9f57291fdf742a3151a651154f0a35c833d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42142006107",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42142006107",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8859",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8860",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8863",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8873",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8881",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8861",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8864",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8865",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8877",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8882"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261106011333_e8482077c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestration changes are commonly validated at both the script and GitHub Actions workflow-contract levels.",
+  "timestamps": {
+    "created_at": "2026-11-06T01:13:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
