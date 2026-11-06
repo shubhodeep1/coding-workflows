@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CI check-run `copilot-pull-request-reviewer` (not a repository file):n/a | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The third-party Copilot reviewer rejected its own request because the AGENTS.md and CLAUDE.md custom instructions exceed its prompt budget (`custom_instructions_too_large`, \"Prompt too big after adding system message\", 422).\n  WHY: The failure is in the external reviewer's size limit, and no change in this one-file diff can cause or fix it, so it was recorded for awareness only (source severity NIT).\n- tests/test_implement_post_codex_recovery.py:5060,5779 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The pre-push gate attributes seven failing tests to this change, but the reviewer did not open the file in this pass.\n  WHY: The reviewer found no path from the canary text change to those failures and judged them pre-existing breakage, not a defect of the diff (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- CI check-run `copilot-pull-request-reviewer` (not a repository file):log_tail shows `custom_instructions_too_large`, \"Prompt too big after adding system message\", 422 | severity=NIT | confidence=2\n  PROBLEM: The third-party Copilot reviewer rejected its own request because the AGENTS.md and CLAUDE.md custom instructions exceed its prompt budget. Neither file is touched by this PR. The only diff hunk is `tests/e2e_smoke_canary.txt`, a plain-text file.\n  WHY: The failure is in the external reviewer's size limit. No change in this one-file diff can cause or fix it, so it was recorded for awareness only.\n- tests/test_implement_post_codex_recovery.py:lines 5060 and 5779, and the \"Failures caused by this change\" list in the PR description | severity=NIT | confidence=2\n  PROBLEM: The pre-push gate attributes seven failing tests to this change. The reviewer did not open the file in this pass. The ledger reviewer notes say it mentions the canary path only inside string literals and never reads the file. The diff changes only the canary's text content.\n  WHY: The reviewer found no path from this change to those failures. They look like the same pre-existing breakage as the four inherited failures. This is not a defect of the diff.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b7796c301c62f9cad9536d2e38b31f061abb0122137ac8c2516b4e083f61f2b4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "42144365612",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42144365612",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106014332_4193219799",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "42144365612"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T01:43:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
