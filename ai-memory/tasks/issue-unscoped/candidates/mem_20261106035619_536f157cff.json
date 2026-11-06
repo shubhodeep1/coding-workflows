@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/tg_helpers.sh:_tg_tracking_write() | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When `curl` fails, `http_code` is explicitly set to `000` regardless of the actual exit code or any headers received.\n  WHY: This conflates real HTTP statuses with the timeout/transport failure mode and makes debugging harder, although the tests accept `http=000`. The source rated it NIT. Other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) judged the same change correct and consistent with the documented behaviour.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update tests/test_tracking_comment_cap.py only if its fake curl must understand `-w`.\" (the tests should exercise the new `-w` HTTP-status capture)\n  expected_change_site: tests/test_tracking_comment_cap.py\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The diff added `wout` handling to the fake curl in tests/test_tracking_comment_cap.py, but the existing tests were left largely unchanged and do not exercise the new logic. Severity per source: MAJOR.\n- requirement: Update the tests affected by this change; the orchestrator CI failures in the PR Description name five contract tests.\n  expected_change_site: tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff shows no changes to these five test files, which the orchestrator CI failures point to. Severity per source: BLOCKER. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash checked this gap and did not confirm it: they found the tests do not read anything the PR changes, and z-ai_glm-5_3-flash found the same files failing on the merge-base.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/tg_helpers.sh:_tg_tracking_write() | severity=NIT | confidence=4\n  PROBLEM: When `curl` fails, `http_code` is explicitly set to `000` regardless of the actual exit code or any headers received.\n  WHY: This hides real HTTP statuses and conflates them with the timeout/transport failure mode, making debugging harder, although the tests accept `http=000`.\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \"Add `tests/test_tg_tracking_write_status.py` ... check that ... success paths are unchanged. Update tests/test_tracking_comment_cap.py only if its fake curl must understand `-w`.\"\n  Expected change site: tests/test_tracking_comment_cap.py\n  Evidence of absence: The original issue required `tests/test_tracking_comment_cap.py` to be updated if its fake curl must understand `-w`. The diff modified `tests/test_tracking_comment_cap.py` to add `wout` handling, but the tests were not updated to actually *use* the `-w` flag functionality in the fake curl wrapper as required to support the new requirement of capturing HTTP status codes. The existing tests in `test_tracking_comment_cap.py` were left largely unchanged without exercising the new logic required by the functional change.\n- TASK_GAP | severity=BLOCKER | confidence=4\n  Requirement: \"Add `tests/test_tg_tracking_write_status.py` ... Update tests/test_tracking_comment_cap.py only if its fake curl must understand `-w`.\"\n  Expected change site: tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py\n  Evidence of absence: The orchestrator CI failures (listed in the PR Description) directly point to these specific files. The requirement was to update tests affected by this change (as listed in the issue), but the PR diff shows zero changes to `tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_pr_watch_guard.py`, and `tests/test_workflow_checkout_integration_ref_audit.py`, causing the CI failures reported.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "36ed0f66d83ece1675fe6278799cf68eff8bcb900bdf49152ef873340f1dc15f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8903,
+    "run_id": "42156239435",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42156239435",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261106035619_536f157cff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8903,
+    "run_id": "42156239435"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-06T03:56:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
