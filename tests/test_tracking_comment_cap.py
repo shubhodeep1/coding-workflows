@@ -384,11 +384,12 @@ curl_gh_api() {{
 	esac
 }}
 curl() {{
-	local method="" url="" data=""
+	local method="" url="" data="" wout=""
 	while [ "$#" -gt 0 ]; do
-		case "$1" in -X) method="$2"; shift 2 ;; -d) data="$2"; shift 2 ;; -H) shift 2 ;; -s) shift ;; *) url="$1"; shift ;; esac
+		case "$1" in -X) method="$2"; shift 2 ;; -d) data="$2"; shift 2 ;; -H) shift 2 ;; -s) shift ;; -w) wout=1; shift 2 ;; -o|--max-time) shift 2 ;; *) url="$1"; shift ;; esac
 	done
 	echo "$method $url $(printf '%s' "$data" | jq -r .body)" >> "{calls}"
+	[ -z "$wout" ] || printf '200'
 }}
 {script}
 '''
