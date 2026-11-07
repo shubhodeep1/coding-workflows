@@ -1444,7 +1444,7 @@ class UnblockStepShardingContractTest(unittest.TestCase):
 
 
 WIRING_PART1_STEP_NAME = "Regression tests wired by the CI wiring guard (part 1)"
-WIRING_PART1_JOB_ID = "tests-heal-plan-and-validation"
+WIRING_PART1_JOB_ID = "tests-promote-stall-and-review"
 WIRING_PART1_MODULES = (
 	"tests/test_ai_memory_cli.py",
 	"tests/test_branch_rebuild.py",
@@ -1556,7 +1556,8 @@ class WiringGuardPartOneShardingContractTest(unittest.TestCase):
 	and splits its test functions across 4 processes, the way #7387 and
 	#8150 did. Every listed module must collect at least one test, every
 	test must run exactly once, and a shard that fails or records no exit
-	code must fail the step.
+	code must fail the step. Issue #9018 moved the step, unchanged, to
+	tests-promote-stall-and-review.
 	"""
 
 	def setUp(self) -> None:
@@ -1829,12 +1830,13 @@ class MovedPollGroupTwoStepsContractTest(unittest.TestCase):
 # id, module paths or tool directory its body names). The group-2 steps of the
 # same move are in GROUP_PINNED_STEPS. Issue #8179 added three more steps.
 # Issue #8268 moved the Node pair on to tests-heal-plan-and-validation.
+# Issue #9018 moved the Node pair on to tests-release-and-log-analysis.
 HOOKS_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
 HOOKS_NODE_SETUP_STEP = "Set up Node 22 for the claude-pool-broker Worker tests"
 HOOKS_VITEST_STEP = "claude-pool-broker Worker tests (vitest)"
 MOVED_HOOKS_JOB_STEPS = {
-	HOOKS_NODE_SETUP_STEP: ("tests-heal-plan-and-validation", ()),
-	HOOKS_VITEST_STEP: ("tests-heal-plan-and-validation", ("tools/claude-pool-broker",)),
+	HOOKS_NODE_SETUP_STEP: ("tests-release-and-log-analysis", ()),
+	HOOKS_VITEST_STEP: ("tests-release-and-log-analysis", ("tools/claude-pool-broker",)),
 	# tests-hooks-and-orchestrator took 15m01s of its 20 minutes again (run
 	# 40264887710, budget-watch issue #8179); these three steps moved,
 	# unchanged, to tests-promote-stall-and-review. Issue #8771 moved
@@ -2160,7 +2162,9 @@ class MovedReleaseLogStepsToHealContractTest(unittest.TestCase):
 
 	def test_moved_steps_left_the_source_job(self) -> None:
 		source_names = {step.get("name") for step in self.jobs()[RELEASE_LOG_TO_HEAL_SOURCE_JOB_ID]["steps"]}
-		for name in (*MOVED_RELEASE_LOG_TO_HEAL_STEPS, HOOKS_NODE_SETUP_STEP, HOOKS_VITEST_STEP):
+		# Issue #9018 moved the Node pair back to this class's source job, so
+		# only the two steps that stay in the heal job are checked here.
+		for name in MOVED_RELEASE_LOG_TO_HEAL_STEPS:
 			with self.subTest(step=name):
 				self.assertNotIn(name, source_names)
 
@@ -2174,7 +2178,11 @@ class MovedReleaseLogStepsToHealContractTest(unittest.TestCase):
 				self.assertLess(setup_index, names.index(name))
 
 	def test_node_pair_runs_in_order_after_the_heal_job_setup(self) -> None:
-		names = self.target_step_names()
+		# The name is historical (#8268): issue #9018 moved the Node pair to
+		# tests-release-and-log-analysis, so the job id comes from
+		# MOVED_HOOKS_JOB_STEPS and the order check still holds there.
+		job_id = MOVED_HOOKS_JOB_STEPS[HOOKS_VITEST_STEP][0]
+		names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
 		for name in (RELEASE_LOG_TO_HEAL_SETUP_STEP, HOOKS_NODE_SETUP_STEP, HOOKS_VITEST_STEP):
 			self.assertIn(name, names)
 		self.assertLess(names.index(RELEASE_LOG_TO_HEAL_SETUP_STEP), names.index(HOOKS_NODE_SETUP_STEP))
@@ -2529,6 +2537,75 @@ class MovedHeal8993StepsContractTest(unittest.TestCase):
 		for name, (job_id, _modules) in MOVED_HEAL_8993_STEPS.items():
 			with self.subTest(step=name):
 				self.assertNotEqual(job_id, HEAL_8993_SOURCE_JOB_ID)
+
+
+# Steps moved out of tests-heal-plan-and-validation, which took 17m59s of its
+# 20 minutes (run 42413379208, budget-watch issue #9018): step name -> (target
+# job id, paths its body names). The run's step timings were not readable; the
+# pick is the heal job's heaviest steps that can move, an estimate. The wiring
+# guard part 1 modules are pinned by WIRING_PART1_MODULES. The steps go to two
+# jobs so that no single job takes both moves.
+HEAL_9018_SOURCE_JOB_ID = "tests-heal-plan-and-validation"
+HEAL_9018_SETUP_STEP = "Install Python CI dependencies"
+MOVED_HEAL_9018_STEPS = {
+	WIRING_PART1_STEP_NAME: ("tests-promote-stall-and-review", ()),
+	HOOKS_NODE_SETUP_STEP: ("tests-release-and-log-analysis", ()),
+	HOOKS_VITEST_STEP: ("tests-release-and-log-analysis", ("tools/claude-pool-broker",)),
+}
+
+
+class MovedHeal9018StepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-heal-plan-and-validation run once, in their target jobs (#9018)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_target_job(self) -> None:
+		for name, (job_id, _paths) in MOVED_HEAL_9018_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_HEAL_9018_STEPS:
+			with self.subTest(step=name):
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_named_directories_exist(self) -> None:
+		for name, (_job_id, paths) in MOVED_HEAL_9018_STEPS.items():
+			for path in paths:
+				with self.subTest(step=name, path=path):
+					self.assertTrue((REPO_ROOT / path).is_dir(), path)
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[HEAL_9018_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_HEAL_9018_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_target_job_setup(self) -> None:
+		for name, (job_id, _paths) in MOVED_HEAL_9018_STEPS.items():
+			names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+			with self.subTest(step=name):
+				self.assertIn(HEAL_9018_SETUP_STEP, names, job_id)
+				self.assertIn(name, names)
+				self.assertLess(names.index(HEAL_9018_SETUP_STEP), names.index(name))
+
+	def test_no_target_is_the_source_job(self) -> None:
+		for name, (job_id, _paths) in MOVED_HEAL_9018_STEPS.items():
+			with self.subTest(step=name):
+				self.assertNotEqual(job_id, HEAL_9018_SOURCE_JOB_ID)
+
+	def test_steps_go_to_two_jobs(self) -> None:
+		self.assertGreater(len({job_id for job_id, _paths in MOVED_HEAL_9018_STEPS.values()}), 1)
 
 # Steps moved out of tests-release-and-log-analysis, which took 15m14s of its
 # 20 minutes (run 40750326439, budget-watch issue #8278): step name -> (new job
