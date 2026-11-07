@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:N/A | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The consensus ledger flags the `copilot-pull-request-reviewer` check failure (GitHub Actions run 41544382408, job 125616255928), but its log shows `Prompt too big after adding system message (errorCode: custom_instructions_too_large, statusCode 422)` thrown before any diff analysis.\n  WHY: The reviewer itself concludes the failure comes from the Copilot reviewer's custom-instruction ingestion and not from the 3-line canary edit. It rated the entry SEVERITY: NIT, mapped here to low, and said it gives the editor nothing to act on.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:N/A | severity=low (source: NIT) | confidence=2\n  PROBLEM: The consensus ledger flags the `copilot-pull-request-reviewer` check failure (GitHub Actions run 41544382408, job 125616255928), but its log shows `Prompt too big after adding system message (errorCode: custom_instructions_too_large, statusCode 422)` thrown before any diff analysis.\n  WHY: The failure is in the Copilot reviewer's custom-instruction ingestion, not in the 3-line canary edit, so the diff cannot influence it. Earlier editor passes in this PR rejected the same finding.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ab247b8027ff49baf434ffa0c24efaf25faaaad6f43fecec30d97f3a3b1c104b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "42336575950",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42336575950",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107041406_18be81e970",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "42336575950"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-07T04:14:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
