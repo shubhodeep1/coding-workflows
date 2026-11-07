@@ -239,7 +239,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `REVIEW_RESOLVER_PATH_REJECTED reason=<token> path=<path|redacted>`
     (paths outside a fixed safe character set, and symlinks or odd names,
     print as `redacted`). When the
-    live `.claude/hooks/pr_merge_status_guard.py` and its `workflow-templates/`
+    live `.claude/hooks/pr_merge_status_guard.py` or
+    `.claude/hooks/prepush_affected_tests.py` (`PAIRED_LIVE_COPIES` in
+    `scripts/review_untrusted_workspace.py`) and its `workflow-templates/`
     twin conflict with identical index stages, the model resolves only the
     template; the runner copies it byte-for-byte over the live hook, which stays
     excluded from the sandbox, and requires identical staged blobs before the

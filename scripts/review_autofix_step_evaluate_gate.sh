@@ -47,6 +47,9 @@ pr_head_sha_gate=""
 pr_head_repo_gate=""
 review_checkout_sha=""
 pr_base_ref_gate=""
+# Base commit SHA from the same PR read; feeds the clean same-head skip and
+# the gate output base_sha (#8952). Empty unless 40 lower-case hex.
+pr_base_sha_gate=""
 pr_base_retargeted="false"
 pr_updated_at_gate=""
 pr_title_cached="${PR_TITLE:-}"
@@ -85,7 +88,7 @@ if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
   _pr_gate_rc=0
   _pr_gate_err="$(mktemp "${RUNNER_TEMP:-/tmp}/pr_gate_err.XXXXXX")"
   _pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-    --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' 2>"${_pr_gate_err}")" || _pr_gate_rc=$?
+    --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), base_sha: (.base.sha // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' 2>"${_pr_gate_err}")" || _pr_gate_rc=$?
   cat "${_pr_gate_err}" >&2 2>/dev/null || true
   _pr_gate_not_found=false
   if grep -q 'GH_API_RETRY outcome=permanent .*status=404 ' "${_pr_gate_err}" 2>/dev/null; then _pr_gate_not_found=true; fi
@@ -106,6 +109,8 @@ if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     pr_auto_merge_enabled="$(printf '%s' "${_pr_gate}" | jq -r 'if .auto_merge_enabled == null then "" else (.auto_merge_enabled | tostring) end' 2>/dev/null || echo "")"
     pr_head_repo_gate="${pr_head_repo}"
     pr_base_ref_gate="$(printf '%s' "${_pr_gate}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
+    pr_base_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.base_sha // ""' 2>/dev/null | tr 'A-F' 'a-f' || echo "")"
+    [[ "${pr_base_sha_gate}" =~ ^[0-9a-f]{40}$ ]] || pr_base_sha_gate=""
     pr_updated_at_gate="$(printf '%s' "${_pr_gate}" | jq -r '.updated_at // ""' 2>/dev/null || echo "")"
     pr_labels="$(printf '%s' "${_pr_gate}" | jq -r '(.labels // []) | join(",")' 2>/dev/null || echo "")"
     pr_additions="$(printf '%s' "${_pr_gate}" | jq -r '.additions // 0' 2>/dev/null || echo "")"
@@ -144,6 +149,7 @@ if [ "${RETARGET_HELPER_VERIFIED:-false}" = "true" ] && [ "${pr_state}" = "open"
     # no longer authorize any same-head or deterministic skip.
     pr_mergeable=""
     pr_mergeable_state=""
+    pr_base_sha_gate=""
   fi
 fi
 
@@ -317,7 +323,13 @@ fi
 # REVIEW_AUTOFIX_PARTIAL_V1 markers (verbatim), and the failure /
 # cap markers, failure comment texts and editor summaries the cap
 # scan reads (other bodies clipped to their first and last 2000
-# characters; both markers sit at the ends of their comments).
+# characters; both markers sit at the ends of their comments), plus
+# the review-autofix-clean:v1 editor summaries. Every other non-Bot
+# comment is kept as a slim activity record ({id, author_login,
+# author_type, author_association, created_at, body: "",
+# activity_only: true}, no body text) in the same call and in the
+# same order, for the clean same-head skip (#8952); every marker
+# reader keys on body text, so an empty body matches none of them.
 # gate_marker_fetch_state: pending | ok | marker_author_unavailable
 # | api_error.
 gate_marker_fetch_state="pending"
@@ -342,7 +354,7 @@ gate_fetch_marker_comments()
   # shellcheck disable=SC2016
   if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
     -f per_page=100 \
-    --jq '[.[] | (.body // "") as $b | select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}]' \
+    --jq '[.[] | (.body // "") as $b | ((select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 ")) or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}) // (select((.user.type // "") != "Bot") | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: "", activity_only: true}))]' \
     2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
     && [ -s "${gate_marker_comments_file}" ]; then
     gate_marker_fetch_state="ok"
@@ -538,6 +550,262 @@ PY
           elif [ "${terminal_matching_markers:-0}" != "0" ] || [ "${terminal_untrusted_markers:-0}" != "0" ]; then
             echo "AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} matching_markers=${terminal_matching_markers:-0} untrusted_markers=${terminal_untrusted_markers:-0} commit_bot_markers=${terminal_commit_bot_markers:-0} marker_author_login=${terminal_marker_author_login}"
           fi
+        fi
+      fi
+    fi
+  fi
+fi
+
+# ----- Clean same-head skip (issue #8952) -----
+# A full review whose editor ended with "Change status: not-edited" and
+# committed nothing ends its "AI autofix editor summary" comment with
+# `<!-- review-autofix-clean:v1 head=<sha> base=<sha> support=<sha|none>
+# run=<id> -->` (scripts/review_autofix_step_post_editor_summary.sh).
+# Another run on the same head, base and review-support SHA would only
+# repeat that clean review: seven e2e smoke PRs got 68-113 identical
+# full reviews each (2026-11-05..07 Claude pool audit). Skip it here.
+#
+# Every event with a numeric PR is eligible except pull_request
+# `reopened` (an explicit human re-engagement). `[force-review]` and the
+# `force-review` label force one full review per head; they do not
+# bypass this skip once that head has a clean marker (issue #8952,
+# decision Q8: A). Invalidators: a different head, base or support
+# SHA, mergeable != true, force_rb_judge, a post_sync_test_repair
+# dispatch, a retargeted base, a comment with no valid created_at, a
+# trusted freshness-ci-failed marker for the head, a newer trusted
+# single-issue security-pass result (clean/findings/failed) for the head,
+# a newer trusted failure / partial comment, a newer non-pipeline non-Bot
+# comment, or a newer non-pipeline non-Bot submitted review. Every lookup or parse failure
+# logs AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK outcome=error and runs the
+# review (fail open toward review). vars.AUTOFIX_SKIP_CLEAN_SAME_HEAD=
+# false disables it.
+# Cost (CLAUDE.md §15): the comments are the shared
+# gate_fetch_marker_comments read; one paginated GET
+# /pulls/{n}/reviews only when a trusted clean marker survives every
+# comment-based invalidator.
+if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+  clean_head_log="${pr_head_sha_gate:-unknown}"
+  clean_precheck=""
+  if [ "${AUTOFIX_SKIP_CLEAN_SAME_HEAD:-true}" = "false" ]; then
+    clean_precheck="disabled"
+  elif [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then
+    clean_precheck="force_rb_judge"
+  elif [ "${POST_SYNC_TEST_REPAIR:-false}" = "true" ]; then
+    # The poller dispatches the integration test repair once per head
+    # (integration_test_repair_sha); skipping it would lose the repair.
+    clean_precheck="post_sync_test_repair"
+  elif [ "${pr_base_retargeted}" = "true" ]; then
+    clean_precheck="base_retargeted"
+  # No provider-outage precheck (deliberate, #8952): a resume dispatch
+  # carries only pr_number. A provider_unavailable failure marker newer
+  # than the clean marker re-arms through newer_failure_marker; a
+  # label-marker resume on a clean head would only repeat a clean review,
+  # because the review-blocked judge is reachable there only through
+  # force_rb_judge, which is checked above.
+  elif [ "${EVENT_NAME:-}" = "pull_request" ] && [ "${EVENT_ACTION:-}" = "reopened" ]; then
+    clean_precheck="reopened"
+  elif [ "${pr_mergeable}" != "true" ]; then
+    clean_precheck="mergeable_not_true"
+  elif ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+    clean_precheck="head_sha_unavailable"
+  elif ! [[ "${pr_base_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+    clean_precheck="base_sha_unavailable"
+  fi
+  if [ -n "${clean_precheck}" ]; then
+    echo "AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK outcome=no_skip reason=${clean_precheck} pr=${PR_NUMBER} head_sha=${clean_head_log}"
+  else
+    gate_fetch_marker_comments
+    if [ "${gate_marker_fetch_state}" = "marker_author_unavailable" ] || [ -z "${gate_marker_author_login}" ]; then
+      echo "AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK outcome=error reason=marker_author_unavailable pr=${PR_NUMBER} head_sha=${clean_head_log}"
+    elif [ "${gate_marker_fetch_state}" != "ok" ]; then
+      echo "AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK outcome=error reason=comments_api_error pr=${PR_NUMBER} head_sha=${clean_head_log}"
+    else
+      clean_decision=""
+      if ! clean_decision="$(CLEAN_MARKER_COMMENTS_FILE="${gate_marker_comments_file}" GATE_HEAD_SHA="${pr_head_sha_gate}" GATE_BASE_SHA="${pr_base_sha_gate}" GATE_SUPPORT_SHA="${REVIEW_SUPPORT_SHA:-}" GATE_PR_NUMBER="${PR_NUMBER}" GATE_MARKER_AUTHOR_LOGIN="${gate_marker_author_login}" python3 - <<'PY'
+# Decide whether the newest trusted review-autofix-clean:v1 marker lets the
+# gate skip a repeat review of the current head (issue #8952).
+# Output is KEY=VALUE lines consumed by the shell below; every value is
+# reduced to a safe character set so it can go into a log line.
+import json
+import os
+import re
+
+head_sha = (os.environ.get("GATE_HEAD_SHA") or "").strip().lower()
+base_sha = (os.environ.get("GATE_BASE_SHA") or "").strip().lower()
+support_sha = (os.environ.get("GATE_SUPPORT_SHA") or "").strip().lower()
+pr_number = (os.environ.get("GATE_PR_NUMBER") or "").strip()
+marker_author = (os.environ.get("GATE_MARKER_AUTHOR_LOGIN") or "").strip().lower()
+try:
+    with open(os.environ.get("CLEAN_MARKER_COMMENTS_FILE") or "", encoding="utf-8") as handle:
+        comments = json.load(handle)
+except (OSError, TypeError, ValueError):
+    raise SystemExit(2)
+if not isinstance(comments, list) or not marker_author or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+    raise SystemExit(2)
+
+CLEAN_TOKEN = "<!-- review-autofix-clean:v1 "
+CLEAN_RE = re.compile(r"^<!-- review-autofix-clean:v1 head=([0-9a-f]{40}) base=([0-9a-f]{40}) support=([0-9a-f]{40}|none) run=([0-9]+) -->$")
+SUMMARY_PREFIX = "AI autofix editor summary"
+# Text of every workflow failure / partial / no-op comment the gate fetch
+# keeps; any of them newer than the clean marker re-arms the review.
+FAILURE_TOKENS = (
+    "review-autofix-failure:v1",
+    "<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->",
+    "AI review/autofix",
+    "Editor changes lost",
+    "Editor no-op suspicious",
+)
+# A single-issue security-pass result for this head re-dispatches the review
+# with only pr_number (scripts/review_single_issue_security_pass.sh); that run
+# must merge or start the next cycle, so a newer result re-arms the review.
+security_pass_re = re.compile(
+    r"<!-- ai:single-issue-security-pass:v1 status=(?:clean|findings|failed) head=" + re.escape(head_sha) + r" cycle=[1-9][0-9]* -->\s*$"
+)
+TIME_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}")
+freshness_re = re.compile(
+    "<!-- ai:freshness-ci-failed:v1 pr=" + re.escape(pr_number) + " head=" + re.escape(head_sha) + r" -->\s*$"
+)
+
+def clean(value: object, pattern: str = r"[^A-Za-z0-9_.-]") -> str:
+    return re.sub(pattern, "", str(value or "")) or "unknown"
+
+def sort_key(comment: dict) -> tuple[str, int]:
+    try:
+        comment_id = int(comment.get("id") or 0)
+    except (TypeError, ValueError):
+        comment_id = 0
+    return (str(comment.get("created_at") or ""), comment_id)
+
+def last_line(body: str) -> str:
+    lines = [line.rstrip("\r") for line in body.splitlines() if line.strip()]
+    return lines[-1].strip() if lines else ""
+
+records = [c for c in comments if isinstance(c, dict)]
+latest = None
+latest_fields = None
+matching = 0
+untrusted = 0
+malformed = 0
+for comment in records:
+    body = comment.get("body")
+    if not isinstance(body, str) or CLEAN_TOKEN not in body:
+        continue
+    author = str(comment.get("author_login") or "").strip().lower()
+    if author != marker_author:
+        untrusted += 1
+        continue
+    match = CLEAN_RE.fullmatch(last_line(body)) if body.startswith(SUMMARY_PREFIX) else None
+    if match is None:
+        malformed += 1
+        continue
+    if match.group(1) != head_sha:
+        continue
+    matching += 1
+    if latest is None or sort_key(comment) > sort_key(latest):
+        latest = comment
+        latest_fields = match
+
+decision = "no_skip"
+reason = ""
+if latest is None:
+    reason = "no_marker"
+elif latest_fields.group(2) != base_sha:
+    reason = "base_moved"
+elif latest_fields.group(3) != (support_sha if re.fullmatch(r"[0-9a-f]{40}", support_sha) else ("none" if not support_sha else "invalid")):
+    # `support=none` matches only an empty current support SHA.
+    reason = "support_changed"
+else:
+    latest_key = sort_key(latest)
+    trusted = [c for c in records if str(c.get("author_login") or "").strip().lower() == marker_author]
+    newer = [c for c in records if c is not latest and sort_key(c) >= latest_key]
+    if not TIME_RE.match(str(latest.get("created_at") or "")) or any(
+        not TIME_RE.match(str(c.get("created_at") or "")) for c in records if c is not latest
+    ):
+        # Without every comment time the order against the marker is
+        # unknown; fail open toward review (issue #8952).
+        reason = "comment_time_unavailable"
+    elif any(isinstance(c.get("body"), str) and freshness_re.search(c["body"]) for c in trusted):
+        reason = "freshness_ci_failed"
+    elif any(
+        isinstance(c.get("body"), str) and security_pass_re.search(c["body"])
+        for c in newer
+        if str(c.get("author_login") or "").strip().lower() == marker_author
+    ):
+        reason = "newer_security_pass_result"
+    elif any(
+        isinstance(c.get("body"), str) and any(token in c["body"] for token in FAILURE_TOKENS)
+        for c in newer
+        if str(c.get("author_login") or "").strip().lower() == marker_author
+    ):
+        reason = "newer_failure_marker"
+    elif any(
+        str(c.get("author_login") or "").strip().lower() != marker_author and str(c.get("author_type") or "") != "Bot"
+        for c in newer
+    ):
+        reason = "newer_human_comment"
+    else:
+        decision = "candidate"
+        reason = "none"
+
+print(f"decision={decision}")
+print(f"reason={clean(reason)}")
+print(f"marker_run={clean(latest_fields.group(4) if latest_fields else '')}")
+print(f"marker_comment_id={clean(latest.get('id') if latest else '')}")
+print(f"marker_created_at={clean(latest.get('created_at') if latest else '', r'[^0-9TZ:-]')}")
+print(f"matching_markers={matching}")
+print(f"untrusted_markers={untrusted}")
+print(f"malformed_markers={malformed}")
+PY
+      )"; then
+        clean_decision=""
+      fi
+      clean_field() { printf '%s\n' "${clean_decision}" | awk -F= -v k="$1" '$1 == k { v = substr($0, length(k) + 2) } END { print v }'; }
+      clean_outcome="$(clean_field decision)"
+      if [ -z "${clean_decision}" ] || { [ "${clean_outcome}" != "candidate" ] && [ "${clean_outcome}" != "no_skip" ]; }; then
+        echo "AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK outcome=error reason=parse_error pr=${PR_NUMBER} head_sha=${clean_head_log}"
+      else
+        clean_reason="$(clean_field reason)"
+        clean_marker_run="$(clean_field marker_run)"
+        clean_marker_comment_id="$(clean_field marker_comment_id)"
+        clean_marker_created_at="$(clean_field marker_created_at)"
+        clean_counts="matching_markers=$(clean_field matching_markers) untrusted_markers=$(clean_field untrusted_markers) malformed_markers=$(clean_field malformed_markers)"
+        clean_reviews_error=""
+        if [ "${clean_outcome}" = "candidate" ]; then
+          # The gate has no other pull-request reviews read, and no existing
+          # call returns reviews, so this one is added. It runs only when a
+          # trusted clean marker for the current head, base and support SHA
+          # survived every comment-based invalidator above (rare): at most
+          # one paginated GET /pulls/{n}/reviews per gate run (CLAUDE.md
+          # §15). A failure keeps the normal review (fail open).
+          clean_reviews_json=""
+          if ! [[ "${clean_marker_created_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+            # Without the marker time no review can be ordered against it.
+            clean_reviews_error="marker_time_unavailable"
+          elif ! clean_reviews_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews" -f per_page=100 \
+            --jq '[.[] | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), submitted_at: (.submitted_at // ""), state: (.state // "")}]' \
+            2>/dev/null | jq -c -s 'add // []' 2>/dev/null)" || [ -z "${clean_reviews_json}" ]; then
+            clean_reviews_error="reviews_api_error"
+          elif ! clean_newer_reviews="$(printf '%s' "${clean_reviews_json}" | jq -r --arg login "${gate_marker_author_login}" --arg since "${clean_marker_created_at}" '
+              if type != "array" then error("bad") else
+                [ .[] | select(type == "object")
+                  | select(((.submitted_at // "") | length) > 0 and (.submitted_at >= $since))
+                  | select(((.author_login // "") | ascii_downcase) != ($login | ascii_downcase) and (.author_type // "") != "Bot") ]
+                | length end' 2>/dev/null)" || ! [[ "${clean_newer_reviews}" =~ ^[0-9]+$ ]]; then
+            clean_reviews_error="reviews_api_error"
+          elif [ "${clean_newer_reviews}" -gt 0 ]; then
+            clean_outcome="no_skip"
+            clean_reason="newer_review"
+          fi
+        fi
+        if [ -n "${clean_reviews_error}" ]; then
+          echo "AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK outcome=error reason=${clean_reviews_error} pr=${PR_NUMBER} head_sha=${clean_head_log}"
+        elif [ "${clean_outcome}" = "candidate" ]; then
+          SHOULD_RUN="false"
+          SKIP_REASON="clean_same_head"
+          GATE_SKIP_RECORDED="true"
+          echo "AUTOFIX_GATE_SKIP reason=clean_same_head pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} marker_run=${clean_marker_run} marker_comment_id=${clean_marker_comment_id}"
+        else
+          echo "AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK outcome=no_skip reason=${clean_reason} pr=${PR_NUMBER} head_sha=${clean_head_log} ${clean_counts}"
         fi
       fi
     fi
@@ -1383,6 +1651,7 @@ echo "review_checkout_sha=${review_checkout_sha}" >> "${GITHUB_OUTPUT}"
 echo "retargeted_base_ref=${pr_base_ref_gate}" >> "${GITHUB_OUTPUT}"
 echo "retargeted_base_updated_at=${pr_updated_at_gate}" >> "${GITHUB_OUTPUT}"
 echo "base_retargeted=${pr_base_retargeted}" >> "${GITHUB_OUTPUT}"
+echo "base_sha=${pr_base_sha_gate}" >> "${GITHUB_OUTPUT}"
 printf 'post_merge_pr_text_json=%s\n' "${POST_MERGE_PR_TEXT_JSON}" >> "${GITHUB_OUTPUT}"
 printf 'post_merge_linked_issues_json=%s\n' "${POST_MERGE_LINKED_ISSUES_JSON}" >> "${GITHUB_OUTPUT}"
 echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}" >> "${GITHUB_OUTPUT}"
