@@ -235,7 +235,11 @@ def test_workflow_reads_only_verified_readme_and_refuses_output_symlinks():
 def run_static_context_step(tmp_path):
 	workflow = expanded_review_autofix_text()
 	step = workflow.split("      - name: Pre-assemble static context (cacheable across runs)\n", 1)[1].split("\n      - name:", 1)[0]
-	body = "\n".join(line[10:] for line in step.splitlines()[1:])
+	# The step has an env: block (STATIC_CONTEXT_AGENTS_MODE, issue #8954); the
+	# body starts after its `run: |` line.
+	step_lines = step.splitlines()
+	run_line = next(index for index, line in enumerate(step_lines) if line.strip() == "run: |")
+	body = "\n".join(line[10:] for line in step_lines[run_line + 1:])
 	instructions = tmp_path.parent / "static-instructions.txt"
 	instructions.write_text("trusted instructions\n")
 	runtime = tmp_path.parent / "static-runtime"
@@ -335,3 +339,27 @@ def test_static_context_refuses_non_regular_output(tmp_path, kind):
 	assert b"non-regular pre_assembled_static.txt" in result.stdout
 	if kind == "symlink":
 		assert outside.read_text() == "unchanged"
+
+
+# The review agents-index cases (issue #8954) live in
+# tests/test_review_static_context_agents_index.py and are collected here,
+# since CI already runs this file and ci.yml was outside that issue's file
+# grant. A name clash would hide a test, so it fails loudly.
+def _collect_review_agents_index_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"review_static_context_agents_index_cases",
+		Path(__file__).resolve().parent / "test_review_static_context_agents_index.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 13, f"only {collected} review agents-index cases collected"
+
+
+_collect_review_agents_index_cases()
