@@ -1045,9 +1045,12 @@ def test_source_repo_without_its_conflict_set_still_fails_closed(tmp_path):
 #
 # PR #8436 (run 42355218108) failed closed with sandbox_path_host_only on
 # .claude/hooks/prepush_affected_tests.py: the paired-live mirroring and the
-# guard-hook template merge cover only pr_merge_status_guard.py. The xfail
-# test records the gap; the guard tests lock the sandbox boundary, so a fix
-# cannot get there by admitting the live hook or taking it from base.
+# guard-hook template merge covered only pr_merge_status_guard.py. The xfail
+# below records the paired-live half of the gap only while PAIRED_LIVE_COPIES
+# lacks the pair, so it turns into an ordinary regression test as soon as the
+# pair lands (on this branch or on the base CI merges in). The guard tests
+# lock the sandbox boundary, so a fix cannot get there by admitting the live
+# hook or taking it from base.
 
 PREPUSH_HOOK = ".claude/hooks/prepush_affected_tests.py"
 PREPUSH_HOOK_TEMPLATE = "workflow-templates/" + PREPUSH_HOOK
@@ -1063,6 +1066,10 @@ def _workspace_module():
 	return module
 
 
+# True only while the paired-live gap is still open in the code under test.
+_PREPUSH_PAIR_GAP_OPEN = _workspace_module().PAIRED_LIVE_COPIES.get(PREPUSH_HOOK) != PREPUSH_HOOK_TEMPLATE
+
+
 def test_prepush_hook_pair_fixture_conflicts_on_both_paths(tmp_path):
 	"""The xfail below must fail only because of the gap, not the fixture."""
 	repo = tmp_path / "repo"
@@ -1071,7 +1078,7 @@ def test_prepush_hook_pair_fixture_conflicts_on_both_paths(tmp_path):
 	assert sorted(_unmerged(repo)) == sorted([PREPUSH_HOOK, PREPUSH_HOOK_TEMPLATE])
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=PREPUSH_GAP_REASON)
+@pytest.mark.xfail(_PREPUSH_PAIR_GAP_OPEN, strict=True, raises=AssertionError, reason=PREPUSH_GAP_REASON)
 def test_prepush_hook_pair_is_listed_in_paired_live_report(tmp_path):
 	repo = tmp_path / "repo"
 	repo.mkdir()
