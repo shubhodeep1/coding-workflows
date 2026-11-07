@@ -2359,7 +2359,8 @@ class MovedPromote8466StepsContractTest(unittest.TestCase):
 # 20 minutes (run 41704793081, budget-watch issue #8771): step name -> (target
 # job id, module paths its body names). The pick is an estimate from test and
 # subprocess counts; the run's step timings were not readable. The two steps
-# go to different jobs so that no single job takes both.
+# first went to different jobs; issue #8993 moved "Orchestrate lib unit tests"
+# on to tests-release-and-log-analysis, so both now run in that job.
 PROMOTE_8771_SOURCE_JOB_ID = "tests-promote-stall-and-review"
 PROMOTE_8771_SETUP_STEP = "Install Python CI dependencies"
 MOVED_PROMOTE_8771_STEPS = {
