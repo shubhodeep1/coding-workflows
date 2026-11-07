@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-07T13:49:38Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=analysis/recommendation-processing-report.md:165-175; cited_path=analysis/recommendation-processing-report.md; files_touched=analysis/recommendation-processing-report.md (hunks at lines 2-8, 139-145, 2109-2137 only), analysis/workflow-optimization-2026-10-07.md, scripts/analyze_workflow_logs.py, scripts/orchestrate_poll_process.sh, scripts/review_merge_train.sh, tests/test_mark_validation_failed_deterministic_marker.py, tests/test_review_merge_train.py.",
+  "phase": "review_autofix",
+  "pr_number": 8983,
+  "record_id": "lesson_20261107134938_f3a0f403f8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "analysis/recommendation-processing-report.md",
+    "analysis/recommendation-processing-report.md (hunks at lines 2-8",
+    "139-145",
+    "2109-2137 only)",
+    "analysis/workflow-optimization-2026-10-07.md",
+    "scripts/analyze_workflow_logs.py",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/review_merge_train.sh",
+    "tests/test_mark_validation_failed_deterministic_marker.py",
+    "tests/test_review_merge_train.py"
+  ]
+}
