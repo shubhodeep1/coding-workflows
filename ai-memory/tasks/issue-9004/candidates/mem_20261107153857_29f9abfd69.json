@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9004,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9004\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9010\",\"pr_number\":9010,\"branch\":\"ai/issue-9004\",\"run_id\":\"42383067354\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42383067354\",\"changed_files\":[\"README.md\",\"agents.d/9004-paired-hook-template-merge.md\",\"changelog.d/9004-paired-hook-template-merge.md\",\"scripts/review_conflict_prepare.sh\",\"tests/test_conflict_guard_hook_template_merge.py\"]}",
+  "fingerprint": "be15a8db5c98d1c9621ea403a8742e3be391a4dfe391a1b2a7070004cf345c2f",
+  "lineage": {
+    "issue_number": 9004,
+    "parent_ids": [],
+    "pr_number": 9010,
+    "run_id": "42383067354",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42383067354",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9010"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261107153857_29f9abfd69",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9004,
+    "level": "run",
+    "pr_number": 9010,
+    "run_id": "42383067354"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9004: https://github.com/shubhodeep1/coding-workflows/pull/9010",
+  "timestamps": {
+    "created_at": "2026-11-07T15:38:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
