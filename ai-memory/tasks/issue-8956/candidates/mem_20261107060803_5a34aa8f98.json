@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8956,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8956\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8962\",\"pr_number\":8962,\"branch\":\"ai/issue-8956\",\"run_id\":\"42343646218\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42343646218\",\"changed_files\":[\".github/workflows/implement.yml\",\"agents.d/8956-auto-heal-companion-scope.md\",\"changelog.d/8956-auto-heal-companion-scope.md\",\"scripts/files_touched_scope_guard.py\",\"scripts/implement_commit_changes.sh\",\"scripts/implement_step_prepush_test_gate.sh\",\"tests/test_files_touched_scope_guard.py\"]}",
+  "fingerprint": "a915b2ef4d0d1a57f5a9210226d8cc0100a4385f423f349ec3ca533df19e5042",
+  "lineage": {
+    "issue_number": 8956,
+    "parent_ids": [],
+    "pr_number": 8962,
+    "run_id": "42343646218",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42343646218",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8962"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261107060803_5a34aa8f98",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8956,
+    "level": "run",
+    "pr_number": 8962,
+    "run_id": "42343646218"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8956: https://github.com/shubhodeep1/coding-workflows/pull/8962",
+  "timestamps": {
+    "created_at": "2026-11-07T06:08:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
