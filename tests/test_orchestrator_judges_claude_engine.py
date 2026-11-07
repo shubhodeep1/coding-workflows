@@ -690,7 +690,13 @@ def test_each_judge_uses_sandbox_without_host_fallback() -> None:
 		assert 'if [ "${' + role.lower() + '_rc}" -eq 75 ]; then' not in text[start:start + 700]
 	assert 'poller_judge_isolated "${role}"' in text
 	assert 'claude_run "${role}"' not in text
-	assert len(re.findall(r"poller_claude_judge (?:SECURITY_JUDGE|INTEGRATION_JUDGE|STALL_JUDGE|WAVE_JUDGE|RB_JUDGE) ", text)) == len(SITES) + 3
+	# The P10 re-decompose call (issue #8427) is a second WAVE_JUDGE site.
+	revise_call = 'poller_claude_judge WAVE_JUDGE "${prd_prompt}" "${prd_out}" "${RUNTIME_DIR:-${prd_base}}/revise_log.txt"'
+	assert text.count(revise_call) == 1
+	revise_start = text.index(revise_call)
+	assert "-eq 75" not in text[revise_start:revise_start + 700]
+	# Count only non-comment lines, so a comment quoting the call cannot change the count.
+	assert len(re.findall(r"(?m)^[ \t]*[^#\n]*poller_claude_judge (?:SECURITY_JUDGE|INTEGRATION_JUDGE|STALL_JUDGE|WAVE_JUDGE|RB_JUDGE) ", text)) == len(SITES) + 4
 	rb_block = text[text.index('      # Run the judge\n      RB_JUDGE_SUCCESS=false'):text.index('      # Parse judge output')]
 	assert 'poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log"' in rb_block
 	assert 'pushd "${RB_COMBINED_WORKDIR}" >/dev/null ||' in rb_block
