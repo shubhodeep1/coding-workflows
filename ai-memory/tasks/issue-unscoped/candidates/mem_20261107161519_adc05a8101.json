@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description says the DEBUG message should list \"each pull request\" (a fresh sync pull request should produce a DEBUG message listing each pull request).\n  expected_change_site: scripts/audit_consumer_drift.py DriftRepairer._repair and RepairResult; .github/workflows/audit_consumer_drift.yml report step\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: DriftRepairer._repair at scripts/audit_consumer_drift.py:985-1000 selects only one sync PR (via `next((item for item in sync_pulls if item[1]), sync_pulls[0])`) and returns a single PR number, the report step at .github/workflows/audit_consumer_drift.yml:276-279 lists one PR per repair, so when multiple sync PRs are open for the same repository the DEBUG message omits all but the selected one (severity NIT in both reviewers)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: A fresh sync pull request should produce a DEBUG message \"listing each pull request\" (per PR description).\n  Expected change site: scripts/audit_consumer_drift.py DriftRepairer._repair and .github/workflows/audit_consumer_drift.yml report step.\n  Evidence of absence: DriftRepairer._repair at scripts/audit_consumer_drift.py:985-1000 selects exactly one sync pull request from sync_pulls (preferring the one for the audited release) and returns a single RepairResult with that PR's number; the report step at .github/workflows/audit_consumer_drift.yml:276-279 iterates over covered_repairs (one entry per repository) and emits one line per repository. If two auto/update-workflows-<same-sha12> PRs are open for the same repository, the listing shows only the first one selected by `next((item for item in sync_pulls if item[1]), sync_pulls[0])`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The PR description says the DEBUG message should list \"each pull request.\"\n  Expected change site: `scripts/audit_consumer_drift.py`, `DriftRepairer._repair` and `RepairResult`; `.github/workflows/audit_consumer_drift.yml`, report step.\n  Evidence of absence: `DriftRepairer._repair` collects open sync PRs but selects only one at lines 985\u20131000 and returns a single PR number. The report step lists one PR per repair at `.github/workflows/audit_consumer_drift.yml:276\u2013279`. If multiple sync PRs are open for the same repository, the DEBUG message omits all but the selected one.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0576113dc2e6396a7ac3a5d56e4786281294cac07687c73fc17b827b45f771cf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8988,
+    "run_id": "42389122041",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42389122041",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107161519_adc05a8101",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8988,
+    "run_id": "42389122041"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T16:15:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
