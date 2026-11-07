@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Implementation plan: issue #9016. Make the P3 done-check tests expect the `/gate/tests.txt` mount\n\nPlanning ref: `orchestrator/project-8434` @ `aa951932bc15d274529fbd55e350dd6f24bb7760` (Integration branch mismatch: false).\n\n## Automation / wiring\n- No new script, supervisor or database work. The change only edits existing test assertions and one pending `agents.d/` fragment.\n- Entry point: the existing `CI` workflow on PR push. Its jobs `tests-hooks-and-orchestrator`, `tests-heal-plan-and-validation` and `tests-promote-stall-and-review` already run these test files.\n- No new long-running supervisor is needed.\n- No entry is needed in `docs/scripts-pending-removal.md`.\n\n## Files likely to change\n- `tests/test_review_conflict_resolve_sandbox_only.py`\n- `tests/test_implement_prepush_test_gate.py`\n- `tests/test_review_prepush_test_gate.py`\n- `agents.d/8427-p3-persist-repair-loop.md`\n\n## Functions or modules to implement\nNo new code. Only string literals in assertions change. I checked each one on the planning ref:\n\n1. **`tests/test_review_conflict_resolve_sandbox_only.py`**\n   - `test_resolver_loop_passes_done_check_tests_file`, line 1515: replace `\"--tests-file /inputs/tests.txt\"` with `\"--tests-file /gate/tests.txt\"`. Keep `len(runs) == 2`.\n   - `test_resolver_loop_fetches_the_done_check_once_when_none_is_staged`, line 1557: same replacement.\n2. **`tests/test_implement_prepush_test_gate.py`**\n   - `test_unmet_done_check_target_drives_a_repair`, line 645: replace only the `--tests-file /inputs/tests.txt` half with `--tests-file /gate/tests.txt`.\n   - Keep `\"--expect-baseline-fail-file /inputs/baseline_fail.txt\"` on line 645. That file still goes through `gate_input()` into `/inputs/`.\n   - Keep `assert \"dst=/inputs,readonly\" in first_run` on line 644.\n3. **`tests/test_review_prepush_test_gate.py`**, line 834: same replacement. This assertion has not run yet in CI because it sits after the failing pytest call in a `set -e` step. It has the same stale expectation, so it would fail next.\n4. **`agents.d/8427-p3-persist-repair-loop.md`**, line 7 (\"Gate inputs.\" bullet). This is a pending fragment, not `agents.md` itself, so editing it is allowed under \u00a725. It currently says both files are copied (\u2264 64 KiB, else `reason=tests_file_rejected`) into a directory mounted read-only at `/inputs`. Rewrite that sentence so it matches the wrapper (`scripts/prepush_test_gate_run.sh` lines 306\u2013325):\n   - The `--tests-file` list is validated by the #8461 path. That means a regular, non-symlink file of at most 256 KiB, with synthetic `tests_file_*` results when it fails. It is mounted read-only at `/gate/tests.txt`.\n   - Only `--expect-baseline-fail-file` is copied, through `gate_input()` (\u2264 64 KiB, else `reason=tests_file_rejected`), into the private directory mounted read-only at `/inputs`, as `/inputs/baseline_fail.txt`.\n   - Leave the rest of the bullet unchanged.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone. The wrapper's docker argv contract stays as #8461 shipped it:\n- `--tests-file /gate/tests.txt`\n- `--expect-baseline-fail-file /inputs/baseline_fail.txt`\n\n## Decisions\n### D1 \u2014 Fix the tests, not the wrapper\n- **Chosen:** change the four assertions to `/gate/tests.txt`. Leave `scripts/prepush_test_gate_run.sh` as it is.\n- **Alternatives considered:** route `--tests-file` through `gate_input()` into `/inputs/tests.txt`.\n- **Why:** `/gate/tests.txt` is the contract #8461 shipped. It has the stricter 256 KiB validation and the synthetic `tests_file_*` results. It is also locked by:\n  - `tests/test_prepush_affected_tests.py` lines 1231, 1239 and 1256\n  - `changelog.d/prepush-gate-tests-file.md`\n  - `agents.d/prepush-gate-tests-file.md`\n\n  Changing the wrapper would break those tests, and it would weaken validation from 256 KiB with typed reasons to 64 KiB with the generic `tests_file_rejected`.\n\n### D2 \u2014 Also correct the stale P3 fragment\n- **Chosen:** edit line 7 of `agents.d/8427-p3-persist-repair-loop.md` in the same PR.\n- **Alternatives considered:** fix the tests only.\n- **Why:** the issue asks for P3 docs that describe the test list under `/inputs` to be corrected. Otherwise, when fragments are folded at release time, `agents.md` would contradict the wrapper and the #8461 fragment. The edit is one sentence.\n\n## Security considerations\n- No trust boundary changes, and no new endpoint or other surface is added.\n- The container mount layout and validation stay the same: read-only bind mounts, `--network none`, and the 256 KiB / 64 KiB caps. Keeping the wrapper unchanged keeps the stricter validation of the `--tests-file` input.\n- No secrets are involved.\n\n## Risks and edge cases\n- **No conflict with the codebase.** A grep on the planning ref confirms these are the only four `/inputs/tests.txt` assertions in `tests/`, `scripts/`, `agents.d/`, `changelog.d/` and `docs/`. The wrapper passes `/gate/tests.txt` on lines 307\u2013308, as the issue says.\n- **Keep the `/inputs` mount check.** In the implement test, `dst=/inputs,readonly` must still be asserted. In that test the baseline file is staged, so `/inputs` is still mounted. Dropping that check would loosen coverage.\n- **Line 834 could hide another failure.** Once the earlier failures are fixed, it will run. Any further failure in that step would be a separate problem; the test file's other assertions are unchanged.\n\n## Testing considerations\nRun on the pinned toolchain:\n\n```\nPYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_review_conflict_resolve_sandbox_only.py tests/test_implement_prepush_test_gate.py tests/test_review_prepush_test_gate.py tests/test_prepush_affected_tests.py -q\n```\n\n- The four target tests should pass, and the #8461 assertions in `tests/test_prepush_affected_tests.py` should keep passing.\n- If the repo has an `agents.d` fragment checker (for example `scripts/check_agents_md_direct_edits.py` or a fragment-marker test), run it to confirm the fragment's `<!-- agents: section=... -->` markers are untouched.\n\nScope-mode: Hold Scope\nReuse-audit: extends scripts/prepush_test_gate_run.sh\nScope-mode justification: The CI failure comes only from stale mount-path strings in four P3 assertions and one P3 fragment sentence. The plan aligns them with the existing wrapper contract from #8461 and adds no new behaviour. Doing the complete fix (including line 834, which has not run yet, and the fragment) costs a few lines more than fixing only the three assertions seen failing. It avoids a second triage round, so it is chosen on Correctness & safety grounds (\u00a76: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed).\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "7686124a0c02af9175176dfab6a44c4915e0f3d66cf0829f84478faec65916e9",
+  "lineage": {
+    "issue_number": 9016,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42407784141",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42407784141",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9016"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261107195144_549524cdaa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9016,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42407784141"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9016",
+  "timestamps": {
+    "created_at": "2026-11-07T19:51:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
