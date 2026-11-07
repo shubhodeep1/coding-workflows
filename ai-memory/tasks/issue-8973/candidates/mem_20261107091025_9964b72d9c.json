@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: A is not something this pipeline can carry out, because closing this issue and filing a new one are issue actions, and the planner and implementer only change repository files and open one pull request. C would fail for certain rather than just stall. `scripts/implement_commit_changes.sh:11-13,599-601` runs `files_touched_scope_guard.py --allowlist-file \"${HEAL_SCOPE_FILE}\"` on the heal route, and the scope comes from the unedited marker. So a commit that touches `scripts/review_untrusted_workspace.py` or `scripts/review_conflict_prepare.sh` is refused even if someone approves the plan by hand, and `run_heal_plan_scope_gate` (`files_touched_scope_guard.py:1159-1259`) holds it first with `heal_scope_plan_out_of_scope`. B is the only option that fits inside the verified scope (`tests/**`, `changelog.d/*.md`, plus this issue's own `agents.d/<N>-*.md` fragment). It is acceptable only if the regression tests are written so they record the gap without breaking CI, and so they force cleanup once the scripts are fixed. The execution plan below sets that as binding.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - scripts/review_untrusted_workspace.py:74-76 (`PAIRED_LIVE_COPIES`, which today lists only `.claude/hooks/pr_merge_status_guard.py`), :674-677 (`live_safety_hook` / `dot_directory` classification), :826-862 (paired-live report and mirror)\n    - scripts/review_conflict_prepare.sh:225-226 (`GUARD_HOOK_LIVE_PATH` / `GUARD_HOOK_TEMPLATE_PATH`), :1006-1011 (take-base turned off for `orchestrator/project-*` / `IS_INTEGRATION_SYNC=true`)\n    - tests/test_conflict_guard_hook_template_merge.py (existing guard-hook template-merge fixtures; reuse its git-repo setup helpers)\n    - tests/test_review_conflict_resolve_sandbox_only.py (existing paired-live / sandbox-only fixtures)\n    - `.claude/hooks/prepush_affected_tests.py` and `workflow-templates/.claude/hooks/prepush_affected_tests.py` (the pair, kept byte-identical by tests/test_claude_template_live_parity.py)\n  steps:\n    - Edit only files under `tests/**` and add one `changelog.d/<issue-number>-prepush-hook-conflict-gap.md`. Do not touch `scripts/**`, `.github/workflows/**`, `.claude/**` or `workflow-templates/**`. The two workflow paths in the scope marker do not need changes.\n    - In tests/test_conflict_guard_hook_template_merge.py, add an integration-sync case on a branch named `orchestrator/project-<n>` with `IS_INTEGRATION_SYNC=true`. Both sides change `.claude/hooks/prepush_affected_tests.py` and its template in step, and the template merges cleanly. Assert the intended result: the conflict is settled on the host with no model run, and live equals template byte for byte. Mark it `pytest.mark.xfail(strict=True, reason=\"#<issue>: guard-hook template merge covers only pr_merge_status_guard.py; scripts outside heal scope\")`.\n    - In tests/test_review_conflict_resolve_sandbox_only.py (or the same file), add a second strict-xfail case. When both the live hook and its template conflict, `.claude/hooks/prepush_affected_tests.py` must appear in the paired-live report: assert that `PAIRED_LIVE_COPIES` maps it to `workflow-templates/.claude/hooks/prepush_affected_tests.py` and that the report lists the pair.\n    - Add a non-xfail guard test that must pass today, so the safety boundary stays locked: `.claude/hooks/prepush_affected_tests.py` is still not `allowed()` in the sandbox, and the take-base fallback stays off on `orchestrator/project-*`. That way a later fix cannot meet the xfail cases by loosening the sandbox.\n    - Write the changelog fragment. It records the known gap: the host-only template merge and paired-live mirroring cover only `pr_merge_status_guard.py`, so integration-sync conflicts on `prepush_affected_tests.py` fail closed with `sandbox_path_host_only`. It names the two scripts that need the fix and points to the strict-xfail tests that will flip when they land.\n    - Make no other changes. Do not add steps that comment on, close or file issues, and do not touch PR #8436.\n  replaces_acceptance_criterion: \"With the fix, it resolves with no model run and keeps template/live parity\" (the issue's step 3, which depends on script changes in steps 1-2)\n  equivalence_argument: The strict-xfail tests encode the exact required behaviour from the diagnosis, for both the clean-template case and the conflicting-template case. They fail today, which records the defect, and CI stays green. Once someone changes `review_untrusted_workspace.py` and `review_conflict_prepare.sh`, the tests XPASS, and strict mode turns that into a failure, so the markers have to come off and the regression test becomes a normal one. The extra guard test makes sure that fix cannot weaken `allowed()` or take-base. This is the most rigorous outcome possible inside the verified heal scope. The script fix itself needs a scope this issue cannot carry. The scope check (`scripts/implement_commit_changes.sh:599-601`) refuses any commit outside it, so this cannot be bypassed.\n  reversibility: Test- and changelog-only. If a human prefers A, they can file a regular issue with this diagnosis and a scope that covers `scripts/review_untrusted_workspace.py`, `scripts/review_conflict_prepare.sh`, `tests/**` and `changelog.d/*.md`. That issue's fix removes the xfail markers, and strict xfail makes that removal mandatory. Nothing here needs reverting, and deleting the tests and fragment returns the repo to its current state. Until the script fix lands, PR #8436 (`orchestrator/project-8434`) still needs a trusted session to merge `main` and copy the resolved template onto the live hook, as the issue describes.",
+  "fingerprint": "696f217e3c720153dfcd4551fce6ba8a5929eecf69b43b0883b0f34e4f94c679",
+  "lineage": {
+    "issue_number": 8973,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42358156461",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42358156461",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8973"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261107091025_9964b72d9c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8973,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42358156461"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8973",
+  "timestamps": {
+    "created_at": "2026-11-07T09:10:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
