@@ -5,13 +5,34 @@
   "entry_id": "processed_command_8953_6702503004_approved",
   "issue_number": 8953,
   "metadata": {
+    "branch": "ai/issue-8953",
+    "changed_files": [
+      ".github/workflows/review_autofix_sweep.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "README.md",
+      "agents.d/8953-smoke-pr-cleanup.md",
+      "changelog.d/8953-close-stranded-smoke-prs.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_ci_wires_every_test_file.py",
+      "tests/test_orchestrate_judge_tracking_closed_guard.py",
+      "tests/test_review_autofix_sweep_merge_queued_skip.py",
+      "tests/test_review_autofix_sweep_smoke_pr_backstop.py",
+      "tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py",
+      "tests/test_test_and_mark_stable_orchestrate_child_count.py",
+      "tests/test_test_and_mark_stable_smoke_pr_cleanup.py"
+    ],
+    "issue_number": 8953,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8953",
+    "pr_number": 8960,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8960",
+    "run_attempt": "1",
+    "run_id": "42340497464",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42340497464"
   },
   "run_attempt": 1,
   "run_id": "42340497464",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-07T04:56:47Z",
+  "status": "completed",
+  "timestamp": "2026-11-07T05:49:14Z",
   "workflow": "implement"
 }
