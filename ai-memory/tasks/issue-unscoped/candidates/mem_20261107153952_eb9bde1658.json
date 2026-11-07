@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:Pre-push test gate failures | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR introduced 5 new test failures in the pre-push test gate (`tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_pr_watch_guard.py`, `tests/test_workflow_checkout_integration_ref_audit.py`).\n  WHY: The reviewer says the CI configuration change affected existing test contracts or workflow guards, contrary to the claim that these are unrelated environment failures. Source severity was BLOCKER, mapped to high. z-ai_glm-5_3-flash disagrees in its prose: it says these modules read files this PR doesn't touch and that the same failure set persisted across three comment-only heads.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  expected_change_site: .github/workflows/ci.yml, orchestrate-poll step placement and group guard (`if: strategy.job-index == \u2026`)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The ci.yml comment at lines 2623-2645 says the run's step timings could not be read and group 0 was chosen by estimate, not by measured headroom, no measured step timings or headroom comparison for run 42359183844 exists in the diff, the cited group 0 duration records predate the unblock step leaving the group and the later step additions (#8759, #8777). Severity: MAJOR from three reviewers, NIT from z-ai_glm-5_3-flash (highest used). z-ai_glm-5_3-flash notes the move, names, timeout and contract tests are otherwise implemented.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:Pre-push test gate failures | severity=BLOCKER | confidence=4\n  PROBLEM: The PR introduced 5 new test failures according to the pre-push test gate (`tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_pr_watch_guard.py`, `tests/test_workflow_checkout_integration_ref_audit.py`).\n  WHY: These failures suggest the CI configuration change has inadvertently impacted existing test contracts or workflow guards, contrary to the claim that these are unrelated environment failures.\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: .github/workflows/ci.yml, orchestrate-poll step placement\n  Evidence of absence: The workflow comment at lines 2625-2644 in .github/workflows/ci.yml states that the run's step timings could not be read, and group 0 was selected by estimate rather than by comparing measured headroom as explicitly required by the task.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged\"\n  Expected change site: `.github/workflows/ci.yml` step guard (`if: strategy.job-index == \u2026`) and the destination-group rationale comment near the moved step\n  Evidence of absence: The ci.yml comment at lines 2623-2645 explicitly states \"That run's step timings could not be read, so the pick is an estimate, not a measurement.\" The move from group 4 to group 0 was made without measured per-step timings from run 42359183844. The PR picked by an alternative basis (test/subprocess counts and recorded group totals), and a recorded group 0 total exceeding 15 minutes predates the unblock step leaving the group and the addition of two later steps (#8759 and #8777). The move remains an unmeasured estimate.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- All other checklist categories: NONE. The reviewer verified that the last run's comment-only changes are factually accurate.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\u201d\n  Expected change site: `.github/workflows/ci.yml`, `orchestrate-poll` step placement and group guard.\n  Evidence of absence: The workflow comment at lines 2623\u20132644 says the triggering run\u2019s step timings could not be read and group 0 was selected by estimate. The diff does not establish that group 0 had the most headroom; its cited duration records predate later group 0 step additions and the unblock step\u2019s departure.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- All other checklist categories: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" (issue #8980)\n  Expected change site: .github/workflows/ci.yml, orchestrate-poll step placement and group guard (destination selection).\n  Evidence of absence: The diff itself states at ci.yml:2623-2626 that \"That run's step timings could not be read, so the pick is an estimate, not a measurement,\" and no measured step timings or headroom comparison for run 42359183844 exists in the diff. Group 0 was selected by inference from other groups' recorded totals. Only the \"most headroom\" selection basis is unsupported by measurement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n  Note: raised once at NIT because three prior autofix passes explicitly accepted this as a documented residual.\n- HARDENING_RISK_SCORE: 0 (no hardening suggestions)\n- All other checklist categories: NONE. The reviewer states the last-run edits are comment-only and factually verified, and that the five pre-push failing modules are not touched by this PR.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ca9027ef036734d85407c17d2601d5b680521ae36014098c32f74624e29b86f8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8989,
+    "run_id": "42381877853",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42381877853",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107153952_eb9bde1658",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8989,
+    "run_id": "42381877853"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T15:39:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
