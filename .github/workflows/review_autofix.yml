@@ -657,6 +657,7 @@ jobs:
           # Clean same-head skip (#8952): the script defaults it to true; set
           # vars.AUTOFIX_SKIP_CLEAN_SAME_HEAD=false to re-review clean heads.
           AUTOFIX_SKIP_CLEAN_SAME_HEAD: ${{ vars.AUTOFIX_SKIP_CLEAN_SAME_HEAD }}
+          POST_SYNC_TEST_REPAIR: ${{ inputs.post_sync_test_repair && 'true' || 'false' }}
           # Same expression as the retrigger_guard step: a stall-poller
           # force_rb_judge dispatch must never be swallowed by the terminal
           # same-head skip (it runs only the review-blocked judge).

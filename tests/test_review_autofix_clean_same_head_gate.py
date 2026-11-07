@@ -110,7 +110,7 @@ def test_gate_script_wiring() -> None:
 	assert 'base_ref: (.base.ref // ""), base_sha: (.base.sha // ""), head_repo:' in text
 	assert '"${AUTOFIX_SKIP_CLEAN_SAME_HEAD:-true}" = "false"' in text
 	assert 'echo "base_sha=${pr_base_sha_gate}" >> "${GITHUB_OUTPUT}"' in text
-	assert 'or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) |' in text
+	assert 'or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) |' in text
 	assert 'body: "", activity_only: true}))]' in text
 	# Order: terminal same-head skip, clean same-head skip, fingerprint cap.
 	block_start = text.index("# ----- Clean same-head skip (issue #8952) -----")
@@ -194,6 +194,29 @@ def test_parser_partial_and_failure_markers_newer_than_the_marker_rearm(tmp_path
 	# An older failure is superseded by the clean marker.
 	comments = [{"id": 3, "author_login": PIPELINE, "author_type": "User", "created_at": "2026-11-05T00:00:00Z", "body": "**AI review/autofix failed**"}, _summary_comment()]
 	assert _run_parser(tmp_path, comments)[1]["decision"] == "candidate"
+
+
+def test_parser_newer_security_pass_result_rearms(tmp_path: Path) -> None:
+	for status in ("clean", "failed", "findings"):
+		comments = [_summary_comment(), {"id": 14, "author_login": PIPELINE, "author_type": "User", "created_at": "2026-11-06T13:00:00Z",
+			"body": f"Single-issue security pass: {status}\n\n<!-- ai:single-issue-security-pass:v1 status={status} head={HEAD} cycle=1 -->"}]
+		assert _run_parser(tmp_path, comments)[1]["reason"] == "newer_security_pass_result", status
+	# A pending marker (posted by the same run), another head or an older result does not re-arm.
+	for body, created_at in ((f"x\n<!-- ai:single-issue-security-pass:v1 status=pending head={HEAD} cycle=1 -->", "2026-11-06T13:00:00Z"),
+			(f"x\n<!-- ai:single-issue-security-pass:v1 status=clean head={OTHER_HEAD} cycle=1 -->", "2026-11-06T13:00:00Z"),
+			(f"x\n<!-- ai:single-issue-security-pass:v1 status=clean head={HEAD} cycle=1 -->", "2026-11-05T13:00:00Z")):
+		comments = [_summary_comment(), {"id": 15, "author_login": PIPELINE, "author_type": "User", "created_at": created_at, "body": body}]
+		assert _run_parser(tmp_path, comments)[1]["decision"] == "candidate", body
+
+
+def test_parser_missing_comment_time_fails_open(tmp_path: Path) -> None:
+	human = {"id": 16, "author_login": "alice", "author_type": "User", "body": "", "activity_only": True}
+	for created_at in (None, "", "2026-11"):
+		record = dict(human)
+		if created_at is not None:
+			record["created_at"] = created_at
+		decision = _run_parser(tmp_path, [_summary_comment(), record])[1]
+		assert decision["decision"] == "no_skip" and decision["reason"] == "comment_time_unavailable", created_at
 
 
 def test_parser_ignores_newer_bot_and_pipeline_activity(tmp_path: Path) -> None:
@@ -299,7 +322,7 @@ def _run_gate(tmp_path: Path, fixture: dict, **env_overrides: str) -> tuple[subp
 		GITHUB_OUTPUT=str(output_file), GITHUB_ENV=str(tmp_path / "github_env"), RUNNER_TEMP=str(tmp_path), REPOSITORY="o/r",
 		PR_NUMBER="42", PR_IS_DRAFT="false", PR_SKIP_AI="false", PR_TITLE="Test", PR_BODY="", EVENT_NAME="workflow_dispatch",
 		EVENT_ACTION="", FINGERPRINT_CAP_SUPPORT_VERIFIED="false", REVIEW_SUPPORT_SHA=SUPPORT, PYTHONDONTWRITEBYTECODE="1")
-	for key in ("AUTOFIX_SKIP_CLEAN_SAME_HEAD", "FORCE_RB_JUDGE", "GH_API_RETRY_HELPERS", "HEAD_GATE_HELPER_VERIFIED", "RETARGET_HELPER_VERIFIED"):
+	for key in ("AUTOFIX_SKIP_CLEAN_SAME_HEAD", "FORCE_RB_JUDGE", "POST_SYNC_TEST_REPAIR", "GH_API_RETRY_HELPERS", "HEAD_GATE_HELPER_VERIFIED", "RETARGET_HELPER_VERIFIED"):
 		env.pop(key, None)
 	env.update(env_overrides)
 	result = subprocess.run(["bash", str(GATE_SCRIPT)], env=env, cwd=work, capture_output=True, text=True, check=False)
@@ -339,6 +362,7 @@ def test_gate_runs_when_preconditions_fail(tmp_path: Path) -> None:
 	cases = [
 		("disabled", _gate_fixture(), {"AUTOFIX_SKIP_CLEAN_SAME_HEAD": "false"}),
 		("force_rb_judge", _gate_fixture(), {"FORCE_RB_JUDGE": "true"}),
+		("post_sync_test_repair", _gate_fixture(), {"POST_SYNC_TEST_REPAIR": "true"}),
 		("reopened", _gate_fixture(), {"EVENT_NAME": "pull_request", "EVENT_ACTION": "reopened"}),
 		("mergeable_not_true", _gate_fixture(pr={"mergeable": False, "mergeable_state": "dirty"}), {}),
 		("mergeable_not_true", _gate_fixture(pr={"mergeable": None}), {}),
@@ -392,6 +416,16 @@ def test_gate_ignores_an_untrusted_clean_marker(tmp_path: Path) -> None:
 	result, outputs, calls = _run_gate(tmp_path, fixture)
 	assert outputs["should_run"] == "true"
 	assert "outcome=no_skip reason=no_marker" in result.stdout and "untrusted_markers=1" in result.stdout
+	assert _reviews_calls(calls) == 0
+
+
+def test_gate_keeps_security_pass_results_and_rearms(tmp_path: Path) -> None:
+	fixture = _gate_fixture()
+	fixture["comments"].append({"id": 5, "user": {"login": PIPELINE, "type": "User"}, "created_at": "2026-11-06T12:00:00Z",
+		"body": f"Single-issue security pass: clean\n\n<!-- ai:single-issue-security-pass:v1 status=clean head={HEAD} cycle=1 -->"})
+	result, outputs, calls = _run_gate(tmp_path, fixture)
+	assert outputs["should_run"] == "true"
+	assert "outcome=no_skip reason=newer_security_pass_result" in result.stdout
 	assert _reviews_calls(calls) == 0
 
 

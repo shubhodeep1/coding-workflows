@@ -354,7 +354,7 @@ gate_fetch_marker_comments()
   # shellcheck disable=SC2016
   if gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
     -f per_page=100 \
-    --jq '[.[] | (.body // "") as $b | ((select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 ")) or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}) // (select((.user.type // "") != "Bot") | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: "", activity_only: true}))]' \
+    --jq '[.[] | (.body // "") as $b | ((select(($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or ($b | contains("review-autofix-failure")) or ($b | contains("AI review/autofix")) or ($b | contains("AI autofix editor summary")) or ($b | contains("Editor changes lost")) or ($b | contains("Editor no-op suspicious")) or ($b | contains("<!-- ai:claude-fixer-review-skipped:")) or ($b | contains("<!-- ai:merge-base-sync:v1 ")) or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: (if (($b | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) or (($b | length) <= 4000)) then $b else ($b[0:2000] + "\n[... clipped ...]\n" + $b[-2000:]) end)}) // (select((.user.type // "") != "Bot") | {id: .id, author_login: (.user.login // ""), author_type: (.user.type // ""), author_association: (.author_association // ""), created_at: (.created_at // ""), body: "", activity_only: true}))]' \
     2>/dev/null | jq -c -s 'add // []' > "${gate_marker_comments_file}" 2>/dev/null \
     && [ -s "${gate_marker_comments_file}" ]; then
     gate_marker_fetch_state="ok"
@@ -588,6 +588,10 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     clean_precheck="disabled"
   elif [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then
     clean_precheck="force_rb_judge"
+  elif [ "${POST_SYNC_TEST_REPAIR:-false}" = "true" ]; then
+    # The poller dispatches the integration test repair once per head
+    # (integration_test_repair_sha); skipping it would lose the repair.
+    clean_precheck="post_sync_test_repair"
   elif [ "${pr_base_retargeted}" = "true" ]; then
     clean_precheck="base_retargeted"
   elif [ "${EVENT_NAME:-}" = "pull_request" ] && [ "${EVENT_ACTION:-}" = "reopened" ]; then
@@ -643,6 +647,13 @@ FAILURE_TOKENS = (
     "Editor changes lost",
     "Editor no-op suspicious",
 )
+# A single-issue security-pass result for this head re-dispatches the review
+# with only pr_number (scripts/review_single_issue_security_pass.sh); that run
+# must merge or start the next cycle, so a newer result re-arms the review.
+security_pass_re = re.compile(
+    r"<!-- ai:single-issue-security-pass:v1 status=(?:clean|findings|failed) head=" + re.escape(head_sha) + r" cycle=[1-9][0-9]* -->\s*$"
+)
+TIME_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}")
 freshness_re = re.compile(
     "<!-- ai:freshness-ci-failed:v1 pr=" + re.escape(pr_number) + " head=" + re.escape(head_sha) + r" -->\s*$"
 )
@@ -699,8 +710,20 @@ else:
     latest_key = sort_key(latest)
     trusted = [c for c in records if str(c.get("author_login") or "").strip().lower() == marker_author]
     newer = [c for c in records if c is not latest and sort_key(c) >= latest_key]
-    if any(isinstance(c.get("body"), str) and freshness_re.search(c["body"]) for c in trusted):
+    if not TIME_RE.match(str(latest.get("created_at") or "")) or any(
+        not TIME_RE.match(str(c.get("created_at") or "")) for c in records if c is not latest
+    ):
+        # Without every comment time the order against the marker is
+        # unknown; fail open toward review (issue #8952).
+        reason = "comment_time_unavailable"
+    elif any(isinstance(c.get("body"), str) and freshness_re.search(c["body"]) for c in trusted):
         reason = "freshness_ci_failed"
+    elif any(
+        isinstance(c.get("body"), str) and security_pass_re.search(c["body"])
+        for c in newer
+        if str(c.get("author_login") or "").strip().lower() == marker_author
+    ):
+        reason = "newer_security_pass_result"
     elif any(
         isinstance(c.get("body"), str) and any(token in c["body"] for token in FAILURE_TOKENS)
         for c in newer
@@ -747,7 +770,7 @@ PY
           # one paginated GET /pulls/{n}/reviews per gate run (CLAUDE.md
           # §15). A failure keeps the normal review (fail open).
           clean_reviews_json=""
-          if ! [[ "${clean_marker_created_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+          if ! [[ "${clean_marker_created_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
             # Without the marker time no review can be ordered against it.
             clean_reviews_error="marker_time_unavailable"
           elif ! clean_reviews_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews" -f per_page=100 \

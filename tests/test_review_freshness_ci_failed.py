@@ -147,7 +147,7 @@ def test_deterministic_skip_merge_job_runs_it_only_for_a_failed_freshness_head()
 def test_gate_reads_the_marker_comments() -> None:
 	assert 'or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) |' in GATE_STEP.read_text(encoding="utf-8")
 	# Issue #8952: the same read also keeps the clean same-head markers.
-	assert 'or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) |' in GATE_STEP.read_text(encoding="utf-8")
+	assert 'or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) |' in GATE_STEP.read_text(encoding="utf-8")
 
 
 def test_gate_marker_also_suppresses_docs_only_and_small_diff_skips() -> None:

@@ -7,8 +7,8 @@ A Claude pool audit for 2026-11-05 to 2026-11-07 found seven e2e smoke PRs re-re
 | --- | --- |
 | A new head, a moved base, or a new review-support SHA | the marker no longer matches |
 | A newer comment or submitted review from anyone other than the pipeline account or a bot | `reason=newer_human_comment` / `newer_review` |
-| A newer pipeline failure, partial-finalize or no-op comment, or a freshness CI-failure marker for the head | `reason=newer_failure_marker` / `freshness_ci_failed` |
-| A conflicted or not-yet-computed PR, a `force_rb_judge` dispatch, a retargeted base, a reopened PR | checked before the marker |
+| A newer pipeline failure, partial-finalize or no-op comment, a newer single-issue security-pass result, or a freshness CI-failure marker for the head | `reason=newer_failure_marker` / `newer_security_pass_result` / `freshness_ci_failed` |
+| A conflicted or not-yet-computed PR, a `force_rb_judge` or `post_sync_test_repair` dispatch, a retargeted base, a reopened PR | checked before the marker |
 
 The `force-review` label and `[force-review]` title marker still force one full review per head, but no longer re-review a head that already has a clean marker. Any lookup failure runs the review. Set the repository variable `AUTOFIX_SKIP_CLEAN_SAME_HEAD=false` to turn the skip off.
 
