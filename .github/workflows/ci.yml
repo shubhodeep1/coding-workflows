@@ -2627,13 +2627,20 @@ jobs:
       # this step arrived in #8772; it is the only step #8772 added to group 4
       # and the group's largest pinned step that does not run in parallel
       # processes (53 modules, about 568 tests, 134 subprocess call sites).
-      # Group 0 has the oldest budget-watch record of any CI job (#8118); every
-      # other poll group and test job was flagged later (group 3 in #8472,
-      # tests-hooks in #8730, tests-promote in #8771, group 2 in #8772,
-      # tests-release in #8777, group 1 in #8805). The step needs only
-      # checkout, Python 3.12 and the shared pip install, which every group
-      # has. It now runs in group 0 only, once per CI run. Name and body
-      # unchanged.
+      # Group 0's only recorded total is 17m01s of 20 minutes (run 40175309052,
+      # #8118), measured while it still carried the unblock step (860s in
+      # failing run 40065164413), which #8118 then moved out. Since then group
+      # 0 gained synthesize-smoke (#8759) and the clarify loop guard (#8777),
+      # and no group 0 total has been recorded. Every other group has a later
+      # recorded total above 15 minutes: group 1 16m44s (#8805), group 2
+      # 15m18s (#8772), group 3 19m30s (#8472), group 4 15m15s (#8980). The pick
+      # assumes group 0's load fell when the unblock step left. Budget-watch
+      # files one issue for all matrix groups (shared `orchestrate-poll`
+      # subject), so no record is not proof of headroom: if group 0 is
+      # flagged next, measure step timings before moving this step again. The
+      # step needs only checkout, Python 3.12 and the shared pip install, which
+      # every group has. It now runs in group 0 only, once per CI run. Name
+      # and body unchanged.
       - name: Regression tests wired by the CI wiring guard (part 2)
         if: strategy.job-index == 0
         run: |
@@ -3080,7 +3087,9 @@ jobs:
       #
       # Moved again from tests-release-and-log-analysis, which took 15m11s of
       # its 20 minutes on main (run 41670184870, budget-watch issue #8759), to
-      # group 0, which carries only its slice and the fast-fail subset. Same
+      # group 0, which then carried only its slice and the fast-fail subset
+      # (group 0 later also took the clarify loop guard in #8777 and the CI
+      # wiring guard part 2 step in #8980). Same
       # estimate basis as above, not a measurement. It uses only temp git
       # repos and needs no git history. Name and body unchanged.
       - name: Review synthesize-smoke contract test
