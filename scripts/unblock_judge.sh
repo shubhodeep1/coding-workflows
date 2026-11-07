@@ -2421,6 +2421,7 @@ ${marker_line}" >/dev/null 2>&1; then
 unblock_select_run_log()
 {
 	local candidate_id run_json checked=0 unreadable="false" reason="run_unbound"
+	local log_failed="false" download_file="${RUNTIME_DIR}/run_log_download.txt"
 	local -a candidates=()
 	: > "${RUNTIME_DIR}/run_log_tail.txt"
 	mapfile -t candidates < <(jq -r --arg login "${UNBLOCK_LOGIN}" '
@@ -2464,11 +2465,32 @@ unblock_select_run_log()
 			' <<< "${run_json}" >/dev/null 2>&1; then
 			continue
 		fi
-		gh run view "${candidate_id}" -R "${REPOSITORY}" --log-failed 2>/dev/null | tail -n 400 | tail -c 120000 > "${RUNTIME_DIR}/run_log_tail.txt" || true
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} op=run_log outcome=attached run=${candidate_id}"
-		return 0
+		# gh's own exit status decides the outcome: the download goes to a
+		# job-private temp file (never to stdout/stderr) and only a successful,
+		# non-empty download is bounded into run_log_tail.txt and reported as
+		# attached. A failed or empty download is discarded and the next bound
+		# candidate is tried (still within the 3-candidate cap).
+		# The bounding write is part of the test too, so a failed write (for
+		# example a full runtime filesystem) is never reported as attached.
+		if gh run view "${candidate_id}" -R "${REPOSITORY}" --log-failed > "${download_file}" 2>/dev/null && [ -s "${download_file}" ] \
+				&& tail -n 400 "${download_file}" | tail -c 120000 > "${RUNTIME_DIR}/run_log_tail.txt"; then
+			rm -f "${download_file}"
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} op=run_log outcome=attached run=${candidate_id}"
+			return 0
+		fi
+		: > "${RUNTIME_DIR}/run_log_tail.txt"
+		rm -f "${download_file}"
+		log_failed="true"
+		continue
 	done
-	[ "${unreadable}" = "false" ] || reason="run_unreadable"
+	# Reason precedence: log_unavailable (at least one candidate was bound but
+	# no download produced output) > run_unreadable (a metadata read failed or
+	# was not an object) > run_unbound (default: no candidate was bound).
+	if [ "${log_failed}" = "true" ]; then
+		reason="log_unavailable"
+	elif [ "${unreadable}" = "true" ]; then
+		reason="run_unreadable"
+	fi
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} op=run_log outcome=omitted reason=${reason} candidates=${checked}"
 }
 
