@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-07T06:33:46Z",
+  "issue_number": 8956,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 007 as out-of-scope; anchor=agents.md:1-1; cited_path=agents.md; files_touched=.github/workflows/implement.yml, agents.d/8956-auto-heal-companion-scope.md, changelog.d/8956-auto-heal-companion-scope.md, scripts/files_touched_scope_guard.py, scripts/implement_commit_changes.sh, scripts/implement_step_prepush_test_gate.sh, tests/test_files_touched_scope_guard.py.",
+  "phase": "review_autofix",
+  "pr_number": 8962,
+  "record_id": "lesson_20261107063346_8658588d96",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.md",
+    ".github/workflows/implement.yml",
+    "agents.d/8956-auto-heal-companion-scope.md",
+    "changelog.d/8956-auto-heal-companion-scope.md",
+    "scripts/files_touched_scope_guard.py",
+    "scripts/implement_commit_changes.sh",
+    "scripts/implement_step_prepush_test_gate.sh",
+    "tests/test_files_touched_scope_guard.py"
+  ]
+}
