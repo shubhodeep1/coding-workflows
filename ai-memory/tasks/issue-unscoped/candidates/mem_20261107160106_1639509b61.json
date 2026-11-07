@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/8973-prepush-hook-conflict-gap.md:2-4 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The last sentence (\"Until then, a conflict on only the live pre-push hook, with a template that merged cleanly, needs a manual merge, and PR #8436 is not shown to be unblocked by this change\") drops the integration-sync qualifier, and the line 2 headline credits the resolver and runner with merging and copying, but the regression test only runs the `paired-live-copies` and `check-paths` CLI steps on a plain `git merge --no-commit` fixture.\n  WHY: The manual-merge limitation applies only on `orchestrator/project-*` branches or with `IS_INTEGRATION_SYNC=true` (`scripts/review_conflict_prepare.sh:1006-1011`), so an operator could read it as needing a manual merge on every branch. Nothing breaks at runtime. The reviewer rated it NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/8973-prepush-hook-conflict-gap.md:4 (line 2 headline related) | severity=NIT | confidence=3\n  PROBLEM: The last sentence drops the integration-sync qualifier. The manual-merge limitation applies only on `orchestrator/project-*` branches or with `IS_INTEGRATION_SYNC=true`, where the take-base fallback is disabled (`scripts/review_conflict_prepare.sh:1006-1011`). Separately, the headline credits the resolver and runner with merging and copying, but the regression test only runs the `paired-live-copies` and `check-paths` CLI steps on a plain `git merge --no-commit` fixture.\n  WHY: Nothing breaks at runtime. The fragment is user-facing release text, and an operator could read it as meaning a live-only conflict on this hook needs a manual merge on every branch.\n- All other checklist sections (security, correctness, concurrency, error paths, performance, index-contract/DB, implicit-execution, task completeness): NONE. HARDENING_SUGGESTIONS: NONE, HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "597d3c4c0f341cc814d24b0e3bcb3226cce4a3b754ec3cde1614951f721738a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9009,
+    "run_id": "42385612934",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42385612934",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107160106_1639509b61",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9009,
+    "run_id": "42385612934"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-07T16:01:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
