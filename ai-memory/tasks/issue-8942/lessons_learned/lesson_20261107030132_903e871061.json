@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-07T03:01:32Z",
+  "issue_number": 8942,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=(no repository file \u2014 check-run copilot-pull-request-reviewer):1; cited_path=(no repository file \u2014 check-run copilot-pull-request-reviewer); files_touched=changelog.d/8942-rb-judge-terminal-swap-additive.md, scripts/review_rb_judge.sh, tests/test_review_rb_judge_label_propagation.py.",
+  "phase": "review_autofix",
+  "pr_number": 8949,
+  "record_id": "lesson_20261107030132_903e871061",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "(no repository file \u2014 check-run copilot-pull-request-reviewer)",
+    "changelog.d/8942-rb-judge-terminal-swap-additive.md",
+    "scripts/review_rb_judge.sh",
+    "tests/test_review_rb_judge_label_propagation.py"
+  ]
+}
