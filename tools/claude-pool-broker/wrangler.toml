@@ -7,6 +7,10 @@
 # `wrangler secret put`): authenticates the GitHub compare calls that verify a
 # SHA-pinned job_workflow_ref. Unset means unauthenticated reads; a rate-limited
 # check is refused (403 workflow_sha_unverifiable) and the job runs codex.
+# ChatGPT account store (docs/plans/chatgpt-account-reviewer-trial-plan.md,
+# Phase 1): the CHATGPT_ACCOUNTS Durable Object is written only by
+# shubhodeep1/claude-workers' chatgpt-pool-refresh.yml (writer audience
+# coding-workflows-chatgpt-pool-writer); nothing in this file holds a token.
 name = "claude-pool-broker"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
@@ -15,3 +19,15 @@ workers_dev = true
 [vars]
 PROBE_MODEL = "claude-haiku-4-5-20251001"
 GATE = "0.9"
+CHATGPT_GATE = "0.9"
+CHATGPT_WRITER_REPOSITORY = "shubhodeep1/claude-workers"
+CHATGPT_WRITER_WORKFLOW = "chatgpt-pool-refresh.yml"
+
+[[durable_objects.bindings]]
+name = "CHATGPT_ACCOUNTS"
+class_name = "ChatgptAccount"
+
+# new_sqlite_classes: the SQLite storage backend (the only one on the Workers Free plan).
+[[migrations]]
+tag = "v1-chatgpt-accounts"
+new_sqlite_classes = ["ChatgptAccount"]
