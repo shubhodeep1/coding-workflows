@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:241-248 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The copilot-pull-request-reviewer check aborts with HTTP 422 `custom_instructions_too_large` after loading `AGENTS.md` and `CLAUDE.md`, so no Copilot review is produced.\n  WHY: Severity disagreement: sonnet rated it NIT (confidence 2) and said agents.md is already far over the limit and this ~2-line edit cannot fix it. luna rated it MAJOR (confidence 5) and said the log does not establish that this passage caused the overflow. The highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.md:241-248 | severity=NIT | confidence=2\n  PROBLEM: The external Copilot reviewer aborts with HTTP 422 because the combined custom-instruction size exceeds its limit (`custom_instructions_too_large`, after loading `AGENTS.md` and `CLAUDE.md`).\n  WHY: The limit applies to the whole instruction set, and agents.md is already far over it (about 797 KB per the prior editor summary). This PR adds only about 2 lines, so reverting would not fix the check, and no change in this diff can fix it.\n- Cosmetic note, not a defect: `_path_rejection_reason` labels any `PAIRED_LIVE_COPIES` entry `live_safety_hook`, and `prepush_affected_tests.py` is not a safety hook. The token is used only for logging.\n- All other checklist sections: NONE. Task completeness: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:242-248 | severity=MAJOR | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check fails before producing a review with `custom_instructions_too_large`, after loading `AGENTS.md` and `CLAUDE.md`.\n  WHY: The check exits with code 1 and leaves no Copilot review. The log identifies the combined custom-instruction prompt as too large, but it does not establish that this passage caused the overflow.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "28948a73c90daeed3d5119e8199c3de47be5dc06fd8fc4a21fd01989bd164a93",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8987,
+    "run_id": "42367586190",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42367586190",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107114324_c06da149a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8987,
+    "run_id": "42367586190"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T11:43:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
