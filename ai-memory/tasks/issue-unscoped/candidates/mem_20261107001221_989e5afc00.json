@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `copilot-pull-request-reviewer` check failed (run 41549900517, job 125634616239) with `custom_instructions_too_large` (HTTP 422) because the repo's combined AGENTS.md and CLAUDE.md custom instructions exceeded the prompt budget.\n  WHY: The reviewer marked it SEVERITY: NIT and informational. The failure is in loading the instruction files, not in the canary content, and this PR cannot fix it. Severity mapped from NIT to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=4\n  PROBLEM: The `copilot-pull-request-reviewer` check failed (run 41549900517, job 125634616239) with `custom_instructions_too_large` (HTTP 422) because the repo's combined AGENTS.md and CLAUDE.md custom instructions exceeded the prompt budget.\n  WHY: The reviewer marked it SEVERITY: NIT and informational. The failure is in loading the instruction files, not in the canary content, and this PR cannot fix it. Severity mapped from NIT to low.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "42eae42c7c11d46ad03bb95b13c1ce14c9e565983e875aa0a36bef83c7a0737d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "42315650293",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42315650293",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107001221_989e5afc00",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "42315650293"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-07T00:12:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
