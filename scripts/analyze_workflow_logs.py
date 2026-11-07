@@ -361,6 +361,10 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 			summary = overall
 		else:
 			summary = _summarize_runs(runs)
+			if not runs:
+				# _summarize_runs reports 0 for an empty list; with no run
+				# rows the count is unknown, as on the summary_stats path.
+				summary["unknown_duration_count"] = None
 	summary = dict(summary)
 	summary["cost_telemetry"] = aggregate_run_cost_telemetry(runs)
 	# Collector-supplied summaries never pass through _summarize_runs, so add

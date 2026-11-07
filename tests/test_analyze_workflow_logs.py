@@ -536,6 +536,21 @@ def test_prepare_analysis_context_summary_unknown_count_null_without_run_rows():
 	assert ctx["per_workflow_family"]["ci"]["unknown_duration_count"] is None
 
 
+def test_prepare_analysis_context_fallback_summary_unknown_count_null_without_run_rows():
+	ctx = analyzer.prepare_analysis_context(
+		{
+			"source_files": [],
+			"collector_report": None,
+			"run_metrics": [],
+			"summary_stats": None,
+		}
+	)
+	assert ctx["summary"]["total_runs"] == 0
+	assert ctx["summary"]["unknown_duration_count"] is None
+	# _summarize_runs itself still reports 0 for its other caller.
+	assert analyzer._summarize_runs([])["unknown_duration_count"] == 0
+
+
 # ---------- script-mode entry point ---------------------------------------
 # CI's "Workflow log analyzer coverage gate" invokes this file directly:
 #   python3 -m coverage run tests/test_analyze_workflow_logs.py
