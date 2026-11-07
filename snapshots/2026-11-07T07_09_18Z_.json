@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-06T08:54:12Z",
+  "tick_at": "2026-11-07T07:09:18Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,12 +11,12 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 5
+    "tracking_issues": 4
   },
   "tracking_issues": [
     {
       "current_wave": 16,
-      "integration_ahead_by": "128",
+      "integration_ahead_by": "131",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -36,13 +36,14 @@
       "wave_complete": false
     },
     {
-      "current_wave": 0,
+      "current_wave": 11,
+      "integration_ahead_by": "63",
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 0,
+        "merged": 1,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -50,10 +51,10 @@
       },
       "number": 8427,
       "project_complete": false,
-      "status": "in-progress",
+      "status": "waiting",
       "title": "[Orchestrator] Keep unattended work going until the change is delivered and verified (persistent-unattended-workflows plan P1-P11)",
-      "total_waves": 0,
-      "wave_complete": false
+      "total_waves": 11,
+      "wave_complete": true
     },
     {
       "current_wave": 0,
@@ -88,30 +89,10 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 8681,
+      "number": 8941,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] [E2E Orchestrate Smoke 41445772297] Parallel canary file updates",
-      "total_waves": 0,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 0,
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 8895,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Apply validated recommendations from analysis/workflow-optimization-2026-10-03-2.md",
+      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-10-06-2.md",
       "total_waves": 0,
       "wave_complete": false
     }
