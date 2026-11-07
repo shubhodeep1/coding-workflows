@@ -5296,14 +5296,29 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # orchestrator-managed issues whose body declares no branch and whose PR
 # merged into an orchestrator/project-* branch
 # (_pr_json_base_is_target_merge); other bases log rejected=non_target_base.
+# Issue #8955: an ai:check-triage issue's fix PR merges into the head branch
+# of the failing PR its `check-failure-triage:pr=<N>` marker names; that
+# merge is accepted with reason=check_triage_pr_branch
+# (_close_sweep_check_triage_branch, pipeline-authored issues only).
+#
+# Third origin class (issue #8955):
+#   - check_triage: open ai:check-triage issue carrying neither ai:merged nor
+#       ai:ready-to-merge (for example ai:done). No merged PR found is the
+#       normal pending state -> silent skip, as for ready_label. On a
+#       verified merge the sweep applies ai:merged via set_issue_phase_label
+#       (label contract) before closing; a label failure warns
+#       backfill_ai_merged_failed and still closes.
 #
 # Gated by ENABLE_CLOSE_MERGED_ISSUES (default true).
 #
-# API hygiene (CLAUDE.md §15): up to 2 `gh issue list` calls per sweep
+# API hygiene (CLAUDE.md §15): up to 3 `gh issue list` calls per sweep
 # (one per label class) regardless of N issues. Per-issue cost is the
 # existing single _issue_timeline_with_cross_refs_json call (GraphQL-first
 # with fail-open REST fallback) plus, in the ready_label-origin merged-PR
-# case, one `gh issue edit` to backfill ai:merged before close.
+# case, one `gh issue edit` to backfill ai:merged before close. For an
+# ai:check-triage issue whose implementation PR the existing rules rejected,
+# at most one more `pulls/<N>` read for the marker PR (plus the per-tick
+# memoized `user` read).
 close_merged_issues_sweep() {
   if [ "${ENABLE_CLOSE_MERGED_ISSUES}" != "true" ]; then
     echo "Close merged issues sweep disabled by ENABLE_CLOSE_MERGED_ISSUES=${ENABLE_CLOSE_MERGED_ISSUES}."
@@ -5320,13 +5335,22 @@ close_merged_issues_sweep() {
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:merged" \
-    --json number,labels,body \
+    --json number,labels,body,author \
     --limit 200 2>/dev/null || echo "[]")"
   ready_json="$(gh_retry gh issue list \
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:ready-to-merge" \
-    --json number,labels,body \
+    --json number,labels,body,author \
+    --limit 200 2>/dev/null || echo "[]")"
+  # Issue #8955: open ai:check-triage issues (e.g. ai:done) whose fix PR
+  # merged into the failing PR's head branch.
+  local triage_json
+  triage_json="$(gh_retry gh issue list \
+    --repo "${GITHUB_REPOSITORY}" \
+    --state open \
+    --label "ai:check-triage" \
+    --json number,labels,body,author \
     --limit 200 2>/dev/null || echo "[]")"
 
   # Build a single deduplicated list of {number, labels, origin} entries.
@@ -5335,15 +5359,18 @@ close_merged_issues_sweep() {
   local issues_json
   issues_json="$(jq -c -n \
     --argjson merged "${merged_json:-[]}" \
-    --argjson ready "${ready_json:-[]}" '
+    --argjson ready "${ready_json:-[]}" \
+    --argjson triage "${triage_json:-[]}" '
       def normalize($origin):
         map(
           select(type == "object" and (.number | type == "number"))
-          | {number: .number, labels: (.labels // []), body: (.body // ""), origin: $origin}
+          | {number: .number, labels: (.labels // []), body: (.body // ""), author: (.author.login? // ""), origin: $origin}
         );
       ($merged | normalize("merged_label")) as $m
       | ($ready | normalize("ready_label")) as $r
-      | ($m + ($r | map(select(.number as $n | ($m | map(.number) | index($n)) == null))))
+      | ($m + ($r | map(select(.number as $n | ($m | map(.number) | index($n)) == null)))) as $mr
+      | ($triage | normalize("check_triage")) as $t
+      | ($mr + ($t | map(select(.number as $n | ($mr | map(.number) | index($n)) == null))))
     ' 2>/dev/null || echo "[]")"
 
   local count
@@ -5352,6 +5379,9 @@ close_merged_issues_sweep() {
   merged_count="$(echo "${merged_json}" | jq 'length' 2>/dev/null || echo "0")"
   ready_count="$(echo "${ready_json}" | jq 'length' 2>/dev/null || echo "0")"
   echo "Found ${merged_count} open issue(s) with ai:merged and ${ready_count} with ai:ready-to-merge (deduped: ${count})."
+  local triage_count
+  triage_count="$(echo "${triage_json}" | jq 'length' 2>/dev/null || echo "0")"
+  echo "Found ${triage_count} open issue(s) with ai:check-triage (merged into the deduped list)."
 
   if [ "${count}" -eq 0 ]; then
     return 0
@@ -5384,6 +5414,7 @@ close_merged_issues_sweep() {
   local sweep_pr_fetch_failed sweep_non_target_seen sweep_partial_delivery_reason _sweep_pd_rc
   local _sweep_issue_body _sweep_is_managed _sweep_declared_branch _sweep_declared_parsed
   local _sweep_base_log _sweep_declared_log _sweep_non_target_note
+  local _sweep_triage_branch _sweep_triage_parsed _sweep_target_ok
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -5447,6 +5478,8 @@ close_merged_issues_sweep() {
     fi
     _sweep_declared_branch=""
     _sweep_declared_parsed=false
+    _sweep_triage_branch=""
+    _sweep_triage_parsed=false
 
     merged_pr_num=""
     sweep_pr_fetch_failed=false
@@ -5465,7 +5498,26 @@ close_merged_issues_sweep() {
           _sweep_declared_branch="$(printf '%s' "${_sweep_issue_body}" | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py extract-integration-branch 2>/dev/null | head -n 1 || echo "")"
           _sweep_declared_parsed=true
         fi
+        _sweep_target_ok=false
         if _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}"; then
+          _sweep_target_ok=true
+        else
+          # Issue #8955: only after the existing rules rejected the merge,
+          # resolve the ai:check-triage marker PR's head branch once per issue.
+          if [ "${_sweep_triage_parsed}" != "true" ]; then
+            _close_sweep_check_triage_branch "${issue_num}" \
+              "$(echo "${issues_json}" | jq -c --argjson i "${idx}" '.[$i].labels // []' 2>/dev/null || echo "[]")" \
+              "${_sweep_issue_body}" \
+              "$(echo "${issues_json}" | jq -r --argjson i "${idx}" '.[$i].author // ""' 2>/dev/null || echo "")" || true
+            _sweep_triage_branch="${_CLOSE_SWEEP_TRIAGE_BRANCH}"
+            _sweep_triage_parsed=true
+          fi
+          if [ -n "${_sweep_triage_branch}" ] \
+              && _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}" "${_sweep_triage_branch}"; then
+            _sweep_target_ok=true
+          fi
+        fi
+        if [ "${_sweep_target_ok}" = "true" ]; then
           # Issue #7657: a bound partial-delivery PR keeps its issue open;
           # issue_pr_status.yml restarts clarify for the deferred items.
           if [ "${_sweep_is_managed}" != "true" ]; then
@@ -5508,9 +5560,10 @@ close_merged_issues_sweep() {
         skipped_count=$((skipped_count + 1))
         continue
       fi
-      if [ "${origin}" = "ready_label" ]; then
-        # Normal pending state for ai:ready-to-merge. No alert — the
-        # label is not a contract that a merged PR exists yet.
+      if [ "${origin}" = "ready_label" ] || [ "${origin}" = "check_triage" ]; then
+        # Normal pending state for ai:ready-to-merge (and, issue #8955, for
+        # an in-flight ai:check-triage issue). No alert — the label is not a
+        # contract that a merged PR exists yet.
         echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found non_target_base_seen=${sweep_non_target_seen} — pending, leaving open."
         skipped_count=$((skipped_count + 1))
         continue
@@ -5536,6 +5589,11 @@ close_merged_issues_sweep() {
       ensure_label_exists "ai:merged" >/dev/null 2>&1 || true
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         --add-label "ai:merged" --remove-label "ai:ready-to-merge" >/dev/null 2>&1 \
+        || echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} backfill_ai_merged_failed — proceeding to close anyway."
+    elif [ "${origin}" = "check_triage" ]; then
+      # Issue #8955: apply ai:merged through the label contract so phase
+      # labels such as ai:done are removed before the close.
+      set_issue_phase_label "${issue_num}" "ai:merged" >/dev/null 2>&1 \
         || echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} backfill_ai_merged_failed — proceeding to close anyway."
     fi
 
@@ -21240,6 +21298,7 @@ _pr_json_is_partial_delivery() {
 # early.  GitHub itself only auto-closes on default-branch merges.
 #
 # Args: <issue_num> <pr_json> <default_branch> <declared_branch> <is_managed>
+#       [check_triage_branch]
 # Accepts (rc=0, sets _TARGET_MERGE_REASON) when:
 #   - .base.ref equals the default branch            -> default_branch
 #   - .base.ref equals the issue's declared branch   -> declared_integration_branch
@@ -21248,6 +21307,12 @@ _pr_json_is_partial_delivery() {
 #     body (its branch may live only on the tracking issue), and .base.ref
 #     is an `orchestrator/project-*` branch (same rule as issue_pr_status.yml)
 #                                                    -> managed_no_child_metadata
+#   - issue #8955: the optional sixth argument is the already-resolved head
+#     branch of the failing PR an ai:check-triage issue names
+#     (_close_sweep_check_triage_branch), and .base.ref equals it
+#                                                    -> check_triage_pr_branch
+#     Callers that pass five arguments (standalone stall recovery) keep the
+#     old rule. This function makes no API calls.
 # Anything else, including an empty or unparseable base, returns 1 (fail
 # closed: the caller's next step closes the issue).  Refs compare exactly.
 _TARGET_MERGE_REASON=""
@@ -21257,6 +21322,7 @@ _pr_json_base_is_target_merge() {
   local default_branch="$3"
   local declared_branch="$4"
   local is_managed="$5"
+  local check_triage_branch="${6:-}"
   _TARGET_MERGE_REASON=""
   [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
   if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
@@ -21280,7 +21346,53 @@ _pr_json_base_is_target_merge() {
     _TARGET_MERGE_REASON="managed_no_child_metadata"
     return 0
   fi
+  if [ -n "${check_triage_branch}" ] && [ "${_target_base_ref}" = "${check_triage_branch}" ]; then
+    _TARGET_MERGE_REASON="check_triage_pr_branch"
+    return 0
+  fi
   return 1
+}
+
+# _close_sweep_check_triage_branch <issue_num> <labels_json> <body> <author>
+# — issue #8955. Resolve the head branch of the failing PR an ai:check-triage
+# issue names (`<!-- check-failure-triage:pr=<N> -->`) into
+# _CLOSE_SWEEP_TRIAGE_BRANCH (empty when the rule does not apply). Called
+# without a subshell so the per-tick unblock_trusted_login memo is kept.
+# Trust rules: the issue carries ai:check-triage, its author equals the
+# pipeline login (case-insensitive), it has exactly one marker
+# (orchestrate_lib.py check-triage-target-pr), and the marker PR has a
+# same-repository head; the branch is `.head.ref` from the API, never issue
+# text. API budget (CLAUDE.md §14): at most one `pulls/<N>` read
+# (_fetch_pr_json) per candidate issue, made only after the existing
+# target-merge rules rejected the merge, plus the memoized `user` read.
+# Every failure leaves the result empty (fail closed).
+_CLOSE_SWEEP_TRIAGE_BRANCH=""
+_close_sweep_check_triage_branch() {
+  local issue_num="$1"
+  local labels_json="$2"
+  local body="$3"
+  local author="$4"
+  local _triage_login _triage_pr _triage_pr_json _triage_head_repo _triage_head_ref
+  _CLOSE_SWEEP_TRIAGE_BRANCH=""
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "${labels_json:-[]}" | jq -e '[.[]? | if type == "object" then (.name // "") else . end] | index("ai:check-triage") != null' >/dev/null 2>&1 || return 1
+  [ -f scripts/orchestrate_lib.py ] || return 1
+  unblock_trusted_login >/dev/null
+  _triage_login="${UNBLOCK_TRUSTED_LOGIN}"
+  [ -n "${_triage_login}" ] || return 1
+  _triage_pr="$(printf '%s' "${body}" | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py check-triage-target-pr \
+    --labels-json "${labels_json:-[]}" --author "${author}" --pipeline-login "${_triage_login}" 2>/dev/null | head -n 1 || echo "")"
+  [[ "${_triage_pr}" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+  _triage_pr_json="$(_fetch_pr_json "${_triage_pr}")"
+  if [ -z "${_triage_pr_json}" ] || [ "${_triage_pr_json}" = "{}" ]; then
+    return 1
+  fi
+  _triage_head_repo="$(printf '%s' "${_triage_pr_json}" | jq -r '.head.repo.full_name // ""' 2>/dev/null || echo "")"
+  _triage_head_ref="$(printf '%s' "${_triage_pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+  [ -n "${_triage_head_repo}" ] && [ "${_triage_head_repo}" = "${GITHUB_REPOSITORY}" ] || return 1
+  [ -n "${_triage_head_ref}" ] || return 1
+  _CLOSE_SWEEP_TRIAGE_BRANCH="${_triage_head_ref}"
+  return 0
 }
 
 # _close_sweep_log_ref <value> <empty_placeholder> — print a ref for a log

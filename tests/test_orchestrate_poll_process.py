@@ -1735,13 +1735,21 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'list':
 				if il_label not in labels:
 					continue
 				try:
-					out.append({
+					il_entry = {
 						'number': int(inum),
 						'labels': [{'name': l} for l in labels],
 						'body': idata.get('body', ''),
-					})
+					}
 				except (TypeError, ValueError):
 					continue
+				# Issue #8955: the close sweep asks for the issue author.
+				if 'author' in str(il_json_fields or '').split(','):
+					il_author_entry = store.get('issue_authors', {}).get(str(inum))
+					if il_author_entry is not None:
+						il_entry['author'] = {'login': str((il_author_entry.get('user') or {}).get('login', ''))}
+					else:
+						il_entry['author'] = {'login': str(idata.get('author_login', 'octocat'))}
+				out.append(il_entry)
 			print(json.dumps(out))
 			sys.exit(0)
 	print('[]')
@@ -18991,13 +18999,17 @@ def _run_target_merge_helper_rules(tmp_path: Path) -> None:
 	helper = tmp_path / "helper.sh"
 	helper.write_text(script[start:end] + "\n", encoding="utf-8")
 
-	def run(base: str, default: str, declared: str, managed: str) -> str:
+	def run(base: str, default: str, declared: str, managed: str, triage: str | None = None) -> str:
 		pr_json = json.dumps({"base": {"ref": base}}) if base is not None else "{}"
+		if triage is None:
+			call = '_pr_json_base_is_target_merge 10 "$2" "$3" "$4" "$5"'
+		else:
+			call = '_pr_json_base_is_target_merge 10 "$2" "$3" "$4" "$5" "$6"'
 		proc = subprocess.run(
 			[
 				"bash", "-c",
-				'source "$1"; if _pr_json_base_is_target_merge 10 "$2" "$3" "$4" "$5"; then echo "yes:${_TARGET_MERGE_REASON}"; else echo no; fi',
-				"_", str(helper), pr_json, default, declared, managed,
+				'source "$1"; if ' + call + '; then echo "yes:${_TARGET_MERGE_REASON}"; else echo no; fi',
+				"_", str(helper), pr_json, default, declared, managed, triage or "",
 			],
 			check=True, capture_output=True, text=True,
 		)
@@ -19012,6 +19024,138 @@ def _run_target_merge_helper_rules(tmp_path: Path) -> None:
 	assert run("", "main", "", "true") == "no"
 	assert run(None, "main", "", "true") == "no"
 	assert run("Main", "main", "", "false") == "no"
+	# Issue #8955: the optional sixth argument (check-triage marker PR head).
+	assert run("ai/issue-9", "main", "", "false", "ai/issue-9") == "yes:check_triage_pr_branch"
+	assert run("ai/issue-9", "main", "", "false", "") == "no"
+	assert run("ai/issue-9", "main", "", "false", "ai/issue-8") == "no"
+	assert run("AI/issue-9", "main", "", "false", "ai/issue-9") == "no"
+	# Existing rules still win over the triage branch.
+	assert run("main", "main", "", "false", "main") == "yes:default_branch"
+	assert run("", "main", "", "false", "ai/issue-9") == "no"
+
+
+# ---------------------------------------------------------------------------
+# Issue #8955: ai:check-triage issues close when their fix PR merges into the
+# head branch of the failing PR their `check-failure-triage:pr=<N>` marker
+# names (close_merged_issues_sweep, reason=check_triage_pr_branch).
+# ---------------------------------------------------------------------------
+
+_TRIAGE_PIPELINE_LOGIN = "github-actions[bot]"
+
+
+def _triage_issue_body(pr: int = 970, extra: str = "") -> str:
+	return (
+		f"<!-- check-failure-triage:pr={pr} -->\n"
+		"Check `lint` failed on PR #970.\n\n---\n\nDiagnosis.\n" + extra
+	)
+
+
+def _triage_fix_pr(number: int = 971, base: str = "ai/issue-9") -> dict:
+	return {
+		"number": number,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-11-07T05:00:00Z",
+		"baseRefName": base,
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"body": "Fix.\n\nCloses #10\n",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+
+
+def _triage_marker_pr(number: int = 970, head: str = "ai/issue-9", head_repo: str | None = None) -> dict:
+	pr = {
+		"number": number,
+		"state": "open",
+		"merged": False,
+		"baseRefName": "main",
+		"headRefName": head,
+		"headRefFromApi": head,
+		"body": "Fixes #9",
+	}
+	if head_repo is not None:
+		pr["headRepoFullName"] = head_repo
+	return pr
+
+
+def _run_triage_sweep(labels: list[str], *, author: str = _TRIAGE_PIPELINE_LOGIN, body: str | None = None,
+		marker_pr: dict | None = None, fix_pr: dict | None = None, linked: bool = True) -> dict:
+	prs = [fix_pr or _triage_fix_pr(), marker_pr or _triage_marker_pr()]
+	return _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: labels},
+		issue_bodies={10: body if body is not None else _triage_issue_body()},
+		issue_authors={10: {"login": author, "association": "NONE"}},
+		issue_linked_prs={10: 971} if linked else {},
+		prs=prs,
+		mock_gh_issue_list_label_filter=True,
+	)
+
+
+def test_close_merged_sweep_closes_done_check_triage_issue_merged_into_marker_pr_branch():
+	result = _run_triage_sweep(["ai:check-triage", "ai:done"])
+	assert 10 in result.get("closed_issues", []), result["stdout"]
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=check_triage candidate_pr=971 accepted reason=check_triage_pr_branch"
+	) in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=971 origin=check_triage status=closed" in result["stdout"]
+	assert "Found 1 open issue(s) with ai:check-triage" in result["stdout"]
+
+
+def test_close_merged_sweep_closes_ready_check_triage_issue_merged_into_marker_pr_branch():
+	result = _run_triage_sweep(["ai:check-triage", "ai:ready-to-merge"])
+	assert 10 in result.get("closed_issues", []), result["stdout"]
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=ready_label candidate_pr=971 accepted reason=check_triage_pr_branch"
+	) in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=971 origin=ready_label status=closed" in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_rejects_non_pipeline_author():
+	result = _run_triage_sweep(["ai:check-triage", "ai:done"], author="someone-else")
+	assert 10 not in result.get("closed_issues", [])
+	assert "origin=check_triage candidate_pr=971 rejected=non_target_base" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=check_triage no_merged_pr_found non_target_base_seen=true" in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_rejects_foreign_marker_head():
+	result = _run_triage_sweep(["ai:check-triage", "ai:done"], marker_pr=_triage_marker_pr(head_repo="attacker/repo"))
+	assert 10 not in result.get("closed_issues", [])
+	assert "origin=check_triage candidate_pr=971 rejected=non_target_base" in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_rejects_duplicate_marker_and_other_branch():
+	dup = _run_triage_sweep(["ai:check-triage", "ai:done"], body=_triage_issue_body(extra="<!-- check-failure-triage:pr=970 -->\n"))
+	assert 10 not in dup.get("closed_issues", [])
+	other = _run_triage_sweep(["ai:check-triage", "ai:done"], fix_pr=_triage_fix_pr(base="ai/issue-8"))
+	assert 10 not in other.get("closed_issues", [])
+	assert "rejected=non_target_base base=ai/issue-8" in other["stdout"]
+
+
+def test_close_merged_sweep_pending_check_triage_issue_is_silent():
+	result = _run_triage_sweep(["ai:check-triage", "ai:implementing"], linked=False)
+	assert 10 not in result.get("closed_issues", [])
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=check_triage no_merged_pr_found non_target_base_seen=false — pending, leaving open." in result["stdout"]
+	assert "leaving open and alerting" not in result["stdout"] + result["stderr"]
+
+
+def test_close_merged_sweep_check_triage_contract():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("close_merged_issues_sweep() {")
+	body = script[start:script.index("\nreconcile_managed_issue_labels() {", start)]
+	assert '--label "ai:check-triage"' in body
+	assert body.count("--json number,labels,body,author") == 3
+	assert 'normalize("check_triage")' in body
+	assert 'set_issue_phase_label "${issue_num}" "ai:merged"' in body
+	# The triage branch is resolved only after the five-argument check rejects.
+	first_check = body.index('_pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}"; then')
+	assert first_check < body.index("_close_sweep_check_triage_branch")
+	# Standalone stall recovery keeps the five-argument call (non-goal).
+	assert '_pr_json_base_is_target_merge "${issue_num}" "${_stall_nt_pr_json}" "${_STALL_STANDALONE_DEFAULT_BRANCH}" "${_stall_nt_declared}" "${_stall_nt_managed}"; then' in script
 
 
 def test_reconciliation_uses_implementation_pr_masked_by_later_mention():
