@@ -5,13 +5,24 @@
   "entry_id": "processed_command_9018_6713246776_approved",
   "issue_number": 9018,
   "metadata": {
+    "branch": "ai/issue-9018",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/9018-heal-job-wiring-guard-and-node-moves.md",
+      "tests/test_ci_poll_test_sharding.py"
+    ],
+    "issue_number": 9018,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9018",
+    "pr_number": 9019,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9019",
+    "run_attempt": "1",
+    "run_id": "42416037599",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42416037599"
   },
   "run_attempt": 1,
   "run_id": "42416037599",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-07T21:30:16Z",
+  "status": "completed",
+  "timestamp": "2026-11-07T22:10:29Z",
   "workflow": "implement"
 }
