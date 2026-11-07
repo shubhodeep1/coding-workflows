@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-07T03:03:21Z",
+  "issue_number": 8944,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=n/a:n/a; cited_path=n/a (CI service check-run copilot-pull-request-reviewer); files_touched=changelog.d/8944-poller-comments-dump-redaction.md, scripts/orchestrate_poll_process.sh, tests/test_ci_wires_every_test_file.py, tests/test_gh_retry_final_stderr_redaction.py, tests/test_poller_tracking_comments_dump_redaction.py.",
+  "phase": "review_autofix",
+  "pr_number": 8946,
+  "record_id": "lesson_20261107030321_3f313050ca",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "n/a (CI service check-run copilot-pull-request-reviewer)",
+    "n/a",
+    "changelog.d/8944-poller-comments-dump-redaction.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_gh_retry_final_stderr_redaction.py",
+    "tests/test_poller_tracking_comments_dump_redaction.py"
+  ]
+}
