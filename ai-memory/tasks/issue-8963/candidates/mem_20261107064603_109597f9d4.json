@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8963,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8963\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8967\",\"pr_number\":8967,\"branch\":\"ai/issue-8963\",\"run_id\":\"42346940043\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42346940043\",\"changed_files\":[\".github/workflows/workflow-log-analysis.yml\",\"agents.d/8963-log-analysis-report-pr-delivery.md\",\"changelog.d/8963-log-analysis-report-pr-delivery.md\",\"scripts/workflow_log_analysis_deliver_report.sh\",\"tests/test_ci_wires_every_test_file.py\",\"tests/test_workflow_log_analysis_failure_contract.py\",\"tests/test_workflow_log_analysis_report_delivery.py\"]}",
+  "fingerprint": "fa0f92f97865bcccd16037839cc46612ee9d82ba918ce4936dcd4cc4daa2f461",
+  "lineage": {
+    "issue_number": 8963,
+    "parent_ids": [],
+    "pr_number": 8967,
+    "run_id": "42346940043",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42346940043",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8967"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261107064603_109597f9d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8963,
+    "level": "run",
+    "pr_number": 8967,
+    "run_id": "42346940043"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8963: https://github.com/shubhodeep1/coding-workflows/pull/8967",
+  "timestamps": {
+    "created_at": "2026-11-07T06:46:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
