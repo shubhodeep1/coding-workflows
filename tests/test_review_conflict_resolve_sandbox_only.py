@@ -1512,7 +1512,7 @@ def test_resolver_loop_passes_done_check_tests_file(tmp_path: Path) -> None:
 	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=[_fail_n(1), _PASS],
 		extra_env=_loop_env(), seed_acceptance=True, copy_acceptance_helper=True)
 	runs = _docker_run_lines(work)
-	assert len(runs) == 2 and all("--tests-file /inputs/tests.txt" in line for line in runs)
+	assert len(runs) == 2 and all("--tests-file /gate/tests.txt" in line for line in runs)
 	result = json.loads((tmp_path / "runtime" / "acceptance_result.json").read_text(encoding="utf-8"))
 	assert result["schema"] == "acceptance_result.v1"
 	assert "PERSIST repair_loop outcome=pass turns=1 stop=clean acceptance=not_run" in proc.stderr
@@ -1554,7 +1554,7 @@ def test_resolver_loop_fetches_the_done_check_once_when_none_is_staged(tmp_path:
 	assert len(calls) <= 2 and sum("comments" in call for call in calls) == 1
 	fetched = json.loads((tmp_path / "runtime" / "prepush_gate_resolver" / "acceptance.json").read_text(encoding="utf-8"))
 	assert fetched["state"] == "valid"
-	assert all("--tests-file /inputs/tests.txt" in line for line in _docker_run_lines(work))
+	assert all("--tests-file /gate/tests.txt" in line for line in _docker_run_lines(work))
 
 
 def test_resolver_loop_contract_stays_in_the_gate_function() -> None:
