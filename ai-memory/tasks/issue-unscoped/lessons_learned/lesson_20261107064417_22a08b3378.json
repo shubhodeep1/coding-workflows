@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-07T06:44:17Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 007 as out-of-scope; anchor=(check-run context, no repository site):LENS: ERROR PATHS & EDGE CASES; cited_path=check-run `copilot-pull-request-reviewer` (`custom_instructions_too_large`); files_touched=agents.d/prepush-gate-tests-file.md, tests/test_prepush_affected_tests.py, workflow-templates/.claude/hooks/prepush_affected_tests.py.",
+  "phase": "review_autofix",
+  "pr_number": 8964,
+  "record_id": "lesson_20261107064417_22a08b3378",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "check-run `copilot-pull-request-reviewer` (`custom_instructions_too_large`)",
+    "(check-run context, no repository site)",
+    "agents.d/prepush-gate-tests-file.md",
+    "tests/test_prepush_affected_tests.py",
+    "workflow-templates/.claude/hooks/prepush_affected_tests.py"
+  ]
+}
