@@ -619,7 +619,7 @@ def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
 	return subprocess.run(["git", *args], cwd=repo, env=_git_env(), check=check, text=True, capture_output=True)
 
 
-def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False) -> None:
+def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False, *, hook_rel: str = HOOK) -> None:
 	"""HEAD `feat` and merged-in `main` conflict on the guard hook.
 
 	shape: `both` (both modify, stages 1 2 3), `base_deleted` (main deletes,
@@ -628,7 +628,7 @@ def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False)
 	_git(repo, "init", "-q", "-b", "main")
 	_git(repo, "config", "user.name", "t")
 	_git(repo, "config", "user.email", "t@t")
-	hook = repo / HOOK
+	hook = repo / hook_rel
 	hook.parent.mkdir(parents=True)
 	hook.write_text("x = 0\n", encoding="utf-8")
 	(repo / "notes.md").write_text("base\n", encoding="utf-8")
@@ -636,7 +636,7 @@ def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False)
 	_git(repo, "commit", "-qm", "base")
 	_git(repo, "checkout", "-q", "-b", "feat")
 	if shape == "pr_deleted":
-		_git(repo, "rm", "-q", "--", HOOK)
+		_git(repo, "rm", "-q", "--", hook_rel)
 	else:
 		hook.write_text("x = 'pr side'\n", encoding="utf-8")
 	if ordinary:
@@ -644,7 +644,7 @@ def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False)
 	_git(repo, "commit", "-qam", "feat change")
 	_git(repo, "checkout", "-q", "main")
 	if shape == "base_deleted":
-		_git(repo, "rm", "-q", "--", HOOK)
+		_git(repo, "rm", "-q", "--", hook_rel)
 	else:
 		hook.write_text("x = 'base side'\n", encoding="utf-8")
 	if ordinary:
@@ -654,7 +654,7 @@ def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False)
 	assert _git(repo, "merge", "--no-commit", "--no-ff", "main", check=False).returncode != 0
 
 
-def _run_take_base(tmp_path: Path, repo: Path, *, linked=None, status="ok", target_branch="", enabled=None):
+def _run_take_base(tmp_path: Path, repo: Path, *, linked=None, status="ok", target_branch="", enabled=None, integration_sync=False):
 	runtime = tmp_path / "runtime"
 	runtime.mkdir()
 	github_env = tmp_path / "github.env"
@@ -685,6 +685,8 @@ echo block-fell-through
 		env["TARGET_BRANCH"] = target_branch
 	if enabled is not None:
 		env["HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED"] = enabled
+	if integration_sync:
+		env["IS_INTEGRATION_SYNC"] = "true"
 	result = subprocess.run(["bash", "-c", script], cwd=repo, env=env, text=True, capture_output=True)
 	return result, runtime, github_env, allowlist
 
@@ -739,23 +741,23 @@ def test_ordinary_conflicts_still_go_to_the_sandbox(tmp_path):
 	assert (runtime / "host_only_take_base_comment.md").is_file()
 
 
-def _paired_hook_conflict(repo: Path, template_differs: bool) -> None:
+def _paired_hook_conflict(repo: Path, template_differs: bool, *, hook_rel: str = HOOK) -> None:
 	"""Live hook and its workflow-templates twin both conflict."""
 	_git(repo, "init", "-q", "-b", "main")
 	_git(repo, "config", "user.name", "t")
 	_git(repo, "config", "user.email", "t@t")
-	template = repo / "workflow-templates" / HOOK
-	for path in (repo / HOOK, template):
+	template = repo / "workflow-templates" / hook_rel
+	for path in (repo / hook_rel, template):
 		path.parent.mkdir(parents=True, exist_ok=True)
 		path.write_text("x = 0\n", encoding="utf-8")
 	_git(repo, "add", "-A")
 	_git(repo, "commit", "-qm", "base")
 	_git(repo, "checkout", "-q", "-b", "feat")
-	(repo / HOOK).write_text("x = 'pr'\n", encoding="utf-8")
+	(repo / hook_rel).write_text("x = 'pr'\n", encoding="utf-8")
 	template.write_text("x = 'pr'\n", encoding="utf-8")
 	_git(repo, "commit", "-qam", "feat change")
 	_git(repo, "checkout", "-q", "main")
-	(repo / HOOK).write_text("x = 'base'\n", encoding="utf-8")
+	(repo / hook_rel).write_text("x = 'base'\n", encoding="utf-8")
 	template.write_text("x = 'base template'\n" if template_differs else "x = 'base'\n", encoding="utf-8")
 	_git(repo, "commit", "-qam", "main change")
 	_git(repo, "checkout", "-q", "feat")
@@ -1037,6 +1039,86 @@ def test_source_repo_without_its_conflict_set_still_fails_closed(tmp_path):
 	assert result.returncode == 1 and "guard-passed" not in result.stdout
 	assert "Conflict resolver paired live copy check failed" in result.stderr
 	assert "reason=sandbox_path_unsupported" in result.stderr
+
+
+# --- Second paired live hook: prepush_affected_tests.py (#8973) ---
+#
+# PR #8436 (run 42355218108) failed closed with sandbox_path_host_only on
+# .claude/hooks/prepush_affected_tests.py: the paired-live mirroring and the
+# guard-hook template merge cover only pr_merge_status_guard.py. The xfail
+# test records the gap; the guard tests lock the sandbox boundary, so a fix
+# cannot get there by admitting the live hook or taking it from base.
+
+PREPUSH_HOOK = ".claude/hooks/prepush_affected_tests.py"
+PREPUSH_HOOK_TEMPLATE = "workflow-templates/" + PREPUSH_HOOK
+PREPUSH_GAP_REASON = "#8973: guard-hook template merge covers only pr_merge_status_guard.py; scripts outside heal scope"
+WORKSPACE_PY = SCRIPT.parent / "review_untrusted_workspace.py"
+
+
+def _workspace_module():
+	import importlib.util
+	spec = importlib.util.spec_from_file_location("review_untrusted_workspace_8973", WORKSPACE_PY)
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=PREPUSH_GAP_REASON)
+def test_prepush_hook_pair_is_listed_in_paired_live_report(tmp_path):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_paired_hook_conflict(repo, False, hook_rel=PREPUSH_HOOK)
+	assert sorted(_unmerged(repo)) == sorted([PREPUSH_HOOK, PREPUSH_HOOK_TEMPLATE])
+	conflicted = tmp_path / "conflicted.txt"
+	conflicted.write_text("".join(name + "\n" for name in _unmerged(repo)), encoding="utf-8")
+	unmerged_z = tmp_path / "unmerged.z"
+	unmerged_z.write_bytes(subprocess.run(["git", "ls-files", "-u", "-z"], cwd=repo, env=_git_env(), check=True, capture_output=True).stdout)
+	pairs = tmp_path / "pairs.txt"
+	model_paths = tmp_path / "model_paths.txt"
+	env = {**_git_env(), "PYTHONDONTWRITEBYTECODE": "1"}
+	report = subprocess.run(["python3", str(WORKSPACE_PY), "paired-live-copies", str(repo), str(conflicted), str(unmerged_z),
+		str(pairs), str(model_paths)], env=env, capture_output=True, text=True, check=False)
+	# A CLI crash is a harness failure, not the expected gap.
+	if report.returncode != 0:
+		raise RuntimeError(f"paired-live-copies failed: {report.stderr}")
+	assert _workspace_module().PAIRED_LIVE_COPIES.get(PREPUSH_HOOK) == PREPUSH_HOOK_TEMPLATE
+	assert pairs.read_text(encoding="utf-8") == f"{PREPUSH_HOOK}\t{PREPUSH_HOOK_TEMPLATE}\n"
+	assert model_paths.read_text(encoding="utf-8") == f"{PREPUSH_HOOK_TEMPLATE}\n"
+	check = subprocess.run(["python3", str(WORKSPACE_PY), "check-paths", str(repo), str(model_paths)], env=env, capture_output=True, text=True, check=False)
+	assert check.returncode == 0, check.stderr
+
+
+def test_prepush_live_hook_stays_outside_the_sandbox(tmp_path):
+	mod = _workspace_module()
+	assert mod.allowed(PREPUSH_HOOK) is False
+	assert mod.allowed(PREPUSH_HOOK, commands={PREPUSH_HOOK}) is False
+	assert mod.allowed(PREPUSH_HOOK_TEMPLATE) is True
+	assert mod._path_rejection_reason(PREPUSH_HOOK) in {"dot_directory", "live_safety_hook"}
+	(tmp_path / ".claude/hooks").mkdir(parents=True)
+	(tmp_path / PREPUSH_HOOK).write_text("x = 1\n", encoding="utf-8")
+	result, env_text = _run_path_guard(tmp_path, [PREPUSH_HOOK], integration="true")
+	assert result.returncode == 1 and "guard-passed" not in result.stdout
+	assert "reason=sandbox_path_host_only" in result.stderr
+	assert f"::error::Conflict resolver: host-only conflicted path(s) need a manual merge: {PREPUSH_HOOK}" in result.stderr
+	assert re.search(r"REVIEW_RESOLVER_PATH_REJECTED reason=(dot_directory|live_safety_hook) path=\.claude/hooks/prepush_affected_tests\.py", result.stderr)
+	assert env_text == ""
+
+
+@pytest.mark.parametrize("kwargs", [{"target_branch": "orchestrator/project-8434"}, {"integration_sync": True}])
+def test_prepush_hook_conflict_is_never_taken_from_base_on_integration_sync(tmp_path, kwargs):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_host_only_conflict(repo, hook_rel=PREPUSH_HOOK)
+	result, runtime, github_env, _ = _run_take_base(tmp_path, repo, **kwargs)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE" not in result.stdout
+	assert "block-fell-through" in result.stdout
+	assert _unmerged(repo) == [PREPUSH_HOOK]
+	assert not (runtime / "host_only_conflict_scope.tsv").exists()
+	assert not github_env.exists()
+	block = _take_base_block()
+	assert "orchestrator/project-*) _ho_enabled=false ;;" in block
+	assert 'if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ]; then' in block
 
 
 # --- pre-push affected-test gate (issue #8201, plan P4) --------------------------------
