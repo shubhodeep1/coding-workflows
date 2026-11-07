@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8976,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8976\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8982\",\"pr_number\":8982,\"branch\":\"ai/issue-8976\",\"run_id\":\"42360545584\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42360545584\",\"changed_files\":[\"changelog.d/wfopt-2026-10-07-deterministic-marker-match.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_alert_levels_human_only.py\",\"tests/test_ci_wires_every_test_file.py\",\"tests/test_mark_validation_failed_deterministic_marker.py\"]}",
+  "fingerprint": "f431e8a9d906104e2c37ebedd44749d6dbf59849df926281f69a02bd5ab4464a",
+  "lineage": {
+    "issue_number": 8976,
+    "parent_ids": [],
+    "pr_number": 8982,
+    "run_id": "42360545584",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42360545584",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8982"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261107100759_e03806d3ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8976,
+    "level": "run",
+    "pr_number": 8982,
+    "run_id": "42360545584"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8976: https://github.com/shubhodeep1/coding-workflows/pull/8982",
+  "timestamps": {
+    "created_at": "2026-11-07T10:07:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
