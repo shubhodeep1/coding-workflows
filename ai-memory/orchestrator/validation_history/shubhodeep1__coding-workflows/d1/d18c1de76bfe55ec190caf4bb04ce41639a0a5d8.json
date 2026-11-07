@@ -407,6 +407,18 @@
       "run_id": null,
       "run_url": null,
       "source": "orchestrate_poll.mark_validation_complete"
+    },
+    {
+      "context": "validation passed",
+      "cycle": 1,
+      "outcome": "passed",
+      "raw_conclusion": "success",
+      "raw_status": "pass",
+      "recorded_at": "2026-11-07T17:31:25Z",
+      "run_attempt": null,
+      "run_id": null,
+      "run_url": null,
+      "source": "orchestrate_poll.mark_validation_complete"
     }
   ],
   "integration_sha": "d18c1de76bfe55ec190caf4bb04ce41639a0a5d8",
