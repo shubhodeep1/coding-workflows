@@ -2611,7 +2611,7 @@ jobs:
       # Moved from group 2 to group 4: orchestrate-poll (2) took 15m18s of its
       # 20 minutes on main (run 41704793081, budget-watch issue #8772). That
       # run's step timings could not be read, so the pick is an estimate from
-      # test and subprocess counts, not a measurement: this step names 52
+      # test and subprocess counts, not a measurement: this step names 53
       # modules with about 568 test functions and 134 subprocess call sites,
       # while group 2's other three pinned steps have about 213 tests between
       # them, and in #7690's sandbox timing this was the heaviest step (37.2s).
