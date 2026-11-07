@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8995,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8995\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9005\",\"pr_number\":9005,\"branch\":\"ai/issue-8995\",\"run_id\":\"42378560460\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42378560460\",\"changed_files\":[\".github/actions/chatgpt-pool-token/action.yml\",\".github/actions/chatgpt-pool-token/main.js\",\".github/actions/chatgpt-pool-token/package.json\",\".github/actions/chatgpt-pool-token/post.js\",\".github/workflows/ci.yml\",\"agents.d/8970-chatgpt-pool-broker.md\",\"changelog.d/8970-chatgpt-pool-broker.md\",\"docs/INVENTORY.md\",\"scripts/chatgpt_pool_token.sh\",\"tests/test_chatgpt_pool_token.py\",\"tools/claude-pool-broker/src/index.ts\",\"tools/claude-pool-broker/test/broker.test.ts\",\"tools/claude-pool-broker/wrangler.toml\"]}",
+  "fingerprint": "026af55a0284060aa7f244f92b9c7728436beea09c46dab219faeae22d84ab91",
+  "lineage": {
+    "issue_number": 8995,
+    "parent_ids": [],
+    "pr_number": 9005,
+    "run_id": "42378560460",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42378560460",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9005"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261107142728_9481e384c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8995,
+    "level": "run",
+    "pr_number": 9005,
+    "run_id": "42378560460"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8995: https://github.com/shubhodeep1/coding-workflows/pull/9005",
+  "timestamps": {
+    "created_at": "2026-11-07T14:27:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
