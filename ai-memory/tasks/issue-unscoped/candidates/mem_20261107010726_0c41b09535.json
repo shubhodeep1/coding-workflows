@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md / agents.md:combined custom-instruction payload (check run 41544382408, `copilot-pull-request-reviewer`) | severity=high | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot reviewer rejected the request before analysis with `Error: Prompt too big after adding system message` (HTTP 422, errorCode `custom_instructions_too_large`), failing the check run.\n  WHY: The reviewer gate never completes while the combined CLAUDE.md + AGENTS.md custom instructions exceed the system-message size limit. The reviewer said this is pre-existing infrastructure and not attributable to this diff, which touches only tests/e2e_smoke_canary.txt, so it is surfaced for visibility only. The source labeled it SEVERITY: MAJOR, which is mapped here to high. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) explicitly declined to attribute this failure to the PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CLAUDE.md / agents.md:combined custom-instruction payload (check run 41544382408, `copilot-pull-request-reviewer`) | severity=high | confidence=5\n  PROBLEM: The Copilot reviewer rejected the request before analysis with `Error: Prompt too big after adding system message` (HTTP 422, errorCode `custom_instructions_too_large`), failing the check run.\n  WHY: The reviewer gate never completes while the combined CLAUDE.md + AGENTS.md custom instructions exceed the system-message size limit. The failure is pre-existing infrastructure and not attributable to this diff, so it is surfaced for visibility only. The source labeled it SEVERITY: MAJOR, which is mapped here to high.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cb12a49e03dd3abf32e6d5031d54587eeb4aabb45ecb6968ef54662f3f106fcb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "42321088216",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42321088216",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107010726_0c41b09535",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "42321088216"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-07T01:07:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
