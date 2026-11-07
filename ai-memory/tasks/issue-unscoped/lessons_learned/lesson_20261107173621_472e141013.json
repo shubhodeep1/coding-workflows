@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-11-07T17:36:21Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=agents.md:4375-4382; cited_path=agents.md; files_touched=CHANGELOG.md, agents.md, agents.d/wfopt-2026-10-02-conflict-sweep-outcome.md, agents.d/wfopt-2026-10-02-memory-records-considered.md, agents.d/wfopt-2026-10-02-reviewer-malformed-class.md, agents.d/wfopt-2026-10-02-reviewer-prompt-components.md, agents.d/wfopt-2026-10-03-2-issue-title-env.md, agents.d/wfopt-2026-10-03-2-pr-comments-incomplete.md, agents.d/wfopt-2026-10-03-2-rb-judge-context-incomplete.md, agents.d/wfopt-2026-10-03-2-tg-tracking-write.md, changelog.d/*.",
+  "phase": "review_autofix",
+  "pr_number": 9013,
+  "record_id": "lesson_20261107173621_472e141013",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.md",
+    "CHANGELOG.md",
+    "agents.d/wfopt-2026-10-02-conflict-sweep-outcome.md",
+    "agents.d/wfopt-2026-10-02-memory-records-considered.md",
+    "agents.d/wfopt-2026-10-02-reviewer-malformed-class.md",
+    "agents.d/wfopt-2026-10-02-reviewer-prompt-components.md",
+    "agents.d/wfopt-2026-10-03-2-issue-title-env.md",
+    "agents.d/wfopt-2026-10-03-2-pr-comments-incomplete.md",
+    "agents.d/wfopt-2026-10-03-2-rb-judge-context-incomplete.md",
+    "agents.d/wfopt-2026-10-03-2-tg-tracking-write.md",
+    "changelog.d/*"
+  ]
+}
