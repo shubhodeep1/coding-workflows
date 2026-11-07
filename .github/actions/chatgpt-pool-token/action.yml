@@ -1,0 +1,33 @@
+name: ChatGPT pool token
+description: |
+  Fetch the ChatGPT credential for this job from the claude-pool-broker
+  Worker's /v1/chatgpt endpoint with the job's GitHub OIDC token (audience
+  coding-workflows-chatgpt-pool), mask it, and write a 0600 auth.json to
+  $RUNNER_TEMP/chatgpt-pool. The job needs `permissions: id-token: write`.
+  Never fails the job: any problem is available=false with a reason. The post
+  step deletes every credential file. ChatGPT account reviewer trial, Phase 1:
+  no workflow uses this action yet.
+
+inputs:
+  config_path:
+    description: chatgpt_pool.json to read. Empty uses the copy shipped with this action.
+    required: false
+    default: ""
+
+outputs:
+  available:
+    description: "`true` when the credential was written."
+  reason:
+    description: Why (granted, broker_not_configured, oidc_unavailable, broker_refused_<code>, broker_unavailable_<status>, …).
+  auth_dir:
+    description: The credential directory (empty when unavailable).
+  auth_file:
+    description: The 0600 auth.json (empty when unavailable).
+  expires_at:
+    description: The access token's expiry in epoch seconds (empty when unavailable).
+
+runs:
+  using: node24
+  main: main.js
+  post: post.js
+  post-if: always()

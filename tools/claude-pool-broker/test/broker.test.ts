@@ -1,12 +1,17 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
 	AUDIENCE,
+	CHATGPT_ALLOWED_WORKFLOW_FILES,
+	CHATGPT_AUDIENCE,
+	CHATGPT_STORE_KEY,
+	ChatgptPoolStore,
 	GITHUB_API,
 	ISSUER,
 	JWKS_URL,
 	REGISTRY_TTL_MS,
 	REGISTRY_URL,
 	VERIFIED_SHA_TTL_MS,
+	createChatgptStore,
 	createHandler,
 	parsePool,
 	parseWorkflowRef,
@@ -553,5 +558,431 @@ describe("parseWorkflowRef", () => {
 		expect(parseWorkflowRef("shubhodeep1/coding-workflows-fork/.github/workflows/plan.yml@refs/heads/main")).toBeNull();
 		expect(parseWorkflowRef(undefined)).toBeNull();
 		expect(parseWorkflowRef(`${WF}@refs/heads/main`)).toBeNull();
+	});
+});
+
+const REFRESH_URL = "https://auth.example.test/oauth/token";
+const CHATGPT_WF = `${WF}review_autofix.yml@refs/heads/main`;
+
+function chatgptJwt(payload: Record<string, unknown>): string
+{
+	return `${b64urlJson({ alg: "RS256", typ: "JWT" })}.${b64urlJson(payload)}.${"s".repeat(24)}`;
+}
+
+function chatgptSeed(overrides: Record<string, unknown> = {}, expOffset = 3600): string
+{
+	return JSON.stringify({
+		auth_mode: "chatgpt",
+		tokens: {
+			access_token: chatgptJwt({ exp: NOW + expOffset, kind: "access" }),
+			id_token: chatgptJwt({ exp: NOW + expOffset, kind: "id" }),
+			refresh_token: "rt_seed_refresh_token_value",
+			account_id: "acct-1234",
+			...overrides,
+		},
+	});
+}
+
+class MapStorage
+{
+	values = new Map<string, unknown>();
+	puts = 0;
+	failPut = false;
+	async get(key: string): Promise<unknown>
+	{
+		const value = this.values.get(key);
+		return value === undefined ? undefined : structuredClone(value);
+	}
+	async put(key: string, value: unknown): Promise<void>
+	{
+		if (this.failPut) {
+			throw new Error("storage down");
+		}
+		this.puts += 1;
+		this.values.set(key, structuredClone(value));
+	}
+}
+
+interface ChatgptHarness
+{
+	s: Stub;
+	env: Env;
+	storage: MapStorage;
+	refreshBodies: string[];
+	refreshAnswers: CompareAnswer[];
+	objectNames: unknown[];
+	handler: ReturnType<typeof createHandler>;
+}
+
+function chatgptHarness(options: { allowed?: readonly string[]; binding?: boolean; stubThrows?: boolean } = {}): ChatgptHarness
+{
+	const s = stub();
+	const storage = new MapStorage();
+	const refreshBodies: string[] = [];
+	const refreshAnswers: CompareAnswer[] = [];
+	const objectNames: unknown[] = [];
+	const store = createChatgptStore(storage, {
+		now: s.deps.now,
+		log: s.deps.log,
+		fetch: async (input, init) => {
+			if (input !== REFRESH_URL) {
+				return s.deps.fetch(input, init);
+			}
+			refreshBodies.push(String(init?.body));
+			const answer = refreshAnswers.shift() ?? { status: 500, body: {} };
+			if (answer === "throw") {
+				throw new Error("network down");
+			}
+			if (answer.raw !== undefined) {
+				return new Response(answer.raw, { status: answer.status });
+			}
+			return Response.json(answer.body ?? {}, { status: answer.status });
+		},
+	});
+	const h: ChatgptHarness = {
+		s,
+		env: { ...ENV, CHATGPT_POOL_SEED: chatgptSeed() },
+		storage,
+		refreshBodies,
+		refreshAnswers,
+		objectNames,
+		handler: createHandler({ ...s.deps, chatgptAllowedWorkflowFiles: options.allowed ?? ["review_autofix.yml"] }),
+	};
+	if (options.binding !== false) {
+		h.env.CHATGPT_POOL = {
+			idFromName: (name: string) => {
+				objectNames.push(name);
+				return `id:${name}`;
+			},
+			get: () => ({
+				fetch: async (input: string, init?: RequestInit) => {
+					if (options.stubThrows) {
+						throw new Error("object down");
+					}
+					expect(input).toBe("https://chatgpt-pool.internal/grant");
+					expect(init?.method).toBe("POST");
+					return store.grant(h.env);
+				},
+			}),
+		};
+	}
+	return h;
+}
+
+function chatgptClaims(overrides: Record<string, unknown> = {}): Record<string, unknown>
+{
+	return claims({ aud: CHATGPT_AUDIENCE, job_workflow_ref: CHATGPT_WF, ...overrides });
+}
+
+async function callChatgpt(h: ChatgptHarness, token: string | null): Promise<{ status: number; body: Record<string, unknown> }>
+{
+	const response = await h.handler(request(token, { path: "/v1/chatgpt" }), h.env);
+	expect(response.headers.get("cache-control")).toBe("no-store");
+	return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+}
+
+function withRefresh(h: ChatgptHarness, expOffset: number): void
+{
+	h.env.CHATGPT_POOL_SEED = chatgptSeed({}, expOffset);
+	h.env.CHATGPT_REFRESH_URL = REFRESH_URL;
+	h.env.CHATGPT_OAUTH_CLIENT_ID = "client-test-id";
+}
+
+function expectNoChatgptSecrets(h: ChatgptHarness, extra: string[] = []): void
+{
+	const text = h.s.logs.join("\n");
+	const seed = JSON.parse(h.env.CHATGPT_POOL_SEED ?? "{}") as { tokens?: Record<string, string> };
+	for (const secret of [...Object.values(seed.tokens ?? {}).filter((v) => v !== "acct-1234"), ...extra]) {
+		expect(text).not.toContain(secret);
+	}
+	expect(text).not.toContain("eyJ");
+	expect(text).not.toContain("rt_");
+}
+
+describe("chatgpt: granted", () => {
+	it("returns exactly the four credential fields and never the refresh token", async () => {
+		const h = chatgptHarness();
+		const { status, body } = await callChatgpt(h, await sign(chatgptClaims()));
+		expect(status).toBe(200);
+		const seed = JSON.parse(h.env.CHATGPT_POOL_SEED ?? "").tokens;
+		expect(body).toEqual({ access_token: seed.access_token, id_token: seed.id_token, account_id: "acct-1234", expires_at: NOW + 3600 });
+		expect(Object.keys(body).sort()).toEqual(["access_token", "account_id", "expires_at", "id_token"]);
+		expect(h.objectNames).toEqual(["default"]);
+		expect(h.s.logs).toContain("CHATGPT_POOL store seeded");
+		expect(h.s.logs).toContain("CHATGPT_POOL broker granted repository=shubhodeep1/digital_pa expires_in=3600 refreshed=false");
+		const stored = (await h.storage.get(CHATGPT_STORE_KEY)) as Record<string, unknown>;
+		expect(stored.refresh_token).toBe("rt_seed_refresh_token_value");
+		expect(stored.seed_fingerprint).toMatch(/^[0-9a-f]{64}$/);
+		expectNoChatgptSecrets(h, [String(stored.seed_fingerprint)]);
+		expect(h.refreshBodies).toEqual([]);
+	});
+
+	it("does not re-seed while the seed is unchanged", async () => {
+		const h = chatgptHarness();
+		await callChatgpt(h, await sign(chatgptClaims()));
+		await callChatgpt(h, await sign(chatgptClaims()));
+		expect(h.s.logs.filter((line) => line === "CHATGPT_POOL store seeded").length).toBe(1);
+		expect(h.storage.puts).toBe(1);
+	});
+
+	it("drops a refresh token and extra keys the object returns", async () => {
+		const h = chatgptHarness();
+		const access = chatgptJwt({ exp: NOW + 900 });
+		h.env.CHATGPT_POOL = {
+			idFromName: () => "id",
+			get: () => ({ fetch: async () => Response.json({ access_token: access, id_token: access, account_id: "a", expires_at: NOW + 900, refresh_token: "rt_leak", extra: 1 }) }),
+		};
+		const { status, body } = await callChatgpt(h, await sign(chatgptClaims()));
+		expect(status).toBe(200);
+		expect(body).toEqual({ access_token: access, id_token: access, account_id: "a", expires_at: NOW + 900 });
+	});
+
+	it("leaves /v1/pool unchanged", async () => {
+		const h = chatgptHarness();
+		const response = await h.handler(request(await sign(claims())), h.env);
+		expect(response.status).toBe(200);
+		expect(((await response.json()) as Record<string, unknown>).accounts).toHaveLength(2);
+		expect(h.objectNames).toEqual([]);
+	});
+});
+
+describe("chatgpt: refused (403)", () => {
+	it("refuses every caller with the production allowlist", async () => {
+		expect(CHATGPT_ALLOWED_WORKFLOW_FILES).toEqual([]);
+		const h = chatgptHarness();
+		const s = h.s;
+		const response = await createHandler(s.deps)(request(await sign(chatgptClaims()), { path: "/v1/chatgpt" }), h.env);
+		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({ error: "workflow_not_allowed" });
+		expect(h.objectNames).toEqual([]);
+		expect(s.logs).toContain("CHATGPT_POOL broker refused reason=workflow_not_allowed status=403 repository=unknown");
+	});
+
+	it("refuses a /v1/pool token, and /v1/pool refuses a /v1/chatgpt token", async () => {
+		const h = chatgptHarness();
+		expect((await callChatgpt(h, await sign(chatgptClaims({ aud: AUDIENCE })))).body.error).toBe("bad_audience");
+		const pool = await h.handler(request(await sign(claims({ aud: CHATGPT_AUDIENCE }))), h.env);
+		expect(pool.status).toBe(403);
+		expect(await pool.json()).toEqual({ error: "bad_audience" });
+	});
+
+	const cases: [string, Record<string, unknown>, string][] = [
+		["wrong owner", { repository_owner: "someone-else", repository: "someone-else/digital_pa" }, "wrong_owner"],
+		["a repository not in the registry", { repository: "shubhodeep1/not-a-consumer" }, "repo_not_allowed"],
+		["a workflow outside the allowlist", { job_workflow_ref: `${WF}clarify.yml@refs/heads/main` }, "workflow_not_allowed"],
+		["a feature branch", { job_workflow_ref: `${WF}review_autofix.yml@refs/heads/feature` }, "workflow_ref_not_allowed"],
+		["a consumer's own workflow", { job_workflow_ref: "shubhodeep1/digital_pa/.github/workflows/ai-review.yml@refs/heads/main" }, "wrong_workflow"],
+		["a token issued too long ago", { iat: NOW - 700, nbf: NOW - 700 }, "too_old"],
+		["an expired token", { exp: NOW - 120 }, "expired"],
+	];
+	for (const [name, overrides, reason] of cases) {
+		it(name, async () => {
+			const h = chatgptHarness();
+			const { status, body } = await callChatgpt(h, await sign(chatgptClaims(overrides)));
+			expect([status, body.error]).toEqual([403, reason]);
+			expect(h.objectNames).toEqual([]);
+		});
+	}
+
+	it("a bad signature or a missing bearer", async () => {
+		const h = chatgptHarness();
+		expect((await callChatgpt(h, await sign(chatgptClaims(), { key: otherKey }))).body.error).toBe("bad_signature");
+		expect((await callChatgpt(h, null)).body.error).toBe("missing_token");
+	});
+
+	it("a SHA-pinned workflow that is not an ancestor of main or stable", async () => {
+		const h = chatgptHarness();
+		h.s.compare[`main...${SHA}`] = { status: 200, body: { status: "diverged" } };
+		h.s.compare[`stable...${SHA}`] = { status: 200, body: { status: "ahead" } };
+		const token = await sign(chatgptClaims({ job_workflow_ref: `${WF}review_autofix.yml@${SHA}`, job_workflow_sha: SHA }));
+		expect((await callChatgpt(h, token)).body.error).toBe("workflow_sha_unverified");
+	});
+});
+
+describe("chatgpt: broker-side failures (503)", () => {
+	it("no Durable Object binding", async () => {
+		const h = chatgptHarness({ binding: false });
+		const { status, body } = await callChatgpt(h, await sign(chatgptClaims()));
+		expect([status, body.error]).toEqual([503, "store_unavailable"]);
+	});
+
+	it("the Durable Object call throws", async () => {
+		const h = chatgptHarness({ stubThrows: true });
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("store_unavailable");
+	});
+
+	it("the object answers an unknown error code or a bad shape", async () => {
+		const h = chatgptHarness();
+		h.env.CHATGPT_POOL = { idFromName: () => "id", get: () => ({ fetch: async () => Response.json({ error: "Bad Code!" }, { status: 503 }) }) };
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).body).toEqual({ error: "store_error" });
+		h.env.CHATGPT_POOL = { idFromName: () => "id", get: () => ({ fetch: async () => Response.json({ access_token: "short" }) }) };
+		const { status, body } = await callChatgpt(h, await sign(chatgptClaims()));
+		expect([status, body.error]).toEqual([503, "store_error"]);
+	});
+
+	it("no seed", async () => {
+		const h = chatgptHarness();
+		delete h.env.CHATGPT_POOL_SEED;
+		const { status, body } = await callChatgpt(h, await sign(chatgptClaims()));
+		expect([status, body.error]).toEqual([503, "credential_not_seeded"]);
+		expect(h.s.logs).toContain("CHATGPT_POOL broker refused reason=credential_not_seeded status=503 repository=shubhodeep1/digital_pa");
+	});
+
+	for (const [name, seed] of [
+		["unparseable", "{"],
+		["missing a field", chatgptSeed({ refresh_token: undefined })],
+		["a short access token", chatgptSeed({ access_token: "short" })],
+		["a bad account id", chatgptSeed({ account_id: "acct 1" })],
+	] as const) {
+		it(`a seed that is ${name}`, async () => {
+			const h = chatgptHarness();
+			h.env.CHATGPT_POOL_SEED = seed;
+			expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("seed_invalid");
+			expect(h.storage.puts).toBe(0);
+		});
+	}
+
+	it("a flat seed is accepted", async () => {
+		const h = chatgptHarness();
+		h.env.CHATGPT_POOL_SEED = JSON.stringify(JSON.parse(chatgptSeed()).tokens);
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).status).toBe(200);
+	});
+
+	it("refresh off: an expiring token is refused, one with enough life is granted", async () => {
+		const h = chatgptHarness();
+		h.env.CHATGPT_POOL_SEED = chatgptSeed({}, 100);
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("refresh_not_configured");
+		h.env.CHATGPT_POOL_SEED = chatgptSeed({}, 1000);
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).status).toBe(200);
+		h.env.CHATGPT_REFRESH_URL = "http://insecure.example/token";
+		h.env.CHATGPT_OAUTH_CLIENT_ID = "client";
+		h.env.CHATGPT_POOL_SEED = chatgptSeed({}, 100);
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("refresh_not_configured");
+		expect(h.refreshBodies).toEqual([]);
+	});
+
+	it("a refresh saves the rotated token before returning", async () => {
+		const h = chatgptHarness();
+		withRefresh(h, 100);
+		const access = chatgptJwt({ exp: NOW + 7200, kind: "new-access" });
+		const id = chatgptJwt({ exp: NOW + 7200, kind: "new-id" });
+		h.refreshAnswers.push({ status: 200, body: { access_token: access, id_token: id, refresh_token: "rt_rotated_token_value" } });
+		const { status, body } = await callChatgpt(h, await sign(chatgptClaims()));
+		expect(status).toBe(200);
+		expect(body).toEqual({ access_token: access, id_token: id, account_id: "acct-1234", expires_at: NOW + 7200 });
+		expect(JSON.parse(h.refreshBodies[0])).toEqual({ client_id: "client-test-id", grant_type: "refresh_token", refresh_token: "rt_seed_refresh_token_value" });
+		const stored = (await h.storage.get(CHATGPT_STORE_KEY)) as Record<string, unknown>;
+		expect([stored.refresh_token, stored.access_token, stored.expires_at, stored.refreshed_at]).toEqual(["rt_rotated_token_value", access, NOW + 7200, NOW]);
+		expect(h.s.logs).toContain("CHATGPT_POOL store refreshed");
+		expect(h.s.logs).toContain("CHATGPT_POOL broker granted repository=shubhodeep1/digital_pa expires_in=7200 refreshed=true");
+		expectNoChatgptSecrets(h, [access, id, "rt_rotated_token_value"]);
+	});
+
+	it("two concurrent grants make one refresh call", async () => {
+		const h = chatgptHarness();
+		withRefresh(h, 100);
+		h.refreshAnswers.push({ status: 200, body: { access_token: chatgptJwt({ exp: NOW + 7200 }), refresh_token: "rt_rotated_token_value" } });
+		const [a, b] = await Promise.all([callChatgpt(h, await sign(chatgptClaims())), callChatgpt(h, await sign(chatgptClaims()))]);
+		expect([a.status, b.status]).toEqual([200, 200]);
+		expect(h.refreshBodies.length).toBe(1);
+	});
+
+	for (const [name, answer] of [["a 5xx", { status: 502, body: {} }], ["a thrown fetch", "throw"], ["invalid JSON", { status: 200, raw: "nope" }]] as [string, CompareAnswer][]) {
+		it(`a refresh that fails with ${name} is unavailable and keeps the credential`, async () => {
+			const h = chatgptHarness();
+			withRefresh(h, 100);
+			h.refreshAnswers.push(answer);
+			expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("credential_refresh_unavailable");
+			const stored = (await h.storage.get(CHATGPT_STORE_KEY)) as Record<string, unknown>;
+			expect([stored.refresh_token, stored.refresh_rejected]).toEqual(["rt_seed_refresh_token_value", false]);
+		});
+	}
+
+	it("an unavailable refresh still grants a token with enough life left", async () => {
+		const h = chatgptHarness();
+		withRefresh(h, 1000);
+		h.refreshAnswers.push({ status: 503, body: {} });
+		const { status, body } = await callChatgpt(h, await sign(chatgptClaims()));
+		expect([status, body.expires_at]).toEqual([200, NOW + 1000]);
+		expect(h.s.logs).toContain("CHATGPT_POOL store refresh_failed reason=unavailable");
+	});
+
+	for (const [name, answer] of [["invalid_grant", { status: 400, body: { error: "invalid_grant" } }], ["a 401", { status: 401, body: {} }]] as [string, CompareAnswer][]) {
+		it(`${name} latches the rejection until the seed changes`, async () => {
+			const h = chatgptHarness();
+			withRefresh(h, 1000);
+			h.refreshAnswers.push(answer);
+			expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("credential_refresh_rejected");
+			expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("credential_refresh_rejected");
+			expect(h.refreshBodies.length).toBe(1);
+			h.env.CHATGPT_POOL_SEED = chatgptSeed({ refresh_token: "rt_new_seed_refresh_token" }, 100);
+			h.refreshAnswers.push({ status: 200, body: { access_token: chatgptJwt({ exp: NOW + 7200 }) } });
+			expect((await callChatgpt(h, await sign(chatgptClaims()))).status).toBe(200);
+			expect(JSON.parse(h.refreshBodies[1]).refresh_token).toBe("rt_new_seed_refresh_token");
+			const stored = (await h.storage.get(CHATGPT_STORE_KEY)) as Record<string, unknown>;
+			expect([stored.refresh_token, stored.refresh_rejected]).toEqual(["rt_new_seed_refresh_token", false]);
+		});
+	}
+
+	it("another 4xx fails without latching", async () => {
+		const h = chatgptHarness();
+		withRefresh(h, 100);
+		h.refreshAnswers.push({ status: 400, body: { error: "invalid_request" } }, { status: 400, body: { error: "invalid_request" } });
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("credential_refresh_failed");
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("credential_refresh_failed");
+		expect(h.refreshBodies.length).toBe(2);
+	});
+
+	it("an unreadable exp keeps the rotated token and fails closed", async () => {
+		const h = chatgptHarness();
+		withRefresh(h, 100);
+		h.refreshAnswers.push({ status: 200, body: { access_token: chatgptJwt({ sub: "no-exp" }), refresh_token: "rt_rotated_token_value" } });
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("credential_expiry_unknown");
+		const stored = (await h.storage.get(CHATGPT_STORE_KEY)) as Record<string, unknown>;
+		expect(stored.refresh_token).toBe("rt_rotated_token_value");
+	});
+
+	it("a refresh answer without a usable access token keeps the rotated refresh token", async () => {
+		const h = chatgptHarness();
+		withRefresh(h, 100);
+		h.refreshAnswers.push({ status: 200, body: { access_token: "x", refresh_token: "rt_rotated_token_value" } });
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("credential_refresh_invalid");
+		const stored = (await h.storage.get(CHATGPT_STORE_KEY)) as Record<string, unknown>;
+		expect(stored.refresh_token).toBe("rt_rotated_token_value");
+	});
+
+	it("a storage write failure", async () => {
+		const h = chatgptHarness();
+		h.storage.failPut = true;
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("store_write_failed");
+		expect(h.s.logs).toContain("CHATGPT_POOL store write_failed");
+	});
+
+	it("an already expired seed", async () => {
+		const h = chatgptHarness();
+		withRefresh(h, -10);
+		h.refreshAnswers.push({ status: 200, body: { access_token: chatgptJwt({ exp: NOW + 200 }) } });
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("credential_expired");
+	});
+});
+
+describe("chatgpt: routing", () => {
+	it("only POST /v1/chatgpt next to /v1/pool", async () => {
+		const h = chatgptHarness();
+		for (const path of ["/v1/chatgpt/", "/v1/chatgptx", "/v1/chatgpt/grant", "/grant"]) {
+			expect((await h.handler(request(null, { path }), h.env)).status).toBe(404);
+		}
+		expect((await h.handler(request(null, { path: "/v1/chatgpt", method: "GET" }), h.env)).status).toBe(405);
+		expect(h.s.calls).toEqual([]);
+	});
+
+	it("the Durable Object answers only POST /grant", async () => {
+		const storage = new MapStorage();
+		const object = new ChatgptPoolStore({ storage }, {});
+		expect((await object.fetch(new Request("https://chatgpt-pool.internal/other", { method: "POST" }))).status).toBe(404);
+		expect((await object.fetch(new Request("https://chatgpt-pool.internal/grant"))).status).toBe(404);
+		const response = await object.fetch(new Request("https://chatgpt-pool.internal/grant", { method: "POST" }));
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ error: "credential_not_seeded" });
 	});
 });

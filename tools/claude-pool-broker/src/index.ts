@@ -36,7 +36,37 @@
  * The pool is the CLAUDE_POOL_TOKENS secret (a JSON array of {name, token}),
  * written only by claude-workers' key-sync workflow. Nothing here logs a
  * token or the OIDC JWT; log lines carry reason codes and the repository.
+ *
+ * POST /v1/chatgpt (ChatGPT account reviewer trial, Phase 1) hands one ChatGPT
+ * credential to a trusted job. It runs the same verify/authorize path as
+ * /v1/pool with its own audience (`coding-workflows-chatgpt-pool`) and its own
+ * workflow allowlist, CHATGPT_ALLOWED_WORKFLOW_FILES, which is empty until a
+ * later phase wires a workflow in, so every caller is refused for now. The
+ * credential lives in the ChatgptPoolStore Durable Object, seeded from the
+ * CHATGPT_POOL_SEED secret (a new secret value re-seeds it) and refreshed in
+ * the object when it nears expiry; the rotated refresh token is written back
+ * to the object and never leaves it. Success: 200
+ * `{"access_token","id_token","account_id","expires_at"}`. Refusal 403 and
+ * broker-side trouble 503, as for /v1/pool. Log lines carry the CHATGPT_POOL
+ * prefix and never a token, the seed or the JWT.
  */
+
+/** The parts of a Durable Object storage API the ChatGPT store uses. */
+export interface DurableObjectStorageLike {
+	get(key: string): Promise<unknown>;
+	put(key: string, value: unknown): Promise<void>;
+}
+
+/** The parts of a Durable Object stub the Worker uses. */
+export interface DurableObjectStubLike {
+	fetch(input: string, init?: RequestInit): Promise<Response>;
+}
+
+/** The parts of a Durable Object namespace binding the Worker uses. */
+export interface DurableObjectNamespaceLike {
+	idFromName(name: string): unknown;
+	get(id: unknown): DurableObjectStubLike;
+}
 
 export interface Env {
 	CLAUDE_POOL_TOKENS?: string;
@@ -44,12 +74,24 @@ export interface Env {
 	GATE?: string;
 	/** Optional read-only token for the GitHub compare calls; unauthenticated reads when unset. Never logged. */
 	BROKER_GITHUB_READ_TOKEN?: string;
+	/** Secret: the ChatGPT credential JSON (flat or `{"tokens": {...}}`). Never logged. */
+	CHATGPT_POOL_SEED?: string;
+	/** The OAuth token endpoint for the refresh; empty (the default) turns refresh off. */
+	CHATGPT_REFRESH_URL?: string;
+	/** The OAuth client id for the refresh; empty (the default) turns refresh off. */
+	CHATGPT_OAUTH_CLIENT_ID?: string;
+	/** Refresh when fewer seconds than this remain (default 1800, limited to 300-86400). */
+	CHATGPT_REFRESH_BEFORE_SECONDS?: string;
+	/** The ChatgptPoolStore Durable Object namespace. */
+	CHATGPT_POOL?: DurableObjectNamespaceLike;
 }
 
 export interface Deps {
 	fetch: (input: string, init?: RequestInit) => Promise<Response>;
 	now: () => number;
 	log: (line: string) => void;
+	/** Tests only: replaces CHATGPT_ALLOWED_WORKFLOW_FILES. The production handler never sets it. */
+	chatgptAllowedWorkflowFiles?: readonly string[];
 }
 
 export const ISSUER = "https://token.actions.githubusercontent.com";
@@ -88,6 +130,26 @@ export const ALLOWED_WORKFLOW_FILES: readonly string[] = Object.freeze([
 	"workflow-failure-heal-intake.yml",
 	"workflow-log-analysis.yml",
 ]);
+/** The OIDC audience /v1/chatgpt accepts; a /v1/pool token is refused there and the reverse. */
+export const CHATGPT_AUDIENCE = "coding-workflows-chatgpt-pool";
+export const CHATGPT_PATH = "/v1/chatgpt";
+/**
+ * Exact reusable workflow files that may receive the ChatGPT credential: the
+ * .github/workflows/*.yml files that use .github/actions/chatgpt-pool-token.
+ * tests/test_chatgpt_pool_token.py keeps this list equal to that set. Empty
+ * in Phase 1, so /v1/chatgpt refuses every caller with workflow_not_allowed.
+ */
+export const CHATGPT_ALLOWED_WORKFLOW_FILES: readonly string[] = Object.freeze([]);
+export const CHATGPT_POOL_OBJECT_NAME = "default";
+export const CHATGPT_STORE_KEY = "credential";
+/** A credential is handed out only with at least this many seconds left. */
+export const CHATGPT_MIN_GRANT_SECONDS = 300;
+export const DEFAULT_CHATGPT_REFRESH_BEFORE_SECONDS = 1800;
+export const CHATGPT_REFRESH_TIMEOUT_MS = 10000;
+export const CHATGPT_TOKEN_RE = /^[A-Za-z0-9_.-]{20,16384}$/;
+export const CHATGPT_REFRESH_TOKEN_RE = /^[A-Za-z0-9_.~+/=-]{8,16384}$/;
+export const CHATGPT_ACCOUNT_RE = /^[A-Za-z0-9_-]{1,128}$/;
+const CHATGPT_ERROR_CODE_RE = /^[a-z_]{1,40}$/;
 export const TRUSTED_BRANCH_REF = "refs/heads/main";
 /**
  * The branch coding-workflows' internal-*.yml wrappers call
@@ -387,7 +449,7 @@ export function createHandler(deps: Deps)
 		}
 	}
 
-	async function verify(jwt: string): Promise<Record<string, unknown>>
+	async function verify(jwt: string, expectedAudience: string): Promise<Record<string, unknown>>
 	{
 		if (jwt.length > MAX_JWT_LENGTH) {
 			throw new Refusal(403, "malformed_token");
@@ -435,7 +497,7 @@ export function createHandler(deps: Deps)
 			throw new Refusal(403, "bad_issuer");
 		}
 		const audience = claims.aud;
-		if (!(audience === AUDIENCE || (Array.isArray(audience) && audience.includes(AUDIENCE)))) {
+		if (!(audience === expectedAudience || (Array.isArray(audience) && audience.includes(expectedAudience)))) {
 			throw new Refusal(403, "bad_audience");
 		}
 		if (!isNumber(claims.exp) || claims.exp <= now - CLOCK_SKEW_SECONDS) {
@@ -453,7 +515,7 @@ export function createHandler(deps: Deps)
 		return claims;
 	}
 
-	async function authorize(claims: Record<string, unknown>, env: Env): Promise<string>
+	async function authorize(claims: Record<string, unknown>, env: Env, allowedFiles: readonly string[]): Promise<string>
 	{
 		if (typeof claims.repository_owner !== "string" || claims.repository_owner.toLowerCase() !== OWNER) {
 			throw new Refusal(403, "wrong_owner");
@@ -475,7 +537,7 @@ export function createHandler(deps: Deps)
 		if (!workflow) {
 			throw new Refusal(403, "wrong_workflow");
 		}
-		if (!ALLOWED_WORKFLOW_FILES.includes(workflow.file)) {
+		if (!allowedFiles.includes(workflow.file)) {
 			throw new Refusal(403, "workflow_not_allowed");
 		}
 		if (workflow.ref === TRUSTED_BRANCH_REF) {
@@ -506,14 +568,82 @@ export function createHandler(deps: Deps)
 		throw new Refusal(403, "workflow_ref_not_allowed");
 	}
 
+	/**
+	 * POST /v1/chatgpt: the same OIDC verification and authorization as
+	 * /v1/pool (own audience and allowlist), then one grant from the
+	 * ChatgptPoolStore Durable Object. The answer is rebuilt from four checked
+	 * fields, so a refresh token can never leave the broker.
+	 */
+	async function handleChatgpt(request: Request, env: Env): Promise<Response>
+	{
+		let repository = "";
+		try {
+			const authorization = request.headers.get("authorization") || "";
+			const match = /^Bearer[ \t]+([A-Za-z0-9_.-]+)$/i.exec(authorization);
+			if (!match) {
+				throw new Refusal(403, "missing_token");
+			}
+			repository = await authorize(
+				await verify(match[1], CHATGPT_AUDIENCE),
+				env,
+				deps.chatgptAllowedWorkflowFiles ?? CHATGPT_ALLOWED_WORKFLOW_FILES,
+			);
+			const namespace = env.CHATGPT_POOL;
+			if (!namespace || typeof namespace.get !== "function" || typeof namespace.idFromName !== "function") {
+				throw new Refusal(503, "store_unavailable");
+			}
+			let response: Response;
+			try {
+				response = await namespace
+					.get(namespace.idFromName(CHATGPT_POOL_OBJECT_NAME))
+					.fetch("https://chatgpt-pool.internal/grant", { method: "POST" });
+			} catch {
+				throw new Refusal(503, "store_unavailable");
+			}
+			let body: unknown;
+			try {
+				body = await response.json();
+			} catch {
+				body = undefined;
+			}
+			const fields = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+			if (response.status !== 200) {
+				const code = fields.error;
+				throw new Refusal(503, typeof code === "string" && CHATGPT_ERROR_CODE_RE.test(code) ? code : "store_error");
+			}
+			const { access_token: accessToken, id_token: idToken, account_id: accountId, expires_at: expiresAt } = fields;
+			if (
+				typeof accessToken !== "string" || !CHATGPT_TOKEN_RE.test(accessToken) ||
+				typeof idToken !== "string" || !CHATGPT_TOKEN_RE.test(idToken) ||
+				typeof accountId !== "string" || !CHATGPT_ACCOUNT_RE.test(accountId) ||
+				typeof expiresAt !== "number" || !Number.isSafeInteger(expiresAt) || expiresAt <= 0
+			) {
+				throw new Refusal(503, "store_error");
+			}
+			const expiresIn = expiresAt - Math.floor(deps.now() / 1000);
+			deps.log(`CHATGPT_POOL broker granted repository=${repository} expires_in=${expiresIn} refreshed=${fields.refreshed === true}`);
+			return json(200, { access_token: accessToken, id_token: idToken, account_id: accountId, expires_at: expiresAt });
+		} catch (error) {
+			if (error instanceof Refusal) {
+				deps.log(`CHATGPT_POOL broker refused reason=${error.reason} status=${error.status} repository=${repository || "unknown"}`);
+				return json(error.status, { error: error.reason });
+			}
+			deps.log("CHATGPT_POOL broker error reason=internal");
+			return json(500, { error: "internal" });
+		}
+	}
+
 	return async function handle(request: Request, env: Env): Promise<Response>
 	{
 		const url = new URL(request.url);
-		if (url.pathname !== "/v1/pool") {
+		if (url.pathname !== "/v1/pool" && url.pathname !== CHATGPT_PATH) {
 			return json(404, { error: "not_found" });
 		}
 		if (request.method !== "POST") {
 			return json(405, { error: "method_not_allowed" });
+		}
+		if (url.pathname === CHATGPT_PATH) {
+			return handleChatgpt(request, env);
 		}
 		let repository = "";
 		try {
@@ -522,7 +652,7 @@ export function createHandler(deps: Deps)
 			if (!match) {
 				throw new Refusal(403, "missing_token");
 			}
-			repository = await authorize(await verify(match[1]), env);
+			repository = await authorize(await verify(match[1], AUDIENCE), env, ALLOWED_WORKFLOW_FILES);
 			const accounts = parsePool(env.CLAUDE_POOL_TOKENS);
 			if (accounts.length === 0) {
 				throw new Refusal(503, "pool_empty");
@@ -544,6 +674,351 @@ export function createHandler(deps: Deps)
 			return json(500, { error: "internal" });
 		}
 	};
+}
+
+interface ChatgptCredential
+{
+	seed_fingerprint: string;
+	access_token: string;
+	id_token: string;
+	refresh_token: string;
+	account_id: string;
+	/** Epoch seconds; 0 when unknown (the next grant then refreshes). */
+	expires_at: number;
+	refreshed_at: number;
+	refresh_rejected: boolean;
+}
+
+interface ChatgptTokens
+{
+	access_token: string;
+	id_token: string;
+	refresh_token: string;
+	account_id: string;
+}
+
+interface StoreResult
+{
+	status: number;
+	body: Record<string, unknown>;
+}
+
+function chatgptTokensFrom(value: unknown): ChatgptTokens | null
+{
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return null;
+	}
+	let fields = value as Record<string, unknown>;
+	const nested = fields.tokens;
+	if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+		fields = nested as Record<string, unknown>;
+	}
+	const { access_token: accessToken, id_token: idToken, refresh_token: refreshToken, account_id: accountId } = fields;
+	if (
+		typeof accessToken !== "string" || !CHATGPT_TOKEN_RE.test(accessToken) ||
+		typeof idToken !== "string" || !CHATGPT_TOKEN_RE.test(idToken) ||
+		typeof refreshToken !== "string" || !CHATGPT_REFRESH_TOKEN_RE.test(refreshToken) ||
+		typeof accountId !== "string" || !CHATGPT_ACCOUNT_RE.test(accountId)
+	) {
+		return null;
+	}
+	return { access_token: accessToken, id_token: idToken, refresh_token: refreshToken, account_id: accountId };
+}
+
+function storedCredential(value: unknown): ChatgptCredential | null
+{
+	const tokens = chatgptTokensFrom(value);
+	if (!tokens) {
+		return null;
+	}
+	const fields = value as Record<string, unknown>;
+	if (
+		typeof fields.seed_fingerprint !== "string" ||
+		typeof fields.expires_at !== "number" || !Number.isSafeInteger(fields.expires_at) ||
+		typeof fields.refreshed_at !== "number" || !Number.isSafeInteger(fields.refreshed_at) ||
+		typeof fields.refresh_rejected !== "boolean"
+	) {
+		return null;
+	}
+	return {
+		...tokens,
+		seed_fingerprint: fields.seed_fingerprint,
+		expires_at: fields.expires_at,
+		refreshed_at: fields.refreshed_at,
+		refresh_rejected: fields.refresh_rejected,
+	};
+}
+
+/** The `exp` claim of a JWT (payload decode only, no signature check), or null. */
+export function jwtExpiry(token: string): number | null
+{
+	const parts = token.split(".");
+	if (parts.length !== 3) {
+		return null;
+	}
+	try {
+		const exp = decodeJsonSegment(parts[1]).exp;
+		return typeof exp === "number" && Number.isSafeInteger(exp) && exp > 0 ? exp : null;
+	} catch {
+		return null;
+	}
+}
+
+async function sha256Hex(text: string): Promise<string>
+{
+	const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+	return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function chatgptRefreshBefore(env: Env): number
+{
+	const raw = (env.CHATGPT_REFRESH_BEFORE_SECONDS ?? "").trim();
+	if (!/^[0-9]{1,6}$/.test(raw)) {
+		return DEFAULT_CHATGPT_REFRESH_BEFORE_SECONDS;
+	}
+	const value = Number(raw);
+	return value >= CHATGPT_MIN_GRANT_SECONDS && value <= 86400 ? value : DEFAULT_CHATGPT_REFRESH_BEFORE_SECONDS;
+}
+
+/**
+ * The ChatGPT credential store behind /v1/chatgpt, run inside the
+ * ChatgptPoolStore Durable Object. grant() seeds (or re-seeds, when the
+ * CHATGPT_POOL_SEED value changed) the stored credential, refreshes it when it
+ * nears expiry, and answers 200 with the access token, id token, account id
+ * and expiry, or 503 with a reason code. Grants run one at a time: a Durable
+ * Object's input gate opens during the outbound refresh call, so without this
+ * a second request could start a second refresh with the same refresh token.
+ * A rotated refresh token is written to storage before anything else is
+ * checked. Nothing here logs a token, the seed or its fingerprint.
+ */
+export function createChatgptStore(storage: DurableObjectStorageLike, deps: Pick<Deps, "fetch" | "now" | "log">)
+{
+	let queue: Promise<unknown> = Promise.resolve();
+
+	function fail(error: string): StoreResult
+	{
+		return { status: 503, body: { error } };
+	}
+
+	async function save(record: ChatgptCredential): Promise<boolean>
+	{
+		try {
+			await storage.put(CHATGPT_STORE_KEY, { ...record });
+			return true;
+		} catch {
+			deps.log("CHATGPT_POOL store write_failed");
+			return false;
+		}
+	}
+
+	type RefreshOutcome =
+		| { kind: "ok"; record: ChatgptCredential }
+		| { kind: "rejected" | "failed" | "unavailable" | "invalid" | "expiry_unknown" | "write_failed" };
+
+	async function refresh(record: ChatgptCredential, url: string, clientId: string, now: number): Promise<RefreshOutcome>
+	{
+		let response: Response;
+		try {
+			response = await deps.fetch(url, {
+				method: "POST",
+				headers: { "content-type": "application/json", accept: "application/json", "user-agent": "claude-pool-broker" },
+				body: JSON.stringify({ client_id: clientId, grant_type: "refresh_token", refresh_token: record.refresh_token }),
+				signal: AbortSignal.timeout(CHATGPT_REFRESH_TIMEOUT_MS),
+			});
+		} catch {
+			return { kind: "unavailable" };
+		}
+		let body: unknown;
+		try {
+			body = await response.json();
+		} catch {
+			body = undefined;
+		}
+		const fields = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+		if (response.status === 401 || (response.status === 400 && fields.error === "invalid_grant")) {
+			// RFC 6749 section 5.2: the refresh token is dead. Latch so no later
+			// grant calls out with it again; a new seed value clears the latch.
+			const latched = await save({ ...record, refresh_rejected: true });
+			return latched ? { kind: "rejected" } : { kind: "write_failed" };
+		}
+		if (response.status >= 400 && response.status < 500) {
+			return { kind: "failed" };
+		}
+		if (response.status !== 200 || body === undefined) {
+			return { kind: "unavailable" };
+		}
+		const rotated = fields.refresh_token;
+		const accessToken = fields.access_token;
+		const idToken = fields.id_token;
+		const refreshToken = typeof rotated === "string" && CHATGPT_REFRESH_TOKEN_RE.test(rotated) ? rotated : record.refresh_token;
+		const accessValid = typeof accessToken === "string" && CHATGPT_TOKEN_RE.test(accessToken);
+		const expiry = accessValid ? jwtExpiry(accessToken as string) : null;
+		const next: ChatgptCredential = accessValid
+			? {
+				...record,
+				refresh_token: refreshToken,
+				access_token: accessToken as string,
+				id_token: typeof idToken === "string" && CHATGPT_TOKEN_RE.test(idToken) ? idToken : record.id_token,
+				expires_at: expiry ?? 0,
+				refreshed_at: now,
+				refresh_rejected: false,
+			}
+			: { ...record, refresh_token: refreshToken };
+		// Save first: the old refresh token may already be spent, so the rotated
+		// one must survive any later check that fails.
+		if (!(await save(next))) {
+			return { kind: "write_failed" };
+		}
+		if (!accessValid) {
+			return { kind: "invalid" };
+		}
+		if (expiry === null) {
+			return { kind: "expiry_unknown" };
+		}
+		return { kind: "ok", record: next };
+	}
+
+	async function grantOnce(env: Env): Promise<StoreResult>
+	{
+		const seedRaw = env.CHATGPT_POOL_SEED;
+		if (typeof seedRaw !== "string" || seedRaw.trim() === "") {
+			return fail("credential_not_seeded");
+		}
+		let seedValue: unknown;
+		try {
+			seedValue = JSON.parse(seedRaw);
+		} catch {
+			return fail("seed_invalid");
+		}
+		const seed = chatgptTokensFrom(seedValue);
+		if (!seed) {
+			return fail("seed_invalid");
+		}
+		const fingerprint = await sha256Hex(seedRaw);
+		let record: ChatgptCredential | null;
+		try {
+			record = storedCredential(await storage.get(CHATGPT_STORE_KEY));
+		} catch {
+			return fail("store_read_failed");
+		}
+		if (!record || record.seed_fingerprint !== fingerprint) {
+			// A new secret value is the operator's only write path; it also
+			// clears a latched refresh rejection.
+			record = {
+				...seed,
+				seed_fingerprint: fingerprint,
+				expires_at: jwtExpiry(seed.access_token) ?? 0,
+				refreshed_at: 0,
+				refresh_rejected: false,
+			};
+			if (!(await save(record))) {
+				return fail("store_write_failed");
+			}
+			deps.log("CHATGPT_POOL store seeded");
+		}
+		if (record.refresh_rejected) {
+			return fail("credential_refresh_rejected");
+		}
+		const now = Math.floor(deps.now() / 1000);
+		let refreshed = false;
+		if (record.expires_at - now < chatgptRefreshBefore(env)) {
+			const url = (env.CHATGPT_REFRESH_URL ?? "").trim();
+			const clientId = (env.CHATGPT_OAUTH_CLIENT_ID ?? "").trim();
+			if (!url.startsWith("https://") || clientId === "") {
+				if (record.expires_at - now < CHATGPT_MIN_GRANT_SECONDS) {
+					return fail("refresh_not_configured");
+				}
+			} else {
+				const outcome = await refresh(record, url, clientId, now);
+				if (outcome.kind === "ok") {
+					record = outcome.record;
+					refreshed = true;
+					deps.log("CHATGPT_POOL store refreshed");
+				} else {
+					deps.log(`CHATGPT_POOL store refresh_failed reason=${outcome.kind}`);
+					switch (outcome.kind) {
+						case "rejected":
+							return fail("credential_refresh_rejected");
+						case "write_failed":
+							return fail("store_write_failed");
+						case "expiry_unknown":
+							return fail("credential_expiry_unknown");
+						default:
+							// Not a rejection: the current token is still handed
+							// out while it has enough life left.
+							if (record.expires_at - now < CHATGPT_MIN_GRANT_SECONDS) {
+								return fail(
+									outcome.kind === "failed"
+										? "credential_refresh_failed"
+										: outcome.kind === "invalid"
+											? "credential_refresh_invalid"
+											: "credential_refresh_unavailable",
+								);
+							}
+					}
+				}
+			}
+		}
+		if (record.expires_at - now < CHATGPT_MIN_GRANT_SECONDS) {
+			return fail("credential_expired");
+		}
+		return {
+			status: 200,
+			body: {
+				access_token: record.access_token,
+				id_token: record.id_token,
+				account_id: record.account_id,
+				expires_at: record.expires_at,
+				refreshed,
+			},
+		};
+	}
+
+	return {
+		async grant(env: Env): Promise<Response>
+		{
+			const run = queue.then(() => grantOnce(env));
+			queue = run.catch(() => undefined);
+			let result: StoreResult;
+			try {
+				result = await run;
+			} catch {
+				deps.log("CHATGPT_POOL store error reason=internal");
+				result = fail("store_error");
+			}
+			return json(result.status, result.body);
+		},
+	};
+}
+
+/**
+ * The Durable Object that holds the ChatGPT credential (binding CHATGPT_POOL,
+ * migration tag v1 in wrangler.toml). Only reachable through the binding; it
+ * answers only POST /grant.
+ */
+export class ChatgptPoolStore
+{
+	private readonly env: Env;
+	private readonly store: ReturnType<typeof createChatgptStore>;
+
+	constructor(state: { storage: DurableObjectStorageLike }, env: Env)
+	{
+		this.env = env;
+		this.store = createChatgptStore(state.storage, {
+			fetch: (input, init) => fetch(input, init),
+			now: () => Date.now(),
+			log: (line) => console.log(line),
+		});
+	}
+
+	async fetch(request: Request): Promise<Response>
+	{
+		const url = new URL(request.url);
+		if (url.pathname !== "/grant" || request.method !== "POST") {
+			return json(404, { error: "not_found" });
+		}
+		return this.store.grant(this.env);
+	}
 }
 
 const handler = createHandler({

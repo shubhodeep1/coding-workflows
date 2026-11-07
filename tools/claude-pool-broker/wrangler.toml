@@ -15,3 +15,20 @@ workers_dev = true
 [vars]
 PROBE_MODEL = "claude-haiku-4-5-20251001"
 GATE = "0.9"
+# ChatGPT account reviewer trial, Phase 1: POST /v1/chatgpt.
+# The CHATGPT_POOL_SEED secret (the ChatGPT credential JSON) is set with
+# `wrangler secret put CHATGPT_POOL_SEED` in the deploy session; a new value
+# re-seeds the ChatgptPoolStore Durable Object. Empty CHATGPT_REFRESH_URL or
+# CHATGPT_OAUTH_CLIENT_ID mean refresh is off: a credential near expiry is
+# refused (503 refresh_not_configured), never handed out on doubt.
+CHATGPT_REFRESH_URL = ""
+CHATGPT_OAUTH_CLIENT_ID = ""
+CHATGPT_REFRESH_BEFORE_SECONDS = "1800"
+
+[[durable_objects.bindings]]
+name = "CHATGPT_POOL"
+class_name = "ChatgptPoolStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatgptPoolStore"]
