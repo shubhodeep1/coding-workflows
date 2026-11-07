@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8942,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8942\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8949\",\"pr_number\":8949,\"branch\":\"ai/issue-8942\",\"run_id\":\"42327751474\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42327751474\",\"changed_files\":[\"changelog.d/8942-rb-judge-terminal-swap-additive.md\",\"scripts/review_rb_judge.sh\",\"tests/test_review_rb_judge_label_propagation.py\"]}",
+  "fingerprint": "c81364c05b097fde2a67bf895dd23429b2138a211d06ecf3adff853d0849e8af",
+  "lineage": {
+    "issue_number": 8942,
+    "parent_ids": [],
+    "pr_number": 8949,
+    "run_id": "42327751474",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42327751474",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8949"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261107023120_4a9142bb03",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8942,
+    "level": "run",
+    "pr_number": 8949,
+    "run_id": "42327751474"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8942: https://github.com/shubhodeep1/coding-workflows/pull/8949",
+  "timestamps": {
+    "created_at": "2026-11-07T02:31:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
