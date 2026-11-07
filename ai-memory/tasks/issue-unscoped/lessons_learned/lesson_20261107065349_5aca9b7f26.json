@@ -1,0 +1,30 @@
+{
+  "discovered_at": "2026-11-07T06:53:49Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=.github/workflows/check_failure_triage.yml:n/a; cited_path=AGENTS.md / CLAUDE.md (external check `copilot-pull-request-reviewer`, `custom_instructions_too_large`); files_touched=.github/workflows/update_workflows.yml, analysis/recommendation-processing-report.md, analysis/workflow-optimization-2026-10-06-2.md, changelog.d/8942-rb-judge-terminal-swap-additive.md, changelog.d/8943-unblock-run-log-attach-status.md, changelog.d/8944-poller-comments-dump-redaction.md, changelog.d/8945-update-workflows-clone-cred-helper.md, scripts/orchestrate_poll_process.sh, scripts/review_rb_judge.sh, scripts/unblock_judge.sh, tests/test_ci_wires_every_test_file.py, tests/test_gh_retry_final_stderr_redaction.py, tests/test_poller_tracking_comments_dump_redaction.py, tests/test_review_rb_judge_label_propagation.py, tests/test_unblock_judge.py, tests/test_update_workflows_guardrails.py.",
+  "phase": "review_autofix",
+  "pr_number": 8950,
+  "record_id": "lesson_20261107065349_5aca9b7f26",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md / CLAUDE.md (external check `copilot-pull-request-reviewer`, `custom_instructions_too_large`)",
+    ".github/workflows/check_failure_triage.yml",
+    ".github/workflows/update_workflows.yml",
+    "analysis/recommendation-processing-report.md",
+    "analysis/workflow-optimization-2026-10-06-2.md",
+    "changelog.d/8942-rb-judge-terminal-swap-additive.md",
+    "changelog.d/8943-unblock-run-log-attach-status.md",
+    "changelog.d/8944-poller-comments-dump-redaction.md",
+    "changelog.d/8945-update-workflows-clone-cred-helper.md",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/review_rb_judge.sh",
+    "scripts/unblock_judge.sh",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_gh_retry_final_stderr_redaction.py",
+    "tests/test_poller_tracking_comments_dump_redaction.py",
+    "tests/test_review_rb_judge_label_propagation.py",
+    "tests/test_unblock_judge.py",
+    "tests/test_update_workflows_guardrails.py"
+  ]
+}
