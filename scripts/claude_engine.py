@@ -37,8 +37,9 @@ stdout, diagnostics to stderr):
     with its denial status, for the smoke run's context and P5 gates.
   * ``probe-parse --account A [--exit-code N] < transcript`` — one Haiku
     probe transcript to a usage record (spike S8).
-  * ``choose [--gate G] < probes.json`` — the least-used account under the
-    gate (ties to the alphabetically first name), or why none is usable.
+  * ``choose [--gate G] < probes.json`` — the usable accounts under the
+    gate, the one whose spare 7-day quota expires soonest first (ties to the
+    alphabetically first name), or why none is usable.
 
 Exit codes: 0 success; 1 the input describes a failure (``extract`` found
 no result); 2 invalid arguments or input.
@@ -724,10 +725,11 @@ def _max_utilization(probe: dict[str, Any]) -> float | None:
 
 	A missing ``five_hour`` reading means the account has no 5-hour limit
 	(many accounts no longer report one), so it ranks by ``seven_day`` alone.
-	A missing ``seven_day`` reading is unknown and returns ``None``.
+	A missing ``seven_day`` reading is unknown and returns ``None``, and so
+	does a negative (malformed) one, so it ranks last instead of first.
 	"""
 	seven_day = probe.get("seven_day")
-	if seven_day is None:
+	if seven_day is None or float(seven_day) < 0:
 		return None
 	five_hour = probe.get("five_hour")
 	return seven_day if five_hour is None else max(five_hour, seven_day)
@@ -736,6 +738,31 @@ def _max_utilization(probe: dict[str, Any]) -> float | None:
 def _known_peak(probe: dict[str, Any]) -> float | None:
 	values = [value for value in (probe.get("five_hour"), probe.get("seven_day")) if value is not None]
 	return max(values) if values else None
+
+
+# Floor for the hours until a 7-day reset in ``_spare_per_hour``, so a reset
+# that is minutes away (or already passed) ranks first without dividing by 0.
+_SPARE_PER_HOUR_MIN_HOURS = 0.1
+
+
+def _spare_per_hour(probe: dict[str, Any], gate: float, now: float) -> float | None:
+	"""Rank key for ``choose_account``: 7-day headroom under ``gate`` per hour
+	until the 7-day window resets.
+
+	Quota left in a window is lost at its reset, so the account whose spare
+	quota expires soonest is used first, and an account that just reset is
+	saved for later in its week. ``None`` without a 7-day reading or reset
+	time, or with a negative (malformed) 7-day reading. The 5-hour window
+	does not change the rank; it only gates.
+	"""
+	seven_day = probe.get("seven_day")
+	reset = _int_or_none(probe.get("seven_day_resets_at"))
+	if seven_day is None or reset is None:
+		return None
+	if float(seven_day) < 0:
+		return None
+	hours = max((reset - now) / 3600, _SPARE_PER_HOUR_MIN_HOURS)
+	return max(gate - max(float(seven_day), 0.0), 0.0) / hours
 
 
 def _usable_at(probe: dict[str, Any], gate: float) -> int | None:
@@ -750,21 +777,36 @@ def _usable_at(probe: dict[str, Any], gate: float) -> int | None:
 	return max(resets) if resets else None
 
 
-def choose_account(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
-	"""Order the accounts for one job: the least used under ``gate`` first.
+def choose_account(probes: list[dict[str, Any]], gate: float, now: float | None = None) -> dict[str, Any]:
+	"""Order the accounts for one job: the one whose spare quota expires soonest first.
 
-	Rank: the lowest ``max(five_hour, seven_day)`` strictly below ``gate``,
-	ties to the alphabetically first name, where a missing ``five_hour``
-	reading counts as no 5-hour limit (ranked by ``seven_day`` alone); then
-	accounts whose probe succeeded without a ``seven_day`` reading. A window at or over the gate, or a ``rejected``
-	status, gates the account; a probe error skips it. ``order`` lists every
-	usable account in that rank, so ``claude_run`` can move to the next one on
-	``usage_limit`` or ``auth_failed``. Verdicts when nothing is usable:
-	``no_accounts``, ``all_gated`` (``resets_at`` is the earliest time one is
-	usable again), ``auth_failed`` (only token failures), ``crashed``.
+	Every account strictly below ``gate`` is ranked in three groups, ties to
+	the alphabetically first name:
+
+	1. accounts with a 7-day reading and reset time, the highest
+	``(gate - seven_day) / hours until the 7-day reset`` first
+	(``_spare_per_hour``; ``now`` is epoch seconds, default the current
+	time);
+	2. accounts with a 7-day reading but no reset time, the lowest
+	``max(five_hour, seven_day)`` first, where a missing ``five_hour``
+	reading counts as no 5-hour limit;
+	3. accounts whose probe succeeded without a usable ``seven_day`` reading
+	(missing, or negative and so malformed).
+
+	A window at or over the gate, or a ``rejected`` status, gates the
+	account; a probe error skips it. ``order`` lists every usable account in
+	that rank, so ``claude_run`` can move to the next one on ``usage_limit``
+	or ``auth_failed``. ``utilization`` is ``max(five_hour, seven_day)`` of
+	the first account, ``None`` when it has no 7-day reading. Verdicts when
+	nothing is usable: ``no_accounts``, ``all_gated`` (``resets_at`` is the
+	earliest time one is usable again), ``auth_failed`` (only token
+	failures), ``crashed``.
 	"""
+	now = _now_seconds(now)
 	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
+	by_reset: list[tuple[float, str]] = []
 	eligible: list[tuple[float, str]] = []
+	peaks: dict[str, float] = {}
 	unknown: list[str] = []
 	gated: list[dict[str, Any]] = []
 	auth_failed: list[str] = []
@@ -785,13 +827,18 @@ def choose_account(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 		elif peak is None:
 			unknown.append(name)
 		else:
-			eligible.append((peak, name))
-	order = [name for _, name in sorted(eligible)] + unknown
+			peaks[name] = peak
+			spare = _spare_per_hour(probe, gate, now)
+			if spare is None:
+				eligible.append((peak, name))
+			else:
+				by_reset.append((-spare, name))
+	order = [name for _, name in sorted(by_reset)] + [name for _, name in sorted(eligible)] + unknown
 	verdict: dict[str, Any] = {
 		"outcome": "selected",
 		"account": order[0] if order else "",
 		"order": order,
-		"utilization": min(eligible)[0] if eligible else None,
+		"utilization": peaks.get(order[0]) if order else None,
 		"resets_at": None,
 		"gated": [probe.get("account") for probe in gated],
 		"auth_failed": auth_failed,

@@ -335,6 +335,11 @@ jobs:
           elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
             echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
             exit 1
+          elif [ "${resolver_rc}" -eq 2 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+            # Exit 2 = resolver API failure (retries exhausted or permanent error).
+            # With routing off, keep the legacy default-branch fallback, matching the exit-75 policy.
+            echo "::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
+            exit 1
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
@@ -685,6 +690,16 @@ jobs:
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
+          # SEC-002 (wfopt-2026-10-03-2): the title is attacker-influenced. A CR/LF
+          # in it would make the text after the line break a new GITHUB_ENV
+          # assignment. Titles are single-line by meaning, so replace CR/LF with
+          # spaces and keep the single-line NAME=value write (Telegram MSG and
+          # --issue-title consumers expect one line). Never log the title itself.
+          ISSUE_TITLE_SINGLE_LINE="$(printf '%s' "${ISSUE_TITLE}" | tr '\r\n' '  ')"
+          if [ "${ISSUE_TITLE_SINGLE_LINE}" != "${ISSUE_TITLE}" ]; then
+            echo "::warning::ISSUE_TITLE_NEWLINE_STRIPPED issue=${ISSUE_NUMBER_JSON}"
+            ISSUE_TITLE="${ISSUE_TITLE_SINGLE_LINE}"
+          fi
 
           # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
           # issue. It is NOT set as an env var to avoid repeated logging of

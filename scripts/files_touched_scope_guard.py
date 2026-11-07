@@ -102,12 +102,14 @@ Matching semantics (allowlist entry -> staged path):
 from __future__ import annotations
 
 import argparse
+import ast
 import fnmatch
 from functools import lru_cache
 import json
 import os
 from pathlib import PurePosixPath
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -725,6 +727,12 @@ PIPELINE_PLAN_GRANT_REASON = "pipeline_plan_grant"
 PIPELINE_PLAN_TOO_LARGE_REASON = "plan_too_large_for_grant"
 _PLAN_GRANT_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _PLAN_GRANT_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(\S+)")
+# The planner's metadata lines (mode-plan.txt items 7-10). A plan sometimes
+# puts them right under the Files bullets with no heading in between,
+# sometimes as a list item, possibly nested at any indent.
+_PLAN_FILES_METADATA_RE = re.compile(
+	r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\*\*|__)?(?:Scope-mode(?: justification)?|Reuse-audit|Implementation-time estimate)(?:\*\*|__)?\s*:",
+	re.IGNORECASE)
 _PLAN_GRANT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@+-]+$")
 # A root file is any name with a letter-led extension (the same rule as a
 # nested last segment), so a planned `main.c` or `app.php` is never left out of
@@ -790,7 +798,23 @@ def extract_plan_file_paths(plan_text: str) -> list[str]:
 		return []
 	seen: set[str] = set()
 	paths: list[str] = []
+	skip_indent: int | None = None
 	for line in section.splitlines():
+		# A planner metadata line and its prose continuation are skipped: the
+		# prose names files the plan chose not to change (consumer
+		# tele-funtoken-msg-scoring #5101). Reading resumes at a blank line or
+		# at a list item no deeper than the metadata line, so files listed
+		# before or after the metadata are still checked. The protected-path
+		# scan still reads the whole section.
+		indent = len(line) - len(line.lstrip())
+		if _PLAN_FILES_METADATA_RE.match(line):
+			skip_indent = indent
+			continue
+		if skip_indent is not None:
+			if not line.strip() or (_PLAN_GRANT_BULLET_RE.match(line) and indent <= skip_indent):
+				skip_indent = None
+			else:
+				continue
 		candidates = _PLAN_GRANT_BACKTICK_RE.findall(line)
 		# The bullet's first token counts even when the line also has
 		# backticked spans (`- README.md — use `parse()``): otherwise a
@@ -1167,11 +1191,37 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 			# them back from the Files section: a heal plan never approves a
 			# path set it cannot name exactly.
 			loose: list[str] = []
+			heal_skip_indent: int | None = None
 			for line in (_plan_files_section(plan_text) or "").splitlines():
-				raw_tokens = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
 				bullet = _PLAN_GRANT_BULLET_RE.match(line)
-				if bullet:
-					raw_tokens.append((bullet.group(1), False))
+				# Skip planner metadata the way extract_plan_file_paths does: its
+				# prose names files the plan chose not to change (#5101).
+				line_indent = len(line) - len(line.lstrip())
+				if _PLAN_FILES_METADATA_RE.match(line):
+					heal_skip_indent = line_indent
+					continue
+				in_metadata = False
+				if heal_skip_indent is not None:
+					if not line.strip() or (bullet and line_indent <= heal_skip_indent):
+						heal_skip_indent = None
+					else:
+						in_metadata = True
+				if in_metadata:
+					# Only a nested bullet that starts with a file is checked
+					# (fail closed); prose lines and mid-line spans are not.
+					if not bullet:
+						continue
+					lead_span = re.match(r"`([^`\n]+)`", bullet.group(1).lstrip("*_"))
+					raw_tokens = [(lead_span.group(1), True)] if lead_span else [(bullet.group(1), False)]
+					if _plan_grant_path(raw_tokens[0][0].strip()) or "/" in raw_tokens[0][0]:
+						# A bullet that starts with a file or a path-shaped
+						# token (`docs/guide`) lists files: check its other
+						# backticked spans too (fail closed).
+						raw_tokens += [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
+				else:
+					raw_tokens = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
+					if bullet:
+						raw_tokens.append((bullet.group(1), False))
 				for raw, backticked in raw_tokens:
 					raw = raw.strip()
 					if not backticked:
@@ -1194,6 +1244,11 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 					# extensionless `docs/guide`) so the scope check sees them.
 					if globlike or ("/" in token and "`" not in token and not _plan_grant_path(token)):
 						loose.append(token)
+					elif _plan_grant_path(token):
+						# extract_plan_file_paths skips a bullet nested under a
+						# planner metadata line, backticked or not; check it
+						# here (fail closed).
+						loose.append(_plan_grant_path(token))
 			candidates: list[str] = []
 			for path in files + protected + loose:
 				if path not in candidates:
@@ -1209,6 +1264,380 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
 		"log_paths": plan_gate_log_paths(denied or protected)}
 	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
+
+
+# Test-only heal plans (#8809). The heal counterfactual gate (#8249) holds a
+# plan whose HEAL_COUNTERFACTUAL line is UNVERIFIED, which is what a plan for a
+# flake always says. A second check approves such a plan when its Files section
+# lists only exact `tests/` files and `changelog.d/*.md` fragments inside the
+# verified heal scope (run_heal_plan_scope_gate decides exactness and scope).
+# The approver then posts the marker below before `/approved`, and the
+# implement preflight narrows the heal scope to the marker's paths
+# (run_heal_test_only_lock_scope); heal_isolated_implement.sh refuses an edit
+# that deletes a file, drops tests or asserts, or adds a skip
+# (run_heal_test_only_weakening_check).
+HEAL_TEST_ONLY_APPROVE_REASON = "test_only_paths"
+HEAL_TEST_ONLY_MAX_PATHS = 50
+HEAL_TEST_ONLY_MARKER_MAX_CHARS = 4000
+HEAL_TEST_ONLY_FILE_MAX_BYTES = 2 * 1024 * 1024
+HEAL_TEST_ONLY_PLAN_MARKER_LINE = "<!-- ai:plan-proposal:v1 -->"
+# The transfer's --scope-file accepts exact entries in [A-Za-z0-9_./-] only, so
+# a test-only path is held to that alphabet as well.
+_HEAL_TEST_ONLY_PATH_RE = re.compile(r"(?:tests/[A-Za-z0-9_./-]+|changelog\.d/[A-Za-z0-9_.-]+\.md)")
+_HEAL_TEST_ONLY_MARKER_RE = re.compile(
+	r"<!-- ai:heal-test-only-approval:v1 issue=([1-9][0-9]{0,9}) plan_comment=([1-9][0-9]{0,19}) paths=([^\s<>]+) -->")
+_HEAL_TEST_ONLY_ISSUE_RE = re.compile(r"[1-9][0-9]{0,9}")
+_HEAL_TEST_ONLY_COMMENT_RE = re.compile(r"[1-9][0-9]{0,19}")
+
+
+def heal_test_only_path_ok(path: object) -> bool:
+	"""True for an exact ``tests/`` file or ``changelog.d/*.md`` fragment."""
+	return isinstance(path, str) and bool(_HEAL_TEST_ONLY_PATH_RE.fullmatch(path)) and _plan_grant_path(path) == path
+
+
+def heal_test_only_marker(issue_number: str, plan_comment_id: str, paths: list[str]) -> str:
+	return (f"<!-- ai:heal-test-only-approval:v1 issue={issue_number} plan_comment={plan_comment_id} "
+		f"paths={','.join(paths)} -->")
+
+
+def run_heal_test_only_check(plan_file: str, heal_scope_file: str, flag_value: str, issue_number: str,
+	plan_comment_id: str) -> tuple[dict, int]:
+	"""Approve an UNVERIFIED heal plan that lists only exact test/changelog files; every error holds."""
+	flag = (flag_value or "").strip().lower()
+	flag_invalid = flag not in {"", "true", "false"}
+	number = str(issue_number or "").strip()
+	comment = str(plan_comment_id or "").strip()
+	paths: list[str] = []
+	marker = ""
+	decision = PLAN_DECISION_HOLD
+	try:
+		if flag == "false":
+			reason = "gate_disabled"
+		elif not _HEAL_TEST_ONLY_ISSUE_RE.fullmatch(number) or not _HEAL_TEST_ONLY_COMMENT_RE.fullmatch(comment):
+			reason = "plan_comment_unknown"
+		else:
+			scope_record, _ = run_heal_plan_scope_gate(plan_file, heal_scope_file, "false", number)
+			scope_reason = scope_record.get("reason")
+			if scope_reason in {"plan_gate_error", "heal_scope_check_unavailable"}:
+				reason = scope_reason
+			elif scope_record.get("protected_paths"):
+				reason = "path_not_test_only"
+			elif scope_reason in {"heal_scope_plan_paths_missing", HEAL_PLAN_NO_CHANGES_REASON}:
+				reason = "plan_paths_missing"
+			elif scope_reason == "heal_scope_plan_out_of_scope":
+				denied = scope_record.get("denied_paths") or []
+				reason = "path_not_exact" if any(path.endswith("/") or any(char in path for char in _GLOB_CHARS)
+					for path in denied) else "path_out_of_heal_scope"
+			elif scope_reason != HEAL_PLAN_APPROVE_REASON:
+				reason = "plan_gate_error"
+			else:
+				with open(plan_file, encoding="utf-8") as handle:
+					listed = extract_plan_file_paths(handle.read())
+				candidate = heal_test_only_marker(number, comment, listed)
+				if not listed:
+					reason = "plan_paths_missing"
+				elif not all(heal_test_only_path_ok(path) for path in listed) \
+					or any(path.rsplit("/", 1)[-1] in _HEAL_PYTEST_CONFIG_NAMES for path in listed):
+					# A pytest config file passes the path check but the
+					# implement lock always refuses changing it.
+					reason = "path_not_test_only"
+				elif len(listed) > HEAL_TEST_ONLY_MAX_PATHS or len(candidate) > HEAL_TEST_ONLY_MARKER_MAX_CHARS:
+					reason = "too_many_paths"
+				else:
+					decision, reason, paths, marker = PLAN_DECISION_APPROVE, HEAL_TEST_ONLY_APPROVE_REASON, listed, candidate
+	except (OSError, UnicodeDecodeError, ValueError, TypeError):
+		decision, reason, paths, marker = PLAN_DECISION_HOLD, "plan_gate_error", [], ""
+	record = {"decision": decision, "reason": reason, "paths": paths, "marker": marker, "flag_invalid": flag_invalid}
+	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
+
+
+def _heal_test_only_comment_login(comment: dict) -> str:
+	user = comment.get("user")
+	login = user.get("login") if isinstance(user, dict) else ""
+	return login if isinstance(login, str) else ""
+
+
+def _heal_test_only_trusted(comment: dict, pipeline_login: str) -> bool:
+	login = _heal_test_only_comment_login(comment)
+	association = comment.get("author_association")
+	association = association.upper() if isinstance(association, str) else ""
+	return (login != "" and login == pipeline_login) or login.endswith("[bot]") \
+		or association in TRUSTED_AUTHOR_ASSOCIATIONS
+
+
+def _heal_test_only_created(comment: dict) -> str:
+	created = comment.get("created_at")
+	return created if isinstance(created, str) else ""
+
+
+def run_heal_test_only_lock_scope(comments_file: str, issue_number: str, pipeline_login: str, heal_scope_file: str,
+	lock_out: str) -> tuple[dict, int]:
+	"""Narrow a heal scope to the trusted test-only approval marker of the latest plan.
+
+	Returns ({"status": "none"}, 0) when the latest pipeline plan has no
+	trusted marker, ({"status": "locked", ...}, 0) after writing the marker's
+	paths to ``lock_out``, and ({"status": "invalid", "reason": ...}, 30)
+	for anything else (fail closed).
+	"""
+	try:
+		number = str(issue_number or "").strip()
+		if not _HEAL_TEST_ONLY_ISSUE_RE.fullmatch(number) or not LOGIN_RE.fullmatch(pipeline_login or ""):
+			return {"status": "invalid", "reason": "lock_scope_input_invalid"}, EXIT_AUTOMATION_UNGRANTED
+		with open(comments_file, encoding="utf-8") as handle:
+			comments = json.load(handle)
+		if not isinstance(comments, list):
+			return {"status": "invalid", "reason": "comments_unreadable"}, EXIT_AUTOMATION_UNGRANTED
+		comments = [comment for comment in comments if isinstance(comment, dict)]
+		# The latest plan: the poller's rule (pipeline login, a trimmed
+		# `<!-- ai:plan-proposal:v1 -->` line, newest created_at).
+		plans = [comment for comment in comments if _heal_test_only_comment_login(comment) == pipeline_login
+			and isinstance(comment.get("body"), str)
+			and any(line.rstrip("\r").strip(" \t") == HEAL_TEST_ONLY_PLAN_MARKER_LINE for line in comment["body"].split("\n"))]
+		if not plans:
+			return {"status": "none"}, EXIT_IN_SCOPE
+		plan = sorted(plans, key=_heal_test_only_created)[-1]
+		plan_id = str(plan.get("id") if plan.get("id") is not None else plan.get("databaseId") or "")
+		if not _HEAL_TEST_ONLY_COMMENT_RE.fullmatch(plan_id):
+			return {"status": "none"}, EXIT_IN_SCOPE
+		raw_paths = ""
+		for comment in sorted(comments, key=_heal_test_only_created):
+			body = comment.get("body")
+			if not isinstance(body, str) or not _heal_test_only_trusted(comment, pipeline_login):
+				continue
+			for match in _HEAL_TEST_ONLY_MARKER_RE.finditer(body):
+				if match.group(1) == number and match.group(2) == plan_id:
+					raw_paths = match.group(3)
+		if not raw_paths:
+			return {"status": "none"}, EXIT_IN_SCOPE
+		scope = normalize_allowlist(_read_allowlist(heal_scope_file)) if heal_scope_file else []
+		if not scope:
+			return {"status": "invalid", "reason": "heal_scope_unavailable"}, EXIT_AUTOMATION_UNGRANTED
+		paths: list[str] = []
+		for path in raw_paths.split(","):
+			if not heal_test_only_path_ok(path):
+				return {"status": "invalid", "reason": "path_not_test_only"}, EXIT_AUTOMATION_UNGRANTED
+			if not path_in_scope(path, scope, allow_lockfiles=False):
+				return {"status": "invalid", "reason": "path_out_of_heal_scope"}, EXIT_AUTOMATION_UNGRANTED
+			if path not in paths:
+				paths.append(path)
+		if not paths or len(paths) > HEAL_TEST_ONLY_MAX_PATHS:
+			return {"status": "invalid", "reason": "too_many_paths"}, EXIT_AUTOMATION_UNGRANTED
+		with open(lock_out, "w", encoding="utf-8") as handle:
+			handle.write("\n".join(paths) + "\n")
+		return {"status": "locked", "plan_comment": plan_id, "count": len(paths)}, EXIT_IN_SCOPE
+	except Exception:  # noqa: BLE001 - every error fails closed
+		return {"status": "invalid", "reason": "lock_scope_error"}, EXIT_AUTOMATION_UNGRANTED
+
+
+class _HealWeakeningRefused(Exception):
+	def __init__(self, reason: str, path: str) -> None:
+		super().__init__(reason)
+		self.reason = reason
+		self.path = path
+
+
+def _heal_test_only_read(root: str, rel: str) -> bytes | None:
+	"""Bytes of ``root/rel`` (None when missing); refuses symlinks, non-files and oversize files."""
+	current = root
+	segments = rel.split("/")
+	for index, segment in enumerate(segments):
+		current = os.path.join(current, segment)
+		try:
+			info = os.lstat(current)
+		except FileNotFoundError:
+			return None
+		if stat.S_ISLNK(info.st_mode):
+			raise _HealWeakeningRefused("unreadable", rel)
+		if index < len(segments) - 1 and not stat.S_ISDIR(info.st_mode):
+			raise _HealWeakeningRefused("unreadable", rel)
+	if not stat.S_ISREG(info.st_mode) or info.st_size > HEAL_TEST_ONLY_FILE_MAX_BYTES:
+		raise _HealWeakeningRefused("unreadable", rel)
+	with open(current, "rb") as handle:
+		data = handle.read(HEAL_TEST_ONLY_FILE_MAX_BYTES + 1)
+	if len(data) > HEAL_TEST_ONLY_FILE_MAX_BYTES:
+		raise _HealWeakeningRefused("unreadable", rel)
+	return data
+
+
+_HEAL_SKIP_NAMES = frozenset({"pytest.skip", "pytest.mark.skip", "pytest.mark.skipif", "pytest.xfail", "pytest.mark.xfail",
+	"pytest.importorskip", "pytest.exit", "pytest.hookimpl", "self.skipTest", "unittest.SkipTest", "unittest.expectedFailure",
+	"unittest.case.SkipTest", "unittest.case.expectedFailure",
+	# Process exits end pytest with status 0 before any test runs.
+	"sys.exit", "os._exit", "exit", "quit", "SystemExit", "builtins.exit", "builtins.quit", "os.abort", "os.kill",
+	# Dynamic dispatch can reach any of the above without naming it.
+	"exec", "eval", "compile", "__import__", "builtins.__import__", "importlib.import_module", "importlib.__import__",
+	"vars", "globals", "locals", "builtins.vars", "builtins.globals", "builtins.locals"})
+# Internal pytest spellings of skip/xfail/exit, reached through import aliases.
+_HEAL_SKIP_PREFIXES = ("unittest.skip", "unittest.case.skip", "_pytest.outcomes", "_pytest.skipping", "_pytest.mark",
+	"os.exec", "os.spawn")
+# An attribute of a computed object (`__import__("os")._exit`) is counted by name.
+_HEAL_DYNAMIC_ATTRS = frozenset({"_exit", "exit", "abort", "kill", "skip", "xfail", "skipTest", "importorskip"})
+# Attributes that add markers at runtime or reach a module namespace by name
+# (`request.node.add_marker("xfail")`, `pytest.mark.__getattr__("skip")`,
+# `os.__dict__["_exit"]`) are counted whatever their root is.
+_HEAL_MARKER_ATTRS = frozenset({"add_marker", "applymarker", "__getattr__", "__getattribute__", "__dict__", "__getitem__"})
+# Star imports from these modules hide which bare names resolve to a control.
+_HEAL_STAR_MODULE_ROOTS = frozenset({"os", "sys", "builtins", "pytest", "_pytest", "unittest", "importlib"})
+_HEAL_COLLECTION_NAMES = frozenset({"__test__", "collect_ignore", "collect_ignore_glob", "pytest_plugins", "pytestmark"})
+_HEAL_COLLECTION_HOOKS = frozenset({"pytest_collection_modifyitems", "pytest_ignore_collect"})
+_HEAL_PYTEST_CONFIG_NAMES = frozenset({"pytest.toml", ".pytest.toml", "pytest.ini", ".pytest.ini", "tox.ini", "setup.cfg",
+	"pyproject.toml"})
+
+
+def _heal_dotted(node: ast.AST, aliases: dict[str, str]) -> str:
+	parts: list[str] = []
+	while isinstance(node, ast.Attribute):
+		parts.append(node.attr)
+		node = node.value
+	if not isinstance(node, ast.Name):
+		return ""
+	parts.append(aliases.get(node.id, node.id))
+	return ".".join(reversed(parts))
+
+
+def _heal_test_only_counts(tree: ast.Module, count_tests: bool) -> dict:
+	"""Tests, asserts and skip/exit/collection-control uses in one parsed test file.
+
+	``controls`` counts each kind of control separately per enclosing
+	top-level scope (function, class or ``Class.method``), so removing one
+	(an old skip) cannot pay for adding another (a process exit), and moving
+	an existing skip onto another test counts as an added skip; ``skips``
+	is their total.
+	"""
+	aliases: dict[str, str] = {}
+	controls: dict[str, int] = {}
+	scopes: dict[int, str] = {}
+	for top in tree.body:
+		top_scope = top.name if isinstance(top, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) else "<module>"
+		for leaf in ast.walk(top):
+			scopes[id(leaf)] = top_scope
+		if isinstance(top, ast.ClassDef):
+			for item in top.body:
+				if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+					for leaf in ast.walk(item):
+						scopes[id(leaf)] = f"{top.name}.{item.name}"
+
+	def control(kind: str, node: ast.AST) -> None:
+		key = f"{scopes.get(id(node), '<module>')}|{kind}"
+		controls[key] = controls.get(key, 0) + 1
+
+	for node in ast.walk(tree):
+		if isinstance(node, ast.Import):
+			for alias in node.names:
+				if alias.asname:
+					aliases[alias.asname] = alias.name
+		elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+			for alias in node.names:
+				if alias.name == "*" and node.module.split(".", 1)[0] in _HEAL_STAR_MODULE_ROOTS:
+					control(f"star:{node.module}", node)
+				aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+	# `SystemExit` caught or expected (`except SystemExit`, `pytest.raises(SystemExit)`,
+	# `isinstance(e, SystemExit)`) checks an exit; it does not cause one. Only the
+	# operand itself (or a direct tuple element) is exempt, never a nested expression.
+	exempt: set[int] = set()
+	for node in ast.walk(tree):
+		checked: list[ast.AST] = []
+		if isinstance(node, ast.ExceptHandler) and node.type is not None:
+			checked = [node.type]
+		elif isinstance(node, ast.Call) and node.args and _heal_dotted(node.func, aliases) in {"pytest.raises",
+			"isinstance", "issubclass", "self.assertRaises", "self.assertRaisesRegex"}:
+			checked = node.args[1:2] if _heal_dotted(node.func, aliases) in {"isinstance", "issubclass"} else node.args[:1]
+		for item in checked:
+			for leaf in (item.elts if isinstance(item, ast.Tuple) else [item]):
+				if isinstance(leaf, (ast.Name, ast.Attribute)) and _heal_dotted(leaf, aliases) == "SystemExit":
+					exempt.add(id(leaf))
+	# Same-file exception classes that raise an exit when called.
+	exit_classes = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+		and any(_heal_dotted(base, aliases) in {"SystemExit", "BaseException", "KeyboardInterrupt"} for base in node.bases)}
+	functions = classes = asserts = 0
+	if count_tests:
+		for node in tree.body:
+			if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+				functions += 1
+			elif isinstance(node, ast.ClassDef) and (node.name.startswith("Test")
+				or any(_heal_dotted(base, aliases).endswith("TestCase") for base in node.bases)):
+				# pytest also collects test_* methods of any unittest.TestCase subclass.
+				classes += sum(1 for item in node.body
+					if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith("test_"))
+	for node in ast.walk(tree):
+		if isinstance(node, ast.Assert):
+			asserts += 1
+		elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+			and isinstance(node.func.value, ast.Name) and node.func.value.id == "self" and node.func.attr.startswith("assert"):
+			asserts += 1
+		if isinstance(node, (ast.Attribute, ast.Name)) and id(node) not in exempt:
+			dotted = _heal_dotted(node, aliases)
+			if dotted in _HEAL_SKIP_NAMES or dotted.startswith(_HEAL_SKIP_PREFIXES):
+				control(dotted, node)
+			elif isinstance(node, ast.Name) and node.id in exit_classes:
+				control(f"exit_class:{node.id}", node)
+			elif isinstance(node, ast.Attribute) and node.attr in _HEAL_MARKER_ATTRS:
+				control(f"attr:{node.attr}", node)
+			elif not dotted and isinstance(node, ast.Attribute) and node.attr in _HEAL_DYNAMIC_ATTRS:
+				control(f"dynamic:{node.attr}", node)
+		if isinstance(node, ast.Call) and _heal_dotted(node.func, aliases) in {"getattr", "builtins.getattr"} and len(node.args) >= 2:
+			target = _heal_dotted(node.args[0], aliases).split(".", 1)[0]
+			name = node.args[1]
+			if target in _HEAL_STAR_MODULE_ROOTS or not (isinstance(name, ast.Constant) and isinstance(name.value, str)) \
+				or name.value in _HEAL_DYNAMIC_ATTRS:
+				control("getattr", node)
+		# An empty (or non-literal) parameter set makes pytest skip the test.
+		if isinstance(node, ast.Call) and _heal_dotted(node.func, aliases) in {"pytest.mark.parametrize", "_pytest.mark.parametrize"}:
+			values = node.args[1] if len(node.args) >= 2 else next(
+				(kw.value for kw in node.keywords if kw.arg == "argvalues"), None)
+			if not isinstance(values, (ast.List, ast.Tuple)) or not values.elts:
+				control("parametrize_empty", node)
+		if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+			targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+			for target in targets:
+				for leaf in ast.walk(target):
+					if isinstance(leaf, ast.Name) and leaf.id in _HEAL_COLLECTION_NAMES:
+						control(f"assign:{leaf.id}", leaf)
+					elif isinstance(leaf, ast.Attribute) and leaf.attr in _HEAL_COLLECTION_NAMES:
+						control(f"assign:{leaf.attr}", leaf)
+		# Any pytest_* hook (e.g. pytest_runtest_makereport rewriting outcomes) is a collection/run control.
+		if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+			and (node.name in _HEAL_COLLECTION_HOOKS or node.name.startswith("pytest_")):
+			control(f"hook:{node.name}", node)
+	return {"test_functions": functions, "test_methods": classes, "asserts": asserts,
+		"skips": sum(controls.values()), "controls": controls}
+
+
+def run_heal_test_only_weakening_check(lock_file: str, base_dir: str, edited_dir: str) -> tuple[dict, int]:
+	"""Refuse a locked test-only heal edit that deletes a file or weakens a test; every error refuses."""
+	path = ""
+	try:
+		locked = [line.strip() for line in _read_text_file(lock_file).splitlines() if line.strip()]
+		if not locked or not base_dir or not edited_dir:
+			raise _HealWeakeningRefused("lock_unavailable", "")
+		for path in locked:
+			if not heal_test_only_path_ok(path):
+				raise _HealWeakeningRefused("lock_invalid", path)
+			base = _heal_test_only_read(base_dir, path)
+			edited = _heal_test_only_read(edited_dir, path)
+			if base is not None and edited is None:
+				raise _HealWeakeningRefused("file_deleted", path)
+			# pytest config files can deselect or skip tests and cannot be checked with ast.
+			if path.rsplit("/", 1)[-1] in _HEAL_PYTEST_CONFIG_NAMES and edited is not None and edited != base:
+				raise _HealWeakeningRefused("pytest_config_changed", path)
+			if not (path.startswith("tests/") and path.endswith(".py")) or edited is None:
+				continue
+			count_tests = path.rsplit("/", 1)[-1].startswith("test_")
+			try:
+				before = _heal_test_only_counts(ast.parse(base or b"", filename=path), count_tests)
+				after = _heal_test_only_counts(ast.parse(edited, filename=path), count_tests)
+			except (SyntaxError, ValueError):
+				raise _HealWeakeningRefused("parse_error", path) from None
+			for key in ("test_functions", "test_methods", "asserts"):
+				if after[key] < before[key]:
+					raise _HealWeakeningRefused(f"{key}_dropped", path)
+			if any(count > before["controls"].get(kind, 0) for kind, count in after["controls"].items()):
+				raise _HealWeakeningRefused("skip_added", path)
+	except _HealWeakeningRefused as refused:
+		return {"decision": "refuse", "reason": refused.reason, "path": refused.path}, EXIT_AUTOMATION_UNGRANTED
+	except Exception:  # noqa: BLE001 - every error refuses
+		return {"decision": "refuse", "reason": "weakening_check_error", "path": path}, EXIT_AUTOMATION_UNGRANTED
+	return {"decision": "allow", "reason": "no_weakening", "path": ""}, EXIT_IN_SCOPE
 
 
 def _read_text_file(path: str) -> str:
@@ -1253,7 +1682,36 @@ def main(argv: list[str] | None = None) -> int:
 		help="plan gate: write the proposed pipeline plan grant body here (Q108)")
 	parser.add_argument("--heal-scope-file", default="",
 		help="plan gate: verified workflow-heal scope paths; approve only inside them, never write a grant (#7444)")
+	parser.add_argument("--heal-test-only-check", action="store_true",
+		help="#8809: approve an UNVERIFIED heal plan listing only exact tests/ and changelog.d/*.md files")
+	parser.add_argument("--heal-test-only-lock-scope", action="store_true",
+		help="#8809: narrow the heal scope to the latest plan's trusted test-only approval marker")
+	parser.add_argument("--heal-test-only-weakening-check", action="store_true",
+		help="#8809: refuse a locked test-only edit that deletes files or weakens tests")
+	parser.add_argument("--plan-comment-id", default="")
+	parser.add_argument("--comments-file", default="")
+	parser.add_argument("--lock-out", default="")
+	parser.add_argument("--lock-file", default="")
+	parser.add_argument("--base-dir", default="")
+	parser.add_argument("--edited-dir", default="")
 	args = parser.parse_args(argv)
+	if args.heal_test_only_check:
+		record, code = run_heal_test_only_check(args.plan_file, args.heal_scope_file, args.flag_enabled,
+			args.issue_number, args.plan_comment_id)
+		sys.stdout.write(json.dumps(record) + "\n")
+		return code
+	if args.heal_test_only_lock_scope:
+		record, code = run_heal_test_only_lock_scope(args.comments_file, args.issue_number, args.pipeline_login,
+			args.heal_scope_file, args.lock_out)
+		sys.stdout.write(json.dumps(record) + "\n")
+		return code
+	if args.heal_test_only_weakening_check:
+		record, code = run_heal_test_only_weakening_check(args.lock_file, args.base_dir, args.edited_dir)
+		sys.stdout.write(json.dumps(record) + "\n")
+		if code != EXIT_IN_SCOPE:
+			safe_path = _PLAN_LOG_UNSAFE_RE.sub("", record.get("path") or "")[:300] or "none"
+			print(f"reason={record['reason']} path={safe_path}", file=sys.stderr)
+		return code
 	if args.plan_auto_approval_gate and args.heal_scope_file:
 		record, code = run_heal_plan_scope_gate(args.plan_file, args.heal_scope_file, args.flag_enabled,
 			args.issue_number, args.allow_workflow_edits)

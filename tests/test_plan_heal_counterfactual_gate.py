@@ -360,10 +360,15 @@ gh() {
   elif [ "$2" = "user" ]; then
     printf '%s\\n' pipeline-bot
   elif [ "$2" = "graphql" ]; then
-    return 1
+    printf 'graphql\\n' >> "${POST_LOG}.reads"
+    [ -n "${GRAPHQL_RESPONSE:-}" ] || return 1
+    printf '%s' "${GRAPHQL_RESPONSE}"
   elif [ "$2" = "--paginate" ]; then
     printf '%s' "${COMMENTS_RESPONSE}"
   else
+    if [ -n "${FAIL_MARKER_POST:-}" ] && [[ "$*" == *"ai:heal-test-only-approval:v1"* ]]; then
+      return 1
+    fi
     printf '%s\\n<<END>>\\n' "$*" >> "${POST_LOG}"
   fi
 }
@@ -376,7 +381,7 @@ def _jq_available() -> bool:
 
 
 def _run_step(issue: dict, plan_text: str, *, flag: str | None = None, comments: list | None = None,
-	heal_route: str = "false", copy_parser: bool = True) -> dict:
+	heal_route: str = "false", copy_parser: bool = True, extra_env: dict | None = None) -> dict:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "scripts").mkdir()
@@ -388,21 +393,26 @@ def _run_step(issue: dict, plan_text: str, *, flag: str | None = None, comments:
 		(root / "plan.txt").write_text(plan_text, encoding="utf-8")
 		env = {name: value for name, value in os.environ.items()
 			if name not in ("BASH_ENV", "ENV", "HEAL_COUNTERFACTUAL_GATE_ENABLED", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED",
-				"HEAL_ROUTE", "PLAN_COMMENT_ID", "GITHUB_STEP_SUMMARY", "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED")}
+				"HEAL_ROUTE", "PLAN_COMMENT_ID", "GITHUB_STEP_SUMMARY", "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED",
+				"HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED", "GRAPHQL_RESPONSE", "FAIL_MARKER_POST")}
 		env.update({"GITHUB_OUTPUT": str(root / "output"), "PLAN_STEP_REPO": "owner/repo", "ISSUE_NUMBER": "123",
 			"ISSUE_RESPONSE": json.dumps(issue), "COMMENTS_RESPONSE": json.dumps(comments or []),
 			"POST_LOG": str(root / "posts"), "AUTO_IMPLEMENT_ON_CLEAR_PLAN": "true", "CODEX_OUTPUT_FILE": str(root / "plan.txt"),
 			"RUNNER_TEMP": str(root), "PLAN_COMMENT_ID": "555", "HEAL_ROUTE": heal_route})
 		if flag is not None:
 			env["HEAL_COUNTERFACTUAL_GATE_ENABLED"] = flag
+		env.update(extra_env or {})
 		proc = subprocess.run(["bash", "-c", _step_run("Auto-approve clear plan")], cwd=root, env=env, text=True,
 			capture_output=True, check=False)
 		assert proc.returncode == 0, proc.stdout + proc.stderr
 		posts_text = (root / "posts").read_text(encoding="utf-8") if (root / "posts").exists() else ""
 		posts = [entry for entry in posts_text.split("\n<<END>>\n") if entry.strip()]
+		reads_file = root / "posts.reads"
 		return {"stdout": proc.stdout, "output": (root / "output").read_text(encoding="utf-8"),
 			"approvals": [p for p in posts if "/approved [auto-approved-by-plan]" in p],
-			"holds": [p for p in posts if "<!-- ai:heal-counterfactual-hold:v1 " in p]}
+			"holds": [p for p in posts if "<!-- ai:heal-counterfactual-hold:v1 " in p],
+			"markers": [p for p in posts if "<!-- ai:heal-test-only-approval:v1 " in p], "posts": posts,
+			"graphql_reads": reads_file.read_text(encoding="utf-8").count("graphql") if reads_file.exists() else 0}
 
 
 def _skip_without_jq() -> bool:
@@ -558,6 +568,163 @@ def test_poller_wiring() -> None:
 	workflow = POLL_WF.read_text(encoding="utf-8")
 	assert " pr_dependency.py partial_delivery.py pr_checks_lib.sh " in workflow
 	assert workflow.count("HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}") == 5
+
+
+# --- test-only heal plans (issue #8809) -------------------------------------
+
+_HEAL_SCOPE_MARKER = "<!-- ai:workflow-heal-scope:v1 paths=scripts/fix.py,tests/**,changelog.d/*.md runs=owner/repo:500 -->"
+_HEAL_LIVE = json.dumps({"data": {"repository": {"issue": {"body": "Heal this.\n" + _HEAL_SCOPE_MARKER + "\n",
+	"lastEditedAt": None, "author": {"login": "pipeline-bot"}, "labels": {"nodes": [{"name": "ai:workflow-heal"}]}}}}})
+_UNVERIFIED_LINE = "HEAL_COUNTERFACTUAL: UNVERIFIED: the step timeline is missing"
+_TEST_ONLY_MARKER = ("<!-- ai:heal-test-only-approval:v1 issue=123 plan_comment=555 "
+	"paths=tests/test_flaky.py,changelog.d/123-flaky.md -->")
+
+
+def _files_plan(files: list[str], line: str | None = _UNVERIFIED_LINE) -> str:
+	parts = ["Implementation Plan", "", "## Files likely to change"] + [f"- `{path}`" for path in files]
+	parts += ["", "## Counterfactual check", "", "- job-a: walked the evidence.", ""]
+	if line is not None:
+		parts.append(line)
+	parts += ["", "STATUS: CLEAR", ""]
+	return "\n".join(parts)
+
+
+_TEST_ONLY_FILES = ["tests/test_flaky.py", "changelog.d/123-flaky.md"]
+
+
+def _run_test_only(plan_text: str, **kwargs) -> dict:
+	extra = {"GRAPHQL_RESPONSE": _HEAL_LIVE}
+	extra.update(kwargs.pop("extra_env", {}))
+	return _run_step(_HEAL_ISSUE, plan_text, extra_env=extra, **kwargs)
+
+
+def test_plan_step_approves_a_test_only_unverified_plan() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_test_only(_files_plan(_TEST_ONLY_FILES))
+	assert "gate=heal_counterfactual outcome=hold result=UNVERIFIED reason=unverified issue=123" in run["stdout"]
+	assert "AI_PHASE_GATE_V1 phase=plan gate=heal_test_only outcome=approve reason=test_only_paths issue=123" in run["stdout"]
+	assert "auto_approve_hold_reason" not in run["output"], run["stdout"]
+	assert run["holds"] == []
+	assert len(run["markers"]) == 1 and _TEST_ONLY_MARKER in run["markers"][0]
+	assert len(run["approvals"]) == 1
+	# The marker lands before /approved, and the heal scope is read once.
+	assert run["posts"].index(run["markers"][0]) < run["posts"].index(run["approvals"][0])
+	assert run["graphql_reads"] == 1
+
+
+def test_plan_step_test_only_check_holds() -> None:
+	if _skip_without_jq():
+		return
+	cases = [
+		(_files_plan(["tests/test_flaky.py", "scripts/fix.py"]), {}, "path_not_test_only"),
+		(_files_plan(["tests/test_flaky.py", "docs/guide.md"]), {}, "path_out_of_heal_scope"),
+		(_files_plan(_TEST_ONLY_FILES), {"HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED": "false"}, "gate_disabled"),
+		(_files_plan(_TEST_ONLY_FILES), {"GRAPHQL_RESPONSE": ""}, "heal_scope_unverified"),
+	]
+	for plan_text, extra, reason in cases:
+		run = _run_test_only(plan_text, extra_env=extra)
+		assert f"gate=heal_test_only outcome=hold reason={reason} issue=123" in run["stdout"], (reason, run["stdout"])
+		assert "auto_approve_hold_reason=heal_counterfactual_hold" in run["output"]
+		assert run["approvals"] == [] and run["markers"] == []
+		assert len(run["holds"]) == 1
+
+
+def test_plan_step_test_only_check_never_runs_for_fail_or_missing() -> None:
+	if _skip_without_jq():
+		return
+	for line in ("HEAL_COUNTERFACTUAL: FAIL: still times out", None):
+		run = _run_test_only(_files_plan(_TEST_ONLY_FILES, line=line))
+		assert "gate=heal_test_only" not in run["stdout"], run["stdout"]
+		assert "auto_approve_hold_reason=heal_counterfactual_hold" in run["output"]
+		assert run["approvals"] == [] and run["markers"] == []
+
+
+def test_plan_step_invalid_test_only_flag_stays_on() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_test_only(_files_plan(_TEST_ONLY_FILES), extra_env={"HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED": "banana"})
+	assert "::warning::HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED has invalid value; treating as true" in run["stdout"]
+	assert len(run["approvals"]) == 1
+
+
+def test_plan_step_marker_post_failure_holds() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_test_only(_files_plan(_TEST_ONLY_FILES), extra_env={"FAIL_MARKER_POST": "1"})
+	assert "gate=heal_test_only outcome=hold reason=marker_post_failed issue=123" in run["stdout"]
+	assert "auto_approve_hold_reason=heal_test_only_marker_failed" in run["output"]
+	assert run["approvals"] == []
+
+
+def _poller_function(name: str) -> str:
+	text = POLLER.read_text(encoding="utf-8")
+	start = text.index(f"\n{name}()")
+	return text[start:text.index("\n}\n", start) + 3]
+
+
+def _run_poller_test_only(plan_text: str, details: dict, *, flag: str = "true", plan_comment: str = "555") -> tuple[str, str]:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "scripts").mkdir()
+		for name in ("files_touched_scope_guard.py", "workflow_failure_heal.py"):
+			shutil.copy(SCRIPTS / name, root / "scripts" / name)
+		(root / "scripts" / "fn.sh").write_text(_poller_function("_plan_heal_test_only_check"), encoding="utf-8")
+		(root / "plan.txt").write_text(plan_text, encoding="utf-8")
+		script = ('source scripts/fn.sh\nrc=0\n_plan_heal_test_only_check 123 "$DETAILS" plan.txt pipeline-bot || rc=$?\n'
+			'echo "rc=${rc} decision=${HEAL_TEST_ONLY_GATE_DECISION} marker=${HEAL_TEST_ONLY_GATE_MARKER}"\n')
+		env = dict(os.environ, DETAILS=json.dumps(details), HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED=flag,
+			HEAL_CF_GATE_PLAN_COMMENT=plan_comment, RUNTIME_DIR=str(root))
+		proc = subprocess.run(["bash", "-c", script], cwd=root, env=env, text=True, capture_output=True, check=False)
+		return proc.stdout, proc.stderr
+
+
+_POLLER_DETAILS = {"123": {"body": "Heal this.\n" + _HEAL_SCOPE_MARKER + "\n", "author_login": "pipeline-bot",
+	"labels": ["ai:workflow-heal"], "labels_complete": True, "last_edited_at": None}}
+
+
+def test_poller_test_only_check_behaviour() -> None:
+	if _skip_without_jq():
+		return
+	out, err = _run_poller_test_only(_files_plan(_TEST_ONLY_FILES), _POLLER_DETAILS)
+	assert "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_test_only outcome=approve reason=test_only_paths issue=123" in out, out + err
+	assert f"rc=0 decision=approve marker={_TEST_ONLY_MARKER}" in out
+	held = [
+		(_files_plan(["tests/test_flaky.py", "scripts/fix.py"]), _POLLER_DETAILS, {}, "path_not_test_only"),
+		(_files_plan(_TEST_ONLY_FILES), _POLLER_DETAILS, {"flag": "false"}, "gate_disabled"),
+		(_files_plan(_TEST_ONLY_FILES), _POLLER_DETAILS, {"plan_comment": "unknown"}, "plan_comment_unknown"),
+		# An old details map without last_edited_at, or an edited body, holds.
+		(_files_plan(_TEST_ONLY_FILES), {"123": {k: v for k, v in _POLLER_DETAILS["123"].items() if k != "last_edited_at"}},
+			{}, "heal_scope_unverified"),
+		(_files_plan(_TEST_ONLY_FILES), {"123": dict(_POLLER_DETAILS["123"], last_edited_at="2026-11-01T00:00:00Z")},
+			{}, "heal_scope_unverified"),
+		(_files_plan(_TEST_ONLY_FILES), {"123": dict(_POLLER_DETAILS["123"], labels_complete=False)}, {}, "heal_scope_unverified"),
+	]
+	for plan_text, details, kwargs, reason in held:
+		out, err = _run_poller_test_only(plan_text, details, **kwargs)
+		assert f"gate=heal_test_only outcome=hold reason={reason} issue=123" in out, (reason, out + err)
+		assert "rc=1 decision=hold marker=" in out and "ai:heal-test-only-approval" not in out
+
+
+def test_test_only_wiring() -> None:
+	assert ("HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}"
+		in _step_env("Auto-approve clear plan"))
+	approve = _step_run("Auto-approve clear plan")
+	assert approve.index("--heal-test-only-check") < approve.index('plan_gate_file="${CODEX_OUTPUT_FILE:-}"')
+	assert approve.index("${heal_to_marker}") < approve.index("/approved [auto-approved-by-plan]")
+	workflow = POLL_WF.read_text(encoding="utf-8")
+	assert workflow.count("HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}") == 5
+	poller = POLLER.read_text(encoding="utf-8")
+	assert 'HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED="${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}"' in poller
+	details = _poller_function("_fetch_candidate_issue_details_graphql")
+	assert "\n          lastEditedAt\n" in details and "last_edited_at: (.value.lastEditedAt // null)," in details
+	cf = _poller_function("_plan_heal_counterfactual_check")
+	assert cf.index('HEAL_TEST_ONLY_GATE_MARKER=""') < cf.index('case "${route}" in')
+	assert cf.index('[ "${HEAL_CF_GATE_RESULT}" = "UNVERIFIED" ]') < cf.index("_plan_heal_test_only_check")
+	gate = _poller_function("_plan_auto_approval_gate")
+	marker_post = gate.index("${HEAL_TEST_ONLY_GATE_MARKER}\" >/dev/null")
+	assert marker_post < gate.index('if [ "${gate_decision}" = "approve" ]; then\n    return 0')
+	assert "reason=heal_test_only_marker_failed phase=${phase} action=none" in gate
 
 
 def main() -> int:

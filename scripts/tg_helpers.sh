@@ -448,6 +448,54 @@ _tg_newest_comments_json()
 }
 
 # ---------------------------------------------------------------
+# _tg_tracking_write — Write one tracking comment (PATCH append or POST
+# create) and report a failure instead of dropping it silently (BUG-004).
+# Captures only the HTTP status (`-o /dev/null -w '%{http_code}'`, bounded
+# by --max-time 30). On a non-2xx status or a curl failure it prints
+#   ::warning::TG_TRACKING_WRITE_FAILED issue=<n> op=<append|create> phase=<phase|none> msg_id=<id> http=<code>
+# to stderr (http=000 means transport failure or timeout). Only the
+# idempotent PATCH (op=append) is retried, once, after 2 seconds; a POST is
+# never retried because a timed-out POST may already have created the
+# comment. Prints nothing to stdout, never logs the URL, token or bodies,
+# and always returns 0 (best-effort).
+# Usage: _tg_tracking_write append 42 none 8 PATCH <url> <json_body>
+# ---------------------------------------------------------------
+_tg_tracking_write()
+{
+	local IFS=$' \t\n'
+	local op="$1" issue_num="$2" phase="$3" msg_id="$4" method="$5" url="$6" json_body="$7"
+	local max_attempts=1 attempt=1 rc=0 http_code=""
+	if [ "${op}" = "append" ] && [ "${method}" = "PATCH" ]; then
+		max_attempts=2
+	fi
+	while [ "${attempt}" -le "${max_attempts}" ]; do
+		rc=0
+		http_code=$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' -X "${method}" \
+			-H "Authorization: token ${GH_TOKEN}" \
+			-H "Accept: application/vnd.github.v3+json" \
+			"${url}" \
+			-d "${json_body}" 2>/dev/null) || rc=$?
+		if [ "${rc}" -eq 0 ] && [[ "${http_code}" =~ ^2[0-9][0-9]$ ]]; then
+			return 0
+		fi
+		[[ "${http_code}" =~ ^[0-9][0-9][0-9]$ ]] || http_code="000"
+		# A curl failure after headers arrived (e.g. --max-time mid-body) can
+		# still print the received status; report it as a transport failure.
+		if [ "${rc}" -ne 0 ]; then
+			http_code="000"
+		fi
+		if [ "${attempt}" -lt "${max_attempts}" ]; then
+			sleep 2 || true
+		fi
+		attempt=$((attempt + 1))
+	done
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || issue_num=0
+	[[ "${msg_id}" =~ ^[0-9]+$ ]] || msg_id=0
+	echo "::warning::TG_TRACKING_WRITE_FAILED issue=${issue_num} op=${op} phase=${phase} msg_id=${msg_id} http=${http_code}" >&2
+	return 0
+}
+
+# ---------------------------------------------------------------
 # tg_store_msg_id — Store a message ID on a GitHub issue comment.
 # Appends to an existing tracking comment if one exists, or
 # creates a new one.  Comment body pattern:
@@ -471,11 +519,8 @@ tg_store_msg_id()
 	comments_json=$(_tg_newest_comments_json "${issue_num}") || {
 		echo "::warning::Failed to fetch existing tracking comments for issue #${issue_num}; creating a new tracking comment" >&2
 		# Fallback: create a new tracking comment
-		curl -s -X POST \
-			-H "Authorization: token ${GH_TOKEN}" \
-			-H "Accept: application/vnd.github.v3+json" \
-			"${api_base}/${issue_num}/comments" \
-			-d "$(jq -n --arg b "<!-- tg_cleanup:${msg_id} -->" '{body: $b}')" >/dev/null 2>&1 || true
+		_tg_tracking_write create "${issue_num}" none "${msg_id}" POST "${api_base}/${issue_num}/comments" \
+			"$(jq -n --arg b "<!-- tg_cleanup:${msg_id} -->" '{body: $b}')"
 		return 0
 	}
 
@@ -499,18 +544,13 @@ tg_store_msg_id()
 		local new_body
 		new_body=$(printf '%s' "${tracking_body}" | \
 			sed "s/<!-- tg_cleanup:\([0-9,]*\) -->/<!-- tg_cleanup:\1,${msg_id} -->/")
-		curl -s -X PATCH \
-			-H "Authorization: token ${GH_TOKEN}" \
-			-H "Accept: application/vnd.github.v3+json" \
+		_tg_tracking_write append "${issue_num}" none "${msg_id}" PATCH \
 			"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${tracking_id}" \
-			-d "$(jq -n --arg b "${new_body}" '{body: $b}')" >/dev/null 2>&1 || true
+			"$(jq -n --arg b "${new_body}" '{body: $b}')"
 	else
 		# Create new tracking comment
-		curl -s -X POST \
-			-H "Authorization: token ${GH_TOKEN}" \
-			-H "Accept: application/vnd.github.v3+json" \
-			"${api_base}/${issue_num}/comments" \
-			-d "$(jq -n --arg b "<!-- tg_cleanup:${msg_id} -->" '{body: $b}')" >/dev/null 2>&1 || true
+		_tg_tracking_write create "${issue_num}" none "${msg_id}" POST "${api_base}/${issue_num}/comments" \
+			"$(jq -n --arg b "<!-- tg_cleanup:${msg_id} -->" '{body: $b}')"
 	fi
 }
 
@@ -551,11 +591,8 @@ tg_store_phase_msg_id()
 	local comments_json
 	comments_json=$(_tg_newest_comments_json "${issue_num}") || {
 		echo "::warning::Failed to fetch existing phase tracking comments for issue #${issue_num} phase=${phase}; creating a new tracking comment" >&2
-		curl -s -X POST \
-			-H "Authorization: token ${GH_TOKEN}" \
-			-H "Accept: application/vnd.github.v3+json" \
-			"${api_base}/${issue_num}/comments" \
-			-d "$(jq -n --arg b "<!-- tg_phase:${phase}:${msg_id} -->" '{body: $b}')" >/dev/null 2>&1 || true
+		_tg_tracking_write create "${issue_num}" "${phase}" "${msg_id}" POST "${api_base}/${issue_num}/comments" \
+			"$(jq -n --arg b "<!-- tg_phase:${phase}:${msg_id} -->" '{body: $b}')"
 		return 0
 	}
 
@@ -579,17 +616,12 @@ tg_store_phase_msg_id()
 		local new_body
 		new_body=$(printf '%s' "${tracking_body}" | \
 			sed "s/<!-- tg_phase:${phase}:\([0-9,]*\) -->/<!-- tg_phase:${phase}:\1,${msg_id} -->/")
-		curl -s -X PATCH \
-			-H "Authorization: token ${GH_TOKEN}" \
-			-H "Accept: application/vnd.github.v3+json" \
+		_tg_tracking_write append "${issue_num}" "${phase}" "${msg_id}" PATCH \
 			"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${tracking_id}" \
-			-d "$(jq -n --arg b "${new_body}" '{body: $b}')" >/dev/null 2>&1 || true
+			"$(jq -n --arg b "${new_body}" '{body: $b}')"
 	else
-		curl -s -X POST \
-			-H "Authorization: token ${GH_TOKEN}" \
-			-H "Accept: application/vnd.github.v3+json" \
-			"${api_base}/${issue_num}/comments" \
-			-d "$(jq -n --arg b "<!-- tg_phase:${phase}:${msg_id} -->" '{body: $b}')" >/dev/null 2>&1 || true
+		_tg_tracking_write create "${issue_num}" "${phase}" "${msg_id}" POST "${api_base}/${issue_num}/comments" \
+			"$(jq -n --arg b "<!-- tg_phase:${phase}:${msg_id} -->" '{body: $b}')"
 	fi
 }
 

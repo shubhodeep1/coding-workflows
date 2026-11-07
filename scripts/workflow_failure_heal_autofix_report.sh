@@ -49,6 +49,9 @@
 #   REPORT_SUMMARY_LINE_FILE               file holding the REVIEW_AUTOFIX_RUN_SUMMARY_V1 line
 #   AUTOFIX_EDITOR_EMPTY_NOOP, EDITOR_CHANGES_LOST, EDITOR_NOOP_REFUSAL,
 #   EDITOR_NOOP_SUSPICIOUS, RESOLVER_ESCALATED   run flags (true/false)
+#   CHANGES_LOST_REDISPATCHED              editor-changes-lost retry outcome; "true" or
+#                                          "skipped_peer_inflight" skips the report
+#                                          (a retry is already recovering the PR)
 #   EDITOR_PREFLIGHT_FAILED                the editor preflight failed (true/false); names
 #                                          the failure editor_preflight_failed ahead of the
 #                                          other flags (the editor never ran)
@@ -185,6 +188,19 @@ fi
 # capacity tracker and the hourly resume pass handle it, so no heal issue.
 if [ "${FAILURE_REASON}" = "claude_capacity" ]; then
 	log "skip reason=claude_capacity pr=${PR}"
+	exit 0
+fi
+# Lost editor changes that the run already retried (a fresh review was
+# dispatched, or one was already in flight) are being recovered: the run posts
+# no failure comment and ends green, so the intake would only reject the
+# report as not_failed and page (PR #8718, run 41564230342, 2026-11-03). The
+# retry-unavailable paths need a person and are still reported (the CAN_PUSH
+# path also posts a PR failure comment; push-disabled sends only a Telegram
+# WARNING). Those runs also end green, so the intake accepts their report only
+# while the run is still in progress and may still reject it as not_failed.
+if [ "${FAILURE_REASON}" = "editor_changes_lost" ] \
+	&& { [ "${CHANGES_LOST_REDISPATCHED:-}" = "true" ] || [ "${CHANGES_LOST_REDISPATCHED:-}" = "skipped_peer_inflight" ]; }; then
+	log "skip reason=changes_lost_retrying pr=${PR} redispatched=${CHANGES_LOST_REDISPATCHED}"
 	exit 0
 fi
 

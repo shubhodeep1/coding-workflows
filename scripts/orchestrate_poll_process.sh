@@ -2751,6 +2751,12 @@ AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL
 # turns it off, any other value is treated as `true` with a warning.
 HEAL_COUNTERFACTUAL_GATE_ENABLED="${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}"
 
+# Issue #8809: an UNVERIFIED heal plan that lists only exact tests/ and
+# changelog.d/*.md files inside the verified heal scope is auto-approved (see
+# _plan_heal_test_only_check). On by default; `false` turns it off, any other
+# value is treated as `true` with a warning.
+HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED="${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}"
+
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
   echo "::warning::MAX_VALIDATE_CYCLES must be a positive integer; defaulting to 3"
@@ -12272,7 +12278,7 @@ check_integration_branch_staleness() {
 	local integration_branch="$1"
 	local default_branch="$2"
 	local ahead_by="$3"
-	local now_epoch="$(date +%s)"
+	local now_epoch=""
 	local last_main_squash_at_utc=""
 	local integration_stale_last_alerted_at_utc=""
 
@@ -12281,6 +12287,11 @@ check_integration_branch_staleness() {
 	# touching state so the disabled path is a true no-op.
 	if [ "${ORCH_INTEGRATION_STALE_ALERT_HOURS}" -eq 0 ]; then
 		return 0
+	fi
+
+	if ! now_epoch="$(date +%s)" || ! [[ "${now_epoch}" =~ ^[0-9]+$ ]]; then
+		echo "::warning::check_integration_branch_staleness: clock read failed; skipping the integration staleness check this cycle." >&2
+		return 1
 	fi
 
 	local stale_threshold_secs=$(( ORCH_INTEGRATION_STALE_ALERT_HOURS * 3600 ))
@@ -18508,6 +18519,10 @@ _plan_heal_counterfactual_check()
   HEAL_CF_GATE_REASON=""
   HEAL_CF_GATE_JSON='{}'
   HEAL_CF_GATE_PLAN_COMMENT="unknown"
+  # Issue #8809: reset before any return so a marker never leaks to the next issue.
+  HEAL_TEST_ONLY_GATE_DECISION=""
+  HEAL_TEST_ONLY_GATE_REASON=""
+  HEAL_TEST_ONLY_GATE_MARKER=""
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   heal_py="${script_dir}/workflow_failure_heal.py"
   partial_py="${script_dir}/partial_delivery.py"
@@ -18575,8 +18590,87 @@ _plan_heal_counterfactual_check()
     echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=approve result=${HEAL_CF_GATE_RESULT} reason=${HEAL_CF_GATE_REASON} issue=${issue_num}"
     return 0
   fi
+  # Issue #8809: an UNVERIFIED heal plan (never FAIL, missing or an unknown
+  # route) gets the test-only check. On approve the flow continues to the
+  # automation-path guard unchanged; _plan_auto_approval_gate posts the
+  # approval marker before /approved.
+  if [ "${route}" = "true" ] && [ "${HEAL_CF_GATE_RESULT}" = "UNVERIFIED" ] && [ "${HEAL_CF_GATE_REASON}" = "unverified" ] \
+    && _plan_heal_test_only_check "${issue_num}" "${details_map_json}" "${plan_file}" "${login}"; then
+    HEAL_CF_GATE_DECISION="approve"
+    return 0
+  fi
   HEAL_CF_GATE_DECISION="hold"
   return 1
+}
+
+# Issue #8809: test-only check for an UNVERIFIED heal plan. The heal scope is
+# verified from the batched details map (body, author, labels and
+# last_edited_at; no GitHub API call) with workflow_failure_heal.py
+# heal-scope verify, then files_touched_scope_guard.py --heal-test-only-check
+# approves only a plan whose Files section lists exact tests/ and
+# changelog.d/*.md files inside that scope. Runs in the main shell and sets
+# HEAL_TEST_ONLY_GATE_DECISION, HEAL_TEST_ONLY_GATE_REASON and
+# HEAL_TEST_ONLY_GATE_MARKER (the approval marker on approve). Reads
+# HEAL_CF_GATE_PLAN_COMMENT. Every error holds; one log line either way.
+# Args: <issue_num> <details_map_json> <plan_file> <login>
+# Returns 0 to approve, 1 to hold.
+_plan_heal_test_only_check()
+{
+  local issue_num="$1"
+  local details_map_json="$2"
+  local plan_file="$3"
+  local login="$4"
+  local script_dir="" heal_py="" guard_py="" flag_norm="" verify_input="" verified="" scope_file="" to_json=""
+  local to_decision="hold" to_reason="heal_test_only_check_unavailable"
+
+  HEAL_TEST_ONLY_GATE_DECISION="hold"
+  HEAL_TEST_ONLY_GATE_REASON=""
+  HEAL_TEST_ONLY_GATE_MARKER=""
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  heal_py="${script_dir}/workflow_failure_heal.py"
+  guard_py="${script_dir}/files_touched_scope_guard.py"
+  flag_norm="$(printf '%s' "${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm="true"
+  case "${flag_norm}" in
+    false) to_reason="gate_disabled" ;;
+    ""|true) ;;
+    *) echo "::warning::HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED has invalid value; treating as true" ;;
+  esac
+  if [ "${flag_norm}" != "false" ]; then
+    to_reason="heal_scope_unverified"
+    if [ -n "${login}" ] && [ -f "${heal_py}" ] && [ -f "${guard_py}" ] \
+      && verify_input="$(printf '%s' "${details_map_json:-{\}}" | jq -ce --arg n "${issue_num}" --arg login "${login}" '
+          .[$n]
+          | select(type == "object")
+          | select(has("last_edited_at") and .labels_complete == true)
+          | select((.body | type) == "string" and (.author_login | type) == "string" and ((.labels // []) | type) == "array")
+          | {body: .body, last_edited_at: .last_edited_at, author_login: .author_login, labels: .labels, pipeline_login: $login}
+        ' 2>/dev/null)" \
+      && verified="$(printf '%s' "${verify_input}" | PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${heal_py}" heal-scope verify --input-json /dev/stdin 2>/dev/null)" \
+      && printf '%s' "${verified}" | jq -e '.status == "verified"' >/dev/null 2>&1 \
+      && scope_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_test_only_scope.XXXXXX" 2>/dev/null)" \
+      && printf '%s' "${verified}" | jq -r '.paths[]' > "${scope_file}" 2>/dev/null && [ -s "${scope_file}" ]; then
+      to_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${guard_py}" --heal-test-only-check --plan-file "${plan_file}" \
+        --heal-scope-file "${scope_file}" --flag-enabled "${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}" \
+        --issue-number "${issue_num}" --plan-comment-id "${HEAL_CF_GATE_PLAN_COMMENT:-}" 2>/dev/null || true)"
+      to_decision="$(printf '%s' "${to_json}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
+      to_reason="$(printf '%s' "${to_json}" | jq -r '.reason // "heal_test_only_check_unavailable"' 2>/dev/null || echo heal_test_only_check_unavailable)"
+      if [ "${to_decision}" = "approve" ]; then
+        HEAL_TEST_ONLY_GATE_MARKER="$(printf '%s' "${to_json}" | jq -r '.marker // ""' 2>/dev/null || true)"
+        case "${HEAL_TEST_ONLY_GATE_MARKER}" in
+          "<!-- ai:heal-test-only-approval:v1 issue=${issue_num} plan_comment="*" -->") ;;
+          *) to_decision="hold"; to_reason="heal_test_only_check_unavailable"; HEAL_TEST_ONLY_GATE_MARKER="" ;;
+        esac
+      fi
+    fi
+    [ -z "${scope_file}" ] || rm -f "${scope_file}"
+  fi
+  [ "${to_decision}" = "approve" ] || { to_decision="hold"; HEAL_TEST_ONLY_GATE_MARKER=""; }
+  to_reason="$(printf '%s' "${to_reason}" | tr -cd 'a-z_' | cut -c1-80)"
+  [ -n "${to_reason}" ] || to_reason="heal_test_only_check_unavailable"
+  HEAL_TEST_ONLY_GATE_DECISION="${to_decision}"
+  HEAL_TEST_ONLY_GATE_REASON="${to_reason}"
+  echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_test_only outcome=${to_decision} reason=${to_reason} issue=${issue_num}"
+  [ "${to_decision}" = "approve" ]
 }
 
 # Issue #8249: a poller heal counterfactual hold reaches a human once per
@@ -18796,6 +18890,29 @@ _plan_auto_approval_gate()
     fi
   fi
   rm -f "${gate_plan_file}" "${gate_meta_file}" "${gate_grant_body_file}" "${gate_fresh_file}" 2>/dev/null || true
+  if [ "${gate_decision}" = "approve" ] && [ -n "${HEAL_TEST_ONLY_GATE_MARKER:-}" ]; then
+    # Issue #8809: the test-only approval marker binds implement to the
+    # plan's paths, so it is posted before any /approved (all four callers
+    # post only after this returns 0). A trusted copy already on the issue
+    # is reused; a failed post holds without counting a recovery attempt.
+    gate_replan_jq='
+      [ .[]?
+        | select(type == "object")
+        | select(((.user.login // "") == $login and $login != "")
+            or ((.user.login // "") | test("\\[bot\\]$"))
+            or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+        | (.body // "")
+        | select(contains($marker))
+      ] | length > 0'
+    if [ "$(printf '%s' "${comments_json:-[]}" | jq -r --arg marker "${HEAL_TEST_ONLY_GATE_MARKER}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" != "true" ] \
+      && ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="Automatic approval of a test-only workflow-heal plan: implementation is limited to the files listed in the marker below, and a change that deletes a file, removes tests or asserts, or adds a skip is refused.
+
+${HEAL_TEST_ONLY_GATE_MARKER}" >/dev/null 2>&1; then
+      echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_test_only outcome=hold reason=marker_post_failed issue=${issue_num}"
+      echo "STALL_SKIP issue=${issue_num} reason=heal_test_only_marker_failed phase=${phase} action=none"
+      return 1
+    fi
+  fi
   if [ "${gate_decision}" = "approve" ]; then
     return 0
   fi
@@ -21614,6 +21731,7 @@ _fetch_candidate_issue_details_graphql() {
           body
           author { login }
           authorAssociation
+          lastEditedAt
           labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
@@ -21670,6 +21788,7 @@ _fetch_candidate_issue_details_graphql() {
             title: (.value.title // ""),
             author_login: (.value.author.login // ""),
             author_association: (.value.authorAssociation // ""),
+            last_edited_at: (.value.lastEditedAt // null),
             labels: [(.value.labels.nodes // [])[]?.name],
             labels_complete: ((.value.labels.pageInfo.hasNextPage == false) and ((.value.labels.nodes | type) == "array")),
             comments_available: ((.value.comments.nodes? | type) == "array"),
@@ -30055,6 +30174,10 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
       # assemble is logged once as RB_JUDGE_CONTEXT_EMPTY.
       _rb_ctx_rc=0
       _rb_ctx_empty_reason=""
+      # BUG-002: set when a comment read failed (helper `comments_incomplete`
+      # or a failed legacy paginated read); merges are deferred this tick.
+      _rb_ctx_comments_incomplete=false
+      _rb_ctx_incomplete_reasons=""
       RB_PR_CONTEXT_JSON=""
       if type gh_pr_with_all_comments >/dev/null 2>&1; then
         RB_PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}")" || _rb_ctx_rc=$?
@@ -30062,9 +30185,34 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         RB_PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}")" || _rb_ctx_rc=$?
       else
         printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${GITHUB_REPOSITORY%%/*} repo=${GITHUB_REPOSITORY##*/} pr=${RB_PR}" >&2
-        RB_PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
-        RB_PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
+        # BUG-002: read each page set first so a failed read is detected
+        # (no pipefail reliance); same two API calls as before.
+        _rb_legacy_issue_raw=""
+        _rb_legacy_review_raw=""
+        _rb_legacy_issue_raw="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null)" || { _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}issue_comments_read_failed"; _rb_legacy_issue_raw=""; }
+        RB_PR_ISSUE_COMMENTS="$(printf '%s' "${_rb_legacy_issue_raw}" | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null)" || { RB_PR_ISSUE_COMMENTS='[]'; if [ "${_rb_ctx_incomplete_reasons#*issue_comments_read_failed}" = "${_rb_ctx_incomplete_reasons}" ]; then _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}issue_comments_parse_failed"; fi; }
+        _rb_legacy_review_raw="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" 2>/dev/null)" || { _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}review_comments_read_failed"; _rb_legacy_review_raw=""; }
+        RB_PR_REVIEW_COMMENTS="$(printf '%s' "${_rb_legacy_review_raw}" | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null)" || { RB_PR_REVIEW_COMMENTS='[]'; if [ "${_rb_ctx_incomplete_reasons#*review_comments_read_failed}" = "${_rb_ctx_incomplete_reasons}" ]; then _rb_ctx_comments_incomplete=true; _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}review_comments_parse_failed"; fi; }
+        [ -n "${RB_PR_ISSUE_COMMENTS}" ] || RB_PR_ISSUE_COMMENTS='[]'
+        [ -n "${RB_PR_REVIEW_COMMENTS}" ] || RB_PR_REVIEW_COMMENTS='[]'
+        unset _rb_legacy_issue_raw _rb_legacy_review_raw
         RB_PR_CONTEXT_JSON="$(jq -cn --slurpfile meta <(printf '%s' "${RB_PRELOADED_META}") --slurpfile comments <(printf '%s' "${RB_PR_ISSUE_COMMENTS}") --slurpfile review_comments <(printf '%s' "${RB_PR_REVIEW_COMMENTS}") '{meta: ($meta[0] // {}), comments: ($comments[0] // []), review_comments: ($review_comments[0] // [])}' 2>/dev/null)" || _rb_ctx_rc=$?
+      fi
+      # BUG-002: read the helper's incomplete signal before an assembly or
+      # shape failure resets the context to {}. Reasons are untrusted, so they
+      # are reduced to [a-z0-9_,] and capped before reaching the log or prompt.
+      if [ -n "${RB_PR_CONTEXT_JSON}" ] && printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -e 'type == "object" and .comments_incomplete == true' >/dev/null 2>&1; then
+        _rb_ctx_comments_incomplete=true
+        _rb_ctx_helper_reasons="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -r '[.incomplete_reasons[]? | strings] | join(",")' 2>/dev/null)" || _rb_ctx_helper_reasons=""
+        if [ -n "${_rb_ctx_helper_reasons}" ]; then
+          _rb_ctx_incomplete_reasons="${_rb_ctx_incomplete_reasons:+${_rb_ctx_incomplete_reasons},}${_rb_ctx_helper_reasons}"
+        fi
+        unset _rb_ctx_helper_reasons
+      fi
+      if [ "${_rb_ctx_comments_incomplete}" = "true" ]; then
+        _rb_ctx_incomplete_reasons="$(printf '%s' "${_rb_ctx_incomplete_reasons}" | tr -cd 'a-z0-9_,' | cut -c1-200)" || _rb_ctx_incomplete_reasons=""
+        [ -n "${_rb_ctx_incomplete_reasons}" ] || _rb_ctx_incomplete_reasons="unknown"
+        printf '%s\n' "::warning::RB_JUDGE_CONTEXT_INCOMPLETE pr=${RB_PR} reasons=${_rb_ctx_incomplete_reasons} action=defer_merge source=poller" >&2
       fi
       if [ "${_rb_ctx_rc}" -ne 0 ] || [ -z "${RB_PR_CONTEXT_JSON}" ]; then
         _rb_ctx_empty_reason="assembly_failed"
@@ -30509,6 +30657,9 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo "Review-blocked retry: $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
         echo "Retries exhausted: ${IS_FINAL}"
         echo "Protected-path fixes: unavailable (the orchestrator rejects any fix that stages a path under .github/, scripts/, prompts/, .claude/ or workflow-templates/)"
+        if [ "${_rb_ctx_comments_incomplete:-false}" = "true" ]; then
+          echo "Comment context: incomplete (reasons: ${_rb_ctx_incomplete_reasons:-unknown}). One or more PR comment reads failed, so the comment sections above may be missing reviewer findings; do not treat a missing finding as resolved. The orchestrator will not merge this PR on this tick."
+        fi
         if [ "${IS_FINAL}" = "true" ]; then
           echo
           echo "IMPORTANT: This is the FINAL attempt. You MUST choose 'merge',"
@@ -30705,6 +30856,30 @@ sys.exit(1)
 
       echo "  Judge decision for #${rb_issue}: ${RB_ACTION}"
       echo "  Justification: ${RB_JUSTIFICATION}"
+
+      # BEGIN rb judge incomplete-context merge gate (BUG-002)
+      # A merge-enabling outcome decided on incomplete comment context is
+      # withheld this tick: no judge comment, no label, no merge/auto-merge,
+      # no retry bump. Non-merge outcomes fall through unchanged.
+      if [ "${_rb_ctx_comments_incomplete:-false}" = "true" ]; then
+        _rb_incomplete_defer=false
+        case "${RB_ACTION}" in
+          merge|merge_with_followup) _rb_incomplete_defer=true ;;
+          fix)
+            if [ "${IS_FINAL}" = "true" ]; then
+              _rb_incomplete_defer=true
+            fi
+            ;;
+        esac
+        if [ "${_rb_incomplete_defer}" = "true" ]; then
+          unset _rb_incomplete_defer
+          echo "  [review-blocked] Merge deferred for PR #${RB_PR} (issue #${rb_issue}): comment context incomplete; judge action ${RB_ACTION} withheld this tick."
+          rb_cleanup_combined_workspace
+          continue
+        fi
+        unset _rb_incomplete_defer
+      fi
+      # END rb judge incomplete-context merge gate (BUG-002)
 
       # Post judge assessment to PR
       RB_COMMENT="## Orchestrator Review-Blocked Judge — Issue #${rb_issue}
@@ -31124,11 +31299,18 @@ ${RB_FIX_DESC}
                 fi
               else
                 echo "  Judge produced no file changes."
-                if [ "${RB_TARGET_MERGED}" = "true" ]; then
+                if [ "${RB_TARGET_MERGED}" = "true" ] && [ "${_rb_ctx_comments_incomplete:-false}" = "true" ]; then
+                  # BUG-002: keep ai:review-blocked; a "no outstanding fixes" verdict on incomplete comment context is withheld.
+                  echo "  [review-blocked] Deferred for merged PR #${RB_PR} (issue #${rb_issue}): comment context incomplete; no-fix close-out withheld this tick."
+                  RB_SKIP_RETRY_INCREMENT="true"
+                elif [ "${RB_TARGET_MERGED}" = "true" ]; then
                   echo "  No follow-up needed — merged PR has no outstanding fixes."
                   gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' 2>/dev/null || true
                   tg_notify "Orchestrator judge found no fixes needed for merged PR #${RB_PR} (issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
+                elif [ "${_rb_ctx_comments_incomplete:-false}" = "true" ]; then
+                  echo "  [review-blocked] Merge deferred for PR #${RB_PR} (issue #${rb_issue}): comment context incomplete; no-fix merge withheld this tick."
+                  RB_SKIP_RETRY_INCREMENT="true"
                 else
                   echo "  Treating as merge decision."
                   ensure_label_exists "ai:ready-to-merge"
@@ -33644,16 +33826,34 @@ echo "========================================"
 
 # Collect the complete open-PR snapshot; drafts are excluded before any
 # per-PR API work. gh pr list's default 30 / old 100 limit missed live PRs.
-STANDALONE_PRS="$(gh_retry gh pr list \
+# A failed list read still falls back to "[]"; the flag only lets the sweep
+# summary tell an API failure from a repository with no open PRs.
+_conflict_sweep_list_failed="false"
+if ! STANDALONE_PRS="$(gh_retry gh pr list \
 	--repo "${GITHUB_REPOSITORY}" \
 	--state open \
 	--json number,headRefName,headRefOid,baseRefName,isDraft,isCrossRepository,headRepositoryOwner \
-	--limit 3000 2>/dev/null || echo "[]")"
+	--limit 3000 2>/dev/null)"; then
+	STANDALONE_PRS="[]"
+	_conflict_sweep_list_failed="true"
+fi
 
 STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
 echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
 
 CONFLICT_SWEEP_FIXED=0
+# Structured sweep telemetry (STANDALONE_CONFLICT_DISPATCH_OUTCOME /
+# STANDALONE_CONFLICT_SWEEP_SUMMARY). Diagnostics only: CONFLICT_SWEEP_FIXED
+# and its "Fixed: N" line keep their legacy meaning (update + dispatch ok).
+CONFLICT_SWEEP_PREFILTERED_DRAFT=0
+CONFLICT_SWEEP_SKIPPED_INTEGRATION=0
+CONFLICT_SWEEP_BATCH_CLEAN=0
+CONFLICT_SWEEP_REST_FETCHED=0
+CONFLICT_SWEEP_API_UPDATED=0
+CONFLICT_SWEEP_DISPATCHED=0
+CONFLICT_SWEEP_DISPATCH_INFLIGHT=0
+CONFLICT_SWEEP_DISPATCH_FAILED=0
+CONFLICT_SWEEP_UNRESOLVED_SAME_HEAD=0
 DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
 
 # Input: the open-PR snapshot, in bounded 30-PR batches. Output: numbers
@@ -33746,23 +33946,28 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	# Do not let the standalone sweep duplicate update-branch / review
 	# dispatches or overwrite that path's state transitions.
 	if [[ "${S_HEAD}" == orchestrator/project-* ]]; then
+		CONFLICT_SWEEP_SKIPPED_INTEGRATION=$(( ${CONFLICT_SWEEP_SKIPPED_INTEGRATION:-0} + 1 ))
 		continue
 	fi
 
 	if [[ "${S_BASE}" == orchestrator/project-* ]]; then
+		CONFLICT_SWEEP_SKIPPED_INTEGRATION=$(( ${CONFLICT_SWEEP_SKIPPED_INTEGRATION:-0} + 1 ))
 		continue
 	fi
 	if [[ "${S_HEAD}" == claude/* ]] && [ "${S_DRAFT}" = "true" ]; then
 		echo "  PR #${S_PR} is a draft claude/* PR; skipping standalone conflict recovery."
+		CONFLICT_SWEEP_PREFILTERED_DRAFT=$(( ${CONFLICT_SWEEP_PREFILTERED_DRAFT:-0} + 1 ))
 		continue
 	fi
 	if [[ "${S_HEAD_OID}" =~ ^[0-9a-f]{40}$ ]] && [ "${_STANDALONE_CLEAN_PRS["${S_PR}"]:-}" = "${S_HEAD_OID}" ]; then
+		CONFLICT_SWEEP_BATCH_CLEAN=$(( ${CONFLICT_SWEEP_BATCH_CLEAN:-0} + 1 ))
 		continue
 	fi
 
 	# Check mergeable state via REST API (dirty == merge conflicts)
 	# _safe_gh_jq → clean empty stdout on failure so the `|| echo '{}'`
 	# fallback stays valid JSON for the downstream jq reads.
+	CONFLICT_SWEEP_REST_FETCHED=$(( ${CONFLICT_SWEEP_REST_FETCHED:-0} + 1 ))
 	S_PR_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" || echo '{}')"
 	[ -n "${S_PR_JSON}" ] || S_PR_JSON='{}'
 	S_STATE="$(echo "${S_PR_JSON}" | jq -r '.state // ""')"
@@ -33808,11 +34013,52 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	# silence stdout while preserving stderr diagnostics; stage 2 handles
 	# the permanent-failure path.
 	S_HEAD_SHA="$(echo "${S_PR_JSON}" | jq -r '.head.sha // ""')"
+	# Outcome telemetry (diagnostics only, no API call): the head is logged
+	# only as 40-hex, and prior attempts come only from the marker maps the
+	# batch above already loaded, filtered to the pipeline's own login as
+	# _standalone_conflict_count_attempt does. UNBLOCK_TRUSTED_LOGIN is read,
+	# never resolved here (unblock_trusted_login may call the API); anything
+	# missing leaves "unknown".
+	_conflict_sweep_outcome_head="unknown"
+	if [[ "${S_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+		_conflict_sweep_outcome_head="${S_HEAD_SHA}"
+	fi
+	_conflict_sweep_prior="unknown"
+	_conflict_sweep_loaded="${_STANDALONE_CONFLICT_STATE_LOADED["${S_PR}"]:-}"
+	# Only a whole-thread window ("1") counts; a "partial" window stays
+	# "unknown" (issue #8847: missing or partial state is never inferred).
+	if [ "${_conflict_sweep_loaded}" = "1" ] &&
+		[ "${_conflict_sweep_outcome_head}" != "unknown" ] && [ -n "${UNBLOCK_TRUSTED_LOGIN:-}" ]; then
+		_conflict_sweep_found="false"
+		while IFS='|' read -r _conflict_sweep_m_id _conflict_sweep_m_author _conflict_sweep_m_head _conflict_sweep_m_attempts _conflict_sweep_m_alerted; do
+			[ -n "${_conflict_sweep_m_id}${_conflict_sweep_m_author}" ] || continue
+			if [ "${_conflict_sweep_m_author}" = "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+				_conflict_sweep_found="true"
+				if [ "${_conflict_sweep_m_head}" != "${_conflict_sweep_outcome_head}" ]; then
+					_conflict_sweep_prior="0"
+				elif [[ "${_conflict_sweep_m_attempts}" =~ ^[0-9]+$ ]]; then
+					_conflict_sweep_prior="${_conflict_sweep_m_attempts}"
+				fi
+				break
+			fi
+		done <<< "${_STANDALONE_CONFLICT_ATTEMPTS_STATE["${S_PR}"]:-}"
+		# The loaded check repeats the outer guard on purpose: "0" only for a whole thread.
+		if [ "${_conflict_sweep_found}" != "true" ] && [ "${_conflict_sweep_loaded}" = "1" ]; then
+			_conflict_sweep_prior="0"
+		fi
+	fi
+	_conflict_sweep_update_branch="skipped_no_sha"
+	_conflict_sweep_dispatch="not_attempted"
 	if [ -n "${S_HEAD_SHA}" ] && GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}/update-branch" \
 		-X PUT -f expected_head_sha="${S_HEAD_SHA}" >/dev/null; then
 		echo "  PR #${S_PR} branch updated via API. Synchronize event will re-trigger review."
 		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
+		CONFLICT_SWEEP_API_UPDATED=$(( ${CONFLICT_SWEEP_API_UPDATED:-0} + 1 ))
+		echo "STANDALONE_CONFLICT_DISPATCH_OUTCOME pr=${S_PR} head=${_conflict_sweep_outcome_head} update_branch=ok dispatch=not_attempted prior_attempts_same_head=${_conflict_sweep_prior} resolution=branch_updated"
 		continue
+	fi
+	if [ -n "${S_HEAD_SHA}" ]; then
+		_conflict_sweep_update_branch="failed"
 	fi
 
 	# Stage 2: Dispatch review workflow for conflict resolution.
@@ -33822,13 +34068,36 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
 		tg_send_msg "Standalone PR #${S_PR} has merge conflicts. Review workflow dispatched for resolution."$'\n'"PR: $(_gh_url "pull/${S_PR}")" "DEBUG" >/dev/null 2>&1 || true
 		_standalone_conflict_count_attempt "${S_PR}" "${S_HEAD_SHA}" "${_dispatch_rc}"
+		_conflict_sweep_dispatch="ok"
+		CONFLICT_SWEEP_DISPATCHED=$(( ${CONFLICT_SWEEP_DISPATCHED:-0} + 1 ))
 	elif [ "${_dispatch_rc}" -eq 2 ]; then
 		echo "  PR #${S_PR}: autofix already in progress, skipping dispatch."
+		_conflict_sweep_dispatch="inflight"
+		CONFLICT_SWEEP_DISPATCH_INFLIGHT=$(( ${CONFLICT_SWEEP_DISPATCH_INFLIGHT:-0} + 1 ))
 	else
 		tg_send_msg "Standalone PR #${S_PR} has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${S_PR}")" "DEBUG" >/dev/null 2>&1 || true
 		_standalone_conflict_count_attempt "${S_PR}" "${S_HEAD_SHA}" "${_dispatch_rc}"
+		_conflict_sweep_dispatch="failed"
+		CONFLICT_SWEEP_DISPATCH_FAILED=$(( ${CONFLICT_SWEEP_DISPATCH_FAILED:-0} + 1 ))
 	fi
+	# Unresolved: the trusted marker for this same head already recorded at
+	# least one earlier attempt and the PR is still dirty.
+	_conflict_sweep_resolution="pending"
+	if [[ "${_conflict_sweep_prior}" =~ ^[0-9]+$ ]] && [ "${_conflict_sweep_prior}" -ge 1 ]; then
+		_conflict_sweep_resolution="unresolved_same_head"
+		CONFLICT_SWEEP_UNRESOLVED_SAME_HEAD=$(( ${CONFLICT_SWEEP_UNRESOLVED_SAME_HEAD:-0} + 1 ))
+	fi
+	echo "STANDALONE_CONFLICT_DISPATCH_OUTCOME pr=${S_PR} head=${_conflict_sweep_outcome_head} update_branch=${_conflict_sweep_update_branch} dispatch=${_conflict_sweep_dispatch} prior_attempts_same_head=${_conflict_sweep_prior} resolution=${_conflict_sweep_resolution}"
 done
+
+CONFLICT_SWEEP_LISTED="${STANDALONE_COUNT:-}"
+[[ "${CONFLICT_SWEEP_LISTED}" =~ ^[0-9]+$ ]] || CONFLICT_SWEEP_LISTED=0
+_conflict_sweep_truncated="false"
+# list_limit must match the --limit 3000 on the gh pr list call above.
+if [ "${CONFLICT_SWEEP_LISTED}" -ge 3000 ]; then
+	_conflict_sweep_truncated="true"
+fi
+echo "STANDALONE_CONFLICT_SWEEP_SUMMARY listed=${CONFLICT_SWEEP_LISTED} prefiltered_draft=${CONFLICT_SWEEP_PREFILTERED_DRAFT:-0} skipped_integration=${CONFLICT_SWEEP_SKIPPED_INTEGRATION:-0} batch_clean=${CONFLICT_SWEEP_BATCH_CLEAN:-0} rest_fetched=${CONFLICT_SWEEP_REST_FETCHED:-0} api_updated=${CONFLICT_SWEEP_API_UPDATED:-0} dispatched=${CONFLICT_SWEEP_DISPATCHED:-0} dispatch_inflight=${CONFLICT_SWEEP_DISPATCH_INFLIGHT:-0} dispatch_failed=${CONFLICT_SWEEP_DISPATCH_FAILED:-0} unresolved_same_head=${CONFLICT_SWEEP_UNRESOLVED_SAME_HEAD:-0} list_limit=3000 list_truncated=${_conflict_sweep_truncated} list_failed=${_conflict_sweep_list_failed:-false}"
 
 echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 

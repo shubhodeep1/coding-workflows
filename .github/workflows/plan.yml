@@ -451,6 +451,11 @@ jobs:
           elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
             echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
             exit 1
+          elif [ "${resolver_rc}" -eq 2 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+            # Exit 2 = resolver API failure (retries exhausted or permanent error).
+            # With routing off, keep the legacy default-branch fallback, matching the exit-75 policy.
+            echo "::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
+            exit 1
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
@@ -2939,6 +2944,7 @@ jobs:
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           PLAN_SPLIT_TO_PROJECT_ENABLED: ${{ vars.PLAN_SPLIT_TO_PROJECT_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}
           # Read as ${PLAN_STEP_REPO} so the run: body carries no expression
           # (tests/test_workflow_file_size_limit.py expression guard).
           PLAN_STEP_REPO: ${{ github.repository }}
@@ -3137,6 +3143,10 @@ jobs:
               # written. Every error holds; a human /approved still works.
               # HEAL_COUNTERFACTUAL_GATE_ENABLED=false turns it off.
               heal_cf_route="false"
+              # Test-only heal check state (issue #8809), read again below.
+              heal_to_login=""
+              heal_to_verified=""
+              heal_to_marker=""
               if [ "${HEAL_ROUTE:-false}" = "true" ]; then
                 heal_cf_route="true"
               else
@@ -3181,6 +3191,60 @@ jobs:
                 heal_cf_outcome="approve"
                 [ "${heal_cf_decision}" = "approve" ] || heal_cf_outcome="hold"
                 echo "AI_PHASE_GATE_V1 phase=plan gate=heal_counterfactual outcome=${heal_cf_outcome} result=${heal_cf_result:-missing} reason=${heal_cf_reason:-heal_counterfactual_check_unavailable} issue=${ISSUE_NUMBER}"
+                # Test-only heal check (issue #8809). An UNVERIFIED heal plan
+                # (never FAIL, missing or an unknown route) whose Files section
+                # lists only exact tests/ and changelog.d/*.md files inside the
+                # verified heal scope is approved; the automation-path gate
+                # below still runs, and an approval marker binding implement to
+                # those paths is posted before /approved. Every error holds.
+                # HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED=false turns it off.
+                if [ "${heal_cf_decision}" != "approve" ] && [ "${heal_cf_route}" = "true" ] \
+                  && [ "${heal_cf_result}" = "UNVERIFIED" ] && [ "${heal_cf_reason}" = "unverified" ]; then
+                  heal_to_decision="hold"
+                  heal_to_reason="heal_scope_unverified"
+                  heal_to_flag_norm="$(printf '%s' "${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || heal_to_flag_norm="true"
+                  case "${heal_to_flag_norm}" in
+                    false) heal_to_reason="gate_disabled" ;;
+                    ""|true) ;;
+                    *) echo "::warning::HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED has invalid value; treating as true" ;;
+                  esac
+                  if [ "${heal_to_flag_norm}" != "false" ]; then
+                    heal_to_repo="${PLAN_STEP_REPO:-${GITHUB_REPOSITORY:-}}"
+                    heal_to_scope="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/heal_test_only_scope.XXXXXX")"
+                    # §14: the same two reads the heal automation-path block
+                    # below makes; that block reuses them instead of reading again.
+                    if heal_to_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null)" && [ -n "${heal_to_login}" ] \
+                      && heal_to_verified="$(gh_retry gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}}}}}' -f owner="${heal_to_repo%%/*}" -f repo="${heal_to_repo#*/}" -F number="${ISSUE_NUMBER}" 2>/dev/null \
+                        | jq -c --arg login "${heal_to_login}" '.data.repository.issue as $i | {body: $i.body, last_edited_at: $i.lastEditedAt, author_login: $i.author.login, labels: [$i.labels.nodes[].name], pipeline_login: $login}' \
+                        | PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/workflow_failure_heal.py heal-scope verify --input-json /dev/stdin 2>/dev/null)" \
+                      && printf '%s' "${heal_to_verified}" | jq -e '.status == "verified"' >/dev/null 2>&1 \
+                      && printf '%s' "${heal_to_verified}" | jq -r '.paths[]' > "${heal_to_scope}" 2>/dev/null && [ -s "${heal_to_scope}" ]; then
+                      heal_to_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/files_touched_scope_guard.py --heal-test-only-check \
+                        --plan-file "${CODEX_OUTPUT_FILE:-}" --heal-scope-file "${heal_to_scope}" \
+                        --flag-enabled "${HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED:-true}" --issue-number "${ISSUE_NUMBER}" \
+                        --plan-comment-id "${PLAN_COMMENT_ID:-}" 2>/dev/null || true)"
+                      heal_to_decision="$(printf '%s' "${heal_to_json}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
+                      heal_to_reason="$(printf '%s' "${heal_to_json}" | jq -r '.reason // "heal_test_only_check_unavailable"' 2>/dev/null || echo heal_test_only_check_unavailable)"
+                      if [ "${heal_to_decision}" = "approve" ]; then
+                        heal_to_marker="$(printf '%s' "${heal_to_json}" | jq -r '.marker // ""' 2>/dev/null || true)"
+                        case "${heal_to_marker}" in
+                          "<!-- ai:heal-test-only-approval:v1 issue=${ISSUE_NUMBER} plan_comment="*" -->") ;;
+                          *) heal_to_decision="hold"; heal_to_reason="heal_test_only_check_unavailable"; heal_to_marker="" ;;
+                        esac
+                      fi
+                    fi
+                    rm -f "${heal_to_scope}"
+                  fi
+                  if [ "${heal_to_decision}" != "approve" ]; then
+                    heal_to_decision="hold"
+                    heal_to_marker=""
+                    heal_to_login=""
+                    heal_to_verified=""
+                  fi
+                  heal_to_reason="$(printf '%s' "${heal_to_reason}" | tr -cd 'a-z_' | cut -c1-80)"
+                  echo "AI_PHASE_GATE_V1 phase=plan gate=heal_test_only outcome=${heal_to_decision} reason=${heal_to_reason:-heal_test_only_check_unavailable} issue=${ISSUE_NUMBER}"
+                  [ "${heal_to_decision}" != "approve" ] || heal_cf_decision="approve"
+                fi
                 if [ "${heal_cf_decision}" != "approve" ]; then
                   echo "auto_approve_hold_reason=heal_counterfactual_hold" >> "$GITHUB_OUTPUT"
                   {
@@ -3222,10 +3286,12 @@ jobs:
                 plan_gate_heal_repo="${GITHUB_REPOSITORY:-}"
                 plan_gate_heal_scope="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_heal_scope.XXXXXX")"
                 # §14: REST has no lastEditedAt; one GraphQL read (the preflight's query).
-                if plan_gate_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null)" && [ -n "${plan_gate_login}" ] \
+                # #8809: reuse the test-only check's reads when it already verified the scope.
+                if { [ -n "${heal_to_login}" ] && [ -n "${heal_to_verified}" ] && plan_gate_login="${heal_to_login}" && plan_gate_heal_verified="${heal_to_verified}"; } \
+                  || { plan_gate_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null)" && [ -n "${plan_gate_login}" ] \
                   && plan_gate_heal_verified="$(gh_retry gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}}}}}' -f owner="${plan_gate_heal_repo%%/*}" -f repo="${plan_gate_heal_repo#*/}" -F number="${ISSUE_NUMBER}" 2>/dev/null \
                     | jq -c --arg login "${plan_gate_login}" '.data.repository.issue as $i | {body: $i.body, last_edited_at: $i.lastEditedAt, author_login: $i.author.login, labels: [$i.labels.nodes[].name], pipeline_login: $login}' \
-                    | PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/workflow_failure_heal.py heal-scope verify --input-json /dev/stdin 2>/dev/null)"; then
+                    | PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/workflow_failure_heal.py heal-scope verify --input-json /dev/stdin 2>/dev/null)"; }; then
                   plan_gate_result='{"reason":"heal_scope_unverified"}'
                   if printf '%s' "${plan_gate_heal_verified}" | jq -e '.status == "verified"' >/dev/null 2>&1 \
                     && printf '%s' "${plan_gate_heal_verified}" | jq -r '.paths[]' > "${plan_gate_heal_scope}" 2>/dev/null; then
@@ -3348,6 +3414,21 @@ jobs:
                 automation_path_plan_hold || true
                 [ "${AUTOMATION_PATH_GATE_PATHS_FILE}" = "/dev/null" ] || rm -f "${AUTOMATION_PATH_GATE_PATHS_FILE}"
                 exit 0
+              fi
+              # Issue #8809: the test-only approval marker binds implement to
+              # the plan's paths, so it lands before /approved; a failed post holds.
+              if [ -n "${heal_to_marker}" ]; then
+                if ! gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments" \
+                  -f body="Automatic approval of a test-only workflow-heal plan: implementation is limited to the files listed in the marker below, and a change that deletes a file, removes tests or asserts, or adds a skip is refused."$'\n\n'"${heal_to_marker}" >/dev/null 2>&1; then
+                  echo "AI_PHASE_GATE_V1 phase=plan gate=heal_test_only outcome=hold reason=marker_post_failed issue=${ISSUE_NUMBER}"
+                  echo "auto_approve_hold_reason=heal_test_only_marker_failed" >> "$GITHUB_OUTPUT"
+                  {
+                    echo "### Automatic plan approval held (test-only heal marker)"
+                    echo ""
+                    echo "The test-only approval marker could not be posted, so no automatic \`/approved\` was posted. A maintainer can review the plan and reply \`/approved\`."
+                  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+                  exit 0
+                fi
               fi
               # Brief pause so the plan comment is fully indexed by GitHub before
               # the auto-approval comment triggers the implement workflow. Without

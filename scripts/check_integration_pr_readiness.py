@@ -13,9 +13,13 @@ This script reads the tracking issue's body, counts unticked `[ ]`
 sub-issue checkboxes, and posts a commit status of:
   - success when 0 unchecked items, OR when an explicit override
     label `ai:override-incomplete-merge` is applied to the integration
-    PR (auditable escape valve).
+    PR (auditable escape valve). The override label also yields success
+    when the head ref's issue lacks `ai:orchestrator-tracking`.
   - failure when >0 unchecked items, OR when the tracking issue body
     contains no parseable checkbox items, AND no override label.
+  - failure when the issue linked from `orchestrator/project-<N>` is not
+    labeled `ai:orchestrator-tracking` (readiness cannot be verified)
+    and no override label is applied.
 
 The integration PR's head ref is the input — by convention orchestrator
 integration branches are `orchestrator/project-<N>`. The script derives
@@ -191,6 +195,8 @@ def main() -> int:
 		if args.tracking_body_file and args.tracking_body_file.exists():
 			issue["body"] = args.tracking_body_file.read_text(encoding="utf-8")
 
+	labels_from_file = issue is not None and bool(issue["labels"])
+
 	if issue is None or not issue["body"] or not issue["labels"]:
 		fetched_issue = _fetch_issue(args.repo, tracking_num)
 		if fetched_issue is None:
@@ -207,12 +213,32 @@ def main() -> int:
 			if not issue["body"]:
 				issue["body"] = fetched_issue["body"]
 
+	if TRACKING_LABEL not in issue["labels"] and labels_from_file:
+		# A non-empty --tracking-labels-file can be an incomplete poller
+		# snapshot (a failed label read cached as [] and then extended by
+		# another label write). Re-read the labels once before failing
+		# closed; keep the file labels when the fresh read fails.
+		fresh_issue = _fetch_issue(args.repo, tracking_num)
+		if fresh_issue is not None and fresh_issue["labels"]:
+			issue["labels"] = fresh_issue["labels"]
+
 	if TRACKING_LABEL not in issue["labels"]:
-		# Branch matches orchestrator/project-N but the linked issue is
-		# not actually a tracking issue. Surface as neutral success.
-		desc = f"issue #{tracking_num} is not labeled {TRACKING_LABEL}; readiness check does not apply"
-		print(f"::notice::{desc}")
-		if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "success", desc, tracking_url):
+		# Branch matches orchestrator/project-N but the linked issue lacks
+		# the tracking label. Fail closed (BUG-002 of
+		# analysis/workflow-optimization-2026-10-06.md): an accidentally
+		# removed label must not turn the required status green for an
+		# incomplete project. No automation removes the tracking label, so
+		# a normal orchestrator final merge is unaffected. The override
+		# label remains the auditable escape valve.
+		if OVERRIDE_LABEL in pr_labels:
+			desc = f"override label {OVERRIDE_LABEL!r} applied: tracking label {TRACKING_LABEL} is missing on #{tracking_num}"
+			print(f"::notice::{desc}")
+			if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "success", desc, tracking_url):
+				return 1
+			return 0
+		desc = f"issue #{tracking_num} is not labeled {TRACKING_LABEL}; readiness cannot be verified (apply {OVERRIDE_LABEL} to override)"
+		print(f"::error::[integration-pr-readiness] {desc}", file=sys.stderr)
+		if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "failure", desc, tracking_url):
 			return 1
 		return 0
 

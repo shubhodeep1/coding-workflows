@@ -134,6 +134,7 @@ class RetrievalResult:
     keyword_method: str  # "llm", "plain", or "none"
     miss_reason: str | None
     selected_lesson_ids: tuple[str, ...] = ()
+    records_considered: int = 0
 
 
 def parse_bool(value: Any, default: bool = False) -> bool:
@@ -2675,6 +2676,9 @@ def retrieve_memory_context(
         keyword_method=keyword_method,
         miss_reason=miss_reason,
         selected_lesson_ids=tuple(lesson_ids),
+        # Eligible pool after status/prune/schema/category/scope/dedupe filters,
+        # before token-budget and max_records selection; lessons are counted separately.
+        records_considered=len(scored),
     )
 
 

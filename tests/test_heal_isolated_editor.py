@@ -952,3 +952,106 @@ def test_heal_gate_budget_counts_from_the_job_start(tmp_path: Path) -> None:
 	assert run["rc"] == 0, run["stderr"]
 	assert run["lines"] == ["editor", "validator"]
 	assert "phase=prepush_gate outcome=skipped reason=step_budget" in run["stderr"]
+
+
+# --- test-only heal lock (issue #8809) ---------------------------------------
+
+_LOCKED_TEST = "def test_fix():\n\tassert 1 == 1\n\tassert 2 == 2\n"
+
+
+def _locked_heal_run(tmp_path: Path, edit: str, *, lock: str | None = "tests/test_fix.py\n", lock_missing: bool = False) -> dict:
+	host = tmp_path / "host"
+	(host / "scripts").mkdir(parents=True)
+	(host / "tests").mkdir()
+	(host / "scripts/fix.py").write_text("old\n")
+	(host / "tests/test_fix.py").write_text(_LOCKED_TEST)
+	git_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	subprocess.run(["git", "init", "-q", str(host)], check=True, env=git_env)
+	subprocess.run(["git", "add", "--all"], cwd=host, check=True, env=git_env)
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("review_untrusted_workspace.py", "files_touched_scope_guard.py"):
+		shutil.copy(ROOT / "scripts" / name, support / name)
+	(support / "validate_changed_files_syntax.sh").write_text("#!/bin/bash\nexit 0\n")
+	(support / "clarify_openrouter_broker.py").write_text(
+		"import socket,sys,time\ns=socket.socket(socket.AF_UNIX)\ns.bind(sys.argv[2])\ns.listen(1)\ntime.sleep(30)\n"
+	)
+	trusted = tmp_path / ".codex-workflow-src/scripts/clarify_sandbox"
+	trusted.mkdir(parents=True)
+	(trusted / "Dockerfile").write_text("FROM scratch\n")
+	edit_script = tmp_path / "edit.sh"
+	edit_script.write_text("#!/bin/bash\ncd \"$1\"\n" + edit + "\n")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	docker = bin_dir / "docker"
+	docker.write_text("""#!/bin/bash
+case "$1" in
+  build) echo fake-image ;;
+  run)
+    [[ "$*" == *"/validator.sh"* ]] && exit 0
+    for arg in "$@"; do
+      case "$arg" in
+        type=bind,src=*,dst=/results) dest="${arg#type=bind,src=}"; printf 'isolated result\\n' > "${dest%%,dst=*}/output" ;;
+        type=bind,src=*,dst=/source) dest="${arg#type=bind,src=}"; bash "__EDIT__" "${dest%%,dst=*}" ;;
+      esac
+    done
+    ;;
+  ps|rm) ;;
+  *) exit 1 ;;
+esac
+""".replace("__EDIT__", str(edit_script)))
+	docker.chmod(0o755)
+	prompt = tmp_path / "prompt"
+	prompt.write_text("Edit the test")
+	scope = tmp_path / "scope"
+	scope.write_text(lock if lock is not None else "scripts/fix.py\ntests/**\nchangelog.d/*.md\n")
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PREPUSH_", "HEAL_TEST_ONLY_"))}
+	env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", OPENROUTER_API_KEY="fake-model-key", HEAL_SCOPE_FILE=str(scope),
+		HEAL_TRUSTED_SUPPORT_DIR=str(support), RUNNER_TEMP=str(tmp_path), GITHUB_WORKSPACE=str(tmp_path),
+		WORKSPACE_PATH=str(host), PYTHONDONTWRITEBYTECODE="1")
+	if lock is not None:
+		lock_file = tmp_path / "heal-test-only-lock.txt"
+		if not lock_missing:
+			lock_file.write_text(lock)
+		env["HEAL_TEST_ONLY_LOCK_FILE"] = str(lock_file)
+	result = subprocess.run(["bash", str(ROOT / "scripts/heal_isolated_implement.sh"), str(prompt), str(tmp_path / "output")],
+		env=env, capture_output=True, text=True, check=False, timeout=300)
+	return {"rc": result.returncode, "stderr": result.stderr, "host": host}
+
+
+def test_test_only_lock_refuses_a_script_edit(tmp_path: Path) -> None:
+	run = _locked_heal_run(tmp_path, "printf 'new\\n' > scripts/fix.py")
+	assert run["rc"] == 42, run["stderr"]
+	assert "reason=out_of_heal_scope" in run["stderr"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "old\n"
+
+
+@pytest.mark.parametrize("edit", [
+	"printf 'def test_fix():\\n\\tassert 1 == 1\\n' > tests/test_fix.py",
+	"printf 'import pytest\\n\\n@pytest.mark.skip\\n' > x && cat tests/test_fix.py >> x && mv x tests/test_fix.py",
+	"rm tests/test_fix.py",
+])
+def test_test_only_lock_refuses_a_weakened_test_before_transfer(tmp_path: Path, edit: str) -> None:
+	run = _locked_heal_run(tmp_path, edit)
+	assert run["rc"] == 42, (edit, run["stderr"])
+	assert "outcome=failed reason=out_of_heal_scope detail=test_only_lock" in run["stderr"]
+	assert (run["host"] / "tests/test_fix.py").read_text() == _LOCKED_TEST
+
+
+def test_test_only_lock_allows_a_strengthened_test(tmp_path: Path) -> None:
+	run = _locked_heal_run(tmp_path, "printf '\\tassert 3 == 3\\n' >> tests/test_fix.py")
+	assert run["rc"] == 0, run["stderr"]
+	assert (run["host"] / "tests/test_fix.py").read_text() == _LOCKED_TEST + "\tassert 3 == 3\n"
+
+
+def test_missing_test_only_lock_file_refuses(tmp_path: Path) -> None:
+	run = _locked_heal_run(tmp_path, "printf '\\tassert 3 == 3\\n' >> tests/test_fix.py", lock_missing=True)
+	assert run["rc"] == 42, run["stderr"]
+	assert "detail=test_only_lock" in run["stderr"]
+	assert (run["host"] / "tests/test_fix.py").read_text() == _LOCKED_TEST
+
+
+def test_no_test_only_lock_keeps_the_heal_scope(tmp_path: Path) -> None:
+	run = _locked_heal_run(tmp_path, "printf 'new\\n' > scripts/fix.py", lock=None)
+	assert run["rc"] == 0, run["stderr"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
