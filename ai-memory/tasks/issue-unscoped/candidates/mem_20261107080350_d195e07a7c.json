@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1048-1056 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The reconciliation-failure warning in `_resilient_phase_swap` says observed prior phase labels \"were removed\", but the preceding DELETE loop only warns on failure and continues, so the claim may be false when a DELETE and the reconciliation GET both fail.\n  WHY: The log is misleading to operators, but return code and label state are unaffected. All four reviewers rated it NIT (low).\n- tests/test_ai_label_precreation_contract.py:Pre-push gate failure | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push gate reports a test failure because the test contract was not updated for the new additive label swapping logic in scripts/review_rb_judge.sh.\n  WHY: Rated MAJOR (high) by one reviewer only. Severity disagreement: anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash said the failure could not be mapped to the diff, or called it a sandbox artifact, and did not report it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_rb_judge.sh:1056 (DELETE loop 1048-1053) | severity=low | confidence=4\n  PROBLEM: The warning says observed prior phase labels \"were removed\" without checking that the DELETEs succeeded.\n  WHY: The only effect is a misleading diagnostic when a DELETE and the reconciliation GET both fail. Earlier per-DELETE warnings still exist. Source severity: NIT. Hardening suggestion: reword to \"attempted to remove ...\" or count failed DELETEs. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ai_label_precreation_contract.py:Pre-push gate failure | severity=high | confidence=4\n  PROBLEM: A test failure was detected in the pre-push gate due to changes in label swapping logic.\n  WHY: The test contract was not updated for the new additive label swapping logic in scripts/review_rb_judge.sh. Source severity: MAJOR.\n- scripts/review_rb_judge.sh:1050-1056 | severity=low | confidence=4\n  PROBLEM: The reconciliation failure warning is inaccurate when the reconciliation GET fails.\n  WHY: It logs that prior phase labels were removed even though the removal loop may have failed, which can confuse operators. Source severity: NIT.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_rb_judge.sh:1050-1056 | severity=low | confidence=4\n  PROBLEM: The warning says the observed prior phase labels \"were removed\", but the preceding DELETE calls are best-effort and continue after failures.\n  WHY: If a DELETE and the reconciliation GET both fail, the warning falsely reports removal and obscures the actual issue state. Source severity: NIT.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_rb_judge.sh:1056 (DELETE loop 1048-1051) | severity=low | confidence=4\n  PROBLEM: The warning states \"observed prior phase labels were removed\", but a failed DELETE only emits a warning and continues. When the reconciliation GET at 1054 also fails, the log asserts removals that did not occur.\n  WHY: An operator may conclude the old phase labels are gone while they remain on the issue, which reintroduces the earlier misdiagnosis in the opposite direction. Source severity: NIT.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "83db7e1f443c87f2ccfb5ba31dabcac5b0a8cd81d52c2bdf857ffe8f2248b947",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8950,
+    "run_id": "42351937649",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42351937649",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107080350_d195e07a7c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8950,
+    "run_id": "42351937649"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T08:03:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
