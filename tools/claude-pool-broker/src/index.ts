@@ -456,12 +456,20 @@ export function applyChatgptWrite(stored: ChatgptRecord | null, write: ChatgptWr
 	if (write.base_generation !== current) {
 		return { status: 409, body: { error: "generation_conflict" } };
 	}
+	// A window the write does not report keeps its stored reading, so a run
+	// that timed out cannot clear a known value at or above the gate.
+	const prior = stored && isPlainObject(stored.usage) ? stored.usage : null;
+	const primary = write.usage.primary?.used_percent == null ? null : write.usage.primary;
+	const secondary = write.usage.secondary?.used_percent == null ? null : write.usage.secondary;
+	const priorFive: unknown = prior ? prior.five_hour : null;
+	const priorWeekly: unknown = prior ? prior.weekly : null;
+	const priorResets = prior && isPlainObject(prior.resets) ? prior.resets : null;
 	const usage: ChatgptUsage = {
-		five_hour: write.usage.primary?.used_percent == null ? null : write.usage.primary.used_percent / 100,
-		weekly: write.usage.secondary?.used_percent == null ? null : write.usage.secondary.used_percent / 100,
+		five_hour: primary ? (primary.used_percent as number) / 100 : isNumber(priorFive) ? priorFive : null,
+		weekly: secondary ? (secondary.used_percent as number) / 100 : isNumber(priorWeekly) ? priorWeekly : null,
 		resets: {
-			five_hour: write.usage.primary?.reset ?? null,
-			weekly: write.usage.secondary?.reset ?? null,
+			five_hour: primary ? primary.reset : (priorResets?.five_hour ?? null),
+			weekly: secondary ? secondary.reset : (priorResets?.weekly ?? null),
 		},
 	};
 	const generation = current + 1;

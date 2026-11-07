@@ -16,10 +16,13 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import threading
+import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -137,7 +140,8 @@ class _Stub(http.server.BaseHTTPRequestHandler):
 	broker_status = 200
 	broker_body: object = {}
 	oidc_body: object = {"value": JWT}
-	seen: list[dict] = []
+	broker_delay: float = 0.0
+	seen: ClassVar[list[dict]] = []
 
 	def log_message(self, *_args):
 		pass
@@ -151,6 +155,8 @@ class _Stub(http.server.BaseHTTPRequestHandler):
 		self.wfile.write(payload)
 
 	def _broker(self, expected_path: str) -> None:
+		if _Stub.broker_delay:
+			time.sleep(_Stub.broker_delay)
 		if self.path == expected_path and self.headers.get("Authorization") == f"Bearer {JWT}":
 			self._send(_Stub.broker_status, _Stub.broker_body)
 		else:
@@ -181,6 +187,7 @@ def env(tmp_path: Path):
 	_Stub.broker_status = 200
 	_Stub.broker_body = {"account": "ALPHA", "auth_json": _auth_json()}
 	_Stub.oidc_body = {"value": JWT}
+	_Stub.broker_delay = 0.0
 	config = tmp_path / "claude_engine.json"
 	config.write_text(json.dumps({"broker_url": f"http://127.0.0.1:{port}/v1/pool", "oidc_audience": "coding-workflows-claude-pool"}), encoding="utf-8")
 	runner_temp = tmp_path / "rt"
@@ -286,11 +293,11 @@ def test_status_mode_outputs_whitelisted_metadata(env: dict) -> None:
 	assert json.loads(raw) == {
 		"accounts": [
 			{"account": "ALPHA", "generation": 4, "last_refresh": "2026-11-07T10:00:00.000Z", "last_outcome": "ok",
-			 "usage": {"five_hour": 0.1, "weekly": 0.25, "resets": {"five_hour": 900, "weekly": "2026-11-10T00:00:00Z"}},
-			 "usable": True, "reason": None},
+				"usage": {"five_hour": 0.1, "weekly": 0.25, "resets": {"five_hour": 900, "weekly": "2026-11-10T00:00:00Z"}},
+				"usable": True, "reason": None},
 			{"account": "BETA", "generation": 2, "last_refresh": None, "last_outcome": "auth_failed",
-			 "usage": {"five_hour": None, "weekly": None, "resets": {"five_hour": None, "weekly": None}},
-			 "usable": False, "reason": "auth_rejected"},
+				"usage": {"five_hour": None, "weekly": None, "resets": {"five_hour": None, "weekly": None}},
+				"usable": False, "reason": "auth_rejected"},
 		],
 		"gate": 0.9,
 	}
@@ -379,6 +386,45 @@ def test_config_invalid_when_the_config_helper_fails(env: dict, tmp_path: Path) 
 	assert _Stub.seen == []
 
 
+def test_curl_missing(env: dict, tmp_path: Path) -> None:
+	bindir = tmp_path / "nocurl"
+	bindir.mkdir()
+	for tool in ("dirname", "python3", "rm"):
+		found = shutil.which(tool)
+		assert found, tool
+		(bindir / tool).symlink_to(found)
+	result = subprocess.run(
+		[shutil.which("bash") or "/bin/bash", str(SCRIPT)],
+		capture_output=True, text=True, env=dict(env["env"], PATH=str(bindir)), timeout=60, check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	outputs = _read_outputs(Path(env["env"]["GITHUB_OUTPUT"]))
+	assert (outputs["available"], outputs["reason"]) == ("false", "curl_missing")
+	assert _Stub.seen == []
+
+
+@pytest.mark.parametrize("mode", ["token", "status"])
+def test_work_dir_failed(env: dict, mode: str) -> None:
+	missing = env["tmp"] / "missing-runner-temp"
+	_, outputs = _run(env, RUNNER_TEMP=str(missing), CHATGPT_POOL_MODE=mode)
+	assert outputs == {"available": "false", "reason": "work_dir_failed", "account": "", "codex_home": "", "status": ""}
+	assert not missing.exists()
+	assert _Stub.seen == []
+
+
+def test_cancelled_run_removes_the_work_directory(env: dict) -> None:
+	_Stub.broker_delay = 2.0
+	proc = subprocess.Popen(["bash", str(SCRIPT)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env["env"])
+	deadline = time.monotonic() + 30
+	while time.monotonic() < deadline and not any(e["method"] == "POST" for e in _Stub.seen):
+		time.sleep(0.05)
+	assert list(env["rt"].glob("chatgpt-pool-work.*"))
+	proc.send_signal(signal.SIGTERM)
+	proc.communicate(timeout=60)
+	assert proc.returncode == 143
+	_no_work_dirs(env)
+
+
 def test_unconfigured_broker(env: dict) -> None:
 	env["config"].write_text(json.dumps({"broker_url": ""}), encoding="utf-8")
 	_, outputs = _run(env)
@@ -407,7 +453,7 @@ def test_no_oidc_permission(env: dict) -> None:
 
 
 def test_oidc_request_rejected(env: dict) -> None:
-	result, outputs = _run(env, ACTIONS_ID_TOKEN_REQUEST_TOKEN="wrong")
+	_, outputs = _run(env, ACTIONS_ID_TOKEN_REQUEST_TOKEN="wrong")
 	assert (outputs["available"], outputs["reason"]) == ("false", "oidc_request_failed_401")
 	assert len(_Stub.seen) == 1
 	assert not env["pool"].exists()
@@ -557,15 +603,15 @@ def test_action_metadata() -> None:
 	assert "using: node24" in text
 	assert "main: main.js" in text and "post: post.js" in text and "post-if: always()" in text
 	outputs = text.split("\noutputs:\n", 1)[1].split("\nruns:\n", 1)[0]
-	assert re.findall(r"^  ([a-z_]+):$", outputs, re.M) == ["available", "reason", "account", "codex_home", "status"]
+	assert re.findall(r"^  ([a-z_]+):$", outputs, re.MULTILINE) == ["available", "reason", "account", "codex_home", "status"]
 	inputs = text.split("\ninputs:\n", 1)[1].split("\noutputs:\n", 1)[0]
-	assert re.findall(r"^  ([a-z_]+):$", inputs, re.M) == ["mode", "config_path"]
+	assert re.findall(r"^  ([a-z_]+):$", inputs, re.MULTILINE) == ["mode", "config_path"]
 	assert "id-token: write" in text
 
 
 def test_workflows_using_the_action_are_in_the_broker_allowlist() -> None:
 	source = (REPO_ROOT / "tools" / "claude-pool-broker" / "src" / "index.ts").read_text(encoding="utf-8")
-	match = re.search(r"ALLOWED_WORKFLOW_FILES[^=]*=\s*Object\.freeze\(\[(.*?)\]\)", source, re.S)
+	match = re.search(r"ALLOWED_WORKFLOW_FILES[^=]*=\s*Object\.freeze\(\[(.*?)\]\)", source, re.DOTALL)
 	assert match, "ALLOWED_WORKFLOW_FILES not found in the broker source"
 	allowed = set(re.findall(r'"([^"]+)"', match.group(1)))
 	assert allowed, "ALLOWED_WORKFLOW_FILES parsed empty"

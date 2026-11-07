@@ -925,7 +925,19 @@ describe("chatgpt writer", () => {
 		expect(after?.last_refresh).toBe(before?.last_refresh);
 		expect(after?.seed_sha256).toBe(SEED);
 		expect(after?.last_outcome).toBe("timeout");
-		expect(after?.usage).toEqual({ five_hour: null, weekly: null, resets: { five_hour: null, weekly: null } });
+		expect(after?.usage).toEqual(before?.usage);
+	});
+
+	it("an unreported usage window keeps its stored reading, so a gated account stays gated", async () => {
+		const s = stub();
+		const store = fakeStore();
+		await writer(s, store, "PUT", "ALPHA", writeBody({ usage: { primary: { used_percent: 10, resets_in_seconds: 900 }, secondary: { used_percent: 97, resets_at: 1760000000 } } }));
+		const body = writeBody({ reseed: false, base_generation: 1, outcome: "timeout", usage: { primary: { used_percent: 20 }, secondary: null } });
+		delete body.auth_json;
+		expect((await writer(s, store, "PUT", "ALPHA", body)).status).toBe(200);
+		expect(storedRecord(store, "ALPHA")?.usage).toEqual({ five_hour: 0.2, weekly: 0.97, resets: { five_hour: null, weekly: 1760000000 } });
+		const read = await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store));
+		expect(read.body.error).toBe("chatgpt_pool_empty");
 	});
 
 	it("a PUT with auth_json replaces the file and advances last_refresh", async () => {

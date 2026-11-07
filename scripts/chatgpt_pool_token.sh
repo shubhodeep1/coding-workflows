@@ -115,6 +115,16 @@ command -v curl >/dev/null 2>&1 || finish false curl_missing
 umask 077
 work="$(mktemp -d "${RUNNER_TEMP:-/tmp}/chatgpt-pool-work.XXXXXX" 2>/dev/null)" || { work=""; finish false work_dir_failed; }
 chmod 0700 "${work}"
+# The work directory holds the OIDC request token, the JWT and auth_json; a
+# cancelled step never reaches finish(), so remove it on every exit as well.
+cleanup_work()
+{
+	if [ -n "${work}" ] && [ -d "${work}" ] && [ ! -L "${work}" ]; then
+		rm -rf -- "${work}"
+	fi
+}
+trap cleanup_work EXIT
+trap 'cleanup_work; exit 143' INT TERM
 
 # 2. The OIDC token (ACTIONS_ID_TOKEN_REQUEST_TOKEN authenticates the request).
 printf 'Authorization: bearer %s\n' "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" > "${work}/oidc-request-headers"
