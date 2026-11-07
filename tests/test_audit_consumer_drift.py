@@ -1196,6 +1196,31 @@ def test_repair_records_sync_pull_request_age() -> None:
 			assert f"stale={'true' if expected_stale else 'false'}" in out.getvalue()
 
 
+def test_repair_treats_a_sync_pull_request_for_another_release_as_stale() -> None:
+	from datetime import datetime, timezone
+
+	now = datetime(2026, 11, 7, 8, 0, tzinfo=timezone.utc)
+	fresh = "2026-11-06T08:00:00Z"
+	old_release = _sync_pull(fresh)
+	old_release["number"] = 4
+	old_release["head"]["ref"] = "auto/update-workflows-fedcba987654"
+	cases = [
+		([old_release], 4, True),  # only an older release's pull request is open
+		([old_release, _sync_pull(fresh)], 3, False),  # the audited release's one wins
+	]
+	for pulls, expected_pr, expected_stale in cases:
+		with tempfile.TemporaryDirectory(prefix="drift-repair-sync-release-") as td:
+			tmp = Path(td)
+			replies = [PlannedCall(prefix=("gh", "api", "-H"), stdout=json.dumps(pulls))]
+			repairer, _executor, _rendered, _bare = _repair_fixture(tmp, replies, {"ai-plan.yml": "x\n"})
+			repairer.now = now
+			with contextlib.redirect_stdout(io.StringIO()):
+				result = repairer.repair("owner/repo", {"ai-plan.yml"})
+			assert result.reason == "sync_pull_request_open", result
+			assert result.pr_number == expected_pr, result
+			assert result.pr_stale is expected_stale, result
+
+
 def _run_report_step(tmp: Path, summary: dict) -> tuple[str, str, str]:
 	"""Run the workflow's inline report script; return (level, telegram, summary_md)."""
 	import textwrap
@@ -1507,6 +1532,7 @@ def main() -> int:
 	test_repair_refreshes_existing_pull_request_and_skips_identical_runs()
 	test_repair_skips_when_a_sync_pull_request_is_open()
 	test_repair_records_sync_pull_request_age()
+	test_repair_treats_a_sync_pull_request_for_another_release_as_stale()
 	test_report_stays_quiet_when_a_fresh_sync_pull_request_covers_the_drift()
 	test_report_warns_when_the_sync_pull_request_is_stale_or_its_age_unknown()
 	test_report_warns_for_uncovered_drift_errors_and_restore_pull_requests()

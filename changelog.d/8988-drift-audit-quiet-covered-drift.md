@@ -1,7 +1,7 @@
 <!-- changelog: fixed -->
 - **The consumer drift audit no longer warns about drift that an open sync pull request already fixes.** It warns again if that pull request stays open for 3 days.
 
-The daily `audit_consumer_drift.yml` run sent a Telegram WARNING whenever a consumer drifted from the `stable` release, even when the consumer had an open `auto/update-workflows-*` or `ai-sync/stable` pull request that restores every wrapper. That drift is now reported at `DEBUG` with a "nothing to do" message naming each pull request, which the default `ALERT_MSG_LEVEL=WARNING` hides. A sync pull request open for 3 days or longer, or one whose open date cannot be read, counts as stuck and raises a WARNING that names it. Fetch errors, failed repairs, new or refreshed restore pull requests, and drift with no sync pull request still warn as before.
+The daily `audit_consumer_drift.yml` run sent a Telegram WARNING whenever a consumer drifted from the `stable` release, even when the consumer had an open `auto/update-workflows-*` or `ai-sync/stable` pull request that restores every wrapper. That drift is now reported at `DEBUG` with a "nothing to do" message naming each pull request, which the default `ALERT_MSG_LEVEL=WARNING` hides. A sync pull request open for 3 days or longer, one whose open date cannot be read, or one built for an older release than the audited one counts as stuck and raises a WARNING that names it. Fetch errors, failed repairs, new or refreshed restore pull requests, and drift with no sync pull request still warn as before.
 
 | The numbers that matter | Value |
 | --- | --- |

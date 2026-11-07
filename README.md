@@ -1313,7 +1313,7 @@ line (a `sync_pull_request_open` skip adds `stale=true|false`); the run summary 
 Drift that an open sync pull request covers needs no action, so it is sent at
 `DEBUG` (hidden by the default `ALERT_MSG_LEVEL=WARNING`) while that pull request
 is less than 3 days old. Once it has been open 3 days (or its open date is
-unknown) the pull request counts as stuck and the alert is a `WARNING` naming
+unknown, or its branch names another release) the pull request counts as stuck and the alert is a `WARNING` naming
 it. Fetch errors, failed repairs, new or refreshed restore pull requests, and
 drift with no sync pull request still send a `WARNING`. Set
 `CONSUMER_DRIFT_REPAIR_ENABLED=false` in this repository to keep the alert

@@ -737,6 +737,21 @@ def _sync_pull_request_is_stale(created_at: Any, now: datetime) -> bool:
 	return (now - opened).total_seconds() >= SYNC_PR_STALE_AFTER_SECONDS
 
 
+def _sync_pull_request_is_for_release(ref: str, stable_sha: str) -> bool:
+	"""Return False when an ``auto/update-workflows-<sha12>`` ref names another release.
+
+	Merging a sync pull request for an older release would not install the
+	audited wrappers, so it does not cover the drift. ``ai-sync/stable`` and a
+	suffix that is not 12 hex characters carry no release and count as covering.
+	"""
+	if not ref.startswith(SYNC_PR_BRANCH_PREFIX):
+		return True
+	suffix = ref[len(SYNC_PR_BRANCH_PREFIX):].lower()
+	if not re.fullmatch(r"[0-9a-f]{12}", suffix):
+		return True
+	return suffix == str(stable_sha or "").lower()[:12]
+
+
 def load_rendered_templates(templates_dir: Path, stable_sha: str, renderer: Any = None) -> dict[str, str]:
 	"""Return ``{name: rendered text}`` for every ``*.yml`` template, unnormalized."""
 	render = renderer or pin_reusable_workflow_refs
@@ -767,7 +782,8 @@ class RepairResult:
 	pr_url: str | None = None
 	pr_created_at: str | None = None
 	# Only set for a sync_pull_request_open skip: True once the sync pull
-	# request has been open for SYNC_PR_STALE_AFTER_SECONDS or longer.
+	# request has been open for SYNC_PR_STALE_AFTER_SECONDS or longer, or when
+	# its branch names a release other than the audited one.
 	pr_stale: bool | None = None
 
 
@@ -936,6 +952,7 @@ class DriftRepairer:
 
 		pulls = self._open_pulls(repository)
 		existing = None
+		sync_pulls: list[tuple[dict[str, Any], bool]] = []
 		for pull in pulls:
 			head = pull.get("head") or {}
 			ref = str(head.get("ref") or "")
@@ -943,20 +960,26 @@ class DriftRepairer:
 			if head_repo != repository:
 				continue
 			if ref.startswith(SYNC_PR_BRANCH_PREFIX) or ref == SYNC_FALLBACK_BRANCH:
-				created_at = pull.get("created_at")
-				stale = _sync_pull_request_is_stale(created_at, self.now or datetime.now(timezone.utc))
-				print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=sync_pull_request_open pr={pull.get('number')} stale={'true' if stale else 'false'}")
-				return RepairResult(
-					repository=repository,
-					outcome="skipped",
-					reason="sync_pull_request_open",
-					pr_number=pull.get("number"),
-					pr_url=pull.get("html_url"),
-					pr_created_at=created_at if isinstance(created_at, str) else None,
-					pr_stale=stale,
-				)
+				sync_pulls.append((pull, _sync_pull_request_is_for_release(ref, self.stable_sha)))
+				continue
 			if ref == RESTORE_BRANCH and RESTORE_MARKER in str(pull.get("body") or ""):
 				existing = pull
+		if sync_pulls:
+			# Prefer a sync pull request for the audited release. One for another
+			# release still skips the repair but counts as stale, so the alert fires.
+			pull, for_release = next((item for item in sync_pulls if item[1]), sync_pulls[0])
+			created_at = pull.get("created_at")
+			stale = not for_release or _sync_pull_request_is_stale(created_at, self.now or datetime.now(timezone.utc))
+			print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=sync_pull_request_open pr={pull.get('number')} stale={'true' if stale else 'false'}")
+			return RepairResult(
+				repository=repository,
+				outcome="skipped",
+				reason="sync_pull_request_open",
+				pr_number=pull.get("number"),
+				pr_url=pull.get("html_url"),
+				pr_created_at=created_at if isinstance(created_at, str) else None,
+				pr_stale=stale,
+			)
 
 		self._git(["add", "--", *[f".github/workflows/{name}" for name in files]], cwd=checkout)
 		author_name, author_email = RESTORE_COMMIT_AUTHOR
