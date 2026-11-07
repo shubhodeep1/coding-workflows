@@ -517,6 +517,25 @@ def test_prepare_analysis_context_percentiles_unchanged_and_unknown_count_surfac
 	assert ctx_stats["recent_runs"][0]["duration_known"] is False
 
 
+def test_prepare_analysis_context_summary_unknown_count_null_without_run_rows():
+	ctx = analyzer.prepare_analysis_context(
+		{
+			"source_files": [],
+			"collector_report": None,
+			"run_metrics": [],
+			"summary_stats": {
+				"overall": {"total_runs": 3},
+				"per_repo": {"o/r": {"total_runs": 3}},
+				"per_workflow_family": {"ci": {"total_runs": 3}},
+			},
+		}
+	)
+	assert ctx["summary"]["total_runs"] == 3
+	assert ctx["summary"]["unknown_duration_count"] is None
+	assert ctx["per_repo"]["o/r"]["unknown_duration_count"] is None
+	assert ctx["per_workflow_family"]["ci"]["unknown_duration_count"] is None
+
+
 # ---------- script-mode entry point ---------------------------------------
 # CI's "Workflow log analyzer coverage gate" invokes this file directly:
 #   python3 -m coverage run tests/test_analyze_workflow_logs.py

@@ -364,10 +364,11 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 	summary = dict(summary)
 	summary["cost_telemetry"] = aggregate_run_cost_telemetry(runs)
 	# Collector-supplied summaries never pass through _summarize_runs, so add
-	# the count here; setdefault never overwrites an existing value.
+	# the count here; setdefault never overwrites an existing value. With no
+	# run rows there is nothing to check, so the count is unknown (None).
 	summary.setdefault(
 		"unknown_duration_count",
-		sum(1 for run in runs if _run_duration_known(run) is False),
+		sum(1 for run in runs if _run_duration_known(run) is False) if runs else None,
 	)
 
 	per_repo: dict[str, dict[str, Any]] = {}
