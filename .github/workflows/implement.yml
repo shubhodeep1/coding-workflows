@@ -2217,6 +2217,13 @@ jobs:
           # later bulk-delete override identity read runs only conditionally;
           # it cannot supply this grant's pipeline identity before the editor.
           pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"
+          # #8956: the files_touched guards reuse this login (no extra API
+          # call) for the auto-heal companion rule. Exported only after the
+          # login shape check, so no value can inject into GITHUB_ENV; unset
+          # or empty means no companion paths.
+          if [[ "${pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+            echo "IMPLEMENT_SCOPE_PIPELINE_LOGIN=${pipeline_login}" >> "$GITHUB_ENV"
+          fi
           automation_grant_path="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/automation_path_grant.json"
           # --origin-repo (Q82): for a pipeline-authored re-issue or unblock
           # fix-up the guard reads each source issue once (gh api, at most 8
@@ -4757,6 +4764,7 @@ jobs:
                   "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' "${HEAL_SCOPE_FILE:?}"; else printf '%s' "${ISSUE_BODY_FILE:-}"; fi)" \
                   "${scope_guard_extra_args[@]}" \
                   --issue-number "${ISSUE_NUMBER:-}" \
+                  --issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${IMPLEMENT_SCOPE_PIPELINE_LOGIN:-}" \
                   --staged-file "${scope_staged_file}" \
                   --allowlist-out "${scope_allowlist_file}")"
                 scope_rc=$?

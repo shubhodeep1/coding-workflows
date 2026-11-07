@@ -2155,6 +2155,180 @@ def test_heal_test_only_weakening_check_cli_logs_sanitized_reason() -> None:
 		assert "reason=file_deleted path=tests/test_x.py" in proc.stderr
 
 
+# --- #8956: auto-heal remediation companion paths ---------------------------
+
+_AUTO_HEAL_MARKER = "<!-- auto-heal-remediation:v1 sig=abc -->"
+_AUTO_HEAL_PLAN = ("## Files likely to change\n- `ft.games/app.py`\n- `db/contracts/streak_claim_ledger.yml`\n"
+	"- `tests/test_streaks_quest_contracts_indexes.py`\n")
+_AUTO_HEAL_COMPANIONS = ["db/contracts/streak_claim_ledger.yml", "tests/test_streaks_quest_contracts_indexes.py"]
+
+
+def _auto_heal_body(*entries: str) -> str:
+	return _AUTO_HEAL_MARKER + "\nSlowRoute POST /api/bet remediation.\n\n" + _body(*entries)
+
+
+def _auto_heal_meta(login: str = PIPELINE, association: str = "NONE", number: int = 42, marker: bool = True) -> dict:
+	body = _auto_heal_body("ft.games/app.py") if marker else _body("ft.games/app.py")
+	return {"number": number, "user": {"login": login}, "author_association": association, "body": body}
+
+
+def test_auto_heal_companion_path_shapes() -> None:
+	for ok in _AUTO_HEAL_COMPANIONS + ["db/contracts/x.yml", "tests/test_a.py", "db/contracts/_locks.yml",
+			"tests/test_streaks-quest.py", "tests/test_a.b.py"]:
+		assert guard.is_auto_heal_companion_path(ok), ok
+	for bad in ("db/contracts/../x.yml", "db/contracts/sub/x.yml", "tests/sub/test_x.py", "tests/conftest.py",
+			"tests/helper.py", "db/contracts/x.yaml", "db/contracts/.x.yml", "ft.games/app.py",
+			".github/workflows/x.yml", "scripts/test_x.py", "tests/test_x.sh", "db/contracts/", "", None,
+			"tests/test_a.py\n", "db/contracts/x.yml\n"):
+		assert not guard.is_auto_heal_companion_path(bad), bad
+
+
+def test_auto_heal_companions_allowed_requires_pipeline_author_and_marker() -> None:
+	body = _auto_heal_body("ft.games/app.py")
+	assert guard.auto_heal_companions_allowed(body, PIPELINE, PIPELINE) is True
+	assert guard.auto_heal_companions_allowed(body, "maintainer", PIPELINE) is False
+	assert guard.auto_heal_companions_allowed(_body("a.py"), PIPELINE, PIPELINE) is False
+	assert guard.auto_heal_companions_allowed("<!-- auto-heal-remediation:v1-->", PIPELINE, PIPELINE) is False
+	for login in ("", "bad login", "-x", None):
+		assert guard.auto_heal_companions_allowed(body, PIPELINE, login) is False, login
+		assert guard.auto_heal_companions_allowed(body, login, PIPELINE) is False, login
+	assert guard.auto_heal_companions_allowed(None, PIPELINE, PIPELINE) is False
+
+
+def test_path_in_scope_companions_default_off() -> None:
+	allowlist = ["ft.games/app.py"]
+	for path in _AUTO_HEAL_COMPANIONS:
+		assert not guard.path_in_scope(path, allowlist)
+		assert guard.path_in_scope(path, allowlist, allow_auto_heal_companions=True)
+	assert not guard.path_in_scope("tests/conftest.py", allowlist, allow_auto_heal_companions=True)
+	body = _auto_heal_body("ft.games/app.py")
+	staged = ["ft.games/app.py"] + _AUTO_HEAL_COMPANIONS
+	assert guard.evaluate(body, staged)[2] == _AUTO_HEAL_COMPANIONS
+	assert guard.evaluate(body, staged, allow_auto_heal_companions=True)[0] == guard.STATUS_IN_SCOPE
+	# Explicit scopes never get the companions.
+	assert guard.evaluate("", staged, allowlist_entries=["ft.games/**"],
+		allow_auto_heal_companions=True)[2] == _AUTO_HEAL_COMPANIONS
+
+
+def test_plan_files_outside_files_touched_auto_heal_companions() -> None:
+	body = _auto_heal_body("ft.games/app.py")
+	assert guard.plan_files_outside_files_touched(_AUTO_HEAL_PLAN, body, author_login=PIPELINE,
+		pipeline_login=PIPELINE) == []
+	assert guard.plan_files_outside_files_touched(_AUTO_HEAL_PLAN, body, author_login="maintainer",
+		pipeline_login=PIPELINE) == _AUTO_HEAL_COMPANIONS
+	assert guard.plan_files_outside_files_touched(_AUTO_HEAL_PLAN, _body("ft.games/app.py"), author_login=PIPELINE,
+		pipeline_login=PIPELINE) == _AUTO_HEAL_COMPANIONS
+	assert guard.plan_files_outside_files_touched(_AUTO_HEAL_PLAN, body) == _AUTO_HEAL_COMPANIONS
+	other = _AUTO_HEAL_PLAN + "- `ft.games/other.py`\n"
+	assert guard.plan_files_outside_files_touched(other, body, author_login=PIPELINE,
+		pipeline_login=PIPELINE) == ["ft.games/other.py"]
+	assert guard.plan_files_outside_files_touched(_AUTO_HEAL_PLAN, body, ["ai:workflow-heal"],
+		author_login="maintainer", pipeline_login=PIPELINE) == []
+
+
+def test_plan_gate_auto_heal_companions() -> None:
+	saved = _with_env()
+	try:
+		code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN, "true", _auto_heal_meta())
+		assert code == 0 and record["decision"] == "approve", record
+		assert record.get("auto_heal_companions") is True, record
+		# No pipeline login (plan.yml reads it only for protected plans):
+		# identity_unavailable makes plan.yml read it once and re-run.
+		code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN, "true", _auto_heal_meta(), login="")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "identity_unavailable", record
+		assert record["denied_paths"] == _AUTO_HEAL_COMPANIONS and "auto_heal_companions" not in record
+		# A person who copies the marker gets nothing, with or without a login.
+		for login in ("", PIPELINE):
+			code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN, "true",
+				_auto_heal_meta(login="maintainer", association="OWNER"), login=login)
+			if login:
+				assert record["reason"] == "plan_files_outside_files_touched", record
+				assert record["denied_paths"] == _AUTO_HEAL_COMPANIONS, record
+			else:
+				# Without a login the marker case asks for identity first; the
+				# re-run with the login then holds (case above).
+				assert record["reason"] == "identity_unavailable", record
+		# An author that can never be the pipeline login holds directly.
+		for author in ("", "bad login"):
+			code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN, "true", _auto_heal_meta(login=author), login="")
+			assert record["reason"] == "plan_files_outside_files_touched", record
+		# A non-companion outside path holds as before, login or not.
+		other = _AUTO_HEAL_PLAN + "- `ft.games/other.py`\n"
+		for login in ("", PIPELINE):
+			code, record = _run_plan_gate_cli(other, "true", _auto_heal_meta(), login=login)
+			assert record["reason"] == "plan_files_outside_files_touched", record
+			assert "ft.games/other.py" in record["denied_paths"], record
+		# The record key marks only approvals that needed the rule: not a hold
+		# on a non-companion path, and not a plan with no companion path.
+		code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN + "- `ft.games/other.py`\n", "true", _auto_heal_meta())
+		assert record["decision"] == "hold" and "auto_heal_companions" not in record, record
+		code, record = _run_plan_gate_cli("## Files likely to change\n- `ft.games/app.py`\n", "true",
+			_auto_heal_meta())
+		assert code == 0 and "auto_heal_companions" not in record, record
+		# Without the marker the record is unchanged.
+		code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN, "true", _auto_heal_meta(marker=False), login="")
+		assert record["reason"] == "plan_files_outside_files_touched", record
+		assert record["denied_paths"] == _AUTO_HEAL_COMPANIONS, record
+	finally:
+		_restore_env(saved)
+
+
+def test_cli_issue_body_mode_auto_heal_companions() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		body_file = tdp / "body.txt"
+		body_file.write_text(_auto_heal_body("ft.games/app.py"), encoding="utf-8")
+		staged_file = tdp / "staged.txt"
+		staged_file.write_text("ft.games/app.py\n" + "\n".join(_AUTO_HEAL_COMPANIONS) + "\n", encoding="utf-8")
+		meta_file = tdp / "meta.json"
+		meta_file.write_text(json.dumps(_auto_heal_meta()), encoding="utf-8")
+		base = [sys.executable, "-B", str(GUARD_SCRIPT), "--issue-body-file", str(body_file), "--staged-file",
+			str(staged_file), "--issue-number", "42", "--issue-meta-file", str(meta_file)]
+		proc = subprocess.run(base + ["--pipeline-login", PIPELINE], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_IN_SCOPE, proc.stdout
+		proc = subprocess.run(base, capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+		proc = subprocess.run(base + ["--pipeline-login", ""], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+		# Another author.
+		meta_file.write_text(json.dumps(_auto_heal_meta(login="maintainer", association="OWNER")), encoding="utf-8")
+		proc = subprocess.run(base + ["--pipeline-login", PIPELINE], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+		# Metadata for a different issue number.
+		meta_file.write_text(json.dumps(_auto_heal_meta(number=43)), encoding="utf-8")
+		proc = subprocess.run(base + ["--pipeline-login", PIPELINE], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+		# Malformed metadata fails closed.
+		meta_file.write_text("{not json", encoding="utf-8")
+		proc = subprocess.run(base + ["--pipeline-login", PIPELINE], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+		# Explicit --allowlist-file scopes never get the companions.
+		meta_file.write_text(json.dumps(_auto_heal_meta()), encoding="utf-8")
+		allow_file = tdp / "allow.txt"
+		allow_file.write_text("ft.games/**\n", encoding="utf-8")
+		proc = subprocess.run([sys.executable, "-B", str(GUARD_SCRIPT), "--allowlist-file", str(allow_file),
+			"--staged-file", str(staged_file), "--issue-number", "42", "--issue-meta-file", str(meta_file),
+			"--pipeline-login", PIPELINE], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+
+
+def test_implement_scope_callers_pass_auto_heal_identity() -> None:
+	args = '--issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${IMPLEMENT_SCOPE_PIPELINE_LOGIN:-}"'
+	for path in (IMPLEMENT, IMPLEMENT_COMMIT_SCRIPT):
+		text = path.read_text(encoding="utf-8")
+		start = text.index('"${scope_guard_extra_args[@]}" \\')
+		assert args in text[start:start + 300], path
+	prepush = (REPO_ROOT / "scripts" / "implement_step_prepush_test_gate.sh").read_text(encoding="utf-8")
+	start = prepush.index("implement_prepush_test_gate_narrow_allow_list()")
+	window = prepush[start:prepush.index("--check-automation-paths", start)]
+	assert '--issue-body-file "${ISSUE_BODY_FILE:-/dev/null}"' in window and args in window
+	text = IMPLEMENT.read_text(encoding="utf-8")
+	export = 'echo "IMPLEMENT_SCOPE_PIPELINE_LOGIN=${pipeline_login}" >> "$GITHUB_ENV"'
+	assert text.count(export) == 1
+	check = 'if [[ "${pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?$ ]]; then'
+	assert text.index(check) < text.index(export) < text.index(check) + len(check) + 120
+
+
 def _run_all() -> int:
 	funcs = [obj for name, obj in sorted(globals().items()) if name.startswith("test_") and callable(obj)]
 	failures = 0
