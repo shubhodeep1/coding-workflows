@@ -5,13 +5,32 @@
   "entry_id": "processed_command_8954_6702499519_approved",
   "issue_number": 8954,
   "metadata": {
+    "branch": "ai/issue-8954",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "agents.d/8954-review-agents-index.md",
+      "changelog.d/8954-review-agents-index.md",
+      "scripts/build_static_context.sh",
+      "scripts/review_untrusted_sandbox.sh",
+      "scripts/stage_workflow_support.sh",
+      "tests/test_ci_wires_every_test_file.py",
+      "tests/test_review_static_context_agents_index.py",
+      "tests/test_review_static_context_readme.py",
+      "tests/test_static_context_symlink_guard.py"
+    ],
+    "issue_number": 8954,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8954",
+    "pr_number": 8959,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8959",
+    "run_attempt": "1",
+    "run_id": "42340469693",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42340469693"
   },
   "run_attempt": 1,
   "run_id": "42340469693",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-07T04:56:25Z",
+  "status": "completed",
+  "timestamp": "2026-11-07T05:45:50Z",
   "workflow": "implement"
 }
