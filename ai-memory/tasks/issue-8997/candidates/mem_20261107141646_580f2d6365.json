@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for setting the content of `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `main` at `b9bd7826e5876df62bbf055a0767bac139db03d0`. The integration branch mismatch line reads `unknown`, not `true`, so there is no blocker.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a data-only change. Replace the whole content of `tests/e2e_smoke_canary.txt` with exactly these three lines, each ending in a newline:\n\n```\nstatus: ok\nrun_id: alt-42379892915\nupdated-by: ai-pipeline\n```\n\nThe file currently has two lines: `status: ok` and `decompose-run: 41445772297`. Remove the `decompose-run:` line and add the `run_id:` and `updated-by:` lines.\n\n## Data structures affected\nOnly the plain-text canary file. No code reads it in a way that depends on its format.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Write the whole file instead of editing single lines\n- Chosen: rewrite the entire file with the three required lines and a trailing newline at the end of the file.\n- Alternatives considered: changing only the second line and adding a third.\n- Why: the issue requires the content to be exactly these three lines. Writing the whole file guarantees that and leaves no stray lines behind.\n\n## Security considerations\n- No trust boundaries, endpoints, input handling or secrets are involved.\n- The values are fixed strings taken from the issue; they include no credentials.\n\n## Potential risks or edge cases\n- Line endings: use LF and end the file with a newline, matching the current file.\n- No extra blank lines at the end of the file.\n- Change no other file, as the issue requires.\n\n## Testing considerations\n- After the edit, `cat -A tests/e2e_smoke_canary.txt` should show exactly three lines, each ending in `$`.\n- `git diff --stat` should list only `tests/e2e_smoke_canary.txt`.\n- No contract tests are needed because no workflow, script or prompt changes.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies the change: one existing file gets exact content. There is nothing to widen or narrow, and no helpers, scripts, scheduler wiring or supervisor are involved.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "8602344ad9565259808fb896f23733a31652eeb15dc45faf3c00c2575d3d639f",
+  "lineage": {
+    "issue_number": 8997,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42380437426",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42380437426",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8997"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261107141646_580f2d6365",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8997,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42380437426"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8997",
+  "timestamps": {
+    "created_at": "2026-11-07T14:16:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
