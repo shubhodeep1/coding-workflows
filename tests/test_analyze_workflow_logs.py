@@ -501,14 +501,17 @@ def test_prepare_analysis_context_percentiles_unchanged_and_unknown_count_surfac
 			"run_metrics": [null_row],
 			"summary_stats": {
 				"overall": {"total_runs": 1},
-				"per_repo": {"o/r": {"total_runs": 1}},
-				"per_workflow_family": {"ci": {"total_runs": 1}},
+				"per_repo": {"o/r": {"total_runs": 1}, "o/stats-only": {"total_runs": 2}},
+				"per_workflow_family": {"ci": {"total_runs": 1}, "stats-only": {"total_runs": 2}},
 			},
 		}
 	)
 	assert ctx_stats["summary"]["unknown_duration_count"] == 1
 	assert ctx_stats["per_repo"]["o/r"]["unknown_duration_count"] == 1
 	assert ctx_stats["per_workflow_family"]["ci"]["unknown_duration_count"] == 1
+	# Keys present only in summary_stats (no run rows) still get the count.
+	assert ctx_stats["per_repo"]["o/stats-only"]["unknown_duration_count"] == 0
+	assert ctx_stats["per_workflow_family"]["stats-only"]["unknown_duration_count"] == 0
 	assert ctx_stats["failing_runs"] == []
 	assert ctx_stats["recent_runs"][0]["duration_known"] is False
 
