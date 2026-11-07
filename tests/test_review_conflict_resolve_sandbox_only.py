@@ -1080,19 +1080,19 @@ def test_prepush_hook_pair_is_listed_in_paired_live_report(tmp_path):
 	conflicted = tmp_path / "conflicted.txt"
 	conflicted.write_text("".join(name + "\n" for name in _unmerged(repo)), encoding="utf-8")
 	unmerged_z = tmp_path / "unmerged.z"
-	unmerged_z.write_bytes(subprocess.run(["git", "ls-files", "-u", "-z"], cwd=repo, env=_git_env(), check=True, capture_output=True).stdout)
+	unmerged_z.write_bytes(subprocess.run(["git", "ls-files", "-u", "-z"], cwd=repo, env=_git_env(), check=True, capture_output=True, timeout=120).stdout)
 	pairs = tmp_path / "pairs.txt"
 	model_paths = tmp_path / "model_paths.txt"
 	env = {**_git_env(), "PYTHONDONTWRITEBYTECODE": "1"}
 	report = subprocess.run(["python3", str(WORKSPACE_PY), "paired-live-copies", str(repo), str(conflicted), str(unmerged_z),
-		str(pairs), str(model_paths)], env=env, capture_output=True, text=True, check=False)
+		str(pairs), str(model_paths)], env=env, capture_output=True, text=True, check=False, timeout=120)
 	# A CLI crash is a harness failure, not the expected gap.
 	if report.returncode != 0:
 		raise RuntimeError(f"paired-live-copies failed: {report.stderr}")
 	assert _workspace_module().PAIRED_LIVE_COPIES.get(PREPUSH_HOOK) == PREPUSH_HOOK_TEMPLATE
 	assert pairs.read_text(encoding="utf-8") == f"{PREPUSH_HOOK}\t{PREPUSH_HOOK_TEMPLATE}\n"
 	assert model_paths.read_text(encoding="utf-8") == f"{PREPUSH_HOOK_TEMPLATE}\n"
-	check = subprocess.run(["python3", str(WORKSPACE_PY), "check-paths", str(repo), str(model_paths)], env=env, capture_output=True, text=True, check=False)
+	check = subprocess.run(["python3", str(WORKSPACE_PY), "check-paths", str(repo), str(model_paths)], env=env, capture_output=True, text=True, check=False, timeout=120)
 	assert check.returncode == 0, check.stderr
 
 
