@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The repository confirms the question's premise. `scripts/review_untrusted_workspace.py:76-79` already lists `.claude/hooks/prepush_affected_tests.py` in `PAIRED_LIVE_COPIES`. `scripts/review_conflict_prepare.sh:225-226` still hard-codes only `pr_merge_status_guard.py`. The heal scope (`.github/workflows/internal-review.yml`, `.github/workflows/review_autofix.yml`, `tests/**`, `changelog.d/*.md`) does not cover `scripts/**`. Option B is therefore certain to be refused by the scope gate. Option C parks the issue on an action the pipeline cannot take. Option A finishes inside scope and keeps the remaining gap enforced by the strict xfail at `tests/test_conflict_guard_hook_template_merge.py:369`, so the gap is not hidden or weakened.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/review_untrusted_workspace.py:74-79 (`PAIRED_LIVE_COPIES` already has the prepush pair), :677-680 (`live_safety_hook` / `dot_directory` reasons), :829-865 (paired-live report and mirroring checks)\n    - tests/test_review_conflict_resolve_sandbox_only.py:1044-1119 (prepush paired-live block: the conditional xfail on `test_prepush_hook_pair_is_listed_in_paired_live_report`, plus the guard tests that keep the live hook out of the sandbox and stop take-base on integration branches)\n    - tests/test_conflict_guard_hook_template_merge.py:49-54, :352-369 (prepush fixture-shape test and strict xfail `test_prepush_hook_integration_sync_conflict_is_resolved_from_template`)\n    - changelog.d/8973-prepush-hook-conflict-gap.md (existing fragment; its text still says the paired-live mirroring covers only `pr_merge_status_guard.py`)\n  steps:\n    - Edit only files under `tests/**` and `changelog.d/*.md`. Do not touch `scripts/**` or any workflow YAML.\n    - In tests/test_review_conflict_resolve_sandbox_only.py, check that the case where both the live hook and its template are unmerged (the PR #8436 shape) now has the pair listed in the paired-live report, with an ordinary assertion. The conditional xfail must not apply now that `PAIRED_LIVE_COPIES` contains the pair. If the marker is still on the test, remove it or make it inert, so the test is a plain regression test. Keep the existing guard tests unchanged: the live hook is never admitted to the sandbox (`allowed()` is not loosened), and it is never taken from base on `orchestrator/project-*` / `IS_INTEGRATION_SYNC=true`.\n    - Keep `@pytest.mark.xfail(strict=True, ...)` at tests/test_conflict_guard_hook_template_merge.py:369 and its `PREPUSH_GAP_REASON` exactly as they are. Whoever later generalises `_conflict_prepare_guard_hook_template_merge` must remove that marker.\n    - Update changelog.d/8973-prepush-hook-conflict-gap.md, keeping its `<!-- changelog: added -->` marker and `Refs #8973`:\n      - State that the paired-live mirroring now covers `prepush_affected_tests.py`, so a conflict where the template also conflicts is routed to the resolver and mirrored onto the live copy.\n      - State that the clean-template, host-only template merge in `scripts/review_conflict_prepare.sh` is out of scope for this heal issue. The strict xfail marks that gap.\n      - Do not describe this as deferred scope or a follow-up owed by this issue.\n    - Run the tests locally: `python -m pytest tests/test_review_conflict_resolve_sandbox_only.py tests/test_conflict_guard_hook_template_merge.py tests/test_claude_template_live_parity.py`. Expect the strict xfail to still xfail and every other test to pass.\n  replaces_acceptance_criterion: The issue's suggested-fix item 2 (generalise the template merge in `scripts/review_conflict_prepare.sh`) and the clean-template half of item 3. A test that confirms the paired-live coverage now on main replaces them, together with the existing strict xfail that keeps the clean-template gap visible.\n  equivalence_argument: Item 1 (the `PAIRED_LIVE_COPIES` entry) is already on main. Within the allowed paths, the strongest remaining deliverable is a regression lock on that coverage. The strict xfail turns the leftover script gap into a CI tripwire, so the gap cannot be closed or forgotten silently. No guard, sandbox boundary or escalation is weakened, as the fix constraints require.\n  reversibility: If a human wants the template merge generalised, they can file a regular issue whose scope covers `scripts/review_conflict_prepare.sh`. When that fix lands, the strict xfail turns into a CI failure until its marker is removed. Nothing in this change has to be reverted.",
+  "fingerprint": "d5cad14f55a4c3fceaaf4cea27c0baad2048037716c03ccd126793088f688014",
+  "lineage": {
+    "issue_number": 8973,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42382002135",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42382002135",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8973"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261107144156_2a12ff76d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8973,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42382002135"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8973",
+  "timestamps": {
+    "created_at": "2026-11-07T14:41:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
