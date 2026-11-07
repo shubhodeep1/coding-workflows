@@ -12,7 +12,8 @@ PR #6555; activation gap of PR #6803, issue #6882).
 
 The live hook must stay byte- and mode-identical to its
 ``workflow-templates/`` twin. ``scripts/review_conflict_prepare.sh`` now
-stages the template's clean merge result for the live path, but only when
+stages the template's clean merge result for the live path of every pair in
+``review_untrusted_workspace.PAIRED_LIVE_COPIES`` (#9014), but only when
 each side's live copy equals that side's template (same blob, same mode)
 and the template itself merged cleanly. Every other shape is refused and
 left unmerged, so the existing fail-closed path still applies.
@@ -47,11 +48,11 @@ PREPARE = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
 
 LIVE = ".claude/hooks/pr_merge_status_guard.py"
 TEMPLATE = "workflow-templates/.claude/hooks/pr_merge_status_guard.py"
-# A second paired live hook (#7137). The template merge does not cover it yet
-# (#8973), so an integration-sync conflict on it fails closed.
+# A second paired live hook (#7137). The template merge covers it since #9014
+# (gap #8973, PR #8436).
 PREPUSH_LIVE = ".claude/hooks/prepush_affected_tests.py"
 PREPUSH_TEMPLATE = "workflow-templates/.claude/hooks/prepush_affected_tests.py"
-PREPUSH_GAP_REASON = "#8973: guard-hook template merge covers only pr_merge_status_guard.py; scripts outside heal scope"
+SUPPORT_DIR = str(REPO_ROOT / "scripts")
 MERGE_RESOLVE_COMMIT_MESSAGE = "[ai-merge-resolve] resolve merge conflicts"
 BASE_LINES = [f"line {i}" for i in range(1, 11)]
 
@@ -123,13 +124,20 @@ def _make_conflict(
 	other_conflict: bool = False,
 	live_rel: str = LIVE,
 	template_rel: str = TEMPLATE,
+	second_pair: tuple[str, str] | None = None,
 ) -> None:
-	"""Leave ``repo`` on ``feat`` mid-merge of ``main`` with the live hook conflicted."""
+	"""Leave ``repo`` on ``feat`` mid-merge of ``main`` with the live hook conflicted.
+
+	``second_pair`` gets the same clean-template edits, so both hooks conflict.
+	"""
 	_git(repo, "init", "-q", "-b", "main")
 	_git(repo, "config", "user.name", "t")
 	_git(repo, "config", "user.email", "t@t")
 	_git(repo, "config", "core.fileMode", "true")
 	_write(repo, live_rel, "old\n")
+	if second_pair is not None:
+		_write(repo, second_pair[0], "old\n")
+		_write(repo, second_pair[1], _body())
 	if variant == "template_symlink":
 		(repo / template_rel).parent.mkdir(parents=True)
 		os.symlink("../../../" + live_rel, repo / template_rel)
@@ -152,6 +160,9 @@ def _make_conflict(
 		_write(repo, live_rel, _body(change_first="ours template"))
 	elif variant not in ("template_missing", "template_symlink"):
 		_write(repo, template_rel, ours)
+	if second_pair is not None:
+		_write(repo, second_pair[0], ours)
+		_write(repo, second_pair[1], ours)
 	if other_conflict:
 		_write(repo, "other.txt", "ours\n", 0o644)
 	_git(repo, "add", "-A")
@@ -164,6 +175,9 @@ def _make_conflict(
 		_write(repo, live_rel, _body(change_first="theirs template"))
 	elif variant not in ("template_missing", "template_symlink"):
 		_write(repo, template_rel, theirs)
+	if second_pair is not None:
+		_write(repo, second_pair[0], theirs)
+		_write(repo, second_pair[1], theirs)
 	if other_conflict:
 		_write(repo, "other.txt", "theirs\n", 0o644)
 	_git(repo, "add", "-A")
@@ -173,6 +187,8 @@ def _make_conflict(
 	merge = _git(repo, "merge", "--no-commit", "--no-ff", "main", check=False)
 	assert merge.returncode != 0, "fixture must produce a conflicted merge"
 	assert _git(repo, "ls-files", "-u", "--", live_rel).stdout.strip(), "live hook must be unmerged"
+	if second_pair is not None:
+		assert _git(repo, "ls-files", "-u", "--", second_pair[0]).stdout.strip(), "second live hook must be unmerged"
 
 
 def _run(
@@ -183,6 +199,7 @@ def _run(
 	enabled: str | None = None,
 	head_ref: str = "feat",
 	integration_sync: bool = False,
+	support_dir: str = SUPPORT_DIR,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
 	runtime_dir = tmp / "runtime"
 	runtime_dir.mkdir()
@@ -199,13 +216,14 @@ def _run(
 		extra = f"""CONFLICTED_FILES_RAW=""
 IS_INTEGRATION_SYNC=true
 INTEGRATION_FINGERPRINTS_FILE={fp_file!s}
-SUPPORT_SCRIPTS_DIR={REPO_ROOT / "scripts"!s}
+SUPPORT_SCRIPTS_DIR={support_dir}
 RESOLVER_FINGERPRINT_ONLY_PATHS_FILE={runtime_dir / "resolver_fingerprint_only_paths.txt"!s}
 {_fingerprint_and_deferred_block(_prepare_text())}"""
 	script = f"""set -euo pipefail
 RUNTIME_DIR={runtime_dir!s}
 GITHUB_ENV={github_env!s}
 RESOLVE_STASH={stash!s}
+SUPPORT_SCRIPTS_DIR={support_dir}
 _merge_stderr_file="$(mktemp)"
 _merge_exit=1
 IS_WORKFLOW_SOURCE_REPO=true
@@ -302,20 +320,28 @@ def test_hook_only_integration_sync_commits_after_fingerprint_check() -> None:
 		_assert_resolved_from_template(repo)
 
 
-def _assert_refused(variant: str, reason: str, *, enabled: str | None = None, markers: bool = True) -> None:
-	tmpdir, tmp, repo = _with_repo(variant)
+def _assert_refused(
+	variant: str,
+	reason: str,
+	*,
+	enabled: str | None = None,
+	markers: bool = True,
+	live_rel: str = LIVE,
+	template_rel: str = TEMPLATE,
+) -> None:
+	tmpdir, tmp, repo = _with_repo(variant, live_rel=live_rel, template_rel=template_rel)
 	with tmpdir:
-		stages_before = _git(repo, "ls-files", "-u", "--", LIVE).stdout
+		stages_before = _git(repo, "ls-files", "-u", "--", live_rel).stdout
 		result, github_env, allowlist = _run(repo, tmp, region=_guard_region(_prepare_text()), enabled=enabled)
 		out = result.stdout + result.stderr
 		assert result.returncode == 0, out
-		assert f"Guard-hook template merge: skipped reason={reason}" in result.stdout, out
+		assert f"Guard-hook template merge: skipped reason={reason} path={live_rel}" in result.stdout, out
 		assert "GHM_RESOLVED=false" in result.stdout, out
-		assert _git(repo, "ls-files", "-u", "--", LIVE).stdout == stages_before
-		assert LIVE in allowlist.read_text(encoding="utf-8").splitlines()
+		assert _git(repo, "ls-files", "-u", "--", live_rel).stdout == stages_before
+		assert live_rel in allowlist.read_text(encoding="utf-8").splitlines()
 		assert not github_env.exists()
 		if markers:
-			assert b"<<<<<<<" in (repo / LIVE).read_bytes()
+			assert b"<<<<<<<" in (repo / live_rel).read_bytes()
 
 
 def test_refuses_when_kill_switch_off() -> None:
@@ -350,7 +376,7 @@ def test_refuses_symlinked_template() -> None:
 
 
 def test_prepush_hook_fixture_has_the_clean_template_shape() -> None:
-	"""The xfail below must fail only because of the gap, not the fixture."""
+	"""The prepush fixture has the PR #8436 shape: clean template, identical stages."""
 	tmpdir, _tmp, repo = _with_repo(live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
 	with tmpdir:
 		live_unmerged = _git(repo, "ls-files", "-u", "--", PREPUSH_LIVE).stdout.splitlines()
@@ -366,7 +392,6 @@ def test_prepush_hook_fixture_has_the_clean_template_shape() -> None:
 			assert live == [[t_mode, t_oid]], (ref, live, tree)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=PREPUSH_GAP_REASON)
 def test_prepush_hook_integration_sync_conflict_is_resolved_from_template() -> None:
 	"""PR #8436 (run 42355218108): both sides changed the prepush hook and its template in step."""
 	tmpdir, tmp, repo = _with_repo(live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
@@ -384,12 +409,73 @@ def test_prepush_hook_integration_sync_conflict_is_resolved_from_template() -> N
 		_assert_resolved_from_template(repo, live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
 
 
+def test_prepush_hook_only_conflict_is_resolved_and_committed() -> None:
+	tmpdir, tmp, repo = _with_repo(live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
+	with tmpdir:
+		region = _guard_and_union_region(_prepare_text()) + _hook_only_commit_region(_prepare_text())
+		result, github_env, _ = _run(repo, tmp, region=region)
+		out = result.stdout + result.stderr
+		assert result.returncode == 0, out
+		assert "Guard-hook template merge: pair_source=paired_live_copies" in result.stdout, out
+		assert "Guard-hook template merge: resolved " + PREPUSH_LIVE in result.stdout, out
+		assert "REGION_FELL_THROUGH" not in result.stdout, out
+		assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
+		assert len(_git(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()) == 3
+		assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == MERGE_RESOLVE_COMMIT_MESSAGE
+		_assert_resolved_from_template(repo, live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
+
+
+def test_both_paired_hooks_conflicted_are_both_resolved() -> None:
+	tmpdir, tmp, repo = _with_repo(second_pair=(PREPUSH_LIVE, PREPUSH_TEMPLATE))
+	with tmpdir:
+		region = _guard_and_union_region(_prepare_text()) + _hook_only_commit_region(_prepare_text())
+		result, github_env, allowlist = _run(repo, tmp, region=region)
+		out = result.stdout + result.stderr
+		assert result.returncode == 0, out
+		assert "Guard-hook template merge: resolved " + LIVE in result.stdout, out
+		assert "Guard-hook template merge: resolved " + PREPUSH_LIVE in result.stdout, out
+		assert "REGION_FELL_THROUGH" not in result.stdout, out
+		assert allowlist.read_text(encoding="utf-8") == ""
+		assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
+		assert _git(repo, "rev-list", "--count", "main..HEAD").stdout.strip() == "2"
+		assert len(_git(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()) == 3
+		_assert_resolved_from_template(repo)
+		_assert_resolved_from_template(repo, live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
+
+
+def test_prepush_refuses_when_ours_live_differs_from_ours_template() -> None:
+	_assert_refused("ours_mismatch", "ours_mismatch", live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
+
+
+def test_falls_back_to_guard_pair_without_support_dir() -> None:
+	tmpdir, tmp, repo = _with_repo(live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
+	with tmpdir:
+		stages_before = _git(repo, "ls-files", "-u", "--", PREPUSH_LIVE).stdout
+		result, github_env, allowlist = _run(repo, tmp, region=_guard_region(_prepare_text()), support_dir="")
+		out = result.stdout + result.stderr
+		assert result.returncode == 0, out
+		assert "Guard-hook template merge: pair_source=fallback reason=support_missing" in result.stdout, out
+		assert "GHM_RESOLVED=false" in result.stdout, out
+		assert _git(repo, "ls-files", "-u", "--", PREPUSH_LIVE).stdout == stages_before
+		assert PREPUSH_LIVE in allowlist.read_text(encoding="utf-8").splitlines()
+		assert not github_env.exists()
+	tmpdir, tmp, repo = _with_repo()
+	with tmpdir:
+		result, _github_env, allowlist = _run(repo, tmp, region=_guard_region(_prepare_text()), support_dir="")
+		out = result.stdout + result.stderr
+		assert result.returncode == 0, out
+		assert "Guard-hook template merge: pair_source=fallback reason=support_missing" in result.stdout, out
+		assert "Guard-hook template merge: resolved " + LIVE in result.stdout, out
+		assert "GHM_RESOLVED=true" in result.stdout, out
+		_assert_resolved_from_template(repo)
+
+
 # ---------------------------------------------------------------- contract
 
 
 def test_block_runs_before_manifest_block_and_empty_allowlist_check() -> None:
 	text = _prepare_text()
-	call = "_conflict_prepare_guard_hook_template_merge || _ghm_rc=$?"
+	call = '_conflict_prepare_guard_hook_template_merge "${_ghm_live}" "${_ghm_tpl}" || _ghm_rc=$?'
 	assert call in text
 	assert text.index('RESOLVER_INITIAL_UNMERGED_PATHS_FILE="${RUNTIME_DIR}/resolver_initial_unmerged_paths.txt"') < text.index(call)
 	assert text.index(call) < text.index("# Deterministic resolution for the generated workspace manifest.")
@@ -410,6 +496,34 @@ def test_hook_only_commit_uses_shared_helper() -> None:
 	assert '_conflict_prepare_commit_deterministic_merge "Guard-hook template merge"' in region
 	assert "_mu_defer_commit=true" in region
 	assert "orchestrator/project-*) _ghm_defer_commit=true ;;" in _guard_region(text)
+
+
+def test_pair_source_is_trusted_support_dir_and_paired_live_copies() -> None:
+	import importlib.util
+	import re
+	import sys
+
+	region = _guard_region(_prepare_text())
+	assert "PAIRED_LIVE_COPIES" in region
+	assert "SUPPORT_SCRIPTS_DIR" in region
+	assert "${SUPPORT_SCRIPTS_DIR:-scripts}" not in region
+	scripts_dir = str(REPO_ROOT / "scripts")
+	sys.path.insert(0, scripts_dir)
+	try:
+		spec = importlib.util.spec_from_file_location(
+			"review_untrusted_workspace_pairs", REPO_ROOT / "scripts" / "review_untrusted_workspace.py"
+		)
+		assert spec is not None and spec.loader is not None
+		workspace = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(workspace)
+	finally:
+		sys.path.remove(scripts_dir)
+	pairs = workspace.PAIRED_LIVE_COPIES
+	assert pairs.get(LIVE) == TEMPLATE
+	assert pairs.get(PREPUSH_LIVE) == PREPUSH_TEMPLATE
+	for live, tpl in pairs.items():
+		assert re.fullmatch(r"\.claude/hooks/[A-Za-z0-9_][A-Za-z0-9_.-]*", live) and ".." not in live, live
+		assert tpl == "workflow-templates/" + live, (live, tpl)
 
 
 def test_workflows_register_conflict_resolve_tests() -> None:
