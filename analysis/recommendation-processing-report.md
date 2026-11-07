@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (134)
+## Processed source docs (135)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -139,6 +139,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-10-03-2.md`
 - `analysis/workflow-optimization-2026-10-06.md`
 - `analysis/workflow-optimization-2026-10-06-2.md`
+- `analysis/workflow-optimization-2026-10-07.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -2108,3 +2109,29 @@ Sibling work for this doc was tracked under Refs #8941. The squash-merge PR numb
 | Executive Summary; Speed 1-3; Cost 1-4; Reliability 1 and 3; AI Memory Health; GH API Call Audit; Prompt Cache & Memory System; Orchestrator Health; Pipeline Flow Bottlenecks | rejected | Instrumentation-only or diagnostic experiments with no defect established. The doc itself says not to change the three-failure fingerprint cap without head/fingerprint evidence. `GH_PAT_BUDGET ... used_in_job=` in `scripts/gh_helpers.sh` already gives per-job API usage, and `push_attempts` is already in memory telemetry (`scripts/ai_memory.py`). |
 | Per-Repo Breakdown / Metrics Appendix | informational | Summary data only. |
 | Dead Calls (DEAD-API) | informational | The doc reports none. |
+
+### `analysis/workflow-optimization-2026-10-07.md`
+Source doc: `analysis/workflow-optimization-2026-10-07.md`
+Processed: 2026-11-07
+Source commit: `73d546524757dbbaa0e892d19195582cc0b3d296`
+
+Sibling work for this doc was tracked under Refs #8975. The squash-merge PR numbers are not visible on this ref (flattened history), so applied rows cite their changelog fragment instead of a guessed PR number.
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| BUG-003 (`mark_validation_failed()` deterministic-marker match was pipefail-sensitive) | applied | `mark_validation_failed()` in `scripts/orchestrate_poll_process.sh` matches with `[[ "${reason}" =~ ${_deterministic_marker_re} ]]` and reads the class from `BASH_REMATCH[1]`, replacing the pipefail-sensitive `printf \| grep -q` / `grep -o \| head` pipelines; test `tests/test_mark_validation_failed_deterministic_marker.py`; fragment `changelog.d/wfopt-2026-10-07-deterministic-marker-match.md`. Refs #8975. |
+| SHELL-001 (dispatch-list half: unquoted `MERGE_TRAIN_DISPATCH_WORKFLOWS` expansion) | applied | `_mt_dispatch_review` in `scripts/review_merge_train.sh` loops over `"${mt_dispatch_workflow_list[@]}"`, which is filled by `read -a`, so list items are no longer glob-expanded; fragment `changelog.d/wfopt-2026-10-07-merge-train-dispatch-list.md`. Refs #8975. |
+| SHELL-001 (raise CI ShellCheck to warning severity) | rejected | The change is broad and would surface unrelated warnings. |
+| Reliability 4 (carry collector diagnostic statuses into normalized run views) | applied | In `scripts/analyze_workflow_logs.py`, `_normalized_run_view` carries `log_download_status`, `jobs_fetch_status`, `diagnostic_failure_reason` and `duration_known`, and the summaries add `unknown_duration_count`; additive fields only; fragment `changelog.d/wfopt-2026-10-07-analyze-diagnostic-status.md`. Refs #8975. |
+| BUG-001 (older PR rename source path lost in `_mt_pr_files_into`) | already-implemented | `_mt_pr_files_into` in `scripts/review_merge_train.sh` keeps both `.filename` and a non-empty `.previous_filename`. |
+| BUG-004 (`_mt_upsert_comment` swallowed write failures; retried marker POST could duplicate) | already-implemented | `_mt_upsert_comment` returns the PATCH/POST status through `write_rc`. `gh_retry` makes only one attempt for non-idempotent POST creates (`_gh_cmd_is_unsafe_post` in `scripts/gh_helpers.sh`, issue #6634). The next gate run re-reads the marker before posting. |
+| SEC-001 (`gh_retry` logged unredacted arguments) | already-implemented | `gh_retry` logs `_gh_cmd_log_summary` and an escaped stderr excerpt, never request-body arguments (#8095). |
+| GH API Call Audit (log-archive row) | already-implemented | `scripts/collect_workflow_logs.py` caches the log-archive fetch per `(repo, run_id)` and never retries `MISSING_LOG_ARCHIVE_MARKER` within one collection. |
+| BUG-002 (soft exit when adding `ai:merge-queued` fails) | rejected | The soft exit is deliberate and is pinned by `test_gate_does_not_arm_bypass_marker_when_queue_label_add_fails` in `tests/test_review_merge_train.py`. `.github/workflows/review_autofix_sweep.yml` (every 30 minutes) skips only PRs labelled `ai:merge-queued`, so an unlabelled PR is re-dispatched and gated again; the doc's "no review path" claim does not hold. Continuing a full review while overlapping PRs are open would defeat the train. |
+| API-001, API-002, API-003, BATCH-001, BATCH-002, BATCH-003, REUSE-001 | rejected | The doc tags them RISKY_SKIP itself. |
+| DUP-001, DUP-002 | rejected | Refactor only (minimal-change rule). |
+| EXPR-001, EXPR-002 | rejected | Static headroom only, with no expression-size breach (earlier precedent). |
+| DEBT-001 (`review_autofix.yml` size headroom) | rejected | Advisory about future growth of `review_autofix.yml`. The file is 382,118 bytes on this ref, under the 480,000-byte guard, so nothing needs to change now. |
+| Executive Summary; Speed 1-4; Cost 1-4; Reliability 1, 2, 3 and 5; AI Memory Health; GH API Call Audit merge-train and per-item rows and the `gh_retry` call-site instrumentation; Prompt Cache & Memory System; Orchestrator Health; Pipeline Flow Bottlenecks | rejected | Instrumentation-only or diagnostic, with no defect established. `GH_PAT_BUDGET ... used_in_job=` in `scripts/gh_helpers.sh` already gives per-job usage. |
+| Per-Repo Breakdown / Metrics Appendix / Section 1 Python 3.11 note on `scripts/workflow_retro.py` | informational | No action. |
+| Consolidation Candidates (MERGE-###) / Dead Calls (DEAD-API-###) | informational | The doc reports none. |
