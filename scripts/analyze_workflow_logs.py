@@ -36,6 +36,18 @@ DEFAULT_INPUT_FILE = "workflow_log_report.json"
 RUN_LIST_CAP = 100
 ERRORS_CAP = 250
 
+# Bound for the collector's per-run diagnostic status strings copied into each
+# normalized run view. Matches the collector's own
+# DIAGNOSTIC_FAILURE_REASON_MAX_CHARS (512) so values it already bounded pass
+# through unchanged; anything longer is truncated before it reaches the
+# Codex prompt context.
+RUN_DIAGNOSTIC_FIELD_MAX_CHARS = 512
+RUN_DIAGNOSTIC_STATUS_FIELDS = (
+	"log_download_status",
+	"jobs_fetch_status",
+	"diagnostic_failure_reason",
+)
+
 
 def _parse_iso8601(value: str | None) -> datetime | None:
 	if not value:
@@ -57,6 +69,27 @@ def _to_int(value: Any, default: int = 0) -> int:
 		return int(value)
 	except (TypeError, ValueError):
 		return default
+
+
+def _run_duration_known(run: dict[str, Any]) -> bool | None:
+	"""Return whether a run row's duration is backed by real timestamps.
+
+	* None  -> the row carries neither `run_started_at` nor `updated_at`
+	(legacy run_metrics.json shape); callers omit `duration_known`.
+	* True  -> both are non-empty strings that parse as ISO-8601.
+	* False -> otherwise (missing, null, empty, non-string or unparseable).
+	The collector sets `duration_seconds = 0` whenever either timestamp
+	fails to parse, so an unparseable value counts as unknown too.
+	"""
+	if "run_started_at" not in run and "updated_at" not in run:
+		return None
+	for key in ("run_started_at", "updated_at"):
+		value = run.get(key)
+		if not isinstance(value, str) or not value.strip():
+			return False
+		if _parse_iso8601(value) is None:
+			return False
+	return True
 
 
 def _percentile(values: list[int], pct: int) -> float:
@@ -208,6 +241,15 @@ def _normalized_run_view(run: dict[str, Any]) -> dict[str, Any]:
 	cost_telemetry = run.get("cost_telemetry")
 	if isinstance(cost_telemetry, dict) and cost_telemetry:
 		view["cost_telemetry"] = dict(cost_telemetry)
+	# Additive diagnostic fields so the analysis can tell a missing/404 log
+	# archive or an unknown duration apart from a genuine 0s run.
+	for field_name in RUN_DIAGNOSTIC_STATUS_FIELDS:
+		field_value = run.get(field_name)
+		if isinstance(field_value, str) and field_value.strip():
+			view[field_name] = field_value[:RUN_DIAGNOSTIC_FIELD_MAX_CHARS]
+	duration_known = _run_duration_known(run)
+	if duration_known is not None:
+		view["duration_known"] = duration_known
 	return view
 
 
@@ -232,6 +274,7 @@ def _summarize_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
 		"p50_duration_seconds": _percentile(durations, 50),
 		"p95_duration_seconds": _percentile(durations, 95),
 		"cost_telemetry": aggregate_run_cost_telemetry(runs),
+		"unknown_duration_count": sum(1 for run in runs if _run_duration_known(run) is False),
 	}
 
 
@@ -247,6 +290,7 @@ def _aggregate_runs_by_key(runs: list[dict[str, Any]], key_name: str) -> dict[st
 				"failure_count": 0,
 				"cancelled_count": 0,
 				"other_count": 0,
+				"unknown_duration_count": 0,
 				"durations": [],
 				"rows": [],
 			},
@@ -261,6 +305,8 @@ def _aggregate_runs_by_key(runs: list[dict[str, Any]], key_name: str) -> dict[st
 			entry["cancelled_count"] += 1
 		else:
 			entry["other_count"] += 1
+		if _run_duration_known(run) is False:
+			entry["unknown_duration_count"] += 1
 		entry["durations"].append(_to_int(run.get("duration_seconds"), 0))
 		entry["rows"].append(run)
 
@@ -317,6 +363,12 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 			summary = _summarize_runs(runs)
 	summary = dict(summary)
 	summary["cost_telemetry"] = aggregate_run_cost_telemetry(runs)
+	# Collector-supplied summaries never pass through _summarize_runs, so add
+	# the count here; setdefault never overwrites an existing value.
+	summary.setdefault(
+		"unknown_duration_count",
+		sum(1 for run in runs if _run_duration_known(run) is False),
+	)
 
 	per_repo: dict[str, dict[str, Any]] = {}
 	per_workflow_family: dict[str, dict[str, Any]] = {}
@@ -344,6 +396,7 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 			entry = per_repo.setdefault(key, {})
 			if isinstance(entry, dict):
 				entry["cost_telemetry"] = value.get("cost_telemetry")
+				entry.setdefault("unknown_duration_count", value.get("unknown_duration_count", 0))
 	if not per_workflow_family:
 		per_workflow_family = _aggregate_runs_by_key(runs, "workflow_family")
 	else:
@@ -352,6 +405,7 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 			entry = per_workflow_family.setdefault(key, {})
 			if isinstance(entry, dict):
 				entry["cost_telemetry"] = value.get("cost_telemetry")
+				entry.setdefault("unknown_duration_count", value.get("unknown_duration_count", 0))
 
 	normalized_runs = [_normalized_run_view(run) for run in runs]
 	failing_runs = [

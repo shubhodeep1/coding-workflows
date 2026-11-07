@@ -366,6 +366,153 @@ def test_aggregate_runs_by_key_computes_failure_rate_and_durations():
 	assert out["b"]["failure_rate"] == 1.0
 
 
+# ---------- diagnostic status + duration_known -----------------------------
+
+
+def test_normalized_run_view_passes_through_diagnostic_status_fields():
+	oversized_reason = "x" * (analyzer.RUN_DIAGNOSTIC_FIELD_MAX_CHARS + 50)
+	view = analyzer._normalized_run_view(
+		{
+			"repository": "o/r",
+			"run_id": 1,
+			"log_download_status": "missing_archive",
+			"jobs_fetch_status": "success",
+			"diagnostic_failure_reason": oversized_reason,
+		}
+	)
+	assert view["log_download_status"] == "missing_archive"
+	assert view["jobs_fetch_status"] == "success"
+	assert len(view["diagnostic_failure_reason"]) == analyzer.RUN_DIAGNOSTIC_FIELD_MAX_CHARS
+	assert view["diagnostic_failure_reason"] == oversized_reason[: analyzer.RUN_DIAGNOSTIC_FIELD_MAX_CHARS]
+
+	dropped = analyzer._normalized_run_view(
+		{
+			"repository": "o/r",
+			"run_id": 2,
+			"log_download_status": None,
+			"jobs_fetch_status": "   ",
+			"diagnostic_failure_reason": 404,
+		}
+	)
+	for field_name in analyzer.RUN_DIAGNOSTIC_STATUS_FIELDS:
+		assert field_name not in dropped
+
+
+def test_normalized_run_view_duration_known_false_when_started_at_null():
+	view = analyzer._normalized_run_view(
+		{
+			"repository": "o/r",
+			"run_id": 1,
+			"duration_seconds": 0,
+			"run_started_at": None,
+			"updated_at": "2026-04-01T00:05:00Z",
+		}
+	)
+	assert view["duration_known"] is False
+	assert view["duration_seconds"] == 0
+	unparseable = analyzer._normalized_run_view(
+		{"run_started_at": "not-a-date", "updated_at": "2026-04-01T00:05:00Z"}
+	)
+	assert unparseable["duration_known"] is False
+	only_one_key = analyzer._normalized_run_view({"updated_at": "2026-04-01T00:05:00Z"})
+	assert only_one_key["duration_known"] is False
+
+
+def test_normalized_run_view_duration_known_true_with_both_timestamps():
+	view = analyzer._normalized_run_view(
+		{
+			"repository": "o/r",
+			"run_id": 1,
+			"duration_seconds": 300,
+			"run_started_at": "2026-04-01T00:00:00Z",
+			"updated_at": "2026-04-01T00:05:00Z",
+		}
+	)
+	assert view["duration_known"] is True
+
+
+def test_normalized_run_view_omits_duration_known_for_legacy_row():
+	view = analyzer._normalized_run_view({"repository": "o/r", "run_id": 1, "duration_seconds": 30})
+	assert "duration_known" not in view
+
+
+def test_unknown_duration_count_in_summary_and_aggregates():
+	runs = [
+		{
+			"repository": "o/r",
+			"workflow_family": "implement",
+			"conclusion": "failure",
+			"duration_seconds": 0,
+			"run_started_at": None,
+			"updated_at": "2026-04-01T00:05:00Z",
+		},
+		{
+			"repository": "o/r",
+			"workflow_family": "implement",
+			"conclusion": "success",
+			"duration_seconds": 300,
+			"run_started_at": "2026-04-01T00:00:00Z",
+			"updated_at": "2026-04-01T00:05:00Z",
+		},
+		{
+			"repository": "o/r",
+			"workflow_family": "ci",
+			"conclusion": "success",
+			"duration_seconds": 60,
+		},
+	]
+	summary = analyzer._summarize_runs(runs)
+	assert summary["unknown_duration_count"] == 1
+	per_family = analyzer._aggregate_runs_by_key(runs, "workflow_family")
+	assert per_family["implement"]["unknown_duration_count"] == 1
+	assert per_family["ci"]["unknown_duration_count"] == 0
+	per_repo = analyzer._aggregate_runs_by_key(runs, "repository")
+	assert per_repo["o/r"]["unknown_duration_count"] == 1
+
+
+def test_prepare_analysis_context_percentiles_unchanged_and_unknown_count_surfaced():
+	runs = _make_runs(4, conclusion="success")
+	collector_summary = {"total_runs": 4, "success_count": 4}
+	ctx = analyzer.prepare_analysis_context(
+		{
+			"source_files": [],
+			"collector_report": {"runs": runs, "summary": dict(collector_summary), "errors": []},
+			"run_metrics": None,
+			"summary_stats": None,
+		}
+	)
+	repo_entry = ctx["per_repo"]["o/r"]
+	# Durations are 10, 20, 30, 40 (linear-interpolated percentiles).
+	assert abs(repo_entry["avg_duration_seconds"] - 25.0) < 1e-9
+	assert abs(repo_entry["p50_duration_seconds"] - 25.0) < 1e-9
+	assert abs(repo_entry["p95_duration_seconds"] - 38.5) < 1e-9
+	assert repo_entry["unknown_duration_count"] == 0
+	assert ctx["per_workflow_family"]["ci"]["unknown_duration_count"] == 0
+	for key, value in collector_summary.items():
+		assert ctx["summary"][key] == value
+	assert ctx["summary"]["unknown_duration_count"] == 0
+
+	# Collector-supplied per-key maps (summary_stats path) gain the count too.
+	null_row = dict(runs[0], run_started_at=None, updated_at="2026-04-01T00:05:00Z")
+	ctx_stats = analyzer.prepare_analysis_context(
+		{
+			"source_files": [],
+			"collector_report": None,
+			"run_metrics": [null_row],
+			"summary_stats": {
+				"overall": {"total_runs": 1},
+				"per_repo": {"o/r": {"total_runs": 1}},
+				"per_workflow_family": {"ci": {"total_runs": 1}},
+			},
+		}
+	)
+	assert ctx_stats["summary"]["unknown_duration_count"] == 1
+	assert ctx_stats["per_repo"]["o/r"]["unknown_duration_count"] == 1
+	assert ctx_stats["per_workflow_family"]["ci"]["unknown_duration_count"] == 1
+	assert ctx_stats["failing_runs"] == []
+	assert ctx_stats["recent_runs"][0]["duration_known"] is False
+
+
 # ---------- script-mode entry point ---------------------------------------
 # CI's "Workflow log analyzer coverage gate" invokes this file directly:
 #   python3 -m coverage run tests/test_analyze_workflow_logs.py
