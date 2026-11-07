@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add `unknown_duration_count` to the per-repository and per-workflow-family aggregates (including the retained `summary_stats` maps)\n  expected_change_site: scripts/analyze_workflow_logs.py:391-408 (`prepare_analysis_context` merge loops)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: When `summary_stats` carries per-group entries but `runs` is empty, `_aggregate_runs_by_key` returns empty maps, so the loops at lines 394-399 and 403-408 never add `unknown_duration_count` to retained entries, and the new test only covers the path with at least one run row. anthropic_claude-sonnet-5_5 judged this not a gap (severity NIT, confidence 2). minimax_minimax-m3 and openai_gpt-6-luna reported it as NIT, confidence 4.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP (raised in pass 1, then judged not a gap by this reviewer):\n- Requirement: Add `unknown_duration_count` to the per-repo and per-workflow-family aggregates, including the retained `summary_stats` maps (pass-1 claim).\n  Expected change site: `prepare_analysis_context` in `scripts/analyze_workflow_logs.py`.\n  Evidence of absence: the key is absent only in the degenerate case where `summary_stats` carries groups and no run rows exist. No count can be computed in that case, so the claim is not a gap. The issue does not require it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: Add `unknown_duration_count` to per-repository and per-workflow-family aggregates so callers can tell a 0s run with a missing log archive from a genuine 0s run, in every code path `prepare_analysis_context` accepts.\n  Expected change site: scripts/analyze_workflow_logs.py:391-408 (the else-branch loops that merge `_aggregate_runs_by_key` results into `per_repo`/`per_workflow_family`).\n  Evidence of absence: When `load_input_data` is fed summary-stats-only input, `runs` ends up empty, so `computed_per_repo`/`computed_per_family` are empty and the loops never iterate. Entries copied verbatim from `summary_stats` at scripts/analyze_workflow_logs.py:378-389 never get `unknown_duration_count`. A consumer doing `per_repo[\"x\"][\"unknown_duration_count\"]` would raise `KeyError`. The new test `test_prepare_analysis_context_percentiles_unchanged_and_unknown_count_surfaced` only exercises the path where `run_metrics` has at least one row.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: Add `unknown_duration_count` to the per-repository and per-workflow-family aggregates.\n  Expected change site: `scripts/analyze_workflow_logs.py`, `prepare_analysis_context` while preserving `summary_stats` maps.\n  Evidence of absence: When `summary_stats` contains per-group entries but `runs` is empty, `_aggregate_runs_by_key` returns empty maps. The loops at lines 403-408 therefore do not add `unknown_duration_count` to the retained per-workflow-family entries; the corresponding per-repository path at lines 394-399 has the same gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3790a92f817c6bb81a03cb8c1a92d274c1323f5ed86bf871735328fb65353ea9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8981,
+    "run_id": "42361984626",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42361984626",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107101709_5a82ea6bf6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8981,
+    "run_id": "42361984626"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T10:17:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
