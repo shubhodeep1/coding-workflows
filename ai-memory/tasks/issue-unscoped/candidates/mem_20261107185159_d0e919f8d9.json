@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_gh_pr_comments_argv_limit.py:479-481 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The test searches the whole of agents_text() for the prefix entry and no longer verifies it sits under \"## Stable log prefixes (contractual)\".\n  WHY: CI passes even if the entry is folded into another section, so the log-prefix registry contract is not enforced. Reviewers rated it NIT. z-ai_glm-5_3-flash listed it only as a hardening suggestion.\n- tests/test_rb_judge_incomplete_comment_context.py:653-656 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The test searches agents_text() for the prefix entry without verifying it appears under \"## Stable log prefixes (contractual)\".\n  WHY: CI passes even if the entry is folded elsewhere, so the registry contract is not enforced. Reviewers rated it NIT. z-ai_glm-5_3-flash listed it only as a hardening suggestion.\n- tests/test_review_autofix_clean_same_head_gate.py:148-150 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The test searches agents_text() for the prefix entries without verifying they appear under \"## Stable log prefixes (contractual)\".\n  WHY: CI passes even if the entries are folded elsewhere, so the registry contract is not enforced. Reviewers rated it NIT. z-ai_glm-5_3-flash listed it only as a hardening suggestion.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_gh_pr_comments_argv_limit.py, tests/test_rb_judge_incomplete_comment_context.py, tests/test_review_autofix_clean_same_head_gate.py: `agents_text()` assertions at about lines 479-481, 653-655 and 148-150 | severity=NIT | confidence=2\n  PROBLEM: The tests search the whole of agents_text() for the prefix bullets and LOG_PREFIX.name= lines. The old check that the fragment targeted the \"Stable log prefixes (contractual)\" section is gone.\n  WHY: It does not fail now, because the folded entries are in the right section and fragment placement is enforced elsewhere in CI. The only loss is a narrower registry-contract check, and the autofix author dropped the marker check on purpose.\n- HARDENING_SUGGESTIONS: the three edited tests each add `sys.path.insert(0, str(Path(__file__).resolve().parent))`, which is redundant but harmless. The leftover `FRAGMENT` constants, for example at line 37 of tests/test_review_autofix_clean_same_head_gate.py, are unused. Suggested fix: guard the insert with `if str(tests_dir) not in sys.path`, or leave it. HARDENING_RISK_SCORE: 1\n- TASK COMPLETENESS: none. The diff is the forward-merge fold that the PR description asks for.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_gh_pr_comments_argv_limit.py: test_incomplete_prefix_registered_in_fragment | severity=NIT | confidence=4\n  PROBLEM: The test searches agents_text() for the prefix entry without validating it appears under the ## Stable log prefixes (contractual) section heading.\n  WHY: CI passes even if the entry is folded elsewhere, failing to enforce the log-prefix registry contract.\n- tests/test_rb_judge_incomplete_comment_context.py: test_agents_fragment_registers_the_prefix | severity=NIT | confidence=4\n  PROBLEM: The test searches agents_text() for the prefix entry without validating it appears under the ## Stable log prefixes (contractual) section heading.\n  WHY: CI passes even if the entry is folded elsewhere, failing to enforce the log-prefix registry contract.\n- tests/test_review_autofix_clean_same_head_gate.py: test_docs_register_the_switch_and_log_prefixes | severity=NIT | confidence=4\n  PROBLEM: The test searches agents_text() for the prefix entries without validating they appear under the ## Stable log prefixes (contractual) section heading.\n  WHY: CI passes even if the entries are folded elsewhere, failing to enforce the log-prefix registry contract.\n- HARDENING_SUGGESTIONS (3 related items): each of the three tests makes a redundant `sys.path.insert(0, ...)` call. Suggested fix: guard it with `if str(Path(__file__).resolve().parent) not in sys.path:`. HARDENING_RISK_SCORE: 1 each.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_gh_pr_comments_argv_limit.py:479-481; tests/test_rb_judge_incomplete_comment_context.py:653-656; tests/test_review_autofix_clean_same_head_gate.py:148-150 | severity=NIT | confidence=4\n  PROBLEM: The updated assertions no longer enforce that these prefixes remain in the contractual registry section.\n  WHY: If a fragment is folded under another section, these tests still pass, so CI does not catch the misplaced registry entries.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- HARDENING_SUGGESTIONS (3 related items): tests/test_gh_pr_comments_argv_limit.py lines 479-481, tests/test_rb_judge_incomplete_comment_context.py lines 653-655 and tests/test_review_autofix_clean_same_head_gate.py lines 148-150. Rewriting these tests to read agents_text() dropped the only section-scoping assertion for the log-prefix registry entries. Suggested fix: assert that \"## Stable log prefixes (contractual)\" precedes the LOG_PREFIX.name= entry. HARDENING_RISK_SCORE: 1 each.\n- Note (not re-flagged): the unused `FRAGMENT` constants at tests/test_gh_pr_comments_argv_limit.py:343 and tests/test_rb_judge_incomplete_comment_context.py:33, and the redundant function-local `sys.path.insert` at tests/test_review_autofix_clean_same_head_gate.py:145, were accepted as won't-fix by a prior editor round.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f46fb81de83800a10f2996dcdb663598a32963535420f484cc97c4099fa92cd6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9013,
+    "run_id": "42402434246",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42402434246",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107185159_d0e919f8d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9013,
+    "run_id": "42402434246"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T18:51:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
