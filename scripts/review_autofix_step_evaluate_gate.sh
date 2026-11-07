@@ -596,6 +596,12 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     clean_precheck="post_sync_test_repair"
   elif [ "${pr_base_retargeted}" = "true" ]; then
     clean_precheck="base_retargeted"
+  # No provider-outage precheck (deliberate, #8952): a resume dispatch
+  # carries only pr_number. A provider_unavailable failure marker newer
+  # than the clean marker re-arms through newer_failure_marker; a
+  # label-marker resume on a clean head would only repeat a clean review,
+  # because the review-blocked judge is reachable there only through
+  # force_rb_judge, which is checked above.
   elif [ "${EVENT_NAME:-}" = "pull_request" ] && [ "${EVENT_ACTION:-}" = "reopened" ]; then
     clean_precheck="reopened"
   elif [ "${pr_mergeable}" != "true" ]; then
