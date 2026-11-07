@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_files_touched_scope_guard.py | location: test_auto_heal_companion_path_shapes, the tuple of rejected paths\n  PROBLEM: No test pins the last run's .fullmatch hardening. Reverting to .match would make \"tests/test_a.py\\n\" and \"db/contracts/x.yml\\n\" companion paths again, and the suite would still pass.\n  WHY: suggested minimal fix: add \"tests/test_a.py\\n\" and \"db/contracts/x.yml\\n\" to the tuple of rejected paths; estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_files_touched_scope_guard.py | location: test_auto_heal_companion_path_shapes\n  PROBLEM: The companion path tests have no negative cases that `.match()` would accept but `.fullmatch()` rejects (for example, paths ending in a newline), so nothing stops a future regression back to `.match()`.\n  WHY: Suggested minimal fix: Add `(path + \"\\n\")` to the list of `bad` paths in `test_auto_heal_companion_path_shapes` to verify rejection; estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_files_touched_scope_guard.py | location: test_auto_heal_companion_path_shapes, rejected-path tuple\n  PROBLEM: The `.fullmatch()` behavior added in the last run rejects trailing-newline paths, but the test does not lock in that behavior.\n  WHY: suggested minimal fix: Add `\"tests/test_a.py\\n\"` and `\"db/contracts/x.yml\\n\"` to the rejected-path cases; estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION: tests/test_files_touched_scope_guard.py | location: test_auto_heal_companion_path_shapes, rejected tuple at lines 2016-2019\n  PROBLEM: The last run switched to `.fullmatch` specifically to reject paths with a trailing newline, but no test pins that behavior. A future revert to `.match` would leave all current tests passing and silently reopen the hole.\n  WHY: suggested minimal fix: add `\"tests/test_a.py\\n\"` and `\"db/contracts/x.yml\\n\"` to the rejected tuple; estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "012a99f8fef10bb75c570f498541d283a99546dd5975e9f1fbb9f639ecf2268c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8962,
+    "run_id": "42353174627",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42353174627",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107081550_8b189953eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8962,
+    "run_id": "42353174627"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-07T08:15:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
