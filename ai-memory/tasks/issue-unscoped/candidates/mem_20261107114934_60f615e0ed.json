@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/8973-prepush-hook-conflict-gap.md:4 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The sentence \"one confirms that on other branches the take-base fallback still settles the conflict with no manual step\" is broader than the code. In `scripts/review_conflict_prepare.sh` the take-base block only fires when linked-issue scope is known and the hook is not in `files_touched:`.\n  WHY: Release-note readers may conclude every non-integration conflict on this hook settles automatically. Nothing fails at runtime, and all four reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement the fix in `scripts/review_untrusted_workspace.py` (add `prepush_affected_tests.py` to `PAIRED_LIVE_COPIES`) and `scripts/review_conflict_prepare.sh` (generalise the template merge) so the review job passes on integration branches whose merge conflicts on the prepush hook.\n  expected_change_site: `scripts/review_untrusted_workspace.py:74-76` (PAIRED_LIVE_COPIES) and `scripts/review_conflict_prepare.sh` (`_conflict_prepare_guard_hook_template_merge`, `GUARD_HOOK_LIVE_PATH`)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: No diff hunk modifies `scripts/review_untrusted_workspace.py`, which still names only `pr_merge_status_guard.py`. `scripts/review_conflict_prepare.sh` still hard-codes `GUARD_HOOK_LIVE_PATH` to a single hook. The PR touches only the changelog and two test files. The PR description lists both script changes under \"Deferred scope\" (auto-decision AD-1, scripts outside the heal scope). Gemini rated this MAJOR and minimax rated it NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/8973-prepush-hook-conflict-gap.md:4 | severity=NIT | confidence=3\n  PROBLEM: The sentence is broader than the code. The take-base block in `scripts/review_conflict_prepare.sh` (comment at lines 983-992, scope check at lines 1060-1079) takes base only when linked issues are available and do not list the hook in `files_touched:`. Otherwise it logs `outcome=unknown` or `outcome=in_scope` and re-issues the path to the resolver (line 1215).\n  WHY: Nothing breaks at runtime. Release-note readers could conclude that every non-integration conflict on this hook settles with no manual step.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/8973-prepush-hook-conflict-gap.md:4 | severity=NIT | confidence=3\n  PROBLEM: The release note implies a broader resolution for non-integration conflicts than the implementation supports.\n  WHY: The take-base block in `scripts/review_conflict_prepare.sh` settles a host-only conflict only if the linked issue's `files_touched` does not list the hook. The note could mislead operators about the conflict-resolution contract.\n- TASK_GAP:\n  Requirement: Implement the fix in `scripts/review_untrusted_workspace.py` (add to `PAIRED_LIVE_COPIES`) and `scripts/review_conflict_prepare.sh` (generalise the template merge).\n  Expected change site: `scripts/review_untrusted_workspace.py` and `scripts/review_conflict_prepare.sh`\n  Evidence of absence: No diff hunk modifies `scripts/review_untrusted_workspace.py` to add `prepush_affected_tests.py` to `PAIRED_LIVE_COPIES`, or updates `scripts/review_conflict_prepare.sh` to generalise the template merge. The PR relies on the \"deferred scope\" disclaimer and auto-decision AD-1.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/8973-prepush-hook-conflict-gap.md:4 | severity=NIT | confidence=4\n  PROBLEM: The host-only take-base block in `scripts/review_conflict_prepare.sh:1062-1114` does not unconditionally resolve a conflict on a non-integration branch. It needs `_ho_scope_ok=true` (line 1102), which requires the linked-issues read to succeed (lines 1067-1078). A hook path listed in any linked issue's `files_touched:` is classified `in_scope` and routed to the reissue path (lines 1087-1099). The positive-control test passes only because its linked fixture has no `files_touched:` block.\n  WHY: Nothing fails at runtime today. An operator reading the release notes would conclude any non-integration conflict on this hook resolves with take-base.\n- TASK_GAP:\n  Requirement: \"Make the review job codex-agent in the Internal AI Review and Autofix workflow pass on integration branches whose merge conflicts on the prepush hook. That needs both script changes above.\" (PR description deferred scope)\n  Expected change site: `scripts/review_untrusted_workspace.py:74-76` (add `prepush_affected_tests.py` to `PAIRED_LIVE_COPIES`) and `scripts/review_conflict_prepare.sh` (generalise `_conflict_prepare_guard_hook_template_merge` to loop over paired live copies).\n  Evidence of absence: Both diffs touch only `changelog.d/8973-prepush-hook-conflict-gap.md` and the two test files. `scripts/review_untrusted_workspace.py:74-76` still names only `pr_merge_status_guard.py`, and the prepare script still hard-codes `GUARD_HOOK_LIVE_PATH` to that single hook. The PR description's \"Deferred scope\" bullets name both script changes as out of scope because the heal scope (`tests/**`, `changelog.d/*.md`) does not cover the scripts.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/8973-prepush-hook-conflict-gap.md:4 | severity=NIT | confidence=3\n  PROBLEM: The changelog says the positive-control test confirms that \"on other branches the take-base fallback still settles the conflict with no manual step\". The test uses a linked issue with a \"No scope\" body. The script leaves conflicts unresolved when linked-issue scope is unknown, the path is in scope, or required support files are missing (eligibility guarded in scripts/review_conflict_prepare.sh:1003-1014 and 1067-1080).\n  WHY: This is an inaccurate operational description, not a code failure. Readers may expect non-integration conflicts to settle automatically even when the eligibility checks require the manual-merge path.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9d2b1d22b57742116431b0077106e2163fcba21eec9f65a97b661355576ac286",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8979,
+    "run_id": "42367175422",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42367175422",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107114934_60f615e0ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8979,
+    "run_id": "42367175422"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T11:49:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
