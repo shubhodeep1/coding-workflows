@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9014,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9014\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9015\",\"pr_number\":9015,\"branch\":\"ai/issue-9014\",\"run_id\":\"42397498053\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42397498053\",\"changed_files\":[\"changelog.d/9014-prepush-hook-template-merge.md\",\"scripts/review_conflict_prepare.sh\",\"tests/test_conflict_guard_hook_template_merge.py\"]}",
+  "fingerprint": "4dbe6ede049b688818a3d21ecf61f7252335d0bb741c0f35ea1a329f5d6a54e6",
+  "lineage": {
+    "issue_number": 9014,
+    "parent_ids": [],
+    "pr_number": 9015,
+    "run_id": "42397498053",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42397498053",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9015"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261107175629_8049b263a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9014,
+    "level": "run",
+    "pr_number": 9015,
+    "run_id": "42397498053"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9014: https://github.com/shubhodeep1/coding-workflows/pull/9015",
+  "timestamps": {
+    "created_at": "2026-11-07T17:56:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
