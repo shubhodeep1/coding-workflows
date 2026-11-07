@@ -28163,6 +28163,224 @@ def test_heal_counterfactual_poller_wiring() -> None:
 		"HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}") == 5
 
 
+# --- Issue #8984: final-merge auto-resume (FINAL_MERGE_AUTO_RESUME) -----------
+
+_FAMR_BRANCH = "orchestrator/project-192"
+_FAMR_HEAD = "ab" * 20
+_FAMR_PR = 596
+
+
+def _famr_state(**overrides) -> dict:
+	state = _base_state(status="failed")
+	state.update(
+		{
+			"integration_branch": _FAMR_BRANCH,
+			"validation_cycle": 1,
+			"final_merge_pr": _FAMR_PR,
+			"final_merge_status": "failed",
+			"final_merge_attempt_count": 3,
+			"final_merge_failure_kind": "final_merge_exhausted",
+			"final_merge_exhausted_head_sha": _FAMR_HEAD,
+			"final_merge_exhausted_at_utc": "2026-10-26T10:00:00Z",
+			"validation_last_passed_sha": _FAMR_HEAD,
+		}
+	)
+	state.update(overrides)
+	return state
+
+
+def _famr_pr(**overrides) -> dict:
+	pr = {
+		"number": _FAMR_PR,
+		"state": "open",
+		"draft": False,
+		"baseRefName": "main",
+		"headRefName": _FAMR_BRANCH,
+		"headSha": _FAMR_HEAD,
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	pr.update(overrides)
+	return pr
+
+
+def _famr_run(*, state: dict | None = None, pr: dict | None = None, labels: list[str] | None = None, **kwargs) -> dict:
+	kwargs.setdefault("compare_ahead_by", 3)
+	# The exhausted attempts already recorded a runtime-validation pass for
+	# the validated head, exactly as mark_validation_complete does in production.
+	kwargs.setdefault(
+		"mock_validation_history_payload",
+		_validation_history_payload(integration_sha=_FAMR_HEAD, entries=[_extfin_history_entry("passed")]),
+	)
+	return _run_poller(
+		state=state if state is not None else _famr_state(),
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=labels if labels is not None else ["ai:blocked", "ai:needs-human"],
+		prs=[pr if pr is not None else _famr_pr()],
+		existing_branches=["main", _FAMR_BRANCH],
+		branch_ref_shas={_FAMR_BRANCH: _FAMR_HEAD},
+		**kwargs,
+	)
+
+
+def _famr_output(result: dict) -> str:
+	return result["stdout"] + result["stderr"]
+
+
+def _famr_resume_comments(result: dict) -> list[str]:
+	return [
+		str(comment.get("body", ""))
+		for comment in result["issues"]["192"]["comments"]
+		if "<!-- final-merge-auto-resume:" in str(comment.get("body", ""))
+	]
+
+
+def test_final_merge_auto_resume_retries_green_clean_final_pr_and_merges():
+	result = _famr_run()
+	output = _famr_output(result)
+	assert (
+		f"FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=resumed final_pr={_FAMR_PR} head_sha={_FAMR_HEAD}"
+		in output
+	), output[-4000:]
+	latest = result["latest_state"]
+	assert latest["status"] == "complete"
+	assert latest["final_merge_status"] == "merged"
+	assert latest["final_merge_attempt_count"] == 0
+	assert latest["final_merge_failure_kind"] is None
+	assert latest["final_merge_auto_resumed_head_shas"] == [_FAMR_HEAD]
+	assert latest["final_merge_auto_resumed_at_utc"]
+	assert _FAMR_PR in result.get("merged_prs", [])
+	assert "ai:blocked" not in result["tracking_labels"]
+	assert "ai:needs-human" not in result["tracking_labels"]
+	assert "ai:validated" in result["tracking_labels"]
+	resume_comments = _famr_resume_comments(result)
+	assert len(resume_comments) == 1
+	assert resume_comments[0].startswith(f"<!-- final-merge-auto-resume:{_FAMR_HEAD} -->")
+	assert "Project already failed, skipping." not in output
+
+
+def _famr_assert_skipped(result: dict, reason_fragment: str, *, pr_read: bool = True, resumed_heads: list[str] | None = None) -> None:
+	output = _famr_output(result)
+	assert f"FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason={reason_fragment}" in output, output[-4000:]
+	assert "outcome=resumed" not in output
+	assert "Project already failed, skipping." in output
+	latest = result["latest_state"]
+	assert latest["status"] == "failed"
+	assert latest["final_merge_status"] == "failed"
+	assert (latest.get("final_merge_auto_resumed_head_shas") or []) == (resumed_heads or [])
+	assert _FAMR_PR not in result.get("merged_prs", [])
+	assert _famr_resume_comments(result) == []
+	if not pr_read:
+		assert str(_FAMR_PR) not in result.get("pr_get_calls", {})
+
+
+def test_final_merge_auto_resume_skips_red_required_checks():
+	result = _famr_run(blocked_check_shas=[_FAMR_HEAD])
+	_famr_assert_skipped(result, "checks_not_green")
+
+
+def test_final_merge_auto_resume_skips_non_mergeable_pr():
+	result = _famr_run(pr=_famr_pr(mergeable=False, mergeable_state="blocked"))
+	_famr_assert_skipped(result, "not_mergeable")
+	result = _famr_run(pr=_famr_pr(mergeable=None, mergeable_state="unknown"))
+	_famr_assert_skipped(result, "not_mergeable")
+
+
+def test_final_merge_auto_resume_skips_closed_and_draft_prs():
+	result = _famr_run(pr=_famr_pr(state="closed"))
+	_famr_assert_skipped(result, "pr_not_open")
+	result = _famr_run(pr=_famr_pr(draft=True))
+	_famr_assert_skipped(result, "pr_not_open")
+
+
+def test_final_merge_auto_resume_skips_failed_lookups():
+	# The PR read returns no usable head SHA.
+	result = _famr_run(pr=_famr_pr(headSha="not-a-sha"))
+	_famr_assert_skipped(result, "lookup_failed detail=pr")
+	# The compare call fails.
+	result = _famr_run(compare_ahead_by_force_error=True)
+	_famr_assert_skipped(result, "lookup_failed detail=compare")
+
+
+def test_final_merge_auto_resume_skips_when_integration_not_ahead():
+	result = _famr_run(compare_ahead_by=0)
+	_famr_assert_skipped(result, "not_ahead")
+
+
+def test_final_merge_auto_resume_skips_head_other_than_validated_head():
+	result = _famr_run(state=_famr_state(validation_last_passed_sha="cd" * 20))
+	_famr_assert_skipped(result, "validation_stale detail=head_mismatch")
+	state = _famr_state()
+	del state["validation_last_passed_sha"]
+	result = _famr_run(state=state)
+	_famr_assert_skipped(result, "validation_stale detail=missing", pr_read=False)
+
+
+def test_final_merge_auto_resume_runs_once_per_head_sha():
+	result = _famr_run(state=_famr_state(final_merge_auto_resumed_head_shas=[_FAMR_HEAD]))
+	_famr_assert_skipped(result, f"already_resumed_on_head head_sha={_FAMR_HEAD}", resumed_heads=[_FAMR_HEAD])
+
+
+def test_final_merge_auto_resume_refailed_merge_counts_attempts_then_reparks_once_per_head():
+	pr = _famr_pr(merge_error="Required status check is failing")
+	first = _famr_run(pr=pr)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=resumed" in _famr_output(first)
+	state = first["latest_state"]
+	assert state["status"] == "validating"
+	assert state["final_merge_attempt_count"] == 1
+	assert state["final_merge_auto_resumed_head_shas"] == [_FAMR_HEAD]
+	assert _FAMR_PR not in first.get("merged_prs", [])
+
+	# With a one-attempt budget the resumed retry exhausts again: the project
+	# re-parks with the marker and the head, and the next tick does not retry.
+	reparked = _famr_run(pr=_famr_pr(merge_error="Required status check is failing"), env_overrides={"MAX_FINAL_MERGE_ATTEMPTS": "1"})
+	parked = reparked["latest_state"]
+	assert parked["status"] == "failed"
+	assert parked["final_merge_status"] == "failed"
+	assert parked["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert parked["final_merge_exhausted_head_sha"] == _FAMR_HEAD
+	assert parked["final_merge_exhausted_at_utc"].endswith("Z")
+	assert parked["final_merge_auto_resumed_head_shas"] == [_FAMR_HEAD]
+	assert "ai:blocked" in reparked["tracking_labels"]
+	second = _famr_run(state=parked, pr=_famr_pr(merge_error="Required status check is failing"))
+	_famr_assert_skipped(second, f"already_resumed_on_head head_sha={_FAMR_HEAD}", resumed_heads=[_FAMR_HEAD])
+
+
+def test_final_merge_auto_resume_leaves_other_failed_projects_untouched():
+	# No marker: failed by judge exhaustion or parked before this change.
+	state = _famr_state()
+	del state["final_merge_failure_kind"]
+	result = _famr_run(state=state)
+	_famr_assert_skipped(result, "not_final_merge_exhausted", pr_read=False)
+	# A validation failure label wins over a stale marker. (ai:security-pass-failed
+	# is excluded the same way; with the security pass off, the existing release
+	# path moves such a project out of `failed` before the terminal block.)
+	for label in ("ai:validate-failed", "ai:validation-failed"):
+		result = _famr_run(labels=["ai:blocked", label])
+		_famr_assert_skipped(result, "not_final_merge_exhausted", pr_read=False)
+
+
+def test_final_merge_auto_resume_disabled_restores_parked_behaviour():
+	result = _famr_run(env_overrides={"FINAL_MERGE_AUTO_RESUME_ENABLED": "false"})
+	_famr_assert_skipped(result, "disabled", pr_read=False)
+	assert "ai:blocked" in result["tracking_labels"]
+
+
+def test_final_merge_auto_resume_contract_in_poller_script():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'if is_truthy "${FINAL_MERGE_AUTO_RESUME_ENABLED:-true}"; then' in script
+	assert '| .final_merge_failure_kind = "final_merge_exhausted"' in script
+	hook = (
+		'    if [ "${PROJECT_STATUS}" = "failed" ] && maybe_auto_resume_final_merge_exhausted; then\n'
+		"      continue\n"
+		"    fi\n"
+		'    echo "Project already ${PROJECT_STATUS}, skipping."'
+	)
+	assert script.count(hook) == 1
+	assert script.index("maybe_apply_force_merge_bypass \"${_terminal_force_merge_final_pr}\"") < script.index(hook)
+
+
 def main() -> int:
 	# Force line-buffered stdout so PASS/FAIL messages surface to CI logs as
 	# each test completes, instead of sitting in Python's default block buffer

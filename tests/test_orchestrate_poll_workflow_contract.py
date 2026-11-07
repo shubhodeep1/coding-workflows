@@ -146,6 +146,21 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 	assert "prompts/contracts/mode-security-audit.yml" in poller[loop_start:loop_end]
 
 
+def test_final_merge_auto_resume_switch_is_wired_into_both_poller_steps() -> None:
+	"""Issue #8984: the switch defaults on and reaches every full-poller step."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	line = "FINAL_MERGE_AUTO_RESUME_ENABLED: ${{ vars.FINAL_MERGE_AUTO_RESUME_ENABLED || 'true' }}"
+	assert wf.count(line) == 2
+	for step_name in ("Process each tracking issue", STANDALONE_SWEEP_STEP):
+		assert line in _step_block(wf, step_name), step_name
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'if is_truthy "${FINAL_MERGE_AUTO_RESUME_ENABLED:-true}"; then' in poller
+	agents_text = _agents_text_with_fragments()
+	assert "- `FINAL_MERGE_AUTO_RESUME`" in agents_text
+	assert "LOG_PREFIX.name=FINAL_MERGE_AUTO_RESUME" in agents_text
+	yaml.safe_load(wf)
+
+
 def test_security_pass_recovery_log_prefixes_are_registered() -> None:
 	agents_text = _agents_text_with_fragments()
 	for prefix in (
@@ -695,6 +710,7 @@ def main() -> int:
 	test_task_state_helper_and_flag_are_wired_into_poller_workflow()
 	test_security_pass_dark_launch_env_and_assets_are_wired()
 	test_security_pass_recovery_log_prefixes_are_registered()
+	test_final_merge_auto_resume_switch_is_wired_into_both_poller_steps()
 	test_staged_support_latch_sweep_runs_without_tracking_issues()
 	test_unblock_scan_runs_without_tracking_issues()
 	test_standalone_stall_recovery_runs_without_tracking_issues()
