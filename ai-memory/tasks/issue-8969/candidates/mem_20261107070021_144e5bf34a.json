@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"ChatGPT account reviewer trial: run the review panel's GPT slot on a ChatGPT account via claude-pool-broker (Phases 1-4)\",\"issues\":[{\"id\":\"phase1-broker-chatgpt-store-token-action\",\"title\":\"ChatGPT reviewer trial Phase 1: ChatGPT credential store in claude-pool-broker + chatgpt-pool-token action\",\"priority\":1},{\"id\":\"phase2-chatgpt-reviewer-slot\",\"title\":\"ChatGPT reviewer trial Phase 2: ChatGPT reviewer slot, tier pinning and default-off switch\",\"priority\":2},{\"id\":\"phase3-review-findings-record\",\"title\":\"ChatGPT reviewer trial Phase 3: review findings record\",\"priority\":3},{\"id\":\"phase4-chatgpt-alert-daily-usage\",\"title\":\"ChatGPT reviewer trial Phase 4: ChatGPT alert and ChatGPT section in the daily usage report\",\"priority\":4}],\"dependency_edges\":[{\"from\":\"phase1-broker-chatgpt-store-token-action\",\"to\":\"phase2-chatgpt-reviewer-slot\"},{\"from\":\"phase2-chatgpt-reviewer-slot\",\"to\":\"phase3-review-findings-record\"},{\"from\":\"phase3-review-findings-record\",\"to\":\"phase4-chatgpt-alert-daily-usage\"}]}",
+  "fingerprint": "8550b13c63bec3b8f60941f8f3c7657a58bffcdd1bbaa2b04b6835e283515185",
+  "lineage": {
+    "issue_number": 8969,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42348435924",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42348435924",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261107070021_144e5bf34a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8969,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42348435924"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'ChatGPT account reviewer trial: run the review panel's GPT slot on a ChatGPT account via claude-pool-broker (Phases 1-4)' into 4 issues (tracking #8969)",
+  "timestamps": {
+    "created_at": "2026-11-07T07:00:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
