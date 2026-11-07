@@ -645,3 +645,25 @@ def _collect_conflict_sweep_outcome_cases() -> None:
 
 
 _collect_conflict_sweep_outcome_cases()
+
+
+# The mark_validation_failed() deterministic-marker cases (BUG-003) live in
+# tests/test_mark_validation_failed_deterministic_marker.py and are collected
+# here for the same reason: ci.yml was outside that issue's file grant.
+def _collect_mark_validation_failed_marker_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"mark_validation_failed_deterministic_marker_cases",
+		Path(__file__).resolve().parent / "test_mark_validation_failed_deterministic_marker.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	assert collected >= 7, f"only {collected} mark_validation_failed marker cases collected"
+
+
+_collect_mark_validation_failed_marker_cases()
