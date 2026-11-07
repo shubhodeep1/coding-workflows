@@ -1333,7 +1333,15 @@ _mt_dispatch_review() {
 		_mt_warn "merge-train release: invalid PR number '${pr}' for head ${head}; not dispatching."
 		return 1
 	fi
-	for wf in ${MERGE_TRAIN_DISPATCH_WORKFLOWS:-ai-review.yml internal-review.yml review_autofix.yml}; do
+	# SHELL-001: an unquoted expansion of the list also glob-expanded items
+	# such as `*.yml` against the working directory. `read -a` splits on the
+	# default IFS (spaces, tabs, newlines; -d '' keeps every line) and never
+	# does pathname expansion, so global `set -f` is not needed. `|| true`:
+	# read -d '' returns 1 at end of input under set -e.
+	local -a mt_dispatch_workflow_list=()
+	IFS=$' \t\n' read -r -d '' -a mt_dispatch_workflow_list \
+		<<< "${MERGE_TRAIN_DISPATCH_WORKFLOWS:-ai-review.yml internal-review.yml review_autofix.yml}" || true
+	for wf in "${mt_dispatch_workflow_list[@]}"; do
 		if gh_retry gh workflow run "${wf}" --repo "${MT_REPO}" \
 			-f pr_number="${pr}" -f allow_workflow_edits="${allow_edits}" >/dev/null 2>&1; then
 			_mt_log "MERGE_TRAIN_DISPATCHED pr=${pr} workflow=${wf} ref=default head=${head}"

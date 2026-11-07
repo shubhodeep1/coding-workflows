@@ -17143,11 +17143,9 @@ The latest validation run reported \`raw_status=harness_error\`, so the orchestr
   # the outcome, so skip the recovery budget and go straight to
   # terminal failure with a clear note.
   local _deterministic_class=""
-  if printf '%s' "${reason}" | grep -qE 'AI_VALIDATION_FAILURE_CLASS:deterministic_[a-z_]+'; then
-    _deterministic_class="$(printf '%s' "${reason}" \
-      | grep -oE 'AI_VALIDATION_FAILURE_CLASS:deterministic_[a-z_]+' \
-      | head -n 1 \
-      | sed 's/^AI_VALIDATION_FAILURE_CLASS://')"
+  local _deterministic_marker_re='AI_VALIDATION_FAILURE_CLASS:(deterministic_[a-z_]+)'
+  if [[ "${reason}" =~ ${_deterministic_marker_re} ]]; then
+    _deterministic_class="${BASH_REMATCH[1]}"
     echo "Validation failed deterministically (class=${_deterministic_class}); skipping recovery budget (current=${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS})."
     jq --arg reason "${reason}" --arg dclass "${_deterministic_class}" --arg raw_status "${validation_raw_status}" \
       '.status = "failed" |
