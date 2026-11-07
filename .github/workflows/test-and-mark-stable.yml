@@ -3710,6 +3710,10 @@ jobs:
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           TRACKING_NUMBER: ${{ steps.review-blocked-sim.outputs.tracking_number }}
+          # Issue #8953: scope the late-Implement cancel to this smoke issue's
+          # run (env only, so the body holds no extra ${{ }} expression).
+          ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
+          IMPL_CREATED_AFTER_INPUT: ${{ steps.create-issue.outputs.created_after }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -3728,6 +3732,32 @@ jobs:
               -X PATCH -f state=closed -f body="${NEW_PR_BODY}" \
               2>/dev/null || echo "Warning: could not close PR #${PR_NUMBER}"
             echo "  Closed PR #${PR_NUMBER}"
+          elif [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            # No PR recorded (issue #8953): Phase 3b gave up while Implement
+            # was still pending, and that run opened a PR for the closed issue
+            # minutes later (#8239, #8346, #8348, #8373, #8389). Cancel this
+            # issue's Implement run (same title-scoped selector as Phase 3b),
+            # then close any ai/issue-<N> PR that already exists. Best effort.
+            if [ -n "${ISSUE_TITLE:-}" ] \
+              && . ./scripts/comprehensive_test_and_release_gh_api.sh 2>/dev/null \
+              && type find_latest_scoped_run_field >/dev/null 2>&1; then
+              LATE_IMPL_RUN_ID="$(find_latest_scoped_run_field "${TEST_REPO}" "${IMPL_CREATED_AFTER_INPUT:-}" "Implement" "${ISSUE_TITLE}" "id" 3 || true)"
+              if [[ "${LATE_IMPL_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+                if gh api -X POST "repos/${TEST_REPO}/actions/runs/${LATE_IMPL_RUN_ID}/cancel" >/dev/null 2>&1; then
+                  echo "  Cancelled Implement run ${LATE_IMPL_RUN_ID}"
+                else
+                  echo "::warning::Could not cancel Implement run ${LATE_IMPL_RUN_ID} (already completed?)"
+                fi
+              fi
+            fi
+            LATE_PR_NUMBERS="$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=100" --jq '.[].number' 2>/dev/null || true)"
+            for LATE_PR in ${LATE_PR_NUMBERS}; do
+              [[ "${LATE_PR}" =~ ^[1-9][0-9]*$ ]] || continue
+              gh api "repos/${TEST_REPO}/pulls/${LATE_PR}" -X PATCH -f state=closed \
+                -f body="*Closed by E2E smoke test cleanup (run ${GITHUB_RUN_ID}): the Implement run opened it after the gate stopped waiting.*" \
+                >/dev/null 2>&1 && echo "  Closed late PR #${LATE_PR}" \
+                || echo "::warning::Could not close late PR #${LATE_PR}"
+            done
           fi
 
           # Close issue
@@ -4801,6 +4831,34 @@ jobs:
           for n in ${STRAGGLERS}; do
             close_with_retry "${n}"
           done
+
+          # Phase 3 (issue #8953): close the project's open PRs, then delete
+          # its integration branch. Judge "Re-deliver" PRs (#8841/#8842) target
+          # orchestrator/project-<N> without being listed in CHILDREN, so the
+          # base= lookup catches them. PRs close BEFORE the branch delete:
+          # deleting a base branch closes its PRs with no cleanup record.
+          if [[ "${TRACKING_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            PROJECT_BRANCH="orchestrator/project-${TRACKING_NUMBER}"
+            OWNER="${TEST_REPO%%/*}"
+            PROJECT_PRS=""
+            PROJECT_PRS+=" $(gh api "repos/${TEST_REPO}/pulls?state=open&base=${PROJECT_BRANCH}&per_page=100" --jq '.[].number' 2>/dev/null || echo "")"
+            PROJECT_PRS+=" $(gh api "repos/${TEST_REPO}/pulls?state=open&head=${OWNER}:${PROJECT_BRANCH}&per_page=100" --jq '.[].number' 2>/dev/null || echo "")"
+            for m in $(echo "${CHILDREN}" | tr ',' ' ') ${STRAGGLERS}; do
+              [[ "${m}" =~ ^[1-9][0-9]*$ ]] || continue
+              PROJECT_PRS+=" $(gh api "repos/${TEST_REPO}/pulls?state=open&head=${OWNER}:ai/issue-${m}&per_page=100" --jq '.[].number' 2>/dev/null || echo "")"
+            done
+            for p in $(printf '%s\n' ${PROJECT_PRS} | grep -E '^[1-9][0-9]*$' | sort -u); do
+              close_with_retry "${p}"
+            done
+            for attempt in 1 2 3; do
+              if gh api "repos/${TEST_REPO}/git/refs/heads/${PROJECT_BRANCH}" \
+                  -X DELETE >/dev/null 2>&1; then
+                echo "  deleted branch ${PROJECT_BRANCH}"
+                break
+              fi
+              sleep $(( attempt * 2 ))
+            done
+          fi
           true  # ensure step exits 0 even if some closes failed
 
   # ──────────────────────────────────────────────────────────────────
@@ -5201,6 +5259,8 @@ jobs:
             echo "pre_${WF}_run_id=${LATEST}" >> "$GITHUB_OUTPUT"
           done
           TITLE="[E2E Smoke Test alt-model] update canary (run ${GITHUB_RUN_ID})"
+          # Cleanup scopes its late-Implement cancel to this title (#8953).
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
           # Same canary task as the main e2e job so we exercise the full
           # implement→review path; only the editor model varies. Body is
           # built with explicit newlines to avoid YAML literal-block
@@ -5382,6 +5442,8 @@ jobs:
         if: always() && steps.create.outputs.issue_number != ''
         env:
           ISSUE_NUMBER: ${{ steps.create.outputs.issue_number }}
+          ALT_ISSUE_TITLE: ${{ steps.create.outputs.title }}
+          PRE_IMPLEMENT: ${{ steps.create.outputs.pre_implement_run_id }}
         run: |
           # Defence in depth — never abort on single failure; retry each
           # close 3× with backoff. Same pattern as orchestrate-decompose-test
@@ -5405,6 +5467,20 @@ jobs:
           }
 
           close_with_retry "issues" "${ISSUE_NUMBER}"
+          # Cancel this issue's still-active Implement runs first (#8953): a
+          # run that starts after the wait gave up would open a PR the
+          # lookup below cannot see yet (#8346). Scoped to runs newer than
+          # the pre-create snapshot whose display_title is this issue's title.
+          if [ -n "${ALT_ISSUE_TITLE:-}" ] && [[ "${PRE_IMPLEMENT:-0}" =~ ^[0-9]+$ ]]; then
+            ALT_ACTIVE_IMPL_IDS=$(gh api "repos/${TEST_REPO}/actions/workflows/implement.yml/runs?per_page=20" \
+              --jq "[.workflow_runs[] | select(.id > ${PRE_IMPLEMENT:-0}) | select(.display_title == env.ALT_ISSUE_TITLE) | select(.status != \"completed\") | .id] | .[]" 2>/dev/null || echo "")
+            for RUN_ID_TO_CANCEL in ${ALT_ACTIVE_IMPL_IDS}; do
+              [[ "${RUN_ID_TO_CANCEL}" =~ ^[1-9][0-9]*$ ]] || continue
+              gh api -X POST "repos/${TEST_REPO}/actions/runs/${RUN_ID_TO_CANCEL}/cancel" >/dev/null 2>&1 \
+                && echo "  cancelled Implement run ${RUN_ID_TO_CANCEL}" \
+                || echo "::warning::Could not cancel Implement run ${RUN_ID_TO_CANCEL}"
+            done
+          fi
           # Best-effort PR + branch cleanup. Target ONLY the implement PR whose
           # head branch is ai/issue-<N> (the same selector Phase 3a's
           # wait-implement uses). The previous `first cross-referenced` timeline
