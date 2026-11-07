@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9018,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9018\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9019\",\"pr_number\":9019,\"branch\":\"ai/issue-9018\",\"run_id\":\"42416037599\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42416037599\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/9018-heal-job-wiring-guard-and-node-moves.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "235de4b9a7baec621522580c29118118279c121f86d03954affcb9d44ddddc96",
+  "lineage": {
+    "issue_number": 9018,
+    "parent_ids": [],
+    "pr_number": 9019,
+    "run_id": "42416037599",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42416037599",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9019"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261107220954_a156a4e326",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9018,
+    "level": "run",
+    "pr_number": 9019,
+    "run_id": "42416037599"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9018: https://github.com/shubhodeep1/coding-workflows/pull/9019",
+  "timestamps": {
+    "created_at": "2026-11-07T22:09:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
