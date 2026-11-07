@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- copilot-pull-request-reviewer:Job failure in Actions log (see https://github.com/shubhodeep1/coding-workflows/actions/runs/41544382408/job/125616255928) | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The copilot-pull-request-reviewer action failed with error code custom_instructions_too_large (422).\n  WHY: It is a systemic configuration or prompt-size limit error in the reviewer infrastructure, unrelated to this PR's code changes, but it prevents the automated review cycle from completing. The reviewer rated it NIT, which maps to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- copilot-pull-request-reviewer:Job failure in Actions log (see https://github.com/shubhodeep1/coding-workflows/actions/runs/41544382408/job/125616255928) | severity=NIT | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer action failed with error code custom_instructions_too_large (422).\n  WHY: This is a systemic configuration or prompt-size limit error in the reviewer infrastructure, unrelated to the code changes in this PR. It prevents completion of the automated review cycle.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9be684a78c3a58c413aa5afbaef686ca89b663a86b5eedc54ce26d7b26227b1a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "42329196593",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42329196593",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107023523_e16c23c51c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "42329196593"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-07T02:35:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
