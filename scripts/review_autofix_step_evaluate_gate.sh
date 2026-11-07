@@ -570,10 +570,12 @@ fi
 # `force-review` label force one full review per head; they do not
 # bypass this skip once that head has a clean marker (issue #8952,
 # decision Q8: A). Invalidators: a different head, base or support
-# SHA, mergeable != true, force_rb_judge, a retargeted base, a trusted
-# freshness-ci-failed marker for the head, a newer trusted failure /
-# partial comment, a newer non-pipeline non-Bot comment, or a newer
-# non-pipeline non-Bot submitted review. Every lookup or parse failure
+# SHA, mergeable != true, force_rb_judge, a post_sync_test_repair
+# dispatch, a retargeted base, a comment with no valid created_at, a
+# trusted freshness-ci-failed marker for the head, a newer trusted
+# single-issue security-pass result (clean/findings/failed) for the head,
+# a newer trusted failure / partial comment, a newer non-pipeline non-Bot
+# comment, or a newer non-pipeline non-Bot submitted review. Every lookup or parse failure
 # logs AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK outcome=error and runs the
 # review (fail open toward review). vars.AUTOFIX_SKIP_CLEAN_SAME_HEAD=
 # false disables it.
