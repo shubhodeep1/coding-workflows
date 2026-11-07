@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, the destination group for the `Regression tests wired by the CI wiring guard (part 2)` step's `if:` guard (strategy.job-index == 0)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: .github/workflows/ci.yml lines 2623\u20132645 (comment states the destination is an estimate, not a measurement, and that group 0's total load has not been recorded since its workload changed), the `if:` guard at ~line 2650 is `strategy.job-index == 0`, no positive evidence that group 0 has more headroom than any other group. Severity disagreement: google_gemini-3_1-flash-lite=MAJOR, minimax_minimax-m3=NIT (highest: MAJOR).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, the Regression tests wired by the CI wiring guard (part 2) step's destination group.\n  Evidence of absence: The PR moves the step to group 0 based on estimates, without validating that group 0 has the most available headroom among the matrix groups. The comment at lines 2623\u20132645 explicitly states the pick is an estimate, not a measurement, and acknowledges that group 0's total load has not been recorded since its workload changed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the destination group for the `Regression tests wired by the CI wiring guard (part 2)` step's `if:` guard.\n  Evidence of absence: The step's `if:` guard is now `strategy.job-index == 0` (line ~2650 of `.github/workflows/ci.yml`). The comment block above it (lines 2611-2645) states the triggering run's step timings could not be read, the destination was an estimate, and group 0 has no recorded total since its workload changed (only group 0 figure is 17m01s from #8118, before the unblock step left). \"Most headroom\" is unverified; the diff establishes no positive evidence group 0 has more headroom than any other. The constraint is documented, the move satisfies the no-name-change / no-timeout-raise / no-new-required-job constraints, and the choice is consistent with prior budget-watch moves (#8759, #8772, #8805), but the literal \"most headroom\" deliverable is not met by measurement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "90c846901ff965ab586f8685a9ce40358e1816707a14c55d1fafe102b094dbbf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8989,
+    "run_id": "42392468311",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42392468311",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107172443_d13e3186ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8989,
+    "run_id": "42392468311"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T17:24:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
