@@ -643,9 +643,14 @@ def test_prompt_note_is_flag_guarded_and_precedes_inline_comments() -> None:
 
 
 def test_agents_fragment_registers_the_prefix() -> None:
-	lines = FRAGMENT.read_text(encoding="utf-8").splitlines()
-	assert lines[0] == '<!-- agents: section="Stable log prefixes (contractual)" -->'
-	body = "\n".join(lines)
+	# The release fold moves the fragment into agents.md and deletes it, so
+	# read the rendered agents text (agents.md plus any pending fragments).
+	import sys
+
+	sys.path.insert(0, str(Path(__file__).resolve().parent))
+	from agents_doc import agents_text
+
+	body = agents_text()
 	assert "- `RB_JUDGE_CONTEXT_INCOMPLETE`" in body
 	assert "LOG_PREFIX.name=RB_JUDGE_CONTEXT_INCOMPLETE" in body
 	assert "scripts/review_rb_judge.sh" in body and "scripts/orchestrate_poll_process.sh" in body
