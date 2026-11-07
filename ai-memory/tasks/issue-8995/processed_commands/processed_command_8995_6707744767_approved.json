@@ -5,13 +5,34 @@
   "entry_id": "processed_command_8995_6707744767_approved",
   "issue_number": 8995,
   "metadata": {
+    "branch": "ai/issue-8995",
+    "changed_files": [
+      ".github/actions/chatgpt-pool-token/action.yml",
+      ".github/actions/chatgpt-pool-token/main.js",
+      ".github/actions/chatgpt-pool-token/package.json",
+      ".github/actions/chatgpt-pool-token/post.js",
+      ".github/workflows/ci.yml",
+      "agents.d/8970-chatgpt-pool-broker.md",
+      "changelog.d/8970-chatgpt-pool-broker.md",
+      "docs/INVENTORY.md",
+      "scripts/chatgpt_pool_token.sh",
+      "tests/test_chatgpt_pool_token.py",
+      "tools/claude-pool-broker/src/index.ts",
+      "tools/claude-pool-broker/test/broker.test.ts",
+      "tools/claude-pool-broker/wrangler.toml"
+    ],
+    "issue_number": 8995,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8995",
+    "pr_number": 9005,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9005",
+    "run_attempt": "1",
+    "run_id": "42378560460",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42378560460"
   },
   "run_attempt": 1,
   "run_id": "42378560460",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-07T13:49:23Z",
+  "status": "completed",
+  "timestamp": "2026-11-07T14:28:07Z",
   "workflow": "implement"
 }
