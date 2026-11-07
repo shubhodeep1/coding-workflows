@@ -326,6 +326,9 @@ jobs:
       base_retargeted: ${{ steps.evaluate.outputs.base_retargeted }}
       head_ref: ${{ steps.evaluate.outputs.head_ref }}
       head_sha: ${{ steps.evaluate.outputs.head_sha }}
+      # Base commit SHA from the gate's PR read; the editor summary binds the
+      # clean same-head marker to it (#8952).
+      base_sha: ${{ steps.evaluate.outputs.base_sha }}
       review_checkout_sha: ${{ steps.evaluate.outputs.review_checkout_sha }}
       post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
       post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
@@ -651,6 +654,9 @@ jobs:
           # set vars.AUTOFIX_SKIP_TERMINAL_SAME_HEAD=false to restore the
           # unconditional re-dispatch behaviour. See the block below.
           AUTOFIX_SKIP_TERMINAL_SAME_HEAD: ${{ vars.AUTOFIX_SKIP_TERMINAL_SAME_HEAD }}
+          # Clean same-head skip (#8952): the script defaults it to true; set
+          # vars.AUTOFIX_SKIP_CLEAN_SAME_HEAD=false to re-review clean heads.
+          AUTOFIX_SKIP_CLEAN_SAME_HEAD: ${{ vars.AUTOFIX_SKIP_CLEAN_SAME_HEAD }}
           # Same expression as the retrigger_guard step: a stall-poller
           # force_rb_judge dispatch must never be swallowed by the terminal
           # same-head skip (it runs only the review-blocked judge).
@@ -3917,6 +3923,7 @@ jobs:
           AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
           AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
           AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
+          AUTOFIX_CLEAN_MARKER_BASE_SHA: ${{ needs.gate.outputs.base_sha }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_post_editor_summary.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_editor_summary.sh"

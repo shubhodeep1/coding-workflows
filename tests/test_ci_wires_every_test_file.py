@@ -39,6 +39,10 @@ UNWIRED_ALLOWLIST: dict[str, str] = {
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_gh_pr_comments_argv_limit.py, which collects them"
 	),
+	"tests/test_review_autofix_clean_same_head_gate.py": (
+		"ci.yml is outside the file grant of the issue that added it (#8952); its cases run in CI "
+		"through tests/test_review_autofix_terminal_same_head_gate.py, which collects them"
+	),
 }
 
 
