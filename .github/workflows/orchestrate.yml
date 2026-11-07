@@ -69,6 +69,11 @@ env:
   MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS: ${{ vars.ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS || '' }}
+  # Orchestrator context (issue #8427, P7): default off; see scripts/persist_orchestrator.py.
+  PERSIST_ORCH_CONTEXT_ENABLED: ${{ vars.PERSIST_ORCH_CONTEXT_ENABLED || 'false' }}
+  # Evidence pack (issue #8427, P4) for the decomposer prompt; P4's own switch.
+  PERSIST_EVIDENCE_PACK_ENABLED: ${{ vars.PERSIST_EVIDENCE_PACK_ENABLED || 'false' }}
+  PERSIST_EVIDENCE_PACK_MAX_BYTES: ${{ vars.PERSIST_EVIDENCE_PACK_MAX_BYTES || '12000' }}
 
 jobs:
   orchestrate:
@@ -497,6 +502,24 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          # Orchestrator-context helpers (issue #8427, P7): optional, so a support
+          # ref without them never fails decomposition; staged only with
+          # PERSIST_ORCH_CONTEXT_ENABLED on, so the workspace is unchanged while it is off.
+          if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ]; then
+            for f in persist_orchestrator.py evidence_pack.py attempt_journal.py targeted_file_context.py gh_api_retry.py; do
+              src=".codex-workflow-src/scripts/${f}"
+              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+                src=".codex-workflow-src-main/scripts/${f}"
+              fi
+              if [ ! -f "${src}" ]; then
+                echo "::notice::Optional orchestrator-context helper ${f} unavailable on ${SCRIPT_REF}; the decomposer prompt carries no persistence context from it."
+                continue
+              fi
+              install -m 0755 "${src}" "scripts/${f}"
+              _fetched_scripts+=("${f}")
+            done
+          fi
+
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json workflow_overlay.v1.json; do
             src=".codex-workflow-src/ai-memory/schemas/${sf}"
@@ -775,6 +798,36 @@ jobs:
             --issue-title "${ISSUE_TITLE}" \
             --issue-body-file "${PROJECT_CONTEXT_FILE}"
 
+      # Orchestrator context (issue #8427, P7). The token stays in this step;
+      # "Build Codex prompt" only appends the files it writes. Fail open.
+      - name: Build persistence context (P7)
+        if: ${{ env.PERSIST_ORCH_CONTEXT_ENABLED == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PROJECT_DESCRIPTION: ${{ inputs.project_description }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -uo pipefail
+          persist_desc="${RUNTIME_DIR}/persist_description.txt"
+          printf '%s\n' "${PROJECT_DESCRIPTION}" > "${persist_desc}" || true
+          if [ -f scripts/persist_orchestrator.py ]; then
+            timeout 120 python3 -B scripts/persist_orchestrator.py open-projects --repo "${GITHUB_REPOSITORY}" \
+              --out "${RUNTIME_DIR}/persist_open_projects.txt" || true
+          fi
+          if [ -f scripts/evidence_pack.py ]; then
+            persist_plan=""
+            if [ -f scripts/persist_orchestrator.py ]; then
+              persist_plan="$(timeout 30 python3 -B scripts/persist_orchestrator.py plan-path --description-file "${persist_desc}" --repo-root . 2>/dev/null)" || persist_plan=""
+            fi
+            persist_pack_args=(build --repo "${GITHUB_REPOSITORY}" --default-branch "${DEFAULT_BRANCH:-}" --text-file "${persist_desc}")
+            [ -n "${persist_plan}" ] && persist_pack_args+=(--plan-file "${persist_plan}")
+            persist_pack_args+=(--repo-root . --out "${RUNTIME_DIR}/persist_decomposer_evidence.txt")
+            timeout 300 python3 -B scripts/evidence_pack.py "${persist_pack_args[@]}" || true
+          fi
+          exit 0
+
       - name: Build Codex prompt
         env:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_ORCHESTRATE || '40' }}
@@ -806,6 +859,16 @@ jobs:
             echo "=== PROJECT DESCRIPTION ==="
             echo
             printf '%s\n' "${PROJECT_DESCRIPTION}"
+            # Orchestrator context (issue #8427, P7): written by "Build persistence
+            # context (P7)"; nothing is appended with the switch off.
+            if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ]; then
+              for persist_ctx in "${RUNTIME_DIR}/persist_open_projects.txt" "${RUNTIME_DIR}/persist_decomposer_evidence.txt"; do
+                if [ -s "${persist_ctx}" ]; then
+                  echo
+                  cat "${persist_ctx}"
+                fi
+              done
+            fi
           } > "${CODEX_PROMPT_FILE}"
 
           echo "Prompt built: $(wc -l < "${CODEX_PROMPT_FILE}") lines, $(wc -c < "${CODEX_PROMPT_FILE}") bytes"
