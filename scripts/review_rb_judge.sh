@@ -960,18 +960,25 @@ echo "judge_skip_reason=" >> "$GITHUB_OUTPUT"
 
 # _resilient_phase_swap <issue_number> <target_label>
 #
-# Swap AI phase labels without letting a concurrent terminal label be
-# removed by a stale full-label PUT. Non-terminal targets are added first,
-# then only phase labels observed by the initial GET are removed; a final
-# GET reconciles terminal precedence. GitHub exposes no conditional label
-# mutation, so the existing GET cannot safely support a full replacement.
-# API calls: terminal target 2 (GET + PUT); non-terminal target 3 plus one
-# DELETE per observed old phase, and one more DELETE when a terminal race wins.
+# Swap AI phase labels without letting a concurrent label be removed by a
+# stale full-label replacement. No target (terminal or non-terminal) ever
+# uses a full-label PUT: the target is added with a POST, then only phase
+# labels observed by the initial GET are DELETEd, and a final GET reconciles
+# terminal precedence. GitHub exposes no conditional label mutation, so the
+# initial GET cannot safely support a full replacement (a PUT built from it
+# erased a concurrent ai:merged / ai:orchestrator-managed).
+# A terminal target may still replace a terminal label the initial GET
+# already saw; for an ai:closed target, an ai:merged that appears
+# concurrently (not seen by the initial GET) wins and ai:closed is removed.
+# API calls: terminal target 3 (GET + POST + GET) plus one DELETE per
+# observed old phase, and one more DELETE when a concurrent ai:merged beats
+# ai:closed; non-terminal target 3 plus one DELETE per observed old phase,
+# and one more DELETE when a terminal race wins.
 _resilient_phase_swap()
 {
 	local _rps_issue="$1" _rps_target="$2"
 	local _rps_phases='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
-	local _rps_cur _rps_new _rps_phase _rps_terminal
+	local _rps_cur _rps_phase _rps_terminal _rps_merged_seen
 	if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
 		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
 		echo "::warning::_resilient_phase_swap: GET labels failed for #${_rps_issue} — falling back to POST add." >&2
@@ -1025,17 +1032,39 @@ _resilient_phase_swap()
 		fi
 		return 0
 	fi
-	_rps_new="$(printf '%s\n' "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
-		'(. - $p) + [$t] | unique')"
-	if printf '{"labels":%s}' "${_rps_new}" | \
-		gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
-			--input - >/dev/null 2>&1; then
+	# Terminal target (ai:merged / ai:closed): additive POST + targeted
+	# DELETE + reconciliation GET, never a full-label PUT.  Remember whether
+	# the initial GET already saw ai:merged so only a concurrently-added
+	# ai:merged triggers the merge-evidence-wins rule below.
+	_rps_merged_seen="$(printf '%s\n' "${_rps_cur}" | jq -r 'index("ai:merged") != null' 2>/dev/null || echo false)"
+	if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+		-f "labels[]=${_rps_target}" >/dev/null 2>&1; then
+		echo "::warning::_resilient_phase_swap: POST add failed for #${_rps_issue}." >&2
+		return 1
+	fi
+	# Unlike the non-terminal path, a terminal label observed by the initial
+	# GET may be replaced by the terminal target; labels the initial GET did
+	# not observe are never deleted.
+	while IFS= read -r _rps_phase; do
+		[ -n "${_rps_phase}" ] || continue
+		gh_retry gh api -X DELETE "repos/${REPOSITORY}/issues/${_rps_issue}/labels/$(printf '%s' "${_rps_phase}" | jq -sRr @uri)" >/dev/null 2>&1 \
+			|| echo "::warning::_resilient_phase_swap: could not remove prior phase ${_rps_phase} from #${_rps_issue}." >&2
+	done < <(printf '%s\n' "${_rps_cur}" | jq -r --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
+		'.[] | select(. as $lbl | ($p | index($lbl)) != null and . != $t)')
+	if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
+		echo "::warning::_resilient_phase_swap: terminal reconciliation GET failed for #${_rps_issue}; target ${_rps_target} was added and removal of observed prior phase labels was attempted (any failed removal is warned above), but the ai:merged-wins check was skipped." >&2
 		return 0
 	fi
-	echo "::warning::_resilient_phase_swap: PUT failed for #${_rps_issue} — falling back to POST add." >&2
-	GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
-		-f "labels[]=${_rps_target}" >/dev/null 2>&1 \
-		|| echo "::warning::_resilient_phase_swap: POST fallback also failed for #${_rps_issue}." >&2
+	if [ "${_rps_target}" = "ai:closed" ] && [ "${_rps_merged_seen}" != "true" ] \
+		&& [ "$(printf '%s\n' "${_rps_cur:-[]}" | jq -r 'index("ai:merged") != null' 2>/dev/null || echo false)" = "true" ]; then
+		if gh_retry gh api -X DELETE "repos/${REPOSITORY}/issues/${_rps_issue}/labels/$(printf '%s' "${_rps_target}" | jq -sRr @uri)" >/dev/null 2>&1; then
+			echo "_resilient_phase_swap: terminal label ai:merged appeared while swapping #${_rps_issue}; removed terminal target ai:closed."
+		else
+			echo "::warning::_resilient_phase_swap: ai:merged won for #${_rps_issue}, but removing ai:closed failed." >&2
+		fi
+	fi
+	return 0
 }
 
 if [ "${ENABLE_REVIEW_BLOCKED_JUDGE}" != "true" ]; then

@@ -26904,9 +26904,27 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       COMMENTS_FOR_TRACKING_NUM="${TRACKING_NUM}"
     else
       echo "::warning::Comments JSON for issue #${TRACKING_NUM} failed validation; proceeding with empty list" >&2
-      echo "::group::Raw comments response (first 50 lines)" >&2
-      head -50 "${_comments_raw}" >&2
-      echo "::endgroup::" >&2
+      # Never print the response itself (SEC-002, follow-up to #8095): it holds
+      # user-controlled comment bodies and orchestrator state. Size, hash prefix
+      # and category only, mirroring gh_api_json_to_file in scripts/gh_helpers.sh.
+      _cmt_dump_bytes="$(wc -c < "${_comments_raw}" 2>/dev/null | tr -d '[:space:]' || true)"
+      [[ "${_cmt_dump_bytes}" =~ ^[0-9]+$ ]] || _cmt_dump_bytes="unknown"
+      _cmt_dump_sha=""
+      if command -v sha256sum >/dev/null 2>&1; then
+        _cmt_dump_sha="$(sha256sum < "${_comments_raw}" 2>/dev/null | cut -c1-12 || true)"
+      elif command -v shasum >/dev/null 2>&1; then
+        _cmt_dump_sha="$(shasum -a 256 < "${_comments_raw}" 2>/dev/null | cut -c1-12 || true)"
+      fi
+      [[ "${_cmt_dump_sha}" =~ ^[0-9a-f]{12}$ ]] || _cmt_dump_sha="unavailable"
+      if [ ! -s "${_comments_raw}" ]; then
+        _cmt_dump_cat="empty"
+      elif [ -s "${_comments_merged}" ] && jq empty "${_comments_merged}" >/dev/null 2>&1; then
+        # The pages merged into valid JSON, so only the type == "array" check failed.
+        _cmt_dump_cat="non_array"
+      else
+        _cmt_dump_cat="invalid_json"
+      fi
+      echo "::warning::Comments response summary for issue #${TRACKING_NUM}: bytes=${_cmt_dump_bytes} sha256=${_cmt_dump_sha} category=${_cmt_dump_cat}" >&2
     fi
     rm -f "${_comments_merged}"
   fi
