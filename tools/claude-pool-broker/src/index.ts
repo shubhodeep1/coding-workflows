@@ -171,6 +171,8 @@ const DEFAULT_PROBE_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_GATE = 0.9;
 const MAX_JWT_LENGTH = 8192;
 const ACCOUNT_NAME_RE = /^[A-Z0-9_]{1,64}$/;
+/** ChatGPT account names: the plan's wire contract `^[A-Z0-9_]+$`, no length cap (/v1/pool keeps ACCOUNT_NAME_RE). */
+const CHATGPT_ACCOUNT_NAME_RE = /^[A-Z0-9_]+$/;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,79}$/;
 
@@ -600,7 +602,7 @@ export class ChatgptAccount
 				} catch {
 					return json(400, { error: "invalid_body" });
 				}
-				if (typeof name !== "string" || !ACCOUNT_NAME_RE.test(name)) {
+				if (typeof name !== "string" || !CHATGPT_ACCOUNT_NAME_RE.test(name)) {
 					return json(400, { error: "invalid_body" });
 				}
 				return this.state.blockConcurrencyWhile(async () => {
@@ -1001,7 +1003,7 @@ export function createHandler(deps: Deps)
 		if (listed.status !== 200 || !Array.isArray(names)) {
 			throw new Refusal(503, "chatgpt_store_unavailable");
 		}
-		const valid = [...new Set(names.filter((name): name is string => typeof name === "string" && ACCOUNT_NAME_RE.test(name)))].sort();
+		const valid = [...new Set(names.filter((name): name is string => typeof name === "string" && CHATGPT_ACCOUNT_NAME_RE.test(name)))].sort();
 		return Promise.all(
 			valid.map(async (name) => {
 				const stored = await storeCall(env, name, "GET", "/record");
@@ -1078,7 +1080,7 @@ export function createHandler(deps: Deps)
 			const jwt = bearerToken(request);
 			if (route === "writer") {
 				authorizeWriter(await verify(jwt, WRITER_AUDIENCE), env);
-				if (!ACCOUNT_NAME_RE.test(writerName)) {
+				if (!CHATGPT_ACCOUNT_NAME_RE.test(writerName)) {
 					throw new Refusal(404, "not_found");
 				}
 				if (request.method === "GET") {

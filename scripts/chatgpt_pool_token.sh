@@ -117,6 +117,7 @@ work="$(mktemp -d "${RUNNER_TEMP:-/tmp}/chatgpt-pool-work.XXXXXX" 2>/dev/null)" 
 chmod 0700 "${work}"
 # The work directory holds the OIDC request token, the JWT and auth_json; a
 # cancelled step never reaches finish(), so remove it on every exit as well.
+# shellcheck disable=SC2317  # Invoked indirectly by the EXIT/INT/TERM traps.
 cleanup_work()
 {
 	if [ -n "${work}" ] && [ -d "${work}" ] && [ ! -L "${work}" ]; then
@@ -196,7 +197,7 @@ accounts = []
 for entry in body["accounts"][:64]:
 	if not isinstance(entry, dict):
 		continue
-	name = text(entry.get("account"), r"[A-Z0-9_]{1,64}")
+	name = text(entry.get("account"), r"[A-Z0-9_]+")
 	if name is None:
 		continue
 	usage = entry.get("usage") if isinstance(entry.get("usage"), dict) else {}
@@ -253,7 +254,7 @@ def mask(value):
 mask(tokens)
 mask(auth.get("OPENAI_API_KEY"))
 name = body.get("account")
-if not isinstance(name, str) or not re.fullmatch(r"[A-Z0-9_]{1,64}", name):
+if not isinstance(name, str) or not re.fullmatch(r"[A-Z0-9_]+", name):
 	sys.exit(1)
 if "refresh_token" in tokens:
 	del tokens["refresh_token"]
@@ -281,6 +282,6 @@ then
 fi
 rm -f -- "${work}/broker.json"
 account="$(cat -- "${work}/account")"
-[[ "${account}" =~ ^[A-Z0-9_]{1,64}$ ]] || { account=""; finish false broker_response_invalid; }
+[[ "${account}" =~ ^[A-Z0-9_]+$ ]] || { account=""; finish false broker_response_invalid; }
 codex_home="${pool_dir}/${account}"
 finish true selected

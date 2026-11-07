@@ -996,7 +996,16 @@ describe("chatgpt writer", () => {
 		});
 	}
 
-	for (const name of ["alpha", "AL-PHA", "A%2FB", "A/B", "", "X".repeat(65)]) {
+	it("a name longer than 64 characters is valid (wire contract ^[A-Z0-9_]+$)", async () => {
+		const s = stub();
+		const store = fakeStore();
+		const name = "X".repeat(65);
+		expect(await writer(s, store, "GET", name)).toEqual({ status: 404, text: '{"error":"not_seeded"}' });
+		expect(await writer(s, store, "PUT", name, writeBody())).toEqual({ status: 200, text: '{"generation":1}' });
+		expect(store.mapFor("chatgpt-registry").get("names")).toEqual([name]);
+	});
+
+	for (const name of ["alpha", "AL-PHA", "A%2FB", "A/B", ""]) {
 		it(`an invalid account name ${JSON.stringify(name)} is 404 not_found`, async () => {
 			const s = stub();
 			expect(await writer(s, fakeStore(), "GET", name)).toEqual({ status: 404, text: '{"error":"not_found"}' });
