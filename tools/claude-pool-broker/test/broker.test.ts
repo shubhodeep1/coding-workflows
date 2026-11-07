@@ -7,9 +7,19 @@ import {
 	REGISTRY_TTL_MS,
 	REGISTRY_URL,
 	VERIFIED_SHA_TTL_MS,
+	CHATGPT_MAX_ACCOUNTS,
+	CHATGPT_STALE_MS,
+	ChatgptAccount,
+	WRITER_AUDIENCE,
+	applyChatgptWrite,
+	chatgptUsable,
 	createHandler,
+	parseChatgptWrite,
 	parsePool,
 	parseWorkflowRef,
+	stripRefreshToken,
+	type ChatgptNamespace,
+	type ChatgptRecord,
 	type Deps,
 	type Env,
 } from "../src/index";
@@ -553,5 +563,576 @@ describe("parseWorkflowRef", () => {
 		expect(parseWorkflowRef("shubhodeep1/coding-workflows-fork/.github/workflows/plan.yml@refs/heads/main")).toBeNull();
 		expect(parseWorkflowRef(undefined)).toBeNull();
 		expect(parseWorkflowRef(`${WF}@refs/heads/main`)).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// ChatGPT account store (plan Phase 1).
+// ---------------------------------------------------------------------------
+
+const WRITER_REF = "shubhodeep1/claude-workers/.github/workflows/chatgpt-pool-refresh.yml@refs/heads/main";
+const SEED = "a".repeat(64);
+const SEED2 = "b".repeat(64);
+const CHECKED_AT = "2026-10-04T11:59:00Z";
+
+interface FakeStore
+{
+	namespace: ChatgptNamespace;
+	mapFor: (name: string) => Map<string, unknown>;
+	failing: { get: boolean };
+}
+
+/** A ChatgptNamespace of real ChatgptAccount objects over Map storage with a serial mutex. */
+function fakeStore(): FakeStore
+{
+	const storage = new Map<string, Map<string, unknown>>();
+	const objects = new Map<string, ChatgptAccount>();
+	const failing = { get: false };
+	function storageFor(name: string): Map<string, unknown>
+	{
+		let map = storage.get(name);
+		if (!map) {
+			map = new Map();
+			storage.set(name, map);
+		}
+		return map;
+	}
+	const namespace: ChatgptNamespace = {
+		idFromName: (name) => `id:${name}`,
+		get: (id) => {
+			const name = String(id).slice(3);
+			let object = objects.get(name);
+			if (!object) {
+				const map = storageFor(name);
+				let chain: Promise<unknown> = Promise.resolve();
+				object = new ChatgptAccount({
+					storage: {
+						get: async (key) => {
+							if (failing.get) {
+								throw new Error("storage down");
+							}
+							return structuredClone(map.get(key));
+						},
+						put: async (key, value) => {
+							map.set(key, structuredClone(value));
+						},
+					},
+					blockConcurrencyWhile: <T>(callback: () => Promise<T>): Promise<T> => {
+						const run = chain.then(callback);
+						chain = run.catch(() => undefined);
+						return run;
+					},
+				});
+				objects.set(name, object);
+			}
+			const target = object;
+			return { fetch: (input, init) => target.fetch(new Request(input, init)) };
+		},
+	};
+	return { namespace, mapFor: storageFor, failing };
+}
+
+function authJson(name: string, extra: Record<string, unknown> = {}): Record<string, unknown>
+{
+	return {
+		OPENAI_API_KEY: null,
+		tokens: { id_token: `id-secret-${name}`, access_token: `at-secret-${name}`, refresh_token: `rt-secret-${name}`, account_id: `acct-${name}` },
+		last_refresh: "2026-10-04T00:00:00Z",
+		...extra,
+	};
+}
+
+function record(name: string, overrides: Partial<ChatgptRecord> = {}): ChatgptRecord
+{
+	return {
+		auth_json: authJson(name),
+		seed_sha256: SEED,
+		generation: 3,
+		last_refresh: new Date(NOW_MS - 3600 * 1000).toISOString(),
+		last_outcome: "ok",
+		forced_refresh: false,
+		checked_at: CHECKED_AT,
+		usage: { five_hour: 0.1, weekly: 0.2, resets: { five_hour: 100, weekly: "2026-10-08T00:00:00Z" } },
+		...overrides,
+	};
+}
+
+function seedRecord(store: FakeStore, name: string, value: ChatgptRecord | null): void
+{
+	const registry = store.mapFor("chatgpt-registry");
+	const names = ((registry.get("names") as string[] | undefined) ?? []).filter((n) => n !== name);
+	names.push(name);
+	names.sort();
+	registry.set("names", names);
+	if (value) {
+		store.mapFor(name).set("record", value);
+	}
+}
+
+function storedRecord(store: FakeStore, name: string): ChatgptRecord | undefined
+{
+	return store.mapFor(name).get("record") as ChatgptRecord | undefined;
+}
+
+function writerClaims(overrides: Record<string, unknown> = {}): Record<string, unknown>
+{
+	return claims({
+		aud: WRITER_AUDIENCE,
+		repository: "shubhodeep1/claude-workers",
+		ref: "refs/heads/main",
+		workflow_ref: WRITER_REF,
+		job_workflow_ref: WRITER_REF,
+		...overrides,
+	});
+}
+
+function chatgptRequest(token: string | null, path: string, method: string, body?: unknown): Request
+{
+	const headers: Record<string, string> = {};
+	if (token !== null) {
+		headers.authorization = `Bearer ${token}`;
+	}
+	if (body !== undefined) {
+		headers["content-type"] = "application/json";
+	}
+	return new Request(`https://claude-pool-broker.example.workers.dev${path}`, {
+		method,
+		headers,
+		body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
+	});
+}
+
+async function rawCall(s: Stub, req: Request, env: Env): Promise<{ status: number; text: string }>
+{
+	const response = await createHandlerFor(s)(req, env);
+	expect(response.headers.get("cache-control")).toBe("no-store");
+	return { status: response.status, text: await response.text() };
+}
+
+function writeBody(overrides: Record<string, unknown> = {}): Record<string, unknown>
+{
+	return {
+		seed_sha256: SEED,
+		base_generation: 0,
+		reseed: true,
+		outcome: "ok",
+		forced_refresh: false,
+		usage: { primary: { used_percent: 12, window_minutes: 300, resets_in_seconds: 900 }, secondary: { used_percent: 34, window_minutes: 10080, resets_at: 1760000000 } },
+		checked_at: CHECKED_AT,
+		auth_json: authJson("NEW"),
+		...overrides,
+	};
+}
+
+function chatgptEnv(store: FakeStore | null, extra: Partial<Env> = {}): Env
+{
+	return { ...ENV, ...(store ? { CHATGPT_ACCOUNTS: store.namespace } : {}), ...extra };
+}
+
+describe("chatgpt read", () => {
+	it("an empty store answers 503 chatgpt_pool_empty", async () => {
+		const s = stub();
+		const { status, text } = await rawCall(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(fakeStore()));
+		expect([status, text]).toEqual([503, '{"error":"chatgpt_pool_empty"}']);
+		expect(s.logs).toContain("CHATGPT_POOL broker refused route=read reason=chatgpt_pool_empty status=503");
+	});
+
+	it("picks the lowest weekly usage and strips the refresh token", async () => {
+		const s = stub();
+		const store = fakeStore();
+		seedRecord(store, "ALPHA", record("ALPHA", { usage: { five_hour: 0.1, weekly: 0.5, resets: { five_hour: null, weekly: null } } }));
+		seedRecord(store, "BETA", record("BETA", { usage: { five_hour: 0.4, weekly: 0.2, resets: { five_hour: null, weekly: null } } }));
+		seedRecord(store, "GAMMA", record("GAMMA", { usage: { five_hour: null, weekly: null, resets: { five_hour: null, weekly: null } } }));
+		const { status, body } = await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store));
+		expect(status).toBe(200);
+		expect(body.account).toBe("BETA");
+		const expected = authJson("BETA");
+		delete (expected.tokens as Record<string, unknown>).refresh_token;
+		expect(body.auth_json).toEqual(expected);
+		expect(JSON.stringify(body)).not.toContain("rt-secret");
+		expect((storedRecord(store, "BETA")?.auth_json.tokens as Record<string, unknown>).refresh_token).toBe("rt-secret-BETA");
+		expect(s.logs).toContain("CHATGPT_POOL broker granted repository=shubhodeep1/digital_pa account=BETA");
+	});
+
+	it("sorts unknown weekly usage after known usage, ties by name", async () => {
+		const s = stub();
+		const store = fakeStore();
+		const unknown = { five_hour: null, weekly: null, resets: { five_hour: null, weekly: null } };
+		seedRecord(store, "ZED", record("ZED", { usage: unknown }));
+		seedRecord(store, "ECHO", record("ECHO", { usage: unknown }));
+		expect((await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store))).body.account).toBe("ECHO");
+		seedRecord(store, "YANKEE", record("YANKEE", { usage: { ...unknown, weekly: 0.8 } }));
+		expect((await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store))).body.account).toBe("YANKEE");
+	});
+
+	it("skips an account at or above the gate, honours CHATGPT_GATE and falls back on an invalid value", async () => {
+		const s = stub();
+		const store = fakeStore();
+		seedRecord(store, "ALPHA", record("ALPHA", { usage: { five_hour: 0.1, weekly: 0.9, resets: { five_hour: null, weekly: null } } }));
+		seedRecord(store, "BETA", record("BETA", { usage: { five_hour: 0.95, weekly: 0.1, resets: { five_hour: null, weekly: null } } }));
+		expect((await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store))).body.error).toBe("chatgpt_pool_empty");
+		expect((await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store, { CHATGPT_GATE: "0.99" }))).body.account).toBe("BETA");
+		for (const bad of ["5", "0", "nope", "-1"]) {
+			expect((await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store, { CHATGPT_GATE: bad }))).body.error).toBe("chatgpt_pool_empty");
+		}
+	});
+
+	it("drops an account not written for 7 days and keeps one just inside", async () => {
+		const s = stub();
+		const store = fakeStore();
+		seedRecord(store, "OLD", record("OLD", { last_refresh: new Date(NOW_MS - CHATGPT_STALE_MS).toISOString(), usage: { five_hour: 0, weekly: 0, resets: { five_hour: null, weekly: null } } }));
+		seedRecord(store, "FRESH", record("FRESH", { last_refresh: new Date(NOW_MS - CHATGPT_STALE_MS + 60_000).toISOString() }));
+		expect((await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store))).body.account).toBe("FRESH");
+		seedRecord(store, "FRESH", record("FRESH", { last_refresh: null }));
+		expect((await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store))).body.error).toBe("chatgpt_pool_empty");
+	});
+
+	it("skips auth_failed and quota_exhausted accounts and listed-but-unseeded names", async () => {
+		const s = stub();
+		const store = fakeStore();
+		seedRecord(store, "AUTH", record("AUTH", { last_outcome: "auth_failed", usage: { five_hour: 0, weekly: 0, resets: { five_hour: null, weekly: null } } }));
+		seedRecord(store, "QUOTA", record("QUOTA", { last_outcome: "quota_exhausted", usage: { five_hour: 0, weekly: 0, resets: { five_hour: null, weekly: null } } }));
+		seedRecord(store, "EMPTY", null);
+		expect((await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store))).body.error).toBe("chatgpt_pool_empty");
+		seedRecord(store, "TIMEOUT", record("TIMEOUT", { last_outcome: "timeout" }));
+		expect((await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store))).body.account).toBe("TIMEOUT");
+	});
+
+	it("refuses a writer-audience token and a disallowed workflow", async () => {
+		const s = stub();
+		const store = fakeStore();
+		seedRecord(store, "ALPHA", record("ALPHA"));
+		expect(await rawCall(s, chatgptRequest(await sign(writerClaims()), "/v1/chatgpt", "POST"), chatgptEnv(store))).toEqual({ status: 403, text: '{"error":"bad_audience"}' });
+		const evil = await sign(claims({ job_workflow_ref: "shubhodeep1/coding-workflows/.github/workflows/evil.yml@refs/heads/main" }));
+		expect(await rawCall(s, chatgptRequest(evil, "/v1/chatgpt", "POST"), chatgptEnv(store))).toEqual({ status: 403, text: '{"error":"workflow_not_allowed"}' });
+		expect((await rawCall(s, chatgptRequest(null, "/v1/chatgpt", "POST"), chatgptEnv(store))).status).toBe(403);
+	});
+
+	it("a missing binding or a storage failure is 503, never 500", async () => {
+		const s = stub();
+		expect(await rawCall(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(null))).toEqual({ status: 503, text: '{"error":"chatgpt_store_unavailable"}' });
+		const store = fakeStore();
+		seedRecord(store, "ALPHA", record("ALPHA"));
+		store.failing.get = true;
+		expect(await rawCall(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store))).toEqual({ status: 503, text: '{"error":"chatgpt_store_unavailable"}' });
+		const broken: ChatgptNamespace = { idFromName: () => { throw new Error("boom"); }, get: () => ({ fetch: async () => new Response("x") }) };
+		expect((await rawCall(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(null, { CHATGPT_ACCOUNTS: broken }))).status).toBe(503);
+		const notJson: ChatgptNamespace = { idFromName: (n) => n, get: () => ({ fetch: async () => new Response("not json", { status: 200 }) }) };
+		expect((await rawCall(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(null, { CHATGPT_ACCOUNTS: notJson }))).status).toBe(503);
+	});
+
+	it("routing: wrong methods and unknown paths", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeStore());
+		expect((await rawCall(s, chatgptRequest(null, "/v1/chatgpt", "GET"), env)).status).toBe(405);
+		expect((await rawCall(s, chatgptRequest(null, "/v1/chatgpt/status", "POST"), env)).status).toBe(405);
+		expect((await rawCall(s, chatgptRequest(null, "/v1/chatgpt/refresh/ALPHA", "POST"), env)).status).toBe(405);
+		expect(await rawCall(s, chatgptRequest(null, "/v1/chatgpt/other", "GET"), env)).toEqual({ status: 404, text: '{"error":"not_found"}' });
+		expect(s.calls).toEqual([]);
+	});
+});
+
+describe("chatgpt status", () => {
+	it("returns metadata only", async () => {
+		const s = stub();
+		const store = fakeStore();
+		seedRecord(store, "ALPHA", record("ALPHA"));
+		seedRecord(store, "BETA", record("BETA", { last_outcome: "auth_failed", generation: 7 }));
+		seedRecord(store, "EMPTY", null);
+		const { status, text } = await rawCall(s, chatgptRequest(await sign(claims()), "/v1/chatgpt/status", "GET"), chatgptEnv(store));
+		expect(status).toBe(200);
+		for (const secret of ["auth_json", "refresh_token", "seed_sha256", "secret", SEED]) {
+			expect(text).not.toContain(secret);
+		}
+		const body = JSON.parse(text);
+		expect(body.gate).toBe(0.9);
+		expect(body.accounts).toEqual([
+			{ account: "ALPHA", generation: 3, last_refresh: record("ALPHA").last_refresh, last_outcome: "ok", usage: { five_hour: 0.1, weekly: 0.2, resets: { five_hour: 100, weekly: "2026-10-08T00:00:00Z" } }, usable: true, reason: null },
+			{ account: "BETA", generation: 7, last_refresh: record("BETA").last_refresh, last_outcome: "auth_failed", usage: { five_hour: 0.1, weekly: 0.2, resets: { five_hour: 100, weekly: "2026-10-08T00:00:00Z" } }, usable: false, reason: "auth_rejected" },
+			{ account: "EMPTY", generation: 0, last_refresh: null, last_outcome: null, usage: { five_hour: null, weekly: null, resets: { five_hour: null, weekly: null } }, usable: false, reason: "not_seeded" },
+		]);
+		expect(s.logs).toContain("CHATGPT_POOL broker status accounts=3");
+	});
+
+	it("an empty store is an empty list", async () => {
+		const s = stub();
+		const { status, body } = await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt/status", "GET"), chatgptEnv(fakeStore()));
+		expect([status, body]).toEqual([200, { accounts: [], gate: 0.9 }]);
+	});
+
+	it("refuses a writer token", async () => {
+		const s = stub();
+		expect(await rawCall(s, chatgptRequest(await sign(writerClaims()), "/v1/chatgpt/status", "GET"), chatgptEnv(fakeStore()))).toEqual({ status: 403, text: '{"error":"bad_audience"}' });
+	});
+});
+
+describe("chatgpt writer", () => {
+	async function writer(s: Stub, store: FakeStore | null, method: string, name: string, body?: unknown, extra: { claims?: Record<string, unknown>; env?: Partial<Env> } = {}): Promise<{ status: number; text: string }>
+	{
+		const token = await sign(writerClaims(extra.claims ?? {}));
+		return rawCall(s, chatgptRequest(token, `/v1/chatgpt/refresh/${name}`, method, body), chatgptEnv(store, extra.env ?? {}));
+	}
+
+	it("GET on an unknown account is 404 not_seeded, byte for byte", async () => {
+		const s = stub();
+		expect(await writer(s, fakeStore(), "GET", "ALPHA")).toEqual({ status: 404, text: '{"error":"not_seeded"}' });
+	});
+
+	it("a reseed creates generation 1 and GET returns the full file", async () => {
+		const s = stub();
+		const store = fakeStore();
+		expect(await writer(s, store, "PUT", "ALPHA", writeBody())).toEqual({ status: 200, text: '{"generation":1}' });
+		const got = await writer(s, store, "GET", "ALPHA");
+		expect(got.status).toBe(200);
+		expect(got.text).toBe(JSON.stringify({ auth_json: authJson("NEW"), generation: 1, seed_sha256: SEED }));
+		const stored = storedRecord(store, "ALPHA");
+		expect(stored?.last_refresh).toBe(new Date(NOW_MS).toISOString());
+		expect(stored?.usage).toEqual({ five_hour: 0.12, weekly: 0.34, resets: { five_hour: 900, weekly: 1760000000 } });
+		expect(store.mapFor("chatgpt-registry").get("names")).toEqual(["ALPHA"]);
+		expect(s.logs).toContain("CHATGPT_POOL broker refresh account=ALPHA outcome=ok generation=1 reseed=true");
+		// The reseeded account is now served (refresh token stripped).
+		const read = await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store));
+		expect(read.body.account).toBe("ALPHA");
+		expect(JSON.stringify(read.body)).not.toContain("rt-secret");
+	});
+
+	it("a non-reseed PUT on an unknown account is 404 not_seeded", async () => {
+		const s = stub();
+		const body = writeBody({ reseed: false });
+		expect(await writer(s, fakeStore(), "PUT", "ALPHA", body)).toEqual({ status: 404, text: '{"error":"not_seeded"}' });
+	});
+
+	it("a stale base_generation is 409 generation_conflict", async () => {
+		const s = stub();
+		const store = fakeStore();
+		await writer(s, store, "PUT", "ALPHA", writeBody());
+		expect(await writer(s, store, "PUT", "ALPHA", writeBody({ reseed: false, base_generation: 0 }))).toEqual({ status: 409, text: '{"error":"generation_conflict"}' });
+		expect(await writer(s, store, "PUT", "ALPHA", writeBody({ reseed: false, base_generation: 2 }))).toEqual({ status: 409, text: '{"error":"generation_conflict"}' });
+		expect(await writer(s, store, "PUT", "ALPHA", writeBody({ reseed: false, base_generation: 1 }))).toEqual({ status: 200, text: '{"generation":2}' });
+	});
+
+	it("a PUT without auth_json keeps the stored file and last_refresh", async () => {
+		const s = stub();
+		const store = fakeStore();
+		await writer(s, store, "PUT", "ALPHA", writeBody());
+		const before = storedRecord(store, "ALPHA");
+		s.setNow(NOW_MS + 60_000);
+		const body = writeBody({ reseed: false, base_generation: 1, outcome: "timeout", usage: null, seed_sha256: SEED2 });
+		delete body.auth_json;
+		expect(await writer(s, store, "PUT", "ALPHA", body)).toEqual({ status: 200, text: '{"generation":2}' });
+		const after = storedRecord(store, "ALPHA");
+		expect(after?.auth_json).toEqual(before?.auth_json);
+		expect(after?.last_refresh).toBe(before?.last_refresh);
+		expect(after?.seed_sha256).toBe(SEED);
+		expect(after?.last_outcome).toBe("timeout");
+		expect(after?.usage).toEqual({ five_hour: null, weekly: null, resets: { five_hour: null, weekly: null } });
+	});
+
+	it("a PUT with auth_json replaces the file and advances last_refresh", async () => {
+		const s = stub();
+		const store = fakeStore();
+		await writer(s, store, "PUT", "ALPHA", writeBody());
+		s.setNow(NOW_MS + 60_000);
+		const body = writeBody({ reseed: false, base_generation: 1, auth_json: authJson("ROTATED") });
+		expect((await writer(s, store, "PUT", "ALPHA", body)).status).toBe(200);
+		expect(storedRecord(store, "ALPHA")?.auth_json).toEqual(authJson("ROTATED"));
+		expect(storedRecord(store, "ALPHA")?.last_refresh).toBe(new Date(NOW_MS + 60_000).toISOString());
+	});
+
+	it("a reseed with a new hash replaces the record but still checks base_generation", async () => {
+		const s = stub();
+		const store = fakeStore();
+		await writer(s, store, "PUT", "ALPHA", writeBody());
+		expect(await writer(s, store, "PUT", "ALPHA", writeBody({ seed_sha256: SEED2, auth_json: authJson("RESEED") }))).toEqual({ status: 409, text: '{"error":"generation_conflict"}' });
+		expect(await writer(s, store, "PUT", "ALPHA", writeBody({ seed_sha256: SEED2, base_generation: 1, auth_json: authJson("RESEED") }))).toEqual({ status: 200, text: '{"generation":2}' });
+		const got = JSON.parse((await writer(s, store, "GET", "ALPHA")).text);
+		expect(got).toEqual({ auth_json: authJson("RESEED"), generation: 2, seed_sha256: SEED2 });
+	});
+
+	const invalidBodies: [string, unknown][] = [
+		["not JSON", "{"],
+		["an array", "[]"],
+		["a bad seed hash", writeBody({ seed_sha256: "ABC" })],
+		["a negative base_generation", writeBody({ base_generation: -1 })],
+		["a fractional base_generation", writeBody({ base_generation: 1.5 })],
+		["a string reseed", writeBody({ reseed: "true" })],
+		["an unknown outcome", writeBody({ outcome: "weird" })],
+		["a missing forced_refresh", writeBody({ forced_refresh: undefined })],
+		["a usage string", writeBody({ usage: "x" })],
+		["a negative used_percent", writeBody({ usage: { primary: { used_percent: -1 } } })],
+		["a bad checked_at", writeBody({ checked_at: "yesterday" })],
+		["an auth_json without tokens", writeBody({ auth_json: { OPENAI_API_KEY: null } })],
+		["a reseed without auth_json", writeBody({ auth_json: undefined })],
+		["an oversized body", writeBody({ auth_json: { tokens: { id_token: "x".repeat(70000) } } })],
+	];
+	for (const [name, body] of invalidBodies) {
+		it(`refuses ${name} with 400 invalid_body`, async () => {
+			const s = stub();
+			const store = fakeStore();
+			expect(await writer(s, store, "PUT", "ALPHA", body)).toEqual({ status: 400, text: '{"error":"invalid_body"}' });
+			expect(storedRecord(store, "ALPHA")).toBeUndefined();
+		});
+	}
+
+	for (const name of ["alpha", "AL-PHA", "A%2FB", "A/B", "", "X".repeat(65)]) {
+		it(`an invalid account name ${JSON.stringify(name)} is 404 not_found`, async () => {
+			const s = stub();
+			expect(await writer(s, fakeStore(), "GET", name)).toEqual({ status: 404, text: '{"error":"not_found"}' });
+		});
+	}
+
+	const refusals: [string, Record<string, unknown>, string][] = [
+		["a wrong repository", { repository: "shubhodeep1/coding-workflows" }, "repo_not_allowed"],
+		["a wrong workflow file", { workflow_ref: WRITER_REF.replace("chatgpt-pool-refresh.yml", "other.yml"), job_workflow_ref: WRITER_REF.replace("chatgpt-pool-refresh.yml", "other.yml") }, "workflow_not_allowed"],
+		["a wrong ref claim", { ref: "refs/heads/feature" }, "workflow_ref_not_allowed"],
+		["a feature-branch workflow_ref", { workflow_ref: WRITER_REF.replace("refs/heads/main", "refs/heads/feature") }, "workflow_ref_not_allowed"],
+		["a job_workflow_ref elsewhere", { job_workflow_ref: "shubhodeep1/coding-workflows/.github/workflows/clarify.yml@refs/heads/main" }, "workflow_not_allowed"],
+		["no job_workflow_ref", { job_workflow_ref: undefined }, "workflow_not_allowed"],
+		["a read-audience token", { aud: AUDIENCE }, "bad_audience"],
+		["an expired token", { exp: NOW - 120 }, "expired"],
+	];
+	for (const [name, overrides, reason] of refusals) {
+		it(`refuses ${name}`, async () => {
+			const s = stub();
+			const store = fakeStore();
+			seedRecord(store, "ALPHA", record("ALPHA"));
+			expect(await writer(s, store, "GET", "ALPHA", undefined, { claims: overrides })).toEqual({ status: 403, text: JSON.stringify({ error: reason }) });
+			expect(await writer(s, store, "PUT", "ALPHA", writeBody({ base_generation: 3 }), { claims: overrides })).toEqual({ status: 403, text: JSON.stringify({ error: reason }) });
+			expect(storedRecord(store, "ALPHA")?.generation).toBe(3);
+			expect(s.calls.filter((url) => url === REGISTRY_URL || url.startsWith(GITHUB_API))).toEqual([]);
+		});
+	}
+
+	it("accepts the writer repository in any case", async () => {
+		const s = stub();
+		const ref = "ShubhoDeep1/Claude-Workers/.github/workflows/chatgpt-pool-refresh.yml@refs/heads/main";
+		expect((await writer(s, fakeStore(), "GET", "ALPHA", undefined, { claims: { repository: "ShubhoDeep1/Claude-Workers", workflow_ref: ref, job_workflow_ref: ref } })).status).toBe(404);
+	});
+
+	it("an invalid CHATGPT_WRITER_* value fails closed with 503", async () => {
+		const s = stub();
+		for (const env of [{ CHATGPT_WRITER_REPOSITORY: "not a repo" }, { CHATGPT_WRITER_WORKFLOW: "../x.yml" }, { CHATGPT_WRITER_WORKFLOW: "" }]) {
+			expect(await writer(s, fakeStore(), "GET", "ALPHA", undefined, { env })).toEqual({ status: 503, text: '{"error":"writer_config_invalid"}' });
+		}
+	});
+
+	it("honours the configured writer repository and workflow", async () => {
+		const s = stub();
+		const ref = "shubhodeep1/other/.github/workflows/w.yml@refs/heads/main";
+		const env = { CHATGPT_WRITER_REPOSITORY: "shubhodeep1/other", CHATGPT_WRITER_WORKFLOW: "w.yml" };
+		expect((await writer(s, fakeStore(), "GET", "ALPHA", undefined, { env })).text).toBe('{"error":"repo_not_allowed"}');
+		expect((await writer(s, fakeStore(), "GET", "ALPHA", undefined, { env, claims: { repository: "shubhodeep1/other", workflow_ref: ref, job_workflow_ref: ref } })).status).toBe(404);
+	});
+
+	it("a missing binding or a storage throw is 503, never 500", async () => {
+		const s = stub();
+		expect(await writer(s, null, "GET", "ALPHA")).toEqual({ status: 503, text: '{"error":"chatgpt_store_unavailable"}' });
+		expect(await writer(s, null, "PUT", "ALPHA", writeBody())).toEqual({ status: 503, text: '{"error":"chatgpt_store_unavailable"}' });
+		const store = fakeStore();
+		store.failing.get = true;
+		expect(await writer(s, store, "GET", "ALPHA")).toEqual({ status: 503, text: '{"error":"chatgpt_store_unavailable"}' });
+		expect(await writer(s, store, "PUT", "ALPHA", writeBody())).toEqual({ status: 503, text: '{"error":"chatgpt_store_unavailable"}' });
+	});
+
+	it("a full registry refuses a new account with 503 chatgpt_registry_full", async () => {
+		const s = stub();
+		const store = fakeStore();
+		for (let i = 0; i < CHATGPT_MAX_ACCOUNTS; i++) {
+			seedRecord(store, `ACCT_${String(i).padStart(2, "0")}`, null);
+		}
+		expect(await writer(s, store, "PUT", "ALPHA", writeBody())).toEqual({ status: 503, text: '{"error":"chatgpt_registry_full"}' });
+		expect(await writer(s, store, "PUT", "ACCT_00", writeBody())).toEqual({ status: 200, text: '{"generation":1}' });
+	});
+
+	it("serialises concurrent writers: one wins, one conflicts", async () => {
+		const s = stub();
+		const store = fakeStore();
+		await writer(s, store, "PUT", "ALPHA", writeBody());
+		const results = await Promise.all([
+			writer(s, store, "PUT", "ALPHA", writeBody({ reseed: false, base_generation: 1 })),
+			writer(s, store, "PUT", "ALPHA", writeBody({ reseed: false, base_generation: 1 })),
+		]);
+		expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+		expect(storedRecord(store, "ALPHA")?.generation).toBe(2);
+	});
+});
+
+describe("chatgpt logs", () => {
+	it("never carry a token, the JWT, auth_json or the seed hash", async () => {
+		const s = stub();
+		const store = fakeStore();
+		const tokens: string[] = [];
+		const jwtRead = await sign(claims());
+		const jwtWriter = await sign(writerClaims());
+		tokens.push(jwtRead, jwtWriter);
+		const env = chatgptEnv(store);
+		await createHandlerFor(s)(chatgptRequest(jwtWriter, "/v1/chatgpt/refresh/ALPHA", "PUT", writeBody()), env);
+		await createHandlerFor(s)(chatgptRequest(jwtWriter, "/v1/chatgpt/refresh/ALPHA", "GET"), env);
+		await createHandlerFor(s)(chatgptRequest(jwtWriter, "/v1/chatgpt/refresh/ALPHA", "PUT", writeBody()), env);
+		await createHandlerFor(s)(chatgptRequest(jwtWriter, "/v1/chatgpt/refresh/ALPHA", "PUT", "{"), env);
+		await createHandlerFor(s)(chatgptRequest(jwtRead, "/v1/chatgpt", "POST"), env);
+		await createHandlerFor(s)(chatgptRequest(jwtRead, "/v1/chatgpt/status", "GET"), env);
+		await createHandlerFor(s)(chatgptRequest(jwtRead, "/v1/chatgpt/refresh/ALPHA", "GET"), env);
+		await createHandlerFor(s)(chatgptRequest(jwtWriter, "/v1/chatgpt", "POST"), env);
+		const text = s.logs.join("\n");
+		expect(s.logs.length).toBeGreaterThan(5);
+		for (const secret of [...tokens, "id-secret", "at-secret", "rt-secret", "acct-NEW", SEED, "auth_json", "tokens"]) {
+			expect(text).not.toContain(secret);
+		}
+		expect(s.logs.every((line) => line.startsWith("CHATGPT_POOL broker ") || line.startsWith("CLAUDE_POOL broker "))).toBe(true);
+	});
+});
+
+describe("/v1/pool unchanged", () => {
+	it("returns the same body and makes the same calls with a CHATGPT_ACCOUNTS binding", async () => {
+		const plain = stub();
+		const withStore = stub();
+		const store = fakeStore();
+		seedRecord(store, "ALPHA", record("ALPHA"));
+		const a = await call(plain, request(await sign(claims())));
+		const b = await call(withStore, request(await sign(claims())), chatgptEnv(store));
+		expect(b).toEqual(a);
+		expect(withStore.calls).toEqual(plain.calls);
+		expect(withStore.logs).toEqual(plain.logs);
+	});
+
+	it("refuses a writer-audience token", async () => {
+		const s = stub();
+		expect((await call(s, request(await sign(writerClaims())))).body.error).toBe("bad_audience");
+	});
+});
+
+describe("chatgpt helpers", () => {
+	it("applyChatgptWrite: not_seeded beats conflict, CAS, seed kept", () => {
+		const write = parseChatgptWrite(writeBody({ reseed: false, base_generation: 5 }));
+		expect(applyChatgptWrite(null, write, "t")).toEqual({ status: 404, body: { error: "not_seeded" } });
+		const stored = record("ALPHA", { generation: 5, seed_sha256: SEED2 });
+		const result = applyChatgptWrite(stored, write, "2026-10-04T12:00:00.000Z");
+		expect(result.status).toBe(200);
+		expect(result.record?.seed_sha256).toBe(SEED2);
+		expect(result.record?.generation).toBe(6);
+		expect(applyChatgptWrite(stored, parseChatgptWrite(writeBody({ reseed: false, base_generation: 4 })), "t").status).toBe(409);
+	});
+
+	it("parseChatgptWrite: accepts +00:00, null windows and clamps over-100 readings", () => {
+		const write = parseChatgptWrite(writeBody({ checked_at: "2026-10-04T11:59:00.123456+00:00", usage: { primary: null, secondary: { used_percent: 140 } } }));
+		expect(write.usage).toEqual({ primary: null, secondary: { used_percent: 100, reset: null } });
+		expect(parseChatgptWrite(writeBody({ usage: null })).usage).toEqual({ primary: null, secondary: null });
+	});
+
+	it("chatgptUsable reasons", () => {
+		expect(chatgptUsable(null, 0.9, NOW_MS)).toBe("not_seeded");
+		expect(chatgptUsable(record("A"), 0.9, NOW_MS)).toBeNull();
+		expect(chatgptUsable(record("A", { last_outcome: "auth_failed" }), 0.9, NOW_MS)).toBe("auth_rejected");
+		expect(chatgptUsable(record("A", { last_outcome: "quota_exhausted" }), 0.9, NOW_MS)).toBe("quota_exhausted");
+		expect(chatgptUsable(record("A", { last_refresh: "garbage" }), 0.9, NOW_MS)).toBe("stale");
+		expect(chatgptUsable(record("A"), 0.15, NOW_MS)).toBe("gated");
+	});
+
+	it("stripRefreshToken copies and leaves the input intact", () => {
+		const input = authJson("A");
+		const copy = stripRefreshToken(input);
+		expect((copy.tokens as Record<string, unknown>).refresh_token).toBeUndefined();
+		expect((input.tokens as Record<string, unknown>).refresh_token).toBe("rt-secret-A");
 	});
 });
