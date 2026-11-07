@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8977_6705143049_approved",
   "issue_number": 8977,
   "metadata": {
+    "branch": "ai/issue-8977",
+    "changed_files": [
+      "changelog.d/wfopt-2026-10-07-merge-train-dispatch-list.md",
+      "scripts/review_merge_train.sh",
+      "tests/test_review_merge_train.py"
+    ],
+    "issue_number": 8977,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8977",
+    "pr_number": 8985,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8985",
+    "run_attempt": "1",
+    "run_id": "42360526249",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42360526249"
   },
   "run_attempt": 1,
   "run_id": "42360526249",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-07T09:45:48Z",
+  "status": "completed",
+  "timestamp": "2026-11-07T10:14:36Z",
   "workflow": "implement"
 }
