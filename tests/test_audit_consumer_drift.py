@@ -1162,6 +1162,127 @@ def test_repair_skips_when_a_sync_pull_request_is_open() -> None:
 		assert _run_git("--git-dir", str(bare), "branch", "--list", drift_audit.RESTORE_BRANCH) == ""
 
 
+def _sync_pull(created_at):
+	pull = {"number": 3, "html_url": "s", "body": "", "head": {"ref": "auto/update-workflows-0123456789ab", "repo": {"full_name": "owner/repo"}}}
+	if created_at is not None:
+		pull["created_at"] = created_at
+	return pull
+
+
+def test_repair_records_sync_pull_request_age() -> None:
+	from datetime import datetime, timezone
+
+	now = datetime(2026, 11, 7, 8, 0, tzinfo=timezone.utc)
+	cases = [
+		("2026-11-05T14:47:30Z", False),  # about 41 hours old
+		("2026-11-04T08:00:01Z", False),  # just under 3 days
+		("2026-11-04T08:00:00Z", True),  # exactly 3 days
+		("2026-10-30T08:00:00Z", True),
+		(None, True),  # unknown age errs toward alerting
+		("not-a-date", True),
+	]
+	for created_at, expected_stale in cases:
+		with tempfile.TemporaryDirectory(prefix="drift-repair-sync-age-") as td:
+			tmp = Path(td)
+			replies = [PlannedCall(prefix=("gh", "api", "-H"), stdout=json.dumps([_sync_pull(created_at)]))]
+			repairer, _executor, _rendered, _bare = _repair_fixture(tmp, replies, {"ai-plan.yml": "x\n"})
+			repairer.now = now
+			out = io.StringIO()
+			with contextlib.redirect_stdout(out):
+				result = repairer.repair("owner/repo", {"ai-plan.yml"})
+			assert result.reason == "sync_pull_request_open", result
+			assert result.pr_stale is expected_stale, (created_at, result)
+			assert result.pr_created_at == (created_at if created_at else None)
+			assert f"stale={'true' if expected_stale else 'false'}" in out.getvalue()
+
+
+def _run_report_step(tmp: Path, summary: dict) -> tuple[str, str, str]:
+	"""Run the workflow's inline report script; return (level, telegram, summary_md)."""
+	import textwrap
+
+	workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
+	start = workflow_text.index("<<'PY'\n") + len("<<'PY'\n")
+	end = workflow_text.index("\n          PY\n", start)
+	script = tmp / "report.py"
+	script.write_text(textwrap.dedent(workflow_text[start:end]) + "\n", encoding="utf-8")
+	summary_json = tmp / "summary.json"
+	summary_json.write_text(json.dumps(summary), encoding="utf-8")
+	subprocess.run(
+		[sys.executable, "-I", str(script), str(summary_json), str(tmp / "s.md"), str(tmp / "t.txt"), str(tmp / "l.txt"), "RUN"],
+		check=True,
+	)
+	return (
+		(tmp / "l.txt").read_text(encoding="utf-8").strip(),
+		(tmp / "t.txt").read_text(encoding="utf-8"),
+		(tmp / "s.md").read_text(encoding="utf-8"),
+	)
+
+
+def _report_summary(repairs: list[dict], *, errors: int = 0) -> dict:
+	drift = {"repository": "owner/drifted", "outcome": "drift", "drift_items": [{"file": "ai-plan.yml", "diff_lines_total": 2, "diff_preview": "-a\n+b"}]}
+	results = [drift] + [{"repository": f"owner/err{i}", "outcome": "error", "error": "fetch_failed"} for i in range(errors)]
+	return {
+		"totals": {"processed": 1 + errors, "match": 0, "drift": 1, "error": errors, "drift_items": 1},
+		"results": results,
+		"template_files": ["ai-plan.yml"],
+		"repairs": repairs,
+	}
+
+
+def _sync_skip(stale) -> dict:
+	repair = {"repository": "owner/drifted", "outcome": "skipped", "reason": "sync_pull_request_open", "files": [], "pr_number": 259, "pr_url": "u", "pr_created_at": "2026-11-05T14:47:30Z"}
+	if stale is not None:
+		repair["pr_stale"] = stale
+	return repair
+
+
+def test_report_stays_quiet_when_a_fresh_sync_pull_request_covers_the_drift() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-report-covered-") as td:
+		level, telegram, summary_md = _run_report_step(Path(td), _report_summary([_sync_skip(False)]))
+		assert level == "DEBUG"
+		assert "nothing to do" in telegram
+		assert "owner/drifted: update PR #259" in telegram
+		assert "fixes this drift when merged" in summary_md
+
+
+def test_report_warns_when_the_sync_pull_request_is_stale_or_its_age_unknown() -> None:
+	for stale in (True, None):
+		with tempfile.TemporaryDirectory(prefix="drift-report-stale-") as td:
+			level, telegram, _summary_md = _run_report_step(Path(td), _report_summary([_sync_skip(stale)]))
+			assert level == "WARNING", stale
+			assert "stuck, open since 2026-11-05T14:47:30Z" in telegram
+			assert "owner/drifted / ai-plan.yml" in telegram
+
+
+def test_report_warns_for_uncovered_drift_errors_and_restore_pull_requests() -> None:
+	created = {"repository": "owner/drifted", "outcome": "created", "reason": "restored", "files": ["ai-plan.yml"], "pr_number": 7}
+	cases = [
+		_report_summary([]),  # drift with no repair (repair disabled)
+		_report_summary([created]),
+		_report_summary([_sync_skip(False)], errors=1),
+	]
+	for summary in cases:
+		with tempfile.TemporaryDirectory(prefix="drift-report-warn-") as td:
+			level, _telegram, _summary_md = _run_report_step(Path(td), summary)
+			assert level == "WARNING", summary
+
+
+def test_report_covered_drift_is_left_out_of_a_warning_for_another_repository() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-report-mixed-") as td:
+		level, telegram, _summary_md = _run_report_step(Path(td), _report_summary([_sync_skip(False)], errors=1))
+		assert level == "WARNING"
+		assert "owner/drifted / ai-plan.yml" not in telegram
+		assert "owner/err0: fetch_failed" in telegram
+
+
+def test_report_all_match_message_is_unchanged() -> None:
+	summary = {"totals": {"processed": 1, "match": 1, "drift": 0, "error": 0, "drift_items": 0}, "results": [{"repository": "owner/ok", "outcome": "match"}], "template_files": [], "repairs": []}
+	with tempfile.TemporaryDirectory(prefix="drift-report-match-") as td:
+		level, telegram, _summary_md = _run_report_step(Path(td), summary)
+		assert level == "DEBUG"
+		assert telegram.startswith("All consumer wrappers match")
+
+
 def test_repair_never_overwrites_a_restore_branch_it_did_not_write() -> None:
 	with tempfile.TemporaryDirectory(prefix="drift-repair-foreign-") as td:
 		tmp = Path(td)
@@ -1385,6 +1506,12 @@ def main() -> int:
 	test_repair_opens_one_restore_pull_request_with_exact_release_bytes()
 	test_repair_refreshes_existing_pull_request_and_skips_identical_runs()
 	test_repair_skips_when_a_sync_pull_request_is_open()
+	test_repair_records_sync_pull_request_age()
+	test_report_stays_quiet_when_a_fresh_sync_pull_request_covers_the_drift()
+	test_report_warns_when_the_sync_pull_request_is_stale_or_its_age_unknown()
+	test_report_warns_for_uncovered_drift_errors_and_restore_pull_requests()
+	test_report_covered_drift_is_left_out_of_a_warning_for_another_repository()
+	test_report_all_match_message_is_unchanged()
 	test_repair_never_overwrites_a_restore_branch_it_did_not_write()
 	test_repair_makes_no_api_call_when_bytes_already_match()
 	test_repair_restores_an_installed_updater_outside_the_profile()

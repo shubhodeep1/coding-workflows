@@ -1309,7 +1309,13 @@ updater is never created by a restore pull request (it stays bootstrap-only),
 and an existing `auto/restore-managed-workflows` branch that the audit did not
 write is left alone (`reason=restore_branch_not_owned`).
 Each repository logs one `DRIFT_REPAIR repository=<r> outcome=created|updated|unchanged|skipped|error reason=<token>`
-line; the run summary and the Telegram alert list the results. Set
+line (a `sync_pull_request_open` skip adds `stale=true|false`); the run summary and the Telegram alert list the results.
+Drift that an open sync pull request covers needs no action, so it is sent at
+`DEBUG` (hidden by the default `ALERT_MSG_LEVEL=WARNING`) while that pull request
+is less than 3 days old. Once it has been open 3 days (or its open date is
+unknown) the pull request counts as stuck and the alert is a `WARNING` naming
+it. Fetch errors, failed repairs, new or refreshed restore pull requests, and
+drift with no sync pull request still send a `WARNING`. Set
 `CONSUMER_DRIFT_REPAIR_ENABLED=false` in this repository to keep the alert
 without pull requests. Transient GitHub API
 failures (intermittent 5xx "Unicorn" pages, rate limits, and network hiccups)

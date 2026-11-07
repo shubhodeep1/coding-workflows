@@ -714,6 +714,27 @@ INTEGRITY_WRAPPER = "ai-workflow-integrity.yml"
 UPDATER_WRAPPER = "ai-update-workflows.yml"
 RESTORE_COMMIT_SUBJECT = "chore: restore managed workflow wrappers to coding-workflows stable"
 RESTORE_COMMIT_AUTHOR = ("coding-workflows drift audit", "41898282+github-actions[bot]@users.noreply.github.com")
+# An open sync pull request covers a consumer's drift, so the audit stays
+# quiet about it. One still open after this long is stuck: the repair records
+# it as stale and the workflow raises the alert to WARNING.
+SYNC_PR_STALE_AFTER_SECONDS = 3 * 24 * 60 * 60
+
+
+def _sync_pull_request_is_stale(created_at: Any, now: datetime) -> bool:
+	"""Return True when a sync pull request opened at ``created_at`` is stuck.
+
+	A missing or unparsable timestamp counts as stale, so the alert errs
+	toward speaking up.
+	"""
+	if not isinstance(created_at, str) or not created_at:
+		return True
+	try:
+		opened = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+	except ValueError:
+		return True
+	if opened.tzinfo is None:
+		opened = opened.replace(tzinfo=timezone.utc)
+	return (now - opened).total_seconds() >= SYNC_PR_STALE_AFTER_SECONDS
 
 
 def load_rendered_templates(templates_dir: Path, stable_sha: str, renderer: Any = None) -> dict[str, str]:
@@ -744,6 +765,10 @@ class RepairResult:
 	files: list[str] = field(default_factory=list)
 	pr_number: int | None = None
 	pr_url: str | None = None
+	pr_created_at: str | None = None
+	# Only set for a sync_pull_request_open skip: True once the sync pull
+	# request has been open for SYNC_PR_STALE_AFTER_SECONDS or longer.
+	pr_stale: bool | None = None
 
 
 class DriftRepairer:
@@ -767,8 +792,11 @@ class DriftRepairer:
 		executor: CommandExecutor | None = None,
 		git_base_url: str = "https://github.com",
 		workdir: Path | None = None,
+		now: datetime | None = None,
 	) -> None:
 		self.auditor = auditor
+		# Fixed clock for tests; the live run reads the time at each check.
+		self.now = now
 		self.rendered_templates = rendered_templates
 		self.stable_sha = stable_sha
 		self.executor = executor or auditor.executor
@@ -915,8 +943,18 @@ class DriftRepairer:
 			if head_repo != repository:
 				continue
 			if ref.startswith(SYNC_PR_BRANCH_PREFIX) or ref == SYNC_FALLBACK_BRANCH:
-				print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=sync_pull_request_open pr={pull.get('number')}")
-				return RepairResult(repository=repository, outcome="skipped", reason="sync_pull_request_open", pr_number=pull.get("number"), pr_url=pull.get("html_url"))
+				created_at = pull.get("created_at")
+				stale = _sync_pull_request_is_stale(created_at, self.now or datetime.now(timezone.utc))
+				print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=sync_pull_request_open pr={pull.get('number')} stale={'true' if stale else 'false'}")
+				return RepairResult(
+					repository=repository,
+					outcome="skipped",
+					reason="sync_pull_request_open",
+					pr_number=pull.get("number"),
+					pr_url=pull.get("html_url"),
+					pr_created_at=created_at if isinstance(created_at, str) else None,
+					pr_stale=stale,
+				)
 			if ref == RESTORE_BRANCH and RESTORE_MARKER in str(pull.get("body") or ""):
 				existing = pull
 
