@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-07T11:50:49Z",
+  "issue_number": 8973,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=changelog.d/8973-prepush-hook-conflict-gap.md:4; cited_path=scripts/review_untrusted_workspace.py, scripts/review_conflict_prepare.sh; files_touched=changelog.d/8973-prepush-hook-conflict-gap.md, tests/test_conflict_guard_hook_template_merge.py, tests/test_review_conflict_resolve_sandbox_only.py.",
+  "phase": "review_autofix",
+  "pr_number": 8979,
+  "record_id": "lesson_20261107115049_9c033f9cdb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/review_untrusted_workspace.py, scripts/review_conflict_prepare.sh",
+    "changelog.d/8973-prepush-hook-conflict-gap.md",
+    "tests/test_conflict_guard_hook_template_merge.py",
+    "tests/test_review_conflict_resolve_sandbox_only.py"
+  ]
+}
