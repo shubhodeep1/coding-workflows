@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-07T15:59:37Z",
+  "issue_number": 8993,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=docs/scripts-pending-removal.md:n/a; cited_path=docs/scripts-pending-removal.md; files_touched=.github/workflows/ci.yml, changelog.d/8993-heal-job-budget-step-moves.md, tests/test_ci_poll_test_sharding.py.",
+  "phase": "review_autofix",
+  "pr_number": 8996,
+  "record_id": "lesson_20261107155937_8c86bd84d2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "docs/scripts-pending-removal.md",
+    ".github/workflows/ci.yml",
+    "changelog.d/8993-heal-job-budget-step-moves.md",
+    "tests/test_ci_poll_test_sharding.py"
+  ]
+}
