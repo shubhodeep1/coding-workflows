@@ -74,6 +74,11 @@ name: "Internal: AI Review Autofix Sweep"
 #     was still queued. With the train disabled nothing removes the label,
 #     so the sweep keeps dispatching; removing the label by hand (the
 #     documented one-shot bypass) makes the next tick dispatch.
+#   - Smoke-PR backstop (issue #8953): a pipeline-authored `e2e-smoke-test`
+#     PR on an `ai/issue-<N>` head is closed, never dispatched, once issue
+#     <N> is closed or the PR is older than SWEEP_SMOKE_PR_MAX_AGE_HOURS
+#     (default 6; 0 disables the age rule). Seven such PRs, opened after the
+#     release gate gave up, took 83.5% of Claude pool spend on Nov 5-7.
 
 on:
   schedule:
@@ -209,6 +214,9 @@ jobs:
           SWEEP_STALE_QUEUED_MINUTES: ${{ vars.SWEEP_STALE_QUEUED_MINUTES || '120' }}
           PROVIDER_OUTAGE_PAUSED: ${{ steps.provider_outage.outputs.paused }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
+          # Smoke-PR backstop age limit in hours (issue #8953); 0 disables
+          # the age rule (an issue_closed match still closes).
+          SWEEP_SMOKE_PR_MAX_AGE_HOURS: ${{ vars.SWEEP_SMOKE_PR_MAX_AGE_HOURS || '6' }}
         run: |
           set -euo pipefail
           # Classified retry for the active-run snapshot (issue #6634): the
@@ -233,7 +241,9 @@ jobs:
               head_sha: .head.sha,
               title: (.title // ""),
               body: (.body // ""),
-              labels: [.labels[]?.name // empty]
+              labels: [.labels[]?.name // empty],
+              created_at: (.created_at // ""),
+              author: (.user.login // "")
             })')"
 
           printf '%s\n' "${prs_json}" > "${RUNNER_TEMP}/ci-cancelled-pr-snapshot.json"
@@ -254,6 +264,21 @@ jobs:
           skipped_skip_ai=0
           skipped_merge_queued=0
           failures=0
+          # Smoke-PR backstop (issue #8953): release-gate smoke PRs whose
+          # Implement run started after the gate gave up stayed open for days
+          # and were re-reviewed every tick. Only a PR with the e2e-smoke-test
+          # label, an ai/issue-<N> head and the pipeline login (GH_PAT's user,
+          # read once per tick and only when such a PR exists) as author is
+          # closed, when issue <N> is closed or the PR is older than the limit.
+          closed_smoke=0
+          smoke_max_age_hours="${SWEEP_SMOKE_PR_MAX_AGE_HOURS:-6}"
+          if ! [[ "${smoke_max_age_hours}" =~ ^[0-9]{1,6}$ ]]; then
+            echo "::warning::SWEEP_SMOKE_PR_MAX_AGE_HOURS is not a non-negative integer; using 6."
+            smoke_max_age_hours=6
+          fi
+          smoke_max_age_hours=$((10#${smoke_max_age_hours}))
+          smoke_pipeline_login=""
+          smoke_login_state=unresolved
           # Identical to the gate's copy in review_autofix.yml (issue #4985):
           # only a body line holding nothing but the marker, outside a fenced
           # block, counts. A fence closes only on a matching fence (same
@@ -467,6 +492,55 @@ jobs:
               continue
             fi
 
+            # Smoke-PR backstop (issue #8953, rules above). Checked before the
+            # skip-ai, merge-queue, capacity and active-run checks so a smoke
+            # PR held by any of them is still closed. A closed (or chosen)
+            # smoke PR is never dispatched. Any API error skips the close
+            # and never blocks the tick.
+            smoke_close_reason=""
+            if [[ "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
+              smoke_issue_number="${BASH_REMATCH[1]}"
+              if printf '%s' "${row}" | jq -e '(.labels // []) | index("e2e-smoke-test") != null' >/dev/null 2>&1; then
+                if [ "${smoke_login_state}" = "unresolved" ]; then
+                  smoke_pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"
+                  if [[ "${smoke_pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+                    smoke_login_state=ok
+                  else
+                    smoke_login_state=failed
+                    smoke_pipeline_login=""
+                  fi
+                fi
+                smoke_pr_author="$(printf '%s' "${row}" | jq -r '.author // ""')"
+                if [ "${smoke_login_state}" != "ok" ]; then
+                  echo "::warning::AUTOFIX_SWEEP_SMOKE_CLOSE_FAILED pr=#${pr_number} reason=author_unavailable"
+                elif [ -n "${smoke_pr_author}" ] && [ "${smoke_pr_author}" = "${smoke_pipeline_login}" ]; then
+                  smoke_issue_state="$(GH_TOKEN="${READ_TOKEN}" gh api "repos/${REPOSITORY}/issues/${smoke_issue_number}" --jq '.state // ""' 2>/dev/null || true)"
+                  if [ "${smoke_issue_state}" = "closed" ]; then
+                    smoke_close_reason=issue_closed
+                  elif [ "${smoke_max_age_hours}" -gt 0 ] \
+                    && printf '%s' "${row}" | jq -e --argjson max "${smoke_max_age_hours}" '(.created_at // "") as $c | $c != "" and ((now - ($c | fromdateiso8601)) / 3600 >= $max)' >/dev/null 2>&1; then
+                    smoke_close_reason=max_age
+                  fi
+                fi
+              fi
+            fi
+            if [ -n "${smoke_close_reason}" ]; then
+              if [ "${DRY_RUN}" = "true" ]; then
+                echo "AUTOFIX_SWEEP_SMOKE_CLOSE pr=#${pr_number} reason=${smoke_close_reason} dry_run=true"
+                continue
+              fi
+              if gh api -X PATCH "repos/${REPOSITORY}/pulls/${pr_number}" -f state=closed >/dev/null 2>&1; then
+                gh api "repos/${REPOSITORY}/issues/${pr_number}/comments" \
+                  -f body="Closed by the review sweep: this pipeline-authored e2e-smoke-test PR was left open by a release-gate smoke run (reason: ${smoke_close_reason}). To keep it, remove the e2e-smoke-test label, then reopen it." \
+                  >/dev/null 2>&1 || true
+                echo "AUTOFIX_SWEEP_SMOKE_CLOSE pr=#${pr_number} reason=${smoke_close_reason}"
+                closed_smoke=$((closed_smoke + 1))
+              else
+                echo "::warning::AUTOFIX_SWEEP_SMOKE_CLOSE_FAILED pr=#${pr_number} reason=close_failed"
+              fi
+              continue
+            fi
+
             # Honour the existing `[skip ai]` opt-out marker (parity with
             # review_autofix.yml gate behaviour: the title, or a body line
             # holding only the marker; a quoted mention does not count). This
@@ -556,7 +630,7 @@ jobs:
             fi
           done
 
-          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete}"
+          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete} closed_smoke=${closed_smoke}"
 
       # Non-retryable failure backfill (issue #7291): re-send a review/autofix
       # failure whose trusted current-head marker names a non-retryable reason

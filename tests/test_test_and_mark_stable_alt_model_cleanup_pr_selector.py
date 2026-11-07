@@ -213,6 +213,44 @@ def test_alt_model_wait_keeps_flag_across_a_failed_label_read() -> None:
 	assert rc == 0, out
 	assert (attempts, oks) == (1, 1), out
 
+
+def test_alt_model_cleanup_cancels_only_this_issues_active_implement_runs() -> None:
+	# Issue #8953: a late Implement run opened #8346 after this cleanup's
+	# head-branch lookup. Cancel first, scoped to this issue's runs.
+	step = _cleanup_alt_model_step(_read_workflow())
+	assert "ALT_ISSUE_TITLE: ${{ steps.create.outputs.title }}" in step
+	assert "PRE_IMPLEMENT: ${{ steps.create.outputs.pre_implement_run_id }}" in step
+	assert "select(.display_title == env.ALT_ISSUE_TITLE)" in step
+	assert 'select(.status != \\"completed\\")' in step
+	assert step.index("/actions/runs/${RUN_ID_TO_CANCEL}/cancel") < step.index('close_with_retry "pulls" "${PR_NUMBER}"')
+
+
+# The smoke-PR cleanup cases (issue #8953) live in
+# tests/test_test_and_mark_stable_smoke_pr_cleanup.py and are collected here,
+# since CI already runs this file and ci.yml was outside that issue's file
+# grant. A name clash would hide a test, so it fails loudly.
+def _collect_smoke_pr_cleanup_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"test_and_mark_stable_smoke_pr_cleanup_cases",
+		Path(__file__).resolve().parent / "test_test_and_mark_stable_smoke_pr_cleanup.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 4, f"only {collected} smoke PR cleanup cases collected"
+
+
+_collect_smoke_pr_cleanup_cases()
+
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	for test in tests:
