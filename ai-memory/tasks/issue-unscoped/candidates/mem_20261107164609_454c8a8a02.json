@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:16741-16749 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new regex match `[[ \"${reason}\" =~ ${_deterministic_marker_re} ]]` was flagged for possibly mishandling the regex variable or a very large multiline `reason`.\n  WHY: The reviewer concluded the current code works, because the variable is defined just before the `if` and is unquoted in `[[`, and a 262KB test covers the large-input case. No severity was stated in the source, so low is a placeholder.\n- scripts/analyze_workflow_logs.py:361-365 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `summary.setdefault(\"unknown_duration_count\", ...)` logic may conflict with the summary_stats path, and `prepare_analysis_context` modifies `summary` in place.\n  WHY: The reviewer called the logic robust but complex. No severity was stated in the source, so low is a placeholder.\n- scripts/analyze_workflow_logs.py:404,409,418,421 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The `setdefault` calls at lines 404 and 418 assign `0` to summary-only entries that have no computed run aggregate, and the later `setdefault(..., None)` calls do not replace that value.\n  WHY: `analysis_context.json` reports `0` instead of `null` for a repository or workflow-family key with no run rows, which presents an unchecked count as a confirmed zero. The source severity is MAJOR, shown here as high.\n- AGENTS.md and CLAUDE.md (repository root) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large` (422).\n  WHY: The external reviewer fails while loading the instruction files, and this PR touches neither file. The source severity is NIT, shown here as low. It is not a defect in this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Carry collector diagnostic statuses into normalized run views\" (Reliability 4)\n  expected_change_site: scripts/analyze_workflow_logs.py\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The diagnostic status fields (`log_download_status`, `jobs_fetch_status`, `diagnostic_failure_reason`) are implemented. The reviewer says the `unknown_duration_count` logic is slightly over scope but additive, and that the requirements are fully satisfied. The source severity is NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- AGENTS.md and CLAUDE.md (repository root) | severity=low | confidence=2\n  PROBLEM: The `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large` (422).\n  WHY: The external Copilot reviewer fails while loading the instruction files. This PR touches neither file, so the failure maps to no hunk. The source severity is NIT.\n- All other checklist sections: NONE. The reviewer verified the `unknown_duration_count` change in `prepare_analysis_context` (lines 363-376) and found it correct. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:16741-16749 | severity=low | confidence=4\n  PROBLEM: The new regex match was flagged for possibly mishandling the regex variable or a very large multiline `reason`.\n  WHY: The reviewer concluded the current code works and that the 262KB test covers the large-input case. The source stated no severity.\n- scripts/analyze_workflow_logs.py:361-365 | severity=low | confidence=2\n  PROBLEM: The `setdefault` logic may be ambiguous or conflict with the summary_stats path, and `summary` is modified in place.\n  WHY: The reviewer called the logic robust but complex. The source stated no severity.\n- TASK_GAP: Requirement: \"Carry collector diagnostic statuses into normalized run views\" (Reliability 4)\n  Expected change site: scripts/analyze_workflow_logs.py\n  Evidence of absence: The diagnostic status fields are implemented. The `unknown_duration_count` logic is slightly over scope but additive, and the requirements are fully satisfied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/analyze_workflow_logs.py:404,409,418,421 | severity=high | confidence=5\n  PROBLEM: The `setdefault` calls at lines 404 and 418 assign `0` to summary-only entries without a computed run aggregate, and the later `setdefault(..., None)` calls do not replace that value.\n  WHY: `analysis_context.json` reports `0` instead of `null` for a repository or workflow-family key with no run rows. This presents an unchecked count as a confirmed zero, and the regression test at `tests/test_analyze_workflow_logs.py:514-515` expects `None`. The source severity is MAJOR, shown here as high.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "193998cf03d938a39a3ca60e6c7687789c5195f9409c7ebadd8af6e33ccf52f7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8983,
+    "run_id": "42391439927",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42391439927",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107164609_454c8a8a02",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8983,
+    "run_id": "42391439927"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-07T16:46:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
