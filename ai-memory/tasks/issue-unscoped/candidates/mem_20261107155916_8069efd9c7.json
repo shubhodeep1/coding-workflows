@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/analyze_workflow_logs.py:366-371 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Top-level `summary.unknown_duration_count` defaults to a computed 0 via `sum(...)` over an empty `runs` list, while per-repo and per-workflow-family entries with no run rows report `null`.\n  WHY: `analysis_context.json` claims no runs have unknown duration when the analyzer checked no rows, and it contradicts the per-key `null` values and the changelog contract. All four reviewers rated it NIT, so low is used with no severity disagreement.\n- CLAUDE.md and agents.md:(no line applies) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The copilot-pull-request-reviewer check failed with `custom_instructions_too_large` (422) while loading AGENTS.md and CLAUDE.md as custom instructions.\n  WHY: The PR touches neither file, so the failure is not actionable in this PR, and \u00a725 forbids adding text to agents.md directly. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Apply recommendations from analysis/workflow-optimization-2026-10-07.md.\n  expected_change_site: All files modified by the PR.\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer reports no absence. It says the PR correctly implements the identified fixes (BUG-003, SHELL-001, Reliability 4) and the diagnostic status update from the last run. It rated this NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/analyze_workflow_logs.py:366-371 | severity=NIT | confidence=4\n  PROBLEM: The last autofix run made per-key entries report `unknown_duration_count: null` when they have no run rows, but the top-level summary still reports a computed 0 in the same situation.\n  WHY: `analysis_context.json` shows `summary.unknown_duration_count == 0` next to `total_runs > 0` and per-key nulls. This is a diagnostic-accuracy inconsistency only.\n- CLAUDE.md and agents.md:(no line applies) | severity=NIT | confidence=2\n  PROBLEM: The copilot-pull-request-reviewer check failed with `custom_instructions_too_large` (422).\n  WHY: It maps to no hunk in this PR, and \u00a725 forbids adding text to agents.md directly. It is not actionable here.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Apply recommendations from analysis/workflow-optimization-2026-10-07.md.\n  Expected change site: All files modified by the PR.\n  Evidence of absence: The PR correctly implements the identified fixes (BUG-003, SHELL-001, Reliability 4) and handles the diagnostic status update from the last run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/analyze_workflow_logs.py:368-371 | severity=NIT | confidence=5\n  PROBLEM: The previous autofix run changed the per-key default to `None` (lines 402-404 and 414-416), but the top-level `summary[\"unknown_duration_count\"]` still defaults to `sum(...)`, which is 0 when `runs == []`.\n  WHY: A `summary_stats`-only input writes a top-level 0 while the per-key entries serialize as `null`, which mismatches the changelog fragment. The existing test at `tests/test_analyze_workflow_logs.py:497-517` always passes a non-empty `run_metrics`, so it does not exercise this path.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/analyze_workflow_logs.py:368-370 | severity=NIT | confidence=5\n  PROBLEM: When `runs` is empty, `unknown_duration_count` defaults to 0 even if the supplied summary reports `total_runs > 0`.\n  WHY: The summary claims no runs have unknown durations although the analyzer had no run rows to inspect. The per-repository and per-workflow-family entries use `null`, so the top-level count is inconsistent.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/analyze_workflow_logs.py:368-371 | severity=NIT | confidence=5\n  PROBLEM: The top-level `unknown_duration_count` still defaults to `sum(...)` over `runs`, which is 0 when `runs` is empty, even though the summary comes from `summary_stats[\"overall\"]` and may report `total_runs > 0`.\n  WHY: `analysis_context.json` can show a top-level 0 next to per-key nulls, which is the \"claims a count it never checked\" defect the last run fixed at the per-key level.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a96efb9e7fcca5c2ee8658a795ad65e1f8f1c016c8c53736fcd95a9e46dd2b70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8983,
+    "run_id": "42383160794",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42383160794",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107155916_8069efd9c7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8983,
+    "run_id": "42383160794"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T15:59:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
