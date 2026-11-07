@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8943,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8943\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8951\",\"pr_number\":8951,\"branch\":\"ai/issue-8943\",\"run_id\":\"42327835131\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42327835131\",\"changed_files\":[\"changelog.d/8943-unblock-run-log-attach-status.md\",\"scripts/unblock_judge.sh\",\"tests/test_unblock_judge.py\"]}",
+  "fingerprint": "c044acc6194940fe7491d3cc811bfca13782be604a94603c1d9d12828dfc407c",
+  "lineage": {
+    "issue_number": 8943,
+    "parent_ids": [],
+    "pr_number": 8951,
+    "run_id": "42327835131",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42327835131",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8951"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261107032408_bb35714c42",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8943,
+    "level": "run",
+    "pr_number": 8951,
+    "run_id": "42327835131"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8943: https://github.com/shubhodeep1/coding-workflows/pull/8951",
+  "timestamps": {
+    "created_at": "2026-11-07T03:24:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
