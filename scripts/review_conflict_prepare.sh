@@ -203,9 +203,11 @@ if [ "${_resolver_allowlist_count}" -gt 0 ]; then
   sed 's/^/ - /' "${RESOLVER_ALLOWLIST_FILE}" || true
 fi
 
-# Deterministic resolution for the merged-PR guard hook (heal #6800,
-# PR #6555, activation gap of PR #6803).
-# .claude/hooks/pr_merge_status_guard.py is a host-executed safety hook:
+# Deterministic resolution for the paired host-only hooks (heal #6800,
+# PR #6555, activation gap of PR #6803; generalised to every live/template
+# pair in #9004).
+# .claude/hooks/pr_merge_status_guard.py is a host-executed safety hook
+# (as is .claude/hooks/prepush_affected_tests.py, see GUARD_HOOK_TEMPLATE_PAIRS):
 # review_untrusted_workspace.py keeps it out of the resolver sandbox, so
 # a conflict on it used to fail the resolver closed with
 # sandbox_path_host_only on every run.  The live copy must stay byte- and
@@ -224,19 +226,26 @@ fi
 # 2 staged result failed verification (fatal).
 GUARD_HOOK_LIVE_PATH=".claude/hooks/pr_merge_status_guard.py"
 GUARD_HOOK_TEMPLATE_PATH="workflow-templates/.claude/hooks/pr_merge_status_guard.py"
-_conflict_prepare_guard_hook_template_merge()
+# Second paired host-only hook (#9004): an integration-sync conflict on it
+# failed the resolver closed with sandbox_path_host_only (PR #8436, run
+# 42355218108).  GUARD_HOOK_TEMPLATE_PAIRS lists every "live|template" pair
+# the template merge covers.  It must equal PAIRED_LIVE_COPIES in
+# scripts/review_untrusted_workspace.py; the contract test
+# test_shell_pair_list_matches_paired_live_copies enforces that.
+PREPUSH_HOOK_LIVE_PATH=".claude/hooks/prepush_affected_tests.py"
+PREPUSH_HOOK_TEMPLATE_PATH="workflow-templates/.claude/hooks/prepush_affected_tests.py"
+GUARD_HOOK_TEMPLATE_PAIRS=("${GUARD_HOOK_LIVE_PATH}|${GUARD_HOOK_TEMPLATE_PATH}" "${PREPUSH_HOOK_LIVE_PATH}|${PREPUSH_HOOK_TEMPLATE_PATH}")
+# Per-pair merge: _conflict_prepare_guard_hook_template_merge_one <live> <template>.
+# Same return codes as the wrapper below: 0 staged, 1 refused, 2 fatal.
+_conflict_prepare_guard_hook_template_merge_one()
 {
-  local ghm_live="${GUARD_HOOK_LIVE_PATH}" ghm_tpl="${GUARD_HOOK_TEMPLATE_PATH}"
+  local ghm_live="${1:-}" ghm_tpl="${2:-}"
   local ghm_stages="" ghm_tpl_entry="" ghm_tpl_mode="" ghm_tpl_oid="" ghm_tpl_stage="" ghm_tpl_path=""
   local ghm_side_ref="" ghm_side_stage="" ghm_side_reason="" ghm_tree_entry="" ghm_t_mode="" ghm_t_type="" ghm_t_oid="" ghm_t_path=""
-  local ghm_live_entry="" ghm_staged="" ghm_wt_oid=""
+  local ghm_live_entry="" ghm_staged="" ghm_wt_oid="" ghm_ancestor=""
 
-  if [ "${CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED:-true}" != "true" ]; then
-    echo "Guard-hook template merge: skipped reason=disabled"
-    return 1
-  fi
-  if ! git rev-parse -q --verify 'MERGE_HEAD^{commit}' >/dev/null 2>&1; then
-    echo "Guard-hook template merge: skipped reason=no_merge_head"
+  if [ -z "${ghm_live}" ] || [ -z "${ghm_tpl}" ]; then
+    echo "Guard-hook template merge: skipped reason=pair_invalid"
     return 1
   fi
   ghm_stages="$(git ls-files -u -- "${ghm_live}" 2>/dev/null | awk '{print $3}' | sort -u | tr '\n' ' ' || true)"
@@ -299,6 +308,16 @@ _conflict_prepare_guard_hook_template_merge()
     echo "Guard-hook template merge: skipped reason=unsafe_path"
     return 1
   fi
+  # Every ancestor directory of the live path, so a pair outside
+  # .claude/hooks cannot skip the symlink check (the repo root is never tested).
+  ghm_ancestor="${ghm_live}"
+  while [[ "${ghm_ancestor}" == */* ]]; do
+    ghm_ancestor="${ghm_ancestor%/*}"
+    if [ -n "${ghm_ancestor}" ] && [ -L "${ghm_ancestor}" ]; then
+      echo "Guard-hook template merge: skipped reason=unsafe_path"
+      return 1
+    fi
+  done
 
   # Collapse stages 1-3 into the template's merged stage-0 entry.
   git update-index --cacheinfo "${ghm_tpl_mode},${ghm_tpl_oid},${ghm_live}" || return 2
@@ -327,10 +346,59 @@ _conflict_prepare_guard_hook_template_merge()
   return 0
 }
 
+# Loops over GUARD_HOOK_TEMPLATE_PAIRS for every live path in the resolver
+# allowlist.  Returns 0 when at least one pair was staged (refused pairs stay
+# unmerged and keep the sandbox_path_host_only fail-closed path), 1 when none
+# was, and 2 at the first staged result that fails verification.  Resolved
+# live paths are appended to _ghm_resolved_paths (space-joined).
+_conflict_prepare_guard_hook_template_merge()
+{
+  local ghm_pair="" ghm_pair_live="" ghm_pair_tpl="" ghm_one_rc=0 ghm_any_resolved=false
+
+  if [ "${CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED:-true}" != "true" ]; then
+    echo "Guard-hook template merge: skipped reason=disabled"
+    return 1
+  fi
+  if ! git rev-parse -q --verify 'MERGE_HEAD^{commit}' >/dev/null 2>&1; then
+    echo "Guard-hook template merge: skipped reason=no_merge_head"
+    return 1
+  fi
+  for ghm_pair in "${GUARD_HOOK_TEMPLATE_PAIRS[@]}"; do
+    ghm_pair_live="${ghm_pair%%|*}"
+    ghm_pair_tpl="${ghm_pair#*|}"
+    grep -Fxq -- "${ghm_pair_live}" "${RESOLVER_ALLOWLIST_FILE}" || continue
+    echo "Guard-hook template merge: pair live=${ghm_pair_live} template=${ghm_pair_tpl}"
+    ghm_one_rc=0
+    _conflict_prepare_guard_hook_template_merge_one "${ghm_pair_live}" "${ghm_pair_tpl}" || ghm_one_rc=$?
+    case "${ghm_one_rc}" in
+      0)
+        ghm_any_resolved=true
+        _ghm_resolved_paths="${_ghm_resolved_paths:+${_ghm_resolved_paths} }${ghm_pair_live}"
+        ;;
+      1) ;;
+      *) return 2 ;;
+    esac
+  done
+  if [ "${ghm_any_resolved}" = "true" ]; then
+    return 0
+  fi
+  return 1
+}
+
 _ghm_resolved=false
+_ghm_resolved_paths=""
 _ghm_defer_commit=false
-if [ "${_resolver_allowlist_count}" -gt 0 ] \
-   && grep -Fxq "${GUARD_HOOK_LIVE_PATH}" "${RESOLVER_ALLOWLIST_FILE}"; then
+_ghm_pair_listed=false
+if [ "${_resolver_allowlist_count}" -gt 0 ]; then
+  for _ghm_pair in "${GUARD_HOOK_TEMPLATE_PAIRS[@]}"; do
+    if grep -Fxq -- "${_ghm_pair%%|*}" "${RESOLVER_ALLOWLIST_FILE}"; then
+      _ghm_pair_listed=true
+      break
+    fi
+  done
+  unset _ghm_pair
+fi
+if [ "${_ghm_pair_listed}" = "true" ]; then
   _ghm_rc=0
   _conflict_prepare_guard_hook_template_merge || _ghm_rc=$?
   case "${_ghm_rc}" in
@@ -854,7 +922,7 @@ if [ "${_ghm_resolved:-false}" = "true" ] && [ "${_resolver_allowlist_count}" -e
   if [ "${_ghm_defer_commit:-false}" = "true" ]; then
     _mu_defer_commit=true
     _det_commit_label="Guard-hook template merge"
-    _det_commit_path="${GUARD_HOOK_LIVE_PATH}"
+    _det_commit_path="${_ghm_resolved_paths:-${GUARD_HOOK_LIVE_PATH}}"
     _det_commit_scope="hook-only"
     echo "Guard-hook template merge: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
   else
