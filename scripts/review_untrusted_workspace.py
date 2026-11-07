@@ -71,8 +71,11 @@ DOCS_TWIN_DIR = "workflow-templates/.claude/docs"
 # Live copies the resolver may sync from their workflow-templates twin
 # (issue #6595). The live path stays excluded from allowed(), snapshot and
 # transfer: only the runner writes it, byte-identical to the resolved template.
+# prepush_affected_tests.py: integration PR #8436 parked on a live/template
+# conflict with identical index stages (run 42360075171).
 PAIRED_LIVE_COPIES = {
 	".claude/hooks/pr_merge_status_guard.py": "workflow-templates/.claude/hooks/pr_merge_status_guard.py",
+	".claude/hooks/prepush_affected_tests.py": "workflow-templates/.claude/hooks/prepush_affected_tests.py",
 }
 _UNMERGED_MODE_RE = re.compile(r"[0-7]{6}")
 _UNMERGED_SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
