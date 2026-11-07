@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "For changes to scripts under scripts/, inspect the corresponding tests/test_*.py coverage and extend it for new behavior and edge cases. This is especially useful for orchestration, gating, and status-handling logic, where regressions can affect workflow outcomes.",
+  "fingerprint": "96cf31ed64de3dd07b2822d904d4604c04e2ec490b331efec20f644213686eac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42383560759",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42383560759",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8952",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8976",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8977",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8978",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8990",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8958",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8981",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8982",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8985",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8991"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261107150431_5a70a3b823",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Shell-based workflow logic is covered by focused tests, often Python tests that exercise the script\u2019s behavior.",
+  "timestamps": {
+    "created_at": "2026-11-07T15:04:31Z",
+    "promoted_at": "2026-11-07T15:05:09Z",
+    "superseded_at": null
+  }
+}
