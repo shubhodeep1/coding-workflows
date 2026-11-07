@@ -811,6 +811,18 @@ describe("chatgpt: broker-side failures (503)", () => {
 		expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("store_unavailable");
 	});
 
+	it("an unexpected error is a 503 internal, never a 500", async () => {
+		const h = chatgptHarness();
+		Object.defineProperty(h.env, "CHATGPT_POOL", {
+			get() {
+				throw new Error("boom");
+			},
+		});
+		const { status, body } = await callChatgpt(h, await sign(chatgptClaims()));
+		expect([status, body]).toEqual([503, { error: "internal" }]);
+		expect(h.s.logs).toContain("CHATGPT_POOL broker error reason=internal");
+	});
+
 	it("the object answers an unknown error code or a bad shape", async () => {
 		const h = chatgptHarness();
 		h.env.CHATGPT_POOL = { idFromName: () => "id", get: () => ({ fetch: async () => Response.json({ error: "Bad Code!" }, { status: 503 }) }) };
