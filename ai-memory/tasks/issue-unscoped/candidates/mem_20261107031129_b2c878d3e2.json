@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:5060-5779 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Integration tests such as `test_review_pipeline_integration_chain_module_runs_clean` and `test_staged_support_guard_marks_only_auto_release_safe_conflicts` fail because the content of `tests/e2e_smoke_canary.txt` changed.\n  WHY: The reviewer says the tests read the canary file, so its content is part of the test suite's contract. Its severity was BLOCKER, mapped here to critical. Minimax and glm-5_3-flash disagree: they say lines 5060 and 5779 only use the canary path inside string literals.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update its content so it is exactly these three lines\" (`status: ok`, `run_id: 40932430968`, `updated-by: ai-pipeline`)\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer says the diff replaces `decompose-run` with `run_id` and `updated-by`, but the file still appears to depend on its pre-existing state instead of being a full overwrite. Sonnet, minimax and glm-5_3-flash checked the file and found it reads exactly the three required lines.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:5060, 5779 | severity=BLOCKER | confidence=4\n  PROBLEM: Integration tests (`test_review_pipeline_integration_chain_module_runs_clean`, `test_staged_support_guard_marks_only_auto_release_safe_conflicts`, etc.) are failing because the canary file content changed.\n  WHY: The tests check the canary file content, so modifying it without updating the tests breaks CI. This shows the canary file is a component of the test suite's contract.\n- TASK_GAP\n  Requirement: \"Update its content so it is exactly these three lines\" (in `tests/e2e_smoke_canary.txt`)\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The diff modifies the file, but the resulting content does not match the exact three lines the issue specifies. The file still appears to depend on its pre-existing state, not an overwrite of the entire file.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "851c69101f9874c2e80ba807bf64710b070a0409a63b86004fabb80bf077f5e0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "42331998876",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42331998876",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107031129_b2c878d3e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "42331998876"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-07T03:11:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
