@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (133)
+## Processed source docs (134)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -138,6 +138,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-10-03.md`
 - `analysis/workflow-optimization-2026-10-03-2.md`
 - `analysis/workflow-optimization-2026-10-06.md`
+- `analysis/workflow-optimization-2026-10-06-2.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -2081,3 +2082,29 @@ Sibling work for this doc was tracked under Refs #8924. The squash-merge PR numb
 | DEAD-001 (`RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE`, `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE`) | rejected | Both identifiers are still assigned in `scripts/review_run_reviewers.sh`; removing identifiers needs explicit approval (naming-immutability rule). |
 | Per-Repo Breakdown / Metrics Appendix / `break_glass_count` and `context_budget_warn_count` note | informational | Summary and coverage data; no actionable change. |
 | Redundant Re-Fetch (REUSE) / Dead Calls (DEAD-API) | informational | The doc reports no findings. |
+
+### `analysis/workflow-optimization-2026-10-06-2.md`
+Source doc: `analysis/workflow-optimization-2026-10-06-2.md`
+Processed: 2026-11-07
+Source commit: `1e2147f8080d951409ec8fabcf15812e944aabc0`
+
+Sibling work for this doc was tracked under Refs #8941. The squash-merge PR numbers are not visible on this ref (flattened history), so applied rows cite their changelog fragment instead of a guessed PR number.
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| BUG-001 (`_resilient_phase_swap` replaced all labels with a `PUT` for terminal targets, so a concurrent `ai:merged` could be erased) | applied | `_resilient_phase_swap` in `scripts/review_rb_judge.sh` no longer uses a full-label `PUT` for terminal targets: it POSTs the target, deletes only the phase labels it observed, and reconciles a concurrent terminal label (`terminal label ... appeared while swapping`); tests `tests/test_review_rb_judge_label_propagation.py`; fragment `changelog.d/8942-rb-judge-terminal-swap-additive.md`. Refs #8941. |
+| BUG-002 (`unblock_select_run_log` logged `outcome=attached` after a failed or empty `--log-failed` download) | applied | `unblock_select_run_log` in `scripts/unblock_judge.sh` logs `op=run_log outcome=attached` only after a successful, non-empty `--log-failed` download; otherwise it tries the next bounded candidate and reports `reason=log_unavailable`; tests `tests/test_unblock_judge.py`; fragment `changelog.d/8943-unblock-run-log-attach-status.md`. Refs #8941. |
+| SEC-002 (gh_helpers half: raw API response dump in `gh_api_json_to_file`) | already-implemented | `gh_api_json_to_file` in `scripts/gh_helpers.sh` already logs only a `response summary (attempt N/M): bytes=... sha256=... category=...` warning instead of response bodies (#8095). |
+| SEC-002 (poller half: `head -50` of the raw tracking-comments response in `scripts/orchestrate_poll_process.sh`) | applied | The tracking-comments validation failure path in `scripts/orchestrate_poll_process.sh` now logs `::warning::Comments response summary for issue #<n>: bytes=... sha256=... category=...` instead of the first 50 lines of the raw response, and still proceeds with an empty comment list; test `tests/test_poller_tracking_comments_dump_redaction.py`; fragment `changelog.d/8944-poller-comments-dump-redaction.md`. Refs #8941. |
+| SEC-001 (`GH_TOKEN` embedded in the upstream clone URL in `.github/workflows/update_workflows.yml`) | applied | The `fetch` step of `.github/workflows/update_workflows.yml` clones a credential-free URL through `upstream_git` and the one-shot `UPSTREAM_CRED_HELPER` credential helper; tests `tests/test_update_workflows_guardrails.py`; fragment `changelog.d/8945-update-workflows-clone-cred-helper.md`. Refs #8941. The "clean up the temporary clone on exit" part is rejected: later steps read `steps.fetch.outputs.upstream_dir`, so deleting the clone would break them. |
+| CONSIST-002 (inline label fallback in `scripts/review_rb_judge.sh` used generic color `1d76db`) | already-implemented | The inline `ensure_label_exists` fallback in `scripts/review_rb_judge.sh` uses the label-contract color and description for `ai:clarification` (`f9d0c4`) and `ai:orchestrator-managed` (`bfdadc`), matching `.github/ai/label_contract.v1.json`; guarded by `test_review_rb_judge_fallback_label_metadata_matches_label_contract` in `tests/test_ai_label_precreation_contract.py`. |
+| CONSIST-001 (raw reads in `scripts/unblock_judge.sh` bypass `gh_retry`) | rejected | Moving the required reads onto `gh_retry` changes the unblock judge's retry, timing and failure semantics. A failed read currently just skips the item until the next run, and `gh_helpers.sh` is only sourced in a subshell there. This is a helper migration that needs dedicated compatibility tests, not a defect fix. |
+| API-001, API-002, BATCH-001, BATCH-002 | rejected | The doc's own cross-reference section tags them RISKY_SKIP (retry classification, pagination, cache invalidation, stall-recovery evidence). |
+| MERGE-001, REUSE-001 | rejected | Tagged RISKY_SKIP by the doc itself. |
+| DUP-001, DUP-002, DUP-003 | rejected | Refactor only (minimal-change rule; same verdict as earlier docs). |
+| EXPR-001, EXPR-002 | rejected | Static headroom only, with no measured expression-size breach (earlier precedent). |
+| Reliability 2 (separate contract-test and runtime Semble fallbacks) | already-implemented | `scripts/cost_audit.py` already counts `semble_contract_test_fallbacks` and `semble_runtime_fallbacks` separately. The per-target preflight-reason part is rejected as instrumentation only. |
+| Reliability 4 (`CONTEXT_BUDGET_WARN` retention) | already-implemented | `scripts/cost_audit.py` already reports `context_budget_warn_count`. The extra per-warning fields (phase, prompt tokens, context window, threshold) are rejected as instrumentation only. |
+| Executive Summary; Speed 1-3; Cost 1-4; Reliability 1 and 3; AI Memory Health; GH API Call Audit; Prompt Cache & Memory System; Orchestrator Health; Pipeline Flow Bottlenecks | rejected | Instrumentation-only or diagnostic experiments with no defect established. The doc itself says not to change the three-failure fingerprint cap without head/fingerprint evidence. `GH_PAT_BUDGET ... used_in_job=` in `scripts/gh_helpers.sh` already gives per-job API usage, and `push_attempts` is already in memory telemetry (`scripts/ai_memory.py`). |
+| Per-Repo Breakdown / Metrics Appendix | informational | Summary data only. |
+| Dead Calls (DEAD-API) | informational | The doc reports none. |
