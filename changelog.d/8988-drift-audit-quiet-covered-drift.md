@@ -13,4 +13,4 @@ What this means for operators: a drift WARNING now always needs action, either a
 
 ### For contributors
 
-The summary JSON's `repairs` entries gain `pr_created_at` and `pr_stale`. The report step treats a missing `pr_stale` (older summaries) as stale.
+The summary JSON's `repairs` entries gain `pr_created_at`, `pr_stale` and `pr_for_release` (false when the sync pull request was built for another release; its note then says to close it or wait for one for the current release instead of "merge or close it"). The report step treats a missing `pr_stale` (older summaries) as stale.

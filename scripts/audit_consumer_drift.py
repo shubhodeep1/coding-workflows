@@ -785,6 +785,10 @@ class RepairResult:
 	# request has been open for SYNC_PR_STALE_AFTER_SECONDS or longer, or when
 	# its branch names a release other than the audited one.
 	pr_stale: bool | None = None
+	# Only set for a sync_pull_request_open skip: False when the sync pull
+	# request's branch names a release other than the audited one, so merging
+	# it would not clear the drift.
+	pr_for_release: bool | None = None
 
 
 class DriftRepairer:
@@ -979,6 +983,7 @@ class DriftRepairer:
 				pr_url=pull.get("html_url"),
 				pr_created_at=created_at if isinstance(created_at, str) else None,
 				pr_stale=stale,
+				pr_for_release=for_release,
 			)
 
 		self._git(["add", "--", *[f".github/workflows/{name}" for name in files]], cwd=checkout)

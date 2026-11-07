@@ -209,6 +209,8 @@ jobs:
                   return ""
               if repair.get("pr_stale") is False:
                   return " update pull request open, fixes this drift when merged"
+              if repair.get("pr_for_release") is False:
+                  return " update pull request built for another release; close it or wait for one for the current release"
               opened = repair.get("pr_created_at") or "unknown date"
               return f" update pull request stuck, open since {opened}; merge or close it"
 

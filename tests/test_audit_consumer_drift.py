@@ -1219,6 +1219,7 @@ def test_repair_treats_a_sync_pull_request_for_another_release_as_stale() -> Non
 			assert result.reason == "sync_pull_request_open", result
 			assert result.pr_number == expected_pr, result
 			assert result.pr_stale is expected_stale, result
+			assert result.pr_for_release is (not expected_stale), result
 
 
 def _run_report_step(tmp: Path, summary: dict) -> tuple[str, str, str]:
@@ -1277,6 +1278,17 @@ def test_report_warns_when_the_sync_pull_request_is_stale_or_its_age_unknown() -
 			assert level == "WARNING", stale
 			assert "stuck, open since 2026-11-05T14:47:30Z" in telegram
 			assert "owner/drifted / ai-plan.yml" in telegram
+
+
+def test_report_names_a_sync_pull_request_for_another_release() -> None:
+	repair = _sync_skip(True)
+	repair["pr_for_release"] = False
+	with tempfile.TemporaryDirectory(prefix="drift-report-other-release-") as td:
+		level, telegram, summary_md = _run_report_step(Path(td), _report_summary([repair]))
+		assert level == "WARNING"
+		assert "built for another release" in telegram
+		assert "merge or close it" not in telegram
+		assert "built for another release" in summary_md
 
 
 def test_report_warns_for_uncovered_drift_errors_and_restore_pull_requests() -> None:
@@ -1535,6 +1547,7 @@ def main() -> int:
 	test_repair_treats_a_sync_pull_request_for_another_release_as_stale()
 	test_report_stays_quiet_when_a_fresh_sync_pull_request_covers_the_drift()
 	test_report_warns_when_the_sync_pull_request_is_stale_or_its_age_unknown()
+	test_report_names_a_sync_pull_request_for_another_release()
 	test_report_warns_for_uncovered_drift_errors_and_restore_pull_requests()
 	test_report_covered_drift_is_left_out_of_a_warning_for_another_repository()
 	test_report_all_match_message_is_unchanged()

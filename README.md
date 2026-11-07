@@ -1304,7 +1304,7 @@ exact release bytes; the body carries the marker
 `<!-- coding-workflows:restore-managed-workflows:v1 -->`, so reruns update the
 same pull request (and skip the push when nothing changed). A consumer with an
 open sync pull request (`auto/update-workflows-*` or `ai-sync/stable`) is
-skipped, because that pull request already restores every wrapper. The
+skipped, because that pull request restores every wrapper (one built for another release still skips the repair but is reported as stuck). The
 updater is never created by a restore pull request (it stays bootstrap-only),
 and an existing `auto/restore-managed-workflows` branch that the audit did not
 write is left alone (`reason=restore_branch_not_owned`).
