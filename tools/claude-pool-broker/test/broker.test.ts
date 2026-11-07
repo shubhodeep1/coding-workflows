@@ -13,6 +13,20 @@ import {
 	type Deps,
 	type Env,
 } from "../src/index";
+import {
+	CHATGPT_MAX_ACCOUNTS,
+	CHATGPT_MAX_BODY_BYTES,
+	CHATGPT_REGISTRY_NAME,
+	CHATGPT_WRITER_AUDIENCE,
+	ChatgptAccount,
+	applyChatgptPut,
+	chatgptGate,
+	normalizeChatgptUsage,
+	parseChatgptPut,
+	stripRefreshToken,
+	type ChatgptNamespace,
+	type ChatgptStorage,
+} from "../src/index";
 
 const NOW_MS = Date.UTC(2026, 9, 4, 12, 0, 0);
 const NOW = Math.floor(NOW_MS / 1000);
@@ -553,5 +567,610 @@ describe("parseWorkflowRef", () => {
 		expect(parseWorkflowRef("shubhodeep1/coding-workflows-fork/.github/workflows/plan.yml@refs/heads/main")).toBeNull();
 		expect(parseWorkflowRef(undefined)).toBeNull();
 		expect(parseWorkflowRef(`${WF}@refs/heads/main`)).toBeNull();
+	});
+});
+
+/* ---------- ChatGPT account store (chatgpt-account-reviewer-trial-plan.md, Phase 1) ---------- */
+
+const WRITER_WF = "shubhodeep1/claude-workers/.github/workflows/chatgpt-pool-refresh.yml";
+const SEED_A = "a".repeat(64);
+const SEED_B = "b".repeat(64);
+const DAY_MS = 24 * 3600 * 1000;
+
+interface FakeNamespace extends ChatgptNamespace
+{
+	instances: Map<string, { object: ChatgptAccount; data: Map<string, unknown> }>;
+}
+
+function fakeNamespace(): FakeNamespace
+{
+	const instances = new Map<string, { object: ChatgptAccount; data: Map<string, unknown> }>();
+	const instance = (name: string) => {
+		let entry = instances.get(name);
+		if (!entry) {
+			const data = new Map<string, unknown>();
+			const storage: ChatgptStorage = {
+				get: async (key) => (data.has(key) ? structuredClone(data.get(key)) : undefined),
+				put: async (key, value) => {
+					data.set(key, structuredClone(value));
+				},
+			};
+			entry = { object: new ChatgptAccount({ storage }), data };
+			instances.set(name, entry);
+		}
+		return entry;
+	};
+	return {
+		instances,
+		idFromName: (name) => name,
+		get: (id) => ({ fetch: (input, init) => instance(String(id)).object.fetch(new Request(input, init)) }),
+	};
+}
+
+function chatgptEnv(namespace: ChatgptNamespace | undefined, extra: Partial<Env> = {}): Env
+{
+	return { ...ENV, CHATGPT_ACCOUNTS: namespace, CHATGPT_GATE: "0.9", ...extra };
+}
+
+function writerClaims(overrides: Record<string, unknown> = {}): Record<string, unknown>
+{
+	return claims({
+		aud: CHATGPT_WRITER_AUDIENCE,
+		repository: "shubhodeep1/claude-workers",
+		job_workflow_ref: `${WRITER_WF}@refs/heads/main`,
+		ref: "refs/heads/main",
+		...overrides,
+	});
+}
+
+function readerClaims(overrides: Record<string, unknown> = {}): Record<string, unknown>
+{
+	return claims({ job_workflow_ref: `${WF}review_autofix.yml@refs/heads/main`, ...overrides });
+}
+
+/** Claims issued at `ms` so a later setNow still passes the iat age check. */
+function at(ms: number, base: Record<string, unknown>): Record<string, unknown>
+{
+	const seconds = Math.floor(ms / 1000);
+	return { ...base, iat: seconds - 10, nbf: seconds - 10, exp: seconds + 300 };
+}
+
+function authJson(name: string): Record<string, unknown>
+{
+	return {
+		OPENAI_API_KEY: null,
+		tokens: { id_token: `id-${name}`, access_token: `access-${name}`, refresh_token: `refresh-${name}`, account_id: `acct-${name}` },
+		last_refresh: "2026-10-04T00:00:00Z",
+	};
+}
+
+function usage(fivePct: number | null, weeklyPct: number | null, extra: { five?: Record<string, unknown>; weekly?: Record<string, unknown> } = {}): Record<string, unknown>
+{
+	const result: Record<string, unknown> = {};
+	if (fivePct !== null) {
+		result.primary = { used_percent: fivePct, window_minutes: 300, ...extra.five };
+	}
+	if (weeklyPct !== null) {
+		result.secondary = { used_percent: weeklyPct, window_minutes: 10080, ...extra.weekly };
+	}
+	return result;
+}
+
+function putBody(name: string, overrides: Record<string, unknown> = {}): Record<string, unknown>
+{
+	return {
+		seed_sha256: SEED_A,
+		base_generation: 0,
+		reseed: true,
+		outcome: "ok",
+		forced_refresh: false,
+		usage: null,
+		checked_at: new Date(NOW_MS).toISOString(),
+		auth_json: authJson(name),
+		...overrides,
+	};
+}
+
+function chatgptRequest(token: string | null, method: string, path: string, body?: unknown): Request
+{
+	const headers: Record<string, string> = {};
+	if (token !== null) {
+		headers.authorization = `Bearer ${token}`;
+	}
+	if (body !== undefined) {
+		headers["content-type"] = "application/json";
+	}
+	return new Request(`https://claude-pool-broker.example.workers.dev${path}`, {
+		method,
+		headers,
+		body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
+	});
+}
+
+async function writerPut(s: Stub, env: Env, name: string, body: Record<string, unknown> | string, ms: number = NOW_MS)
+{
+	return call(s, chatgptRequest(await sign(at(ms, writerClaims())), "PUT", `/v1/chatgpt/refresh/${name}`, body), env);
+}
+
+async function writerGet(s: Stub, env: Env, name: string)
+{
+	return call(s, chatgptRequest(await sign(writerClaims()), "GET", `/v1/chatgpt/refresh/${name}`), env);
+}
+
+async function pick(s: Stub, env: Env, ms: number = NOW_MS)
+{
+	return call(s, chatgptRequest(await sign(at(ms, readerClaims())), "POST", "/v1/chatgpt"), env);
+}
+
+async function status(s: Stub, env: Env, ms: number = NOW_MS)
+{
+	return call(s, chatgptRequest(await sign(at(ms, readerClaims())), "GET", "/v1/chatgpt/status"), env);
+}
+
+/** Seed an account and, optionally, write usage / outcome in a second PUT. */
+async function seedAccount(s: Stub, env: Env, name: string, extra: Record<string, unknown> = {}, ms: number = NOW_MS)
+{
+	const result = await writerPut(s, env, name, putBody(name, extra), ms);
+	expect(result).toEqual({ status: 200, body: { generation: 1 } });
+}
+
+describe("chatgpt routes", () => {
+	it("answers 405 for a wrong method and 404 for an unknown path, before auth", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		expect((await call(s, chatgptRequest(null, "GET", "/v1/chatgpt"), env))).toEqual({ status: 405, body: { error: "method_not_allowed" } });
+		expect((await call(s, chatgptRequest(null, "POST", "/v1/chatgpt/status"), env)).status).toBe(405);
+		expect((await call(s, chatgptRequest(null, "POST", "/v1/chatgpt/refresh/ALPHA"), env)).status).toBe(405);
+		expect((await call(s, chatgptRequest(null, "DELETE", "/v1/chatgpt/refresh/ALPHA"), env)).status).toBe(405);
+		expect((await call(s, chatgptRequest(null, "GET", "/v1/chatgpt/x"), env))).toEqual({ status: 404, body: { error: "not_found" } });
+		expect(s.calls).toEqual([]);
+	});
+
+	for (const name of ["bad-name", "alpha", "", "A/B", "A".repeat(65)]) {
+		it(`answers 400 invalid_account for ${JSON.stringify(name)}`, async () => {
+			const s = stub();
+			const { status: code, body } = await call(s, chatgptRequest(await sign(writerClaims()), "GET", `/v1/chatgpt/refresh/${name}`), chatgptEnv(fakeNamespace()));
+			expect([code, body]).toEqual([400, { error: "invalid_account" }]);
+		});
+	}
+
+	it("a missing bearer is refused", async () => {
+		const s = stub();
+		expect((await call(s, chatgptRequest(null, "POST", "/v1/chatgpt"), chatgptEnv(fakeNamespace())))).toEqual({ status: 403, body: { error: "missing_token" } });
+	});
+});
+
+describe("chatgpt reader auth", () => {
+	it("grants a coding-workflows reusable-workflow token on both read routes", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA");
+		expect((await pick(s, env)).status).toBe(200);
+		expect((await status(s, env)).status).toBe(200);
+	});
+
+	const refused: [string, () => Record<string, unknown>, string][] = [
+		["a writer-audience token", () => writerClaims({ repository: "shubhodeep1/digital_pa", job_workflow_ref: `${WF}review_autofix.yml@refs/heads/main` }), "bad_audience"],
+		["a workflow outside ALLOWED_WORKFLOW_FILES", () => readerClaims({ job_workflow_ref: `${WF}evil.yml@refs/heads/main` }), "workflow_not_allowed"],
+		["a claude-workers token", () => readerClaims({ repository: "shubhodeep1/claude-workers", job_workflow_ref: `${WRITER_WF}@refs/heads/main` }), "repo_not_allowed"],
+		["a consumer's own workflow", () => readerClaims({ job_workflow_ref: "shubhodeep1/digital_pa/.github/workflows/ai-review.yml@refs/heads/main" }), "wrong_workflow"],
+	];
+	for (const [name, build, reason] of refused) {
+		for (const [method, path] of [["POST", "/v1/chatgpt"], ["GET", "/v1/chatgpt/status"]]) {
+			it(`refuses ${name} on ${method} ${path}`, async () => {
+				const s = stub();
+				const env = chatgptEnv(fakeNamespace());
+				await seedAccount(s, env, "ALPHA");
+				const { status: code, body } = await call(s, chatgptRequest(await sign(build()), method, path), env);
+				expect([code, body]).toEqual([403, { error: reason }]);
+			});
+		}
+	}
+});
+
+describe("chatgpt writer auth", () => {
+	const refused: [string, Record<string, unknown>, string][] = [
+		["a wrong repository", { repository: "shubhodeep1/digital_pa" }, "writer_repo_not_allowed"],
+		["a fork with the same workflow", { repository: "evil/claude-workers", repository_owner: "evil", job_workflow_ref: "evil/claude-workers/.github/workflows/chatgpt-pool-refresh.yml@refs/heads/main" }, "wrong_owner"],
+		["a wrong workflow file", { job_workflow_ref: "shubhodeep1/claude-workers/.github/workflows/claude-pool-key-sync.yml@refs/heads/main" }, "writer_workflow_not_allowed"],
+		["a workflow in another repository", { job_workflow_ref: "shubhodeep1/coding-workflows/.github/workflows/chatgpt-pool-refresh.yml@refs/heads/main" }, "writer_workflow_not_allowed"],
+		["a missing job_workflow_ref", { job_workflow_ref: undefined }, "writer_workflow_not_allowed"],
+		["a feature-branch ref", { job_workflow_ref: `${WRITER_WF}@refs/heads/dev`, ref: "refs/heads/dev" }, "writer_ref_not_allowed"],
+		["a SHA ref", { job_workflow_ref: `${WRITER_WF}@${SHA}` }, "writer_ref_not_allowed"],
+		["a wrong ref claim", { ref: "refs/heads/dev" }, "writer_ref_not_allowed"],
+		["a missing ref claim", { ref: undefined }, "writer_ref_not_allowed"],
+		["the reader audience", { aud: AUDIENCE }, "bad_audience"],
+		["a wrong owner", { repository_owner: "someone-else" }, "wrong_owner"],
+	];
+	for (const [name, overrides, reason] of refused) {
+		for (const method of ["GET", "PUT"]) {
+			it(`refuses ${name} on ${method}`, async () => {
+				const s = stub();
+				const namespace = fakeNamespace();
+				const body = method === "PUT" ? putBody("ALPHA") : undefined;
+				const { status: code, body: reply } = await call(s, chatgptRequest(await sign(writerClaims(overrides)), method, "/v1/chatgpt/refresh/ALPHA", body), chatgptEnv(namespace));
+				expect([code, reply]).toEqual([403, { error: reason }]);
+				expect(namespace.instances.size).toBe(0);
+			});
+		}
+	}
+
+	it("refuses a coding-workflows reader token on GET and PUT", async () => {
+		const s = stub();
+		const namespace = fakeNamespace();
+		const env = chatgptEnv(namespace);
+		for (const [method, body] of [["GET", undefined], ["PUT", putBody("ALPHA")]] as const) {
+			const reader = await sign(readerClaims());
+			expect((await call(s, chatgptRequest(reader, method, "/v1/chatgpt/refresh/ALPHA", body), env)).body.error).toBe("bad_audience");
+			const readerWithWriterAudience = await sign(readerClaims({ aud: CHATGPT_WRITER_AUDIENCE }));
+			expect((await call(s, chatgptRequest(readerWithWriterAudience, method, "/v1/chatgpt/refresh/ALPHA", body), env)).body.error).toBe("writer_repo_not_allowed");
+		}
+		expect(namespace.instances.size).toBe(0);
+	});
+
+	it("an invalid writer config fails closed", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace(), { CHATGPT_WRITER_WORKFLOW: "../evil" });
+		expect((await writerGet(s, env, "ALPHA"))).toEqual({ status: 503, body: { error: "writer_config_invalid" } });
+	});
+
+	it("unset writer config uses the defaults", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace(), { CHATGPT_WRITER_REPOSITORY: undefined, CHATGPT_WRITER_WORKFLOW: undefined });
+		expect((await writerGet(s, env, "ALPHA"))).toEqual({ status: 404, body: { error: "not_seeded" } });
+	});
+});
+
+describe("chatgpt empty pool and store", () => {
+	it("with no accounts, POST /v1/chatgpt is 503 chatgpt_pool_empty and status lists nothing", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		expect(await pick(s, env)).toEqual({ status: 503, body: { error: "chatgpt_pool_empty" } });
+		expect(await status(s, env)).toEqual({ status: 200, body: { gate: 0.9, accounts: [] } });
+		expect(s.logs).toContain("CHATGPT_POOL broker chatgpt_refused route=pick reason=chatgpt_pool_empty status=503 repository=shubhodeep1/digital_pa account=none");
+	});
+
+	it("without the binding every route is 503 chatgpt_store_unavailable", async () => {
+		const s = stub();
+		const env = chatgptEnv(undefined);
+		expect((await pick(s, env)).body.error).toBe("chatgpt_store_unavailable");
+		expect((await status(s, env)).body.error).toBe("chatgpt_store_unavailable");
+		expect((await writerGet(s, env, "ALPHA")).body.error).toBe("chatgpt_store_unavailable");
+		expect((await writerPut(s, env, "ALPHA", putBody("ALPHA"))).status).toBe(503);
+	});
+});
+
+describe("chatgpt seed, read and compare-and-swap", () => {
+	it("GET on an unseeded account is 404 not_seeded", async () => {
+		const s = stub();
+		expect(await writerGet(s, chatgptEnv(fakeNamespace()), "ALPHA")).toEqual({ status: 404, body: { error: "not_seeded" } });
+	});
+
+	it("a reseed at generation 0 seeds, and GET returns the full file (refresh token included)", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA");
+		expect(await writerGet(s, env, "ALPHA")).toEqual({ status: 200, body: { auth_json: authJson("ALPHA"), generation: 1, seed_sha256: SEED_A } });
+	});
+
+	it("a stale base_generation is 409 generation_conflict and leaves the record unchanged", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA");
+		const stale = await writerPut(s, env, "ALPHA", putBody("ALPHA", { reseed: false, base_generation: 0, auth_json: authJson("OTHER") }));
+		expect(stale).toEqual({ status: 409, body: { error: "generation_conflict" } });
+		expect((await writerGet(s, env, "ALPHA")).body).toEqual({ auth_json: authJson("ALPHA"), generation: 1, seed_sha256: SEED_A });
+	});
+
+	it("two writes from the same base: the first wins, the second conflicts", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA");
+		const body = putBody("ALPHA", { reseed: false, base_generation: 1 });
+		const [first, second] = await Promise.all([writerPut(s, env, "ALPHA", body), writerPut(s, env, "ALPHA", body)]);
+		expect([first, second].map((r) => r.status).sort()).toEqual([200, 409]);
+		expect((await writerGet(s, env, "ALPHA")).body.generation).toBe(2);
+	});
+
+	it("a reseed on an existing account checks base_generation and replaces the seed and file", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA");
+		expect((await writerPut(s, env, "ALPHA", putBody("ALPHA", { seed_sha256: SEED_B, base_generation: 0, auth_json: authJson("NEW") }))).body.error).toBe("generation_conflict");
+		expect(await writerPut(s, env, "ALPHA", putBody("ALPHA", { seed_sha256: SEED_B, base_generation: 1, auth_json: authJson("NEW") }))).toEqual({ status: 200, body: { generation: 2 } });
+		expect((await writerGet(s, env, "ALPHA")).body).toEqual({ auth_json: authJson("NEW"), generation: 2, seed_sha256: SEED_B });
+	});
+
+	it("a reseed without auth_json is 400 auth_json_required", async () => {
+		const s = stub();
+		expect((await writerPut(s, chatgptEnv(fakeNamespace()), "ALPHA", putBody("ALPHA", { auth_json: undefined })))).toEqual({ status: 400, body: { error: "auth_json_required" } });
+	});
+
+	it("a non-reseed write with a different seed is 409 seed_mismatch", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA");
+		expect((await writerPut(s, env, "ALPHA", putBody("ALPHA", { reseed: false, base_generation: 1, seed_sha256: SEED_B })))).toEqual({ status: 409, body: { error: "seed_mismatch" } });
+	});
+
+	it("a non-reseed write on an unseeded account is 404 not_seeded", async () => {
+		const s = stub();
+		expect((await writerPut(s, chatgptEnv(fakeNamespace()), "ALPHA", putBody("ALPHA", { reseed: false })))).toEqual({ status: 404, body: { error: "not_seeded" } });
+	});
+
+	it("a write without auth_json keeps the stored file and bumps the generation", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA");
+		expect(await writerPut(s, env, "ALPHA", putBody("ALPHA", { reseed: false, base_generation: 1, auth_json: undefined, outcome: "timeout" }))).toEqual({ status: 200, body: { generation: 2 } });
+		expect((await writerGet(s, env, "ALPHA")).body).toEqual({ auth_json: authJson("ALPHA"), generation: 2, seed_sha256: SEED_A });
+		const listed = (await status(s, env)).body.accounts as Record<string, unknown>[];
+		expect(listed[0].last_outcome).toBe("timeout");
+	});
+});
+
+describe("chatgpt PUT validation", () => {
+	const invalid: [string, Record<string, unknown> | string, number, string][] = [
+		["a bad seed_sha256", putBody("ALPHA", { seed_sha256: "ABC" }), 400, "invalid_body"],
+		["an upper-case seed_sha256", putBody("ALPHA", { seed_sha256: "A".repeat(64) }), 400, "invalid_body"],
+		["a negative base_generation", putBody("ALPHA", { base_generation: -1 }), 400, "invalid_body"],
+		["a non-integer base_generation", putBody("ALPHA", { base_generation: 1.5 }), 400, "invalid_body"],
+		["a string base_generation", putBody("ALPHA", { base_generation: "0" }), 400, "invalid_body"],
+		["a non-boolean reseed", putBody("ALPHA", { reseed: "yes" }), 400, "invalid_body"],
+		["an unknown outcome", putBody("ALPHA", { outcome: "great" }), 400, "invalid_body"],
+		["an auth_json without tokens.access_token", putBody("ALPHA", { auth_json: { tokens: { refresh_token: "r" } } }), 400, "invalid_auth_json"],
+		["an auth_json that is a list", putBody("ALPHA", { auth_json: [] }), 400, "invalid_auth_json"],
+		["a non-object body", "[1, 2]", 400, "invalid_body"],
+		["invalid JSON", "{", 400, "invalid_body"],
+		["a body over 64 KiB", putBody("ALPHA", { padding: "x".repeat(CHATGPT_MAX_BODY_BYTES) }), 413, "body_too_large"],
+	];
+	for (const [name, body, code, reason] of invalid) {
+		it(`refuses ${name}`, async () => {
+			const s = stub();
+			const namespace = fakeNamespace();
+			expect(await writerPut(s, chatgptEnv(namespace), "ALPHA", body)).toEqual({ status: code, body: { error: reason } });
+			expect(namespace.instances.size).toBe(0);
+		});
+	}
+
+	it("accepts malformed usage, checked_at and forced_refresh as null / false", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA", { usage: { primary: "junk", secondary: { used_percent: "50" } }, checked_at: "not a date", forced_refresh: "yes" });
+		const [entry] = (await status(s, env)).body.accounts as Record<string, unknown>[];
+		expect(entry).toMatchObject({
+			checked_at: null,
+			forced_refresh: false,
+			usage: { five_hour: null, weekly: null, resets: { five_hour: null, weekly: null } },
+			usable: true,
+			reason: "ok",
+		});
+	});
+
+	it("normalizes usage: primary is the 5-hour window, secondary the weekly one", () => {
+		const base = Date.UTC(2026, 9, 4, 12, 0, 0);
+		expect(normalizeChatgptUsage(usage(25, 140, { five: { resets_in_seconds: 60 }, weekly: { resets_at: base / 1000 + 3600 } }), base)).toEqual({
+			five_hour: 0.25,
+			weekly: 1,
+			resets: { five_hour: "2026-10-04T12:01:00.000Z", weekly: "2026-10-04T13:00:00.000Z" },
+		});
+		expect(normalizeChatgptUsage({ primary: { used_percent: -5, resets_at: "2026-10-05T00:00:00Z" } }, base)).toEqual({
+			five_hour: 0,
+			weekly: null,
+			resets: { five_hour: "2026-10-05T00:00:00.000Z", weekly: null },
+		});
+		expect(normalizeChatgptUsage(null, base)).toEqual({ five_hour: null, weekly: null, resets: { five_hour: null, weekly: null } });
+	});
+});
+
+describe("chatgpt refresh-token stripping", () => {
+	it("POST /v1/chatgpt returns the file without tokens.refresh_token; the store keeps it", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA");
+		const { status: code, body } = await pick(s, env);
+		expect(code).toBe(200);
+		const expected = authJson("ALPHA");
+		delete (expected.tokens as Record<string, unknown>).refresh_token;
+		expect(body).toEqual({ account: "ALPHA", auth_json: expected });
+		expect(JSON.stringify(body)).not.toContain("refresh-ALPHA");
+		expect(((await writerGet(s, env, "ALPHA")).body.auth_json as { tokens: Record<string, unknown> }).tokens.refresh_token).toBe("refresh-ALPHA");
+	});
+
+	it("stripRefreshToken leaves its input untouched", () => {
+		const input = authJson("X");
+		const stripped = stripRefreshToken(input);
+		expect((stripped.tokens as Record<string, unknown>).refresh_token).toBeUndefined();
+		expect((input.tokens as Record<string, unknown>).refresh_token).toBe("refresh-X");
+	});
+});
+
+describe("chatgpt selection, gate and staleness", () => {
+	it("picks the lowest weekly usage, then the lower 5-hour usage, then the name", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA", { usage: usage(10, 50) });
+		await seedAccount(s, env, "BETA", { usage: usage(30, 20) });
+		await seedAccount(s, env, "GAMMA", { usage: usage(10, 20) });
+		expect((await pick(s, env)).body.account).toBe("GAMMA");
+		await seedAccount(s, env, "DELTA", { usage: usage(10, 20) });
+		expect((await pick(s, env)).body.account).toBe("DELTA");
+	});
+
+	it("skips an account with either window at or above the gate", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA", { usage: usage(90, 5) });
+		await seedAccount(s, env, "BETA", { usage: usage(5, 90) });
+		await seedAccount(s, env, "GAMMA", { usage: usage(80, 89) });
+		expect((await pick(s, env)).body.account).toBe("GAMMA");
+		const reasons = ((await status(s, env)).body.accounts as Record<string, unknown>[]).map((a) => [a.account, a.usable, a.reason]);
+		expect(reasons).toEqual([["ALPHA", false, "over_gate"], ["BETA", false, "over_gate"], ["GAMMA", true, "ok"]]);
+	});
+
+	it("all accounts over the gate is chatgpt_pool_empty", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA", { usage: usage(95, 5) });
+		expect((await pick(s, env)).body.error).toBe("chatgpt_pool_empty");
+	});
+
+	it("counts a window whose reset time has passed as 0", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA", { usage: usage(95, 10, { five: { resets_at: NOW - 60 } }) });
+		await seedAccount(s, env, "BETA", { usage: usage(5, 50) });
+		expect((await pick(s, env)).body.account).toBe("ALPHA");
+	});
+
+	for (const outcome of ["auth_failed", "quota_exhausted"]) {
+		it(`skips an account whose last outcome is ${outcome}`, async () => {
+			const s = stub();
+			const env = chatgptEnv(fakeNamespace());
+			await seedAccount(s, env, "ALPHA", { outcome });
+			expect((await pick(s, env)).body.error).toBe("chatgpt_pool_empty");
+			const [entry] = (await status(s, env)).body.accounts as Record<string, unknown>[];
+			expect([entry.usable, entry.reason]).toEqual([false, outcome]);
+		});
+	}
+
+	for (const outcome of ["timeout", "run_failed"]) {
+		it(`keeps an account whose last outcome is ${outcome}`, async () => {
+			const s = stub();
+			const env = chatgptEnv(fakeNamespace());
+			await seedAccount(s, env, "ALPHA", { outcome });
+			expect((await pick(s, env)).body.account).toBe("ALPHA");
+		});
+	}
+
+	it("drops an account not written for 7 days", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA");
+		const later = NOW_MS + 7 * DAY_MS + 60 * 1000;
+		s.setNow(later);
+		await seedAccount(s, env, "BETA", { usage: usage(50, 80) }, later);
+		expect((await pick(s, env, later)).body.account).toBe("BETA");
+		const entries = (await status(s, env, later)).body.accounts as Record<string, unknown>[];
+		expect(entries.map((a) => [a.account, a.usable, a.reason])).toEqual([["ALPHA", false, "stale"], ["BETA", true, "ok"]]);
+	});
+
+	it("treats usage null as unknown, so the account stays usable", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA", { usage: null });
+		expect((await pick(s, env)).body.account).toBe("ALPHA");
+	});
+
+	it("an invalid CHATGPT_GATE falls back to 0.9", async () => {
+		const s = stub();
+		for (const gate of ["5", "0", "-1", "abc", ""]) {
+			const env = chatgptEnv(fakeNamespace(), { CHATGPT_GATE: gate });
+			await seedAccount(s, env, "ALPHA", { usage: usage(5, 91) });
+			await seedAccount(s, env, "BETA", { usage: usage(5, 89) });
+			expect((await pick(s, env)).body.account).toBe("BETA");
+			expect((await status(s, env)).body.gate).toBe(0.9);
+		}
+		expect(chatgptGate({ CHATGPT_GATE: "0.5" })).toBe(0.5);
+	});
+
+	it("a lower CHATGPT_GATE gates more accounts", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace(), { CHATGPT_GATE: "0.5" });
+		await seedAccount(s, env, "ALPHA", { usage: usage(5, 60) });
+		expect((await pick(s, env)).body.error).toBe("chatgpt_pool_empty");
+	});
+});
+
+describe("chatgpt status, registry and logs", () => {
+	it("status never contains auth_json, a seed hash or any token", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		await seedAccount(s, env, "ALPHA", { usage: usage(10, 20), forced_refresh: true });
+		const { status: code, body } = await status(s, env);
+		expect(code).toBe(200);
+		const text = JSON.stringify(body);
+		for (const forbidden of ["auth_json", "seed_sha256", "tokens", SEED_A, "access-ALPHA", "refresh-ALPHA", "id-ALPHA"]) {
+			expect(text).not.toContain(forbidden);
+		}
+		expect(body).toEqual({
+			gate: 0.9,
+			accounts: [{
+				account: "ALPHA",
+				generation: 1,
+				last_refresh: new Date(NOW_MS).toISOString(),
+				last_outcome: "ok",
+				forced_refresh: true,
+				checked_at: new Date(NOW_MS).toISOString(),
+				usage: { five_hour: 0.1, weekly: 0.2, resets: { five_hour: null, weekly: null } },
+				usable: true,
+				reason: "ok",
+			}],
+		});
+	});
+
+	it("the registry is updated on PUT; a listed name without a record is not_seeded", async () => {
+		const s = stub();
+		const namespace = fakeNamespace();
+		const env = chatgptEnv(namespace);
+		await seedAccount(s, env, "BETA");
+		await seedAccount(s, env, "ALPHA");
+		expect(namespace.instances.get(CHATGPT_REGISTRY_NAME)?.data.get("names")).toEqual(["ALPHA", "BETA"]);
+		// A failed reseed still registers the name (D2) but writes no record.
+		expect((await writerPut(s, env, "GAMMA", putBody("GAMMA", { base_generation: 3 }))).status).toBe(409);
+		const entries = (await status(s, env)).body.accounts as Record<string, unknown>[];
+		expect(entries.map((a) => [a.account, a.usable, a.reason])).toEqual([["ALPHA", true, "ok"], ["BETA", true, "ok"], ["GAMMA", false, "not_seeded"]]);
+	});
+
+	it("the registry refuses a new name past the account cap", async () => {
+		const s = stub();
+		const namespace = fakeNamespace();
+		const env = chatgptEnv(namespace);
+		const names = Array.from({ length: CHATGPT_MAX_ACCOUNTS }, (_, i) => `A${i}`);
+		await namespace.get(namespace.idFromName(CHATGPT_REGISTRY_NAME)).fetch("https://x/registry/list");
+		namespace.instances.get(CHATGPT_REGISTRY_NAME)?.data.set("names", names);
+		expect(await writerPut(s, env, "ZED", putBody("ZED"))).toEqual({ status: 507, body: { error: "registry_full" } });
+		expect(namespace.instances.has("ZED")).toBe(false);
+		expect((await writerPut(s, env, "A1", putBody("A1"))).status).toBe(200);
+	});
+
+	it("log lines carry reason codes and account names, never a token, seed hash or JWT", async () => {
+		const s = stub();
+		const env = chatgptEnv(fakeNamespace());
+		const writerToken = await sign(writerClaims());
+		await call(s, chatgptRequest(writerToken, "PUT", "/v1/chatgpt/refresh/ALPHA", putBody("ALPHA")), env);
+		await call(s, chatgptRequest(writerToken, "GET", "/v1/chatgpt/refresh/ALPHA"), env);
+		const readerToken = await sign(readerClaims());
+		await call(s, chatgptRequest(readerToken, "POST", "/v1/chatgpt"), env);
+		await call(s, chatgptRequest(readerToken, "GET", "/v1/chatgpt/status"), env);
+		await call(s, chatgptRequest(readerToken, "PUT", "/v1/chatgpt/refresh/ALPHA", putBody("ALPHA")), env);
+		const text = s.logs.join("\n");
+		for (const secret of ["access-ALPHA", "refresh-ALPHA", "id-ALPHA", SEED_A, writerToken, readerToken, "sk-ant"]) {
+			expect(text).not.toContain(secret);
+		}
+		expect(s.logs).toContain("CHATGPT_POOL broker chatgpt_written account=ALPHA generation=1 reason=ok reseed=true forced_refresh=false");
+		expect(s.logs).toContain("CHATGPT_POOL broker chatgpt_read account=ALPHA generation=1 reason=ok");
+		expect(s.logs).toContain("CHATGPT_POOL broker chatgpt_granted route=pick repository=shubhodeep1/digital_pa account=ALPHA reason=selected usable=1");
+		expect(s.logs).toContain("CHATGPT_POOL broker chatgpt_status repository=shubhodeep1/digital_pa accounts=1 usable=1");
+		expect(s.logs).toContain("CHATGPT_POOL broker chatgpt_refused route=refresh reason=bad_audience status=403 repository=unknown account=ALPHA");
+	});
+});
+
+describe("chatgpt store leaves /v1/pool alone", () => {
+	it("POST /v1/pool ignores the CHATGPT_* env and never touches the store", async () => {
+		const s = stub();
+		const namespace = fakeNamespace();
+		const { status: code, body } = await call(s, request(await sign(claims())), chatgptEnv(namespace, { CHATGPT_GATE: "0.1" }));
+		expect(code).toBe(200);
+		expect(body.gate).toBe(0.9);
+		expect(Object.keys(body).sort()).toEqual(["accounts", "gate", "probe_model"]);
+		expect(namespace.instances.size).toBe(0);
+	});
+
+	it("applyChatgptPut is a pure compare-and-swap", () => {
+		const put = parseChatgptPut(JSON.stringify(putBody("ALPHA")), NOW_MS);
+		const first = applyChatgptPut(undefined, put, "ALPHA", NOW_MS);
+		expect(first.status).toBe(200);
+		expect(applyChatgptPut(first.record, put, "ALPHA", NOW_MS)).toEqual({ status: 409, body: { error: "generation_conflict" } });
 	});
 });

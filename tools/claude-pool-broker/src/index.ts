@@ -36,6 +36,21 @@
  * The pool is the CLAUDE_POOL_TOKENS secret (a JSON array of {name, token}),
  * written only by claude-workers' key-sync workflow. Nothing here logs a
  * token or the OIDC JWT; log lines carry reason codes and the repository.
+ *
+ * ChatGPT account store (docs/plans/chatgpt-account-reviewer-trial-plan.md,
+ * Phase 1): one ChatgptAccount Durable Object per account (binding
+ * CHATGPT_ACCOUNTS) plus a lower-case `__registry__` instance listing the names.
+ *   - POST /v1/chatgpt and GET /v1/chatgpt/status: the same coding-workflows
+ *     OIDC check as /v1/pool (audience coding-workflows-claude-pool,
+ *     ALLOWED_WORKFLOW_FILES). POST returns the usable account with the lowest
+ *     weekly usage under CHATGPT_GATE as {account, auth_json} with
+ *     tokens.refresh_token removed, or 503 chatgpt_pool_empty. status returns
+ *     per-account metadata and never a token.
+ *   - GET / PUT /v1/chatgpt/refresh/<NAME>: writer only (audience
+ *     coding-workflows-chatgpt-pool-writer, shubhodeep1/claude-workers'
+ *     chatgpt-pool-refresh.yml at refs/heads/main). PUT compare-and-swaps on
+ *     base_generation. Accounts not written for 7 days drop out of reads.
+ * Log lines carry the CHATGPT_POOL prefix, reason codes and account names only.
  */
 
 export interface Env {
@@ -44,6 +59,14 @@ export interface Env {
 	GATE?: string;
 	/** Optional read-only token for the GitHub compare calls; unauthenticated reads when unset. Never logged. */
 	BROKER_GITHUB_READ_TOKEN?: string;
+	/** ChatGPT account store (Durable Object binding); the /v1/chatgpt routes answer 503 chatgpt_store_unavailable when absent. */
+	CHATGPT_ACCOUNTS?: ChatgptNamespace;
+	/** Usage gate for ChatGPT accounts, in (0, 1]; default 0.9. */
+	CHATGPT_GATE?: string;
+	/** Writer repository; default shubhodeep1/claude-workers. */
+	CHATGPT_WRITER_REPOSITORY?: string;
+	/** Writer workflow file; default chatgpt-pool-refresh.yml. */
+	CHATGPT_WRITER_WORKFLOW?: string;
 }
 
 export interface Deps {
@@ -239,6 +262,468 @@ export function parseWorkflowRef(value: unknown): { file: string; ref: string } 
 	return { file, ref };
 }
 
+/* ---------- ChatGPT account store (chatgpt-account-reviewer-trial-plan.md, Phase 1) ---------- */
+
+/** The Durable Object stub surface the Worker uses (no @cloudflare/workers-types dependency). */
+export interface ChatgptStub
+{
+	fetch(input: string, init?: RequestInit): Promise<Response>;
+}
+
+export interface ChatgptNamespace
+{
+	idFromName(name: string): unknown;
+	get(id: unknown): ChatgptStub;
+}
+
+export interface ChatgptStorage
+{
+	get(key: string): Promise<unknown>;
+	put(key: string, value: unknown): Promise<void>;
+}
+
+export interface ChatgptState
+{
+	storage: ChatgptStorage;
+	blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
+}
+
+export interface ChatgptUsage
+{
+	five_hour: number | null;
+	weekly: number | null;
+	resets: { five_hour: string | null; weekly: string | null };
+}
+
+export interface ChatgptRecord
+{
+	account: string;
+	auth_json: Record<string, unknown>;
+	seed_sha256: string;
+	generation: number;
+	last_refresh: string;
+	last_outcome: string;
+	forced_refresh: boolean;
+	checked_at: string | null;
+	usage: ChatgptUsage;
+}
+
+export type ChatgptSummary = Omit<ChatgptRecord, "auth_json" | "seed_sha256">;
+
+export interface ChatgptPut
+{
+	seed_sha256: string;
+	base_generation: number;
+	reseed: boolean;
+	outcome: string;
+	forced_refresh: boolean;
+	checked_at: string | null;
+	usage: ChatgptUsage;
+	auth_json?: Record<string, unknown>;
+}
+
+/** Writer routes only; reads keep AUDIENCE. */
+export const CHATGPT_WRITER_AUDIENCE = "coding-workflows-chatgpt-pool-writer";
+export const CHATGPT_WRITER_REPOSITORY_DEFAULT = "shubhodeep1/claude-workers";
+export const CHATGPT_WRITER_WORKFLOW_DEFAULT = "chatgpt-pool-refresh.yml";
+export const CHATGPT_STALE_MS = 7 * 24 * 3600 * 1000;
+export const CHATGPT_OUTCOMES: readonly string[] = Object.freeze(["ok", "timeout", "auth_failed", "quota_exhausted", "run_failed"]);
+export const CHATGPT_MAX_BODY_BYTES = 65536;
+export const CHATGPT_MAX_ACCOUNTS = 32;
+/** Lower-case, so it can never be an account name (ACCOUNT_NAME_RE is upper-case). */
+export const CHATGPT_REGISTRY_NAME = "__registry__";
+export const SEED_SHA256_RE = /^[0-9a-f]{64}$/;
+const DEFAULT_CHATGPT_GATE = 0.9;
+const CHATGPT_REFRESH_PREFIX = "/v1/chatgpt/refresh/";
+const CHATGPT_STORE_ORIGIN = "https://chatgpt-account.internal";
+const WRITER_WORKFLOW_FILE_RE = /^[A-Za-z0-9_.-]+\.ya?ml$/;
+const CHATGPT_ERROR_CODE_RE = /^[a-z_]{1,40}$/;
+
+function isPlainObject(value: unknown): value is Record<string, unknown>
+{
+	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isoFromMs(ms: number): string | null
+{
+	if (!Number.isFinite(ms)) {
+		return null;
+	}
+	const date = new Date(ms);
+	return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+function chatgptUsageWindow(raw: unknown, baseMs: number): { fraction: number | null; reset: string | null }
+{
+	if (!isPlainObject(raw)) {
+		return { fraction: null, reset: null };
+	}
+	const percent = raw.used_percent;
+	const fraction = isNumber(percent) ? Math.min(1, Math.max(0, percent / 100)) : null;
+	let reset: string | null = null;
+	if (isNumber(raw.resets_at) && raw.resets_at > 0) {
+		reset = isoFromMs(raw.resets_at * 1000);
+	} else if (typeof raw.resets_at === "string" && raw.resets_at.length <= 64) {
+		reset = isoFromMs(Date.parse(raw.resets_at));
+	} else if (isNumber(raw.resets_in_seconds) && raw.resets_in_seconds >= 0) {
+		reset = isoFromMs(baseMs + raw.resets_in_seconds * 1000);
+	}
+	return { fraction, reset };
+}
+
+/**
+ * Map the writer's Codex usage ({primary?, secondary?}) to the stored shape:
+ * primary is the 5-hour window, secondary the weekly one, as fractions in
+ * [0, 1]. Any malformed part becomes null (plan D4: metadata is lenient).
+ */
+export function normalizeChatgptUsage(usage: unknown, baseMs: number): ChatgptUsage
+{
+	const fiveHour = chatgptUsageWindow(isPlainObject(usage) ? usage.primary : undefined, baseMs);
+	const weekly = chatgptUsageWindow(isPlainObject(usage) ? usage.secondary : undefined, baseMs);
+	return {
+		five_hour: fiveHour.fraction,
+		weekly: weekly.fraction,
+		resets: { five_hour: fiveHour.reset, weekly: weekly.reset },
+	};
+}
+
+/** CHATGPT_GATE in (0, 1], else the default. */
+export function chatgptGate(env: Env): number
+{
+	const raw = env.CHATGPT_GATE;
+	const gate = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : DEFAULT_CHATGPT_GATE;
+	return Number.isFinite(gate) && gate > 0 && gate <= 1 ? gate : DEFAULT_CHATGPT_GATE;
+}
+
+/**
+ * Whether an account can be handed out. Unknown usage counts as 0 and a window
+ * whose reset time has passed counts as 0; both windows must be under the gate.
+ */
+export function chatgptUsability(
+	summary: ChatgptSummary | null,
+	gate: number,
+	nowMs: number,
+): { usable: boolean; reason: string; fiveHour: number; weekly: number }
+{
+	if (!summary) {
+		return { usable: false, reason: "not_seeded", fiveHour: 0, weekly: 0 };
+	}
+	const refreshed = typeof summary.last_refresh === "string" ? Date.parse(summary.last_refresh) : NaN;
+	if (!Number.isFinite(refreshed) || nowMs - refreshed > CHATGPT_STALE_MS) {
+		return { usable: false, reason: "stale", fiveHour: 0, weekly: 0 };
+	}
+	if (summary.last_outcome === "auth_failed" || summary.last_outcome === "quota_exhausted") {
+		return { usable: false, reason: summary.last_outcome, fiveHour: 0, weekly: 0 };
+	}
+	const usage = isPlainObject(summary.usage) ? summary.usage : null;
+	const resets = usage && isPlainObject(usage.resets) ? usage.resets : null;
+	const effective = (fraction: unknown, reset: unknown): number => {
+		if (!isNumber(fraction)) {
+			return 0;
+		}
+		if (typeof reset === "string") {
+			const at = Date.parse(reset);
+			if (Number.isFinite(at) && at <= nowMs) {
+				return 0;
+			}
+		}
+		return fraction;
+	};
+	const fiveHour = effective(usage?.five_hour, resets?.five_hour);
+	const weekly = effective(usage?.weekly, resets?.weekly);
+	if (fiveHour >= gate || weekly >= gate) {
+		return { usable: false, reason: "over_gate", fiveHour, weekly };
+	}
+	return { usable: true, reason: "ok", fiveHour, weekly };
+}
+
+/** A deep copy of a Codex auth.json without tokens.refresh_token (readers never get it). */
+export function stripRefreshToken(authJson: Record<string, unknown>): Record<string, unknown>
+{
+	const copy = JSON.parse(JSON.stringify(authJson)) as Record<string, unknown>;
+	if (isPlainObject(copy.tokens)) {
+		delete copy.tokens.refresh_token;
+	}
+	return copy;
+}
+
+/**
+ * Validate a writer PUT body. Safety fields (seed_sha256, base_generation,
+ * reseed, outcome, auth_json shape) are strict: 400. Metadata (usage,
+ * checked_at, forced_refresh) is lenient: malformed values become null/false
+ * so a rotated single-use login is never rejected over a usage glitch (D4).
+ */
+export function parseChatgptPut(text: string, nowMs: number): ChatgptPut
+{
+	let body: unknown;
+	try {
+		body = JSON.parse(text);
+	} catch {
+		throw new Refusal(400, "invalid_body");
+	}
+	if (!isPlainObject(body)) {
+		throw new Refusal(400, "invalid_body");
+	}
+	if (typeof body.seed_sha256 !== "string" || !SEED_SHA256_RE.test(body.seed_sha256)) {
+		throw new Refusal(400, "invalid_body");
+	}
+	if (typeof body.base_generation !== "number" || !Number.isSafeInteger(body.base_generation) || body.base_generation < 0) {
+		throw new Refusal(400, "invalid_body");
+	}
+	if (body.reseed !== undefined && typeof body.reseed !== "boolean") {
+		throw new Refusal(400, "invalid_body");
+	}
+	if (typeof body.outcome !== "string" || !CHATGPT_OUTCOMES.includes(body.outcome)) {
+		throw new Refusal(400, "invalid_body");
+	}
+	let authJson: Record<string, unknown> | undefined;
+	if (body.auth_json !== undefined && body.auth_json !== null) {
+		const tokens = isPlainObject(body.auth_json) ? body.auth_json.tokens : undefined;
+		if (!isPlainObject(body.auth_json) || !isPlainObject(tokens) || typeof tokens.access_token !== "string" || tokens.access_token.trim() === "") {
+			throw new Refusal(400, "invalid_auth_json");
+		}
+		authJson = body.auth_json;
+	}
+	const reseed = body.reseed === true;
+	if (reseed && !authJson) {
+		throw new Refusal(400, "auth_json_required");
+	}
+	const checkedAtMs = typeof body.checked_at === "string" && body.checked_at.length <= 64 ? Date.parse(body.checked_at) : NaN;
+	const checkedAt = isoFromMs(checkedAtMs);
+	const put: ChatgptPut = {
+		seed_sha256: body.seed_sha256,
+		base_generation: body.base_generation,
+		reseed,
+		outcome: body.outcome,
+		forced_refresh: body.forced_refresh === true,
+		checked_at: checkedAt,
+		usage: normalizeChatgptUsage(body.usage, checkedAt === null ? nowMs : checkedAtMs),
+	};
+	if (authJson) {
+		put.auth_json = authJson;
+	}
+	return put;
+}
+
+/**
+ * The compare-and-swap. A reseed replaces the record (base_generation must
+ * equal the stored generation, 0 for a new account); any other write needs a
+ * seeded record with the same seed_sha256 and generation. A write without
+ * auth_json keeps the stored one. last_refresh is the broker clock (D6).
+ */
+export function applyChatgptPut(
+	current: ChatgptRecord | undefined,
+	put: ChatgptPut,
+	account: string,
+	nowMs: number,
+): { status: number; body: Record<string, unknown>; record?: ChatgptRecord }
+{
+	const currentGeneration = current ? current.generation : 0;
+	let authJson: Record<string, unknown>;
+	if (put.reseed) {
+		if (!put.auth_json) {
+			return { status: 400, body: { error: "auth_json_required" } };
+		}
+		if (put.base_generation !== currentGeneration) {
+			return { status: 409, body: { error: "generation_conflict" } };
+		}
+		authJson = put.auth_json;
+	} else {
+		if (!current) {
+			return { status: 404, body: { error: "not_seeded" } };
+		}
+		if (current.seed_sha256 !== put.seed_sha256) {
+			return { status: 409, body: { error: "seed_mismatch" } };
+		}
+		if (put.base_generation !== currentGeneration) {
+			return { status: 409, body: { error: "generation_conflict" } };
+		}
+		authJson = put.auth_json ?? current.auth_json;
+	}
+	const lastRefresh = isoFromMs(nowMs);
+	if (lastRefresh === null) {
+		return { status: 400, body: { error: "invalid_body" } };
+	}
+	const record: ChatgptRecord = {
+		account,
+		auth_json: authJson,
+		seed_sha256: put.seed_sha256,
+		generation: currentGeneration + 1,
+		last_refresh: lastRefresh,
+		last_outcome: put.outcome,
+		forced_refresh: put.forced_refresh,
+		checked_at: put.checked_at,
+		usage: put.usage,
+	};
+	return { status: 200, body: { generation: record.generation }, record };
+}
+
+function isChatgptRecord(value: unknown): value is ChatgptRecord
+{
+	return isPlainObject(value) && typeof value.account === "string" && Number.isSafeInteger(value.generation) &&
+		typeof value.seed_sha256 === "string" && isPlainObject(value.auth_json);
+}
+
+function chatgptSummaryOf(record: ChatgptRecord): ChatgptSummary
+{
+	return {
+		account: record.account,
+		generation: record.generation,
+		last_refresh: record.last_refresh,
+		last_outcome: record.last_outcome,
+		forced_refresh: record.forced_refresh,
+		checked_at: record.checked_at,
+		usage: record.usage,
+	};
+}
+
+function chatgptNames(raw: unknown): string[]
+{
+	if (!Array.isArray(raw)) {
+		return [];
+	}
+	const names = new Set<string>();
+	for (const item of raw) {
+		if (typeof item === "string" && ACCOUNT_NAME_RE.test(item)) {
+			names.add(item);
+		}
+	}
+	return [...names].sort();
+}
+
+/**
+ * Durable Object for one ChatGPT account (key `record`), or, for the
+ * `__registry__` instance, the list of account names (key `names`). A plain
+ * class in the fetch-handler style (no cloudflare:workers import) so the
+ * Node vitest run can construct it with a fake state. Only the Worker can
+ * reach it, through the CHATGPT_ACCOUNTS binding.
+ */
+export class ChatgptAccount
+{
+	constructor(
+		private readonly state: ChatgptState,
+		_env?: unknown,
+	) {}
+
+	/** get → compare → put with no other await in between; the input gate (and blockConcurrencyWhile when present) keeps it atomic. */
+	private exclusive<T>(callback: () => Promise<T>): Promise<T>
+	{
+		return typeof this.state.blockConcurrencyWhile === "function" ? this.state.blockConcurrencyWhile(callback) : callback();
+	}
+
+	async fetch(request: Request): Promise<Response>
+	{
+		const url = new URL(request.url);
+		const storage = this.state.storage;
+		try {
+			if (url.pathname === "/registry/list" && request.method === "GET") {
+				return json(200, { names: chatgptNames(await storage.get("names")) });
+			}
+			if (url.pathname === "/registry/add" && request.method === "POST") {
+				const body: unknown = await request.json();
+				const name = isPlainObject(body) ? body.name : undefined;
+				if (typeof name !== "string" || !ACCOUNT_NAME_RE.test(name)) {
+					return json(400, { error: "invalid_account" });
+				}
+				return await this.exclusive(async () => {
+					const names = chatgptNames(await storage.get("names"));
+					if (names.includes(name)) {
+						return json(200, { names });
+					}
+					if (names.length >= CHATGPT_MAX_ACCOUNTS) {
+						return json(507, { error: "registry_full" });
+					}
+					names.push(name);
+					names.sort();
+					await storage.put("names", names);
+					return json(200, { names });
+				});
+			}
+			if (url.pathname === "/record" && request.method === "GET") {
+				const record = await storage.get("record");
+				return isChatgptRecord(record) ? json(200, record) : json(404, { error: "not_seeded" });
+			}
+			if (url.pathname === "/summary" && request.method === "GET") {
+				const record = await storage.get("record");
+				return isChatgptRecord(record) ? json(200, chatgptSummaryOf(record)) : json(404, { error: "not_seeded" });
+			}
+			if (url.pathname === "/record" && request.method === "PUT") {
+				const body: unknown = await request.json();
+				if (!isPlainObject(body) || typeof body.account !== "string" || !ACCOUNT_NAME_RE.test(body.account) ||
+					!isNumber(body.now_ms) || !isPlainObject(body.put)) {
+					return json(400, { error: "invalid_body" });
+				}
+				const put = body.put as unknown as ChatgptPut;
+				if (typeof put.seed_sha256 !== "string" || !SEED_SHA256_RE.test(put.seed_sha256) ||
+					!Number.isSafeInteger(put.base_generation) || put.base_generation < 0) {
+					return json(400, { error: "invalid_body" });
+				}
+				const account = body.account;
+				const nowMs = body.now_ms;
+				return await this.exclusive(async () => {
+					const current = await storage.get("record");
+					const result = applyChatgptPut(isChatgptRecord(current) ? current : undefined, put, account, nowMs);
+					if (result.record) {
+						await storage.put("record", result.record);
+					}
+					return json(result.status, result.body);
+				});
+			}
+			return json(404, { error: "not_found" });
+		} catch {
+			return json(500, { error: "internal" });
+		}
+	}
+}
+
+function chatgptNamespace(env: Env): ChatgptNamespace
+{
+	const namespace = env.CHATGPT_ACCOUNTS;
+	if (!namespace || typeof namespace.get !== "function" || typeof namespace.idFromName !== "function") {
+		throw new Refusal(503, "chatgpt_store_unavailable");
+	}
+	return namespace;
+}
+
+async function chatgptStoreCall(
+	namespace: ChatgptNamespace,
+	name: string,
+	path: string,
+	init?: RequestInit,
+): Promise<{ status: number; body: Record<string, unknown> }>
+{
+	let response: Response;
+	let body: unknown;
+	try {
+		response = await namespace.get(namespace.idFromName(name)).fetch(`${CHATGPT_STORE_ORIGIN}${path}`, init);
+		body = await response.json();
+	} catch {
+		throw new Refusal(503, "chatgpt_store_unavailable");
+	}
+	return { status: response.status, body: isPlainObject(body) ? body : {} };
+}
+
+async function chatgptRegistryNames(namespace: ChatgptNamespace): Promise<string[]>
+{
+	const result = await chatgptStoreCall(namespace, CHATGPT_REGISTRY_NAME, "/registry/list");
+	if (result.status !== 200) {
+		throw new Refusal(503, "chatgpt_store_unavailable");
+	}
+	return chatgptNames(result.body.names);
+}
+
+async function chatgptLoadSummary(namespace: ChatgptNamespace, name: string): Promise<ChatgptSummary | null>
+{
+	const result = await chatgptStoreCall(namespace, name, "/summary");
+	if (result.status === 404) {
+		return null;
+	}
+	if (result.status !== 200) {
+		throw new Refusal(503, "chatgpt_store_unavailable");
+	}
+	return result.body as unknown as ChatgptSummary;
+}
+
 type ShaVerdict = "trusted" | "untrusted" | "unavailable";
 
 export function createHandler(deps: Deps)
@@ -387,7 +872,7 @@ export function createHandler(deps: Deps)
 		}
 	}
 
-	async function verify(jwt: string): Promise<Record<string, unknown>>
+	async function verify(jwt: string, audience: string = AUDIENCE): Promise<Record<string, unknown>>
 	{
 		if (jwt.length > MAX_JWT_LENGTH) {
 			throw new Refusal(403, "malformed_token");
@@ -434,8 +919,8 @@ export function createHandler(deps: Deps)
 		if (claims.iss !== ISSUER) {
 			throw new Refusal(403, "bad_issuer");
 		}
-		const audience = claims.aud;
-		if (!(audience === AUDIENCE || (Array.isArray(audience) && audience.includes(AUDIENCE)))) {
+		const claimedAudience = claims.aud;
+		if (!(claimedAudience === audience || (Array.isArray(claimedAudience) && claimedAudience.includes(audience)))) {
 			throw new Refusal(403, "bad_audience");
 		}
 		if (!isNumber(claims.exp) || claims.exp <= now - CLOCK_SKEW_SECONDS) {
@@ -506,9 +991,228 @@ export function createHandler(deps: Deps)
 		throw new Refusal(403, "workflow_ref_not_allowed");
 	}
 
+	/**
+	 * The writer check for /v1/chatgpt/refresh/<NAME>: only the configured
+	 * writer repository's workflow file at refs/heads/main. No registry, no
+	 * ALLOWED_WORKFLOW_FILES, no SHA ancestry. A set but invalid config fails
+	 * closed (503 writer_config_invalid).
+	 */
+	function authorizeWriter(claims: Record<string, unknown>, env: Env): string
+	{
+		const configuredRepo = (env.CHATGPT_WRITER_REPOSITORY ?? "").trim();
+		const configuredWorkflow = (env.CHATGPT_WRITER_WORKFLOW ?? "").trim();
+		const writerRepo = configuredRepo === "" ? CHATGPT_WRITER_REPOSITORY_DEFAULT : configuredRepo;
+		const writerWorkflow = configuredWorkflow === "" ? CHATGPT_WRITER_WORKFLOW_DEFAULT : configuredWorkflow;
+		if (!REPO_RE.test(writerRepo) || !WRITER_WORKFLOW_FILE_RE.test(writerWorkflow)) {
+			throw new Refusal(503, "writer_config_invalid");
+		}
+		if (typeof claims.repository_owner !== "string" || claims.repository_owner.toLowerCase() !== OWNER) {
+			throw new Refusal(403, "wrong_owner");
+		}
+		const repository = claims.repository;
+		if (typeof repository !== "string" || repository.toLowerCase() !== writerRepo.toLowerCase()) {
+			throw new Refusal(403, "writer_repo_not_allowed");
+		}
+		const jobWorkflowRef = claims.job_workflow_ref;
+		const parts = typeof jobWorkflowRef === "string" ? jobWorkflowRef.split("@") : [];
+		if (parts.length !== 2 || parts[0].toLowerCase() !== `${writerRepo}/.github/workflows/${writerWorkflow}`.toLowerCase()) {
+			throw new Refusal(403, "writer_workflow_not_allowed");
+		}
+		if (parts[1] !== TRUSTED_BRANCH_REF || claims.ref !== TRUSTED_BRANCH_REF) {
+			throw new Refusal(403, "writer_ref_not_allowed");
+		}
+		return repository;
+	}
+
+	async function chatgptPick(env: Env, repository: string): Promise<Response>
+	{
+		const namespace = chatgptNamespace(env);
+		const gate = chatgptGate(env);
+		const nowMs = deps.now();
+		const names = await chatgptRegistryNames(namespace);
+		const summaries = await Promise.all(names.map((name) => chatgptLoadSummary(namespace, name)));
+		const candidates: { name: string; fiveHour: number; weekly: number }[] = [];
+		names.forEach((name, index) => {
+			const verdict = chatgptUsability(summaries[index], gate, nowMs);
+			if (verdict.usable) {
+				candidates.push({ name, fiveHour: verdict.fiveHour, weekly: verdict.weekly });
+			}
+		});
+		candidates.sort((a, b) => a.weekly - b.weekly || a.fiveHour - b.fiveHour || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+		if (candidates.length === 0) {
+			throw new Refusal(503, "chatgpt_pool_empty");
+		}
+		const chosen = candidates[0].name;
+		const record = await chatgptStoreCall(namespace, chosen, "/record");
+		if (record.status === 404) {
+			throw new Refusal(503, "chatgpt_pool_empty");
+		}
+		if (record.status !== 200 || !isPlainObject(record.body.auth_json)) {
+			throw new Refusal(503, "chatgpt_store_unavailable");
+		}
+		deps.log(`CHATGPT_POOL broker chatgpt_granted route=pick repository=${repository} account=${chosen} reason=selected usable=${candidates.length}`);
+		return json(200, { account: chosen, auth_json: stripRefreshToken(record.body.auth_json) });
+	}
+
+	async function chatgptStatus(env: Env, repository: string): Promise<Response>
+	{
+		const namespace = chatgptNamespace(env);
+		const gate = chatgptGate(env);
+		const nowMs = deps.now();
+		const names = await chatgptRegistryNames(namespace);
+		const summaries = await Promise.all(names.map((name) => chatgptLoadSummary(namespace, name)));
+		// Fields are picked one by one so nothing else in a summary can reach the reply.
+		const accounts = names.map((name, index) => {
+			const summary = summaries[index];
+			const verdict = chatgptUsability(summary, gate, nowMs);
+			return {
+				account: name,
+				generation: summary && Number.isSafeInteger(summary.generation) ? summary.generation : 0,
+				last_refresh: typeof summary?.last_refresh === "string" ? summary.last_refresh : null,
+				last_outcome: typeof summary?.last_outcome === "string" ? summary.last_outcome : null,
+				forced_refresh: summary?.forced_refresh === true,
+				checked_at: typeof summary?.checked_at === "string" ? summary.checked_at : null,
+				usage: summary && isPlainObject(summary.usage)
+					? {
+						five_hour: isNumber(summary.usage.five_hour) ? summary.usage.five_hour : null,
+						weekly: isNumber(summary.usage.weekly) ? summary.usage.weekly : null,
+						resets: {
+							five_hour: typeof summary.usage.resets?.five_hour === "string" ? summary.usage.resets.five_hour : null,
+							weekly: typeof summary.usage.resets?.weekly === "string" ? summary.usage.resets.weekly : null,
+						},
+					}
+					: null,
+				usable: verdict.usable,
+				reason: verdict.reason,
+			};
+		});
+		const usable = accounts.filter((entry) => entry.usable).length;
+		deps.log(`CHATGPT_POOL broker chatgpt_status repository=${repository} accounts=${accounts.length} usable=${usable}`);
+		return json(200, { gate, accounts });
+	}
+
+	async function chatgptWriterRead(env: Env, account: string): Promise<Response>
+	{
+		const namespace = chatgptNamespace(env);
+		const result = await chatgptStoreCall(namespace, account, "/record");
+		if (result.status === 404) {
+			throw new Refusal(404, "not_seeded");
+		}
+		if (result.status !== 200 || !isPlainObject(result.body.auth_json)) {
+			throw new Refusal(503, "chatgpt_store_unavailable");
+		}
+		deps.log(`CHATGPT_POOL broker chatgpt_read account=${account} generation=${result.body.generation} reason=ok`);
+		return json(200, {
+			auth_json: result.body.auth_json,
+			generation: result.body.generation,
+			seed_sha256: result.body.seed_sha256,
+		});
+	}
+
+	async function chatgptWriterPut(request: Request, env: Env, account: string): Promise<Response>
+	{
+		const declared = Number(request.headers.get("content-length") ?? "0");
+		if (Number.isFinite(declared) && declared > CHATGPT_MAX_BODY_BYTES) {
+			throw new Refusal(413, "body_too_large");
+		}
+		const text = await request.text();
+		if (new TextEncoder().encode(text).length > CHATGPT_MAX_BODY_BYTES) {
+			throw new Refusal(413, "body_too_large");
+		}
+		const nowMs = deps.now();
+		const put = parseChatgptPut(text, nowMs);
+		const namespace = chatgptNamespace(env);
+		// Registry first (D2): a committed but unlisted account would be invisible;
+		// a listed name without a record is skipped as not_seeded.
+		let added = 0;
+		try {
+			added = (await chatgptStoreCall(namespace, CHATGPT_REGISTRY_NAME, "/registry/add", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ name: account }),
+			})).status;
+		} catch {
+			added = 0;
+		}
+		if (added === 507) {
+			throw new Refusal(507, "registry_full");
+		}
+		if (added !== 200) {
+			deps.log(`CHATGPT_POOL broker registry_add_failed account=${account}`);
+		}
+		const result = await chatgptStoreCall(namespace, account, "/record", {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ account, now_ms: nowMs, put }),
+		});
+		if (result.status === 200 && Number.isSafeInteger(result.body.generation)) {
+			deps.log(`CHATGPT_POOL broker chatgpt_written account=${account} generation=${result.body.generation} reason=${put.outcome} reseed=${put.reseed} forced_refresh=${put.forced_refresh}`);
+			return json(200, { generation: result.body.generation });
+		}
+		const code = result.body.error;
+		if ([400, 404, 409].includes(result.status) && typeof code === "string" && CHATGPT_ERROR_CODE_RE.test(code)) {
+			throw new Refusal(result.status, code);
+		}
+		throw new Refusal(503, "chatgpt_store_unavailable");
+	}
+
+	async function handleChatgpt(request: Request, env: Env, url: URL): Promise<Response>
+	{
+		const path = url.pathname;
+		let route: "pick" | "status" | "refresh";
+		let account = "";
+		if (path === "/v1/chatgpt") {
+			if (request.method !== "POST") {
+				return json(405, { error: "method_not_allowed" });
+			}
+			route = "pick";
+		} else if (path === "/v1/chatgpt/status") {
+			if (request.method !== "GET") {
+				return json(405, { error: "method_not_allowed" });
+			}
+			route = "status";
+		} else if (path.startsWith(CHATGPT_REFRESH_PREFIX)) {
+			if (request.method !== "GET" && request.method !== "PUT") {
+				return json(405, { error: "method_not_allowed" });
+			}
+			account = path.slice(CHATGPT_REFRESH_PREFIX.length);
+			// 400, not 404: the writer reads any 404 body other than not_seeded as "route missing".
+			if (!ACCOUNT_NAME_RE.test(account)) {
+				return json(400, { error: "invalid_account" });
+			}
+			route = "refresh";
+		} else {
+			return json(404, { error: "not_found" });
+		}
+		let repository = "";
+		try {
+			const authorization = request.headers.get("authorization") || "";
+			const match = /^Bearer[ \t]+([A-Za-z0-9_.-]+)$/i.exec(authorization);
+			if (!match) {
+				throw new Refusal(403, "missing_token");
+			}
+			if (route === "refresh") {
+				repository = authorizeWriter(await verify(match[1], CHATGPT_WRITER_AUDIENCE), env);
+				return request.method === "GET" ? await chatgptWriterRead(env, account) : await chatgptWriterPut(request, env, account);
+			}
+			repository = await authorize(await verify(match[1]), env);
+			return route === "pick" ? await chatgptPick(env, repository) : await chatgptStatus(env, repository);
+		} catch (error) {
+			if (error instanceof Refusal) {
+				deps.log(`CHATGPT_POOL broker chatgpt_refused route=${route} reason=${error.reason} status=${error.status} repository=${repository || "unknown"} account=${account || "none"}`);
+				return json(error.status, { error: error.reason });
+			}
+			deps.log(`CHATGPT_POOL broker chatgpt_error route=${route} reason=internal`);
+			return json(500, { error: "internal" });
+		}
+	}
+
 	return async function handle(request: Request, env: Env): Promise<Response>
 	{
 		const url = new URL(request.url);
+		if (url.pathname === "/v1/chatgpt" || url.pathname.startsWith("/v1/chatgpt/")) {
+			return handleChatgpt(request, env, url);
+		}
 		if (url.pathname !== "/v1/pool") {
 			return json(404, { error: "not_found" });
 		}
