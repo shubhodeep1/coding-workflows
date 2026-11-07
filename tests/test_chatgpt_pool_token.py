@@ -5,7 +5,8 @@ ChatGPT account reviewer trial, Phase 1. A stub HTTP server plays the Actions
 OIDC endpoint and the claude-pool-broker /v1/chatgpt endpoint on loopback.
 Checks the 0600 auth.json layout, masking, that a refresh token never reaches
 disk, every available=false reason, the post-step cleanup, the config file
-(reviewer slot off), and that the broker's CHATGPT_ALLOWED_WORKFLOW_FILES
+(reviewer slot off; until the Phase 2 file lands, that the action fails
+closed with config_missing), and that the broker's CHATGPT_ALLOWED_WORKFLOW_FILES
 equals the workflows that use the action (none yet).
 """
 
@@ -477,7 +478,26 @@ def test_script_defaults_every_input() -> None:
 		assert re.search(r"\$\{" + name + r":-", text), name
 
 
-def test_config_contract() -> None:
+def test_config_contract(tmp_path: Path) -> None:
+	# The plan ships .github/ai/chatgpt_pool.json in Phase 2
+	# (docs/plans/chatgpt-account-reviewer-trial-plan.md, "Phase 2" step 1).
+	# Until it lands, the action must fail closed on its default config path.
+	if not CONFIG.exists():
+		runner_temp = tmp_path / "rt"
+		runner_temp.mkdir()
+		output = tmp_path / "output.txt"
+		values = {
+			"PATH": os.environ.get("PATH", os.defpath),
+			"HOME": str(tmp_path),
+			"RUNNER_TEMP": str(runner_temp),
+			"GITHUB_OUTPUT": str(output),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		}
+		result = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=values, timeout=60, check=False)
+		assert result.returncode == 0, result.stderr
+		assert output.read_text(encoding="utf-8") == "available=false\nreason=config_missing\nauth_dir=\nauth_file=\nexpires_at=\n"
+		assert not (runner_temp / "chatgpt-pool").exists()
+		return
 	data = json.loads(CONFIG.read_text(encoding="utf-8"))
 	assert set(data) == {"schema_version", "broker_url", "audience", "reviewer_slot_enabled"}
 	assert data["schema_version"] == 1
