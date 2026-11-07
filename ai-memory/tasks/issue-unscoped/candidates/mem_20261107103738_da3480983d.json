@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:16744 | severity=medium | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The bash regex match uses variable expansion `${_deterministic_marker_re}` inside `[[ ... =~ ... ]]`, which the reviewer claims may be treated as a literal string rather than a regex.\n  WHY: The reviewer says relying on the expanded variable being treated as a regex is brittle in Bash. Severity was not stated in the source, so medium is assigned. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) verified that the unquoted expansion is correct Bash semantics.\n- n/a (external check-run copilot-pull-request-reviewer, head SHA 82a5d1731) | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The third-party Copilot reviewer action failed with `Error: Prompt too big after adding system message` (`custom_instructions_too_large`, 422) and did not evaluate the diff.\n  WHY: This is an external tooling context-size limit and no code in the diff is implicated. The reviewer rated it NIT and said no code change follows from it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a source-contract assertion that the old `| grep -qE 'AI_VALIDATION_FAILURE_CLASS` pipeline is gone from `mark_validation_failed()`.\"\n  expected_change_site: tests/test_mark_validation_failed_deterministic_marker.py\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `test_mvf_old_pipeline_removed_from_mark_validation_failed` does not check for complete removal of the exact legacy pipeline structure cited in the task. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) found this assertion present.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:16744 | confidence=3\n  PROBLEM: The bash regex match uses variable expansion `${_deterministic_marker_re}` inside `[[ ... =~ ... ]]`, which the reviewer claims may be treated as a literal string rather than a regex.\n  WHY: The reviewer says relying on the expanded variable being treated as a regex is brittle in Bash.\n- TASK_GAP:\n  Requirement: \"Add a source-contract assertion that the old `| grep -qE 'AI_VALIDATION_FAILURE_CLASS` pipeline is gone from `mark_validation_failed()`.\"\n  Expected change site: tests/test_mark_validation_failed_deterministic_marker.py\n  Evidence of absence: `test_mvf_old_pipeline_removed_from_mark_validation_failed` does not check for complete removal of the exact legacy pipeline structure cited in the task.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- n/a (external check-run copilot-pull-request-reviewer, head SHA 82a5d1731) | severity=low | confidence=2\n  PROBLEM: The third-party Copilot reviewer action failed with `Error: Prompt too big after adding system message` (`custom_instructions_too_large`, 422) and did not evaluate the diff.\n  WHY: This is an external tooling context-size limit and no code in the diff is implicated. The reviewer rated it NIT and said no code change follows from it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c83b48de9dd989dedae6fe9d0d4b2f82fc944a0bb8747cb7fe726d62eb87a88c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8982,
+    "run_id": "42362610876",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42362610876",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107103738_da3480983d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8982,
+    "run_id": "42362610876"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-07T10:37:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
