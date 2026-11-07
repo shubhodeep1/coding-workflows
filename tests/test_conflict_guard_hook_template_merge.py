@@ -47,11 +47,10 @@ PREPARE = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
 
 LIVE = ".claude/hooks/pr_merge_status_guard.py"
 TEMPLATE = "workflow-templates/.claude/hooks/pr_merge_status_guard.py"
-# A second paired live hook (#7137). The template merge does not cover it yet
-# (#8973), so an integration-sync conflict on it fails closed.
+# A second paired live hook (#7137). The template merge covers it the same
+# way as pr_merge_status_guard.py (#8973, issue #9008).
 PREPUSH_LIVE = ".claude/hooks/prepush_affected_tests.py"
 PREPUSH_TEMPLATE = "workflow-templates/.claude/hooks/prepush_affected_tests.py"
-PREPUSH_GAP_REASON = "#8973: guard-hook template merge covers only pr_merge_status_guard.py; scripts outside heal scope"
 MERGE_RESOLVE_COMMIT_MESSAGE = "[ai-merge-resolve] resolve merge conflicts"
 BASE_LINES = [f"line {i}" for i in range(1, 11)]
 
@@ -350,7 +349,7 @@ def test_refuses_symlinked_template() -> None:
 
 
 def test_prepush_hook_fixture_has_the_clean_template_shape() -> None:
-	"""The xfail below must fail only because of the gap, not the fixture."""
+	"""The prepush fixture has the shape the template merge accepts."""
 	tmpdir, _tmp, repo = _with_repo(live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
 	with tmpdir:
 		live_unmerged = _git(repo, "ls-files", "-u", "--", PREPUSH_LIVE).stdout.splitlines()
@@ -366,7 +365,6 @@ def test_prepush_hook_fixture_has_the_clean_template_shape() -> None:
 			assert live == [[t_mode, t_oid]], (ref, live, tree)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=PREPUSH_GAP_REASON)
 def test_prepush_hook_integration_sync_conflict_is_resolved_from_template() -> None:
 	"""PR #8436 (run 42355218108): both sides changed the prepush hook and its template in step."""
 	tmpdir, tmp, repo = _with_repo(live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
@@ -384,12 +382,101 @@ def test_prepush_hook_integration_sync_conflict_is_resolved_from_template() -> N
 		_assert_resolved_from_template(repo, live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
 
 
+def _make_dual_conflict(repo: Path) -> None:
+	"""Leave ``repo`` mid-merge with both paired live hooks conflicted in step with their templates."""
+	pairs = ((LIVE, TEMPLATE), (PREPUSH_LIVE, PREPUSH_TEMPLATE))
+	_git(repo, "init", "-q", "-b", "main")
+	_git(repo, "config", "user.name", "t")
+	_git(repo, "config", "user.email", "t@t")
+	_git(repo, "config", "core.fileMode", "true")
+	for live_rel, template_rel in pairs:
+		_write(repo, live_rel, "old\n")
+		_write(repo, template_rel, _body())
+	_write(repo, "other.txt", "base\n", 0o644)
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "base")
+	_git(repo, "checkout", "-q", "-b", "feat")
+	for live_rel, template_rel in pairs:
+		_write(repo, live_rel, _body(change_first="ours first line"))
+		_write(repo, template_rel, _body(change_first="ours first line"))
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "ours")
+	_git(repo, "checkout", "-q", "main")
+	for live_rel, template_rel in pairs:
+		_write(repo, live_rel, _body(change_last="theirs last line"))
+		_write(repo, template_rel, _body(change_last="theirs last line"))
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "theirs")
+	_git(repo, "checkout", "-q", "feat")
+	merge = _git(repo, "merge", "--no-commit", "--no-ff", "main", check=False)
+	assert merge.returncode != 0, "fixture must produce a conflicted merge"
+	for live_rel, _template_rel in pairs:
+		assert _git(repo, "ls-files", "-u", "--", live_rel).stdout.strip(), f"{live_rel} must be unmerged"
+
+
+def test_both_paired_hooks_conflicting_are_resolved_in_one_pass() -> None:
+	tmpdir = tempfile.TemporaryDirectory()
+	with tmpdir:
+		tmp = Path(tmpdir.name)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_make_dual_conflict(repo)
+		region = _guard_and_union_region(_prepare_text()) + _hook_only_commit_region(_prepare_text())
+		result, github_env, _ = _run(
+			repo, tmp, region=region, head_ref="orchestrator/project-9008", integration_sync=True,
+		)
+		out = result.stdout + result.stderr
+		assert result.returncode == 0, out
+		assert "Guard-hook template merge: resolved " + LIVE in result.stdout, out
+		assert "Guard-hook template merge: resolved " + PREPUSH_LIVE in result.stdout, out
+		assert result.stdout.index("resolved " + LIVE) < result.stdout.index("resolved " + PREPUSH_LIVE), out
+		assert "REGION_FELL_THROUGH" not in result.stdout, out
+		assert "CONFLICT_RESOLVED=true" in github_env.read_text(encoding="utf-8").splitlines()
+		assert len(_git(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()) == 3
+		_assert_resolved_from_template(repo)
+		_assert_resolved_from_template(repo, live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
+
+
 # ---------------------------------------------------------------- contract
+
+
+def test_guard_hook_pairs_mirror_paired_live_copies() -> None:
+	import importlib.util
+	import re
+	import sys
+
+	spec = importlib.util.spec_from_file_location(
+		"review_untrusted_workspace_pairs", REPO_ROOT / "scripts" / "review_untrusted_workspace.py"
+	)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	previous = sys.dont_write_bytecode
+	sys.dont_write_bytecode = True
+	try:
+		spec.loader.exec_module(module)
+	finally:
+		sys.dont_write_bytecode = previous
+	expected = list(module.PAIRED_LIVE_COPIES.items())
+
+	region = _guard_region(_prepare_text())
+	match = re.search(r"^GUARD_HOOK_TEMPLATE_PAIRS=\(\n(.*?)\n\)$", region, re.S | re.M)
+	assert match, "GUARD_HOOK_TEMPLATE_PAIRS array not found"
+	pairs = []
+	for raw in match.group(1).splitlines():
+		entry = raw.strip()
+		assert entry.startswith('"') and entry.endswith('"'), raw
+		entry = entry[1:-1].replace("${GUARD_HOOK_LIVE_PATH}", LIVE).replace("${GUARD_HOOK_TEMPLATE_PATH}", TEMPLATE)
+		live, _, template = entry.partition("|")
+		pairs.append((live, template))
+	assert pairs == expected
+	assert pairs[0] == (LIVE, TEMPLATE)
+	assert (PREPUSH_LIVE, PREPUSH_TEMPLATE) in pairs
+
 
 
 def test_block_runs_before_manifest_block_and_empty_allowlist_check() -> None:
 	text = _prepare_text()
-	call = "_conflict_prepare_guard_hook_template_merge || _ghm_rc=$?"
+	call = '_conflict_prepare_guard_hook_template_merge "${_ghm_pair_live}" "${_ghm_pair_tpl}" || _ghm_rc=$?'
 	assert call in text
 	assert text.index('RESOLVER_INITIAL_UNMERGED_PATHS_FILE="${RUNTIME_DIR}/resolver_initial_unmerged_paths.txt"') < text.index(call)
 	assert text.index(call) < text.index("# Deterministic resolution for the generated workspace manifest.")
