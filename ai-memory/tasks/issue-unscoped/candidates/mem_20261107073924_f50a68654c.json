@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/prepush_affected_tests.py:745-746 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The summary-banner search in `error_node_names` matches the phrase anywhere in a line, including an `ERROR <node>` summary line's exception message.\n  WHY: If a setup or teardown exception message contains \"short test summary info,\" that line becomes the last matched banner and is excluded from the scan, so its node is omitted from `error_names` and `heal_reproduce.sh` reports `names_incomplete`. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description says \"The template itself is unchanged\" and lists only `.claude/hooks/prepush_affected_tests.py` as changed, but the last autofix run modified the template.\n  expected_change_site: PR description body (no repository file change needed)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  EVIDENCE: The last autofix run edited `workflow-templates/.claude/hooks/prepush_affected_tests.py` (banner-restricted `error_node_names`), `tests/test_prepush_affected_tests.py` and `agents.d/prepush-gate-tests-file.md`, so the description is stale. Live/template parity is still met. Severity was NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- No code findings (all checklist categories reported NONE). The reviewer verified the `error_node_names` banner restriction against the template and test, and found live/template parity by matching blob `f4f9b51`.\n- Noted that the `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large` (HTTP 422). The failure is unmappable to any file or line, and nothing in this PR can fix it.\n- TASK_GAP: Requirement: The PR description says \"The template itself is unchanged\" and lists only `.claude/hooks/prepush_affected_tests.py` as changed.\n  Expected change site: PR description body. No repository file change is needed.\n  Evidence of absence: The last autofix run edited the template, `tests/test_prepush_affected_tests.py` and `agents.d/prepush-gate-tests-file.md`. The description is stale. Parity is still met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- HARDENING_SUGGESTIONS: None. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: PR description should accurately reflect changes made to the template.\n  Expected change site: PR Description body.\n  Evidence of absence: The description states \"The template itself is unchanged\", but `workflow-templates/.claude/hooks/prepush_affected_tests.py` was modified by the last autofix run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/hooks/prepush_affected_tests.py:745-746 (`error_node_names`) | severity=NIT | confidence=4\n  PROBLEM: The summary-banner search matches the phrase anywhere in a line, including an `ERROR <node>` summary line's exception message.\n  WHY: If a setup or teardown exception message contains \"short test summary info,\" that error line becomes the last matched banner and is excluded from the scan. Its node is omitted from `error_names`, so `heal_reproduce.sh` reports `names_incomplete`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: Requirement: The PR description states \"replaced with the branch's workflow-templates copy\" and \"The template itself is unchanged\", and its Changes section lists only `.claude/hooks/prepush_affected_tests.py` (+198 / \u22125).\n  Expected change site: PR description body (no repo file change required).\n  Evidence of absence: The last run diff shows `workflow-templates/.claude/hooks/prepush_affected_tests.py` modified (afea4a7 \u2192 f4f9b51), plus `tests/test_prepush_affected_tests.py` (+4) and `agents.d/prepush-gate-tests-file.md` updated. The \"template unchanged\" claim is now wrong and the Changes list omits three files. Live/template parity is met (both 1618 lines).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- No code findings (all checklist categories reported NONE). The reviewer noted the failed `copilot-pull-request-reviewer` check (`custom_instructions_too_large`, HTTP 422, run 42346734791) is not attributable to any changed code. It also noted that the fail-closed behavior of `error_node_names` when the banner is absent is documented and tested.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "dcb4a1e9b0e9fba6e88015f59db721b8c3eac8739145ca68d3f6d33c93d87790",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8964,
+    "run_id": "42349563548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42349563548",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107073924_f50a68654c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8964,
+    "run_id": "42349563548"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T07:39:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
