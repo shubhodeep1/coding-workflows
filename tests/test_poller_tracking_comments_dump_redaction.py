@@ -106,6 +106,9 @@ def test_proceeding_with_empty_list_warning_kept() -> None:
 
 def _run_fetch(tmp_path: Path, fixture: bytes, extra: str = "") -> tuple[subprocess.CompletedProcess[str], Path]:
 	if shutil.which("jq") is None:
+		# In CI a missing jq must not turn the redaction cases into a green skip.
+		if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+			pytest.fail("jq required for the redaction tests in CI")
 		pytest.skip("jq not on PATH")
 	work = tmp_path / "tmp"
 	work.mkdir()
