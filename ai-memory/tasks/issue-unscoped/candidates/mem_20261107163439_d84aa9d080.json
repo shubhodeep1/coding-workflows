@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tools/claude-pool-broker/src/index.ts:137-168 | severity=high | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: CHATGPT_CHECKED_AT_RE (line 168), used in parseChatgptWrite, requires a Z or +00:00 suffix, so a naive ISO timestamp is rejected with 400 invalid_body.\n  WHY: The whole PUT, including a rotated auth_json, would be discarded if the writer sends a suffix-less timestamp; severity disagreement: sonnet-5_5 said NIT, gemini said MAJOR (highest used, mapped to high).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"GET and PUT /v1/chatgpt/refresh/<NAME>, where <NAME> matches ^[A-Z0-9_]+$.\"\n  expected_change_site: tools/claude-pool-broker/src/index.ts, ACCOUNT_NAME_RE (line 173) and the writer-route check in handleChatgpt (line 1081)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: ACCOUNT_NAME_RE at line 173 is /^[A-Z0-9_]{1,64}$/, so names of 65 or more valid characters get 404 not_found, narrower than the specified + quantifier, and tools/claude-pool-broker/test/broker.test.ts:999-1003 treats a 65-character name as invalid. The regex is shared with /v1/pool, and the 64-character cap bounds Durable Object names. Severity: NIT from sonnet-5_5 and MAJOR from the others, so the highest, MAJOR, applies.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tools/claude-pool-broker/src/index.ts:168 (CHATGPT_CHECKED_AT_RE, parseChatgptWrite) | severity=NIT | confidence=2\n  PROBLEM: checked_at must end in Z or +00:00, so a suffix-less timestamp is rejected with 400 invalid_body even though checked_at is only stored.\n  WHY: It fails only if the claude-workers writer sends a naive ISO timestamp, and then the whole PUT is discarded. The writer's format is unconfirmed, so this is advisory.\n- TASK_GAP: Requirement: \"GET and PUT /v1/chatgpt/refresh/<NAME>, where <NAME> matches ^[A-Z0-9_]+$.\"\n  Expected change site: tools/claude-pool-broker/src/index.ts, the writer-route name check in handleChatgpt.\n  Evidence of absence: ACCOUNT_NAME_RE (line 173) is /^[A-Z0-9_]{1,64}$/, so names of 65 or more characters get 404 not_found. The regex is shared with /v1/pool, the cap bounds Durable Object names, and broker.test.ts documents it. Earlier editor runs ignored this.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tools/claude-pool-broker/src/index.ts:168 and 137 (CHATGPT_CHECKED_AT_RE, parseChatgptWrite) | severity=MAJOR | confidence=2\n  PROBLEM: CHATGPT_CHECKED_AT_RE requires a timezone suffix (Z or +00:00).\n  WHY: A checked_at timestamp that lacks the suffix would be rejected, and the regex is overly strict.\n- TASK_GAP: Requirement: \"PUT compare-and-swaps on `base_generation` (200 {generation:N+1}, 409 {error:generation_conflict}, 404 {error:not_seeded} for a non-reseed write to an unknown account)\"\n  Expected change site: tools/claude-pool-broker/src/index.ts, applyChatgptWrite\n  Evidence of absence: The reviewer concluded the requirement is satisfied; applyChatgptWrite implements the logic and handleChatgpt returns not_seeded (404) or generation_conflict (409).\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"GET and PUT /v1/chatgpt/refresh/<NAME> ... where <NAME> matches ^[A-Z0-9_]+$.\"\n  Expected change site: tools/claude-pool-broker/src/index.ts, writer-route account-name validation.\n  Evidence of absence: ACCOUNT_NAME_RE at line 1081 is declared as /^[A-Z0-9_]{1,64}$/ at line 173, so names of 65 or more characters get 404 not_found. The {1,64} appears to come from the agents fragment.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"GET and PUT /v1/chatgpt/refresh/<NAME>, where <NAME> matches ^[A-Z0-9_]+$, accept only the writer OIDC token.\"\n  Expected change site: tools/claude-pool-broker/src/index.ts, the ACCOUNT_NAME_RE declaration and the writer-route handler.\n  Evidence of absence: ACCOUNT_NAME_RE is /^[A-Z0-9_]{1,64}$/ at index.ts:173, so names of 65 or more characters get 404 not_found. The vitest \"an invalid account name ... 404 not_found\" loop in tools/claude-pool-broker/test/broker.test.ts encodes the 65-character cap as invalid.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"GET and PUT /v1/chatgpt/refresh/<NAME>, where <NAME> matches ^[A-Z0-9_]+$.\"\n  Expected change site: tools/claude-pool-broker/src/index.ts, account-name validation for the writer routes and registry.\n  Evidence of absence: The shared ACCOUNT_NAME_RE at line 173 restricts names to 1\u201364 characters and the writer route uses it at line 1081, so names of 65 or more characters get 404 not_found. tools/claude-pool-broker/test/broker.test.ts:999-1003 treats a 65-character name as invalid.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "88d9a1895262951459ea6c0640d1b5947731879207ea6fad470ece41f997a774",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9003,
+    "run_id": "42389738571",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42389738571",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107163439_d84aa9d080",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9003,
+    "run_id": "42389738571"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T16:34:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
