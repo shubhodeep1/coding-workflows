@@ -509,9 +509,10 @@ def test_prepare_analysis_context_percentiles_unchanged_and_unknown_count_surfac
 	assert ctx_stats["summary"]["unknown_duration_count"] == 1
 	assert ctx_stats["per_repo"]["o/r"]["unknown_duration_count"] == 1
 	assert ctx_stats["per_workflow_family"]["ci"]["unknown_duration_count"] == 1
-	# Keys present only in summary_stats (no run rows) still get the count.
-	assert ctx_stats["per_repo"]["o/stats-only"]["unknown_duration_count"] == 0
-	assert ctx_stats["per_workflow_family"]["stats-only"]["unknown_duration_count"] == 0
+	# Keys present only in summary_stats (no run rows) get the field as
+	# unknown (None), not a confirmed 0.
+	assert ctx_stats["per_repo"]["o/stats-only"]["unknown_duration_count"] is None
+	assert ctx_stats["per_workflow_family"]["stats-only"]["unknown_duration_count"] is None
 	assert ctx_stats["failing_runs"] == []
 	assert ctx_stats["recent_runs"][0]["duration_known"] is False
 

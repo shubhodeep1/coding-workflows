@@ -397,10 +397,11 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 			if isinstance(entry, dict):
 				entry["cost_telemetry"] = value.get("cost_telemetry")
 				entry.setdefault("unknown_duration_count", value.get("unknown_duration_count", 0))
-		# summary_stats-only keys have no run rows, so their count is 0.
+		# summary_stats-only keys have no run rows to check, so their count is
+		# unknown (None -> JSON null), never a confirmed 0.
 		for entry in per_repo.values():
 			if isinstance(entry, dict):
-				entry.setdefault("unknown_duration_count", 0)
+				entry.setdefault("unknown_duration_count", None)
 	if not per_workflow_family:
 		per_workflow_family = _aggregate_runs_by_key(runs, "workflow_family")
 	else:
@@ -412,7 +413,7 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 				entry.setdefault("unknown_duration_count", value.get("unknown_duration_count", 0))
 		for entry in per_workflow_family.values():
 			if isinstance(entry, dict):
-				entry.setdefault("unknown_duration_count", 0)
+				entry.setdefault("unknown_duration_count", None)
 
 	normalized_runs = [_normalized_run_view(run) for run in runs]
 	failing_runs = [
