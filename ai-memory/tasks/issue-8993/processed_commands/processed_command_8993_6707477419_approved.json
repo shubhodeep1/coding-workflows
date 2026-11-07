@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8993_6707477419_approved",
   "issue_number": 8993,
   "metadata": {
+    "branch": "ai/issue-8993",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/8993-heal-job-budget-step-moves.md",
+      "tests/test_ci_poll_test_sharding.py"
+    ],
+    "issue_number": 8993,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8993",
+    "pr_number": 8996,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8996",
+    "run_attempt": "1",
+    "run_id": "42376562541",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42376562541"
   },
   "run_attempt": 1,
   "run_id": "42376562541",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-07T13:22:58Z",
+  "status": "completed",
+  "timestamp": "2026-11-07T13:58:09Z",
   "workflow": "implement"
 }
