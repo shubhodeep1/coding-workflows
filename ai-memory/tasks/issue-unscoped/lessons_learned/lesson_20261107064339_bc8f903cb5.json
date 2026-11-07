@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-07T06:43:39Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=CI check-run copilot-pull-request-reviewer:N/A; cited_path=CI check-run copilot-pull-request-reviewer (job 128326033199); files_touched=.claude/hooks/prepush_affected_tests.py.",
+  "phase": "review_autofix",
+  "pr_number": 8965,
+  "record_id": "lesson_20261107064339_bc8f903cb5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "CI check-run copilot-pull-request-reviewer (job 128326033199)",
+    "CI check-run copilot-pull-request-reviewer",
+    ".claude/hooks/prepush_affected_tests.py"
+  ]
+}
