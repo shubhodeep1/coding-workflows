@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/chatgpt_pool_token.sh:257-274 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The action accepts unbounded-length ChatGPT account names and uses the name as a single filesystem path component, so a 256+ character name makes os.makedirs raise OSError and the action returns available=false reason=broker_response_invalid.\n  WHY: The broker accepts a larger set of names than the action can serve, so such an account can never be delivered. Severity is MAJOR from both reviewers, mapped to high. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 saw the same path and chose not to report it because it fails closed and needs an unrealistically long name. z-ai_glm-5_3-flash also notes that unbounded names in status_json may exceed the GITHUB_OUTPUT size budget.\n- tests/test_files_touched_scope_guard.py:(no line given) | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push test gate reports a persistent failure in tests/test_files_touched_scope_guard.py.\n  WHY: The test checks that the PR only modifies files in the plan's files_touched grant list, so a failure means unauthorized file changes or a scope-guard violation. The reviewer rated it BLOCKER, mapped to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_files_touched_scope_guard.py:(no line given) | severity=BLOCKER | confidence=4\n  PROBLEM: The pre-push test gate reports a persistent failure in `tests/test_files_touched_scope_guard.py`.\n  WHY: The test validates that the PR only modifies files included in the approved plan's `files_touched` grant list. A failure here indicates unauthorized file changes or a scope guard contract violation.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/chatgpt_pool_token.sh:257, 263-274 | severity=MAJOR | confidence=4\n  PROBLEM: The action accepts account names of unlimited length and uses the name as a single filesystem path component.\n  WHY: A broker-valid 256-character name exceeds the usual 255-byte path-component limit on Linux runners. Creating the account directory fails with OSError, and the action returns available=false reason=broker_response_invalid.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/chatgpt_pool_token.sh:~256, ~263-274, ~284 (paired with tools/claude-pool-broker/src/index.ts:175) | severity=MAJOR | confidence=4\n  PROBLEM: The 64-character cap was removed from ChatGPT account-name validation in the broker and the action, but the name is used verbatim as a filesystem path component. A name of 256+ characters is seeded and selected by the broker, then os.makedirs raises OSError (ENAMETOOLONG), which becomes available=false reason=broker_response_invalid. Unbounded names in status_json may also exceed GitHub's step-output size budget.\n  WHY: The broker's accepted name set is larger than the action's servable name set, so a contract-valid seed produces an account that can never be delivered. The pool silently loses capacity for such accounts, though no token leaks.\n- HARDENING_SUGGESTIONS: tools/claude-pool-broker/src/index.ts `CHATGPT_ACCOUNT_NAME_RE` (~line 175) \u2192 bound the regex (e.g. `^[A-Z0-9_]{1,64}$`) for the ChatGPT routes and mirror it in the three regexes of scripts/chatgpt_pool_token.sh. Keep /v1/pool untouched and move the 65-char test case in tools/claude-pool-broker/test/broker.test.ts back to the invalid-name loop. About 6 lines. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c7372048aace42d78de5dc2a8863432f64deba0ffbd7eff9a7c77b0db706a034",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9003,
+    "run_id": "42392674808",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42392674808",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107173055_756ddef41f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9003,
+    "run_id": "42392674808"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T17:30:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
