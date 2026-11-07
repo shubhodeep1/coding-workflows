@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The only remaining code change is in `scripts/review_conflict_prepare.sh`: the template merge has to loop over every paired live copy for the case where the template merges cleanly. That file is outside this heal issue's fixed scope. The pairing for the case where the template also conflicts is already on main. How should this issue finish?\nChoices:\nA) Close out inside the heal scope. Edit only `tests/**` and `changelog.d/*.md`: confirm with tests that the pairing now on main covers the conflict on PR #8436 (both the live hook and its template unmerged), record in a changelog fragment that the template-merge loop in `review_conflict_prepare.sh` is out of scope for this heal issue, and do not list it as deferred scope, so the issue can close instead of restarting again. Keep the strict xfail at `tests/test_conflict_guard_hook_template_merge.py:369`, so whoever later fixes the script has to remove it. (RECOMMENDED)\nB) Plan the `review_conflict_prepare.sh` change in this issue anyway. **Note:** the heal plan scope gate (`heal_scope_plan_out_of_scope`) and `implement_commit_changes.sh` will refuse a commit that touches this file, so this choice is certain to fail rather than stall.\nC) Deliver nothing more here. Leave the issue open for a human to file a regular (non-heal) issue whose scope covers `scripts/review_conflict_prepare.sh`, `tests/**` and `changelog.d/*.md`. The pipeline cannot file or close issues itself, so this issue stays parked until a person acts.",
+  "fingerprint": "8ab2fde43c4108142f80316b523e04a7edec8c38118ff9d5e8e9b4af56585627",
+  "lineage": {
+    "issue_number": 8973,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42381659758",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42381659758",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261107143155_9d6bfc371e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8973,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42381659758"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8973 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-07T14:31:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
