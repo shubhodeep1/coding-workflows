@@ -2848,3 +2848,54 @@ def test_gate_skips_non_object_and_null_filename_entries(tmp_path: Path, own_pat
 		assert "MERGE_TRAIN_GATE pr=4077 base=main result=unblocked action=continue" in result.stdout
 		assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
 	assert log_text.count("pulls/4075/files") == 1
+
+
+# SHELL-001 (Refs #8975): MERGE_TRAIN_DISPATCH_WORKFLOWS is split on default
+# IFS without pathname expansion; order and first-success stop are unchanged.
+def _dispatch_lines(log_text: str) -> list[str]:
+	return [line for line in log_text.splitlines() if line.startswith("gh workflow run ")]
+
+
+def test_release_dispatch_list_glob_is_not_expanded(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(tmp_path / "x.yml").write_text("", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="*.yml")
+	assert result.returncode == 0, result.stderr
+	assert "gh workflow run *.yml --repo acme/consumer -f pr_number=4077" in log_text
+	assert "gh workflow run x.yml" not in log_text
+	assert "MERGE_TRAIN_DISPATCHED pr=4077 workflow=*.yml ref=default head=ai/issue-4064" in result.stdout
+
+
+def test_release_default_dispatch_list_order_unchanged(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "dispatch_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	workflows = [line.split()[3] for line in _dispatch_lines(log_text)]
+	assert workflows == ["ai-review.yml", "internal-review.yml", "review_autofix.yml"]
+	assert " dispatch_failed=1 " in result.stdout
+
+
+def test_release_newline_separated_dispatch_list_is_split(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "dispatch_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="first.yml\nsecond.yml\tthird.yml\n")
+	assert result.returncode == 0, result.stderr
+	workflows = [line.split()[3] for line in _dispatch_lines(log_text)]
+	assert workflows == ["first.yml", "second.yml", "third.yml"]
+
+
+def test_release_whitespace_only_dispatch_list_dispatches_nothing(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="  \n ")
+	assert result.returncode == 0, result.stderr
+	assert _dispatch_lines(log_text) == []
+	assert "could not be dispatched" in result.stdout
+	assert " dispatch_failed=1 " in result.stdout
