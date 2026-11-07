@@ -22,7 +22,14 @@
 #   prepush_test_gate_run.sh --worktree DIR --module FILE --image IMAGE \
 #     --base SHA --out-dir DIR [--timeout-minutes N] [--deps-root DIR]... \
 #     [--venv DIR] [--shards N] [--large-file-tests N] [--node-modules DIR] \
-#     [--nested-node-modules-root DIR]
+#     [--nested-node-modules-root DIR] [--tests-file F] [--expect-baseline-fail-file F]
+#
+# --tests-file and --expect-baseline-fail-file (issue #8427, P3) pass a plan's
+# done-check targets (one `path[::name]` per line) to the module's `run`. Each
+# must be a regular, non-symlink file of at most 65,536 bytes; it is copied
+# into a private inputs directory mounted read-only at /inputs. A rejected
+# file is logged (tests_file_rejected) and the run goes ahead without it.
+# Without these options the docker argv is unchanged.
 #
 # --nested-node-modules-root mounts each DIR/<project>/node_modules (the
 # nested Node projects that codex_isolated_exec.sh prepare --deps installs,
@@ -58,6 +65,8 @@ node_modules=""
 nested_nm_root=""
 shards=""
 large_file_tests=""
+tests_file=""
+baseline_fail_file=""
 
 gate_log()
 {
@@ -88,6 +97,8 @@ while [ "$#" -gt 0 ]; do
 		--nested-node-modules-root) nested_nm_root="${2:-}"; shift 2 ;;
 		--shards) shards="${2:-}"; shift 2 ;;
 		--large-file-tests) large_file_tests="${2:-}"; shift 2 ;;
+		--tests-file) tests_file="${2:-}"; shift 2 ;;
+		--expect-baseline-fail-file) baseline_fail_file="${2:-}"; shift 2 ;;
 		*) gate_log "outcome=error reason=unknown_argument"; synthetic_result usage_error; exit 0 ;;
 	esac
 done
@@ -247,6 +258,22 @@ if [ -n "${nested_nm_root}" ] && nested_real="$(realpath -e "${nested_nm_root}" 
 fi
 [ -z "${large_file_tests}" ] || extra_env+=(--env "PREPUSH_TEST_GATE_LARGE_FILE_TESTS=${large_file_tests}")
 [ -z "${shards}" ] || run_extra+=(--shards "${shards}")
+# Done-check target files (issue #8427, P3): host copies, mounted read-only.
+inputs_used=false
+gate_input()
+{
+	local src="$1" name="$2" option="$3" size
+	if [ -f "${src}" ] && [ ! -L "${src}" ] && size="$(stat -c %s "${src}" 2>/dev/null)" && [ "${size}" -le 65536 ] \
+		&& mkdir -p -m 0700 "${root}/inputs" && install -m 0644 "${src}" "${root}/inputs/${name}"; then
+		run_extra+=("${option}" "/inputs/${name}")
+		inputs_used=true
+	else
+		gate_log "outcome=warning reason=tests_file_rejected"
+	fi
+}
+[ -z "${tests_file}" ] || gate_input "${tests_file}" tests.txt --tests-file
+[ -z "${baseline_fail_file}" ] || gate_input "${baseline_fail_file}" baseline_fail.txt --expect-baseline-fail-file
+[ "${inputs_used}" != true ] || mounts+=(--mount "type=bind,src=${root}/inputs,dst=/inputs,readonly")
 
 wall=$(( timeout_minutes * 60 + 120 ))
 rc=0
