@@ -302,6 +302,28 @@ are in place and one dispatched review shows the GPT slot `ok`.
      the hash differs, otherwise compare-and-swaps on `base_generation`
      (`409 generation_conflict`). Accounts not written for 7 days drop out of
      `/v1/chatgpt`. Log lines carry reason codes and account names only.
+   Writer wire contract, fixed by the already-built
+   `shubhodeep1/claude-workers` `.github/scripts/chatgpt_pool_refresh.py`
+   (build to it exactly):
+   - Auth: `Authorization: Bearer <GitHub OIDC JWT>` with audience
+     `coding-workflows-chatgpt-pool-writer` (new constant; reads keep
+     `coding-workflows-claude-pool`); repository `shubhodeep1/claude-workers`,
+     workflow file `chatgpt-pool-refresh.yml`, ref `refs/heads/main`.
+   - `<NAME>`: `^[A-Z0-9_]+$`.
+   - `GET` → `200 {"auth_json": {…}, "generation": N, "seed_sha256": "<hex>"}`;
+     unknown account → `404 {"error": "not_seeded"}`. Any other 404 body is
+     read by the script as "route missing".
+   - `PUT` body: `{"seed_sha256", "base_generation", "reseed": bool,
+     "outcome": "ok"|"timeout"|"auth_failed"|"quota_exhausted"|"run_failed",
+     "forced_refresh": bool, "usage": null | {"primary"?: {"used_percent",
+     "window_minutes"?, "resets_at"?, "resets_in_seconds"?}, "secondary"?:
+     {…}}, "checked_at": "<UTC ISO>", "auth_json"?: {…}}`. `auth_json` is
+     absent when Codex left no usable file: keep the stored one. Success →
+     `200 {"generation": N+1}`; stale `base_generation` → `409
+     {"error": "generation_conflict"}`. A reseed (`reseed: true`) replaces
+     the record and its `seed_sha256` but still checks `base_generation`
+     (0 for a new account). `primary` / `secondary` are Codex's 5-hour and
+     weekly windows when present.
 3. `tools/claude-pool-broker/test/broker.test.ts`: cover each route, the
    writer check (wrong repo / workflow / ref → 403), refresh-token stripping,
    gate, CAS conflict, reseed.
