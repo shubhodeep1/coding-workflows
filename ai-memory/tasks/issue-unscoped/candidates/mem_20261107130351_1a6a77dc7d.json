@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/audit_consumer_drift.yml:197-213 | severity=medium | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: repair_pull_request_note() tells the operator \"update pull request stuck, open since {opened}; merge or close it\" for every non-fresh sync PR, including one marked pr_stale=true only because its branch names a different release (see scripts/audit_consumer_drift.py:740-752, 972).\n  WHY: Merging a PR for another release does not install the audited wrappers, so the drift remains. Severity disagreement: reviewers rated this NIT, minimax_minimax-m3 gave no severity, and the merged ledger entry says medium.\n- README.md:1305-1307 | severity=medium | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: README still says an open sync PR is skipped because it \"already restores every wrapper\", which contradicts the new wrong-release rule at README.md:1315-1316.\n  WHY: A reader concludes no alert is owed for any open sync PR, while the code raises a WARNING for a PR built for another release.\n- scripts/audit_consumer_drift.py:752 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: _sync_pull_request_is_for_release returns True for SYNC_FALLBACK_BRANCH and other non-prefixed refs, which relies on the caller `_repair` filtering refs first.\n  WHY: This is an implicit caller/callee dependency; the reviewer verified the behaviour is intentional (NIT).\n- tests/test_agents_fragment_contract.py | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push test tests/test_agents_fragment_contract.py failed.\n  WHY: This indicates an agent-documentation contract violation, likely a mismatch between the direct edit in agents.md and the fragment rules (rated BLOCKER).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/audit_consumer_drift.yml: repair_pull_request_note(), branch after `if repair.get(\"pr_stale\") is False` | severity=NIT | confidence=3\n  PROBLEM: Every non-fresh sync_pull_request_open repair gets the \"stuck... merge or close it\" note, including a repair marked stale because the branch names another release.\n  WHY: Merging that PR does not clear the drift. The WARNING still fires correctly, so this is a wording defect only.\n- (Note, no finding) _sync_pull_request_is_for_release (scripts/audit_consumer_drift.py:740-752) is only called inside `_repair` for refs that already match the sync prefix or fallback, so unrelated PR branches never reach it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/audit_consumer_drift.py:752 | severity=NIT | confidence=4\n  PROBLEM: _sync_pull_request_is_for_release returns True for SYNC_FALLBACK_BRANCH and other non-prefixed refs, relying on `_repair` filtering first.\n  WHY: Not a runtime failure. It is an implicit dependency between caller and callee, which the reviewer verified is intentional.\n- tests/test_agents_fragment_contract.py | severity=BLOCKER | confidence=4\n  PROBLEM: The pre-push test tests/test_agents_fragment_contract.py failed.\n  WHY: This indicates an agent-documentation contract violation, likely a mismatch between the direct edit in agents.md and the fragment instructions.\n- .github/workflows/audit_consumer_drift.yml:201 | severity=NIT | confidence=3\n  PROBLEM: The \"stuck, open since {opened}; merge or close it\" note applies to a fresh sync PR built for an older release, because pr_stale is True for it.\n  WHY: The operator gets misleading advice for a PR that is stuck only because it will not fix the drift, not because it has been open 3 days.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/audit_consumer_drift.yml:207-213 | no severity stated\n  PROBLEM: pr_stale also becomes True when the sync PR branch names another release, but repair_pull_request_note still renders \"stuck, open since {pr_created_at}; merge or close it\", so it cannot tell \"too old\" from \"wrong release\".\n  WHY: The audit resolves refs/tags/stable itself (audit_consumer_drift.yml:59-60) while the updater names its branch after the stable SHA at its own run time (update_workflows.yml:121-133, 1389). Merging an old-release PR leaves the audited drift in place, and the job summary (line 251) and Telegram WARNING (line 326) recommend that action.\n- README.md:1305-1307 | no severity stated\n  PROBLEM: The README keeps the absolute claim that an open sync PR \"already restores every wrapper\", while the wrong-release rule added at README.md:1315-1316 contradicts it.\n  WHY: A reader concludes any open sync PR covers the drift, but the code marks a PR for another release pr_stale=true (scripts/audit_consumer_drift.py:972) and raises a WARNING.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/audit_consumer_drift.yml:212-213 | severity=NIT | confidence=4\n  PROBLEM: repair_pull_request_note() says \"merge or close it\" for every stale sync PR, including one stale because its branch targets a different release.\n  WHY: When only an older-release sync PR is open, the WARNING recommends merging a PR that cannot clear the reported drift.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/audit_consumer_drift.yml: repair_pull_request_note() (~lines 197-203; called at ~251 and ~328) | severity=NIT | confidence=4\n  PROBLEM: The non-fresh branch always emits \"update pull request stuck, open since {opened}; merge or close it\" whenever pr_stale is not False, so it cannot tell an older-release PR (scripts/audit_consumer_drift.py:740-752, 972) from a long-open one.\n  WHY: Merging an old-release PR does not clear the audited drift; the case is exercised by `[old_release], 4, True` in tests/test_audit_consumer_drift.py:1209-1216.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1a38a2df4dd4458cd659f76d2f449817b41a16b7d1f235686aeea3d437c4095e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8988,
+    "run_id": "42372391172",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42372391172",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107130351_1a6a77dc7d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8988,
+    "run_id": "42372391172"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T13:03:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
