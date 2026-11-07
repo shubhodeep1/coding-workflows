@@ -10,7 +10,7 @@ description: |
 
 inputs:
   config_path:
-    description: chatgpt_pool.json to read. Empty uses the copy shipped with this action.
+    description: chatgpt_pool.json to read. Empty uses .github/ai/chatgpt_pool.json in this action's checkout, which is not shipped yet (the action then answers available=false reason=config_missing).
     required: false
     default: ""
 

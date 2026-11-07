@@ -1,5 +1,5 @@
 <!-- changelog: added -->
-- **The token broker can now hand a ChatGPT credential to a trusted job (ChatGPT account reviewer trial, Phase 1).** Nothing uses it yet: the broker's ChatGPT workflow allowlist is empty, so every caller is refused, and `reviewer_slot_enabled` is `false` in `.github/ai/chatgpt_pool.json`. A later phase adds the reviewer slot; turning it on is a separate human pull request.
+- **The token broker can now hand a ChatGPT credential to a trusted job (ChatGPT account reviewer trial, Phase 1).** Nothing uses it yet: the broker's ChatGPT workflow allowlist is empty, so every caller is refused. `.github/ai/chatgpt_pool.json`, the action's default config, is not shipped yet, so the action answers `available=false reason=config_missing` on its default path. A later phase adds that file (with `reviewer_slot_enabled` `false`) and the reviewer slot; turning the slot on is a separate human pull request.
 
 What was added:
 

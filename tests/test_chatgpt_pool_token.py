@@ -497,7 +497,7 @@ def test_config_contract(tmp_path: Path) -> None:
 		assert result.returncode == 0, result.stderr
 		assert output.read_text(encoding="utf-8") == "available=false\nreason=config_missing\nauth_dir=\nauth_file=\nexpires_at=\n"
 		assert not (runner_temp / "chatgpt-pool").exists()
-		return
+		pytest.xfail(".github/ai/chatgpt_pool.json not shipped yet (issue #8970 requirement 3 / plan Phase 2); the action fails closed")
 	data = json.loads(CONFIG.read_text(encoding="utf-8"))
 	assert set(data) == {"schema_version", "broker_url", "audience", "reviewer_slot_enabled"}
 	assert data["schema_version"] == 1
