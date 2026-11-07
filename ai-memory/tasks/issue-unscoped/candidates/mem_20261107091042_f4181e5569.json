@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1042-1043 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The use of `GH_RETRY_IDEMPOTENT=true` with `gh_retry` on a `POST` request to `.../issues/${_rps_issue}/labels` is inherently unsafe.\n  WHY: A retried POST after a lost response may fail with a 422 or be misinterpreted, disrupting label state synchronization. The source labelled it SEVERITY: MAJOR, which is mapped here to high.\n- scripts/review_rb_judge.sh:1056-1058 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The reconciliation-GET-failure warning is misleading. Luna says it claims the \"ai:merged-wins check was skipped\" for either terminal target, though that check only runs for ai:closed (line 1059). Gemini says it does not tell the reader that terminal reconciliation may run on inconsistent state after failed deletions.\n  WHY: Failure diagnostics are inaccurate or incomplete. Both reviewers rated it NIT (mapped to low). Gemini cited line 1058 and Luna cited line 1056, so the range spans both. The two reviewers describe different aspects of the warning, so this merge is a judgment call.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh:1042-1043 | severity=MAJOR | confidence=4\n  PROBLEM: The use of `GH_RETRY_IDEMPOTENT=true` with `gh_retry` on a `POST` request to `.../issues/${_rps_issue}/labels` is inherently unsafe.\n  WHY: A retried POST after a lost response may fail with a 422 or be misinterpreted, disrupting label state synchronization.\n- scripts/review_rb_judge.sh:1058 | severity=NIT | confidence=3\n  PROBLEM: The warning message is still potentially misleading.\n  WHY: If the DELETE calls fail, the subsequent terminal reconciliation GET may return labels that were not removed. The warning does not tell the reader that reconciliation may be operating on inconsistent state.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_rb_judge.sh:1056 | severity=NIT | confidence=5\n  PROBLEM: The warning says the \"ai:merged-wins check was skipped\" for either terminal target, but that check only runs when the target is ai:closed (line 1059).\n  WHY: When the target is ai:merged and the reconciliation GET fails, the log reports that an inapplicable check was skipped, which makes the failure diagnostics inaccurate.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e964a94755ecee3473cac1237f29cece2d261569b370527d3bc7d4a2a15c0c5f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8950,
+    "run_id": "42356853320",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42356853320",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107091042_f4181e5569",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8950,
+    "run_id": "42356853320"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T09:10:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
