@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: From issue #8952, \"Gate skip\" precondition list, bullet: \"`force_rb_judge` is false, and the run is not a security-hold follow-up or provider-outage recovery dispatch\". The gate must not skip a `provider-outage recovery dispatch` even on a head with a matching clean marker.\n  expected_change_site: `scripts/review_autofix_step_evaluate_gate.sh`, the clean same-head precheck chain (currently lines 586-613), where `FORCE_RB_JUDGE` and `POST_SYNC_TEST_REPAIR` are checked.\n  confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The precheck at `scripts/review_autofix_step_evaluate_gate.sh:586-613` excludes `force_rb_judge` and `post_sync_test_repair` but has no provider-outage condition, and the comment at lines 599-604 explicitly documents the omission (\"No provider-outage precheck (deliberate, #8952)\"), the provider-outage resume dispatch in `scripts/provider_outage.py:397-401` (`dispatch`) sends only `pr_number` and `allow_workflow_edits` with no distinguishing input, the label-resume path at `scripts/provider_outage.py:779-786` (also cited as `provider_outage.py:776-786`) dispatches the review workflow with only the PR number, the `newer_failure_marker` invalidation does not cover the label-marker resume path because the marker is written to the labelled item (usually the linked issue, not the PR) so the gate's PR-comment read cannot see it, and so a resume dispatch on a clean head with no newer PR comment, review or failure marker is treated as an ordinary dispatch and skipped. The README row for `AUTOFIX_SKIP_CLEAN_SAME_HEAD` and the `agents.d/8952-clean-same-head-skip.md` fragment were updated in the LAST RUN DIFF to document this deviation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: From issue #8952, \"Gate skip\" precondition list, bullet: \"`force_rb_judge` is false, and the run is not a security-hold follow-up or provider-outage recovery dispatch\". The gate must not skip a `provider-outage recovery dispatch` even on a head with a matching clean marker.\n  Expected change site: `scripts/review_autofix_step_evaluate_gate.sh`, the clean same-head precheck chain (currently lines 586-613), where `FORCE_RB_JUDGE` and `POST_SYNC_TEST_REPAIR` are checked.\n  Evidence of absence: The provider-outage resume dispatch in `scripts/provider_outage.py:397-401` (`dispatch`) sends only `pr_number` and `allow_workflow_edits` and no distinguishing input. The precheck at `scripts/review_autofix_step_evaluate_gate.sh:586-613` has no provider-outage condition, and the comment at lines 599-604 explicitly documents the omission (\"No provider-outage precheck (deliberate, #8952)\"). The implementation relies on `newer_failure_marker`, which does not cover the label-marker resume path (`provider_outage.py:776-786`, the marker is written to the labelled item \u2014 usually the linked issue, not the PR \u2014 so the gate's PR-comment read cannot see it). A resume dispatch for a clean head with no newer PR-side failure marker is therefore treated as an ordinary dispatch and skipped. The README row for `AUTOFIX_SKIP_CLEAN_SAME_HEAD` and the `agents.d/8952-clean-same-head-skip.md` fragment were updated in the LAST RUN DIFF to document this deviation.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cThe run is not a security-hold follow-up or provider-outage recovery dispatch.\u201d\n  Expected change site: `scripts/review_autofix_step_evaluate_gate.sh`, clean same-head precheck at lines 586-613.\n  Evidence of absence: The precheck excludes `force_rb_judge` and `post_sync_test_repair`, but has no provider-outage recovery exclusion. The provider-outage label-resume path dispatches the review workflow with only the PR number at `scripts/provider_outage.py:779-786`. Thus, when that dispatch encounters a matching clean marker without a newer PR comment or review, the gate treats it as an ordinary dispatch and skips it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "535b31f5553eb0b646193f0f9003fe92a6587e8b50b51efd8f6e85348e98d127",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8958,
+    "run_id": "42362372135",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42362372135",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107102558_c803782bff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8958,
+    "run_id": "42362372135"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T10:25:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
