@@ -84,6 +84,7 @@ case "${stage_support_phase}" in
 	clarify)
 		stage_support_required_scripts=(
 			gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh
+			attempt_journal.py gh_api_retry.py
 			assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh
 			label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py
 			memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py
@@ -112,7 +113,8 @@ case "${stage_support_phase}" in
 	plan)
 		stage_support_required_scripts=(
 			gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py partial_delivery.py
-			assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh
+			assemble_prompt.sh render_prompt.py attempt_journal.py gh_api_retry.py
+			load_workflow_overlay.py tg_helpers.sh label_helpers.sh
 			memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py
 			openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh
 			build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh
@@ -122,7 +124,9 @@ case "${stage_support_phase}" in
 			clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh
 		)
 		# gh_helpers.sh sources emit_event.sh from its own directory first.
-		stage_support_optional_scripts=(emit_event.sh)
+		# run_plan_codex.sh runs the evidence pack and broker (#8427 P4/P11)
+		# from its own directory; optional, as its -f guards skip them.
+		stage_support_optional_scripts=(emit_event.sh evidence_pack.py evidence_broker.py)
 		# clarify_isolated_run.sh (called by run_plan_codex.sh for PLAN) reads
 		# the Claude settings template and the sandbox Dockerfile from its own
 		# directory or CLARIFY_ISOLATION_SUPPORT_DIR.
@@ -152,7 +156,8 @@ case "${stage_support_phase}" in
 		;;
 	implement)
 		stage_support_required_scripts=(
-			gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh
+			gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh
+			attempt_journal.py acceptance_check.py evidence_pack.py gh_api_retry.py assemble_prompt.sh
 			render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh
 			label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py
 			openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh
