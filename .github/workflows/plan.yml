@@ -644,7 +644,7 @@ jobs:
             support_overlay_loader=".codex-workflow-src/scripts/load_workflow_overlay.py"
           else
           # support-scripts-legacy:begin
-          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py partial_delivery.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh; do
+          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py partial_delivery.py assemble_prompt.sh render_prompt.py attempt_journal.py gh_api_retry.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -736,23 +736,6 @@ jobs:
             fi
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional evidence-broker helper ${f} unavailable on ${SCRIPT_REF}; the planner gets no evidence round."
-              continue
-            fi
-            install -m 0755 "${src}" "scripts/${f}"
-            _fetched_scripts+=("${f}")
-          done
-
-          # Attempt-journal helpers (issue #8428, P1): optional, so a support ref
-          # without them never fails planning while PERSIST_JOURNAL_ENABLED is
-          # off. They are not in the required loop above because that list must
-          # match the plan case of stage_support_for_phase.sh.
-          for f in attempt_journal.py gh_api_retry.py; do
-            src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
-            if [ ! -f "${src}" ]; then
-              echo "::notice::Optional attempt-journal helper ${f} unavailable on ${SCRIPT_REF}; planning writes no journal entry."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"

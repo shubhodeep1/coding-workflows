@@ -5,6 +5,9 @@ set -euo pipefail
 # the kill switch (docs/plans/remove-unattended-pipeline-stuck-states-plan.md
 # P2a). Prompt templates stay relative to the checkout working directory.
 RUN_PLAN_CODEX_SUPPORT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The persistence blocks below use ${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}: the
+# variable is always set here, and the fallback only keeps those blocks safe
+# under `set -u` when run on their own (tests extract and execute them).
 source "${RUN_PLAN_CODEX_SUPPORT_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"
@@ -307,8 +310,8 @@ EOF
 # Attempt journal (issue #8428, P1): only with PERSIST_JOURNAL_ENABLED=true
 # (default false), append the issue's fenced journal after the dynamic
 # planning context. Off, or no journal yet: the prompt is unchanged.
-if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ -f scripts/attempt_journal.py ] && [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]; then
-  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/attempt_journal.py render --repo "${GITHUB_REPOSITORY:-}" \
+if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ -f "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/attempt_journal.py" ] && [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+  PYTHONDONTWRITEBYTECODE=1 python3 -B "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/attempt_journal.py" render --repo "${GITHUB_REPOSITORY:-}" \
     --issue "${ISSUE_NUMBER}" --out "${RUNTIME_DIR}/attempt_journal.txt" || true
   if [ -s "${RUNTIME_DIR}/attempt_journal.txt" ]; then
     {
@@ -345,7 +348,7 @@ if [ "${PERSIST_ACCEPTANCE_ENABLED:-false}" = "true" ]; then
 	acceptance_prompt="prompts/mode-plan-acceptance.txt"
 	acceptance_rendered=""
 	if [ -f "${acceptance_prompt}" ] && [ ! -L "${acceptance_prompt}" ] \
-		&& acceptance_rendered="$(bash scripts/render_prompt.sh "${acceptance_prompt}")" && [ -n "${acceptance_rendered}" ]; then
+		&& acceptance_rendered="$(bash "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/render_prompt.sh" "${acceptance_prompt}")" && [ -n "${acceptance_rendered}" ]; then
 		{
 			echo
 			printf '%s\n' "${acceptance_rendered}"
@@ -360,7 +363,7 @@ fi
 # host (GH_TOKEN never reaches the model) and append it after the dynamic
 # context. Off, missing helper or empty pack: the prompt is unchanged.
 if [ "${PERSIST_EVIDENCE_PACK_ENABLED:-false}" = "true" ]; then
-	if [ -f scripts/evidence_pack.py ] && [ ! -L scripts/evidence_pack.py ]; then
+	if [ -f "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/evidence_pack.py" ] && [ ! -L "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/evidence_pack.py" ]; then
 		# Re-planning: the newest earlier plan comment (last line
 		# <!-- ai:plan-proposal:v1 -->) by github-actions[bot] or an
 		# OWNER/MEMBER/COLLABORATOR, read from the comments plan.yml already
@@ -402,7 +405,7 @@ open(sys.argv[2], "w", encoding="utf-8").write(best[1])
 ' "${ISSUE_COMMENTS_FILE}" "${evidence_prev_plan}" 2>/dev/null && [ -s "${evidence_prev_plan}" ]; then
 			evidence_plan_args=(--plan-file "${evidence_prev_plan}")
 		fi
-		PYTHONDONTWRITEBYTECODE=1 timeout 300 python3 -B scripts/evidence_pack.py build --repo "${GITHUB_REPOSITORY:-}" \
+		PYTHONDONTWRITEBYTECODE=1 timeout 300 python3 -B "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/evidence_pack.py" build --repo "${GITHUB_REPOSITORY:-}" \
 			${evidence_plan_args[@]+"${evidence_plan_args[@]}"} \
 			--text-file "${PLANNING_CONTEXT_FILE}" --repo-root . --out "${RUNTIME_DIR}/evidence_pack.txt" || true
 		if [ -s "${RUNTIME_DIR}/evidence_pack.txt" ]; then
@@ -422,7 +425,7 @@ if [ "${PERSIST_EVIDENCE_BROKER_ENABLED:-false}" = "true" ]; then
 	evidence_broker_prompt="prompts/mode-plan-evidence-request.txt"
 	evidence_broker_rendered=""
 	if [ -f "${evidence_broker_prompt}" ] && [ ! -L "${evidence_broker_prompt}" ] \
-		&& evidence_broker_rendered="$(bash scripts/render_prompt.sh "${evidence_broker_prompt}")" && [ -n "${evidence_broker_rendered}" ]; then
+		&& evidence_broker_rendered="$(bash "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/render_prompt.sh" "${evidence_broker_prompt}")" && [ -n "${evidence_broker_rendered}" ]; then
 		{
 			echo
 			printf '%s\n' "${evidence_broker_rendered}"
@@ -634,15 +637,15 @@ plan_evidence_broker_round()
   local request_count="" rerun_rc=0
   [ "${PERSIST_EVIDENCE_BROKER_ENABLED:-false}" = "true" ] || return 0
   [ "${evidence_broker_prompt_appended:-false}" = "true" ] || return 0
-  if [ ! -f scripts/evidence_broker.py ] || [ -L scripts/evidence_broker.py ]; then
+  if [ ! -f "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/evidence_broker.py" ] || [ -L "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/evidence_broker.py" ]; then
     echo "PERSIST broker outcome=skipped reason=helper_absent"
     return 0
   fi
   rm -f -- "${requests_file}" "${results_file}" "${hash_file}" "${rerun_output}"
-  request_count="$(PYTHONDONTWRITEBYTECODE=1 timeout 60 python3 -B scripts/evidence_broker.py validate \
+  request_count="$(PYTHONDONTWRITEBYTECODE=1 timeout 60 python3 -B "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/evidence_broker.py" validate \
     --output-file "${CODEX_OUTPUT_FILE}" --repo "${GITHUB_REPOSITORY:-}" --out "${requests_file}")" || request_count=""
   [[ "${request_count}" =~ ^[1-9][0-9]*$ ]] || return 0
-  PYTHONDONTWRITEBYTECODE=1 timeout 300 python3 -B scripts/evidence_broker.py fulfil \
+  PYTHONDONTWRITEBYTECODE=1 timeout 300 python3 -B "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/evidence_broker.py" fulfil \
     --requests "${requests_file}" --repo "${GITHUB_REPOSITORY:-}" --repo-root . \
     --default-branch "${PLAN_ISOLATED_BASE_BRANCH:-}" \
     --out "${results_file}" --hash-out "${hash_file}" || true
@@ -658,11 +661,11 @@ plan_evidence_broker_round()
   echo "${plan_engine_name:-Codex} planning evidence round: re-running the planner once with broker results."
   # Same dispatch as one attempt of the loop above.
   if [ "${HEAL_ROUTE:-false}" = true ]; then
-    MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${rerun_output}" "${RUNTIME_DIR}/codex_log.txt" "${PLAN_ENGINE}" PLAN || rerun_rc=$?
+    MODEL_EDITOR="${attempt_model}" bash "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}" "${rerun_output}" "${RUNTIME_DIR}/codex_log.txt" "${PLAN_ENGINE}" PLAN || rerun_rc=$?
     if [ "${rerun_rc}" -eq 75 ]; then
       PLAN_ENGINE=codex
       rerun_rc=0
-      MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${rerun_output}" "${RUNTIME_DIR}/codex_log.txt" codex PLAN || rerun_rc=$?
+      MODEL_EDITOR="${attempt_model}" bash "${RUN_PLAN_CODEX_SUPPORT_DIR:-scripts}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}" "${rerun_output}" "${RUNTIME_DIR}/codex_log.txt" codex PLAN || rerun_rc=$?
     fi
   elif [ "${PLAN_ENGINE}" = "claude" ]; then
     AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
