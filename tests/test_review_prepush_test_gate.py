@@ -831,7 +831,7 @@ def test_review_loop_uses_the_fetched_done_check(tmp_path):
 		"post_merge": None, "post_merge_none": "library only"}), encoding="utf-8")
 	proc = _run_step(tmp_path, repo, env)
 	assert "STEP_RETURNED" in proc.stdout, proc.stderr
-	assert "--tests-file /inputs/tests.txt" in (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
+	assert "--tests-file /gate/tests.txt" in (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
 	assert _editor_calls(tmp_path) == 1
 	assert "turns=1 stop=clean acceptance=not_run" in proc.stderr
 
