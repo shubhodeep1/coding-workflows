@@ -5,13 +5,26 @@
   "entry_id": "processed_command_8976_6705145748_approved",
   "issue_number": 8976,
   "metadata": {
+    "branch": "ai/issue-8976",
+    "changed_files": [
+      "changelog.d/wfopt-2026-10-07-deterministic-marker-match.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_alert_levels_human_only.py",
+      "tests/test_ci_wires_every_test_file.py",
+      "tests/test_mark_validation_failed_deterministic_marker.py"
+    ],
+    "issue_number": 8976,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8976",
+    "pr_number": 8982,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8982",
+    "run_attempt": "1",
+    "run_id": "42360545584",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42360545584"
   },
   "run_attempt": 1,
   "run_id": "42360545584",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-07T09:49:59Z",
+  "status": "completed",
+  "timestamp": "2026-11-07T10:08:37Z",
   "workflow": "implement"
 }
