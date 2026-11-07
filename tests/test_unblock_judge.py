@@ -1613,8 +1613,11 @@ def test_failed_or_empty_log_download_tries_next_bound_candidate(tmp_path: Path,
 def test_successful_log_download_writes_bounded_tail_without_echoing_it(tmp_path: Path) -> None:
 	if not shutil.which("jq"):
 		pytest.skip("jq is required for the unblock judge fixture")
-	lines = [f"LOGMARKER-{i:04d} " + "x" * 260 for i in range(450)]
-	assert len("\n".join(lines).encode("utf-8")) > 120000
+	# 401 lines: the last 400 still exceed 120000 bytes, so both the line cap
+	# and the byte cap apply, while the whole log stays under the per-string
+	# environment limit the fake gh reads it through.
+	lines = [f"LOGMARKER-{i:04d} " + "x" * 290 for i in range(401)]
+	assert len("\n".join(lines[-400:]).encode("utf-8")) > 120000
 	result, state = _judge(tmp_path, ISSUE, comments=[_comment("/actions/runs/111")],
 		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
 		FAKE_GH_RUNS=json.dumps({"111": _run_metadata(111, head_branch="ai/issue-7")}),
@@ -1622,7 +1625,8 @@ def test_successful_log_download_writes_bounded_tail_without_echoing_it(tmp_path
 	assert result.returncode == 0, result.stderr
 	assert "op=run_log outcome=attached run=111" in result.stdout
 	tail = (tmp_path / "rt" / "run_log_tail.txt").read_bytes()
-	assert tail and len(tail) <= 120000 and tail.count(b"\n") <= 400
+	assert len(tail) == 120000 and tail.count(b"\n") <= 400
+	assert b"LOGMARKER-0000 " not in tail
 	assert tail.rstrip(b"\n").endswith(lines[-1].encode("utf-8"))
 	assert "LOGMARKER-" not in result.stdout and "LOGMARKER-" not in result.stderr
 	assert not (tmp_path / "rt" / "run_log_download.txt").exists()

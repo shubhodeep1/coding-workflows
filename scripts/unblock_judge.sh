@@ -2470,8 +2470,10 @@ unblock_select_run_log()
 		# non-empty download is bounded into run_log_tail.txt and reported as
 		# attached. A failed or empty download is discarded and the next bound
 		# candidate is tried (still within the 3-candidate cap).
-		if gh run view "${candidate_id}" -R "${REPOSITORY}" --log-failed > "${download_file}" 2>/dev/null && [ -s "${download_file}" ]; then
-			tail -n 400 "${download_file}" | tail -c 120000 > "${RUNTIME_DIR}/run_log_tail.txt"
+		# The bounding write is part of the test too, so a failed write (for
+		# example a full runtime filesystem) is never reported as attached.
+		if gh run view "${candidate_id}" -R "${REPOSITORY}" --log-failed > "${download_file}" 2>/dev/null && [ -s "${download_file}" ] \
+				&& tail -n 400 "${download_file}" | tail -c 120000 > "${RUNTIME_DIR}/run_log_tail.txt"; then
 			rm -f "${download_file}"
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} op=run_log outcome=attached run=${candidate_id}"
 			return 0
