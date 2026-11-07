@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/8973-prepush-hook-conflict-gap.md:4 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The fragment says \"Two more check the test fixtures\" but the PR adds three fixture/control tests, and it omits `test_prepush_hook_fixture_has_the_clean_template_shape` in `tests/test_conflict_guard_hook_template_merge.py`.\n  WHY: The release note undercounts the guard tests. There is no runtime impact. All four reviewers rated it NIT, and confidence ranged from 3 to 5.\n- tests/test_review_conflict_resolve_sandbox_only.py:1083-1095 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The `subprocess.run` calls in `test_prepush_hook_pair_is_listed_in_paired_live_report` set no timeout (hardening suggestion: add `timeout=120`).\n  WHY: A hung helper would hang the CI step. The reviewers reported this as a hardening suggestion with risk score 1, and the confidence value is not a reviewer-stated figure.\n- external check-run copilot-pull-request-reviewer (head 0998e257) | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The check fails with `custom_instructions_too_large` (HTTP 422), caused by the size of `AGENTS.md` and `CLAUDE.md`.\n  WHY: The failure is external, and this PR touches neither file, so nothing in the heal scope can fix it. The reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/8973-prepush-hook-conflict-gap.md:4 | severity=NIT | confidence=3\n  PROBLEM: The fragment says two tests check fixtures or controls, but the PR adds three. It omits `test_prepush_hook_fixture_has_the_clean_template_shape`.\n  WHY: This is a documentation inaccuracy with no runtime impact.\n- external check-run copilot-pull-request-reviewer (head 0998e257) | severity=NIT | confidence=5\n  PROBLEM: The check fails with `custom_instructions_too_large` (422) because of `AGENTS.md` and `CLAUDE.md` size.\n  WHY: This PR touches neither file, and nothing in the heal scope can fix it.\n- HARDENING: tests/test_review_conflict_resolve_sandbox_only.py, the two `subprocess.run` calls in `test_prepush_hook_pair_is_listed_in_paired_live_report`\n  PROBLEM: Neither call sets a timeout.\n  WHY: A hung helper would hang the CI step. Suggested fix: add `timeout=120` (about 2 lines). HARDENING_RISK_SCORE: 1\n- Task completeness: NONE. The deferred items are listed in the PR description under AD-1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- HARDENING: tests/test_review_conflict_resolve_sandbox_only.py, `test_prepush_hook_pair_is_listed_in_paired_live_report` `subprocess.run` calls\n  PROBLEM: The `subprocess.run` calls have no timeout.\n  WHY: Suggested fix: add `timeout=120` to both calls. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/8973-prepush-hook-conflict-gap.md:4 | severity=NIT\n  PROBLEM: The fragment says \"Two more check the test fixtures\" but the PR adds three tests. It omits `test_prepush_hook_fixture_has_the_clean_template_shape`. The reviewer reported this as pre-existing, not introduced by the last run.\n  WHY: This is a documentation inaccuracy.\n- tests/test_review_conflict_resolve_sandbox_only.py `test_prepush_hook_pair_is_listed_in_paired_live_report` | severity=NIT\n  PROBLEM: The test calls `subprocess.run` twice without a `timeout`. The reviewer reported this as pre-existing.\n  WHY: This is a hardening gap.\n- external check `copilot-pull-request-reviewer` (head `0998e257`)\n  PROBLEM: The check fails with `custom_instructions_too_large`. The reviewer reported this as environmental.\n  WHY: The PR does not touch `AGENTS.md` or `CLAUDE.md`, and the heal scope cannot fix it.\n- Reviewer note: the last run's changelog qualifier is accurate against `scripts/review_conflict_prepare.sh:1215`. Task completeness: no TASK_GAP entries, because the deferred scope is explicit (AD-1). HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/8973-prepush-hook-conflict-gap.md:4 (tests at tests/test_conflict_guard_hook_template_merge.py:352 and tests/test_review_conflict_resolve_sandbox_only.py:1066, 1115) | severity=NIT | confidence=5\n  PROBLEM: The changelog says \"Two more\" tests check the fixtures but describes only two. The clean-template-shape fixture test is a third test in that group.\n  WHY: There is no runtime failure. The release note inaccurately describes the test coverage.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/8973-prepush-hook-conflict-gap.md:4 | severity=NIT | confidence=3\n  PROBLEM: The count is wrong. The PR adds three non-xfail fixture/control tests: `test_prepush_hook_fixture_has_the_clean_template_shape` (tests/test_conflict_guard_hook_template_merge.py:352), `test_prepush_hook_pair_fixture_conflicts_on_both_paths` (tests/test_review_conflict_resolve_sandbox_only.py:1066) and `test_prepush_hook_conflict_is_taken_from_base_off_integration_sync` (tests/test_review_conflict_resolve_sandbox_only.py:1115). The clause describes only the latter two, and the last run kept the incorrect count.\n  WHY: There is no runtime failure. The release note misstates what the PR ships.\n- external check-run copilot-pull-request-reviewer on head 0998e257ecb3d91e580d3e5acdc60cd931a7854b, run 42369968303 | severity=NIT | confidence=5\n  PROBLEM: The failed check (`custom_instructions_too_large`, HTTP 422) cannot be mapped to the diff. The PR touches only tests/test_conflict_guard_hook_template_merge.py, tests/test_review_conflict_resolve_sandbox_only.py and changelog.d/8973-prepush-hook-conflict-gap.md. The reviewer states CLAUDE.md \u00a730 forbids shrinking the agents file from this PR.\n  WHY: The action aborts before reviewing on every PR head in this repo, regardless of this PR's content.\n- HARDENING: tests/test_review_conflict_resolve_sandbox_only.py, `test_prepush_hook_pair_is_listed_in_paired_live_report`, subprocess.run calls at lines 1083, 1087-1088, 1095\n  PROBLEM: None of the three calls passes a timeout.\n  WHY: A hung git or python3 helper would hang the CI job. Suggested fix: add `timeout=120` to each call (about 3 lines). HARDENING_RISK_SCORE: 1\n- Task completeness: NONE. The deferred items are not gaps.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cbbb30e326e2f9309d0b6feb8ec845d71af66183c91e46bb2362fb17deba68a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8979,
+    "run_id": "42373743696",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42373743696",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107130954_8bc78f5783",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8979,
+    "run_id": "42373743696"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T13:09:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
