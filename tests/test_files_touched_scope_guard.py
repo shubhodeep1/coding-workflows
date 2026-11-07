@@ -2015,7 +2015,8 @@ def test_auto_heal_companion_path_shapes() -> None:
 		assert guard.is_auto_heal_companion_path(ok), ok
 	for bad in ("db/contracts/../x.yml", "db/contracts/sub/x.yml", "tests/sub/test_x.py", "tests/conftest.py",
 			"tests/helper.py", "db/contracts/x.yaml", "db/contracts/.x.yml", "ft.games/app.py",
-			".github/workflows/x.yml", "scripts/test_x.py", "tests/test_x.sh", "db/contracts/", "", None):
+			".github/workflows/x.yml", "scripts/test_x.py", "tests/test_x.sh", "db/contracts/", "", None,
+			"tests/test_a.py\n", "db/contracts/x.yml\n"):
 		assert not guard.is_auto_heal_companion_path(bad), bad
 
 
