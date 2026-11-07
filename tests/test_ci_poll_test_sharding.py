@@ -3160,7 +3160,7 @@ POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "e6795c8ab682e4d23b64fe87175b904f97ea243
 
 
 class MovedPollGroupTwo8772StepsContractTest(unittest.TestCase):
-	"""The CI wiring guard part 2 step runs once, in orchestrate-poll group 4 (#8772)."""
+	"""The CI wiring guard part 2 step runs once, in orchestrate-poll group 0 (#8772, #8980)."""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]

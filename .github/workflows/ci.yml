@@ -2318,7 +2318,8 @@ jobs:
     # 0 the synthesize-smoke step.
     # Since #8777, group 0 also pins the clarify loop guard step and group
     # 1 the validation bootstrap step.
-    # Since #8772, group 4 also pins the CI wiring guard part 2 step.
+    # From #8772 until #8980, group 4 also pinned the CI wiring guard part 2
+    # step.
     # Since #8805, group 2 runs the validation bootstrap step (moved from
     # group 1).
     # Since #8980, group 0 runs the CI wiring guard part 2 step (moved from
@@ -2617,8 +2618,8 @@ jobs:
       # Group 4 has not been named by budget-watch since #8150, and its only
       # pinned step (unblock) was split across 4 local processes in #8150. The
       # step needs only checkout, Python 3.12 and the shared pip install, which
-      # every group has. It now runs in group 4 only, once per CI run. Name and
-      # body unchanged.
+      # every group has. It then ran in group 4 only, once per CI run, until
+      # #8980. Name and body unchanged.
       # Moved from group 4 to group 0: orchestrate-poll (4) took 15m15s of its
       # 20 minutes on main (run 42359183844, budget-watch issue #8980). That
       # run's step timings could not be read, so the pick is an estimate, not
