@@ -420,6 +420,26 @@ jobs:
             fi
           }
 
+          # Issue #8955: labels and author of each linked issue, from the same
+          # GraphQL/REST lookups that fill ISSUE_BODIES_JSON (no extra API call).
+          # Shape: {"<number>": {"labels": [names], "author": login}}.
+          ISSUE_TRIAGE_META_JSON='{}'
+
+          add_issue_triage_meta_from_json() {
+            local entries_json="$1"
+            local merged_meta
+            merged_meta="$(jq -c -n --argjson cur "${ISSUE_TRIAGE_META_JSON}" --argjson add "${entries_json:-[]}" '
+              $cur + ([$add[]? | select(type == "object" and (.number | type == "number"))
+                | {key: (.number | tostring), value: {
+                    labels: [(.labels // [])[]? | if type == "string" then . elif type == "object" then (.name // empty) else empty end | select(type == "string")],
+                    author: (if (.author | type) == "string" then .author else "" end)
+                  }}] | from_entries)
+            ' 2>/dev/null || echo '')"
+            if [ -n "${merged_meta}" ]; then
+              ISSUE_TRIAGE_META_JSON="${merged_meta}"
+            fi
+          }
+
           declared_branch_for_issue() {
             local issue_num="$1"
             [ -f scripts/orchestrate_lib.py ] || return 0
@@ -508,11 +528,12 @@ jobs:
             -f owner="${REPOSITORY%/*}" \
             -f name="${REPOSITORY#*/}" \
             -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number body labels(first: 50) { nodes { name } } } } } } }' \
+            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number body author { login } labels(first: 50) { nodes { name } } } } } } }' \
             2>/dev/null || true)"
 
           CLOSING_ISSUE_NUMBERS="$(printf '%s' "${CLOSING_ISSUES_RESP}" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[]?.number' 2>/dev/null || true)"
           add_issue_bodies_from_json "$(printf '%s' "${CLOSING_ISSUES_RESP}" | jq -c '[.data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) | {number, body}]' 2>/dev/null || echo '[]')"
+          add_issue_triage_meta_from_json "$(printf '%s' "${CLOSING_ISSUES_RESP}" | jq -c '[.data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) | {number, labels: [(.labels.nodes // [])[]? | .name], author: (.author.login? // "")}]' 2>/dev/null || echo '[]')"
           ISSUE_NUMBERS="${CLOSING_ISSUE_NUMBERS}"
 
           if [ -n "${CLOSING_ISSUE_NUMBERS}" ]; then
@@ -622,7 +643,7 @@ jobs:
           while IFS= read -r _orch_num; do
             [ -n "${_orch_num}" ] || continue
             [[ "${_orch_num}" =~ ^[0-9]+$ ]] || continue
-            ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }"
+            ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body author { login } }"
             ORCH_IDX=$((ORCH_IDX + 1))
           done <<< "${LOOKUP_ISSUE_NUMBERS}"
 
@@ -657,6 +678,7 @@ jobs:
               TRACKING_ISSUES="$(merge_issue_number_list "${TRACKING_ISSUES}" "${_tracking_issues}")"
               MANAGED_ISSUES="$(merge_issue_number_list "${MANAGED_ISSUES}" "${_managed_issues}")"
               add_issue_bodies_from_json "$(printf '%s' "${ORCH_RESP}" | jq -c '[.data.repository | to_entries[] | .value | select(. != null) | {number, body}]' 2>/dev/null || echo '[]')"
+              add_issue_triage_meta_from_json "$(printf '%s' "${ORCH_RESP}" | jq -c '[.data.repository | to_entries[] | .value | select(. != null) | {number, labels: [(.labels.nodes // [])[]? | .name], author: (.author.login? // "")}]' 2>/dev/null || echo '[]')"
               ORCH_BATCH_FAILED=false
             fi
             if [ "${ORCH_BATCH_FAILED}" = true ]; then
@@ -667,7 +689,7 @@ jobs:
               while IFS= read -r _orch_num; do
                 [ -n "${_orch_num}" ] || continue
                 [[ "${_orch_num}" =~ ^[0-9]+$ ]] || continue
-                _orch_meta="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" --jq '{labels:[.labels[].name], body:(.body // "")}' 2>/dev/null || echo '')"
+                _orch_meta="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" --jq '{labels:[.labels[].name], body:(.body // ""), author:(.user.login // "")}' 2>/dev/null || echo '')"
                 if [ -z "${_orch_meta}" ]; then
                   # Conservative fail-open: treat as tracking so we skip
                   # the label/close mutation. Mis-classifying a managed
@@ -680,6 +702,7 @@ jobs:
                   continue
                 fi
                 add_issue_bodies_from_json "$(printf '%s' "${_orch_meta}" | jq -c --argjson n "${_orch_num}" '[{number: $n, body: (.body // "")}]' 2>/dev/null || echo '[]')"
+                add_issue_triage_meta_from_json "$(printf '%s' "${_orch_meta}" | jq -c --argjson n "${_orch_num}" '[{number: $n, labels: (.labels // []), author: (.author // "")}]' 2>/dev/null || echo '[]')"
                 if printf '%s' "${_orch_meta}" | jq -e '((.labels // []) | index("ai:orchestrator-tracking")) != null' >/dev/null 2>&1; then
                   TRACKING_ISSUES+="${_orch_num}"$'\n'
                 elif printf '%s' "${_orch_meta}" | jq -e '
@@ -763,6 +786,60 @@ jobs:
               fi
             fi
 
+            # Issue #8955: an ai:check-triage issue's fix PR merges into the head
+            # branch of the PR whose check failed (marker
+            # `<!-- check-failure-triage:pr=<N> -->`). Count that merge as
+            # completion only when the PR is merged, same-repository and bound
+            # to this issue (head ai/issue-<n>), the issue carries
+            # ai:check-triage, was written by the pipeline login and has exactly
+            # one marker, and the marker PR's API head (same repository) equals
+            # this PR's base. Any failure leaves the reason empty (fail closed).
+            if [ -z "${target_merge_reason}" ] && [ "${PR_MERGED}" = "true" ] \
+              && [ -n "${PR_HEAD_REPO:-}" ] && [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ] \
+              && [ -n "${BRANCH_ISSUE_NUMBER}" ] && [ "${BRANCH_ISSUE_NUMBER}" = "${issue_number}" ] \
+              && printf '%s' "${ISSUE_TRIAGE_META_JSON}" | jq -e --arg n "${issue_number}" '(.[$n].labels // []) | index("ai:check-triage") != null' >/dev/null 2>&1; then
+              _triage_skip_reason=""
+              _triage_marker_pr=""
+              _triage_head_ref=""
+              if [ ! -f scripts/orchestrate_lib.py ]; then
+                _triage_skip_reason="helper_missing"
+              elif ! resolve_unmerged_close_login; then
+                _triage_skip_reason="identity_unavailable"
+              else
+                _triage_labels_json="$(printf '%s' "${ISSUE_TRIAGE_META_JSON}" | jq -c --arg n "${issue_number}" '.[$n].labels // []' 2>/dev/null || echo '[]')"
+                _triage_author="$(printf '%s' "${ISSUE_TRIAGE_META_JSON}" | jq -r --arg n "${issue_number}" '.[$n].author // ""' 2>/dev/null || echo '')"
+                _triage_marker_pr="$(printf '%s' "${ISSUE_BODIES_JSON}" | jq -r --arg n "${issue_number}" '.[$n] // ""' 2>/dev/null \
+                  | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py check-triage-target-pr \
+                    --labels-json "${_triage_labels_json}" --author "${_triage_author}" --pipeline-login "${UNMERGED_CLOSE_LOGIN}" 2>/dev/null \
+                  | head -n 1 || true)"
+                if [[ ! "${_triage_marker_pr}" =~ ^[1-9][0-9]{0,9}$ ]] || [ "${_triage_marker_pr}" = "${PR_NUMBER}" ]; then
+                  _triage_skip_reason="no_trusted_marker"
+                else
+                  # GitHub API audit (CLAUDE.md §14): the event payload carries
+                  # only this PR, and the closing-refs / classification GraphQL
+                  # calls above return issue data, not another PR's head. One
+                  # pulls/<N> read, only for a bound ai:check-triage issue whose
+                  # merge every existing rule already rejected.
+                  _triage_pull_meta="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${_triage_marker_pr}" \
+                    --jq '{head_ref: (.head.ref // ""), head_repo: (.head.repo.full_name // "")}' 2>/dev/null || echo '')"
+                  _triage_head_ref="$(printf '%s' "${_triage_pull_meta}" | jq -r '.head_ref // ""' 2>/dev/null || echo '')"
+                  _triage_head_repo="$(printf '%s' "${_triage_pull_meta}" | jq -r '.head_repo // ""' 2>/dev/null || echo '')"
+                  if [ -z "${_triage_pull_meta}" ] || [ -z "${_triage_head_repo}" ]; then
+                    _triage_skip_reason="pull_read_failed"
+                  elif [ "${_triage_head_repo}" != "${REPOSITORY}" ]; then
+                    _triage_skip_reason="foreign_marker_head"
+                  elif [ -z "${_triage_head_ref}" ] || [ "${_triage_head_ref}" != "${PR_BASE_REF}" ]; then
+                    _triage_skip_reason="ref_mismatch"
+                  else
+                    target_merge_reason="check_triage_pr_branch"
+                  fi
+                fi
+              fi
+              if [ -n "${_triage_skip_reason}" ]; then
+                echo "Check-triage completion not applied to issue #${issue_number} (reason=${_triage_skip_reason}; base=$(sanitize_ref_for_log "${PR_BASE_REF}"); marker_head=$(sanitize_ref_for_log "${_triage_head_ref}"))."
+              fi
+            fi
+
             if [ -z "${target_merge_reason}" ]; then
               echo "PR #${PR_NUMBER} merged into $(sanitize_ref_for_log "${PR_BASE_REF}") (default branch: $(sanitize_ref_for_log "${REPO_DEFAULT_BRANCH}")); issue #${issue_number} labels, state and lineage left unchanged (not a target merge; declared=$(sanitize_ref_for_log "${declared_branch}"))."
               continue
@@ -770,7 +847,7 @@ jobs:
             # Issue #7657: a merged PR that delivered only part of a standalone
             # issue keeps it open and restarts clarify for the deferred items.
             if [ "${PR_MERGED}" = "true" ] && [ "${is_managed_child}" != "true" ] \
-              && { [ "${target_merge_reason}" = "default_branch" ] || [ "${target_merge_reason}" = "declared_integration_branch" ]; } \
+              && { [ "${target_merge_reason}" = "default_branch" ] || [ "${target_merge_reason}" = "declared_integration_branch" ] || [ "${target_merge_reason}" = "check_triage_pr_branch" ]; } \
               && handle_partial_delivery_merge "${issue_number}"; then
               continue
             fi

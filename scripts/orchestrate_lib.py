@@ -2849,6 +2849,69 @@ def extract_integration_branch(body: str) -> str:
 	return (alias_match.group(1) or alias_match.group(2) or "").strip()
 
 
+# Issue #8955: the failing-PR marker scripts/check_failure_triage.sh writes
+# into an ai:check-triage issue body. Must stay identical to
+# check_triage_resolution.PR_MARKER_RE (a test compares the two patterns);
+# copied rather than imported because issue_pr_status.yml stages only this
+# module, and check_triage_resolution imports workflow_failure_heal.
+CHECK_TRIAGE_PR_MARKER_RE = re.compile(r"^ {0,3}<!-- check-failure-triage:pr=([1-9][0-9]{0,9}) -->\s*$")
+CHECK_TRIAGE_LABEL_NAME = "ai:check-triage"
+
+
+def check_triage_target_branch(
+	issue_body: Any,
+	labels: Any,
+	author_login: Any,
+	pipeline_login: Any,
+) -> int | None:
+	"""Return the failing PR number an ai:check-triage issue names, or None.
+
+	Issue #8955: a check-triage fix PR merges into the head branch of the PR
+	whose check failed, not into the default branch. Callers
+	(issue_pr_status.yml and close_merged_issues_sweep) count a merge into
+	that PR's head branch as completion with reason ``check_triage_pr_branch``.
+
+	Trust rules (all must hold, otherwise None):
+	- ``labels`` contains ``ai:check-triage`` (strings or ``{"name": ...}``
+	objects; anything else is ignored);
+	- ``author_login`` and ``pipeline_login`` are non-empty and equal,
+	case-insensitively (the issue was written by the pipeline login);
+	- the body has exactly one ``<!-- check-failure-triage:pr=<N> -->`` line
+	(CHECK_TRIAGE_PR_MARKER_RE); zero or several markers return None.
+
+	API budget: this function makes no API calls. Callers make at most one
+	``GET pulls/<N>`` per issue, only after the existing target-branch rules
+	have rejected the merge, and compare the API's ``head.ref`` (never issue
+	text) with the merged PR's base, requiring a same-repository head.
+	"""
+	if not isinstance(labels, list):
+		return None
+	label_names: set[str] = set()
+	for entry in labels:
+		if isinstance(entry, str):
+			label_names.add(entry)
+		elif isinstance(entry, dict) and isinstance(entry.get("name"), str):
+			label_names.add(entry["name"])
+	if CHECK_TRIAGE_LABEL_NAME not in label_names:
+		return None
+	if not isinstance(author_login, str) or not isinstance(pipeline_login, str):
+		return None
+	author = author_login.strip()
+	pipeline = pipeline_login.strip()
+	if not author or not pipeline or author.lower() != pipeline.lower():
+		return None
+	if not isinstance(issue_body, str) or not issue_body:
+		return None
+	markers = [
+		match.group(1)
+		for match in (CHECK_TRIAGE_PR_MARKER_RE.match(line.rstrip("\r")) for line in issue_body.split("\n"))
+		if match
+	]
+	if len(markers) != 1:
+		return None
+	return int(markers[0])
+
+
 def extract_tracking_issue_number(body: str) -> int | None:
 	"""Extract the first tracking-issue number from markdown body text."""
 	if not body:
@@ -3750,6 +3813,25 @@ def cmd_extract_integration_branch(args: argparse.Namespace) -> int:
 	branch = extract_integration_branch(body)
 	if branch:
 		print(branch)
+	return 0
+
+
+def cmd_check_triage_target_pr(args: argparse.Namespace) -> int:
+	"""Print the failing PR number an ai:check-triage issue names, or nothing.
+
+	Issue #8955. Reads the issue body from stdin and applies
+	check_triage_target_branch with ``--labels-json``, ``--author`` and
+	``--pipeline-login``. Always exits 0; malformed ``--labels-json`` prints
+	nothing so callers fail closed. Makes no API calls.
+	"""
+	body = sys.stdin.read()
+	try:
+		labels = json.loads(args.labels_json or "[]")
+	except (TypeError, ValueError):
+		return 0
+	pr_number = check_triage_target_branch(body, labels, args.author or "", args.pipeline_login or "")
+	if pr_number is not None:
+		print(pr_number)
 	return 0
 
 
@@ -4682,6 +4764,15 @@ def build_parser() -> argparse.ArgumentParser:
 		help="Print the integration branch declared in an issue body read from stdin",
 	)
 	p_extract_branch.set_defaults(func=cmd_extract_integration_branch)
+
+	p_triage_target = subparsers.add_parser(
+		"check-triage-target-pr",
+		help="Print the failing PR number a pipeline-authored ai:check-triage issue body (stdin) names",
+	)
+	p_triage_target.add_argument("--labels-json", default="[]")
+	p_triage_target.add_argument("--author", default="")
+	p_triage_target.add_argument("--pipeline-login", default="")
+	p_triage_target.set_defaults(func=cmd_check_triage_target_pr)
 
 	p_unrouted = subparsers.add_parser("unrouted-blocked-comments", help="Flag blocked issues whose newest trusted human reply was never routed (JSON on stdin)")
 	p_unrouted.add_argument("--grace-minutes", type=int, default=15)
