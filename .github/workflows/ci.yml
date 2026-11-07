@@ -2627,11 +2627,13 @@ jobs:
       # this step arrived in #8772; it is the only step #8772 added to group 4
       # and the group's largest pinned step that does not run in parallel
       # processes (53 modules, about 568 tests, 134 subprocess call sites).
-      # Group 0's only recorded total is 17m01s of 20 minutes (run 40175309052,
-      # #8118), measured while it still carried the unblock step (860s in
-      # failing run 40065164413), which #8118 then moved out. Since then group
-      # 0 gained synthesize-smoke (#8759) and the clarify loop guard (#8777),
-      # and no group 0 total has been recorded. Every other group has a later
+      # Group 0's recorded totals are 15m09s (run 40122910216, #8080), 16m45s
+      # (run 40165437476, #8113) and 17m01s (run 40175309052, #8118); the
+      # last was measured while it still carried the unblock step, which
+      # #8118 then moved out (that step's only recorded figure, 860s in
+      # failing run 40065164413, was measured while it ran in group 3). Since
+      # #8118 group 0 gained synthesize-smoke (#8759) and the clarify loop
+      # guard (#8777), and no group 0 total has been recorded. Every other group has a later
       # recorded total above 15 minutes: group 1 16m44s (#8805), group 2
       # 15m18s (#8772), group 3 19m30s (#8472), group 4 15m15s (#8980). The pick
       # assumes group 0's load fell when the unblock step left. Budget-watch

@@ -3338,8 +3338,10 @@ class MovedPollGroupOne8805StepsContractTest(unittest.TestCase):
 # (run 42359183844, budget-watch issue #8980): step name -> new matrix group.
 # The run's step timings could not be read (an estimate, not a measurement).
 # This was the only step #8772 added to group 4, which budget-watch had not
-# named since #8150; group 0 has the oldest budget-watch record (#8118). Name
-# and body unchanged; only the guard moved.
+# named since #8150. Group 0's latest budget-watch record (17m01s, #8118)
+# predates the unblock step leaving it, and no group 0 total has been recorded
+# since; see the ci.yml comment for the basis and its limits. Name and body
+# unchanged; only the guard moved.
 POLL_GROUP_FOUR_8980_SOURCE_GROUP = 4
 POLL_GROUP_FOUR_8980_SETUP_STEP = "Install Python CI dependencies"
 POLL_GROUP_FOUR_8980_STEP_NAME = POLL_GROUP_TWO_8772_STEP_NAME
