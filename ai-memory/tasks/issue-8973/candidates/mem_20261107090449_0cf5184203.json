@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The fix needs `scripts/review_untrusted_workspace.py` and `scripts/review_conflict_prepare.sh`, but this heal issue's verified scope does not include them, and the scope cannot be widened by editing this issue. How should the fix go ahead?\nChoices:\n- A: Close this heal issue and file a regular (non-heal) issue with the same diagnosis. Its scope would cover the two scripts plus `tests/**` and a `changelog.d/` entry. That issue then runs the normal clarify, plan and implement pipeline. (RECOMMENDED)\n- B: Keep this issue and only add the failing regression test, plus a changelog note about the gap, inside the current scope. The bug stays unfixed until a later issue changes the scripts.\n  **Note:** with B, the resolver keeps failing closed on `orchestrator/project-8434` (PR #8436) and on every later integration branch that changes this hook.\n- C: Keep this issue and plan the change to the scripts anyway, knowing the plan gate will hold it as out of scope. Someone would then have to approve it manually, and the implement-time scope guard may still refuse the commit.\n  **Note:** C is likely to stall at plan or implement, because `HEAL_SCOPE_FILE` comes from the unedited marker.\nMissing-context notes:\n- The intake did not carry the diagnosis's \"Affected files\" into the scope marker. `render_heal_scope_marker` (`scripts/workflow_failure_heal.py:3703-3735`) only takes the crash file, the workflow paths, the changed files and the test subjects. That gap is a separate intake problem and is not part of this question.\n- Nobody knows yet whether the template twin also conflicted in run 42355218108. The suggested fix covers both cases: the stage-0 template merge when the template merged cleanly, and the paired-live mirroring when it conflicted. So this does not block planning.",
+  "fingerprint": "99c2067551c3fcb475cf6e048701e98c0643a2bf29ae6db629cfebf9215240f8",
+  "lineage": {
+    "issue_number": 8973,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42357847683",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42357847683",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261107090449_0cf5184203",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8973,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42357847683"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8973 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-07T09:04:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
