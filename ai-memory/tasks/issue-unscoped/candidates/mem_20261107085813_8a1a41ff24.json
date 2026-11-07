@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:1856-1867 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: An `OSError` (e.g., missing or unreadable file) during `_read_text_file` crashes the guard instead of failing closed, because the `try-except` block only catches `ValueError` and `TypeError`.\n  WHY: The reviewer says OSError would propagate and crash the process, causing an unhandled guard state or unavailability instead of failing closed; source severity was NIT, mapped to low; reviewers disagree: anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash say `_read_text_file` (lines 1740-1745) already catches `(OSError, UnicodeDecodeError)` and returns \"\", so `json.loads(\"\")` raises ValueError, which is caught; openai_gpt-6-luna raised the same point only as a hardening suggestion (availability/diagnostic concern, not a scope bypass).\n- scripts/files_touched_scope_guard.py:1856-1867 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The cross-pollination suggestion to add `OSError` to the `except (ValueError, TypeError)` clause rests on a misreading: `_read_text_file` (lines 1740-1745) already catches `OSError`/`UnicodeDecodeError` and returns `\"\"`, which then raises `json.JSONDecodeError` (a `ValueError`) and is caught.\n  WHY: The chain `OSError -> \"\" -> json.JSONDecodeError -> ValueError caught -> allow_companions = False` already fails closed, and `test_cli_issue_body_mode_auto_heal_companions` covers it, so the change would be churn, not a fix; source severity was NIT, mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:lines 1856-1867 | severity=NIT | confidence=4\n  PROBLEM: An `OSError` (e.g., missing or unreadable file) during `_read_text_file` crashes the guard instead of failing closed.\n  WHY: The `try-except` block only catches `ValueError` and `TypeError`, so `OSError` propagates and crashes the process, which can leave the guard in an unhandled state or unavailable instead of failing closed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/files_touched_scope_guard.py:lines 1856-1867 (the auto-heal companion metadata parse block) | severity=NIT | confidence=4\n  PROBLEM: The suggestion to add `OSError` to `except (ValueError, TypeError)` misreads the code: `_read_text_file` (lines 1740-1745) already catches `OSError` and `UnicodeDecodeError` and returns `\"\"`; `json.loads(\"\")` then raises `json.JSONDecodeError` (a `ValueError`), which is caught, so `allow_companions` defaults to `False`.\n  WHY: It does not fail at runtime; the chain `OSError -> \"\" -> json.JSONDecodeError -> ValueError caught -> allow_companions = False` already fails closed, so the suggested change would be churn, not a fix.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- HARDENING_SUGGESTION: scripts/files_touched_scope_guard.py:lines 1861\u20131867\n  PROBLEM: If the issue metadata path cannot be read, `_read_text_file` raises `OSError`, which this block does not catch, so the guard exits with an exception instead of disabling the companion allowance.\n  WHY: Callers fail closed, so this is an availability and diagnostic concern, not a scope bypass; suggested minimal fix: include `OSError` in the exception tuple (est. 1 line; HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d310f43618a9d2cba8624f2a95cd2dadd09c9e165e354c48d1f1bff001209582",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8962,
+    "run_id": "42354951683",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42354951683",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107085813_8a1a41ff24",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8962,
+    "run_id": "42354951683"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-07T08:58:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
