@@ -951,6 +951,16 @@ describe("chatgpt writer", () => {
 		expect(storedRecord(store, "ALPHA")?.last_refresh).toBe(new Date(NOW_MS + 60_000).toISOString());
 	});
 
+	it("a reseed that reports no usage starts with unknown usage, not the previous login's", async () => {
+		const s = stub();
+		const store = fakeStore();
+		await writer(s, store, "PUT", "ALPHA", writeBody({ usage: { primary: { used_percent: 10, resets_in_seconds: 900 }, secondary: { used_percent: 97, resets_at: 1760000000 } } }));
+		expect(await writer(s, store, "PUT", "ALPHA", writeBody({ base_generation: 1, seed_sha256: SEED2, usage: null, auth_json: authJson("RESEED") }))).toEqual({ status: 200, text: '{"generation":2}' });
+		expect(storedRecord(store, "ALPHA")?.usage).toEqual({ five_hour: null, weekly: null, resets: { five_hour: null, weekly: null } });
+		const read = await call(s, chatgptRequest(await sign(claims()), "/v1/chatgpt", "POST"), chatgptEnv(store));
+		expect(read.body.account).toBe("ALPHA");
+	});
+
 	it("a reseed with a new hash replaces the record but still checks base_generation", async () => {
 		const s = stub();
 		const store = fakeStore();
