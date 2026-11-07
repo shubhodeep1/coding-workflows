@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_conflict_resolve_sandbox_only.py:1064-1090 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The fixture-shape assertion `assert sorted(_unmerged(repo)) == sorted([PREPUSH_HOOK, PREPUSH_HOOK_TEMPLATE])` sits inside the strict xfail in `test_prepush_hook_pair_is_listed_in_paired_live_report`, so a broken fixture would record XFAIL instead of a failure.\n  WHY: CI would stay green without exercising the paired-live report behaviour, and the sibling file has a non-xfail fixture-shape test while this one has none. All reviewers rated it NIT, so there is no severity disagreement.\n- tests/test_conflict_guard_hook_template_merge.py:355 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test uses @pytest.mark.xfail(strict=True), so if the `_with_repo` fixture stops creating the required merge conflicts, the test XFAILs instead of failing.\n  WHY: A broken fixture could be hidden by the XFAIL result. The source rated it NIT.\n- tests/test_conflict_guard_hook_template_merge.py:349-385 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The xfail test `test_prepush_hook_integration_sync_conflict_is_resolved_from_template` also depends on the region helpers (`_guard_and_union_region` / `_hook_only_commit_region`) finding the `GUARD_HOOK_LIVE_PATH` anchor, which the shape test `test_prepush_hook_fixture_has_the_clean_template_shape` does not validate.\n  WHY: If the anchor moves, `str.index` raises ValueError, which `raises=AssertionError` does not swallow, so pytest reports an error rather than XFAIL. This is non-silent and advisory only. The source rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_conflict_resolve_sandbox_only.py:`test_prepush_hook_pair_is_listed_in_paired_live_report` | severity=NIT | confidence=4\n  PROBLEM: The fixture-shape assertion sits inside the strict xfail, which expects AssertionError, so a broken fixture would record XFAIL. The sibling test has a non-xfail companion and this one does not.\n  WHY: CI would stay green without exercising the paired-live report behaviour.\n- HARDENING: tests/test_review_conflict_resolve_sandbox_only.py `test_prepush_hook_conflict_is_never_taken_from_base_on_integration_sync` has no positive control. Add a `_run_take_base(tmp_path, repo)` case with no kwargs and assert `CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE` in stdout (about 8 lines). HARDENING_RISK_SCORE: 1\n- TASK GAPS: none. The script changes are deferred explicitly in the PR description.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_conflict_guard_hook_template_merge.py:355 | severity=NIT | confidence=4\n  PROBLEM: The test uses @pytest.mark.xfail(strict=True), so if the `_with_repo` fixture fails to create the merge conflicts, the test XFAILs instead of failing.\n  WHY: A broken fixture could be hidden, and changes to the integration-sync conflict logic would be harder to detect.\n- HARDENING: tests/test_review_conflict_resolve_sandbox_only.py `test_prepush_hook_conflict_is_never_taken_from_base_on_integration_sync` has no positive control. Add a case invoking `_run_take_base` without kwargs and expect `CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE` in the output (about 8 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_conflict_resolve_sandbox_only.py:1066-1088 | severity=NIT | confidence=4\n  PROBLEM: The strict xfail on `test_prepush_hook_pair_is_listed_in_paired_live_report` wraps the first assertion, which checks that the `_paired_hook_conflict` fixture produced conflicts on both paths. The companion file adds a separate non-xfail test (`tests/test_conflict_guard_hook_template_merge.py:352-366`), and this file has none.\n  WHY: A fixture regression would record XFAIL and CI would stay green without exercising the paired-live report behaviour. The existing `test_paired_live_copy_is_never_taken_from_base` (line 768) only covers `template_differs=True`.\n- HARDENING: tests/test_review_conflict_resolve_sandbox_only.py `test_prepush_hook_conflict_is_never_taken_from_base_on_integration_sync` (lines 1107-1121) has no positive control. Add a case with `{\"target_branch\": \"main\"}` and assert that `\"CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE pr= path=\" + PREPUSH_HOOK` appears, that `host_only_conflict_scope.tsv` exists, and that `CONFLICT_RESOLVED=true` is set (about 6 lines). HARDENING_RISK_SCORE: 1\n- TASK GAPS: none. The script-level fix is explicitly deferred.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_conflict_resolve_sandbox_only.py:1066-1071 | severity=NIT | confidence=4\n  PROBLEM: The strict xfail covers the assertion that the fixture produced conflicts on both the live hook and the template.\n  WHY: If the fixture shape breaks, the line 1071 assertion raises AssertionError and pytest records it as an expected failure, so CI can pass without exercising the paired-live report behaviour.\n- HARDENING: none. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_conflict_resolve_sandbox_only.py:1064-1090 | severity=NIT | confidence=4\n  PROBLEM: The strict xfail wraps the fixture-shape assertion `assert sorted(_unmerged(repo)) == sorted([PREPUSH_HOOK, PREPUSH_HOOK_TEMPLATE])`. The sibling file adds `test_prepush_hook_fixture_has_the_clean_template_shape` (tests/test_conflict_guard_hook_template_merge.py:349-368), and this file has no non-xfail guard.\n  WHY: A `_paired_hook_conflict` regression would be recorded silently as XFAIL, so CI stays green and the gap marker loses its meaning.\n- tests/test_conflict_guard_hook_template_merge.py:349-368 vs 371-385 | severity=NIT | confidence=2\n  PROBLEM: The shape test does not validate that the region helpers (`_guard_and_union_region` / `_hook_only_commit_region`, lines 374-375) still find the `GUARD_HOOK_LIVE_PATH` anchor that the xfail test depends on.\n  WHY: If the anchor moves, `str.index` raises ValueError. Under pytest that surfaces as an error, not XFAIL, so it is inconsistent but non-silent and advisory only.\n- HARDENING: tests/test_review_conflict_resolve_sandbox_only.py near line 1066. Extract the `sorted(_unmerged(repo))` check into a small non-xfail test that mirrors `test_prepush_hook_fixture_has_the_clean_template_shape` (about 8 lines). HARDENING_RISK_SCORE: 1\n- TASK GAPS: none. The script fixes are explicitly deferred by the PR description.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f16d3c0a7d060b72d08b42c7a79a57f9cf623b593ff84a49d69eef09c6b80151",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8979,
+    "run_id": "42360144002",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42360144002",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107102150_6d9b05ad03",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8979,
+    "run_id": "42360144002"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T10:21:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
