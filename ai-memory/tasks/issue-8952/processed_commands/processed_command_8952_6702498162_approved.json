@@ -5,13 +5,31 @@
   "entry_id": "processed_command_8952_6702498162_approved",
   "issue_number": 8952,
   "metadata": {
+    "branch": "ai/issue-8952",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "agents.d/8952-clean-same-head-skip.md",
+      "changelog.d/8952-skip-clean-same-head-review.md",
+      "scripts/review_autofix_step_evaluate_gate.sh",
+      "scripts/review_autofix_step_post_editor_summary.sh",
+      "tests/test_ci_wires_every_test_file.py",
+      "tests/test_review_autofix_clean_same_head_gate.py",
+      "tests/test_review_autofix_terminal_same_head_gate.py",
+      "tests/test_review_freshness_ci_failed.py"
+    ],
+    "issue_number": 8952,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8952",
+    "pr_number": 8958,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8958",
+    "run_attempt": "1",
+    "run_id": "42340459334",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42340459334"
   },
   "run_attempt": 1,
   "run_id": "42340459334",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-07T04:56:12Z",
+  "status": "completed",
+  "timestamp": "2026-11-07T05:44:19Z",
   "workflow": "implement"
 }
