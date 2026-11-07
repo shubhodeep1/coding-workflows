@@ -2010,7 +2010,8 @@ def _auto_heal_meta(login: str = PIPELINE, association: str = "NONE", number: in
 
 
 def test_auto_heal_companion_path_shapes() -> None:
-	for ok in _AUTO_HEAL_COMPANIONS + ["db/contracts/x.yml", "tests/test_a.py"]:
+	for ok in _AUTO_HEAL_COMPANIONS + ["db/contracts/x.yml", "tests/test_a.py", "db/contracts/_locks.yml",
+			"tests/test_streaks-quest.py", "tests/test_a.b.py"]:
 		assert guard.is_auto_heal_companion_path(ok), ok
 	for bad in ("db/contracts/../x.yml", "db/contracts/sub/x.yml", "tests/sub/test_x.py", "tests/conftest.py",
 			"tests/helper.py", "db/contracts/x.yaml", "db/contracts/.x.yml", "ft.games/app.py",
@@ -2093,6 +2094,13 @@ def test_plan_gate_auto_heal_companions() -> None:
 			code, record = _run_plan_gate_cli(other, "true", _auto_heal_meta(), login=login)
 			assert record["reason"] == "plan_files_outside_files_touched", record
 			assert "ft.games/other.py" in record["denied_paths"], record
+		# The record key marks only approvals that needed the rule: not a hold
+		# on a non-companion path, and not a plan with no companion path.
+		code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN + "- `ft.games/other.py`\n", "true", _auto_heal_meta())
+		assert record["decision"] == "hold" and "auto_heal_companions" not in record, record
+		code, record = _run_plan_gate_cli("## Files likely to change\n- `ft.games/app.py`\n", "true",
+			_auto_heal_meta())
+		assert code == 0 and "auto_heal_companions" not in record, record
 		# Without the marker the record is unchanged.
 		code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN, "true", _auto_heal_meta(marker=False), login="")
 		assert record["reason"] == "plan_files_outside_files_touched", record

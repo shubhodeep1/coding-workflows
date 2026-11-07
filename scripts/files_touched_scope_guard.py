@@ -548,8 +548,10 @@ def is_own_issue_fragment(path: str, issue_number: object) -> bool:
 # shapes are in scope. The marker alone grants nothing: the author comes from
 # the issue's API metadata, never from the body.
 _AUTO_HEAL_REMEDIATION_RE = re.compile(r"<!-- auto-heal-remediation:v1 ")
-_AUTO_HEAL_CONTRACT_RE = re.compile(r"^db/contracts/[A-Za-z0-9][A-Za-z0-9._-]*\.yml$")
-_AUTO_HEAL_TEST_RE = re.compile(r"^tests/test_[A-Za-z0-9_]+\.py$")
+# A leading `_` is allowed for collections such as `_locks` (CLAUDE.md §12);
+# a leading `.` (hidden file) and any `/` (nesting) are not.
+_AUTO_HEAL_CONTRACT_RE = re.compile(r"^db/contracts/[A-Za-z0-9_][A-Za-z0-9._-]*\.yml$")
+_AUTO_HEAL_TEST_RE = re.compile(r"^tests/test_[A-Za-z0-9_.-]+\.py$")
 
 
 def is_auto_heal_companion_path(path: str) -> bool:
@@ -1116,8 +1118,11 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 			outside = plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "",
 				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number"),
 				author_login=issue_author, pipeline_login=pipeline_login)
-			auto_heal_companions = auto_heal_companions_allowed(issue_meta.get("body") or "", issue_author,
-				pipeline_login)
+			# The record key marks an approval that needed the rule: some plan
+			# path is in scope only because of the companion allowance.
+			companions_used = auto_heal_companions_allowed(issue_meta.get("body") or "", issue_author,
+				pipeline_login) and bool(plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "",
+				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number")))
 			if outside and not (isinstance(pipeline_login, str) and LOGIN_RE.fullmatch(pipeline_login)) \
 					and LOGIN_RE.fullmatch(issue_author) \
 					and _AUTO_HEAL_REMEDIATION_RE.search(issue_meta.get("body") or "") \
@@ -1131,6 +1136,7 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 				decision, reason, denied = PLAN_DECISION_HOLD, "identity_unavailable", outside
 			elif outside:
 				decision, reason, denied = PLAN_DECISION_HOLD, PLAN_FILES_TOUCHED_GATE_REASON, outside
+			auto_heal_companions = companions_used and decision == PLAN_DECISION_APPROVE
 		if decision == PLAN_DECISION_HOLD and reason == "path_not_granted":
 			# The counterfactual approval would be a proposed pipeline plan
 			# grant when the proposal produced this hold, and the real gate
