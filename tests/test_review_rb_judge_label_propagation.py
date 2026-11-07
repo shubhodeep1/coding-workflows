@@ -2649,7 +2649,7 @@ RB_REMAINING="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.remaining_issues_summar
 def test_review_blocked_pr_metadata_parsing_uses_printf_under_xpg_echo() -> None:
 	src = _rb_judge_text()
 
-	assert '_rps_new="$(printf \'%s\\n\' "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}"' in src
+	assert '_rps_merged_seen="$(printf \'%s\\n\' "${_rps_cur}" | jq -r \'index("ai:merged") != null\'' in src
 	assert '_pr_state="$(printf \'%s\\n\' "${_pr_meta}" | jq -r \'.state // ""\')"' in src
 	assert '_pr_merged="$(printf \'%s\\n\' "${_pr_meta}" | jq -r \'(.merged_at != null) or (.merged == true)\')"' in src
 	assert '_guard_pr_merged="$(printf \'%s\\n\' "${_guard_pr_meta}" | jq -r \'(.merged_at != null) or (.merged == true)\')"' in src
@@ -3086,7 +3086,57 @@ def test_resilient_phase_swap_allows_terminal_to_terminal() -> None:
 	"""close_and_reissue moves issues to ai:closed; a terminal target is
 	never blocked by the guard."""
 	state = _run_resilient_phase_swap(["ai:merged"], "ai:closed")
-	assert len(_put_label_calls(state)) == 1, state.get("api_calls")
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert _post_label_calls(state, "ai:closed"), state.get("api_calls")
+	deletes = _delete_label_calls(state)
+	# The initial GET saw ai:merged, so terminal-to-terminal replacement is
+	# still allowed and the merge-wins reconciliation does not fire.
+	assert any("ai%3Amerged" in arg for call in deletes for arg in call), deletes
+	assert not any("ai%3Aclosed" in arg for call in deletes for arg in call), deletes
+
+
+def _post_label_calls(state: dict, label: str) -> list[list[str]]:
+	return [
+		call for call in state.get("api_calls", [])
+		if "POST" in call and f"labels[]={label}" in call
+	]
+
+
+def test_resilient_phase_swap_closed_target_yields_to_concurrent_merged_and_keeps_unrelated_labels() -> None:
+	"""Terminal ai:closed swap is additive: a concurrent ai:merged and an
+	unrelated label added between the initial GET and the reconciliation
+	GET are never removed, and merge evidence wins over ai:closed."""
+	state = _run_resilient_phase_swap(
+		["ai:review-blocked", "ai:orchestrator-managed"],
+		"ai:closed",
+		labels_after_mutation=["ai:merged", "ai:closed", "ai:orchestrator-managed", "ai:followup"],
+	)
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert _post_label_calls(state, "ai:closed"), state.get("api_calls")
+	deletes = _delete_label_calls(state)
+	assert any("ai%3Areview-blocked" in arg for call in deletes for arg in call), deletes
+	assert any("ai%3Aclosed" in arg for call in deletes for arg in call), deletes
+	for kept in ("ai%3Amerged", "ai%3Aorchestrator-managed", "ai%3Afollowup"):
+		assert not any(kept in arg for call in deletes for arg in call), (kept, deletes)
+	assert (
+		"terminal label ai:merged appeared while swapping #41; removed terminal target ai:closed"
+		in state["_stdout"]
+	)
+
+
+def test_resilient_phase_swap_closed_target_replaces_review_blocked_without_put() -> None:
+	state = _run_resilient_phase_swap(
+		["ai:review-blocked", "ai:orchestrator-managed"],
+		"ai:closed",
+		labels_after_mutation=["ai:closed", "ai:orchestrator-managed"],
+	)
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert _post_label_calls(state, "ai:closed"), state.get("api_calls")
+	deletes = _delete_label_calls(state)
+	assert any("ai%3Areview-blocked" in arg for call in deletes for arg in call), deletes
+	assert not any("ai%3Aclosed" in arg for call in deletes for arg in call), deletes
+	assert not any("ai%3Aorchestrator-managed" in arg for call in deletes for arg in call), deletes
+	assert "appeared while swapping" not in state["_stdout"]
 
 
 if __name__ == "__main__":
