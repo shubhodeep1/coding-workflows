@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "When changing a workflow, shell script, or review gate, look for the corresponding changelog.d convention and add focused tests for the behavior. The repository also has tests/test_ci_wires_every_test_file.py, so new test files may need to be registered with CI.",
+  "fingerprint": "b2d4ace3086c856365328934ca5545be5bab4d63fc514619778e449dbeeff49e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42383560759",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42383560759",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8952",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8976",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8977",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8978",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8990",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8958",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8981",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8982",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8985",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8991"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261107150311_26a14b334e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow behavior changes are typically paired with a focused changelog.d entry and regression tests.",
+  "timestamps": {
+    "created_at": "2026-11-07T15:03:11Z",
+    "promoted_at": "2026-11-07T15:03:57Z",
+    "superseded_at": null
+  }
+}
