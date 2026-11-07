@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/analyze_workflow_logs.py:400-415 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: prepare_analysis_context() sets `unknown_duration_count: 0` via setdefault (lines 400-403 and 413-415) on summary_stats-only per_repo / per_workflow_family entries that have no run rows.\n  WHY: A 0 reads as a confirmed count when the analyzer has no data to check, so unknown is conflated with zero (all reviewers rated this NIT; the added test pins it at tests/test_analyze_workflow_logs.py:504-514).\n- CLAUDE.md; agents.md:n/a | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The copilot-pull-request-reviewer check (run 42381559401) fails with `custom_instructions_too_large` while loading the repository's AGENTS.md and CLAUDE.md.\n  WHY: The check fails before reading the diff and produces no review. The failure is outside the PR diff, and the PR touches neither file (both reviewers rated it NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/analyze_workflow_logs.py:400-403, 413-415 | severity=NIT | confidence=3\n  PROBLEM: `entry.setdefault(\"unknown_duration_count\", 0)` gives summary_stats-only entries a count of 0, although they can describe nonzero runs (test: `\"o/stats-only\": {\"total_runs\": 2}`).\n  WHY: A 0 reads as \"no unknown durations\" when there are no timestamps to check. The reviewer calls this minor semantic imprecision, not a crash.\n- agents.md and CLAUDE.md (check run copilot-pull-request-reviewer, 42381559401) | severity=NIT | confidence=5\n  PROBLEM: The Copilot reviewer fails with `custom_instructions_too_large` while loading AGENTS.md and CLAUDE.md. The PR touches neither file.\n  WHY: The check reports failure and Copilot produces no review. Fixing it needs a separate change, and \u00a725 forbids adding text to agents.md directly.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/analyze_workflow_logs.py: new setdefault loops after the `for key, value in per_repo.items()` loop, mirrored for per_workflow_family (around lines 400-403 and 413-415) | severity=NIT | confidence=4\n  PROBLEM: The new loops write `unknown_duration_count: 0` into summary-only entries with no run rows. Such entries can describe nonzero runs, as the added test shows with `o/stats-only` at total_runs 2.\n  WHY: Downstream consumers of analysis_context.json would read \"0 of N runs unknown\", which is false. The comment \"their count is 0\" reinforces the misreading, and the changelog fragment and test pin the contract.\n- HARDENING_SUGGESTIONS (scripts/analyze_workflow_logs.py, the two setdefault loops) | HARDENING_RISK_SCORE=1\n  PROBLEM: Summary-only entries conflate \"checked and found zero\" with \"no run rows to check\".\n  WHY: Fix (a): drop the loops and leave the field absent (smaller change). Fix (b): default to None. The test assertion would change to match. Estimated \u22644 lines.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/analyze_workflow_logs.py:400-403, 413-415 (prepare_analysis_context) | severity=NIT | confidence=4\n  PROBLEM: Summary-only repository and workflow-family entries are assigned unknown_duration_count: 0 when they have no matching run rows.\n  WHY: An entry can report total_runs greater than zero with timestamps unavailable, so the zero is presented as confirmed. The added test covers this shape at tests/test_analyze_workflow_logs.py:504-514.\n- CLAUDE.md; agents.md | severity=NIT | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check (run 42381559401) fails with `custom_instructions_too_large` while constructing its prompt from the repository instructions.\n  WHY: The check exits before producing a review. The failure is outside the PR diff but present on the PR head.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/analyze_workflow_logs.py:400-403, 413-415 | severity=NIT | confidence=4\n  PROBLEM: summary_stats-only keys, which have no matching rows in run_metrics, get `unknown_duration_count` hardcoded to 0. The test shows `o/stats-only: {total_runs: 2}`. The comment at line 400 states an assumption the code cannot verify.\n  WHY: Downstream analysis reads a confirmed 0 when the analyzer had no rows to check. The blast radius is low (an advisory field), but it is a semantics regression versus omitting the field.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "47dcdc5d3c1e29288ce49dfce4533c2abea2609376bf46ed802196f2c6981b7c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8983,
+    "run_id": "42381553456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42381553456",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107144400_4bf13f6383",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8983,
+    "run_id": "42381553456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T14:44:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
