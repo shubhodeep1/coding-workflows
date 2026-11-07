@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8952,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8952\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8958\",\"pr_number\":8958,\"branch\":\"ai/issue-8952\",\"run_id\":\"42340459334\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42340459334\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"README.md\",\"agents.d/8952-clean-same-head-skip.md\",\"changelog.d/8952-skip-clean-same-head-review.md\",\"scripts/review_autofix_step_evaluate_gate.sh\",\"scripts/review_autofix_step_post_editor_summary.sh\",\"tests/test_ci_wires_every_test_file.py\",\"tests/test_review_autofix_clean_same_head_gate.py\",\"tests/test_review_autofix_terminal_same_head_gate.py\",\"tests/test_review_freshness_ci_failed.py\"]}",
+  "fingerprint": "4f005335615c1643fc4f77f1dc6e540f886a95064a4a71cd825f99da5daf0f59",
+  "lineage": {
+    "issue_number": 8952,
+    "parent_ids": [],
+    "pr_number": 8958,
+    "run_id": "42340459334",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42340459334",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8958"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261107054344_2d62759edd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8952,
+    "level": "run",
+    "pr_number": 8958,
+    "run_id": "42340459334"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8952: https://github.com/shubhodeep1/coding-workflows/pull/8958",
+  "timestamps": {
+    "created_at": "2026-11-07T05:43:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
