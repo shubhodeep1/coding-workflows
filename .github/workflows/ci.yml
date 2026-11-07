@@ -936,6 +936,27 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
 
+      # Moved from tests-heal-plan-and-validation, which took 16m08s of its 20
+      # minutes on main (run 42373283876, budget-watch issue #8993). Step
+      # timings could not be read; picked as that job's next slowest unsplit
+      # steps in the planning sandbox (about 29s and 23s, relative weights
+      # only). This job has the fewest subprocess call sites of the 20-minute
+      # non-matrix jobs (about 221), and nothing has moved into it since #8730
+      # moved its largest unsplit step out. Conflict-dispatch first came to the
+      # heal job from tests-release-and-log-analysis (#8208). Names and bodies
+      # unchanged.
+      - name: Merge-base freshness gate (pr_checks_lib) tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_base_freshness_gate.py
+
+      - name: Conflict-dispatch active-run visibility contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_dispatch_active_run_visibility.py
+          # Issue #4701: default-branch review dispatches and PR-named run lookups.
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_dispatch_default_branch.py
+
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -1289,11 +1310,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_checks_lib_required_filter.py
 
-      - name: Merge-base freshness gate (pr_checks_lib) tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_base_freshness_gate.py
-
       # Moved from tests-release-and-log-analysis, which took 15m01s of its 20
       # minutes on main (run 40368173231, budget-watch issue #8208). The run's
       # step timings could not be read, so these steps were chosen by their
@@ -1495,13 +1511,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_cancelled_rerun.py
 
-      - name: Conflict-dispatch active-run visibility contract tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_dispatch_active_run_visibility.py
-          # Issue #4701: default-branch review dispatches and PR-named run lookups.
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_dispatch_default_branch.py
-
       # Moved from tests-release-and-log-analysis, which took 15m13s of its 20
       # minutes on main (run 40716905879, budget-watch issue #8268). That run's
       # step timings were not readable, so these steps were chosen by estimated
@@ -1536,36 +1545,6 @@ jobs:
           python3 -m coverage erase
           python3 -m coverage run tests/test_semantic_cache.py
           python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
-
-      # Moved again from tests-promote-stall-and-review, which took 16m02s of
-      # its 20 minutes on main (run 41704793081, budget-watch issue #8771).
-      # The run's step timings could not be read, so the pick is an estimate
-      # from test and subprocess counts (9 modules, about 240 test functions),
-      # not a measurement. It was also the slowest step that could be timed in
-      # the planning sandbox (about 49s across eight of its nine modules, a
-      # relative weight only); 825s was the whole run's elapsed time, not this
-      # step's duration, when run 37499559962 failed at this
-      # step. This job's last budget-watch issue was #8395 (15m10s, run
-      # 40954844196), which moved a step out of it; its headroom now is an
-      # estimate, not a measurement. It needs no git
-      # history, Node or prepared .claude/ live copies. Name and body unchanged.
-      # Moved here unchanged from tests-hooks-and-orchestrator (15m01s of its 20
-      # minutes, run 40264887710, budget-watch issue #8179). Step timings were not
-      # readable when this was planned; chosen by test and subprocess counts
-      # (estimated, not measured). None of these needs git history, Node or the
-      # prepared .claude/ live copies. Names and bodies unchanged.
-      - name: Orchestrate lib unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_initial_state_v2.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_follow_up.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -2294,8 +2273,9 @@ jobs:
       # was that job's most subprocess-heavy unsharded step (about 152 tests
       # and about 57 subprocess call sites; an estimate, not a measurement).
       # This job lost its two most expensive steps in #8759; the other step of
-      # the #8771 move went to tests-heal-plan-and-validation so that no single
-      # job takes both. Name and body unchanged.
+      # the #8771 move first went to tests-heal-plan-and-validation, and #8993
+      # moved it on to this job (see "Orchestrate lib unit tests" below), so
+      # both #8771 steps now run here. Name and body unchanged.
       # Moved from tests-release-and-log-analysis, which took 20m16s of its
       # 20 minutes on main (run 39030079651, budget-watch issue #7560). It
       # moved there from tests-heal-plan-and-validation in #7383. Step timings
@@ -2309,6 +2289,44 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_clarify_isolated_run.py
+
+      # Moved again from tests-heal-plan-and-validation, which took 16m08s of
+      # its 20 minutes on main (run 42373283876, budget-watch issue #8993). The
+      # run's step timings could not be read; the pick is the heal job's
+      # slowest unsplit step in the planning sandbox (about 56s, a relative
+      # weight only). This job has the fewest test functions of the 20-minute
+      # non-matrix jobs (about 1,374) and lost 557 test functions in #8777.
+      # Release checks out full history; the step needs no Node or prepared
+      # .claude/ live copies. Name and body unchanged.
+      # Moved again from tests-promote-stall-and-review, which took 16m02s of
+      # its 20 minutes on main (run 41704793081, budget-watch issue #8771).
+      # The run's step timings could not be read, so the pick is an estimate
+      # from test and subprocess counts (9 modules, about 240 test functions),
+      # not a measurement. It was also the slowest step that could be timed in
+      # the planning sandbox (about 49s across eight of its nine modules, a
+      # relative weight only); 825s was the whole run's elapsed time, not this
+      # step's duration, when run 37499559962 failed at this
+      # step. This job's last budget-watch issue was #8395 (15m10s, run
+      # 40954844196), which moved a step out of it; its headroom now is an
+      # estimate, not a measurement. It needs no git
+      # history, Node or prepared .claude/ live copies. Name and body unchanged.
+      # Moved here unchanged from tests-hooks-and-orchestrator (15m01s of its 20
+      # minutes, run 40264887710, budget-watch issue #8179). Step timings were not
+      # readable when this was planned; chosen by test and subprocess counts
+      # (estimated, not measured). None of these needs git history, Node or the
+      # prepared .claude/ live copies. Names and bodies unchanged.
+      - name: Orchestrate lib unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_initial_state_v2.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_follow_up.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
 
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
