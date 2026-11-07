@@ -722,6 +722,16 @@ jobs:
 
           ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
           ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
+          # SEC-002 (wfopt-2026-10-03-2): the title is attacker-influenced. A CR/LF
+          # in it would make the text after the line break a new GITHUB_ENV
+          # assignment. Titles are single-line by meaning, so replace CR/LF with
+          # spaces and keep the single-line NAME=value write (Telegram MSG and
+          # --issue-title consumers expect one line). Never log the title itself.
+          ISSUE_TITLE_SINGLE_LINE="$(printf '%s' "${ISSUE_TITLE}" | tr '\r\n' '  ')"
+          if [ "${ISSUE_TITLE_SINGLE_LINE}" != "${ISSUE_TITLE}" ]; then
+            echo "::warning::ISSUE_TITLE_NEWLINE_STRIPPED issue=${ISSUE_NUMBER}"
+            ISSUE_TITLE="${ISSUE_TITLE_SINGLE_LINE}"
+          fi
           echo "ISSUE_TITLE=${ISSUE_TITLE}" >> "$GITHUB_ENV"
 
           # Extract tracking issue number from orchestrator metadata

@@ -27,6 +27,30 @@ UNWIRED_ALLOWLIST: dict[str, str] = {
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_orchestrate_integration_ahead_by_gate.py, which collects them"
 	),
+	"tests/test_orchestrate_poll_conflict_sweep_outcome.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_alert_levels_human_only.py, which collects them"
+	),
+	"tests/test_mark_validation_failed_deterministic_marker.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_alert_levels_human_only.py, which collects them"
+	),
+	"tests/test_github_env_issue_title_newline.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_clarify_respond_standalone.py, which collects them"
+	),
+	"tests/test_poller_rb_judge_incomplete_context.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_gh_pr_comments_argv_limit.py, which collects them"
+	),
+	"tests/test_review_autofix_clean_same_head_gate.py": (
+		"ci.yml is outside the file grant of the issue that added it (#8952); its cases run in CI "
+		"through tests/test_review_autofix_terminal_same_head_gate.py, which collects them"
+	),
+	"tests/test_poller_tracking_comments_dump_redaction.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_gh_retry_final_stderr_redaction.py, which collects them"
+	),
 }
 
 

@@ -1012,6 +1012,87 @@ def test_plan_files_outside_files_touched_uses_the_implement_matcher() -> None:
 	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body + scope_marker) == ["backend/withdrawal_flow.py"]
 
 
+# Consumer tele-funtoken-msg-scoring #5101: the planner put its Scope-mode
+# lines right under the Files bullets, and the justification named files it
+# chose NOT to change. The plan was held with plan_files_outside_files_touched.
+_SCOPE_MODE_PLAN = ("## Files likely to change\n- `ft.games/app.py`\n- `tests/test_wof_spin.py`\n"
+	"- `changelog.d/5101-wof-spin.md` (new)\n\nScope-mode: Hold Scope\n"
+	"Reuse-audit: extends _safe_record_streaks_quests_wof_spin\n"
+	"Scope-mode justification: deeper fixes would edit `ft.games/db_indexes.py` and "
+	"`ft.games/streaks_quests.py`, which are outside the protected scope.\n\n"
+	"## Automation / wiring\n- No new script.\n")
+
+
+def test_plan_file_paths_stop_at_scope_mode_metadata() -> None:
+	listed = ["ft.games/app.py", "tests/test_wof_spin.py", "changelog.d/5101-wof-spin.md"]
+	assert guard.extract_plan_file_paths(_SCOPE_MODE_PLAN) == listed
+	body = _body("ft.games/app.py", "tests/test_wof_spin.py", "changelog.d/*.md")
+	assert guard.plan_files_outside_files_touched(_SCOPE_MODE_PLAN, body, issue_number=5101) == []
+	# Bold, differently cased, listed or nested lead-ins are skipped too; the
+	# file bullet after them is still read.
+	for lead in ("**Scope-mode:** Hold Scope", "reuse-audit: extends f", "Implementation-time estimate: 20 minutes",
+			"__Scope-mode justification__: see `ft.games/db_indexes.py`",
+			"- **Scope-mode:** Hold Scope, not `ft.games/db_indexes.py`", "10. Reuse-audit: extends `e/f.py`",
+			"    - **Scope-mode:** Hold Scope, not `x/y.py`"):
+		plan = f"## Files likely to change\n- `a/b.py`\n{lead}\n- `c/d.py`\n"
+		assert guard.extract_plan_file_paths(plan) == ["a/b.py", "c/d.py"], lead
+	# The justification's prose continuation is skipped up to the next file bullet.
+	assert guard.extract_plan_file_paths("## Files likely to change\nScope-mode: Hold Scope\n"
+		"Scope-mode justification: deeper fixes would edit\n`x/rejected.py`, out of scope.\n- `a/b.py`\n") == ["a/b.py"]
+	# Metadata before the bullets does not hide them from the files_touched check.
+	before = "## Files likely to change\nScope-mode: Hold Scope\n- `a/b.py`\n- `e/out.py`\n"
+	assert guard.plan_files_outside_files_touched(before, _body("a/b.py")) == ["e/out.py"]
+	# A bullet that merely mentions the word does not end the list.
+	assert guard.extract_plan_file_paths(
+		"## Files likely to change\n- `a/b.py` (Scope-mode: n/a)\n- `c/d.py`\n") == ["a/b.py", "c/d.py"]
+	# The protected-path scan still reads the whole section (fails closed).
+	protected = _SCOPE_MODE_PLAN.replace("`ft.games/db_indexes.py`", "`scripts/x.sh`")
+	assert "scripts/x.sh" in guard.extract_plan_automation_paths(protected)
+	# The heal-scope gate still checks an exact file listed after the metadata.
+	with tempfile.TemporaryDirectory() as tmp:
+		plan_file, scope_file = Path(tmp, "plan.md"), Path(tmp, "scope.txt")
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n- `e/out.py`\n",
+			encoding="utf-8")
+		scope_file.write_text("a/b.py\n", encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "heal_scope_plan_out_of_scope"
+		assert record["denied_paths"] == ["e/out.py"]
+		# A non-backticked bullet nested under a metadata line is still checked.
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n  - e/out.py\n",
+			encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
+		# So is a backticked one.
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n  - `e/out.py`\n",
+			encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
+		# A later file on a nested bullet led by a directory-shaped token is checked too.
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n  - `docs/guide`, `e/out.py`\n",
+			encoding="utf-8")
+		scope_file.write_text("a/b.py\ndocs/**\n", encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
+		scope_file.write_text("a/b.py\n", encoding="utf-8")
+		# A later file on a nested bullet that starts with a file is checked too.
+		plan_file.write_text("## Files likely to change\n- `a/b.py`\nScope-mode: Hold Scope\n  - `a/b.py`, `e/out.py`\n",
+			encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["e/out.py"]
+		# Files named only in the justification prose do not hold a heal plan.
+		plan_file.write_text(_SCOPE_MODE_PLAN, encoding="utf-8")
+		scope_file.write_text("ft.games/app.py\ntests/test_wof_spin.py\nchangelog.d/*.md\n", encoding="utf-8")
+		record, code = guard.run_heal_plan_scope_gate(str(plan_file), str(scope_file), "true", "5101")
+		assert code == guard.EXIT_IN_SCOPE and record["denied_paths"] == [], record
+
+
+def test_plan_prompt_copies_keep_scope_mode_out_of_the_files_section() -> None:
+	rule = ("   whenever `Scope-mode:` is present. Put these three lines after Testing considerations,\n"
+		"   never inside `## Files likely to change`: the plan approval gate reads a file named there as changed.\n")
+	for relative in ("prompts/mode-plan.txt", "prompts/_templates/mode-plan.txt", "scripts/run_plan_codex.sh"):
+		assert (REPO_ROOT / relative).read_text(encoding="utf-8").count(rule) == 1, relative
+
+
 def test_own_issue_fragments_are_allowed_for_issue_body_scopes() -> None:
 	"""Consumer tele-funtoken-msg-scoring#4815 (run 40055496344): an exact
 	files_touched list without changelog.d refused the fragment CLAUDE.md §20
@@ -1909,6 +1990,180 @@ def test_heal_test_only_weakening_check_cli_logs_sanitized_reason() -> None:
 			"--base-dir", str(base), "--edited-dir", str(edited)], capture_output=True, text=True, check=False)
 		assert proc.returncode == guard.EXIT_AUTOMATION_UNGRANTED
 		assert "reason=file_deleted path=tests/test_x.py" in proc.stderr
+
+
+# --- #8956: auto-heal remediation companion paths ---------------------------
+
+_AUTO_HEAL_MARKER = "<!-- auto-heal-remediation:v1 sig=abc -->"
+_AUTO_HEAL_PLAN = ("## Files likely to change\n- `ft.games/app.py`\n- `db/contracts/streak_claim_ledger.yml`\n"
+	"- `tests/test_streaks_quest_contracts_indexes.py`\n")
+_AUTO_HEAL_COMPANIONS = ["db/contracts/streak_claim_ledger.yml", "tests/test_streaks_quest_contracts_indexes.py"]
+
+
+def _auto_heal_body(*entries: str) -> str:
+	return _AUTO_HEAL_MARKER + "\nSlowRoute POST /api/bet remediation.\n\n" + _body(*entries)
+
+
+def _auto_heal_meta(login: str = PIPELINE, association: str = "NONE", number: int = 42, marker: bool = True) -> dict:
+	body = _auto_heal_body("ft.games/app.py") if marker else _body("ft.games/app.py")
+	return {"number": number, "user": {"login": login}, "author_association": association, "body": body}
+
+
+def test_auto_heal_companion_path_shapes() -> None:
+	for ok in _AUTO_HEAL_COMPANIONS + ["db/contracts/x.yml", "tests/test_a.py", "db/contracts/_locks.yml",
+			"tests/test_streaks-quest.py", "tests/test_a.b.py"]:
+		assert guard.is_auto_heal_companion_path(ok), ok
+	for bad in ("db/contracts/../x.yml", "db/contracts/sub/x.yml", "tests/sub/test_x.py", "tests/conftest.py",
+			"tests/helper.py", "db/contracts/x.yaml", "db/contracts/.x.yml", "ft.games/app.py",
+			".github/workflows/x.yml", "scripts/test_x.py", "tests/test_x.sh", "db/contracts/", "", None,
+			"tests/test_a.py\n", "db/contracts/x.yml\n"):
+		assert not guard.is_auto_heal_companion_path(bad), bad
+
+
+def test_auto_heal_companions_allowed_requires_pipeline_author_and_marker() -> None:
+	body = _auto_heal_body("ft.games/app.py")
+	assert guard.auto_heal_companions_allowed(body, PIPELINE, PIPELINE) is True
+	assert guard.auto_heal_companions_allowed(body, "maintainer", PIPELINE) is False
+	assert guard.auto_heal_companions_allowed(_body("a.py"), PIPELINE, PIPELINE) is False
+	assert guard.auto_heal_companions_allowed("<!-- auto-heal-remediation:v1-->", PIPELINE, PIPELINE) is False
+	for login in ("", "bad login", "-x", None):
+		assert guard.auto_heal_companions_allowed(body, PIPELINE, login) is False, login
+		assert guard.auto_heal_companions_allowed(body, login, PIPELINE) is False, login
+	assert guard.auto_heal_companions_allowed(None, PIPELINE, PIPELINE) is False
+
+
+def test_path_in_scope_companions_default_off() -> None:
+	allowlist = ["ft.games/app.py"]
+	for path in _AUTO_HEAL_COMPANIONS:
+		assert not guard.path_in_scope(path, allowlist)
+		assert guard.path_in_scope(path, allowlist, allow_auto_heal_companions=True)
+	assert not guard.path_in_scope("tests/conftest.py", allowlist, allow_auto_heal_companions=True)
+	body = _auto_heal_body("ft.games/app.py")
+	staged = ["ft.games/app.py"] + _AUTO_HEAL_COMPANIONS
+	assert guard.evaluate(body, staged)[2] == _AUTO_HEAL_COMPANIONS
+	assert guard.evaluate(body, staged, allow_auto_heal_companions=True)[0] == guard.STATUS_IN_SCOPE
+	# Explicit scopes never get the companions.
+	assert guard.evaluate("", staged, allowlist_entries=["ft.games/**"],
+		allow_auto_heal_companions=True)[2] == _AUTO_HEAL_COMPANIONS
+
+
+def test_plan_files_outside_files_touched_auto_heal_companions() -> None:
+	body = _auto_heal_body("ft.games/app.py")
+	assert guard.plan_files_outside_files_touched(_AUTO_HEAL_PLAN, body, author_login=PIPELINE,
+		pipeline_login=PIPELINE) == []
+	assert guard.plan_files_outside_files_touched(_AUTO_HEAL_PLAN, body, author_login="maintainer",
+		pipeline_login=PIPELINE) == _AUTO_HEAL_COMPANIONS
+	assert guard.plan_files_outside_files_touched(_AUTO_HEAL_PLAN, _body("ft.games/app.py"), author_login=PIPELINE,
+		pipeline_login=PIPELINE) == _AUTO_HEAL_COMPANIONS
+	assert guard.plan_files_outside_files_touched(_AUTO_HEAL_PLAN, body) == _AUTO_HEAL_COMPANIONS
+	other = _AUTO_HEAL_PLAN + "- `ft.games/other.py`\n"
+	assert guard.plan_files_outside_files_touched(other, body, author_login=PIPELINE,
+		pipeline_login=PIPELINE) == ["ft.games/other.py"]
+	assert guard.plan_files_outside_files_touched(_AUTO_HEAL_PLAN, body, ["ai:workflow-heal"],
+		author_login="maintainer", pipeline_login=PIPELINE) == []
+
+
+def test_plan_gate_auto_heal_companions() -> None:
+	saved = _with_env()
+	try:
+		code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN, "true", _auto_heal_meta())
+		assert code == 0 and record["decision"] == "approve", record
+		assert record.get("auto_heal_companions") is True, record
+		# No pipeline login (plan.yml reads it only for protected plans):
+		# identity_unavailable makes plan.yml read it once and re-run.
+		code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN, "true", _auto_heal_meta(), login="")
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "identity_unavailable", record
+		assert record["denied_paths"] == _AUTO_HEAL_COMPANIONS and "auto_heal_companions" not in record
+		# A person who copies the marker gets nothing, with or without a login.
+		for login in ("", PIPELINE):
+			code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN, "true",
+				_auto_heal_meta(login="maintainer", association="OWNER"), login=login)
+			if login:
+				assert record["reason"] == "plan_files_outside_files_touched", record
+				assert record["denied_paths"] == _AUTO_HEAL_COMPANIONS, record
+			else:
+				# Without a login the marker case asks for identity first; the
+				# re-run with the login then holds (case above).
+				assert record["reason"] == "identity_unavailable", record
+		# An author that can never be the pipeline login holds directly.
+		for author in ("", "bad login"):
+			code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN, "true", _auto_heal_meta(login=author), login="")
+			assert record["reason"] == "plan_files_outside_files_touched", record
+		# A non-companion outside path holds as before, login or not.
+		other = _AUTO_HEAL_PLAN + "- `ft.games/other.py`\n"
+		for login in ("", PIPELINE):
+			code, record = _run_plan_gate_cli(other, "true", _auto_heal_meta(), login=login)
+			assert record["reason"] == "plan_files_outside_files_touched", record
+			assert "ft.games/other.py" in record["denied_paths"], record
+		# The record key marks only approvals that needed the rule: not a hold
+		# on a non-companion path, and not a plan with no companion path.
+		code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN + "- `ft.games/other.py`\n", "true", _auto_heal_meta())
+		assert record["decision"] == "hold" and "auto_heal_companions" not in record, record
+		code, record = _run_plan_gate_cli("## Files likely to change\n- `ft.games/app.py`\n", "true",
+			_auto_heal_meta())
+		assert code == 0 and "auto_heal_companions" not in record, record
+		# Without the marker the record is unchanged.
+		code, record = _run_plan_gate_cli(_AUTO_HEAL_PLAN, "true", _auto_heal_meta(marker=False), login="")
+		assert record["reason"] == "plan_files_outside_files_touched", record
+		assert record["denied_paths"] == _AUTO_HEAL_COMPANIONS, record
+	finally:
+		_restore_env(saved)
+
+
+def test_cli_issue_body_mode_auto_heal_companions() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		body_file = tdp / "body.txt"
+		body_file.write_text(_auto_heal_body("ft.games/app.py"), encoding="utf-8")
+		staged_file = tdp / "staged.txt"
+		staged_file.write_text("ft.games/app.py\n" + "\n".join(_AUTO_HEAL_COMPANIONS) + "\n", encoding="utf-8")
+		meta_file = tdp / "meta.json"
+		meta_file.write_text(json.dumps(_auto_heal_meta()), encoding="utf-8")
+		base = [sys.executable, "-B", str(GUARD_SCRIPT), "--issue-body-file", str(body_file), "--staged-file",
+			str(staged_file), "--issue-number", "42", "--issue-meta-file", str(meta_file)]
+		proc = subprocess.run(base + ["--pipeline-login", PIPELINE], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_IN_SCOPE, proc.stdout
+		proc = subprocess.run(base, capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+		proc = subprocess.run(base + ["--pipeline-login", ""], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+		# Another author.
+		meta_file.write_text(json.dumps(_auto_heal_meta(login="maintainer", association="OWNER")), encoding="utf-8")
+		proc = subprocess.run(base + ["--pipeline-login", PIPELINE], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+		# Metadata for a different issue number.
+		meta_file.write_text(json.dumps(_auto_heal_meta(number=43)), encoding="utf-8")
+		proc = subprocess.run(base + ["--pipeline-login", PIPELINE], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+		# Malformed metadata fails closed.
+		meta_file.write_text("{not json", encoding="utf-8")
+		proc = subprocess.run(base + ["--pipeline-login", PIPELINE], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+		# Explicit --allowlist-file scopes never get the companions.
+		meta_file.write_text(json.dumps(_auto_heal_meta()), encoding="utf-8")
+		allow_file = tdp / "allow.txt"
+		allow_file.write_text("ft.games/**\n", encoding="utf-8")
+		proc = subprocess.run([sys.executable, "-B", str(GUARD_SCRIPT), "--allowlist-file", str(allow_file),
+			"--staged-file", str(staged_file), "--issue-number", "42", "--issue-meta-file", str(meta_file),
+			"--pipeline-login", PIPELINE], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+
+
+def test_implement_scope_callers_pass_auto_heal_identity() -> None:
+	args = '--issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${IMPLEMENT_SCOPE_PIPELINE_LOGIN:-}"'
+	for path in (IMPLEMENT, IMPLEMENT_COMMIT_SCRIPT):
+		text = path.read_text(encoding="utf-8")
+		start = text.index('"${scope_guard_extra_args[@]}" \\')
+		assert args in text[start:start + 300], path
+	prepush = (REPO_ROOT / "scripts" / "implement_step_prepush_test_gate.sh").read_text(encoding="utf-8")
+	start = prepush.index("implement_prepush_test_gate_narrow_allow_list()")
+	window = prepush[start:prepush.index("--check-automation-paths", start)]
+	assert '--issue-body-file "${ISSUE_BODY_FILE:-/dev/null}"' in window and args in window
+	text = IMPLEMENT.read_text(encoding="utf-8")
+	export = 'echo "IMPLEMENT_SCOPE_PIPELINE_LOGIN=${pipeline_login}" >> "$GITHUB_ENV"'
+	assert text.count(export) == 1
+	check = 'if [[ "${pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?$ ]]; then'
+	assert text.index(check) < text.index(export) < text.index(check) + len(check) + 120
 
 
 def _run_all() -> int:

@@ -619,7 +619,7 @@ def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
 	return subprocess.run(["git", *args], cwd=repo, env=_git_env(), check=check, text=True, capture_output=True)
 
 
-def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False) -> None:
+def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False, *, hook_rel: str = HOOK) -> None:
 	"""HEAD `feat` and merged-in `main` conflict on the guard hook.
 
 	shape: `both` (both modify, stages 1 2 3), `base_deleted` (main deletes,
@@ -628,7 +628,7 @@ def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False)
 	_git(repo, "init", "-q", "-b", "main")
 	_git(repo, "config", "user.name", "t")
 	_git(repo, "config", "user.email", "t@t")
-	hook = repo / HOOK
+	hook = repo / hook_rel
 	hook.parent.mkdir(parents=True)
 	hook.write_text("x = 0\n", encoding="utf-8")
 	(repo / "notes.md").write_text("base\n", encoding="utf-8")
@@ -636,7 +636,7 @@ def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False)
 	_git(repo, "commit", "-qm", "base")
 	_git(repo, "checkout", "-q", "-b", "feat")
 	if shape == "pr_deleted":
-		_git(repo, "rm", "-q", "--", HOOK)
+		_git(repo, "rm", "-q", "--", hook_rel)
 	else:
 		hook.write_text("x = 'pr side'\n", encoding="utf-8")
 	if ordinary:
@@ -644,7 +644,7 @@ def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False)
 	_git(repo, "commit", "-qam", "feat change")
 	_git(repo, "checkout", "-q", "main")
 	if shape == "base_deleted":
-		_git(repo, "rm", "-q", "--", HOOK)
+		_git(repo, "rm", "-q", "--", hook_rel)
 	else:
 		hook.write_text("x = 'base side'\n", encoding="utf-8")
 	if ordinary:
@@ -654,7 +654,7 @@ def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False)
 	assert _git(repo, "merge", "--no-commit", "--no-ff", "main", check=False).returncode != 0
 
 
-def _run_take_base(tmp_path: Path, repo: Path, *, linked=None, status="ok", target_branch="", enabled=None):
+def _run_take_base(tmp_path: Path, repo: Path, *, linked=None, status="ok", target_branch="", enabled=None, integration_sync=False):
 	runtime = tmp_path / "runtime"
 	runtime.mkdir()
 	github_env = tmp_path / "github.env"
@@ -685,6 +685,8 @@ echo block-fell-through
 		env["TARGET_BRANCH"] = target_branch
 	if enabled is not None:
 		env["HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED"] = enabled
+	if integration_sync:
+		env["IS_INTEGRATION_SYNC"] = "true"
 	result = subprocess.run(["bash", "-c", script], cwd=repo, env=env, text=True, capture_output=True)
 	return result, runtime, github_env, allowlist
 
@@ -739,23 +741,23 @@ def test_ordinary_conflicts_still_go_to_the_sandbox(tmp_path):
 	assert (runtime / "host_only_take_base_comment.md").is_file()
 
 
-def _paired_hook_conflict(repo: Path, template_differs: bool) -> None:
+def _paired_hook_conflict(repo: Path, template_differs: bool, *, hook_rel: str = HOOK) -> None:
 	"""Live hook and its workflow-templates twin both conflict."""
 	_git(repo, "init", "-q", "-b", "main")
 	_git(repo, "config", "user.name", "t")
 	_git(repo, "config", "user.email", "t@t")
-	template = repo / "workflow-templates" / HOOK
-	for path in (repo / HOOK, template):
+	template = repo / "workflow-templates" / hook_rel
+	for path in (repo / hook_rel, template):
 		path.parent.mkdir(parents=True, exist_ok=True)
 		path.write_text("x = 0\n", encoding="utf-8")
 	_git(repo, "add", "-A")
 	_git(repo, "commit", "-qm", "base")
 	_git(repo, "checkout", "-q", "-b", "feat")
-	(repo / HOOK).write_text("x = 'pr'\n", encoding="utf-8")
+	(repo / hook_rel).write_text("x = 'pr'\n", encoding="utf-8")
 	template.write_text("x = 'pr'\n", encoding="utf-8")
 	_git(repo, "commit", "-qam", "feat change")
 	_git(repo, "checkout", "-q", "main")
-	(repo / HOOK).write_text("x = 'base'\n", encoding="utf-8")
+	(repo / hook_rel).write_text("x = 'base'\n", encoding="utf-8")
 	template.write_text("x = 'base template'\n" if template_differs else "x = 'base'\n", encoding="utf-8")
 	_git(repo, "commit", "-qam", "main change")
 	_git(repo, "checkout", "-q", "feat")
@@ -898,7 +900,7 @@ def test_declared_host_only_path_closes_and_reissues_the_pr(tmp_path):
 	assert create < comment < close < source_close
 	assert "ai:unblock-provenance:v1 source_pr=7" in "\n".join(calls)
 	bodies = (tmp_path / "gh_calls.bodies").read_text()
-	assert f"<!-- ai:host-only-conflict-reissue:v1 pr=7 issue=901 head=" in bodies and "as #901" in bodies
+	assert "<!-- ai:host-only-conflict-reissue:v1 pr=7 issue=901 head=" in bodies and "as #901" in bodies
 
 
 @needs_jq
@@ -1039,6 +1041,105 @@ def test_source_repo_without_its_conflict_set_still_fails_closed(tmp_path):
 	assert "reason=sandbox_path_unsupported" in result.stderr
 
 
+# --- Second paired live hook: prepush_affected_tests.py (#8973) ---
+#
+# PR #8436 (run 42355218108) failed closed with sandbox_path_host_only on
+# .claude/hooks/prepush_affected_tests.py. PAIRED_LIVE_COPIES now pairs that
+# live hook with its workflow-templates/ twin, so when both are unmerged with
+# identical stages the template goes to the resolver and the runner mirrors it
+# onto the live copy. The paired-live report test below locks that pairing,
+# and the guard tests lock the sandbox boundary: the live hook is never
+# admitted to the sandbox and never taken from base on an integration branch.
+# The clean-template host-only merge gap is tracked by the strict xfail in
+# tests/test_conflict_guard_hook_template_merge.py.
+
+PREPUSH_HOOK = ".claude/hooks/prepush_affected_tests.py"
+PREPUSH_HOOK_TEMPLATE = "workflow-templates/" + PREPUSH_HOOK
+WORKSPACE_PY = SCRIPT.parent / "review_untrusted_workspace.py"
+
+
+def _workspace_module():
+	import importlib.util
+	spec = importlib.util.spec_from_file_location("review_untrusted_workspace_8973", WORKSPACE_PY)
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+def test_prepush_hook_pair_fixture_conflicts_on_both_paths(tmp_path):
+	"""The fixture must leave both paths unmerged, the shape the paired-live report test relies on."""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_paired_hook_conflict(repo, False, hook_rel=PREPUSH_HOOK)
+	assert sorted(_unmerged(repo)) == sorted([PREPUSH_HOOK, PREPUSH_HOOK_TEMPLATE])
+
+
+def test_prepush_hook_pair_is_listed_in_paired_live_report(tmp_path):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_paired_hook_conflict(repo, False, hook_rel=PREPUSH_HOOK)
+	assert sorted(_unmerged(repo)) == sorted([PREPUSH_HOOK, PREPUSH_HOOK_TEMPLATE])
+	conflicted = tmp_path / "conflicted.txt"
+	conflicted.write_text("".join(name + "\n" for name in _unmerged(repo)), encoding="utf-8")
+	unmerged_z = tmp_path / "unmerged.z"
+	unmerged_z.write_bytes(subprocess.run(["git", "ls-files", "-u", "-z"], cwd=repo, env=_git_env(), check=True, capture_output=True, timeout=120).stdout)
+	pairs = tmp_path / "pairs.txt"
+	model_paths = tmp_path / "model_paths.txt"
+	env = {**_git_env(), "PYTHONDONTWRITEBYTECODE": "1"}
+	report = subprocess.run(["python3", str(WORKSPACE_PY), "paired-live-copies", str(repo), str(conflicted), str(unmerged_z),
+		str(pairs), str(model_paths)], env=env, capture_output=True, text=True, check=False, timeout=120)
+	assert report.returncode == 0, report.stderr
+	assert _workspace_module().PAIRED_LIVE_COPIES.get(PREPUSH_HOOK) == PREPUSH_HOOK_TEMPLATE
+	assert pairs.read_text(encoding="utf-8") == f"{PREPUSH_HOOK}\t{PREPUSH_HOOK_TEMPLATE}\n"
+	assert model_paths.read_text(encoding="utf-8") == f"{PREPUSH_HOOK_TEMPLATE}\n"
+	check = subprocess.run(["python3", str(WORKSPACE_PY), "check-paths", str(repo), str(model_paths)], env=env, capture_output=True, text=True, check=False, timeout=120)
+	assert check.returncode == 0, check.stderr
+
+
+def test_prepush_live_hook_stays_outside_the_sandbox(tmp_path):
+	mod = _workspace_module()
+	assert mod.allowed(PREPUSH_HOOK) is False
+	assert mod.allowed(PREPUSH_HOOK, commands={PREPUSH_HOOK}) is False
+	assert mod.allowed(PREPUSH_HOOK_TEMPLATE) is True
+	assert mod._path_rejection_reason(PREPUSH_HOOK) in {"dot_directory", "live_safety_hook"}
+	(tmp_path / ".claude/hooks").mkdir(parents=True)
+	(tmp_path / PREPUSH_HOOK).write_text("x = 1\n", encoding="utf-8")
+	result, env_text = _run_path_guard(tmp_path, [PREPUSH_HOOK], integration="true")
+	assert result.returncode == 1 and "guard-passed" not in result.stdout
+	assert "reason=sandbox_path_host_only" in result.stderr
+	assert f"::error::Conflict resolver: host-only conflicted path(s) need a manual merge: {PREPUSH_HOOK}" in result.stderr
+	assert re.search(r"REVIEW_RESOLVER_PATH_REJECTED reason=(dot_directory|live_safety_hook) path=\.claude/hooks/prepush_affected_tests\.py", result.stderr)
+	assert env_text == ""
+
+
+def test_prepush_hook_conflict_is_taken_from_base_off_integration_sync(tmp_path):
+	"""Positive control: the fixture reaches take-base when no integration-sync gate applies."""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_host_only_conflict(repo, hook_rel=PREPUSH_HOOK)
+	result, _runtime, github_env, _ = _run_take_base(tmp_path, repo)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert f"CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE pr=7 path={PREPUSH_HOOK} base=main stages=1 2 3" in result.stdout
+	assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
+
+
+@pytest.mark.parametrize("kwargs", [{"target_branch": "orchestrator/project-8434"}, {"integration_sync": True}])
+def test_prepush_hook_conflict_is_never_taken_from_base_on_integration_sync(tmp_path, kwargs):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_host_only_conflict(repo, hook_rel=PREPUSH_HOOK)
+	result, runtime, github_env, _ = _run_take_base(tmp_path, repo, **kwargs)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE" not in result.stdout
+	assert "block-fell-through" in result.stdout
+	assert _unmerged(repo) == [PREPUSH_HOOK]
+	assert not (runtime / "host_only_conflict_scope.tsv").exists()
+	assert not github_env.exists()
+	block = _take_base_block()
+	assert "orchestrator/project-*) _ho_enabled=false ;;" in block
+	assert 'if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ]; then' in block
+
+
 # --- pre-push affected-test gate (issue #8201, plan P4) --------------------------------
 
 CHECK_RESOLVER_DIFF = SCRIPT.parent / "check_resolver_diff.sh"
@@ -1147,7 +1248,11 @@ if [ "$1" = run ]; then
 	done
 	n=$(( $(cat "__WORK__/count" 2>/dev/null || echo 0) + 1 ))
 	echo "$n" > "__WORK__/count"
-	if [ "$n" = 1 ]; then cp "__WORK__/fail.json" "$results/result.json"; else cp "__WORK__/pass.json" "$results/result.json"; fi
+	if [ -f "__WORK__/queue/last.json" ]; then
+		src="__WORK__/queue/$n.json"
+		[ -f "$src" ] || src="__WORK__/queue/last.json"
+		cp "$src" "$results/result.json"
+	elif [ "$n" = 1 ]; then cp "__WORK__/fail.json" "$results/result.json"; else cp "__WORK__/pass.json" "$results/result.json"; fi
 fi
 exit 0
 '''
@@ -1158,10 +1263,18 @@ def _gate_result(status: str, failures: list) -> str:
 		"inherited": [], "unverified": [], "changed_assertions": [], "selected": 1, "elapsed_secs": 1})
 
 
-def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: int = 0, full_prepare: bool = True) -> tuple:
+def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: int = 0, full_prepare: bool = True,
+		queue: list | None = None, extra_env: dict | None = None, seed_acceptance: bool = False,
+		copy_acceptance_helper: bool = False) -> tuple:
 	root = SCRIPT.parent.parent
 	work = tmp_path / "work"
-	work.mkdir()
+	work.mkdir(parents=True)
+	if queue:
+		# docker serves the queued results in order, repeating the last one.
+		(work / "queue").mkdir()
+		for index, payload in enumerate(queue, start=1):
+			(work / "queue" / f"{index}.json").write_text(json.dumps(payload), encoding="utf-8")
+		(work / "queue" / "last.json").write_text(json.dumps(queue[-1]), encoding="utf-8")
 	failure = [{"test": "tests/test_a.py", "file": "tests/test_a.py", "names": ["test_x"], "tail": "AssertionError"}]
 	(work / "fail.json").write_text(_gate_result("fail", failure), encoding="utf-8")
 	(work / "pass.json").write_text(_gate_result("pass", []), encoding="utf-8")
@@ -1183,6 +1296,9 @@ def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: 
 	for name in ("review_autofix_step_prepush_test_gate.sh", "prepush_test_gate_run.sh", "review_untrusted_workspace.py", "check_resolver_diff.sh"):
 		shutil.copy2(root / "scripts" / name, support / name)
 	shutil.copy2(root / "workflow-templates/.claude/hooks/prepush_affected_tests.py", support / "prepush_affected_tests.py")
+	if copy_acceptance_helper:
+		for name in ("acceptance_check.py", "partial_delivery.py", "targeted_file_context.py", "attempt_journal.py", "gh_api_retry.py"):
+			shutil.copy2(root / "scripts" / name, support / name)
 	prompts = tmp_path / "prompts"
 	prompts.mkdir()
 	shutil.copy2(root / "prompts/mode-implement-repair-tests.txt", prompts / "mode-implement-repair-tests.txt")
@@ -1204,6 +1320,9 @@ def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: 
 	runtime.mkdir()
 	conflicted = runtime / "conflicted_paths.txt"
 	conflicted.write_text("a.py\n", encoding="utf-8")
+	if seed_acceptance:
+		(runtime / "prepush_gate").mkdir()
+		(runtime / "prepush_gate" / "acceptance.json").write_text(json.dumps(_DONE_CHECK), encoding="utf-8")
 	text = SCRIPT.read_text(encoding="utf-8")
 	start = text.index("_resolver_prepush_test_gate()\n{")
 	function = text[start:text.index("\n}\n", start) + 3]
@@ -1219,6 +1338,9 @@ echo COMMITTED
 	env.update(PATH=f"{bin_dir}{os.pathsep}{env.get('PATH', '')}", SUPPORT_SCRIPTS_DIR=str(support), SUPPORT_PROMPTS_DIR=str(prompts),
 		RUNTIME_DIR=str(runtime), RUNNER_TEMP=str(tmp_path), CONFLICTED_PATHS_FILE=str(conflicted), GITHUB_WORKSPACE=str(repo),
 		GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+	for key in ("PERSIST_REPAIR_LOOP_ENABLED", "PERSIST_REPAIR_MAX_TURNS"):
+		env.pop(key, None)
+	env.update(extra_env or {})
 	proc = subprocess.run(["bash", "-c", harness], cwd=repo, env=env, capture_output=True, text=True, timeout=180)
 	assert "COMMITTED" in proc.stdout, proc.stderr
 	return proc, work, repo, env
@@ -1263,6 +1385,187 @@ def test_resolver_gate_is_skipped_when_no_gate_run_fits_the_step_budget(tmp_path
 	assert not (work / "count").exists() and not (work / "attempts").exists()
 	assert "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=step_budget" in proc.stderr
 	assert subprocess.run(["git", "show", "HEAD:a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout == "x = 2\n"
+
+
+# --- resolver repair loop (issue #8427, P3 follow-up) -------------------------------------
+
+_DONE_CHECK = {"schema": "acceptance.v1", "state": "valid", "source": "plan", "errors": [], "checks": [],
+	"tests": [{"path": "tests/test_a.py", "name": "", "red_on_base": False}], "post_merge": None, "post_merge_none": "library only"}
+
+_FAKE_GH = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "__WORK__/gh.log"
+case "$*" in
+	*" user"|"api user") printf '{"login": "pipeline-bot"}\n' ;;
+	*comments*) cat "__WORK__/comments.json" ;;
+	*) printf '{}\n' ;;
+esac
+exit 0
+'''
+
+
+def _fail_n(count: int) -> dict:
+	return json.loads(_gate_result("fail", [{"test": f"tests/test_a.py#{n}", "file": "tests/test_a.py", "names": ["test_x"],
+		"tail": "AssertionError"} for n in range(count)]))
+
+
+_PASS = json.loads(_gate_result("pass", []))
+
+
+def _counter_edit(tmp_path: Path, extra: str = "") -> str:
+	# Each repair turn writes a different fix, so every turn touches the file.
+	return f'n=$(wc -l < "{tmp_path / "work" / "attempts"}" | tr -d " "); printf \'fix%s\\n\' "$n" > tests/test_a.py{extra}'
+
+
+def _attempts(work: Path) -> int:
+	path = work / "attempts"
+	return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
+
+
+def _docker_run_lines(work: Path) -> list[str]:
+	return [line for line in (work / "docker.log").read_text(encoding="utf-8").splitlines() if line.startswith("run ")]
+
+
+def _loop_env(**extra: str) -> dict:
+	return {"PERSIST_REPAIR_LOOP_ENABLED": "true", **extra}
+
+
+def _normalised_docker_argv(tmp_path: Path, work: Path) -> list[str]:
+	lines = _docker_run_lines(work)
+	lines = [re.sub(r"prepush-gate-[A-Za-z0-9_]+-[0-9]+", "prepush-gate-<RUN>-<PID>", line.replace(str(tmp_path), "<TMP>")) for line in lines]
+	return [re.sub(r"[0-9a-f]{40}", "<SHA>", re.sub(r"\.[A-Za-z0-9]{6,}(?=[/,\s]|$)", ".<RND>", line)) for line in lines]
+
+
+@pytest.mark.parametrize("switch", [None, "false"])
+def test_resolver_loop_off_changes_nothing(tmp_path: Path, switch: str | None) -> None:
+	runs = {}
+	for name, seed in (("plain", False), ("seeded", True)):
+		base = tmp_path / name
+		base.mkdir()
+		extra = {} if switch is None else {"PERSIST_REPAIR_LOOP_ENABLED": switch}
+		proc, work, repo, env = _run_resolver_gate_fixture(base, "printf 'fixed\\n' > tests/test_a.py", extra_env=extra,
+			seed_acceptance=seed, copy_acceptance_helper=seed)
+		docker = (work / "docker.log").read_text(encoding="utf-8")
+		assert "/inputs" not in docker and "--tests-file" not in docker
+		assert _attempts(work) == 1
+		assert (work / "count").read_text(encoding="utf-8").strip() == "2"
+		assert "PERSIST repair_loop" not in proc.stderr
+		final = [line for line in proc.stderr.splitlines() if line.startswith("PREPUSH_TEST_GATE phase=resolver outcome=")]
+		assert final == ["PREPUSH_TEST_GATE phase=resolver outcome=pass failures=0 inherited=0 mode=repair repair=ran"]
+		assert not (base / "runtime" / "acceptance_result.json").exists()
+		assert not (base / "runtime" / "prepush_gate_resolver" / "tests.txt").exists()
+		assert "DONE-CHECK" not in (work / "prompt").read_text(encoding="utf-8")
+		runs[name] = (_normalised_docker_argv(base, work), final)
+	assert runs["plain"] == runs["seeded"]
+
+
+def test_resolver_loop_repairs_while_failures_drop(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=[_fail_n(3), _fail_n(1), _PASS],
+		extra_env=_loop_env())
+	assert _attempts(work) == 2 and len(_docker_run_lines(work)) == 3
+	assert "PERSIST repair_loop outcome=pass turns=2 stop=clean acceptance=none" in proc.stderr
+	assert "phase=resolver outcome=pass failures=0 inherited=0 mode=repair repair=ran_x2" in proc.stderr
+	assert (tmp_path / "runtime" / "prepush_gate_resolver" / "run3" / "result.json").is_file()
+	committed = subprocess.run(["git", "show", "HEAD:tests/test_a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout
+	assert committed == "fix2\n"
+
+
+def test_resolver_loop_stops_without_progress(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=[_fail_n(2), _fail_n(2)],
+		extra_env=_loop_env())
+	assert _attempts(work) == 1 and len(_docker_run_lines(work)) == 2
+	assert "PERSIST repair_loop outcome=fail turns=1 stop=no_progress acceptance=none" in proc.stderr
+	assert "repair=ran_x1" in proc.stderr
+
+
+def test_resolver_loop_stops_at_turn_cap(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path),
+		queue=[_fail_n(3), _fail_n(2), _fail_n(1)], extra_env=_loop_env(PERSIST_REPAIR_MAX_TURNS="2"))
+	assert _attempts(work) == 2 and len(_docker_run_lines(work)) == 3
+	assert "PERSIST repair_loop outcome=fail turns=2 stop=max_turns acceptance=none" in proc.stderr
+
+
+def test_resolver_loop_clamps_the_turn_cap_to_five(tmp_path: Path) -> None:
+	queue = [_fail_n(9 - n) for n in range(8)]
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=queue,
+		extra_env=_loop_env(PERSIST_REPAIR_MAX_TURNS="9"))
+	assert _attempts(work) == 5 and len(_docker_run_lines(work)) == 6
+	assert "turns=5 stop=max_turns" in proc.stderr
+	assert (tmp_path / "runtime" / "prepush_gate_resolver" / "run6.status").is_file()
+
+
+def test_resolver_loop_reverted_repair_ends_loop(tmp_path: Path) -> None:
+	edit = _counter_edit(tmp_path, '; if [ "$n" = 2 ]; then printf "bad\\n" > outside.py; fi')
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, edit, queue=[_fail_n(3), _fail_n(1), _PASS],
+		extra_env=_loop_env())
+	assert _attempts(work) == 2 and len(_docker_run_lines(work)) == 2
+	assert "outcome=repair_reverted reason=check_resolver_diff" in proc.stderr
+	assert "PERSIST repair_loop outcome=fail turns=1 stop=reverted acceptance=none" in proc.stderr
+	assert "repair=ran_x1;_reverted_check_resolver_diff" in proc.stderr
+	def show(path: str) -> str:
+		return subprocess.run(["git", "show", f"HEAD:{path}"], cwd=repo, capture_output=True, text=True, env=env).stdout
+
+	assert show("tests/test_a.py") == "fix1\n" and show("outside.py") == "keep\n" and show("a.py") == "x = 2\n"
+	assert (repo / "outside.py").read_text(encoding="utf-8") == "keep\n"
+
+
+def test_resolver_loop_passes_done_check_tests_file(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=[_fail_n(1), _PASS],
+		extra_env=_loop_env(), seed_acceptance=True, copy_acceptance_helper=True)
+	runs = _docker_run_lines(work)
+	assert len(runs) == 2 and all("--tests-file /inputs/tests.txt" in line for line in runs)
+	result = json.loads((tmp_path / "runtime" / "acceptance_result.json").read_text(encoding="utf-8"))
+	assert result["schema"] == "acceptance_result.v1"
+	assert "PERSIST repair_loop outcome=pass turns=1 stop=clean acceptance=not_run" in proc.stderr
+	assert (tmp_path / "runtime" / "prepush_gate_resolver" / "tests.txt").read_text(encoding="utf-8") == "tests/test_a.py\n"
+	# No fetch: the review step's acceptance.json is reused.
+	assert not (tmp_path / "runtime" / "prepush_gate_resolver" / "acceptance.json").exists()
+
+
+def test_resolver_loop_unmet_target_reaches_the_fenced_prompt(tmp_path: Path) -> None:
+	unmet = dict(_fail_n(1), acceptance={"tests/test_a.py": {"head": "fail", "base": "not_run"}})
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=[unmet, _PASS],
+		extra_env=_loop_env(), seed_acceptance=True, copy_acceptance_helper=True)
+	prompt = (work / "prompt").read_text(encoding="utf-8")
+	assert "=== BEGIN UNTRUSTED DONE-CHECK STATUS" in prompt
+	assert "UNTRUSTED_DATA: tests/test_a.py: unmet" in prompt
+
+
+def test_resolver_loop_fetches_the_done_check_once_when_none_is_staged(tmp_path: Path) -> None:
+	sys_path = str(SCRIPT.parent)
+	import sys
+	if sys_path not in sys.path:
+		sys.path.insert(0, sys_path)
+	import acceptance_check
+	body = "Implementation Plan\n" + acceptance_check.marker_line(_DONE_CHECK) + "\n<!-- ai:plan-proposal:v1 -->"
+	gh_work = tmp_path / "gh_work"
+	gh_work.mkdir()
+	(gh_work / "comments.json").write_text(json.dumps([{"user": {"login": "pipeline-bot"}, "created_at": "2026-10-02T00:00:00Z",
+		"body": body}]), encoding="utf-8")
+	gh_bin = tmp_path / "ghbin"
+	gh_bin.mkdir()
+	(gh_bin / "gh").write_text(_FAKE_GH.replace("__WORK__", str(gh_work)), encoding="utf-8")
+	(gh_bin / "gh").chmod(0o755)
+	# The fixture's fake docker lives in tmp_path/bin; keep it first.
+	env_path = os.pathsep.join((str(tmp_path / "bin"), str(gh_bin), os.environ.get("PATH", "")))
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=[_fail_n(1), _PASS],
+		extra_env=_loop_env(PATH=env_path, GITHUB_REPOSITORY="o/r", PR_NUMBER="12", HEAD_REF="ai/issue-7", GH_TOKEN="x"),
+		copy_acceptance_helper=True)
+	calls = (gh_work / "gh.log").read_text(encoding="utf-8").splitlines()
+	assert len(calls) <= 2 and sum("comments" in call for call in calls) == 1
+	fetched = json.loads((tmp_path / "runtime" / "prepush_gate_resolver" / "acceptance.json").read_text(encoding="utf-8"))
+	assert fetched["state"] == "valid"
+	assert all("--tests-file /inputs/tests.txt" in line for line in _docker_run_lines(work))
+
+
+def test_resolver_loop_contract_stays_in_the_gate_function() -> None:
+	body = _gate_function_body()
+	assert '[ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" = true ]' in body
+	assert 'bash "${gate_step}" persist-config' in body
+	assert 'bash "${gate_step}" acceptance-files' in body and 'bash "${gate_step}" acceptance-score' in body
+	assert 'PREPUSH_TEST_GATE_PROMPT_DONE_CHECK="${gate_acc_on}"' in body
+	assert "PERSIST repair_loop outcome=" in body
+	# The fetch is the trusted support copy, isolated, and never runs inside the gate.
+	assert '"${gate_support}/acceptance_check.py" fetch-plan' in body and "python3 -I -B" in body
 
 
 # ── --test-repair (#8210, plan phase P5) ─────────────────────────────

@@ -1,0 +1,4 @@
+<!-- changelog: security -->
+- **An issue title with a line break can no longer add environment variables to the clarify workflows.** Line breaks in the title are now replaced with spaces before the title is saved for later steps.
+
+`.github/workflows/clarify.yml` ("Fetch issue metadata") and `.github/workflows/orchestrate_clarify_respond.yml` ("Fetch issue and tracking context") write the issue title from the GitHub API to `$GITHUB_ENV` as one `ISSUE_TITLE=<title>` line. A CR or LF in the title would have made the text after it a new assignment for every later step. Both steps now replace CR and LF with spaces before that write and log `::warning::ISSUE_TITLE_NEWLINE_STRIPPED issue=<number>`, without the title text, when they do. The job still runs, and `ISSUE_TITLE` keeps its name and single-line form. Refs #8895.

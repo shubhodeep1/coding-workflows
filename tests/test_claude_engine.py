@@ -505,6 +505,80 @@ def test_choose_ranks_a_missing_five_hour_reading_by_seven_day() -> None:
 	assert verdict["gated"] == ["SVET2"]
 
 
+def _pool_probe(account: str, five: float | None, seven: float | None, seven_reset: int | None) -> dict:
+	return {
+		"account": account,
+		"five_hour": five,
+		"seven_day": seven,
+		"five_hour_resets_at": None,
+		"seven_day_resets_at": seven_reset,
+		"resets_at": None,
+		"status": "allowed",
+		"error": None,
+	}
+
+
+def test_choose_uses_the_spare_quota_that_expires_soonest_first() -> None:
+	# The 2026-11-05 pool report: 7-day windows reset at different times, so
+	# the account whose spare quota is lost soonest goes first (TEAM3: 35%
+	# left, resets in 19.8h) and one that just reset is saved (PERSONAL1).
+	now = 1_800_000_000
+
+	def hours(value: float) -> int:
+		return now + int(value * 3600)
+
+	probes = [
+		_pool_probe("FUNTOKEN1", None, 0.97, hours(23.8)),
+		_pool_probe("FUNTOKEN2", 0.59, 0.56, hours(135.8)),
+		_pool_probe("PERSONAL1", None, 0.58, hours(150.8)),
+		_pool_probe("PERSONAL2", None, 0.58, hours(124.8)),
+		_pool_probe("SVET", 0.10, 0.58, hours(121.8)),
+		_pool_probe("SVET2", 0.0, 0.96, hours(31.8)),
+		_pool_probe("TEAM1", 0.01, 0.91, hours(77.8)),
+		_pool_probe("TEAM2", 0.23, 0.59, hours(118.8)),
+		_pool_probe("TEAM3", 0.01, 0.60, hours(19.8)),
+		_pool_probe("TEAM4", 0.91, 0.47, hours(138.8)),
+	]
+	verdict = ce.choose_account(probes, 0.95, now=now)
+	assert verdict["order"] == [
+		"TEAM3", "TEAM4", "SVET", "TEAM2", "PERSONAL2", "FUNTOKEN2", "PERSONAL1", "TEAM1",
+	]
+	assert verdict["account"] == "TEAM3"
+	assert verdict["utilization"] == 0.60
+	assert verdict["gated"] == ["FUNTOKEN1", "SVET2"]
+
+
+def test_choose_ranks_accounts_without_a_reset_time_after_those_with_one() -> None:
+	now = 1_800_000_000
+	probes = [
+		_pool_probe("A", 0.1, 0.2, None),
+		_pool_probe("B", None, 0.1, None),
+		_pool_probe("C", 0.9, 0.8, now + 10 * 3600),
+		_pool_probe("D", 0.2, None, None),
+		_pool_probe("E", 0.5, 0.94, now - 60),
+	]
+	verdict = ce.choose_account(probes, 0.95, now=now)
+	# E's reset has passed, so its spare quota counts as expiring now; C's
+	# 5-hour reading only gates, it does not lower C's rank.
+	assert verdict["order"] == ["E", "C", "B", "A", "D"]
+	assert verdict["utilization"] == 0.94
+
+
+def test_choose_ranks_a_negative_seven_day_reading_last() -> None:
+	# A malformed negative 7-day reading must not rank an account first, with
+	# or without a reset time.
+	now = 1_800_000_000
+	probes = [
+		_pool_probe("A", None, -0.5, now + 3600),
+		_pool_probe("B", None, 0.5, None),
+		_pool_probe("C", None, -0.2, None),
+		_pool_probe("D", 0.3, 0.6, now + 50 * 3600),
+	]
+	verdict = ce.choose_account(probes, 0.95, now=now)
+	assert verdict["order"] == ["D", "B", "A", "C"]
+	assert verdict["account"] == "D"
+
+
 def test_choose_gates_accounts_at_or_over_the_gate() -> None:
 	probes = [
 		ce.parse_probe(_probe_text(0.95, 0.1), "A"),

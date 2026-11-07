@@ -11,12 +11,20 @@ and decided with no comments (tele-funtoken-msg-scoring PR #3933, run
 substitution, and the judge logs ``RB_JUDGE_CONTEXT_EMPTY`` when the context
 still fails to assemble.
 
+BUG-002 (analysis/workflow-optimization-2026-10-03-2.md): a failed metadata,
+issue-comments or review-comments read in ``_gh_pr_with_all_comments_rest``
+used to degrade silently to ``{}`` / ``[]``. It still does, but the emitted
+JSON now gains ``comments_incomplete: true`` and ``incomplete_reasons`` and
+the helper logs ``PR_COMMENTS_CONTEXT_INCOMPLETE``; both keys stay absent when
+every read succeeds, so the complete output is byte-identical.
+
 These tests drive the helper and the judges' context-assembly blocks with a
 fake ``gh`` on PATH.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -39,15 +47,16 @@ COMMENT_CHARS = 12000
 requires_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required to run the helpers")
 
 # Serves canned JSON by endpoint shape. A missing file prints nothing and
-# exits 0, which is how the empty-input cases are produced.
+# exits 0, which is how the empty-input cases are produced. A ``<name>.fail``
+# marker makes that endpoint print ``boom`` to stderr and exit 1 (BUG-002).
 FAKE_GH = r"""#!/usr/bin/env bash
 d="${FAKE_GH_DIR}"
 for a in "$@"; do
 	case "$a" in
 		graphql) cat "$d/graphql.json" 2>/dev/null; exit 0 ;;
-		*/issues/*/comments*) cat "$d/comments.json" 2>/dev/null; exit 0 ;;
-		*/pulls/*/comments*) cat "$d/review.json" 2>/dev/null; exit 0 ;;
-		repos/*/pulls/*) cat "$d/meta.json" 2>/dev/null; exit 0 ;;
+		*/issues/*/comments*) [ -e "$d/comments.fail" ] && { echo boom >&2; exit 1; }; cat "$d/comments.json" 2>/dev/null; exit 0 ;;
+		*/pulls/*/comments*) [ -e "$d/review.fail" ] && { echo boom >&2; exit 1; }; cat "$d/review.json" 2>/dev/null; exit 0 ;;
+		repos/*/pulls/*) [ -e "$d/meta.fail" ] && { echo boom >&2; exit 1; }; cat "$d/meta.json" 2>/dev/null; exit 0 ;;
 	esac
 done
 exit 0
@@ -222,7 +231,7 @@ def test_judge_warns_once_when_context_assembly_fails(tmp_path: Path) -> None:
 	)
 	result = _run(tmp_path, env, body, source_helpers=False)
 	assert result.returncode == 0, result.stderr
-	warnings = [l for l in result.stderr.splitlines() if "RB_JUDGE_CONTEXT_EMPTY" in l]
+	warnings = [line for line in result.stderr.splitlines() if "RB_JUDGE_CONTEXT_EMPTY" in line]
 	assert warnings == ["::warning::RB_JUDGE_CONTEXT_EMPTY pr=7 reason=assembly_failed"]
 	assert (tmp_path / "ctx.json").read_text(encoding="utf-8") == "{}"
 
@@ -289,7 +298,7 @@ def test_poller_judge_inline_fallback_and_warning(tmp_path: Path) -> None:
 	failing = prefix + "gh_pr_with_all_comments() { return 126; }\n" + _poller_block()
 	result = _run(tmp_path, env, failing, source_helpers=False)
 	assert result.returncode == 0, result.stderr
-	warnings = [l for l in result.stderr.splitlines() if "RB_JUDGE_CONTEXT_EMPTY" in l]
+	warnings = [line for line in result.stderr.splitlines() if "RB_JUDGE_CONTEXT_EMPTY" in line]
 	assert warnings == ["::warning::RB_JUDGE_CONTEXT_EMPTY pr=9 reason=assembly_failed"]
 
 
@@ -325,3 +334,169 @@ def test_other_unbounded_github_json_is_not_passed_through_argjson() -> None:
 def test_both_judges_log_the_empty_context_prefix() -> None:
 	assert "RB_JUDGE_CONTEXT_EMPTY" in RB_JUDGE.read_text(encoding="utf-8")
 	assert "RB_JUDGE_CONTEXT_EMPTY" in POLLER.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# BUG-002: incomplete-context signal on the REST fallback.
+# ---------------------------------------------------------------------------
+
+FRAGMENT = REPO_ROOT / "agents.d" / "wfopt-2026-10-03-2-pr-comments-incomplete.md"
+PRELOADED_META = json.dumps({"title": "t", "body": "b", "head_ref": "h", "base_ref": "main", "head_sha": "abc"})
+INCOMPLETE_KEYS = ["meta", "comments", "review_comments", "comments_incomplete", "incomplete_reasons"]
+SMALL_REVIEW = [{"user": {"login": "rev"}, "path": "a.py", "line": 3, "body": "nit"}]
+
+
+def _incomplete_warning(pr: str, reasons: str) -> str:
+	return (
+		"::warning::PR_COMMENTS_CONTEXT_INCOMPLETE helper=gh_pr_with_all_comments "
+		f"owner=o repo=r pr={pr} reasons={reasons}"
+	)
+
+
+def _incomplete_lines(stderr: str) -> list[str]:
+	return [line for line in stderr.splitlines() if "PR_COMMENTS_CONTEXT_INCOMPLETE" in line]
+
+
+def _mark_failed(tmp_path: Path, *names: str) -> None:
+	for name in names:
+		(tmp_path / "data" / f"{name}.fail").write_text("", encoding="utf-8")
+
+
+@requires_jq
+def test_rest_helper_flags_issue_comments_read_failure(tmp_path: Path) -> None:
+	env = _setup(tmp_path, {"review.json": SMALL_REVIEW})
+	_mark_failed(tmp_path, "comments")
+	result = _run(tmp_path, env, f"_gh_pr_with_all_comments_rest o r 1 '{PRELOADED_META}' > out.json")
+	assert result.returncode == 0, result.stderr
+	out = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+	assert list(out.keys()) == INCOMPLETE_KEYS
+	assert out["comments"] == []
+	assert out["review_comments"] == [{"author": "rev", "path": "a.py", "line": 3, "body": "nit"}]
+	assert out["comments_incomplete"] is True
+	assert out["incomplete_reasons"] == ["issue_comments_read_failed"]
+	assert _incomplete_lines(result.stderr) == [_incomplete_warning("1", "issue_comments_read_failed")]
+	assert "boom" not in "\n".join(_incomplete_lines(result.stderr))
+
+
+@requires_jq
+def test_rest_helper_flags_review_comments_read_failure(tmp_path: Path) -> None:
+	env = _setup(tmp_path, {"comments.json": _raw_comments()})
+	_mark_failed(tmp_path, "review")
+	result = _run(tmp_path, env, f"_gh_pr_with_all_comments_rest o r 1 '{PRELOADED_META}' > out.json")
+	assert result.returncode == 0, result.stderr
+	out = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+	assert list(out.keys()) == INCOMPLETE_KEYS
+	assert [c["body"] for c in out["comments"]] == _expected_bodies()
+	assert out["review_comments"] == []
+	assert out["comments_incomplete"] is True
+	assert out["incomplete_reasons"] == ["review_comments_read_failed"]
+	assert _incomplete_lines(result.stderr) == [_incomplete_warning("1", "review_comments_read_failed")]
+
+
+@requires_jq
+def test_rest_helper_flags_meta_read_failure_alone(tmp_path: Path) -> None:
+	env = _setup(tmp_path, {"comments.json": _raw_comments(), "review.json": SMALL_REVIEW})
+	_mark_failed(tmp_path, "meta")
+	result = _run(tmp_path, env, "_gh_pr_with_all_comments_rest o r 3 > out.json")
+	assert result.returncode == 0, result.stderr
+	out = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+	assert list(out.keys()) == INCOMPLETE_KEYS
+	assert out["meta"] == {}
+	assert [c["body"] for c in out["comments"]] == _expected_bodies()
+	assert out["review_comments"] == [{"author": "rev", "path": "a.py", "line": 3, "body": "nit"}]
+	assert out["comments_incomplete"] is True
+	assert out["incomplete_reasons"] == ["pr_meta_read_failed"]
+	assert _incomplete_lines(result.stderr) == [_incomplete_warning("3", "pr_meta_read_failed")]
+
+
+@requires_jq
+def test_rest_helper_flags_meta_and_both_comment_failures_in_order(tmp_path: Path) -> None:
+	env = _setup(tmp_path, {})
+	_mark_failed(tmp_path, "meta", "comments", "review")
+	result = _run(tmp_path, env, "_gh_pr_with_all_comments_rest o r 5 > out.json")
+	assert result.returncode == 0, result.stderr
+	out = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+	assert out["meta"] == {} and out["comments"] == [] and out["review_comments"] == []
+	reasons = ["pr_meta_read_failed", "issue_comments_read_failed", "review_comments_read_failed"]
+	assert out["incomplete_reasons"] == reasons
+	assert out["comments_incomplete"] is True
+	assert _incomplete_lines(result.stderr) == [_incomplete_warning("5", ",".join(reasons))]
+
+
+@requires_jq
+def test_rest_helper_flags_failure_without_pipefail(tmp_path: Path) -> None:
+	env = _setup(tmp_path, {"review.json": []})
+	_mark_failed(tmp_path, "comments")
+	body = f"set +o pipefail\n_gh_pr_with_all_comments_rest o r 1 '{PRELOADED_META}' > out.json"
+	result = _run(tmp_path, env, body)
+	assert result.returncode == 0, result.stderr
+	out = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+	assert out["comments_incomplete"] is True
+	assert out["incomplete_reasons"] == ["issue_comments_read_failed"]
+
+
+@requires_jq
+def test_rest_helper_success_output_is_unchanged(tmp_path: Path) -> None:
+	small = [{"user": {"login": "u"}, "body": "hello", "created_at": "2026-10-18T00:00:00Z"}]
+	meta = {"title": "t", "body": "b", "head": {"ref": "h", "sha": "abc"}, "base": {"ref": "main"}}
+	env = _setup(tmp_path, {"comments.json": small, "review.json": SMALL_REVIEW, "meta.json": meta})
+	result = _run(tmp_path, env, "_gh_pr_with_all_comments_rest o r 1")
+	assert result.returncode == 0, result.stderr
+	assert "PR_COMMENTS_CONTEXT_INCOMPLETE" not in result.stderr
+	expected = {
+		"meta": {"title": "t", "body": "b", "head_ref": "h", "base_ref": "main", "head_sha": "abc"},
+		"comments": [{"author": "u", "body": "hello", "created_at": "2026-10-18T00:00:00Z"}],
+		"review_comments": [{"author": "rev", "path": "a.py", "line": 3, "body": "nit"}],
+	}
+	assert result.stdout.strip() == json.dumps(expected, separators=(",", ":"))
+	out = json.loads(result.stdout)
+	assert "comments_incomplete" not in out
+	assert "incomplete_reasons" not in out
+
+
+@requires_jq
+def test_graphql_failure_fallback_propagates_incomplete_signal(tmp_path: Path) -> None:
+	env = _setup(tmp_path, {"comments.json": _raw_comments()})
+	_mark_failed(tmp_path, "review")
+	result = _run(tmp_path, env, f"gh_pr_with_all_comments o r 1 '{PRELOADED_META}' > out.json")
+	assert result.returncode == 0, result.stderr
+	assert "rate_limit_audit_fallback helper=gh_pr_with_all_comments" in result.stderr
+	assert _incomplete_lines(result.stderr) == [_incomplete_warning("1", "review_comments_read_failed")]
+	out = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+	assert out["comments_incomplete"] is True
+	assert out["incomplete_reasons"] == ["review_comments_read_failed"]
+	assert [c["body"] for c in out["comments"]] == _expected_bodies()
+
+
+def test_incomplete_prefix_registered_in_fragment() -> None:
+	fragment = FRAGMENT.read_text(encoding="utf-8")
+	assert fragment.startswith('<!-- agents: section="Stable log prefixes (contractual)" -->')
+	assert "LOG_PREFIX.name=PR_COMMENTS_CONTEXT_INCOMPLETE" in fragment
+	assert "- `PR_COMMENTS_CONTEXT_INCOMPLETE`" in fragment
+	assert "::warning::PR_COMMENTS_CONTEXT_INCOMPLETE helper=gh_pr_with_all_comments" in GH_HELPERS.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# BUG-002 poller caller half: tests/test_poller_rb_judge_incomplete_context.py
+# runs in CI through this file (ci.yml is outside that issue's file grant).
+# ---------------------------------------------------------------------------
+
+
+def _collect_poller_rb_incomplete_context_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"poller_rb_judge_incomplete_context_cases",
+		Path(__file__).resolve().parent / "test_poller_rb_judge_incomplete_context.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 8, f"only {collected} poller rb incomplete-context cases collected"
+
+
+_collect_poller_rb_incomplete_context_cases()

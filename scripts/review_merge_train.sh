@@ -1333,7 +1333,15 @@ _mt_dispatch_review() {
 		_mt_warn "merge-train release: invalid PR number '${pr}' for head ${head}; not dispatching."
 		return 1
 	fi
-	for wf in ${MERGE_TRAIN_DISPATCH_WORKFLOWS:-ai-review.yml internal-review.yml review_autofix.yml}; do
+	# SHELL-001: an unquoted expansion of the list also glob-expanded items
+	# such as `*.yml` against the working directory. `read -a` splits on the
+	# default IFS (spaces, tabs, newlines; -d '' keeps every line) and never
+	# does pathname expansion, so global `set -f` is not needed. `|| true`:
+	# read -d '' returns 1 at end of input under set -e.
+	local -a mt_dispatch_workflow_list=()
+	IFS=$' \t\n' read -r -d '' -a mt_dispatch_workflow_list \
+		<<< "${MERGE_TRAIN_DISPATCH_WORKFLOWS:-ai-review.yml internal-review.yml review_autofix.yml}" || true
+	for wf in "${mt_dispatch_workflow_list[@]}"; do
 		if gh_retry gh workflow run "${wf}" --repo "${MT_REPO}" \
 			-f pr_number="${pr}" -f allow_workflow_edits="${allow_edits}" >/dev/null 2>&1; then
 			_mt_log "MERGE_TRAIN_DISPATCHED pr=${pr} workflow=${wf} ref=default head=${head}"
@@ -1352,6 +1360,15 @@ _mt_release() {
 	# so every queued PR stays queued this invocation and the next close event
 	# or poll tick retries.
 	local release_runs_listing_state=""
+	# Per-reason leave-queued counts for MERGE_TRAIN_RELEASE_SUMMARY, so a tick
+	# that examines queued PRs and releases none can be attributed. Each counted
+	# branch is terminal for its PR, so released + the counts == examined.
+	local release_count_overlap=0 release_count_active_review=0 release_count_runs_incomplete=0
+	local release_count_files_unavailable=0 release_count_blockers_unavailable=0 release_count_marker_unavailable=0
+	local release_count_claim_skipped=0 release_count_dispatch_failed=0
+	local release_created_at="" release_created_epoch="" release_oldest_created_epoch="" release_oldest_age="none"
+	local release_now_epoch
+	release_now_epoch="$(date -u +%s)"
 	MT_EVAL_SOURCE="release"
 	if ! prs_json="$(_mt_list_open_prs "")"; then
 		_mt_warn "merge-train release: could not list open PRs; fail-open (nothing released)."
@@ -1369,6 +1386,15 @@ _mt_release() {
 			continue
 		fi
 		examined=$((examined + 1))
+		# Oldest queued age: created_at is already in the _mt_list_open_prs
+		# output, so this adds no API call (CLAUDE.md §14). A missing or
+		# malformed timestamp is skipped (fail-open).
+		release_created_at="$(printf '%s' "${line}" | jq -r '.created_at // ""' 2>/dev/null || true)"
+		if release_created_epoch="$(_mt_iso_epoch "${release_created_at}")" && [[ "${release_created_epoch}" =~ ^[0-9]+$ ]]; then
+			if [ -z "${release_oldest_created_epoch}" ] || [ "${release_created_epoch}" -lt "${release_oldest_created_epoch}" ]; then
+				release_oldest_created_epoch="${release_created_epoch}"
+			fi
+		fi
 		if [ -z "${release_runs_listing_state}" ]; then
 			if inflight_review_branches="$(_mt_inflight_review_branches)"; then
 				release_runs_listing_state="complete"
@@ -1380,37 +1406,44 @@ _mt_release() {
 		fi
 		if [ "${release_runs_listing_state}" != "complete" ]; then
 			_mt_log "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=${num} head=${head} action=leave_queued"
+			release_count_runs_incomplete=$((release_count_runs_incomplete + 1))
 			continue
 		fi
 		# An empty head is never a pattern: grep -Fx with "" matches a blank
 		# line, and a run whose head_branch is "" prints one.
 		if [ -n "${inflight_review_branches}" ] && printf '%s\n' "${inflight_review_branches}" | grep -Fxq -e "pr:${num}" ${head:+-e "${head}"}; then
 			_mt_log "MERGE_TRAIN_RELEASE_ACTIVE pr=${num} head=${head} action=leave_queued"
+			release_count_active_review=$((release_count_active_review + 1))
 			continue
 		fi
 		files=""
 		if ! _mt_pr_files_into files "${num}"; then
 			_mt_warn "merge-train release: could not list files for queued PR #${num}; leaving it queued."
+			release_count_files_unavailable=$((release_count_files_unavailable + 1))
 			continue
 		fi
 		blockers=""
 		if ! _mt_blockers_for_into blockers "${num}" "${base}" "${files}" "${prs_json}"; then
 			_mt_warn "merge-train release: could not evaluate blockers for PR #${num}; leaving it queued."
+			release_count_blockers_unavailable=$((release_count_blockers_unavailable + 1))
 			continue
 		fi
 		if [ -n "${blockers}" ]; then
 			_mt_log "MERGE_TRAIN_STILL_QUEUED pr=${num} blockers=$(printf '%s\n' "${blockers}" | sed 's/:.*//' | paste -sd, -)"
+			release_count_overlap=$((release_count_overlap + 1))
 			continue
 		fi
 		release_queue_comment_id=""
 		if ! _mt_resolve_automation_login || ! release_queue_comment_id="$(_mt_find_marker_comment_id "${num}" "${MT_MARKER}")"; then
 			_mt_warn "merge-train release: could not inspect the queue marker for PR #${num}; leaving it queued to avoid arming a false bypass."
+			release_count_marker_unavailable=$((release_count_marker_unavailable + 1))
 			continue
 		fi
 		if [[ "${release_queue_comment_id}" =~ ^[0-9]+$ ]] && \
 		   ! _mt_replace_comment "${release_queue_comment_id}" "${MT_RETIRED_MARKER}
 **Merge train release claimed.** The train found no older overlapping PRs and is dispatching review."; then
 			_mt_warn "merge-train release: could not retire the queue marker for PR #${num}; leaving it queued."
+			release_count_marker_unavailable=$((release_count_marker_unavailable + 1))
 			continue
 		fi
 		# Claim this release by removing the queue label. Concurrent release
@@ -1418,6 +1451,7 @@ _mt_release() {
 		# an automation-owned label removal can never look like a human bypass.
 		if ! gh_retry gh api -X DELETE "repos/${MT_REPO}/issues/${num}/labels/$(printf '%s' "${MT_LABEL}" | jq -sRr @uri)" >/dev/null 2>&1; then
 			_mt_log "MERGE_TRAIN_RELEASE_CLAIM_SKIPPED pr=${num} action=leave_to_peer"
+			release_count_claim_skipped=$((release_count_claim_skipped + 1))
 			continue
 		fi
 		if _mt_dispatch_review "${num}" "${head}"; then
@@ -1428,6 +1462,7 @@ _mt_release() {
 			released=$((released + 1))
 			_mt_log "MERGE_TRAIN_RELEASED pr=${num} source=release"
 		else
+			release_count_dispatch_failed=$((release_count_dispatch_failed + 1))
 			release_label_restored="false"
 			if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${MT_REPO}/issues/${num}/labels" -f "labels[]=${MT_LABEL}" >/dev/null 2>&1; then
 				release_label_restored="true"
@@ -1446,7 +1481,14 @@ _mt_release() {
 			fi
 		fi
 	done < <(printf '%s\n' "${prs_json}")
-	_mt_log "MERGE_TRAIN_RELEASE_SUMMARY examined=${examined} released=${released} base_filter=${base_filter:-*}"
+	if [ -n "${release_oldest_created_epoch}" ]; then
+		release_oldest_age=$((release_now_epoch - release_oldest_created_epoch))
+		# Clock skew: a future-dated PR reports 0, never a negative age.
+		[ "${release_oldest_age}" -ge 0 ] || release_oldest_age=0
+	fi
+	# New fields are appended after base_filter= so the existing prefix and
+	# first three fields stay byte-identical for current consumers.
+	_mt_log "MERGE_TRAIN_RELEASE_SUMMARY examined=${examined} released=${released} base_filter=${base_filter:-*} overlap=${release_count_overlap} active_review=${release_count_active_review} runs_incomplete=${release_count_runs_incomplete} files_unavailable=${release_count_files_unavailable} blockers_unavailable=${release_count_blockers_unavailable} marker_unavailable=${release_count_marker_unavailable} claim_skipped=${release_count_claim_skipped} dispatch_failed=${release_count_dispatch_failed} oldest_queued_age_secs=${release_oldest_age}"
 	return 0
 }
 

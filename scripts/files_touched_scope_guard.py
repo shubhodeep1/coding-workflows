@@ -32,6 +32,15 @@ Inputs:
                           CLAUDE.md §20/§30 require, even when the
                           files_touched list omits them. Never applies to
                           --allowlist-file scopes.
+  --issue-meta-file PATH --pipeline-login LOGIN
+                          Optional, with --issue-body-file: the issue's REST
+                          metadata and the pipeline login. When the issue was
+                          authored by that login and its body carries the
+                          `<!-- auto-heal-remediation:v1 ` marker, the
+                          auto-heal companion paths are also in scope (#8956).
+                          When --issue-number is given it must equal the
+                          metadata's number. Never applies to --allowlist-file
+                          scopes.
   --emit-automation-grant PATH --issue-meta-file PATH --pipeline-login LOGIN
                           [--origin-repo OWNER/NAME]
                           Snapshot trusted-author exact automation paths. A
@@ -97,6 +106,11 @@ Matching semantics (allowlist entry -> staged path):
     manifest edits are auto-allowed by basename. Compiled build outputs (e.g.
     `*.js` twins, `dist/**`) are deliberately NOT auto-allowed — sweeping those
     in was the incident this guard exists to stop.
+  * auto-heal companion paths (#8956): for an issue authored by the pipeline
+    login whose body carries the `<!-- auto-heal-remediation:v1 ` marker,
+    `db/contracts/<name>.yml` (one level) and top-level `tests/test_<name>.py`
+    are in scope, in both the plan gate and the implement guard. A body that
+    copies the marker but was written by anyone else gets nothing.
 """
 
 from __future__ import annotations
@@ -523,16 +537,69 @@ def is_own_issue_fragment(path: str, issue_number: object) -> bool:
 	return bool(re.fullmatch(r"(?:changelog|agents)\.d/" + number + r"-[A-Za-z0-9][A-Za-z0-9._-]*\.md", path))
 
 
+# Auto-heal remediation companions (#8956). An auto-heal remediation issue's
+# files_touched list is built when the monitor files it, before any plan
+# exists, so it cannot name the index contract and index test a plan that adds
+# an index must also change (consumer tele-funtoken-msg-scoring 5122, held on
+# 2026-11-06 with plan_files_outside_files_touched for exactly
+# db/contracts/streak_claim_ledger.yml and
+# tests/test_streaks_quest_contracts_indexes.py). For an issue authored by the
+# pipeline login whose body carries the remediation marker, those two path
+# shapes are in scope. The marker alone grants nothing: the author comes from
+# the issue's API metadata, never from the body.
+_AUTO_HEAL_REMEDIATION_RE = re.compile(r"<!-- auto-heal-remediation:v1 ")
+# A leading `_` is allowed for collections such as `_locks` (CLAUDE.md §12);
+# a leading `.` (hidden file) and any `/` (nesting) are not.
+_AUTO_HEAL_CONTRACT_RE = re.compile(r"^db/contracts/[A-Za-z0-9_][A-Za-z0-9._-]*\.yml$")
+_AUTO_HEAL_TEST_RE = re.compile(r"^tests/test_[A-Za-z0-9_.-]+\.py$")
+
+
+def is_auto_heal_companion_path(path: str) -> bool:
+	"""True for ``db/contracts/<name>.yml`` (one level) or top-level ``tests/test_<name>.py``."""
+	if not isinstance(path, str) or ".." in path.split("/"):
+		return False
+	return bool(_AUTO_HEAL_CONTRACT_RE.fullmatch(path) or _AUTO_HEAL_TEST_RE.fullmatch(path))
+
+
+def auto_heal_companions_allowed(issue_body: object, author_login: object, pipeline_login: object) -> bool:
+	"""True when a pipeline-authored issue carries the auto-heal remediation marker.
+
+	The single place the companion flag is computed. Both logins must be
+	valid (LOGIN_RE) and equal; author association is not considered, so a
+	person who copies the marker into an issue gets nothing (fail closed).
+	"""
+	if not isinstance(pipeline_login, str) or not LOGIN_RE.fullmatch(pipeline_login):
+		return False
+	if not isinstance(author_login, str) or not LOGIN_RE.fullmatch(author_login):
+		return False
+	if author_login != pipeline_login:
+		return False
+	return bool(_AUTO_HEAL_REMEDIATION_RE.search(issue_body if isinstance(issue_body, str) else ""))
+
+
+def _issue_meta_author_login(meta: object) -> str:
+	"""``meta["user"]["login"]`` when it is a string, else ``""``."""
+	if not isinstance(meta, dict):
+		return ""
+	user = meta.get("user")
+	login = user.get("login") if isinstance(user, dict) else ""
+	return login if isinstance(login, str) else ""
+
+
 def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = True,
-	own_fragment_issue: object = None) -> bool:
+	own_fragment_issue: object = None, allow_auto_heal_companions: bool = False) -> bool:
 	"""True when a staged path is auto-allowed or covered by any allowlist entry.
 
 	``own_fragment_issue`` (an issue number) also allows that issue's own
 	changelog / agents fragments (is_own_issue_fragment).
+	``allow_auto_heal_companions`` (from auto_heal_companions_allowed) also
+	allows the auto-heal companion paths (is_auto_heal_companion_path, #8956).
 	"""
 	if allow_lockfiles and is_lockfile(path):
 		return True
 	if own_fragment_issue is not None and is_own_issue_fragment(path, own_fragment_issue):
+		return True
+	if allow_auto_heal_companions and is_auto_heal_companion_path(path):
 		return True
 	for entry in allowlist:
 		if entry_matches(entry, path):
@@ -543,7 +610,7 @@ def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = Tr
 
 
 def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[str], *, allow_lockfiles: bool = True,
-	own_fragment_issue: object = None) -> tuple[str, list[str], list[str]]:
+	own_fragment_issue: object = None, allow_auto_heal_companions: bool = False) -> tuple[str, list[str], list[str]]:
 	"""Classify staged paths against an explicit allowlist using the shared matcher.
 
 	Returns (status, allowlist, out_of_scope) where status is one of
@@ -559,7 +626,7 @@ def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[s
 		if not path:
 			continue
 		if not path_in_scope(path, allowlist, allow_lockfiles=allow_lockfiles,
-				own_fragment_issue=own_fragment_issue):
+				own_fragment_issue=own_fragment_issue, allow_auto_heal_companions=allow_auto_heal_companions):
 			out_of_scope.append(path)
 
 	if out_of_scope:
@@ -568,19 +635,20 @@ def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[s
 
 
 def evaluate(issue_body: str, staged_paths: list[str], *, allowlist_entries: list[str] | None = None, allow_lockfiles: bool = True,
-	issue_number: object = None) -> tuple[str, list[str], list[str]]:
+	issue_number: object = None, allow_auto_heal_companions: bool = False) -> tuple[str, list[str], list[str]]:
 	"""Classify the staged change set against issue-body or explicit allowlists.
 
 	Returns (status, allowlist, out_of_scope) where status is one of
 	STATUS_IN_SCOPE / STATUS_SKIP_NO_ALLOWLIST / STATUS_OUT_OF_SCOPE.
 	``issue_number`` allows the issue's own changelog / agents fragments, for
-	an issue-body list only (never for explicit ``allowlist_entries``).
+	an issue-body list only (never for explicit ``allowlist_entries``), and
+	so does ``allow_auto_heal_companions`` for the auto-heal companion paths.
 	"""
 	if allowlist_entries is not None:
 		return evaluate_allowlist(allowlist_entries, staged_paths, allow_lockfiles=allow_lockfiles)
 	raw_allowlist = extract_files_touched(issue_body or "")
 	return evaluate_allowlist(raw_allowlist or [], staged_paths, allow_lockfiles=allow_lockfiles,
-		own_fragment_issue=issue_number)
+		own_fragment_issue=issue_number, allow_auto_heal_companions=allow_auto_heal_companions)
 
 
 # --- Plan auto-approval gate (issue #6769) ---------------------------------
@@ -727,6 +795,12 @@ PIPELINE_PLAN_GRANT_REASON = "pipeline_plan_grant"
 PIPELINE_PLAN_TOO_LARGE_REASON = "plan_too_large_for_grant"
 _PLAN_GRANT_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _PLAN_GRANT_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(\S+)")
+# The planner's metadata lines (mode-plan.txt items 7-10). A plan sometimes
+# puts them right under the Files bullets with no heading in between,
+# sometimes as a list item, possibly nested at any indent.
+_PLAN_FILES_METADATA_RE = re.compile(
+	r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\*\*|__)?(?:Scope-mode(?: justification)?|Reuse-audit|Implementation-time estimate)(?:\*\*|__)?\s*:",
+	re.IGNORECASE)
 _PLAN_GRANT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@+-]+$")
 # A root file is any name with a letter-led extension (the same rule as a
 # nested last segment), so a planned `main.c` or `app.php` is never left out of
@@ -792,7 +866,23 @@ def extract_plan_file_paths(plan_text: str) -> list[str]:
 		return []
 	seen: set[str] = set()
 	paths: list[str] = []
+	skip_indent: int | None = None
 	for line in section.splitlines():
+		# A planner metadata line and its prose continuation are skipped: the
+		# prose names files the plan chose not to change (consumer
+		# tele-funtoken-msg-scoring #5101). Reading resumes at a blank line or
+		# at a list item no deeper than the metadata line, so files listed
+		# before or after the metadata are still checked. The protected-path
+		# scan still reads the whole section.
+		indent = len(line) - len(line.lstrip())
+		if _PLAN_FILES_METADATA_RE.match(line):
+			skip_indent = indent
+			continue
+		if skip_indent is not None:
+			if not line.strip() or (_PLAN_GRANT_BULLET_RE.match(line) and indent <= skip_indent):
+				skip_indent = None
+			else:
+				continue
 		candidates = _PLAN_GRANT_BACKTICK_RE.findall(line)
 		# The bullet's first token counts even when the line also has
 		# backticked spans (`- README.md — use `parse()``): otherwise a
@@ -865,7 +955,7 @@ def _issue_on_heal_route(issue_body: str, labels: object) -> bool:
 
 
 def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: object = None,
-	issue_number: object = None) -> list[str]:
+	issue_number: object = None, *, author_login: str = "", pipeline_login: str = "") -> list[str]:
 	"""Exact files in a plan's Files section that the issue's files_touched list misses.
 
 	Uses the implement guard's matcher (path_in_scope: lockfiles and agents.d
@@ -875,15 +965,19 @@ def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: ob
 	here; the implement guard still applies to whatever gets staged. An issue
 	on the heal route (the ai:workflow-heal label or the heal fingerprint
 	marker, as implement decides it) is not checked: there implement enforces
-	the heal scope marker, not files_touched.
+	the heal scope marker, not files_touched. ``author_login`` and
+	``pipeline_login`` turn on the auto-heal companion paths through
+	auto_heal_companions_allowed, as the implement guard does (#8956).
 	"""
 	if _issue_on_heal_route(issue_body, labels):
 		return []
 	allowlist = normalize_allowlist(extract_files_touched(issue_body or "") or [])
 	if not allowlist:
 		return []
+	companions = auto_heal_companions_allowed(issue_body, author_login, pipeline_login)
 	return [path for path in extract_plan_file_paths(plan_text)
-		if not path_in_scope(path, allowlist, own_fragment_issue=issue_number)]
+		if not path_in_scope(path, allowlist, own_fragment_issue=issue_number,
+			allow_auto_heal_companions=companions)]
 
 
 # Re-plan of a hold caused only by non-exact tokens (#8339). A plan whose
@@ -896,7 +990,7 @@ def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: ob
 # decision, the denied list or any grant, and never writes a grant body.
 def _plan_hold_replannable(plan_text: str, protected: list[str], denied: list[str], replan_grant: object, *,
 	flag_on: bool, allow_workflow_edits: str, issue_number: str, metadata: object,
-	check_files_touched: bool) -> bool:
+	check_files_touched: bool, pipeline_login: str = "") -> bool:
 	"""True when a path_not_granted hold would approve without its non-exact tokens."""
 	if not denied or not isinstance(metadata, dict):
 		return False
@@ -912,7 +1006,8 @@ def _plan_hold_replannable(plan_text: str, protected: list[str], denied: list[st
 	if decision != PLAN_DECISION_APPROVE or reason != "granted":
 		return False
 	return not (check_files_touched and plan_files_outside_files_touched(plan_text, metadata.get("body") or "",
-		metadata.get("labels"), issue_number=issue_number or metadata.get("number")))
+		metadata.get("labels"), issue_number=issue_number or metadata.get("number"),
+		author_login=_issue_meta_author_login(metadata), pipeline_login=pipeline_login))
 
 
 def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,
@@ -938,6 +1033,7 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 	grant_proposed = False
 	plan_path_count = 0
 	replannable = False
+	auto_heal_companions = False
 	try:
 		with open(plan_file, encoding="utf-8") as handle:
 			plan_text = handle.read()
@@ -1017,10 +1113,30 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 			# The issue's own changelog / agents fragments are allowed, as the
 			# implement guard allows them, so an auto-heal plan that adds the
 			# required fragment is not parked for a human.
+			# Auto-heal companion paths (#8956) use the implement guard's rule.
+			issue_author = _issue_meta_author_login(issue_meta)
 			outside = plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "",
-				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number"))
-			if outside:
+				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number"),
+				author_login=issue_author, pipeline_login=pipeline_login)
+			# The record key marks an approval that needed the rule: some plan
+			# path is in scope only because of the companion allowance.
+			companions_used = auto_heal_companions_allowed(issue_meta.get("body") or "", issue_author,
+				pipeline_login) and bool(plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "",
+				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number")))
+			if outside and not (isinstance(pipeline_login, str) and LOGIN_RE.fullmatch(pipeline_login)) \
+					and LOGIN_RE.fullmatch(issue_author) \
+					and _AUTO_HEAL_REMEDIATION_RE.search(issue_meta.get("body") or "") \
+					and all(is_auto_heal_companion_path(path) for path in outside):
+				# plan.yml reads the pipeline login only for plans that list
+				# protected paths. identity_unavailable makes it read the login
+				# once and re-run the gate, which then decides the companions.
+				# Without the login a valid author cannot be told apart from
+				# the pipeline, so any valid author with the marker asks once;
+				# an empty or invalid author can never match and holds below.
+				decision, reason, denied = PLAN_DECISION_HOLD, "identity_unavailable", outside
+			elif outside:
 				decision, reason, denied = PLAN_DECISION_HOLD, PLAN_FILES_TOUCHED_GATE_REASON, outside
+			auto_heal_companions = companions_used and decision == PLAN_DECISION_APPROVE
 		if decision == PLAN_DECISION_HOLD and reason == "path_not_granted":
 			# The counterfactual approval would be a proposed pipeline plan
 			# grant when the proposal produced this hold, and the real gate
@@ -1030,7 +1146,7 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 				replannable = _plan_hold_replannable(plan_text, protected, denied, replan_grant,
 					flag_on=flag_on, allow_workflow_edits=allow_workflow_edits, issue_number=issue_number,
 					metadata=metadata, check_files_touched=(not replan_via_proposal and bool(issue_meta_file)
-						and plan_files_touched_gate_active()))
+						and plan_files_touched_gate_active()), pipeline_login=pipeline_login)
 			except Exception:  # noqa: BLE001 - advisory only; the hold stands
 				replannable = False
 	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
@@ -1038,6 +1154,7 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 		grant_proposed = False
 		plan_path_count = 0
 		replannable = False
+		auto_heal_companions = False
 	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
 		"log_paths": plan_gate_log_paths(denied or protected)}
 	if grant_proposed:
@@ -1046,6 +1163,8 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 		record["plan_path_count"] = plan_path_count
 	if replannable:
 		record["replannable"] = True
+	if auto_heal_companions:
+		record["auto_heal_companions"] = True
 	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
 
 
@@ -1169,11 +1288,37 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 			# them back from the Files section: a heal plan never approves a
 			# path set it cannot name exactly.
 			loose: list[str] = []
+			heal_skip_indent: int | None = None
 			for line in (_plan_files_section(plan_text) or "").splitlines():
-				raw_tokens = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
 				bullet = _PLAN_GRANT_BULLET_RE.match(line)
-				if bullet:
-					raw_tokens.append((bullet.group(1), False))
+				# Skip planner metadata the way extract_plan_file_paths does: its
+				# prose names files the plan chose not to change (#5101).
+				line_indent = len(line) - len(line.lstrip())
+				if _PLAN_FILES_METADATA_RE.match(line):
+					heal_skip_indent = line_indent
+					continue
+				in_metadata = False
+				if heal_skip_indent is not None:
+					if not line.strip() or (bullet and line_indent <= heal_skip_indent):
+						heal_skip_indent = None
+					else:
+						in_metadata = True
+				if in_metadata:
+					# Only a nested bullet that starts with a file is checked
+					# (fail closed); prose lines and mid-line spans are not.
+					if not bullet:
+						continue
+					lead_span = re.match(r"`([^`\n]+)`", bullet.group(1).lstrip("*_"))
+					raw_tokens = [(lead_span.group(1), True)] if lead_span else [(bullet.group(1), False)]
+					if _plan_grant_path(raw_tokens[0][0].strip()) or "/" in raw_tokens[0][0]:
+						# A bullet that starts with a file or a path-shaped
+						# token (`docs/guide`) lists files: check its other
+						# backticked spans too (fail closed).
+						raw_tokens += [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
+				else:
+					raw_tokens = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
+					if bullet:
+						raw_tokens.append((bullet.group(1), False))
 				for raw, backticked in raw_tokens:
 					raw = raw.strip()
 					if not backticked:
@@ -1196,6 +1341,11 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 					# extensionless `docs/guide`) so the scope check sees them.
 					if globlike or ("/" in token and "`" not in token and not _plan_grant_path(token)):
 						loose.append(token)
+					elif _plan_grant_path(token):
+						# extract_plan_file_paths skips a bullet nested under a
+						# planner metadata line, backticked or not; check it
+						# here (fail closed).
+						loose.append(_plan_grant_path(token))
 			candidates: list[str] = []
 			for path in files + protected + loose:
 				if path not in candidates:
@@ -1703,8 +1853,22 @@ def main(argv: list[str] | None = None) -> int:
 	staged_paths = _read_staged(args.staged_file or None)
 	allowlist_entries = _read_allowlist(args.allowlist_file) if args.allowlist_file else None
 
+	# Auto-heal companion paths (#8956): only for an issue-body list, with the
+	# issue's own metadata and the pipeline login. Every error gives False.
+	allow_companions = False
+	if args.issue_body_file and allowlist_entries is None and args.issue_meta_file and args.pipeline_login:
+		try:
+			issue_meta = json.loads(_read_text_file(args.issue_meta_file))
+			if isinstance(issue_meta, dict) and (not args.issue_number
+					or str(issue_meta.get("number")) == args.issue_number.strip()):
+				allow_companions = auto_heal_companions_allowed(issue_body, _issue_meta_author_login(issue_meta),
+					args.pipeline_login)
+		except (ValueError, TypeError):
+			allow_companions = False
+
 	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths, allowlist_entries=allowlist_entries,
-		allow_lockfiles=not args.strict_allowlist, issue_number=args.issue_number or None)
+		allow_lockfiles=not args.strict_allowlist, issue_number=args.issue_number or None,
+		allow_auto_heal_companions=allow_companions)
 
 	if args.allowlist_out:
 		try:

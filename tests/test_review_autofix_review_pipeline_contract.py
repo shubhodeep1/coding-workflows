@@ -10787,6 +10787,7 @@ def test_reviewer_pass2_still_launches_when_shadow_would_skip(tmp_path: Path) ->
 			_reviewer_bash_function("reviewer_any_path_matches_regex"),
 			_reviewer_pass2_shadow_helper_block(),
 			'assemble_reviewer_prompt() { : > "$1"; }',
+			'log_reviewer_prompt_components() { :; }',
 			'run_reviewer_pass() { printf "%s %s\\n" "$1" "$3" > "${PASS2_MARKER}"; echo 2; }',
 			"PASS2_DIFF_LOC=10",
 			"PASS2_DIFF_LARGE_LOC=200",
@@ -10862,7 +10863,8 @@ _POST_SYNC_REPAIR_SKIP_CLAUSE = "env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'"
 def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
 	raw = WORKFLOW.read_text(encoding="utf-8")
 	pre_review = [line for line in raw.splitlines() if "env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'" in line]
-	assert len(pre_review) == 17, len(pre_review)
+	# 19 since #8427 P3: the switch-gated done-check prepare and label steps.
+	assert len(pre_review) == 19, len(pre_review)
 	for line in pre_review:
 		assert line.lstrip().startswith("if: "), line
 		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in line, line
@@ -10884,7 +10886,7 @@ def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
 		"Telegram success",
 	):
 		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in _step_block(name), name
-	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 26
+	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 28
 
 
 def test_post_sync_test_repair_commit_is_pushed() -> None:

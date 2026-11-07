@@ -829,6 +829,39 @@ def test_release_dispatches_only_unblocked_queued_prs(tmp_path: Path) -> None:
 	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
 	assert "issues/4081/labels/ai%3Amerge-queued" not in log_text
 	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=1 base_filter=main" in result.stdout
+	# Per-reason counts are appended after base_filter= (overlap scenario).
+	assert (
+		"MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=1 base_filter=main overlap=1 active_review=0"
+		" runs_incomplete=0 files_unavailable=0 blockers_unavailable=0 marker_unavailable=0"
+		" claim_skipped=0 dispatch_failed=0 oldest_queued_age_secs=none"
+	) in result.stdout
+
+
+def test_release_summary_reports_oldest_queued_age(tmp_path: Path) -> None:
+	"""oldest_queued_age_secs comes from the listing's created_at (no extra API call)."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4070, "ai/issue-4060", labels=["ai:merge-queued"], created_at="not-a-timestamp"),
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"], created_at="2026-01-01T00:00:00Z"),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"], created_at="2026-06-01T00:00:00Z"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4070, ["a.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4081, ["backend/promo_email_sender.py"])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	summary = [line for line in result.stdout.splitlines() if line.startswith("MERGE_TRAIN_RELEASE_SUMMARY ")]
+	assert len(summary) == 1
+	fields = dict(item.split("=", 1) for item in summary[0].split()[1:])
+	assert fields["examined"] == "3"
+	assert fields["overlap"] == "1", "4081 still overlaps the open, older 4077"
+	counted = sum(int(fields[key]) for key in (
+		"overlap", "active_review", "runs_incomplete", "files_unavailable", "blockers_unavailable",
+		"marker_unavailable", "claim_skipped", "dispatch_failed"))
+	assert int(fields["released"]) + counted == int(fields["examined"])
+	# The malformed created_at on 4070 is skipped; the oldest parseable one wins.
+	expected = (datetime.now(timezone.utc) - datetime(2026, 1, 1, tzinfo=timezone.utc)).total_seconds()
+	assert abs(int(fields["oldest_queued_age_secs"]) - expected) <= 300
 
 
 def test_release_does_not_read_actions_without_queued_prs(tmp_path: Path) -> None:
@@ -877,6 +910,7 @@ def test_release_keeps_queue_when_identity_unavailable(tmp_path: Path) -> None:
 	result, log_text, _env_out = _run("release", tmp_path, bin_dir, fixtures, log, GH_RETRY_MAX_ATTEMPTS="1")
 	assert result.returncode == 0, result.stderr
 	assert "could not inspect the queue marker" in result.stdout
+	assert "marker_unavailable=1" in result.stdout
 	assert "DELETE repos/acme/consumer/issues/4077/labels" not in log_text
 	assert "gh workflow run" not in log_text
 
@@ -922,7 +956,7 @@ def test_release_fetches_each_pr_file_list_once_per_run(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert "MERGE_TRAIN_STILL_QUEUED pr=4081 blockers=#4077" in result.stdout
 	assert "MERGE_TRAIN_STILL_QUEUED pr=4090 blockers=#4077,#4081" in result.stdout
-	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=0 base_filter=main" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=0 base_filter=main overlap=2 " in result.stdout
 	for number in (4077, 4081, 4090):
 		calls = log_text.count(f"pulls/{number}/files")
 		assert calls == 1, f"/pulls/{number}/files fetched {calls} times; the per-run cache must hold it to one"
@@ -956,6 +990,8 @@ def test_release_keeps_label_when_dispatch_fails(tmp_path: Path) -> None:
 	assert "POST repos/acme/consumer/issues/4077/labels" in log_text
 	assert "labels[]=ai:merge-queued" in log_text, "failed dispatch must restore the queue label"
 	assert "merge-train:released" not in log_text
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=0 base_filter=* " in result.stdout
+	assert " dispatch_failed=1 " in result.stdout
 
 
 def test_release_comment_lookup_failure_does_not_abort_successful_release(tmp_path: Path) -> None:
@@ -991,6 +1027,7 @@ def test_release_leaves_active_review_queued_without_dispatch(tmp_path: Path) ->
 	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
 	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=0 base_filter=* overlap=0 active_review=1 " in result.stdout
 
 
 def test_release_leaves_pr_named_dispatch_run_queued_without_dispatch(tmp_path: Path) -> None:
@@ -1103,6 +1140,7 @@ def test_release_dispatch_claim_prevents_concurrent_release(tmp_path: Path) -> N
 	assert result.returncode == 0, result.stderr
 	assert "MERGE_TRAIN_RELEASE_CLAIM_SKIPPED pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
+	assert " claim_skipped=1 dispatch_failed=0 " in result.stdout
 
 
 def _queued_pr_4077(fixtures: Path) -> None:
@@ -1397,6 +1435,12 @@ def test_release_leaves_pr_queued_when_run_listing_fails(tmp_path: Path) -> None
 	assert "PATCH" not in log_text, "the queue marker must not be retired on an incomplete listing"
 	assert "pulls/4077/files" not in log_text
 	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=0" in result.stdout
+	# Incomplete-listing scenario: every examined PR is attributed to it.
+	assert (
+		"MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=0 base_filter=* overlap=0 active_review=0"
+		" runs_incomplete=2 files_unavailable=0 blockers_unavailable=0 marker_unavailable=0"
+		" claim_skipped=0 dispatch_failed=0"
+	) in result.stdout
 
 
 def test_release_leaves_pr_queued_on_malformed_run_listing(tmp_path: Path) -> None:
@@ -2804,3 +2848,54 @@ def test_gate_skips_non_object_and_null_filename_entries(tmp_path: Path, own_pat
 		assert "MERGE_TRAIN_GATE pr=4077 base=main result=unblocked action=continue" in result.stdout
 		assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
 	assert log_text.count("pulls/4075/files") == 1
+
+
+# SHELL-001 (Refs #8975): MERGE_TRAIN_DISPATCH_WORKFLOWS is split on default
+# IFS without pathname expansion; order and first-success stop are unchanged.
+def _dispatch_lines(log_text: str) -> list[str]:
+	return [line for line in log_text.splitlines() if line.startswith("gh workflow run ")]
+
+
+def test_release_dispatch_list_glob_is_not_expanded(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(tmp_path / "x.yml").write_text("", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="*.yml")
+	assert result.returncode == 0, result.stderr
+	assert "gh workflow run *.yml --repo acme/consumer -f pr_number=4077" in log_text
+	assert "gh workflow run x.yml" not in log_text
+	assert "MERGE_TRAIN_DISPATCHED pr=4077 workflow=*.yml ref=default head=ai/issue-4064" in result.stdout
+
+
+def test_release_default_dispatch_list_order_unchanged(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "dispatch_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	workflows = [line.split()[3] for line in _dispatch_lines(log_text)]
+	assert workflows == ["ai-review.yml", "internal-review.yml", "review_autofix.yml"]
+	assert " dispatch_failed=1 " in result.stdout
+
+
+def test_release_newline_separated_dispatch_list_is_split(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "dispatch_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="first.yml\nsecond.yml\tthird.yml\n")
+	assert result.returncode == 0, result.stderr
+	workflows = [line.split()[3] for line in _dispatch_lines(log_text)]
+	assert workflows == ["first.yml", "second.yml", "third.yml"]
+
+
+def test_release_whitespace_only_dispatch_list_dispatches_nothing(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="  \n ")
+	assert result.returncode == 0, result.stderr
+	assert _dispatch_lines(log_text) == []
+	assert "could not be dispatched" in result.stdout
+	assert " dispatch_failed=1 " in result.stdout

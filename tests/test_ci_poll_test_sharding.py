@@ -1837,8 +1837,9 @@ MOVED_HOOKS_JOB_STEPS = {
 	# 40264887710, budget-watch issue #8179); these three steps moved,
 	# unchanged, to tests-promote-stall-and-review. Issue #8771 moved
 	# "Orchestrate lib unit tests" on to tests-heal-plan-and-validation.
+	# Issue #8993 moved it on to tests-release-and-log-analysis.
 	"Orchestrate lib unit tests": (
-		"tests-heal-plan-and-validation",
+		"tests-release-and-log-analysis",
 		(
 			"tests/test_orchestrate_lib.py",
 			"tests/test_task_state.py",
@@ -1966,10 +1967,8 @@ MOVED_RELEASE_TO_HEAL_STEPS = {
 	"Cancelled CI sweep recovery tests": (
 		"tests/test_ci_cancelled_rerun.py",
 	),
-	"Conflict-dispatch active-run visibility contract tests": (
-		"tests/test_conflict_dispatch_active_run_visibility.py",
-		"tests/test_review_dispatch_default_branch.py",
-	),
+	# Conflict-dispatch moved on to tests-hooks-and-orchestrator in #8993; see
+	# MOVED_HEAL_8993_STEPS.
 }
 
 
@@ -2360,12 +2359,14 @@ class MovedPromote8466StepsContractTest(unittest.TestCase):
 # 20 minutes (run 41704793081, budget-watch issue #8771): step name -> (target
 # job id, module paths its body names). The pick is an estimate from test and
 # subprocess counts; the run's step timings were not readable. The two steps
-# go to different jobs so that no single job takes both.
+# first went to different jobs; issue #8993 moved "Orchestrate lib unit tests"
+# on to tests-release-and-log-analysis, so both now run in that job.
 PROMOTE_8771_SOURCE_JOB_ID = "tests-promote-stall-and-review"
 PROMOTE_8771_SETUP_STEP = "Install Python CI dependencies"
 MOVED_PROMOTE_8771_STEPS = {
+	# Issue #8993 moved it on from tests-heal-plan-and-validation.
 	"Orchestrate lib unit tests": (
-		"tests-heal-plan-and-validation",
+		"tests-release-and-log-analysis",
 		(
 			"tests/test_orchestrate_lib.py",
 			"tests/test_orchestrate_initial_state_v2.py",
@@ -2435,6 +2436,97 @@ class MovedPromote8771StepsContractTest(unittest.TestCase):
 				self.assertIn(PROMOTE_8771_SETUP_STEP, names, job_id)
 				self.assertIn(name, names)
 				self.assertLess(names.index(PROMOTE_8771_SETUP_STEP), names.index(name))
+
+
+# Steps moved out of tests-heal-plan-and-validation, which took 16m08s of its
+# 20 minutes (run 42373283876, budget-watch issue #8993): step name -> (target
+# job id, module paths its body names). The run's step timings were not
+# readable; the pick is the heal job's slowest unsplit steps in the planning
+# sandbox, an estimate. The steps go to two jobs so that no single job takes
+# all of them.
+HEAL_8993_SOURCE_JOB_ID = "tests-heal-plan-and-validation"
+HEAL_8993_SETUP_STEP = "Install Python CI dependencies"
+MOVED_HEAL_8993_STEPS = {
+	"Orchestrate lib unit tests": (
+		"tests-release-and-log-analysis",
+		(
+			"tests/test_orchestrate_lib.py",
+			"tests/test_orchestrate_initial_state_v2.py",
+			"tests/test_task_state.py",
+			"tests/test_task_state_unblock.py",
+			"tests/test_blocker_check.py",
+			"tests/test_codex_stall_guard_poller.py",
+			"tests/test_orchestrate_force_tick.py",
+			"tests/test_orchestrate_poll_follow_up.py",
+			"tests/test_orchestrator_concurrency_caps.py",
+		),
+	),
+	"Merge-base freshness gate (pr_checks_lib) tests": (
+		"tests-hooks-and-orchestrator",
+		("tests/test_pr_base_freshness_gate.py",),
+	),
+	"Conflict-dispatch active-run visibility contract tests": (
+		"tests-hooks-and-orchestrator",
+		(
+			"tests/test_conflict_dispatch_active_run_visibility.py",
+			"tests/test_review_dispatch_default_branch.py",
+		),
+	),
+}
+
+
+class MovedHeal8993StepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-heal-plan-and-validation run once, in their target jobs (#8993)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_target_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_HEAL_8993_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_HEAL_8993_STEPS:
+			with self.subTest(step=name):
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_job_id, modules) in MOVED_HEAL_8993_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[HEAL_8993_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_HEAL_8993_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_target_job_setup(self) -> None:
+		for name, (job_id, _modules) in MOVED_HEAL_8993_STEPS.items():
+			names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+			with self.subTest(step=name):
+				self.assertIn(HEAL_8993_SETUP_STEP, names, job_id)
+				self.assertIn(name, names)
+				self.assertLess(names.index(HEAL_8993_SETUP_STEP), names.index(name))
+
+	def test_no_target_is_the_source_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_HEAL_8993_STEPS.items():
+			with self.subTest(step=name):
+				self.assertNotEqual(job_id, HEAL_8993_SOURCE_JOB_ID)
 
 # Steps moved out of tests-release-and-log-analysis, which took 15m14s of its
 # 20 minutes (run 40750326439, budget-watch issue #8278): step name -> (new job
@@ -3149,10 +3241,10 @@ POLL_GROUP_TWO_8772_BOUNDARY_MODULES = (
 	"tests/test_ai_memory_sync_reference_files.py",
 	"tests/test_workflow_untrusted_input_contract.py",
 )
-POLL_GROUP_TWO_8772_MODULE_COUNT = 52
+POLL_GROUP_TWO_8772_MODULE_COUNT = 53
 # sha256 of the sorted, newline-joined module paths, so swapping an interior
 # module for another one is caught too.
-POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "a9fd35d08c872bb8b425964f565525d2255fc50964f0e19f26676959e7f03757"
+POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "e6795c8ab682e4d23b64fe87175b904f97ea243d51cd562adf8c2f7831ccc24f"
 
 
 class MovedPollGroupTwo8772StepsContractTest(unittest.TestCase):
