@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large`; the reviewer calls it a mention for the editor, and no edit is needed in this PR.\n  WHY: The cause is the size of the custom-instruction files the Copilot reviewer loads, not the canary content, so changing the canary file cannot fix it. The reviewer rated it NIT.\n- .github/workflows/review_autofix.yml:copilot-pull-request-reviewer check-run | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `copilot-pull-request-reviewer` check-run failed with `custom_instructions_too_large` (\"Prompt too big after adding system message\").\n  WHY: The reviewer could not create a review request, which blocks automated CI status; the reviewer calls it an infrastructure or configuration issue rather than a code defect. Severity disagreement: MAJOR (gemini) vs NIT (claude); the highest is used, mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=NIT | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large`. The cause is the size of the custom-instruction files the Copilot reviewer loads, not the canary content.\n  WHY: Changing the canary file cannot fix it. No edit is needed in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:copilot-pull-request-reviewer check-run | severity=MAJOR | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check-run failed with custom_instructions_too_large (\"Prompt too big after adding system message\").\n  WHY: The reviewer could not create a review request, preventing automated review on this PR. This appears to be an infrastructure or configuration issue rather than a code defect, but it requires investigation as it blocks automated CI status.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: Requirement: \"Update its content so it is exactly these three lines (no more, no less, with a trailing newline after the final line...): status: ok / run_id: 40831286935 / updated-by: ai-pipeline\" and \"Only modify tests/e2e_smoke_canary.txt\".\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: none \u2014 the PR diff replaces the file content with exactly the required three lines and changes no other file (pr_changed_files.txt lists only tests/e2e_smoke_canary.txt), and the working-tree file content matches the spec byte-for-byte.\n  ISSUE_CONFIDENCE: 5 (gap: none found)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "24945db1beb4d620f631e5fb3404c8b191ce669a46820976be001ff98a336d87",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "42336578161",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42336578161",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107041425_a71db936a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "42336578161"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-07T04:14:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
