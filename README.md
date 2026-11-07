@@ -1305,12 +1305,18 @@ exact release bytes; the body carries the marker
 `<!-- coding-workflows:restore-managed-workflows:v1 -->`, so reruns update the
 same pull request (and skip the push when nothing changed). A consumer with an
 open sync pull request (`auto/update-workflows-*` or `ai-sync/stable`) is
-skipped, because that pull request already restores every wrapper. The
+skipped, because that pull request restores every wrapper (one built for another release still skips the repair but is reported as stuck). The
 updater is never created by a restore pull request (it stays bootstrap-only),
 and an existing `auto/restore-managed-workflows` branch that the audit did not
 write is left alone (`reason=restore_branch_not_owned`).
 Each repository logs one `DRIFT_REPAIR repository=<r> outcome=created|updated|unchanged|skipped|error reason=<token>`
-line; the run summary and the Telegram alert list the results. Set
+line (a `sync_pull_request_open` skip adds `stale=true|false`); the run summary and the Telegram alert list the results.
+Drift that an open sync pull request covers needs no action, so it is sent at
+`DEBUG` (hidden by the default `ALERT_MSG_LEVEL=WARNING`) while that pull request
+is less than 3 days old. Once it has been open 3 days (or its open date is
+unknown, or its branch names another release) the pull request counts as stuck and the alert is a `WARNING` naming
+it. Fetch errors, failed repairs, new or refreshed restore pull requests, and
+drift with no sync pull request still send a `WARNING`. Set
 `CONSUMER_DRIFT_REPAIR_ENABLED=false` in this repository to keep the alert
 without pull requests. Transient GitHub API
 failures (intermittent 5xx "Unicorn" pages, rate limits, and network hiccups)
