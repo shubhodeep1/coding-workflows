@@ -360,3 +360,35 @@ Copy this block when adding a new entry:
   - `rg -n 'consumer_health_check' .github/workflows scripts --glob '!scripts/consumer_health_check.*'` lists only the four `orchestrate_poll.yml` steps, so they are removed together with the scripts.
   - A replacement that watches the same four signals (inactivity-disabled wrappers, manually disabled wrappers, silent pollers, tracking issues near the comment cap) is wired into the scheduler and has run green for 7 days.
 - **Owner:** @shubhodeep1
+
+### `scripts/heal_reproduce.sh`
+
+- **Introduced in:** PR for #8474 (2026-10-30), Refs #8434
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the shared helper that runs a heal's failing tests at the failing SHA and the last green SHA in the pre-push gate container (plan P2); the heal intake and the heal editor call it behind `WORKFLOW_HEAL_REPRODUCE_ENABLED`.
+- **Removal preflight checks:**
+  - `grep -rn heal_reproduce .github/workflows scripts` returns no callers other than this file.
+  - `tests/test_heal_reproduce.py` (and `tests/test_heal_reproduce_docker_e2e.py`, with their `ci.yml` entries) is removed in the same PR.
+- **Owner:** @shubhodeep1
+
+### `scripts/workflow_failure_heal_verify.sh`
+
+- **Introduced in:** PR #8589 (2026-11-01), for #8583, Refs #8434
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the post-merge check (plan P7) that reopens a heal issue whose fix did not hold; the `heal-verify` job of `.github/workflows/workflow-failure-heal-intake.yml` runs it hourly behind `WORKFLOW_HEAL_VERIFY_ENABLED`.
+- **Removal preflight checks:**
+  - The `heal-verify` job is removed from `.github/workflows/workflow-failure-heal-intake.yml` in the same PR.
+  - `grep -rn workflow_failure_heal_verify .github/workflows scripts` returns no callers other than this file.
+  - `tests/test_workflow_failure_heal_verify.py` (and its `ci.yml` entry), the `docs/INVENTORY.md` line and the `heal-verify` entry in `tests/test_review_autofix_sweep_zero_candidate_fast_exit.py` are removed in the same PR.
+- **Owner:** @shubhodeep1
+
+### `scripts/heal_port_to_default.sh`
+
+- **Introduced in:** PR #8636 (2026-11-01), for #8635, Refs #8434
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the post-merge port check (plan P6 step 2, decision D4) that files a heal issue on the default branch when a heal merged into `stable` still applies there; the "Open heal port issue on the default branch" step of `.github/workflows/issue_pr_status.yml` runs it, in this repository only, behind `WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED`.
+- **Removal preflight checks:**
+  - `grep -rn heal_port_to_default .github/workflows scripts` returns no callers other than this file (remove the `issue_pr_status.yml` step and its fetch block first).
+  - No open issue carries its port marker: `gh issue list -R shubhodeep1/coding-workflows -l ai:workflow-heal -s open --search 'in:body "Ported from heal:"' --json number --jq length` prints `0`.
+  - `tests/test_heal_port_to_default.py` (and its `ci.yml` entry) and the `heal-port` subcommand of `scripts/workflow_failure_heal.py` are removed in the same PR.
+- **Owner:** @shubhodeep1

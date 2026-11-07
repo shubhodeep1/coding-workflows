@@ -141,7 +141,7 @@ def test_pat_budget_steps_bracket_every_active_job() -> None:
 		"clarify.yml": ("clarify", "heal-report"),
 		"orchestrate_poll.yml": ("poll",),
 		"review_autofix_sweep.yml": ("sweep",),
-		"workflow-failure-heal-intake.yml": ("intake",),
+		"workflow-failure-heal-intake.yml": ("intake", "heal-verify"),
 		"validation-improvements-intake.yml": ("intake",),
 		"review_autofix.yml": ("gate", "codex-agent", "post-merge-validate-dispatch",
 			"post-merge-force-poll", "deterministic-skip-merge", "fingerprint-cap-block"),
