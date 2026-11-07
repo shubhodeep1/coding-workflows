@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2611-2629 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The pre-existing #8772 comment paragraph (lines 2611-2617) says the step names 52 modules, while the new #8980 paragraph (line 2629) says 53 modules, so adjacent comments disagree.\n  WHY: tests/test_ci_poll_test_sharding.py:3156 defines POLL_GROUP_TWO_8772_MODULE_COUNT = 53, so the 52 figure is stale. The mismatch is comment-only and has no runtime effect. Source severity is NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml (group assignment of the \"Regression tests wired by the CI wiring guard (part 2)\" step, `if: strategy.job-index == 0`, lines 2623-2647)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The step is moved to group 0 (ci.yml:2646-2647) and MovedPollGroupFour8980StepsContractTest (tests/test_ci_poll_test_sharding.py:3346-3438) locks that in, but the comments at ci.yml:2623-2642 say the run's step timings were unreadable and the pick is an estimate. No measurement shows group 0 has the most headroom, and the other groups' recorded totals are all above 15 minutes. Severity is NIT for gemini and openai, MAJOR for minimax; the highest is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\nExpected change site: .github/workflows/ci.yml (group selection for the regression tests step).\nEvidence of absence: The PR selects group 0 based on an estimate because the actual step timings from the failing run were unreadable. The \"most headroom\" requirement remains technically unverified due to missing data.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: Issue #8980 \u2014 \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\nExpected change site: .github/workflows/ci.yml at the step guard and surrounding comment block (lines 2623-2645) plus any supporting test in tests/test_ci_poll_test_sharding.py that documents the headroom basis.\nEvidence of absence: The PR moves the step to `if: strategy.job-index == 0` and MovedPollGroupFour8980StepsContractTest (tests/test_ci_poll_test_sharding.py:3346-3438) locks that destination in, but neither establishes that group 0 has the most headroom. The ci.yml comment records that \"the pick is an estimate, not a measurement\". Every other group carries a later recorded total above 15 minutes. The job, step name, body, matrix and timeout-minutes are unchanged, and no new required job name is introduced.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n\nTASK_GAP:\nRequirement: Internal comment consistency describing the same step body.\nExpected change site: .github/workflows/ci.yml comment block above \"Regression tests wired by the CI wiring guard (part 2)\" (lines 2611-2629).\nEvidence of absence: The #8772 paragraph (lines 2611-2617) says 52 modules, about 568 test functions and 134 subprocess call sites, while the new #8980 paragraph (line 2629) says 53 modules. tests/test_ci_poll_test_sharding.py:3156 defines POLL_GROUP_TWO_8772_MODULE_COUNT = 53. Comment-only, no runtime failure path.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\nExpected change site: `.github/workflows/ci.yml`, the `Regression tests wired by the CI wiring guard (part 2)` step's group assignment.\nEvidence of absence: The step is assigned to group 0 at `.github/workflows/ci.yml:2646-2647`, but the comments at `2623-2642` state that the step timings were unavailable and the destination was chosen by estimate. No measurement establishes that group 0 has the most headroom.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n\nHARDENING_SUGGESTIONS: NONE\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9de824441881daca5b6e57b130ac666b10a1d08e057e8c5c9c9ab58d4d7b7cbd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8989,
+    "run_id": "42388370828",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42388370828",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107160749_f395868f4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8989,
+    "run_id": "42388370828"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T16:07:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
