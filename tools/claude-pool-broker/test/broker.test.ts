@@ -907,7 +907,7 @@ describe("chatgpt: broker-side failures (503)", () => {
 		expect(h.s.logs).toContain("CHATGPT_POOL store refresh_failed reason=unavailable");
 	});
 
-	for (const [name, answer] of [["invalid_grant", { status: 400, body: { error: "invalid_grant" } }], ["a 401", { status: 401, body: {} }]] as [string, CompareAnswer][]) {
+	for (const [name, answer] of [["invalid_grant", { status: 400, body: { error: "invalid_grant" } }]] as [string, CompareAnswer][]) {
 		it(`${name} latches the rejection until the seed changes`, async () => {
 			const h = chatgptHarness();
 			withRefresh(h, 1000);
@@ -923,6 +923,17 @@ describe("chatgpt: broker-side failures (503)", () => {
 			expect([stored.refresh_token, stored.refresh_rejected]).toEqual(["rt_new_seed_refresh_token", false]);
 		});
 	}
+
+	it("a 401 (invalid_client) fails without latching", async () => {
+		const h = chatgptHarness();
+		withRefresh(h, 100);
+		h.refreshAnswers.push({ status: 401, body: {} }, { status: 401, body: {} });
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("credential_refresh_failed");
+		expect((await callChatgpt(h, await sign(chatgptClaims()))).body.error).toBe("credential_refresh_failed");
+		expect(h.refreshBodies.length).toBe(2);
+		const stored = (await h.storage.get(CHATGPT_STORE_KEY)) as Record<string, unknown>;
+		expect(stored.refresh_rejected).toBe(false);
+	});
 
 	it("another 4xx fails without latching", async () => {
 		const h = chatgptHarness();

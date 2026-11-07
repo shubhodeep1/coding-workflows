@@ -629,7 +629,7 @@ export function createHandler(deps: Deps)
 				return json(error.status, { error: error.reason });
 			}
 			deps.log("CHATGPT_POOL broker error reason=internal");
-			return json(500, { error: "internal" });
+			return json(503, { error: "internal" });
 		}
 	}
 
@@ -835,9 +835,11 @@ export function createChatgptStore(storage: DurableObjectStorageLike, deps: Pick
 			body = undefined;
 		}
 		const fields = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
-		if (response.status === 401 || (response.status === 400 && fields.error === "invalid_grant")) {
+		if (response.status === 400 && fields.error === "invalid_grant") {
 			// RFC 6749 section 5.2: the refresh token is dead. Latch so no later
 			// grant calls out with it again; a new seed value clears the latch.
+			// A 401 is invalid_client (wrong client id or URL), not a dead
+			// refresh token, so it falls through to "failed" and never latches.
 			const latched = await save({ ...record, refresh_rejected: true });
 			return latched ? { kind: "rejected" } : { kind: "write_failed" };
 		}
