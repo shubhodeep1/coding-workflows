@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-07T12:35:28Z",
+  "issue_number": 8973,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/review_untrusted_workspace.py:n/a; cited_path=scripts/review_untrusted_workspace.py; files_touched=.github/workflows/internal-review.yml, .github/workflows/review_autofix.yml, tests/**, changelog.d/*.md.",
+  "phase": "review_autofix",
+  "pr_number": 8979,
+  "record_id": "lesson_20261107123528_6160dad0d5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/review_untrusted_workspace.py",
+    ".github/workflows/internal-review.yml",
+    ".github/workflows/review_autofix.yml",
+    "tests/**",
+    "changelog.d/*.md"
+  ]
+}
