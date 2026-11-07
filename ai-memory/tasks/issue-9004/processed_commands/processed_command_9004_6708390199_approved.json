@@ -5,13 +5,26 @@
   "entry_id": "processed_command_9004_6708390199_approved",
   "issue_number": 9004,
   "metadata": {
+    "branch": "ai/issue-9004",
+    "changed_files": [
+      "README.md",
+      "agents.d/9004-paired-hook-template-merge.md",
+      "changelog.d/9004-paired-hook-template-merge.md",
+      "scripts/review_conflict_prepare.sh",
+      "tests/test_conflict_guard_hook_template_merge.py"
+    ],
+    "issue_number": 9004,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9004",
+    "pr_number": 9010,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9010",
+    "run_attempt": "1",
+    "run_id": "42383067354",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42383067354"
   },
   "run_attempt": 1,
   "run_id": "42383067354",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-07T14:57:19Z",
+  "status": "completed",
+  "timestamp": "2026-11-07T15:39:31Z",
   "workflow": "implement"
 }
