@@ -498,3 +498,165 @@ def test_operator_step_tick_cli_round_trip(fake: FakeGitHub, tmp_path: Path, cap
 	assert code == 0 and json.loads(captured.out)["ticked"] == ["pr-1"]
 	assert f"OPERATOR_STEP_TICK key=pr-1 outcome=ticked stable={stable[:7]}" in captured.err
 	assert writer.main(["tick", "--repo", REPO, "--stable-sha", "x"]) == 1
+
+
+# --- at most one persisted alert attempt per parking (stuck-states P6b) -------
+
+STAMP = "2026-10-08T00:00:00Z"
+
+
+def _claim_body(item: int = 7, parking: str = STAMP, state: str = "attempted", message: str | None = None) -> str:
+	return writer.render_alert_claim(item, parking, state, message)
+
+
+def _claim_posts(fake: FakeGitHub, item: int = 7) -> list[list[str]]:
+	return [args for args in fake.calls if args[:2] == ["api", f"repos/{REPO}/issues/{item}/comments"] and "-f" in args]
+
+
+def test_needs_human_park_reports_the_parking_identity(fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	assert _park(7)["parking"] == NOW
+	# An update keeps the entry's original stamp.
+	assert _park(7, now="2026-10-09T00:00:00Z", item_labeled=True)["parking"] == NOW
+	entries = {
+		n: {"kind": "issue", "parked": NOW, "line": writer.render_digest_entry(n, "issue", "blocked", "item_cap", "", NOW)}
+		for n in range(1, writer.NEEDS_HUMAN_MAX_ENTRIES + 1)
+	}
+	fake.issues[:] = [{"number": 5, "body": writer.render_digest(entries, []), "user": {"login": BOT}}]
+	assert _park(1001)["parking"] == "overflow"
+	monkeypatch.setenv("NEEDS_HUMAN_DIGEST_ENABLED", "false")
+	assert _park(7)["parking"] is None
+
+
+def test_needs_human_alert_claim_posts_one_claim_and_wins(fake: FakeGitHub) -> None:
+	result = writer.needs_human_alert_claim(REPO, 7, STAMP, BOT, now=NOW)
+	assert result["claimed"] is True and result["comment_id"] == 5000 and result["alert_attempted_at"] == NOW
+	posts = _claim_posts(fake)
+	assert len(posts) == 1
+	last = posts[0][-1].split("\n")[-1]
+	assert last == f"<!-- ai:unblock-park-alert:v1 item=7 parked={STAMP} state=attempted -->"
+	assert writer.NEEDS_HUMAN_ALERT_MARKER_RE.match(last)
+	# Two paginated reads (before and after the claim), one POST.
+	assert len([args for args in fake.calls if "--slurp" in args]) == 2
+
+
+@pytest.mark.parametrize("prior", [
+	_claim_body(),
+	_claim_body(state="confirmed", message="4242"),
+	_claim_body(parking="overflow"),
+])
+def test_needs_human_alert_claim_skips_an_attempted_parking(fake: FakeGitHub, prior: str) -> None:
+	fake.comments[7] = [{"id": 10, "body": prior, "user": {"login": BOT}}]
+	result = writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)
+	assert result["claimed"] is False and result["reason"] == "already_attempted" and result["comment_id"] == 10
+	assert _claim_posts(fake) == []
+
+
+@pytest.mark.parametrize("prior", [
+	_claim_body(parking="2026-01-01T00:00:00Z"),  # An earlier parking of the same item.
+	_claim_body(item=8),  # Another item.
+	"quoted\n" + _claim_body() + "\nand more",  # Not the last line.
+])
+def test_needs_human_alert_claim_ignores_claims_for_other_parkings(fake: FakeGitHub, prior: str) -> None:
+	fake.comments[7] = [{"id": 10, "body": prior, "user": {"login": BOT}}]
+	assert writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)["claimed"] is True
+
+
+def test_needs_human_alert_claim_ignores_a_forged_claim(fake: FakeGitHub) -> None:
+	fake.comments[7] = [{"id": 10, "body": _claim_body(state="confirmed", message="1"), "user": {"login": "mallory"}}]
+	result = writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)
+	assert result["claimed"] is True and len(_claim_posts(fake)) == 1
+
+
+def test_needs_human_alert_claim_loses_to_a_concurrent_lower_id_claim(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	original = fake.__call__
+
+	def racing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if "-f" in args and args[1] == f"repos/{REPO}/issues/7/comments":
+			# Another run's claim landed first (lower id).
+			fake.comments[7].insert(0, {"id": 10, "body": _claim_body(), "user": {"login": BOT}})
+		return out
+
+	monkeypatch.setattr(writer, "_gh", racing)
+	result = writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)
+	assert result["claimed"] is False and result["reason"] == "lost_race"
+
+
+def test_needs_human_alert_claim_unverified_when_its_claim_is_not_listed(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	original = fake.__call__
+
+	def lagging(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if "-f" in args and args[1] == f"repos/{REPO}/issues/7/comments":
+			fake.comments[7] = []  # The listing lags behind the POST.
+		return out
+
+	monkeypatch.setattr(writer, "_gh", lagging)
+	result = writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)
+	assert result["claimed"] is False and result["reason"] == "claim_unverified"
+
+
+@pytest.mark.parametrize("fail", ["post", "reread", "no_id"])
+def test_needs_human_alert_claim_failures_exit_2(fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch,
+		capsys: pytest.CaptureFixture[str], fail: str) -> None:
+	original = fake.__call__
+	reads = {"count": 0}
+
+	def failing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if "--slurp" in args:
+			reads["count"] += 1
+			if fail == "reread" and reads["count"] == 2:
+				raise writer.ApiError("re-read failed")
+		if "-f" in args and args[1] == f"repos/{REPO}/issues/7/comments":
+			if fail == "post":
+				raise writer.ApiError("post failed")
+			if fail == "no_id":
+				return "{}"
+		return original(args, allow_existing_label=allow_existing_label)
+
+	monkeypatch.setattr(writer, "_gh", failing)
+	code = writer.main(["needs-human", "alert-claim", "--repo", REPO, "--item", "7", "--parking", STAMP, "--trusted-login", BOT])
+	captured = capsys.readouterr()
+	assert code == 2 and "error" in json.loads(captured.out)
+	assert "NEEDS_HUMAN_ALERT item=7 parking=" in captured.err and "outcome=failed" in captured.err
+
+
+def test_needs_human_alert_claim_kill_switch_and_bad_arguments(fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	assert writer.main(["needs-human", "alert-claim", "--repo", REPO, "--item", "7", "--parking", "yesterday"]) == 1
+	assert writer.main(["needs-human", "alert-confirm", "--repo", REPO, "--item", "7", "--parking", STAMP,
+		"--comment-id", "5000", "--message-id", "12a"]) == 1
+	assert writer.main(["needs-human", "alert-confirm", "--repo", REPO, "--item", "7", "--parking", STAMP,
+		"--comment-id", "0", "--message-id", "12"]) == 1
+	assert fake.calls == []
+	monkeypatch.setenv("NEEDS_HUMAN_DIGEST_ENABLED", "false")
+	assert writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)["reason"] == "disabled"
+	assert writer.needs_human_alert_confirm(REPO, 7, STAMP, "5000", "12")["reason"] == "disabled"
+	assert fake.calls == []
+
+
+def test_needs_human_alert_confirm_patches_the_claim_in_place(fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	result = writer.needs_human_alert_confirm(REPO, 7, STAMP, "5000", "4242")
+	assert result["confirmed"] is True
+	patch = fake.patches()
+	assert len(patch) == 1 and patch[0][3] == f"repos/{REPO}/issues/comments/5000"
+	assert patch[0][-1].endswith(f"<!-- ai:unblock-park-alert:v1 item=7 parked={STAMP} state=confirmed message=4242 -->")
+	# A confirmed claim still counts as the parking's one attempt.
+	fake.comments[7] = [{"id": 5000, "body": patch[0][-1][len("body="):], "user": {"login": BOT}}]
+	assert writer.needs_human_alert_claim(REPO, 7, STAMP, BOT)["reason"] == "already_attempted"
+
+	def failing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		raise writer.ApiError("patch failed")
+
+	monkeypatch.setattr(writer, "_gh", failing)
+	capsys.readouterr()
+	assert writer.main(["needs-human", "alert-confirm", "--repo", REPO, "--item", "7", "--parking", STAMP,
+		"--comment-id", "5000", "--message-id", "4242"]) == 2
+	assert "outcome=failed reason=confirm_write_failed" in capsys.readouterr().err
+
+
+def test_needs_human_cli_dispatch_keeps_prune_reachable(fake: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
+	assert writer.main(["needs-human", "prune", "--repo", REPO, "--trusted-login", BOT]) == 0
+	assert json.loads(capsys.readouterr().out)["reason"] == "no_digest"

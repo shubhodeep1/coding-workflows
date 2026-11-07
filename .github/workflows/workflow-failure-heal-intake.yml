@@ -51,7 +51,7 @@ name: Workflow Failure Heal Intake
   workflow_dispatch:
     inputs:
       payload_json:
-        description: "Raw workflow_failure_heal.v1 payload JSON (manual re-run / testing)"
+        description: "Raw workflow_failure_heal.v1 payload JSON (manual re-run / testing; any source_kind, including release_blocker)"
         required: true
         type: string
 
@@ -144,6 +144,10 @@ jobs:
       # accepts them after the binding checks. An identity is always verified.
       WORKFLOW_HEAL_REQUIRE_REPORT_AUTH: ${{ vars.WORKFLOW_HEAL_REQUIRE_REPORT_AUTH || 'false' }}
       WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS: ${{ vars.WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS || '3600' }}
+      # Release-blocker occurrence throttle (stuck-states P4): a release_blocker
+      # duplicate posts at most one occurrence comment and alert per this many
+      # seconds on its open heal issue. Other kinds are never throttled.
+      WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS: ${{ vars.WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS || '86400' }}
       # Report queue (scripts/workflow_failure_heal_queue.sh): 'false' turns it
       # off and restores the shared concurrency group, which cancels pending runs.
       HEAL_INTAKE_QUEUE_ENABLED: ${{ vars.HEAL_INTAKE_QUEUE_ENABLED || 'true' }}
@@ -411,6 +415,8 @@ jobs:
       HEAL_SYNCED_SECURITY_LINE_BUCKET: ${{ vars.HEAL_SYNCED_SECURITY_LINE_BUCKET || '25' }}
       WORKFLOW_HEAL_REQUIRE_REPORT_AUTH: ${{ vars.WORKFLOW_HEAL_REQUIRE_REPORT_AUTH || 'false' }}
       WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS: ${{ vars.WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS || '3600' }}
+      # Release-blocker occurrence throttle; kept in step with the intake job's env.
+      WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS: ${{ vars.WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS || '86400' }}
       # Report queue (scripts/workflow_failure_heal_queue.sh): 'false' turns it
       # off and restores the shared concurrency group, which cancels pending runs.
       HEAL_INTAKE_QUEUE_ENABLED: ${{ vars.HEAL_INTAKE_QUEUE_ENABLED || 'true' }}

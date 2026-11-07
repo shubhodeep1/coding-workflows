@@ -231,12 +231,15 @@ def test_facts_are_fetched_on_the_host_and_given_to_the_model() -> None:
 	for name in ("Semantic cache lookup", "Semantic cache store", "Restore semantic cache SQLite", "Save semantic cache SQLite"):
 		assert "steps.check_orchestrator.outputs.mode != 'standalone'" in steps[name]["if"]
 	assert names.index("Semantic cache lookup") < names.index("Fetch GitHub facts for the questions") < names.index("Remove git auth before Codex execution")
-	assert "python3 scripts/clarify_github_facts.py" in facts["run"]
+	assert 'python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_github_facts.py"' in facts["run"]
 	run = steps["Build prompt and run Codex"]["run"]
 	assert run.index('echo "=== CLARIFICATION QUESTIONS ==="') < run.index('echo "=== GITHUB FACTS ==="')
 	stage = steps["Stage workflow support files"]["run"]
+	# The legacy copy loop (kill-switch region); the bundle helper stages the same list.
+	legacy_loop = re.search(r"for f in (gh_helpers\.sh[^;]*); do", stage)
+	assert legacy_loop
 	for script in ("auto_decisions.py", "clarify_github_facts.py", "clarify_data_provision_guard.py"):
-		assert f" {script}" in stage.split("; do", 1)[0]
+		assert script in legacy_loop.group(1).split()
 
 
 def test_standalone_worker_failure_does_not_end_the_job() -> None:
@@ -297,7 +300,7 @@ def test_fallback_guard_checks_later_recommended_answer(tmp_path: Path) -> None:
 	assert answers.rstrip("\n") == "Q1: B\nQ2: A"
 	result = subprocess.run(
 		[sys.executable, str(ROOT / "scripts" / "clarify_data_provision_guard.py"),
-		 "--clarification-file", str(clarification_path), "--answers-file", str(answer_path)],
+		"--clarification-file", str(clarification_path), "--answers-file", str(answer_path)],
 		capture_output=True, text=True, check=True,
 	)
 	assert "Q1: B\nQ2: B" in result.stdout
@@ -409,7 +412,7 @@ def test_data_guard_rewrites_emphasized_decisions_before_posting(tmp_path: Path)
 	answers.write_text("**DECISIONS:**\n**Q1**: **B**\n**Q2**: **A**\n\n**RATIONALE:**\nQ2: This needs a URL.\n", encoding="utf-8")
 	result = subprocess.run(
 		[sys.executable, str(ROOT / "scripts" / "clarify_data_provision_guard.py"),
-		 "--clarification-file", str(clarification), "--answers-file", str(answers)],
+		"--clarification-file", str(clarification), "--answers-file", str(answers)],
 		capture_output=True, text=True, check=True,
 	)
 	assert "Q2: B\n" in result.stdout and "Q2: overrode A -> B" in result.stdout

@@ -174,7 +174,7 @@ def test_proving_run_retries_when_default_branch_ref_is_unavailable() -> None:
 	assert "RETRY reason=default_branch_unavailable" in result["stdout"]
 
 
-def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: dict | None = None, runs_by_file: dict | None = None, prs: list[dict] | None = None, tag_commit: str = "9" * 40, untrusted_marker: bool = False, env_overrides: dict | None = None, compare_status_by_range: dict | None = None, extra_store: dict | None = None, stable_branch_sha: str = STABLE_BRANCH_SHA, stable_status: str = "ahead"):
+def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: dict | None = None, runs_by_file: dict | None = None, prs: list[dict] | None = None, tag_commit: str = "9" * 40, untrusted_marker: bool = False, env_overrides: dict | None = None, compare_status_by_range: dict | None = None, extra_store: dict | None = None, stable_branch_sha: str = STABLE_BRANCH_SHA, stable_status: str = "ahead", capture_telegram_calls: bool = False):
 	extra = {"compare_commits_detail": compare_commits, "tag_refs": {"stable": {"type": "tag", "sha": "8" * 40}}, "tag_objects": {"8" * 40: tag_commit}}
 	if commit_files:
 		extra["commit_files"] = commit_files
@@ -207,6 +207,7 @@ def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: di
 		branch_ref_shas={"stable": stable_branch_sha},
 		mock_store_extra=extra,
 		env_overrides=env_overrides,
+		capture_telegram_calls=capture_telegram_calls,
 	)
 
 
@@ -805,3 +806,192 @@ def test_stable_branch_at_smoke_sha_reuses_the_smoke_compare() -> None:
 	assert len(result["release_dispatches"]) == 1
 	smoke_compares = [str(call) for call in result["api_calls"] if f"compare/{SMOKE_SHA}...{PROMOTE_SHA}" in str(call)]
 	assert len(smoke_compares) == 1, smoke_compares
+
+
+# --- release-blocker heal reports from the poller (Refs #8291) -----------------
+
+RB_ENV = {
+	"GITHUB_WORKFLOW_REF": "owner/repo/.github/workflows/internal-orchestrate-poll.yml@refs/heads/main",
+	"GITHUB_WORKFLOW": "Internal: AI Orchestrate Poller",
+	"GITHUB_RUN_ID": "123",
+	"GITHUB_RUN_ATTEMPT": "1",
+}
+NOT_PINNABLE_ENV = {"COMPREHENSIVE_RELEASE_WORKFLOW_FILE": "test-and-mark-stable.yml"}
+
+
+def _only_heal_report(result: dict, reason: str) -> dict:
+	assert len(result["heal_dispatches"]) == 1, (result["heal_dispatches"], result["stdout"])
+	envelope = result["heal_dispatches"][0]
+	assert envelope["event_type"]
+	report = envelope["client_payload"]["report"]
+	assert report["source_kind"] == "release_blocker"
+	assert report["source_repo"] == "owner/repo"
+	assert report["blocker_reason"] == reason
+	assert report["head_branch"] == "main"
+	assert report["workflow_name"] == RB_ENV["GITHUB_WORKFLOW"]
+	assert report["reporter_run"]["run_id"] == "123"
+	assert report["run_refs"] == []
+	assert report["blocker_evidence"].splitlines()[0] == f"reason={reason}"
+	assert "tracking_issue=" in report["blocker_evidence"]
+	assert f"RELEASE_BLOCKER_REPORTED reason={reason} " in result["stdout"]
+	assert "test-token" not in report["blocker_evidence"]
+	return report
+
+
+def test_release_workflow_not_pinnable_reports_release_blocker_once() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	result = _verifying_run(_project_state(), compare_commits=commits, env_overrides={**RB_ENV, **NOT_PINNABLE_ENV})
+	report = _only_heal_report(result, "promotion_failed:release_workflow_not_pinnable")
+	assert report["head_sha"] == PROMOTE_SHA
+	assert "workflow=test-and-mark-stable.yml" in report["blocker_evidence"]
+	promotion = result["latest_state"]["comprehensive_promotion"]
+	assert promotion["status"] == "failed"
+	assert promotion["release_blocker_reported"] is True
+	assert result["release_dispatches"] == []
+	assert result["latest_state"]["final_merge_status"] == "merged"
+
+
+def test_release_blocker_report_kill_switch_sends_nothing() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	result = _verifying_run(_project_state(), compare_commits=commits, env_overrides={**RB_ENV, **NOT_PINNABLE_ENV, "RELEASE_BLOCKER_HEAL_ENABLED": "false"})
+	assert result["heal_dispatches"] == []
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=promotion_failed:release_workflow_not_pinnable" in result["stdout"]
+	assert "release_blocker_reported" not in result["latest_state"]["comprehensive_promotion"]
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "failed"
+
+
+def test_release_blocker_report_needs_the_registered_producer() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	foreign = {**RB_ENV, "GITHUB_WORKFLOW_REF": "consumer/repo/.github/workflows/internal-orchestrate-poll.yml@refs/heads/main"}
+	for env in ({k: v for k, v in RB_ENV.items() if k != "GITHUB_WORKFLOW_REF"}, foreign, {**RB_ENV, "GITHUB_WORKFLOW_REF": "owner/repo/.github/workflows/orchestrate_poll.yml@refs/heads/main"}):
+		result = _verifying_run(_project_state(), compare_commits=commits, env_overrides={**env, **NOT_PINNABLE_ENV})
+		assert result["heal_dispatches"] == [], env
+		assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=promotion_failed:release_workflow_not_pinnable detail=producer_unregistered" in result["stdout"], env
+		assert result["latest_state"]["comprehensive_promotion"]["status"] == "failed"
+
+
+def test_release_blocker_dispatch_denied_warns_and_keeps_existing_alerts() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	result = _verifying_run(
+		_project_state(),
+		compare_commits=commits,
+		env_overrides={**RB_ENV, **NOT_PINNABLE_ENV},
+		extra_store={"fail_heal_dispatch": True},
+		capture_telegram_calls=True,
+	)
+	assert result["heal_dispatches"] == []
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=dispatch_denied blocker=promotion_failed:release_workflow_not_pinnable" in result["stdout"]
+	assert "RELEASE_BLOCKER_REPORTED" not in result["stdout"]
+	levels = [(n["level"], n["message"]) for n in result["telegram_notifications"]]
+	assert any(level == "WARNING" and "Release blocker report could not be dispatched (dispatch_denied)" in msg for level, msg in levels), levels
+	assert any(level == "CRITICAL" and "cannot pin target_sha" in msg for level, msg in levels), levels
+	promotion = result["latest_state"]["comprehensive_promotion"]
+	assert promotion["status"] == "failed"
+	assert promotion["release_blocker_reported"] is True
+	assert result["release_dispatches"] == []
+	assert result["latest_state"]["final_merge_status"] == "merged"
+
+
+def test_release_run_failure_reports_release_blocker_once() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	first = _verifying_run(_project_state(), compare_commits=commits, env_overrides=RB_ENV)
+	assert first["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+	assert first["heal_dispatches"] == []
+	runs = {"promote-main-to-stable.yml": [{"id": 1, "event": "workflow_dispatch", "status": "completed", "conclusion": "failure", "head_branch": "main", "created_at": "2099-01-01T00:00:00Z"}]}
+	second = _verifying_run(first["latest_state"], compare_commits=commits, runs_by_file=runs, prs=first["prs"], env_overrides=RB_ENV)
+	report = _only_heal_report(second, "promotion_failed:release_failed")
+	assert report["head_sha"] == PROMOTE_SHA
+	assert second["latest_state"]["comprehensive_promotion"]["status"] == "failed"
+	assert second["latest_state"]["comprehensive_promotion"]["release_blocker_reported"] is True
+	assert "COMPREHENSIVE_PROMOTION_FAILED" in second["stdout"]
+
+
+def test_hold_timeout_report_is_not_repeated_once_reported() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	first = _verifying_run(_project_state(), compare_commits=commits, env_overrides=RB_ENV)
+	state = first["latest_state"]
+	state["comprehensive_promotion"]["dispatched_at"] = 1
+	timed_out = _verifying_run(state, compare_commits=commits, prs=first["prs"], env_overrides=RB_ENV)
+	_only_heal_report(timed_out, "promotion_failed:hold_timeout")
+	# A rebuilt tick carrying the persisted guard does not report again.
+	state = first["latest_state"]
+	state["comprehensive_promotion"]["dispatched_at"] = 1
+	state["comprehensive_promotion"]["release_blocker_reported"] = True
+	again = _verifying_run(state, compare_commits=commits, prs=first["prs"], env_overrides=RB_ENV)
+	assert again["heal_dispatches"] == []
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=already_reported blocker=promotion_failed:hold_timeout" in again["stdout"]
+	assert again["latest_state"]["comprehensive_promotion"]["reason"] == "hold cap reached before the release finished"
+
+
+def test_stable_tag_lookup_past_hold_cap_reports_release_blocker() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	state = _project_state()
+	state["comprehensive_promotion"] = {"status": "pending", "gate_started_at": 1}
+	result = _verifying_run(state, compare_commits=commits, extra_store={"tag_ref_lookup_error": True}, env_overrides=RB_ENV)
+	report = _only_heal_report(result, "promotion_failed:stable_tag_lookup_unavailable")
+	assert report["head_sha"] == PROMOTE_SHA
+	assert "gate=stable_tag_lookup_unavailable" in report["blocker_evidence"]
+	assert report["blocker_age_secs"] > 0
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "failed"
+	assert result["release_dispatches"] == []
+	assert result["latest_state"]["final_merge_status"] == "merged"
+
+
+def test_verification_retries_exhausted_reports_release_blocker() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		stub = Path(tmp) / "dispatcher_stub.sh"
+		stub.write_text("#!/usr/bin/env bash\necho 'APPLY_ANALYSIS_SKIPPED reason=orchestrate_run_in_flight workflow=internal-orchestrate.yml'\n", encoding="utf-8")
+		stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+		env = {**RB_ENV, "APPLY_ANALYSIS_DISPATCHER": str(stub), "COMPREHENSIVE_VERIFICATION_RETRY_MAX": "1"}
+		common = dict(
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_comments=[_trusted(_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA))],
+			issue_labels={10: ["ai:merged"]},
+			existing_branches=["main", "orchestrator/project-192"],
+			branch_ref_shas={"main": PROMOTE_SHA},
+			env_overrides=env,
+		)
+		first = _run_poller(state=_project_state(), tracking_labels=[LABEL], prs=[_open_final_pr()], **common)
+		assert first["heal_dispatches"] == []
+		second = _run_poller(state=first["latest_state"], tracking_labels=first["tracking_labels"], prs=first["prs"], **common)
+	report = _only_heal_report(second, "verification_not_dispatched")
+	assert "dispatcher_outcome=SKIPPED_reason=orchestrate_run_in_flight" in report["blocker_evidence"]
+	assert "retries=1" in report["blocker_evidence"]
+	callback = second["latest_state"]["comprehensive_release_callback"]
+	assert callback["handled"] is True
+	assert callback["release_blocker_reported"] is True
+
+
+def test_plain_skipped_verification_is_not_a_release_blocker() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		stub, _ = _stub_dispatcher(Path(tmp), outcome="skipped")
+		result = _run_poller(
+			state=_project_state(),
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_labels=[LABEL],
+			tracking_comments=[_trusted(_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA))],
+			issue_labels={10: ["ai:merged"]},
+			prs=[_open_final_pr()],
+			existing_branches=["main", "orchestrator/project-192"],
+			branch_ref_shas={"main": PROMOTE_SHA},
+			env_overrides={**RB_ENV, "APPLY_ANALYSIS_DISPATCHER": str(stub)},
+		)
+	assert "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED" in result["stdout"]
+	assert result["heal_dispatches"] == []
+	assert "RELEASE_BLOCKER_REPORT" not in result["stdout"]
+
+
+def test_untrusted_marker_reports_release_blocker_on_first_alert_only() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	first = _verifying_run(_project_state(), compare_commits=commits, untrusted_marker=True, env_overrides=RB_ENV)
+	report = _only_heal_report(first, "marker_untrusted")
+	assert "marker_author=drive-by" in report["blocker_evidence"]
+	callback = first["latest_state"]["comprehensive_release_callback"]
+	assert callback["release_blocker_reported"] is True
+	assert callback.get("handled") is not True
+	assert LABEL in first["tracking_labels"]
+	second = _verifying_run(first["latest_state"], compare_commits=commits, untrusted_marker=True, env_overrides=RB_ENV)
+	assert second["heal_dispatches"] == []
+	assert "alerted=true" in second["stdout"]

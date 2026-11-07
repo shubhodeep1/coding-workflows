@@ -569,7 +569,7 @@ def test_security_audit_support_identity_fails_closed_and_pins_source_and_consum
 	assert proc.returncode == 0, proc.stderr
 	assert output == f"support_sha={support_sha}\nprotected_main_sha={support_sha}\n"
 	for bad_branch in ({"protected": False, "commit": {"sha": support_sha}},
-	                   {"protected": True, "commit": {"sha": "invalid"}}):
+		{"protected": True, "commit": {"sha": "invalid"}}):
 		proc, output, _ = _run_audit_workflow_resolution(
 			"Resolve trusted audit support commit", {main_api: bad_branch}, env_overrides=source_env
 		)
@@ -587,12 +587,12 @@ def test_security_audit_support_identity_fails_closed_and_pins_source_and_consum
 	proc, output, _ = _run_audit_workflow_resolution(
 		"Resolve trusted audit support commit",
 		{stable_api: {"object": {"type": "tag", "sha": other_sha}},
-		 f"repos/{source_repo}/git/tags/{other_sha}": {"object": {"type": "commit", "sha": support_sha}}},
+			f"repos/{source_repo}/git/tags/{other_sha}": {"object": {"type": "commit", "sha": support_sha}}},
 	)
 	assert proc.returncode == 0, proc.stderr
 	assert output == f"support_sha={support_sha}\n"
 	for bad_responses in ({}, {stable_api: {"object": {"type": "tag", "sha": other_sha}}},
-	                      {stable_api: {"object": {"type": "commit", "sha": "invalid"}}}):
+		{stable_api: {"object": {"type": "commit", "sha": "invalid"}}}):
 		proc, output, _ = _run_audit_workflow_resolution("Resolve trusted audit support commit", bad_responses)
 		assert proc.returncode != 0 and not output
 	pinned_env = {"WORKFLOW_JOB_JSON": json.dumps({
@@ -603,7 +603,7 @@ def test_security_audit_support_identity_fails_closed_and_pins_source_and_consum
 	assert proc.returncode == 0, proc.stderr
 	assert output == f"support_sha={support_sha}\n"
 	for invalid_identity in (f"{source_repo}/.github/workflows/security-audit.yml@refs/heads/main",
-	                         f"other/repo/.github/workflows/security-audit.yml@{support_sha}"):
+		f"other/repo/.github/workflows/security-audit.yml@{support_sha}"):
 		proc, output, _ = _run_audit_workflow_resolution(
 			"Resolve trusted audit support commit", {},
 			env_overrides={"WORKFLOW_JOB_JSON": json.dumps({
@@ -760,7 +760,7 @@ def test_security_audit_exclusions_resolution_accepts_only_unchanged_tracked_sup
 def test_security_audit_nested_data_cannot_replace_trusted_exclusions() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-trust-boundary-") as td:
 		workspace = Path(td)
-		trusted = _audit_exclusions_support_repo(workspace)
+		_audit_exclusions_support_repo(workspace)
 		repo_dir, first_sha, head_sha = _git_fixture_repo(workspace / "audit-data")
 		malicious = repo_dir / "scripts" / "security_audit_fp_exclusions.json"
 		malicious.parent.mkdir()
@@ -789,7 +789,7 @@ def test_security_audit_nested_data_cannot_replace_trusted_exclusions() -> None:
 				},
 			)
 			assert proc.returncode == 0, proc.stderr
-			assert f"tracker=#9000 findings=1 followups_created=1" in proc.stdout
+			assert "tracker=#9000 findings=1 followups_created=1" in proc.stdout
 			assert finding_id in "\n".join(final_state.get("issue_create_bodies", []))
 
 		proc, variables = _run_audit_exclusions_resolution(workspace, "scripts/malformed.json")
@@ -3208,6 +3208,11 @@ def test_security_audit_workflow_declares_branch_audit_inputs_on_both_triggers()
 		inputs = triggers[trigger]["inputs"]
 		assert inputs["ref"]["default"] == ""
 		assert inputs["ref"]["type"] == "string"
+		# Single-issue security pass delta re-audit (stuck-states P5a): optional
+		# requests the audit verifies before it narrows the scope.
+		for delta_input in ("audit_diff_since", "prior_findings"):
+			assert inputs[delta_input]["default"] == ""
+			assert inputs[delta_input]["type"] == "string"
 		# The weekly follow-up cap is gone (every finding is filed), so the
 		# short-lived bypass input never shipped.
 		assert "bypass_weekly_cap" not in inputs
@@ -3321,6 +3326,87 @@ def test_security_audit_target_ref_routes_followups_and_keeps_tracker_marker() -
 	assert f"branch `claude/implement-plan-demo` changes since its merge-base with the default branch (`{first_sha}`..`{head_sha}`)" in comment
 	# No tracker body edit carries the branch head as the default-branch marker.
 	assert not any(head_sha in body for body in final_state.get("issue_edit_bodies", []))
+
+
+def test_security_audit_branch_issues_audit_accepts_prior_findings_and_exports_findings() -> None:
+	"""Single-issue security pass delta re-audit (stuck-states P5a).
+
+	A branch-scoped issues audit (SECURITY_AUDIT_TARGET_REF) accepts prior
+	findings, renders the untrusted prior-findings block without the
+	project-pass money lens, and writes the surviving findings to
+	SECURITY_AUDIT_PASS_FINDINGS_OUT for the PR report.
+	"""
+	with tempfile.TemporaryDirectory(prefix="security-audit-pass-delta-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, second_sha, head_sha = _git_fixture_repo_three_commits(tmp_path)
+		prior_findings_path = tmp_path / "prior.json"
+		prior_findings_path.write_text(
+			json.dumps([{"finding_id": "prior-b", "file": "file_b.py", "line": 1, "severity": "high", "exploit_scenario": "Earlier pass finding."}]),
+			encoding="utf-8",
+		)
+		export_path = tmp_path / "single-pass-findings.json"
+		tracker_state = {
+			"issue_list_responses": [
+				[
+					{
+						"number": 9000,
+						"title": "AI Security Audit Tracker",
+						"body": "<!-- ai:security-audit-tracker:v1 -->\n",
+						"state": "OPEN",
+						"url": "https://github.com/owner/repo/issues/9000",
+					}
+				],
+			],
+			"api_responses": [[[]]],
+			"next_issue_number": 9100,
+		}
+		base_env = {
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_TARGET_REF": "ai/issue-7",
+			"SECURITY_AUDIT_DIFF_BASE": first_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			"SECURITY_AUDIT_DIFF_SINCE": second_sha,
+			"SECURITY_AUDIT_PRIOR_FINDINGS": str(prior_findings_path),
+		}
+		proc, final_state = _run_security_audit(
+			json.loads(json.dumps(tracker_state)),
+			codex_output=json.dumps(
+				[
+					_finding_payload("new-c", file_path="file_c.py"),
+					_finding_payload("prior-b", file_path="file_b.py"),
+					_finding_payload("unchanged-a", file_path="file_a.py"),
+				]
+			),
+			cwd=repo_dir,
+			extra_env={**base_env, "SECURITY_AUDIT_PASS_FINDINGS_OUT": str(export_path)},
+		)
+		exported = json.loads(export_path.read_text(encoding="utf-8")) if export_path.exists() else None
+
+		missing_prior = dict(base_env, SECURITY_AUDIT_PRIOR_FINDINGS=str(tmp_path / "missing.json"))
+		missing_proc, _ = _run_security_audit(json.loads(json.dumps(tracker_state)), cwd=repo_dir, extra_env=missing_prior)
+
+		unset_export = tmp_path / "unset-export.json"
+		unset_proc, _ = _run_security_audit(
+			json.loads(json.dumps(tracker_state)),
+			codex_output=json.dumps([_finding_payload("new-c", file_path="file_c.py")]),
+			cwd=repo_dir,
+			extra_env=base_env,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "prior-findings=1 (1 cited files kept in scope)" in proc.stdout
+	prompt = final_state["codex_stdin"][0]
+	assert "Previously reported findings for this project" in prompt
+	assert prompt.count("=== BEGIN UNTRUSTED PRIOR FINDINGS ===") == 1
+	assert "re-emit it with the SAME finding_id" in prompt
+	assert "Project-pass security and money-handling lens:" not in prompt
+	assert exported is not None
+	assert sorted(finding["finding_id"] for finding in exported) == ["new-c", "prior-b"]
+	assert set(exported[0]) <= {"finding_id", "owasp_or_stride_category", "severity", "confidence", "file", "line", "exploit_scenario", "recommendation"}
+	assert all(body.count("- Integration branch: `ai/issue-7`") == 1 for body in final_state.get("issue_create_bodies", []))
+	_assert_security_audit_failure_context(missing_proc, phase="prior-findings-preflight", path_suffix="missing.json", expected_cwd=repo_dir)
+	assert unset_proc.returncode == 0, unset_proc.stderr
+	assert not unset_export.exists()
 
 
 def test_security_audit_target_ref_routes_through_the_integration_ref_resolver() -> None:
@@ -4102,7 +4188,7 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	so mod.py stays in scope even when the project leaves it unchanged):
 	- ``append``: pure addition of line 61; lines 1-60 predate the project.
 	- ``unrelated_change``: mod.py is unchanged; the project adds other.py,
-	  which names nothing.
+		which names nothing.
 	- ``rewrite``: line 2 is rewritten (a deletion plus an addition).
 	- ``delete_guard``: a guard line above an unchanged operation is deleted.
 	- ``insert_near``: one line is inserted after line 50 (no deletion).
@@ -4110,24 +4196,24 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	- ``cross_file_import``: as ``cross_file``, but mod.py imports auth.
 	- ``cross_file_reverse``: as ``cross_file``, but auth.py names mod.
 	- ``cross_file_registry``: as ``cross_file``, but an unchanged registry.py
-	  names both auth and mod (neither names the other).
+		names both auth and mod (neither names the other).
 	- ``cross_file_registry_short``: as ``cross_file_registry``, but the guard
-	  is deleted from the two-letter module db.py instead of auth.py.
+		is deleted from the two-letter module db.py instead of auth.py.
 	- ``head_router``: as ``cross_file``, but the project adds router.py
-	  naming both auth and mod (the link exists only at the head).
+		naming both auth and mod (the link exists only at the head).
 	- ``head_override``: no deletions; the project adds patch.py naming mod.
 	- ``test_added``: no deletions; the project adds tests/test_mod.py
-	  naming mod.
+		naming mod.
 	- ``one_letter_deleted``: as ``cross_file``, but the guard is deleted
-	  from the one-letter module a.py, whose name cannot be searched.
+		from the one-letter module a.py, whose name cannot be searched.
 	- ``cross_file_chain``: as ``cross_file``, but middleware.py names auth
-	  and app.py names middleware and mod (a two-hop link).
+		and app.py names middleware and mod (a two-hop link).
 	- ``cross_file_long_chain``: as ``cross_file``, but mod is named by a
-	  five-file reference chain longer than the search bound.
+		five-file reference chain longer than the search bound.
 	- ``cross_file_shared_dependency``: as ``cross_file``, but mod.py and
-	  auth.py both import an unchanged shared.py that names neither.
+		auth.py both import an unchanged shared.py that names neither.
 	- ``cross_file_shared_one_letter``: as ``cross_file_shared_dependency``,
-	  but the shared module is the one-letter x.py.
+		but the shared module is the one-letter x.py.
 	"""
 	repo_dir = base_dir / "audited-repo"
 	repo_dir.mkdir(parents=True, exist_ok=True)
@@ -4698,6 +4784,256 @@ def test_security_audit_prompts_require_final_array_only() -> None:
 		assert tuple(block) == SECURITY_AUDIT_FINAL_ARRAY_LINES, path
 		contract_blocks.append(block)
 	assert contract_blocks[0] == contract_blocks[1]
+
+
+# Stuck-states P5b: a single-issue security pass audit (target ref plus PR
+# number) files one consolidated follow-up per cycle.
+P5B_TARGET_REF = "ai/issue-7"
+
+
+def _p5b_fixture_repo(base_dir: Path) -> tuple[Path, str, str]:
+	repo_dir, first_sha, _ = _git_fixture_repo(base_dir)
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update({
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+		"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+	})
+	(repo_dir / "file_c.py").write_text("print('third module')\nVALUE_C = 3\n", encoding="utf-8")
+	subprocess.run(["git", "add", "file_c.py"], cwd=repo_dir, env=git_env, check=True)
+	subprocess.run(["git", "commit", "-qm", "third commit"], cwd=repo_dir, env=git_env, check=True)
+	head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, env=git_env, text=True).strip()
+	return repo_dir, first_sha, head_sha
+
+
+def _p5b_findings() -> list[dict]:
+	second = _finding_payload("p5b-b-second", file_path="file_b.py")
+	second["line"] = 2
+	return [
+		_finding_payload("p5b-b-first", file_path="file_b.py"),
+		second,
+		_finding_payload("p5b-c", file_path="file_c.py"),
+	]
+
+
+def _run_p5b_audit(findings: list[dict], *, api_issues: list | None = None, env: dict | None = None):
+	with tempfile.TemporaryDirectory(prefix="security-audit-p5b-") as fixture_td:
+		repo_dir, first_sha, head_sha = _p5b_fixture_repo(Path(fixture_td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[api_issues or []]]
+		state["next_issue_number"] = 9200
+		extra_env = {
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_TARGET_REF": P5B_TARGET_REF,
+			"SECURITY_AUDIT_DIFF_BASE": first_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			"SECURITY_AUDIT_PASS_PR_NUMBER": "42",
+		}
+		extra_env.update(env or {})
+		extra_env = {key: value for key, value in extra_env.items() if value is not None}
+		proc, final_state = _run_security_audit(state, codex_output=json.dumps(findings), cwd=repo_dir, extra_env=extra_env)
+		return proc, final_state, head_sha
+
+
+def _leading_markers(body: str) -> list[str]:
+	markers = []
+	for line in body.split("\n"):
+		match = re.fullmatch(r"<!-- ai:security-finding:(\S+) -->", line)
+		if match is None:
+			break
+		markers.append(match.group(1))
+	return markers
+
+
+def test_security_audit_pr_pass_files_one_consolidated_followup() -> None:
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import security_dependency
+
+	proc, final_state, head_sha = _run_p5b_audit(_p5b_findings())
+	assert proc.returncode == 0, proc.stderr
+	assert "security-audit: followup_mode=consolidated pr=42" in proc.stdout
+	assert "followups_created=1" in proc.stdout
+	assert "findings=3 " in proc.stdout
+	bodies = final_state.get("issue_create_bodies", [])
+	assert len(bodies) == 1
+	body = bodies[0]
+	assert _leading_markers(body) == ["p5b-b-first", "p5b-b-second", "p5b-c"]
+	assert body.split("\n")[3] == "Refs #9000"
+	assert "- Pull request: #42" in body
+	assert f"- Audited head: `{head_sha}`" in body
+	assert f"- Integration branch: `{P5B_TARGET_REF}`" in body
+	assert "## Findings" in body and "### 3. p5b-c" in body
+	assert "Depends on:" not in body
+	title = final_state["issue_create_args"][0][final_state["issue_create_args"][0].index("--title") + 1]
+	assert title == f"[security-audit] PR #42: 3 findings at {head_sha[:12]}"
+	assert "--label" in final_state["issue_create_args"][0] and "ai:security" in final_state["issue_create_args"][0]
+	comment = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "- Follow-up mode: consolidated (3 findings in one issue)" in comment
+	assert security_dependency.security_dependency_number({"body": body, "labels": ["ai:security"], "number": 9200}) is None
+
+
+@pytest.mark.parametrize("state", ["open", "closed"])
+def test_security_audit_consolidated_retry_dedupes_every_leading_marker(state: str) -> None:
+	existing = {
+		"number": 9150,
+		"state": state,
+		"body": "".join(f"<!-- ai:security-finding:{finding['finding_id']} -->\n" for finding in _p5b_findings())
+		+ "Refs #9000\n\n- Integration branch: `ai/issue-7`\n",
+	}
+	proc, final_state, _ = _run_p5b_audit(_p5b_findings(), api_issues=[existing])
+	assert proc.returncode == 0, proc.stderr
+	assert "followups_created=0" in proc.stdout
+	assert not final_state.get("issue_create_bodies")
+
+
+def test_security_audit_dedupe_ignores_markers_below_the_leading_block() -> None:
+	existing = {
+		"number": 9150,
+		"state": "open",
+		"body": "<!-- ai:security-finding:p5b-b-first -->\nRefs #9000\n\n<!-- ai:security-finding:p5b-c -->\n",
+	}
+	proc, final_state, _ = _run_p5b_audit(_p5b_findings(), api_issues=[existing])
+	assert proc.returncode == 0, proc.stderr
+	bodies = final_state.get("issue_create_bodies", [])
+	assert len(bodies) == 1
+	assert _leading_markers(bodies[0]) == ["p5b-b-second", "p5b-c"]
+	# p5b-b-first's file already has follow-up #9150.
+	assert "\n- Depends on: #9150\n" in bodies[0]
+
+
+def test_security_audit_consolidated_followup_depends_on_highest_same_file_predecessor() -> None:
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import security_dependency
+
+	findings = [
+		_finding_payload("old-b", file_path="file_b.py"),
+		_finding_payload("old-c", file_path="file_c.py"),
+		*_p5b_findings(),
+	]
+	existing = [
+		{"number": 9100, "state": "open", "body": "<!-- ai:security-finding:old-b -->\nRefs #9000\n"},
+		{"number": 9105, "state": "closed", "body": "<!-- ai:security-finding:old-c -->\nRefs #9000\n"},
+	]
+	proc, final_state, _ = _run_p5b_audit(findings, api_issues=existing)
+	assert proc.returncode == 0, proc.stderr
+	assert "followups_created=1" in proc.stdout
+	bodies = final_state.get("issue_create_bodies", [])
+	assert len(bodies) == 1
+	assert bodies[0].count("Depends on:") == 1
+	# The open file_b.py predecessor wins over the higher-numbered closed one,
+	# so a merged #9105 cannot release the fix while #9100 is still open.
+	assert "\n- Depends on: #9100\n" in bodies[0]
+	assert security_dependency.security_dependency_number({"body": bodies[0], "labels": ["ai:security"], "number": 9200}) == 9100
+	comment = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "- New follow-up issues planned this run: 1" in comment
+
+
+def test_security_audit_consolidated_followup_falls_back_to_highest_closed_predecessor() -> None:
+	findings = [
+		_finding_payload("old-b", file_path="file_b.py"),
+		_finding_payload("old-c", file_path="file_c.py"),
+		*_p5b_findings(),
+	]
+	existing = [
+		{"number": 9100, "state": "closed", "body": "<!-- ai:security-finding:old-b -->\nRefs #9000\n"},
+		{"number": 9105, "state": "closed", "body": "<!-- ai:security-finding:old-c -->\nRefs #9000\n"},
+	]
+	proc, final_state, _ = _run_p5b_audit(findings, api_issues=existing)
+	assert proc.returncode == 0, proc.stderr
+	bodies = final_state.get("issue_create_bodies", [])
+	assert len(bodies) == 1
+	assert bodies[0].count("Depends on:") == 1
+	assert "\n- Depends on: #9105\n" in bodies[0]
+
+
+def test_security_audit_consolidated_closed_fallback_uses_highest_same_file_number() -> None:
+	# Two closed predecessors for one file, listed highest first: the fallback
+	# must still pick the highest, not the last-listed one.
+	findings = [
+		_finding_payload("old-b-high", file_path="file_b.py"),
+		_finding_payload("old-b-low", file_path="file_b.py"),
+		*_p5b_findings(),
+	]
+	existing = [
+		{"number": 9105, "state": "closed", "body": "<!-- ai:security-finding:old-b-high -->\nRefs #9000\n"},
+		{"number": 9100, "state": "closed", "body": "<!-- ai:security-finding:old-b-low -->\nRefs #9000\n"},
+	]
+	proc, final_state, _ = _run_p5b_audit(findings, api_issues=existing)
+	assert proc.returncode == 0, proc.stderr
+	bodies = final_state.get("issue_create_bodies", [])
+	assert len(bodies) == 1
+	assert bodies[0].count("Depends on:") == 1
+	assert "\n- Depends on: #9105\n" in bodies[0]
+
+
+def test_security_audit_consolidated_retry_omits_follow_up_mode_line_when_nothing_planned() -> None:
+	existing = {
+		"number": 9150,
+		"state": "open",
+		"body": "".join(f"<!-- ai:security-finding:{finding['finding_id']} -->\n" for finding in _p5b_findings()),
+	}
+	proc, final_state, _ = _run_p5b_audit(_p5b_findings(), api_issues=[existing])
+	assert proc.returncode == 0, proc.stderr
+	comment = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "- New follow-up issues planned this run: 0" in comment
+	assert "Follow-up mode:" not in comment
+
+
+@pytest.mark.parametrize("env", [
+	{"SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED": "false"},
+	{"SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED": "off"},
+	{"SECURITY_AUDIT_PASS_PR_NUMBER": None},
+	{"SECURITY_AUDIT_PASS_PR_NUMBER": ""},
+])
+def test_security_audit_consolidation_off_or_without_pr_keeps_per_finding_followups(env: dict) -> None:
+	proc, final_state, _ = _run_p5b_audit(_p5b_findings(), env=env)
+	assert proc.returncode == 0, proc.stderr
+	assert "security-audit: followup_mode=per_finding" in proc.stdout
+	assert "followups_created=3" in proc.stdout
+	bodies = final_state.get("issue_create_bodies", [])
+	assert [_leading_markers(body) for body in bodies] == [["p5b-b-first"], ["p5b-b-second"], ["p5b-c"]]
+	assert "- Depends on: #9200" in bodies[1]
+	assert "Depends on:" not in bodies[2]
+	assert not any("Pull request:" in body for body in bodies)
+	comment = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "Follow-up mode:" not in comment
+	# Byte-identical to a run whose environment has neither new variable.
+	_, legacy_state, _ = _run_p5b_audit(
+		_p5b_findings(),
+		env={"SECURITY_AUDIT_PASS_PR_NUMBER": None, "SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED": None},
+	)
+	assert legacy_state.get("issue_create_bodies") == bodies
+
+
+@pytest.mark.parametrize("pr_number", ["abc", "0", "-1", "12345678901"])
+def test_security_audit_invalid_pr_number_warns_and_keeps_per_finding_followups(pr_number: str) -> None:
+	proc, final_state, _ = _run_p5b_audit(_p5b_findings(), env={"SECURITY_AUDIT_PASS_PR_NUMBER": pr_number})
+	assert proc.returncode == 0, proc.stderr
+	assert "::warning::security-audit: SECURITY_AUDIT_PASS_PR_NUMBER must be a positive integer" in proc.stdout
+	assert "security-audit: followup_mode=per_finding pr=none" in proc.stdout
+	assert len(final_state.get("issue_create_bodies", [])) == 3
+
+
+def test_security_audit_default_branch_audit_never_consolidates() -> None:
+	state = _security_audit_tracker_state()
+	state["api_responses"] = [[[]]]
+	state["next_issue_number"] = 9100
+	proc, final_state = _run_security_audit(
+		state,
+		codex_output=json.dumps([_finding_payload("first"), _finding_payload("second")]),
+		extra_env={"SECURITY_AUDIT_PASS_PR_NUMBER": "42"},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert "followup_mode=per_finding" in proc.stdout
+	assert len(final_state.get("issue_create_bodies", [])) == 2
+
+
+def test_security_audit_step_wires_consolidated_followup_switch() -> None:
+	env = _audit_workflow_step("Run security audit")["env"]
+	assert env["SECURITY_AUDIT_PASS_PR_NUMBER"] == "${{ inputs.pr_number || '' }}"
+	assert env["SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED"] == "${{ vars.SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED || 'true' }}"
+	script = SCRIPT_PATH.read_text(encoding="utf-8")
+	assert 'SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED="${SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED:-true}"' in script
+	assert 'SECURITY_AUDIT_PASS_PR_NUMBER="${SECURITY_AUDIT_PASS_PR_NUMBER:-}"' in script
 
 
 if __name__ == "__main__":

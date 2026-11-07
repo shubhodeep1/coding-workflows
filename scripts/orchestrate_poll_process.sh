@@ -2574,6 +2574,18 @@ if ! [[ "${COMPREHENSIVE_VERIFICATION_RETRY_MAX}" =~ ^[0-9]+$ ]]; then
   echo "::warning::COMPREHENSIVE_VERIFICATION_RETRY_MAX must be a non-negative integer; defaulting to 24"
   COMPREHENSIVE_VERIFICATION_RETRY_MAX="24"
 fi
+# Release-blocker heal reports from the promote cycle (stuck-states P4,
+# release-blocker Phase 3; Refs #8291). The poller reports promotion_failed:*,
+# verification_not_dispatched and marker_untrusted to the heal intake through
+# the same build-blocker-payload -> request-report-identity -> wrap-dispatch
+# chain auto_release_stable.sh uses. Defaults live here (CLAUDE.md §8) so a
+# staged copy run under an older workflow YAML still works.
+RELEASE_BLOCKER_HEAL_ENABLED="${RELEASE_BLOCKER_HEAL_ENABLED:-true}"
+RELEASE_BLOCKER_HEAL_PY="${RELEASE_BLOCKER_HEAL_PY:-${ORCH_SCRIPTS_ROOT}/workflow_failure_heal.py}"
+# Must match the RELEASE_BLOCKER_PRODUCER_SCOPE_PATHS key in
+# workflow_failure_heal.py: only this repository's internal poller caller
+# reports, so consumer pollers never send reports the intake would reject.
+RELEASE_BLOCKER_POLLER_PRODUCER_FILE="internal-orchestrate-poll.yml"
 
 # Advisory follow-ups for accepted (waived) findings are filed only after the
 # project's integration branch has merged into the default branch.  Filing
@@ -2661,6 +2673,21 @@ if [ -n "${VALIDATION_HARNESS_ROUTE_LOGIN}" ] \
   echo "::warning::VALIDATION_HARNESS_HOLD config=VALIDATION_HARNESS_ROUTE_LOGIN outcome=default reason=invalid_value"
   VALIDATION_HARNESS_ROUTE_LOGIN=""
 fi
+
+# Harness heal auto-revalidate (Refs #8291, stuck-states plan P7 item 1). A
+# project parked failed with ai:harness-broken and no active harness hold is
+# revalidated once, by a poller-posted /revalidate, after the heal issue its
+# newest trusted routing marker names was closed with ai:merged. The value
+# falls back to its default with a warning that never prints the value.
+#   HARNESS_HEAL_AUTO_REVALIDATE_ENABLED   unset/empty/true -> true, false -> false
+case "$(printf '%s' "${HARNESS_HEAL_AUTO_REVALIDATE_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+  ""|true) HARNESS_HEAL_AUTO_REVALIDATE_ENABLED="true" ;;
+  false) HARNESS_HEAL_AUTO_REVALIDATE_ENABLED="false" ;;
+  *)
+    echo "::warning::HARNESS_HEAL_AUTO_REVALIDATE config=HARNESS_HEAL_AUTO_REVALIDATE_ENABLED outcome=default reason=invalid_value"
+    HARNESS_HEAL_AUTO_REVALIDATE_ENABLED="true"
+    ;;
+esac
 
 # Put the failure labels back after an aborted stale-pin recovery (#7138).
 # Restores ai:validation-failed and ai:harness-broken, plus the legacy
@@ -2924,6 +2951,25 @@ STALL_JUDGE_TRIGGER_COUNT="${STALL_JUDGE_TRIGGER_COUNT:-2}"
 if ! [[ "${STALL_JUDGE_TRIGGER_COUNT}" =~ ^[0-9]+$ ]] || [ "${STALL_JUDGE_TRIGGER_COUNT}" -lt 1 ]; then
   echo "::warning::STALL_JUDGE_TRIGGER_COUNT must be a positive integer; defaulting to 2"
   STALL_JUDGE_TRIGGER_COUNT="2"
+fi
+
+# Stuck-states P3b: failure-signature breaker + exhaustion escalation.
+# STALL_FINGERPRINT_BREAKER_ENABLED=true (default) trips a phase-failure label
+# when the same AI_FAILURE_FINGERPRINT_V1 (phase, fp) repeats
+# STALL_FINGERPRINT_REPEAT_MAX times in a row, and makes stall exhaustion
+# ("skip") label ai:needs-human and leave the issue open instead of closing
+# it. Setting it to false restores the legacy skip-and-close behaviour.
+STALL_FINGERPRINT_BREAKER_ENABLED="${STALL_FINGERPRINT_BREAKER_ENABLED:-true}"
+if is_truthy "${STALL_FINGERPRINT_BREAKER_ENABLED}"; then
+  STALL_FINGERPRINT_BREAKER_ENABLED="true"
+else
+  STALL_FINGERPRINT_BREAKER_ENABLED="false"
+fi
+# A value of 1 would trip on a single failure, so the floor is 2.
+STALL_FINGERPRINT_REPEAT_MAX="${STALL_FINGERPRINT_REPEAT_MAX:-2}"
+if ! [[ "${STALL_FINGERPRINT_REPEAT_MAX}" =~ ^[0-9]{1,4}$ ]] || [ "${STALL_FINGERPRINT_REPEAT_MAX}" -lt 2 ]; then
+  echo "::warning::STALL_FINGERPRINT_REPEAT_MAX must be an integer >= 2; defaulting to 2"
+  STALL_FINGERPRINT_REPEAT_MAX="2"
 fi
 
 ENABLE_STALL_JUDGE="${ENABLE_STALL_JUDGE:-true}"
@@ -14346,6 +14392,7 @@ comprehensive_cycle_metadata_json() {
                   or ((.user.login // "") == "github-actions[bot]"));
     ([ .[] | select(is_marker and trusted) | .body ] | last // "") as $body
     | ([ .[] | select(is_marker and (trusted | not)) ] | length > 0) as $untrusted
+    | ([ .[] | select(is_marker and (trusted | not)) | (.user.login // "") ] | last // "") as $untrusted_author
     | {
         role: line($body; "apply-analysis-role"),
         doc: line($body; "apply-analysis-source-doc"),
@@ -14354,8 +14401,9 @@ comprehensive_cycle_metadata_json() {
         promote_sha: line($body; "apply-analysis-promote-sha"),
         proving_merge_sha: line($body; "apply-analysis-proving-merge-sha"),
         pinned: (line($body; "apply-analysis-pinned") == "true"),
-        untrusted_marker: $untrusted
-      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","pinned":false,"untrusted_marker":false}'
+        untrusted_marker: $untrusted,
+        untrusted_author: $untrusted_author
+      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","pinned":false,"untrusted_marker":false,"untrusted_author":""}'
 }
 
 # comprehensive_stable_tag_commit
@@ -14395,6 +14443,143 @@ comprehensive_stable_tag_commit() {
   fi
 }
 
+# poller_release_blocker_safe <text>
+# Prints the text reduced to [A-Za-z0-9_.:/@+=[]-], at most 200 bytes. Mirrors
+# release_blocker_safe in auto_release_stable.sh; brackets are kept so a
+# login such as github-actions[bot] stays readable.
+poller_release_blocker_safe() {
+  local poller_rb_safe_value
+  poller_rb_safe_value="$(printf '%s' "${1:-}" | tr -cd 'A-Za-z0-9_.:/@+=\133\135-')"
+  printf '%s' "${poller_rb_safe_value:0:200}"
+}
+
+# poller_release_blocker_evidence <reason> <age_secs> [key=value ...]
+# Prints the evidence lines of one report. The fixed first line
+# (reason=<token>) keeps the intake fingerprint stable; every line is
+# sanitised, so attacker-chosen values (a marker author's login) stay data.
+poller_release_blocker_evidence() {
+  local prb_ev_reason="${1:-}" prb_ev_age="${2:-}"
+  shift 2 || true
+  local prb_ev_line
+  printf 'reason=%s\n' "$(poller_release_blocker_safe "${prb_ev_reason}")"
+  printf 'tracking_issue=%s\n' "$(poller_release_blocker_safe "$(_gh_url "issues/${TRACKING_NUM:-0}")")"
+  printf 'age_secs=%s\n' "$(poller_release_blocker_safe "${prb_ev_age:-unknown}")"
+  for prb_ev_line in "$@"; do
+    [ -n "${prb_ev_line}" ] || continue
+    printf '%s\n' "$(poller_release_blocker_safe "${prb_ev_line}")"
+  done
+}
+
+# poller_release_blocker_report <state_key> <reason> <age_secs> <head_sha> [evidence key=value ...]
+# Sends one release_blocker heal report for a terminal promote-cycle outcome.
+# Always returns 0 and never changes the tick's outcome. Order: kill switch
+# (RELEASE_BLOCKER_HEAL_ENABLED), producer gate (GITHUB_WORKFLOW_REF must be
+# this repository's internal-orchestrate-poll.yml), once-only guard
+# (<state_key>.release_blocker_reported in STATE_FILE), then build, identity,
+# wrap and POST repos/<self>/dispatches. Any attempt past the three gates sets
+# the guard, whatever the outcome; the caller's post_state_comment persists
+# it. No EXIT trap: the poller owns its traps, so the work dir is removed
+# inline on every path.
+poller_release_blocker_report() {
+  local prb_state_key="${1:-}" prb_reason="${2:-}" prb_age="${3:-}" prb_head_sha="${4:-}"
+  shift 4 || true
+  local prb_branch prb_sha_log="none" prb_work_dir="" prb_evidence="" prb_payload="" prb_identity=""
+  local prb_envelope="" prb_error="" prb_identity_status="" prb_detail="" prb_skip="" prb_reported
+  prb_branch="$(poller_release_blocker_safe "${DEFAULT_BRANCH_TRACKING:-main}")"
+  [[ "${prb_age}" =~ ^[0-9]{1,12}$ ]] || prb_age=""
+  if ! is_truthy "${RELEASE_BLOCKER_HEAL_ENABLED}"; then
+    echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=${prb_reason}"
+    return 0
+  fi
+  if [ -z "${GITHUB_REPOSITORY:-}" ] || [[ "${GITHUB_WORKFLOW_REF:-}" != "${GITHUB_REPOSITORY}/.github/workflows/${RELEASE_BLOCKER_POLLER_PRODUCER_FILE}@"* ]]; then
+    echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=${prb_reason} detail=producer_unregistered"
+    return 0
+  fi
+  prb_reported="$(jq -r --arg k "${prb_state_key}" '(.[$k] // {}) | if type == "object" then (.release_blocker_reported // false) else false end' "${STATE_FILE}" 2>/dev/null || echo false)"
+  if [ "${prb_reported}" = "true" ]; then
+    echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=already_reported blocker=${prb_reason}"
+    return 0
+  fi
+  prb_work_dir="$(mktemp -d 2>/dev/null)" || prb_work_dir=""
+  if [ -z "${prb_work_dir}" ] || [ ! -d "${prb_work_dir}" ]; then
+    prb_skip="payload_invalid"
+    echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=${prb_reason} stage=build detail=work_dir_unavailable"
+  else
+    prb_evidence="${prb_work_dir}/evidence.txt"
+    prb_payload="${prb_work_dir}/payload.json"
+    prb_identity="${prb_work_dir}/report_identity.jwt"
+    prb_envelope="${prb_work_dir}/dispatch.json"
+    prb_error="${prb_work_dir}/error.txt"
+    poller_release_blocker_evidence "${prb_reason}" "${prb_age}" "$@" > "${prb_evidence}" 2>/dev/null || true
+    local -a prb_build_args=(
+      build-blocker-payload
+      --repo "${GITHUB_REPOSITORY}"
+      --workflow-name "${GITHUB_WORKFLOW:-AI Orchestrate Poll}"
+      --reason "${prb_reason}"
+      --evidence-file "${prb_evidence}"
+      --age-secs "${prb_age}"
+      --head-branch "${DEFAULT_BRANCH_TRACKING:-main}"
+    )
+    if [[ "${prb_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+      prb_build_args+=(--head-sha "${prb_head_sha}")
+      prb_sha_log="${prb_head_sha}"
+    fi
+    if [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]{1,20}$ ]]; then
+      prb_build_args+=(
+        --reporter-run-id "${GITHUB_RUN_ID}"
+        --reporter-run-url "$(poller_release_blocker_safe "${GITHUB_SERVER_URL:-https://github.com}")/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+      )
+      if [[ "${GITHUB_RUN_ATTEMPT:-1}" =~ ^[0-9]{1,10}$ ]]; then
+        prb_build_args+=(--reporter-run-attempt "${GITHUB_RUN_ATTEMPT:-1}")
+      fi
+    fi
+    if ! python3 "${RELEASE_BLOCKER_HEAL_PY}" "${prb_build_args[@]}" > "${prb_payload}" 2> "${prb_error}"; then
+      prb_detail="$(poller_release_blocker_safe "$(head -c 200 "${prb_error}" 2>/dev/null | tr '\n' ' ' | tr ' ' '_')")"
+      prb_skip="payload_invalid"
+      echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=${prb_reason} stage=build detail=${prb_detail:-none}"
+    fi
+    if [ -z "${prb_skip}" ]; then
+      local -a prb_wrap_args=(wrap-dispatch --payload-json "${prb_payload}")
+      if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+        prb_identity_status="$(python3 "${RELEASE_BLOCKER_HEAL_PY}" request-report-identity --out "${prb_identity}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
+        prb_identity_status="$(printf '%s' "${prb_identity_status}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
+        echo "Release blocker report identity: ${prb_identity_status:-identity=absent reason=unknown} blocker=${prb_reason}"
+        if [ -s "${prb_identity}" ]; then
+          prb_wrap_args+=(--report-identity-file "${prb_identity}")
+        fi
+      else
+        echo "Release blocker report identity: identity=absent reason=oidc_unavailable blocker=${prb_reason}"
+      fi
+      if ! python3 "${RELEASE_BLOCKER_HEAL_PY}" "${prb_wrap_args[@]}" > "${prb_envelope}" 2> "${prb_error}"; then
+        prb_skip="payload_invalid"
+        echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=${prb_reason} stage=wrap"
+      fi
+      rm -f "${prb_identity}"
+    fi
+    if [ -z "${prb_skip}" ]; then
+      if ! gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/dispatches" --input "${prb_envelope}" >/dev/null 2> "${prb_error}"; then
+        prb_detail="$(poller_release_blocker_safe "$(head -c 200 "${prb_error}" 2>/dev/null | tr '\n' ' ' | tr ' ' '_')")"
+        prb_skip="dispatch_denied"
+        echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=dispatch_denied blocker=${prb_reason} detail=${prb_detail:-none}"
+        echo "::warning::Release blocker report ${prb_reason} on ${prb_branch} could not be dispatched to ${GITHUB_REPOSITORY}."
+      fi
+    fi
+    if [ -z "${prb_skip}" ]; then
+      echo "RELEASE_BLOCKER_REPORTED reason=${prb_reason} age=${prb_age:-unknown} branch=${prb_branch} sha=${prb_sha_log} run_ref=none tracking_issue=${TRACKING_NUM:-0}"
+    fi
+    rm -rf "${prb_work_dir}"
+  fi
+  if [ -n "${prb_skip}" ]; then
+    tg_notify "Release blocker report could not be dispatched (${prb_skip}): ${prb_reason} on ${prb_branch}. Refs #8291" "WARNING" || true
+  fi
+  if jq --arg k "${prb_state_key}" '.[$k] = ((if (.[$k] | type) == "object" then .[$k] else {} end) + {release_blocker_reported: true})' "${STATE_FILE}" > "${STATE_FILE}.rb.tmp" 2>/dev/null; then
+    mv "${STATE_FILE}.rb.tmp" "${STATE_FILE}" || true
+  else
+    rm -f "${STATE_FILE}.rb.tmp" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # comprehensive_promotion_hold_or_fail <reason> <now_epoch> <alert_text>
 #
 # Shared bounded hold for pre-dispatch checks that could not run this tick
@@ -14418,6 +14603,10 @@ comprehensive_promotion_hold_or_fail() {
     return 1
   fi
   jq --arg r "${reason}" '.comprehensive_promotion = {status: "failed", reason: ($r + " past the hold cap")}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  # promote_sha is the calling gate's local (bash dynamic scope); empty when
+  # unset, which the payload allows.
+  poller_release_blocker_report comprehensive_promotion "promotion_failed:${reason}" "$((now - gate_started))" "${promote_sha:-}" \
+    "gate=${reason}" "hold_max_secs=${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" || true
   post_state_comment || true
   echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=${reason}"
   tg_notify "${alert_text}" "DEBUG"
@@ -14765,6 +14954,9 @@ comprehensive_promotion_gate_before_final_merge() {
         # whatever main is now.
         jq --arg wf "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" '.comprehensive_promotion = {status: "failed", reason: ("pinned promotion requires promote-main-to-stable.yml, got " + $wf)}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=release_workflow_not_pinnable workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}"
+        poller_release_blocker_report comprehensive_promotion "promotion_failed:release_workflow_not_pinnable" "" "${promote_sha}" \
+          "workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" || true
+        post_state_comment || true
         post_tracking_comment "## ❌ Promotion not possible
 
 \`COMPREHENSIVE_RELEASE_WORKFLOW_FILE\` is \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\`, which cannot promote a pinned commit (only promote-main-to-stable.yml takes \`target_sha\`). Nothing is promoted; the final merge proceeds."
@@ -14942,6 +15134,10 @@ ${promotion_basis} \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\` was dispatched wit
       rm -f "${_dispatch_err}"
       jq --arg reason "${_dispatch_msg}" '.comprehensive_promotion = {status: "failed", reason: ("dispatch failed: " + $reason)}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=dispatch_failed"
+      # _dispatch_msg is raw gh stderr and stays out of the evidence.
+      poller_release_blocker_report comprehensive_promotion "promotion_failed:dispatch_failed" "" "${promote_sha}" \
+        "promote_sha=${promote_sha}" "smoke_sha=${smoke_sha}" "workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" || true
+      post_state_comment || true
       tg_notify "Project #${TRACKING_NUM}: could not dispatch ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} (${_dispatch_msg:-unknown error}); merge proceeds without promotion." "CRITICAL"
       comprehensive_release_cycle_freeze "${pinned}"
       return 0
@@ -14966,6 +15162,8 @@ ${promotion_basis} \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\` was dispatched wit
           ;;
         failed)
           jq '.comprehensive_promotion.status = "failed" | .comprehensive_promotion.reason = "release run failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          poller_release_blocker_report comprehensive_promotion "promotion_failed:release_failed" "$((now - dispatched_at))" "${promote_sha}" \
+            "promote_sha=${promote_sha}" "workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" || true
           post_state_comment || true
           echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=release_failed promote_sha=${promote_sha}"
           post_tracking_comment "## ❌ Promotion failed
@@ -14978,6 +15176,8 @@ The release run for \`${promote_sha:0:7}\` did not succeed; \`stable\` is unchan
       esac
       if [ $((now - dispatched_at)) -ge "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" ]; then
         jq '.comprehensive_promotion.status = "failed" | .comprehensive_promotion.reason = "hold cap reached before the release finished"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        poller_release_blocker_report comprehensive_promotion "promotion_failed:hold_timeout" "$((now - dispatched_at))" "${promote_sha}" \
+          "promote_sha=${promote_sha}" "workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" "hold_max_secs=${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" || true
         post_state_comment || true
         echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=hold_timeout"
         post_tracking_comment "## ⌛ Promotion hold expired
@@ -15277,6 +15477,14 @@ handle_comprehensive_release_callback_if_needed() {
     jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg outcome "${verification_outcome}" \
       '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at, role: "proving", verification: $outcome}' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    # Only a transient outcome that exhausted its retries is a release
+    # blocker; a plain SKIPPED (e.g. not enough docs) is the normal
+    # "start over next cycle" path.
+    if [[ "${verification_outcome}" == *"retries_exhausted="* ]]; then
+      poller_release_blocker_report comprehensive_release_callback "verification_not_dispatched" "" \
+        "$(printf '%s' "${cycle_metadata_json}" | jq -r '.promote_sha // ""' 2>/dev/null || true)" \
+        "dispatcher_outcome=$(printf '%s' "${verification_outcome}" | tr ' ' '_')" "retries=${COMPREHENSIVE_VERIFICATION_RETRY_MAX}" || true
+    fi
     post_state_comment || true
     case "${verification_outcome}" in
       DISPATCHED*)
@@ -15313,6 +15521,10 @@ The proving run merged, but the verifying run could not be dispatched (${verific
       jq --arg alerted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         '.comprehensive_release_callback = ((.comprehensive_release_callback // {}) + {role: "untrusted", untrusted_marker_alerted: true, untrusted_marker_alerted_at: $alerted_at})' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      local untrusted_marker_author
+      untrusted_marker_author="$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.untrusted_author // ""' 2>/dev/null || true)"
+      poller_release_blocker_report comprehensive_release_callback "marker_untrusted" "" "" \
+        "marker_author=${untrusted_marker_author:-unknown}" || true
       post_state_comment || true
       post_tracking_comment "## ⚠️ Untrusted apply-analysis marker
 
@@ -15863,9 +16075,11 @@ validation_harness_pin() {
   printf '%s' "${vhp_pins}"
 }
 
-# validation_harness_marker owner <run_id> | route <fp>
+# validation_harness_marker owner <run_id> | route <fp> | route-latest any
 # Newest trusted marker (route login, marker on the comment's last non-empty
 # line) from COMMENTS, printed as compact JSON; prints nothing when absent.
+# `route-latest` is the newest routing marker for any fingerprint (harness
+# heal auto-revalidate, Refs #8291); its key must be the literal `any`.
 validation_harness_marker() {
   local vhm_kind="$1" vhm_key="$2" vhm_login
   vhm_login="$(validation_harness_route_login)"
@@ -15875,6 +16089,7 @@ validation_harness_marker() {
   case "${vhm_kind}" in
     owner) [[ "${vhm_key}" =~ ^[0-9]+$ ]] || return 0 ;;
     route) [[ "${vhm_key}" =~ ^[0-9a-f]{64}$ ]] || return 0 ;;
+    route-latest) [ "${vhm_key}" = "any" ] || return 0 ;;
     *) return 0 ;;
   esac
   printf '%s' "${COMMENTS:-[]}" | jq -c --arg login "${vhm_login}" --arg kind "${vhm_kind}" --arg key "${vhm_key}" '
@@ -15888,7 +16103,7 @@ validation_harness_marker() {
              | select(.run == $key)
            else
              ($last | capture("^<!-- workflow-failure-heal:validation-route:v1 fp=(?<fp>[0-9a-f]{64}) outcome=(?<outcome>opened|duplicate|already-fixed|bounced|skipped) issue=(?<issue>[0-9]+|none) classification=(?<classification>[a-z-]+) run=(?<run>[0-9]+) -->$")?)
-             | select(.fp == $key)
+             | select($kind == "route-latest" or .fp == $key)
            end)
         | {m: ., created_at: ($c.created_at // ""), id: (($c.id // 0) | tonumber? // 0)}
       ]
@@ -15992,12 +16207,13 @@ ${vhf_cause} The project stays failed with \`ai:validation-failed\` and \`ai:har
 # one pin-commit GET only when the compare lists fewer commits than it counts.
 # ---------------------------------------------------------------------------
 declare -gA _VALIDATION_HARNESS_COMPARE_CACHE=()  # "<support>...<pin>" -> "<status>|<committer date>" or "__error__"
-declare -gA _VALIDATION_HARNESS_ISSUE_CACHE=()    # "<heal issue>" -> "<state>|<state_reason>|<closed_at>" or "__error__"
+declare -gA _VALIDATION_HARNESS_ISSUE_CACHE=()    # "<heal issue>" -> "<state>|<state_reason>|<closed_at>|<merged>" or "__error__"
 VHH_COMPARE_STATUS=""
 VHH_PIN_DATE=""
 VHH_ISSUE_STATE=""
 VHH_ISSUE_STATE_REASON=""
 VHH_ISSUE_CLOSED_AT=""
+VHH_ISSUE_MERGED=""
 
 # One VALIDATION_HARNESS_HOLD log line. Args: outcome fp pin heal_issue [reason]
 _validation_harness_hold_log() {
@@ -16052,22 +16268,26 @@ _validation_harness_hold_compare() {
   return 0
 }
 
-# Sets VHH_ISSUE_STATE, VHH_ISSUE_STATE_REASON and VHH_ISSUE_CLOSED_AT for a
-# heal issue in the harness repo; returns 1 when the read fails.
+# Sets VHH_ISSUE_STATE, VHH_ISSUE_STATE_REASON, VHH_ISSUE_CLOSED_AT and
+# VHH_ISSUE_MERGED (`true` only when the issue carries ai:merged, else `false`)
+# for a heal issue in the harness repo; returns 1 when the read fails.
 _validation_harness_hold_issue_state() {
   local vhi_issue="$1" vhi_out
   VHH_ISSUE_STATE=""
   VHH_ISSUE_STATE_REASON=""
   VHH_ISSUE_CLOSED_AT=""
+  VHH_ISSUE_MERGED=""
   [[ "${vhi_issue}" =~ ^[0-9]{1,9}$ ]] || return 1
   if [ -z "${_VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]+set}" ]; then
     # §14/§15 API budget: at most one GET repos/shubhodeep1/coding-workflows/
     # issues/<n> per heal issue per tick, memoized in
     # _VALIDATION_HARNESS_ISSUE_CACHE, and only after the pin moved ahead of
-    # the hold's support commit. No batched read covers issues in the harness
+    # the hold's support commit, or (harness_heal_auto_revalidate, #8291) for
+    # a parked project once no once-only marker names the issue yet. Both
+    # callers share the cached entry. No batched read covers issues in the harness
     # repo (the candidate and linked-PR batches read ${GITHUB_REPOSITORY}).
     if vhi_out="$(gh_retry _safe_gh_jq "repos/shubhodeep1/coding-workflows/issues/${vhi_issue}" \
-      --jq '[(.state // ""), (.state_reason // ""), (.closed_at // "")] | join("|")' 2>/dev/null)"; then
+      --jq '[(.state // ""), (.state_reason // ""), (.closed_at // ""), ([.labels[]? | (.name? // empty)] | any(. == "ai:merged") | tostring)] | join("|")' 2>/dev/null)"; then
       _VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]="${vhi_out}"
     else
       _VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]="__error__"
@@ -16075,7 +16295,8 @@ _validation_harness_hold_issue_state() {
   fi
   vhi_out="${_VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]}"
   [ "${vhi_out}" != "__error__" ] || return 1
-  IFS='|' read -r VHH_ISSUE_STATE VHH_ISSUE_STATE_REASON VHH_ISSUE_CLOSED_AT <<< "${vhi_out}"
+  IFS='|' read -r VHH_ISSUE_STATE VHH_ISSUE_STATE_REASON VHH_ISSUE_CLOSED_AT VHH_ISSUE_MERGED <<< "${vhi_out}"
+  [ "${VHH_ISSUE_MERGED}" = "true" ] || VHH_ISSUE_MERGED="false"
   case "${VHH_ISSUE_STATE}" in
     open|closed) ;;
     *)
@@ -16464,6 +16685,187 @@ validation_harness_hold_tick() {
   vht_rc=0
   _validation_harness_hold_resume "${vht_fp}" "${vht_pin}" "${vht_issue}" || vht_rc=$?
   return "${vht_rc}"
+}
+
+# ---------------------------------------------------------------------------
+# Harness heal auto-revalidate (Refs #8291, docs/plans/
+# remove-unattended-pipeline-stuck-states-plan.md P7 item 1). A project parked
+# failed with ai:harness-broken and no active harness hold (the hold ended, a
+# resume cap was reached, or the source repository's self_repo park) stays
+# parked after its heal issue merges. Once the heal issue named by the newest
+# trusted routing marker is closed with ai:merged, this posts one /revalidate
+# comment whose last line is
+#   <!-- AI_HARNESS_HEAL_REVALIDATE_V1 heal=<n> -->
+# and hands it to the /revalidate block on the same tick. The once-only gate
+# is that marker on a comment by the pipeline login, read from the full
+# COMMENTS list, so the step fails closed when the comments could not be
+# fetched. A failed POST leaves no marker and the next tick retries.
+#
+# Returns 0 and always sets HHAR_POSTED_COMMENT_JSON: the posted comment as
+# {id, body, created_at, html_url, user:{login}, author_association}, or
+# empty when nothing was posted. Every check before the heal issue read is
+# local (no API call).
+# ---------------------------------------------------------------------------
+HHAR_POSTED_COMMENT_JSON=""
+declare -gA _HHAR_PIN_DATE_CACHE=()  # "<pin sha>" -> committer date (empty when unread)
+
+# One HARNESS_HEAL_AUTO_REVALIDATE log line. Args: outcome heal_issue [reason]
+_harness_heal_auto_revalidate_log() {
+  local hhl_issue="${2:-}"
+  [[ "${hhl_issue}" =~ ^[1-9][0-9]{0,8}$ ]] || hhl_issue="none"
+  echo "HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=${TRACKING_NUM} outcome=$1 heal_issue=${hhl_issue}${3:+ reason=$3}"
+}
+
+harness_heal_auto_revalidate() {
+  local hhar_login hhar_marker hhar_outcome hhar_issue hhar_marker_line hhar_rc
+  local hhar_body hhar_response_file hhar_id hhar_now hhar_comment
+  local hhar_pin hhar_pin_epoch hhar_heal_epoch
+  HHAR_POSTED_COMMENT_JSON=""
+  # Switch off: silent, so the off path matches the output before #8291.
+  [ "${HARNESS_HEAL_AUTO_REVALIDATE_ENABLED:-true}" != "false" ] || return 0
+  if [ "${ENABLE_VALIDATION:-true}" != "true" ]; then
+    _harness_heal_auto_revalidate_log "skip" "" "validation_disabled"
+    return 0
+  fi
+  # An active hold owns its own resume, which also waits for the pin to move.
+  if validation_harness_hold_active; then
+    _harness_heal_auto_revalidate_log "skip" "" "hold_active"
+    return 0
+  fi
+  if [ "${COMMENTS_FETCH_OK:-false}" != "true" ] || [ "${COMMENTS_FOR_TRACKING_NUM:-}" != "${TRACKING_NUM:-}" ]; then
+    _harness_heal_auto_revalidate_log "skip" "" "comments_unavailable"
+    return 0
+  fi
+  unblock_trusted_login >/dev/null 2>&1 || true
+  hhar_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+  if [ -z "${hhar_login}" ]; then
+    _harness_heal_auto_revalidate_log "skip" "" "identity_unavailable"
+    return 0
+  fi
+
+  validation_harness_route_login >/dev/null
+  hhar_marker="$(validation_harness_marker route-latest any)"
+  if [ -z "${hhar_marker}" ]; then
+    _harness_heal_auto_revalidate_log "skip" "" "no_route_marker"
+    return 0
+  fi
+  hhar_outcome="$(printf '%s' "${hhar_marker}" | jq -r '.outcome // ""' 2>/dev/null || echo '')"
+  hhar_issue="$(printf '%s' "${hhar_marker}" | jq -r '.issue // ""' 2>/dev/null || echo '')"
+  [[ "${hhar_outcome}" =~ ^[a-z-]{1,20}$ ]] || hhar_outcome="unknown"
+  if { [ "${hhar_outcome}" != "opened" ] && [ "${hhar_outcome}" != "duplicate" ]; } \
+    || ! [[ "${hhar_issue}" =~ ^[1-9][0-9]{0,8}$ ]]; then
+    _harness_heal_auto_revalidate_log "skip" "" "route_${hhar_outcome}"
+    return 0
+  fi
+
+  # Once-only gate: the marker line on a comment by the pipeline login. An
+  # unreadable COMMENTS list fails closed.
+  hhar_marker_line="<!-- AI_HARNESS_HEAL_REVALIDATE_V1 heal=${hhar_issue} -->"
+  hhar_rc=0
+  printf '%s' "${COMMENTS:-[]}" | jq -e --arg login "${hhar_login}" --arg line "${hhar_marker_line}" '
+    if type != "array" then error("comments are not an array") else . end
+    | any(.[]?;
+        type == "object"
+        and ((.user.login // "") == $login)
+        and ((.body // "") | tostring | split("\n") | map(sub("\\s+$"; "")) | any(. == $line)))
+  ' >/dev/null 2>&1 || hhar_rc=$?
+  if [ "${hhar_rc}" = "0" ]; then
+    _harness_heal_auto_revalidate_log "skip" "${hhar_issue}" "already_posted"
+    return 0
+  fi
+  if [ "${hhar_rc}" != "1" ]; then
+    _harness_heal_auto_revalidate_log "skip" "${hhar_issue}" "comments_unavailable"
+    return 0
+  fi
+
+  # Heal issue state: the hold's memoized GET (_VALIDATION_HARNESS_ISSUE_CACHE).
+  if ! _validation_harness_hold_issue_state "${hhar_issue}"; then
+    _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "heal_read_failed"
+    return 0
+  fi
+  if [ "${VHH_ISSUE_STATE}" = "open" ]; then
+    _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "heal_open"
+    return 0
+  fi
+  if [ "${VHH_ISSUE_MERGED}" != "true" ]; then
+    _harness_heal_auto_revalidate_log "skip" "${hhar_issue}" "heal_closed_unmerged"
+    return 0
+  fi
+  # Wait until the consumer's validate.yml pin carries the fix, as the hold
+  # resume does: the pin commit must be no older than the heal close, or the
+  # only retry would rerun the old harness. The source repository pins a
+  # branch (promote-candidate), so it skips this check.
+  if [ "${GITHUB_REPOSITORY:-}" != "shubhodeep1/coding-workflows" ]; then
+    if ! validation_harness_pin >/dev/null; then
+      _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "pin_unresolved"
+      return 0
+    fi
+    hhar_pin="${_VALIDATION_HARNESS_PIN_VALUE}"
+    if [ -z "${_HHAR_PIN_DATE_CACHE[${hhar_pin}]+set}" ]; then
+      # §14 API budget: one GET of the pin commit per distinct pin per poller
+      # process, memoized; the compare the hold uses needs a support commit
+      # this parked project no longer has.
+      _HHAR_PIN_DATE_CACHE[${hhar_pin}]="$(gh_retry _safe_gh_jq "repos/shubhodeep1/coding-workflows/commits/${hhar_pin}" \
+        --jq '(.commit.committer.date // "")' 2>/dev/null || echo '')"
+    fi
+    hhar_pin_epoch="$(_iso8601_to_epoch "${_HHAR_PIN_DATE_CACHE[${hhar_pin}]}" || echo '')"
+    hhar_heal_epoch="$(_iso8601_to_epoch "${VHH_ISSUE_CLOSED_AT}" || echo '')"
+    if [ -z "${hhar_pin_epoch}" ] || [ -z "${hhar_heal_epoch}" ]; then
+      _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "pin_date_unknown"
+      return 0
+    fi
+    if [ "${hhar_heal_epoch}" -gt "${hhar_pin_epoch}" ]; then
+      _harness_heal_auto_revalidate_log "waiting" "${hhar_issue}" "heal_closed_after_pin"
+      return 0
+    fi
+  fi
+
+  hhar_body="/revalidate harness heal issue shubhodeep1/coding-workflows#${hhar_issue} merged
+
+The validation harness heal issue for this project merged, so the orchestrator is resuming runtime validation once. Set \`HARNESS_HEAL_AUTO_REVALIDATE_ENABLED=false\` to turn this off.
+
+${hhar_marker_line}"
+  if ! hhar_response_file="$(mktemp "${TMPDIR:-/tmp}/harness_heal_revalidate.XXXXXX")"; then
+    echo "::warning::HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=${TRACKING_NUM} outcome=post_failed heal_issue=${hhar_issue} reason=tempfile_failed"
+    return 0
+  fi
+  # §14 API budget: at most one comment POST per heal issue over its lifetime
+  # (the marker above gates it). post_tracking_comment is not reused because
+  # it does not return the posted comment, which the /revalidate block needs
+  # on this tick.
+  if ! gh_retry_to_file "${hhar_response_file}" gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+    -X POST -f body="${hhar_body}"; then
+    rm -f "${hhar_response_file}"
+    echo "::warning::HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=${TRACKING_NUM} outcome=post_failed heal_issue=${hhar_issue} reason=post_error"
+    return 0
+  fi
+  hhar_id="$(jq -r '.id // empty' "${hhar_response_file}" 2>/dev/null || echo '')"
+  if ! [[ "${hhar_id}" =~ ^[0-9]+$ ]]; then
+    rm -f "${hhar_response_file}"
+    echo "::warning::HARNESS_HEAL_AUTO_REVALIDATE tracking_issue=${TRACKING_NUM} outcome=post_failed heal_issue=${hhar_issue} reason=no_comment_id"
+    return 0
+  fi
+  hhar_now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  hhar_comment="$(jq -c --arg body "${hhar_body}" --arg login "${hhar_login}" --arg now "${hhar_now}" --argjson id "${hhar_id}" '
+    {
+      id: $id,
+      body: ((.body // "") | if (type == "string" and length > 0) then . else $body end),
+      created_at: ((.created_at // "") | if (type == "string" and length > 0) then . else $now end),
+      html_url: ((.html_url // "") | if type == "string" then . else "" end),
+      user: {login: $login},
+      author_association: ((.author_association // "") | if (type == "string" and length > 0) then . else "OWNER" end)
+    }
+  ' "${hhar_response_file}" 2>/dev/null || echo '')"
+  rm -f "${hhar_response_file}"
+  if [ -z "${hhar_comment}" ]; then
+    hhar_comment="$(jq -cn --arg body "${hhar_body}" --arg login "${hhar_login}" --arg now "${hhar_now}" --argjson id "${hhar_id}" \
+      '{id: $id, body: $body, created_at: $now, html_url: "", user: {login: $login}, author_association: "OWNER"}')"
+  fi
+  HHAR_POSTED_COMMENT_JSON="${hhar_comment}"
+  COMMENTS="$(printf '%s' "${COMMENTS:-[]}" | jq -c --argjson c "${hhar_comment}" '(if type == "array" then . else [] end) + [$c]' 2>/dev/null || printf '%s' "${COMMENTS:-[]}")"
+  _harness_heal_auto_revalidate_log "posted" "${hhar_issue}"
+  tg_notify "Project #${TRACKING_NUM}: harness heal issue shubhodeep1/coding-workflows#${hhar_issue} merged; posted /revalidate to resume runtime validation once." "DEBUG"
+  return 0
 }
 
 # Unblock judge hold request (Refs #7913, P2c). The judge (Phase 3) asks the
@@ -18154,24 +18556,28 @@ _extract_standalone_state_json_from_comments() {
     2>/dev/null || echo "")"
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
     return
   fi
 
   local extracted
   extracted="$(printf '%s' "${state_raw}" | sed -n "/^${STANDALONE_STATE_MARKER_OPEN}$/,/^${STANDALONE_STATE_MARKER_CLOSE}$/p" | sed '1d;$d')"
   if [ -z "${extracted}" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
     return
   fi
 
   if ! echo "${extracted}" | jq -e . >/dev/null 2>&1; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
     return
   fi
 
+  # Stuck-states P8c: the security-dependency hold keys are kept only when
+  # present (integers; anything unparsable becomes 0) so states without a
+  # hold episode keep their existing shape.
   echo "${extracted}" | jq -c '
-    {
+    . as $sdh_src
+    | {
       schema_version: 1,
       last_seen_phase: (.last_seen_phase // ""),
       status_since_ts: ((.status_since_ts // 0) | tonumber),
@@ -18179,9 +18585,14 @@ _extract_standalone_state_json_from_comments() {
       phase_attempts: (if (.phase_attempts | type) == "object" then .phase_attempts else {} end),
       conflict_override_count: (if (.conflict_override_count | type) == "object" then .conflict_override_count else {} end),
       judge_escalate_streak: (if (.judge_escalate_streak | type) == "object" then .judge_escalate_streak else {} end),
+      failure_fingerprints: (if (.failure_fingerprints | type) == "array" then .failure_fingerprints[-5:] else [] end),
       updated_ts: ((.updated_ts // 0) | tonumber)
     }
-  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
+    + ([ "security_dependency_depends_on", "security_dependency_held_since_ts", "security_dependency_escalated_ts" ]
+      | map(select(. as $k | $sdh_src | has($k)))
+      | map({key: ., value: ($sdh_src[.] | (try (tonumber | floor) catch 0))})
+      | from_entries)
+  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
 }
 
 # Fetch the issue comments once and return the latest standalone state
@@ -18232,6 +18643,205 @@ ${STANDALONE_STATE_MARKER_CLOSE}"
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
       -f body="${comment_body}" >/dev/null 2>&1 || true
+  fi
+}
+
+# Stuck-states P8c: security-dependency hold age, escalation and release
+# helpers for run_standalone_stall_recovery. The hold episode lives in the
+# standalone stall state (security_dependency_depends_on,
+# security_dependency_held_since_ts, security_dependency_escalated_ts; UTC
+# epoch seconds). Markers count only when the pipeline login wrote them.
+#
+# Prints the issue's complete comment history. The cached candidate window
+# is complete when it came from a full read ("complete") or holds fewer than
+# 100 comments ("true"); otherwise one bounded paginated read runs (the same
+# fallback the release path uses, because the GraphQL batch cannot prove a
+# marker absent beyond 100 comments). Returns 1 when that read fails.
+_security_dependency_complete_comments() {
+  local issue_num="$1"
+  local comments_json="$2"
+  local cache_available="$3"
+  local _sdc_fetched
+  if [ "${cache_available}" = "complete" ] \
+    || { [ "${cache_available}" = "true" ] && [ "$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null || echo 100)" -lt 100 ]; }; then
+    printf '%s' "${comments_json}"
+    return 0
+  fi
+  if ! _sdc_fetched="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+    || ! printf '%s' "${_sdc_fetched}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    return 1
+  fi
+  printf '%s' "${_sdc_fetched}"
+}
+
+# True when the label-name array carries ai:needs-human. Kept local (not
+# has_label) because `$label` is a reserved word that jq 1.6 rejects.
+_security_dependency_has_needs_human() {
+  printf '%s' "${1:-[]}" | jq -e '(. // []) | map(if type == "object" then (.name // "") else . end) | index("ai:needs-human") != null' >/dev/null 2>&1
+}
+
+# Records held_since once per hold episode (reset when depends_on changes or
+# the stored value is missing, invalid or in the future) and, after
+# escalate_days, labels ai:needs-human once with a latch comment naming the
+# dependency chain. The hold itself is unchanged: the caller still skips the
+# issue. Steady state (recorded, not yet due, or already escalated) makes no
+# API call beyond the per-tick cached /user read (unblock_trusted_login).
+_security_dependency_hold_age_check() {
+  local issue_num="$1"
+  local depends_on="$2"
+  local comments_json="$3"
+  local labels_json="$4"
+  local cache_available="$5"
+  local escalate_days="$6"
+  local _sdh_now
+  local _sdh_state
+  local _sdh_fields
+  local _sdh_dep
+  local _sdh_held
+  local _sdh_esc
+  local _sdh_action="none"
+  local _sdh_pass
+  local _sdh_complete="false"
+  local _sdh_comment_id
+  local _sdh_login
+  local _sdh_age_days
+  local _sdh_held_iso
+  local _sdh_body
+  local _sdh_marker
+  local _sdh_trusted_comments
+  _sdh_now="$(date -u +%s)"
+  # The hold keys gate escalation, so they are read only from state
+  # comments the pipeline login wrote (one cached /user read per tick).
+  unblock_trusted_login >/dev/null 2>&1 || true
+  _sdh_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+  if [ -z "${_sdh_login}" ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_identity_unavailable action=none"
+    return 0
+  fi
+  for _sdh_pass in 1 2; do
+    _sdh_trusted_comments="$(printf '%s' "${comments_json:-[]}" | jq -c --arg login "${_sdh_login}" '[(. // [])[] | select((.user.login // "") == $login)]' 2>/dev/null || echo '[]')"
+    _sdh_state="$(_extract_standalone_state_json_from_comments "${_sdh_trusted_comments}")"
+    _sdh_fields="$(printf '%s' "${_sdh_state}" | jq -r '[(.security_dependency_depends_on // 0), (.security_dependency_held_since_ts // 0), (.security_dependency_escalated_ts // 0)] | map(tostring) | join(" ")' 2>/dev/null || echo "0 0 0")"
+    read -r _sdh_dep _sdh_held _sdh_esc <<<"${_sdh_fields}"
+    [[ "${_sdh_dep:-}" =~ ^[0-9]{1,12}$ ]] || _sdh_dep=0
+    [[ "${_sdh_held:-}" =~ ^[0-9]{1,12}$ ]] || _sdh_held=0
+    [[ "${_sdh_esc:-}" =~ ^[0-9]{1,12}$ ]] || _sdh_esc=0
+    _sdh_action="none"
+    if [ "${_sdh_dep}" != "${depends_on}" ] || [ "${_sdh_held}" -le 0 ] || [ "${_sdh_held}" -gt "${_sdh_now}" ]; then
+      _sdh_action="record"
+    elif [ $((_sdh_now - _sdh_held)) -ge $((escalate_days * 86400)) ] && [ "${_sdh_esc}" -eq 0 ] \
+      && ! _security_dependency_has_needs_human "${labels_json}"; then
+      _sdh_action="escalate"
+    fi
+    [ "${_sdh_action}" != "none" ] || return 0
+    [ "${_sdh_complete}" != "true" ] || break
+    # A write is due: re-read from the complete history so a state comment
+    # or latch marker beyond the cached window is never duplicated.
+    if ! comments_json="$(_security_dependency_complete_comments "${issue_num}" "${comments_json}" "${cache_available}")"; then
+      echo "STALL_SKIP issue=${issue_num} reason=security_dependency_comments_unavailable action=none"
+      return 0
+    fi
+    _sdh_complete="true"
+  done
+  _sdh_comment_id="$(_extract_standalone_state_comment_id_from_comments "${_sdh_trusted_comments}")"
+  if [ "${_sdh_action}" = "record" ]; then
+    _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson dep "${depends_on}" --argjson now "${_sdh_now}" \
+      '. + {security_dependency_depends_on: $dep, security_dependency_held_since_ts: $now, security_dependency_escalated_ts: 0}')" || return 0
+    write_standalone_state_json "${issue_num}" "${_sdh_state}" "${_sdh_comment_id}"
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_hold_recorded action=none"
+    return 0
+  fi
+  # The marker carries this episode's held_since, so a latch comment left by
+  # an earlier, released episode on the same predecessor never matches.
+  _sdh_marker="<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=${depends_on} held_since=${_sdh_held} -->"
+  if printf '%s' "${comments_json}" | jq -e --arg login "${_sdh_login}" --arg marker "${_sdh_marker}" '
+    any(.[]; ((.user.login // "") == $login) and ((.body // "") | contains($marker)))' >/dev/null 2>&1; then
+    # The latch comment exists but the label does not (an earlier label edit
+    # failed, or its response was lost): add the label, then record it.
+    ensure_label_exists "ai:needs-human"
+    if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1; then
+      echo "::warning::[standalone-stall] could not label security follow-up #${issue_num} ai:needs-human; retrying next tick." >&2
+      echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalation_failed action=none"
+      return 0
+    fi
+    _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson now "${_sdh_now}" '. + {security_dependency_escalated_ts: $now}')" || return 0
+    write_standalone_state_json "${issue_num}" "${_sdh_state}" "${_sdh_comment_id}"
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalated detail=marker_present action=needs_human"
+    return 0
+  fi
+  _sdh_age_days=$(((_sdh_now - _sdh_held) / 86400))
+  _sdh_held_iso="$(date -u -d "@${_sdh_held}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "${_sdh_held}")"
+  _sdh_body="Security follow-up #${issue_num} has waited at least ${_sdh_age_days} days for its predecessor.
+
+Dependency chain: #${issue_num} -> #${depends_on} (open)
+Held since: ${_sdh_held_iso}
+
+The hold stays in place. It releases automatically when #${depends_on} is closed with \`ai:merged\` or closed without merging.
+
+${_sdh_marker}"
+  # The latch comment goes first: _security_dependency_clear_latch removes the
+  # label only when this comment exists, so a failed POST must leave no label.
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${_sdh_body}" >/dev/null 2>&1; then
+    echo "::warning::[standalone-stall] could not post the security-dependency latch comment on #${issue_num}; retrying next tick." >&2
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalation_failed action=none"
+    return 0
+  fi
+  ensure_label_exists "ai:needs-human"
+  if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1; then
+    # escalated_ts stays 0, so the next tick finds this latch comment and
+    # retries the label in the marker_present branch above.
+    echo "::warning::[standalone-stall] could not label security follow-up #${issue_num} ai:needs-human after posting its latch comment; retrying next tick." >&2
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalation_failed action=none"
+    return 0
+  fi
+  _sdh_state="$(printf '%s' "${_sdh_state}" | jq -c --argjson now "${_sdh_now}" '. + {security_dependency_escalated_ts: $now}')" || return 0
+  write_standalone_state_json "${issue_num}" "${_sdh_state}" "${_sdh_comment_id}"
+  echo "STALL_SKIP issue=${issue_num} reason=security_dependency_escalated action=needs_human"
+}
+
+# On release, removes ai:needs-human only when the latest latch comment the
+# pipeline login wrote is this hold's own (reason=security_dependency_wait).
+# Any other latch is left alone. Returns 1 when the removal fails, so the
+# caller skips posting its release marker and the next tick retries both
+# (once the marker exists the release path never runs again).
+_security_dependency_clear_latch() {
+  local issue_num="$1"
+  local comments_json="$2"
+  local labels_json="$3"
+  local trusted_login="$4"
+  local _sdl_latest
+  _security_dependency_has_needs_human "${labels_json}" || return 0
+  [ -n "${trusted_login}" ] || return 0
+  _sdl_latest="$(printf '%s' "${comments_json}" | jq -r --arg login "${trusted_login}" '
+    [.[] | select(((.user.login // "") == $login) and ((.body // "") | contains("<!-- ai:needs-human-latch")))]
+    | sort_by(.created_at // "") | last | .body // ""' 2>/dev/null || true)"
+  case "${_sdl_latest}" in
+    *"<!-- ai:needs-human-latch reason=security_dependency_wait "*) ;;
+    *) return 0 ;;
+  esac
+  # Only the label this hold added may be removed: when the newest
+  # `labeled` event for ai:needs-human came from anyone else (a person
+  # re-gating the issue without a latch comment), the label stays. One
+  # paginated events read, only at release time with the label present.
+  local _sdl_events
+  local _sdl_labeler
+  if ! _sdl_events="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/events?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+    || ! printf '%s' "${_sdl_events}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    echo "::warning::[standalone-stall] could not read label events for security follow-up #${issue_num}; retrying next tick." >&2
+    return 1
+  fi
+  _sdl_labeler="$(printf '%s' "${_sdl_events}" | jq -r '
+    [.[] | select((.event // "") == "labeled" and ((.label.name // "") == "ai:needs-human"))]
+    | last | .actor.login // ""' 2>/dev/null || true)"
+  if [ "${_sdl_labeler}" != "${trusted_login}" ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_latch_kept detail=labeled_by_other action=none"
+    return 0
+  fi
+  if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:needs-human" >/dev/null 2>&1; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_latch_cleared action=none"
+  else
+    echo "::warning::[standalone-stall] could not remove ai:needs-human from security follow-up #${issue_num}; retrying next tick." >&2
+    return 1
   fi
 }
 
@@ -19876,6 +20486,38 @@ REISSUE_EOF
           STALL_RECOVERY_SHOULD_INCREMENT="true"
           return 0
         fi
+      fi
+
+      if [ "${STALL_FINGERPRINT_BREAKER_ENABLED}" = "true" ]; then
+        # Stuck-states P3b (G3): exhaustion never closes the issue or its
+        # linked PR. Label ai:needs-human, verify it, and leave the issue
+        # open for the unblock judge. An unverified label returns 1 so the
+        # attempt is not recorded and the next tick retries.
+        local _skip_limit="${MAX_STALL_RECOVERIES_PER_ISSUE}"
+        if [ "${phase}" = "ai:done" ]; then
+          _skip_limit="${MAX_STALL_RECOVERIES_DONE}"
+        fi
+        ensure_label_exists "ai:needs-human"
+        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || true
+        local _skip_escalated_labels
+        _skip_escalated_labels="$(get_issue_labels_json "${issue_num}")"
+        if ! has_label "${_skip_escalated_labels}" "ai:needs-human"; then
+          echo "STALL_EXHAUSTED_ESCALATED issue=${issue_num} scope=managed phase=${phase} attempts=${recovery_count} limit=${_skip_limit} outcome=label_failed"
+          STALL_RECOVERY_EFFECTIVE_ACTION="skip_escalate_label_failed"
+          return 1
+        fi
+        echo "  Escalating issue #${issue_num} after ${recovery_count} recovery attempts (left open with ai:needs-human)."
+        post_tracking_comment "## ⏸️ Issue #${issue_num} escalated (stall recovery exhausted)
+
+- **Phase:** \`${phase}\`
+- **Stalled for:** ${stall_minutes} minutes
+- **Recovery attempts:** ${recovery_count} (limit ${_skip_limit})
+- **Local ID:** \`${local_id}\`
+
+The issue and its linked PR stay open with \`ai:needs-human\`; the unblock judge will pick it up."
+        echo "STALL_EXHAUSTED_ESCALATED issue=${issue_num} scope=managed phase=${phase} attempts=${recovery_count} limit=${_skip_limit} outcome=labelled"
+        tg_notify "Issue #${issue_num} escalated after ${recovery_count} stall recovery attempts (${stall_minutes}m in '${phase}'). Left open with ai:needs-human for the unblock judge."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+        return 0
       fi
 
       echo "  Skipping issue #${issue_num} after ${recovery_count} recovery attempts."
@@ -23216,8 +23858,11 @@ unblock_handover_merge_deferral() {
 # Needs-human digest (docs/plans/unattended-claude-pipeline-completion-plan.md
 # item 4a, decision D6). When a project's automated budgets are spent it is
 # parked in the repository's single needs-human digest issue
-# (scripts/operator_step_issue.py needs-human park) with one CRITICAL alert per
-# newly parked project; nothing is closed by an exhausted budget. While the
+# (scripts/operator_step_issue.py needs-human park) with at most one persisted
+# CRITICAL alert attempt per parking (stuck-states P6b, Refs #8291: a trusted
+# ai:unblock-park-alert claim on the tracking issue is written before the one
+# Telegram send and confirmed with its message id; the send is never retried);
+# nothing is closed by an exhausted budget. While the
 # unblock judge is enabled it still has rounds for a failed project, so the
 # poller defers to it and the judge parks the project when its own rounds run
 # out. Kill switch NEEDS_HUMAN_DIGEST_ENABLED (default true). Labels and state
@@ -23258,9 +23903,62 @@ needs_human_park_project() {
     echo "NEEDS_HUMAN item=${TRACKING_NUM} kind=project reason=${reason} outcome=skip detail=park_failed"
     return 0
   fi
-  if jq -e '.newly_parked == true' <<< "${park_json}" >/dev/null 2>&1; then
-    digest="$(jq -r '.issue // "?"' <<< "${park_json}" 2>/dev/null || echo '?')"
-    tg_notify "Project #${TRACKING_NUM} parked in needs-human digest #${digest} (${reason}): every automated budget is spent and a person must decide." "CRITICAL" || true
+  local park_parking="" claim_json="" claim_id="" msg_id="" alert_msg="" alert_url=""
+  park_parking="$(jq -r '.parking // empty' <<< "${park_json}" 2>/dev/null || true)"
+  [ -n "${park_parking}" ] || return 0
+  # Smoke fixtures and an unconfigured Telegram never claim: the claim is the
+  # only attempt this parking gets, so it is kept for a run that can send.
+  if declare -F _smoke_fixture_alert_silenced >/dev/null 2>&1 && _smoke_fixture_alert_silenced CRITICAL; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=skip reason=smoke_silenced"
+    return 0
+  fi
+  if ! declare -F tg_alert_configured >/dev/null 2>&1 || ! declare -F tg_send_msg >/dev/null 2>&1; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=skip reason=helper_missing"
+    return 0
+  fi
+  if ! tg_alert_configured CRITICAL; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=skip reason=telegram_unconfigured"
+    return 0
+  fi
+  if ! claim_json="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/operator_step_issue.py needs-human alert-claim \
+    --repo "${GITHUB_REPOSITORY}" --item "${TRACKING_NUM}" --parking "${park_parking}" \
+    --trusted-login "${UNBLOCK_TRUSTED_LOGIN}")"; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=failed reason=claim_failed"
+    return 0
+  fi
+  # Not claimed (already attempted, lost race, unverified): the helper logged why.
+  jq -e '.claimed == true' <<< "${claim_json}" >/dev/null 2>&1 || return 0
+  claim_id="$(jq -r '.comment_id // empty' <<< "${claim_json}" 2>/dev/null || true)"
+  if ! [[ "${claim_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=failed reason=claim_id_missing"
+    return 0
+  fi
+  digest="$(jq -r '.issue // "?"' <<< "${park_json}" 2>/dev/null || echo '?')"
+  # Same text tg_notify built: base message plus the Tracking and Run links.
+  alert_msg="Project #${TRACKING_NUM} parked in needs-human digest #${digest} (${reason}): every automated budget is spent and a person must decide."
+  if declare -F _gh_url >/dev/null 2>&1; then
+    alert_url="$(_gh_url "issues/${TRACKING_NUM}")"
+    [ -z "${alert_url}" ] || alert_msg+=$'\n'"Tracking: ${alert_url}"
+    if [ -n "${GITHUB_RUN_ID:-}" ]; then
+      alert_url="$(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+      [ -z "${alert_url}" ] || alert_msg+=$'\n'"Run: ${alert_url}"
+    fi
+  fi
+  # stderr kept: tg_send_msg logs why a send returned no message id (curl stderr stays silenced inside).
+  msg_id="$(tg_send_msg "${alert_msg}" CRITICAL || true)"
+  if [[ "${msg_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+    # Keep the tg_send_tracked cleanup record on the tracking issue.
+    if declare -F tg_store_msg_id >/dev/null 2>&1; then
+      tg_store_msg_id "${TRACKING_NUM}" "${msg_id}" >/dev/null 2>&1 || true
+    fi
+    if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/operator_step_issue.py needs-human alert-confirm \
+      --repo "${GITHUB_REPOSITORY}" --item "${TRACKING_NUM}" --parking "${park_parking}" \
+      --comment-id "${claim_id}" --message-id "${msg_id}" >/dev/null; then
+      echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=failed reason=confirm_write_failed"
+    fi
+  else
+    # The claim stays state=attempted; the send is never retried for this parking.
+    echo "NEEDS_HUMAN_ALERT item=${TRACKING_NUM} parking=${park_parking} outcome=unconfirmed reason=send_failed_or_ambiguous"
   fi
   return 0
 }
@@ -23996,6 +24694,303 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
   done
 }
 
+# ---------------------------------------------------------------
+# Stuck-states P3b: failure-signature breaker
+# ---------------------------------------------------------------
+# Evaluates AI_FAILURE_FINGERPRINT_V1 markers (emitted by the plan/clarify
+# failure handlers) through `orchestrate_lib.py failure-fingerprint-breaker`.
+# Comment history is authoritative: only comments authored by the pipeline's
+# verified login (unblock_trusted_login) count, and the newest trusted
+# AI_FAILURE_FINGERPRINT_BREAKER_V1 comment is the consumption point.
+#
+# GitHub API cost (§14): zero calls when no cached comment carries a marker;
+# otherwise the per-tick cached `user` read from unblock_trusted_login, plus at
+# most one paginated comments read (_staged_support_comments_for_guard) when
+# the last-100 cache truncates a streak that is still building. Every failure
+# fails open to the legacy stall ladder (no trip is ever inferred).
+
+# Prints the evaluator's JSON for <comments_json> <login> <complete>.
+_failure_fingerprint_breaker_eval()
+{
+  local ffb_eval_comments="$1"
+  local ffb_eval_login="$2"
+  local ffb_eval_complete="$3"
+  local ffb_eval_file=""
+  local ffb_eval_result=""
+
+  if ! ffb_eval_file="$(mktemp "${TMPDIR:-/tmp}/ffb_comments.XXXXXX")"; then
+    printf '%s' '{"decision":"unavailable"}'
+    return 0
+  fi
+  printf '%s' "${ffb_eval_comments}" > "${ffb_eval_file}"
+  ffb_eval_result="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py failure-fingerprint-breaker \
+    --comments-file "${ffb_eval_file}" \
+    --trusted-login "${ffb_eval_login}" \
+    --repeat-max "${STALL_FINGERPRINT_REPEAT_MAX}" \
+    --comments-complete "${ffb_eval_complete}" 2>/dev/null || true)"
+  rm -f "${ffb_eval_file}"
+  if ! printf '%s' "${ffb_eval_result}" | jq -e 'type == "object" and ((.decision // null) | type) == "string"' >/dev/null 2>&1; then
+    ffb_eval_result='{"decision":"unavailable"}'
+  fi
+  printf '%s' "${ffb_eval_result}"
+}
+
+# _failure_fingerprint_breaker_check <issue_num> <cached_comments_json> <cache_available> <scope>
+# cache_available: "complete" (full history), "true" (last-100 cache) or
+# "false". Sets FFB_DECISION (trip|none|identity_unavailable|
+# history_unavailable|unavailable), FFB_LABEL, FFB_PHASE, FFB_FP, FFB_RUNS
+# (csv) and FFB_RECENT_JSON (last <=5 markers). Always returns 0.
+_failure_fingerprint_breaker_check()
+{
+  local issue_num="$1"
+  local cached_comments_json="${2:-[]}"
+  local cache_available="${3:-false}"
+  local ffb_scope="${4:-standalone}"
+  local ffb_login=""
+  local ffb_complete="false"
+  local ffb_count=""
+  local ffb_result=""
+  local ffb_full_comments=""
+
+  FFB_DECISION="none"
+  FFB_LABEL=""
+  FFB_PHASE=""
+  FFB_FP=""
+  FFB_RUNS=""
+  FFB_RECENT_JSON='[]'
+
+  [ "${STALL_FINGERPRINT_BREAKER_ENABLED}" = "true" ] || return 0
+  if ! printf '%s' "${cached_comments_json}" | jq -e 'type == "array" and any(.[]?; ((.body // "") | tostring | contains("AI_FAILURE_FINGERPRINT_V1")))' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  unblock_trusted_login >/dev/null
+  ffb_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+  if [ -z "${ffb_login}" ]; then
+    FFB_DECISION="identity_unavailable"
+    return 0
+  fi
+
+  # Same completeness rule as _staged_support_comments_for_guard.
+  if [ "${cache_available}" = "complete" ]; then
+    ffb_complete="true"
+  elif [ "${cache_available}" = "true" ] \
+    && ffb_count="$(printf '%s' "${cached_comments_json}" | jq -er 'length' 2>/dev/null)" \
+    && [[ "${ffb_count}" =~ ^[0-9]+$ ]] && [ "${ffb_count}" -lt 100 ]; then
+    ffb_complete="true"
+  fi
+
+  ffb_result="$(_failure_fingerprint_breaker_eval "${cached_comments_json}" "${ffb_login}" "${ffb_complete}")"
+  if [ "$(printf '%s' "${ffb_result}" | jq -r '.decision' 2>/dev/null)" = "needs_full_history" ]; then
+    if ! ffb_full_comments="$(_staged_support_comments_for_guard "${issue_num}" "${cached_comments_json}" "false")"; then
+      FFB_DECISION="history_unavailable"
+      return 0
+    fi
+    ffb_result="$(_failure_fingerprint_breaker_eval "${ffb_full_comments}" "${ffb_login}" "true")"
+  fi
+
+  FFB_DECISION="$(printf '%s' "${ffb_result}" | jq -r '.decision // "unavailable"' 2>/dev/null || echo unavailable)"
+  case "${FFB_DECISION}" in
+    trip|none|identity_unavailable|unavailable) ;;
+    *) FFB_DECISION="unavailable" ;;
+  esac
+  FFB_RECENT_JSON="$(printf '%s' "${ffb_result}" | jq -c '(.recent // []) | if type == "array" then .[-5:] else [] end' 2>/dev/null || echo '[]')"
+  [ -n "${FFB_RECENT_JSON}" ] || FFB_RECENT_JSON='[]'
+  if [ "${FFB_DECISION}" = "trip" ]; then
+    FFB_PHASE="$(printf '%s' "${ffb_result}" | jq -r '.phase // ""' 2>/dev/null || true)"
+    FFB_FP="$(printf '%s' "${ffb_result}" | jq -r '.fp // ""' 2>/dev/null || true)"
+    FFB_LABEL="$(printf '%s' "${ffb_result}" | jq -r '.label // ""' 2>/dev/null || true)"
+    FFB_RUNS="$(printf '%s' "${ffb_result}" | jq -r '(.runs // []) | map(tostring) | join(",")' 2>/dev/null || true)"
+    # Defence in depth: the evaluator already validated these fields.
+    if ! [[ "${FFB_PHASE}" =~ ^[a-z][a-z0-9-]{0,31}$ ]] \
+      || ! [[ "${FFB_FP}" =~ ^[0-9a-f]{12}$ ]] \
+      || ! [[ "${FFB_RUNS}" =~ ^[1-9][0-9]{0,19}(,[1-9][0-9]{0,19})+$ ]]; then
+      FFB_DECISION="unavailable"
+    fi
+    case "${FFB_LABEL}" in
+      ai:plan-failed|ai:clarify-failed|ai:needs-human) ;;
+      *) FFB_DECISION="unavailable" ;;
+    esac
+    if [ "${FFB_DECISION}" != "trip" ]; then
+      FFB_LABEL=""
+      FFB_PHASE=""
+      FFB_FP=""
+      FFB_RUNS=""
+      echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=unavailable reason=invalid_trip_payload" >&2
+    fi
+  fi
+  return 0
+}
+
+# _failure_fingerprint_breaker_apply <issue_num> <scope>
+# Adds FFB_LABEL, verifies it by re-reading labels (like escalate_human), and
+# posts the breaker comment that carries the consumption-point marker.
+# Returns 1 (no comment, no state change) when the label cannot be verified
+# or the breaker comment could not be posted and the label was rolled back,
+# so the next tick retries idempotently. Returns 2 when the label state is
+# unknown or still applied: the label read after the add failed, or the
+# comment failed and the rollback could not be verified (the issue stays
+# stopped; callers must not run the stall ladder on it this tick).
+_ffb_read_issue_labels()
+{
+  # Unlike get_issue_labels_json, a failed read is reported (rc=1) instead
+  # of being turned into "[]", which would read as "label absent".
+  local ffb_read_out=""
+  ffb_read_out="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/$1/labels" --jq '[.[].name]' 2>/dev/null)" || return 1
+  printf '%s' "${ffb_read_out}" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
+  printf '%s' "${ffb_read_out}"
+}
+
+_failure_fingerprint_breaker_apply()
+{
+  local issue_num="$1"
+  local ffb_scope="${2:-standalone}"
+  local ffb_labels_after=""
+  local ffb_runs_base=""
+  local ffb_rows=""
+  local ffb_body=""
+
+  ensure_label_exists "${FFB_LABEL}"
+  gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "${FFB_LABEL}" >/dev/null 2>&1 || true
+  if ! ffb_labels_after="$(_ffb_read_issue_labels "${issue_num}")"; then
+    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed label=${FFB_LABEL} reason=label_read_failed (label state unknown; ladder skipped this tick)"
+    return 2
+  fi
+  if ! has_label "${ffb_labels_after}" "${FFB_LABEL}"; then
+    echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed phase=${FFB_PHASE} fp=${FFB_FP} runs=${FFB_RUNS} label=${FFB_LABEL}"
+    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed label=${FFB_LABEL}"
+    return 1
+  fi
+
+  ffb_runs_base="$(_gh_url "actions/runs")"
+  ffb_rows="$(printf '%s' "${FFB_RECENT_JSON}" | jq -r --arg base "${ffb_runs_base}" '
+    .[]? | "| `\(.phase)` | `\(.fp)` | " + (if $base != "" then "[\(.run)](\($base)/\(.run))" else (.run | tostring) end) + " |"
+  ' 2>/dev/null || true)"
+  ffb_body="<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 phase=${FFB_PHASE} fp=${FFB_FP} runs=${FFB_RUNS} -->
+## 🛑 Repeated failure detected: automatic retries stopped
+
+The \`${FFB_PHASE}\` phase failed with the same failure signature (\`${FFB_FP}\`) in runs ${FFB_RUNS//,/, }. Stall recovery will not retrigger it again; this issue now carries \`${FFB_LABEL}\`.
+
+| Phase | Fingerprint | Run |
+|---|---|---|
+${ffb_rows}
+
+The unblock judge will pick this up on its next scan."
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${ffb_body}" >/dev/null 2>&1; then
+    # The breaker comment is the only consumption point for the marker
+    # history. Without it, a later unblock-judge resume would re-trip on the
+    # same markers, so roll the label back (both callers only reach here
+    # when the issue did not carry it) and let the next tick retry. Return 2
+    # when the rollback cannot be verified, so callers do not run the legacy
+    # ladder on an issue that still carries the failure label.
+    gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --remove-label "${FFB_LABEL}" >/dev/null 2>&1 || true
+    if ! ffb_labels_after="$(_ffb_read_issue_labels "${issue_num}")"; then
+      echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=unverified (label read failed; breaker comment not posted)"
+      return 2
+    fi
+    if has_label "${ffb_labels_after}" "${FFB_LABEL}"; then
+      echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=failed (label applied; breaker comment not posted)"
+      return 2
+    fi
+    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=done (breaker comment not posted; next tick retries)"
+    return 1
+  fi
+  echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=tripped phase=${FFB_PHASE} fp=${FFB_FP} runs=${FFB_RUNS} label=${FFB_LABEL}"
+  tg_notify_issue "${issue_num}" "Failure-signature breaker tripped for issue #${issue_num}: phase '${FFB_PHASE}' failed with the same fingerprint ${FFB_FP} in runs ${FFB_RUNS}. Labelled ${FFB_LABEL} for the unblock judge." "WARNING"
+  return 0
+}
+
+# run_managed_failure_fingerprint_breaker: per-project managed loop pass.
+# Runs before check-stalls on every tick (inside the INVOKE_JUDGE_FOR_STUCK
+# != true block) over the current wave's open issues, reading comments only
+# from the batched _current_wave_details_json cache. On a trip it patches
+# LABELS_JSON so check-stalls sees the new label this tick and mirrors the
+# recent markers into the wave issue's failure_fingerprints. Sets
+# FFB_MANAGED_STATE_CHANGED=true when STATE_FILE was rewritten.
+run_managed_failure_fingerprint_breaker()
+{
+  local ffb_entry=""
+  local ffb_issue=""
+  local ffb_local_id=""
+  local ffb_comments=""
+  local ffb_issue_labels=""
+  local ffb_gate=""
+  local ffb_new_labels=""
+  local ffb_labels_map=""
+
+  FFB_MANAGED_STATE_CHANGED="false"
+  [ "${STALL_FINGERPRINT_BREAKER_ENABLED}" = "true" ] || return 0
+  [ -f "${STATE_FILE:-}" ] || return 0
+  [[ "${WAVE_IDX:-}" =~ ^[0-9]+$ ]] || return 0
+
+  while IFS= read -r ffb_entry; do
+    [ -n "${ffb_entry}" ] || continue
+    ffb_issue="$(printf '%s' "${ffb_entry}" | jq -r '.github_issue // empty' 2>/dev/null || true)"
+    ffb_local_id="$(printf '%s' "${ffb_entry}" | jq -r '.id // empty' 2>/dev/null || true)"
+    [[ "${ffb_issue}" =~ ^[0-9]+$ ]] || continue
+    if ! printf '%s' "${_current_wave_details_json:-}" | jq -e --arg n "${ffb_issue}" \
+      '(.[$n].comments_available == true) and ((.[$n].comments | type) == "array")' >/dev/null 2>&1; then
+      continue
+    fi
+    ffb_comments="$(printf '%s' "${_current_wave_details_json}" | jq -c --arg n "${ffb_issue}" '.[$n].comments' 2>/dev/null || echo '[]')"
+    if ! printf '%s' "${ffb_comments}" | jq -e 'any(.[]?; ((.body // "") | tostring | contains("AI_FAILURE_FINGERPRINT_V1")))' >/dev/null 2>&1; then
+      continue
+    fi
+    ffb_labels_map="${LABELS_JSON:-}"
+    [ -n "${ffb_labels_map}" ] || ffb_labels_map='{}'
+    ffb_issue_labels="$(printf '%s' "${ffb_labels_map}" | jq -c --arg n "${ffb_issue}" '.[$n] // [] | if type == "array" then . else [] end' 2>/dev/null || echo '[]')"
+    ffb_gate="$(PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json, sys
+sys.path.insert(0, "scripts")
+from orchestrate_lib import DEDICATED_HANDLER_PHASES, TERMINAL_PHASES, determine_phase, stall_recovery_latch_label
+labels = json.loads(sys.argv[1])
+phase = determine_phase(labels)
+if phase in TERMINAL_PHASES or phase in DEDICATED_HANDLER_PHASES or stall_recovery_latch_label(labels):
+    print("skip")
+else:
+    print("eligible")
+' "${ffb_issue_labels}" 2>/dev/null || echo skip)"
+    [ "${ffb_gate}" = "eligible" ] || continue
+
+    _failure_fingerprint_breaker_check "${ffb_issue}" "${ffb_comments}" "true" "managed"
+    case "${FFB_DECISION}" in
+      trip)
+        # Managed wave issues get ai:needs-human (a dedicated-handler phase)
+        # instead of ai:plan-failed / ai:clarify-failed: those are
+        # TERMINAL_PHASES, which reconcile_wave_issue_status would record as
+        # a permanent "closed" wave status (the skip-and-close P3b removes).
+        FFB_LABEL="ai:needs-human"
+        local ffb_apply_rc=0
+        _failure_fingerprint_breaker_apply "${ffb_issue}" "managed" || ffb_apply_rc=$?
+        # rc=1: nothing applied; check-stalls sees the issue as before.
+        [ "${ffb_apply_rc}" -eq 1 ] && continue
+        # rc=0 and rc=2 (label applied or state unknown): patch the in-memory
+        # snapshot so check-stalls skips the issue this tick.
+        ffb_new_labels="$(printf '%s' "${ffb_issue_labels}" | jq -c --arg l "${FFB_LABEL}" 'if index($l) == null then . + [$l] else . end' 2>/dev/null || echo "${ffb_issue_labels}")"
+        LABELS_JSON="$(printf '%s' "${ffb_labels_map}" | jq -c --arg key "${ffb_issue}" --argjson labels "${ffb_new_labels}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
+        [ "${ffb_apply_rc}" -eq 0 ] || continue
+        if [ -n "${ffb_local_id}" ] \
+          && jq --argjson w "${WAVE_IDX}" --arg id "${ffb_local_id}" --argjson recent "${FFB_RECENT_JSON}" \
+            '(.waves[$w].issues[]? | select(.id == $id)) |= (.failure_fingerprints = $recent)' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null; then
+          mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          FFB_MANAGED_STATE_CHANGED="true"
+        else
+          rm -f "${STATE_FILE}.tmp"
+        fi
+        ;;
+      identity_unavailable|history_unavailable|unavailable)
+        echo "STALL_FINGERPRINT_BREAKER issue=${ffb_issue} scope=managed outcome=${FFB_DECISION}"
+        ;;
+    esac
+  done < <(jq -c --argjson w "${WAVE_IDX}" '
+    .waves[$w].issues[]?
+    | select(.github_issue != null)
+    | select(((.status // "") as $s | ["merged", "closed", "skipped", "not_created"] | index($s)) | not)
+  ' "${STATE_FILE}" 2>/dev/null || true)
+  return 0
+}
+
 run_standalone_stall_recovery() {
   if [ "${ENABLE_STANDALONE_STALL_RECOVERY}" != "true" ]; then
     echo "Standalone stall recovery disabled by ENABLE_STANDALONE_STALL_RECOVERY=${ENABLE_STANDALONE_STALL_RECOVERY}."
@@ -24119,6 +25114,25 @@ run_standalone_stall_recovery() {
   local _security_dependency_issue_file="${RUNTIME_DIR}/standalone_security_dependency_issue.json"
   local _security_dependency_verdict
   local _security_dependency_status
+  local _security_dependency_reason
+  local _security_dependency_depends_on
+  local _security_dependency_login
+  local _security_dependency_release_marker
+  # Stuck-states P8c: parsed once per sweep. The switch is exported so the
+  # security_dependency.py verdict below uses the same value.
+  local _security_dependency_resume_enabled="true"
+  local _security_dependency_escalate_days="7"
+  case "$(printf '%s' "${DEPENDENCY_WAIT_RESUME_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    true|1|yes|on) _security_dependency_resume_enabled="true" ;;
+    false|0|no|off) _security_dependency_resume_enabled="false" ;;
+    *) echo "::warning::DEPENDENCY_WAIT_RESUME_ENABLED is not a boolean; using true." ;;
+  esac
+  export DEPENDENCY_WAIT_RESUME_ENABLED="${_security_dependency_resume_enabled}"
+  if [[ "${DEPENDENCY_WAIT_ESCALATE_DAYS:-7}" =~ ^[0-9]{1,4}$ ]] && [ "$((10#${DEPENDENCY_WAIT_ESCALATE_DAYS:-7}))" -ge 1 ]; then
+    _security_dependency_escalate_days="$((10#${DEPENDENCY_WAIT_ESCALATE_DAYS:-7}))"
+  else
+    echo "::warning::DEPENDENCY_WAIT_ESCALATE_DAYS must be an integer from 1 to 9999; using 7."
+  fi
   local _pr_dependency_verdict
   local _pr_dependency_status
   local _pr_dependency_reason
@@ -24186,10 +25200,61 @@ run_standalone_stall_recovery() {
         'dependency closed without ai:merged') _security_dependency_status="closed_without_ai_merged" ;;
         *) _security_dependency_status="unverified" ;;
       esac
+      # Stuck-states P8c: only a verified open predecessor ages the hold;
+      # unverified verdicts neither start nor advance the clock.
+      if [ "${_security_dependency_status}" = "open" ] && [ "${_security_dependency_resume_enabled}" = "true" ]; then
+        _security_dependency_depends_on="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.depends_on // empty' 2>/dev/null || true)"
+        if [[ "${_security_dependency_depends_on}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+          _security_dependency_hold_age_check "${issue_num}" "${_security_dependency_depends_on}" "${comments_json}" \
+            "${labels_json}" "${_standalone_staged_support_cache_available}" "${_security_dependency_escalate_days}" || true
+        fi
+      fi
       echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held detail=${_security_dependency_status} action=none"
       continue
     fi
     if [ "${_security_dependency_status}" = "ready" ]; then
+      _security_dependency_reason="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.reason // empty' 2>/dev/null || true)"
+      _security_dependency_depends_on="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.depends_on // empty' 2>/dev/null || true)"
+    fi
+    if [ "${_security_dependency_status}" = "ready" ] && [ "${_security_dependency_reason}" = "dependency closed without ai:merged" ]; then
+      # Stuck-states P8c: the predecessor was closed without ai:merged, so it
+      # can no longer race this follow-up. Post one trusted /reclarify with
+      # the AI_SECURITY_DEPENDENCY_RELEASED_V1 marker; clarify then re-checks
+      # whether the finding still applies. Nothing is posted when the
+      # pipeline login or the complete comment history cannot be read.
+      if [ "${_security_dependency_resume_enabled}" != "true" ] || ! [[ "${_security_dependency_depends_on}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+        echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held detail=closed_without_ai_merged action=none"
+        continue
+      fi
+      unblock_trusted_login >/dev/null 2>&1 || true
+      _security_dependency_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+      if [ -z "${_security_dependency_login}" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=security_dependency_identity_unavailable action=none"
+        continue
+      fi
+      if ! comments_json="$(_security_dependency_complete_comments "${issue_num}" "${comments_json}" "${_standalone_staged_support_cache_available}")"; then
+        comments_json='[]'
+        echo "STALL_SKIP issue=${issue_num} reason=security_dependency_comments_unavailable action=none"
+        continue
+      fi
+      _security_dependency_release_marker="<!-- AI_SECURITY_DEPENDENCY_RELEASED_V1 reason=predecessor_unmerged issue=${issue_num} depends_on=${_security_dependency_depends_on} -->"
+      if ! printf '%s' "${comments_json}" | jq -e --arg marker "${_security_dependency_release_marker}" --arg login "${_security_dependency_login}" '
+        any(.[]; ((.user.login // "") == $login)
+          and ((.body // "") | startswith("/reclarify\n" + $marker)))' >/dev/null 2>&1; then
+        if ! _security_dependency_clear_latch "${issue_num}" "${comments_json}" "${labels_json}" "${_security_dependency_login}"; then
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed detail=latch_clear_failed action=none"
+          continue
+        fi
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+          -f body="/reclarify
+${_security_dependency_release_marker}" >/dev/null; then
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_released_unmerged action=reclarify"
+        else
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed action=none"
+        fi
+        continue
+      fi
+    elif [ "${_security_dependency_status}" = "ready" ]; then
       # An unavailable or full comment window cannot prove the release
       # marker absent. Fetch complete history only on that rare path.
       if [ "${_standalone_staged_support_cache_available}" != "true" ] || [ "$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null || echo 100)" -ge 100 ]; then
@@ -24201,6 +25266,20 @@ run_standalone_stall_recovery() {
       if ! printf '%s' "${comments_json}" | jq -e --arg marker "<!-- ai:security-dependency-released:${issue_num} -->" '
         any(.[]; ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
           and ((.body // "") | startswith("/reclarify\n" + $marker)))' >/dev/null 2>&1; then
+        # Stuck-states P8c: drop this hold's own ai:needs-human latch first.
+        if [ "${_security_dependency_resume_enabled}" = "true" ] && _security_dependency_has_needs_human "${labels_json}"; then
+          unblock_trusted_login >/dev/null 2>&1 || true
+          # The latch clear is a no-op without the login; posting the marker
+          # then would strand ai:needs-human, so wait for the next tick.
+          if [ -z "${UNBLOCK_TRUSTED_LOGIN:-}" ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=security_dependency_identity_unavailable action=none"
+            continue
+          fi
+          if ! _security_dependency_clear_latch "${issue_num}" "${comments_json}" "${labels_json}" "${UNBLOCK_TRUSTED_LOGIN:-}"; then
+            echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed detail=latch_clear_failed action=none"
+            continue
+          fi
+        fi
         if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
           -f body="/reclarify
 <!-- ai:security-dependency-released:${issue_num} -->" >/dev/null; then
@@ -24344,7 +25423,8 @@ PY
     # dispatch_rb_judge action (see execute_stall_recovery_action).
     # ai:split-to-project (Q152): the orchestrator project owns the plan and
     # close_plan_split_source_if_needed closes the issue at completion.
-    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:split-to-project" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
+    # ai:waiting-on-dependency (stuck-states P8): the dependency-wait resume scan owns it.
+    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:split-to-project" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:waiting-on-dependency" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
       continue
     fi
 
@@ -24366,10 +25446,56 @@ if phase != last:
 elif not state.get("status_since_ts"):
     state["status_since_ts"] = now
     state["updated_ts"] = now
+# Stuck-states P8c: an issue reaches this point only when it is not held, so
+# the next ordinary state write ends any security-dependency hold episode.
+for _sdh_key in ("security_dependency_depends_on", "security_dependency_held_since_ts", "security_dependency_escalated_ts"):
+    state.pop(_sdh_key, None)
 state["schema_version"] = 1
 print(json.dumps(state, separators=(",", ":")))
 PY
 )"
+
+    # Stuck-states P3b: failure-signature breaker. Runs before the
+    # capacity-wait and threshold checks so a phase that fails the same way
+    # twice is stopped on the next tick, even though a failing plan flips the
+    # issue back to ai:clarification and restarts the stall clock. The
+    # failure_fingerprints state key only mirrors the trusted comment
+    # history (observation only; never an input to a trip).
+    local _std_ffb_cache_available="false"
+    if [ "${_standalone_staged_support_cache_available}" = "complete" ]; then
+      _std_ffb_cache_available="complete"
+    elif [ "${_standalone_staged_support_cache_available}" = "true" ]; then
+      _std_ffb_cache_available="true"
+    fi
+    _failure_fingerprint_breaker_check "${issue_num}" "${comments_json}" "${_std_ffb_cache_available}" "standalone"
+    case "${FFB_DECISION}" in
+      trip)
+        local _std_ffb_apply_rc=0
+        _failure_fingerprint_breaker_apply "${issue_num}" "standalone" || _std_ffb_apply_rc=$?
+        if [ "${_std_ffb_apply_rc}" -eq 0 ]; then
+          updated_state="$(printf '%s' "${updated_state}" | jq -c --argjson recent "${FFB_RECENT_JSON}" --argjson now "$(date +%s)" '
+            .failure_fingerprints = $recent | .updated_ts = $now
+          ' 2>/dev/null || echo "${updated_state}")"
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+          continue
+        fi
+        # rc=2: the failure label is still on the issue; skip the ladder.
+        # rc=1: nothing applied; fall through so the legacy ladder still runs.
+        if [ "${_std_ffb_apply_rc}" -ne 1 ]; then
+          continue
+        fi
+        ;;
+      identity_unavailable|history_unavailable|unavailable)
+        echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=standalone outcome=${FFB_DECISION}"
+        ;;
+      *)
+        if [ "${FFB_RECENT_JSON}" != "[]" ]; then
+          updated_state="$(printf '%s' "${updated_state}" | jq -c --argjson recent "${FFB_RECENT_JSON}" '
+            if (.failure_fingerprints // []) == $recent then . else .failure_fingerprints = $recent end
+          ' 2>/dev/null || echo "${updated_state}")"
+        fi
+        ;;
+    esac
 
     # ai:claude-capacity-wait (issue #7251) is owned by the capacity-wait
     # resume pass, like DEDICATED_HANDLER_PHASES in orchestrate_lib.py, so no
@@ -25347,13 +26473,66 @@ REISSUE_EOF
         if [ "${phase_attempts_count}" -gt "${_std_exhausted_attempts}" ]; then
           _std_exhausted_attempts="${phase_attempts_count}"
         fi
-        close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})."
-        ensure_label_exists "ai:closed"
-        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:closed' 2>/dev/null || true
-        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries}; stuck ${elapsed_minutes} minutes this time)." 2>/dev/null || true
-        tg_notify_issue "${issue_num}" "Standalone stall recovery exhausted for issue #${issue_num} (${_std_exhausted_attempts} attempts in '${phase}', limit ${effective_max_recoveries}). Issue closed with ai:closed." "CRITICAL"
-        STALL_RECOVERY_SHOULD_INCREMENT="false"
-        took_action="true"
+        if [ "${STALL_FINGERPRINT_BREAKER_ENABLED}" = "true" ]; then
+          # Stuck-states P3b (G3): exhaustion never closes the issue or its
+          # linked PR. Label ai:needs-human, verify it, and leave the issue
+          # open for the unblock judge (unblock_scan BLOCK_LABELS).
+          local _std_exhausted_counter="phase_attempts"
+          if [ "${recovery_count}" -ge "${effective_max_recoveries}" ]; then
+            _std_exhausted_counter="stall_recovery_count"
+          fi
+          ensure_label_exists "ai:needs-human"
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:needs-human' >/dev/null 2>&1 || true
+          local _std_exhausted_labels
+          _std_exhausted_labels="$(get_issue_labels_json "${issue_num}")"
+          if has_label "${_std_exhausted_labels}" "ai:needs-human"; then
+            local _std_exhausted_history
+            _std_exhausted_history="$(printf '%s' "${updated_state}" | jq -r '
+              ((.failure_fingerprints // []) | if type == "array" then .[-5:] else [] end)[]?
+              | select(type == "object")
+              | select(((.phase // "") | tostring | test("^[a-z][a-z0-9-]{0,31}$"))
+                and ((.fp // "") | tostring | test("^[0-9a-f]{12}$"))
+                and ((.run // "") | tostring | test("^[1-9][0-9]{0,19}$")))
+              | "| `\(.phase)` | `\(.fp)` | \(.run) |"
+            ' 2>/dev/null || true)"
+            if [ -n "${_std_exhausted_history}" ]; then
+              _std_exhausted_history="| Phase | Fingerprint | Run |
+|---|---|---|
+${_std_exhausted_history}"
+            else
+              _std_exhausted_history="_No failure fingerprints recorded._"
+            fi
+            gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="## ⏸️ Stall recovery exhausted: escalated for the unblock judge
+
+Standalone stall recovery exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries}; stuck ${elapsed_minutes} minutes this time).
+
+- **Phase:** \`${phase}\`
+- **Exhausted counter:** \`${_std_exhausted_counter}\` (stall_recovery_count=${recovery_count}, phase_attempts=${phase_attempts_count})
+- **Limit:** ${effective_max_recoveries}
+- **Stuck this time:** ${elapsed_minutes} minutes
+
+**Recent failure fingerprints:**
+
+${_std_exhausted_history}
+
+This issue and its linked PR stay open with \`ai:needs-human\`; the unblock judge will pick it up." >/dev/null 2>&1 || true
+            echo "STALL_EXHAUSTED_ESCALATED issue=${issue_num} scope=standalone phase=${phase} attempts=${_std_exhausted_attempts} limit=${effective_max_recoveries} counter=${_std_exhausted_counter} outcome=labelled"
+            tg_notify_issue "${issue_num}" "Standalone stall recovery exhausted for issue #${issue_num} (${_std_exhausted_attempts} attempts in '${phase}', limit ${effective_max_recoveries}). Issue left open with ai:needs-human for the unblock judge." "CRITICAL"
+            took_action="true"
+          else
+            echo "STALL_EXHAUSTED_ESCALATED issue=${issue_num} scope=standalone phase=${phase} attempts=${_std_exhausted_attempts} limit=${effective_max_recoveries} outcome=label_failed"
+            took_action="false"
+          fi
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+        else
+          close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})."
+          ensure_label_exists "ai:closed"
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:closed' 2>/dev/null || true
+          gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries}; stuck ${elapsed_minutes} minutes this time)." 2>/dev/null || true
+          tg_notify_issue "${issue_num}" "Standalone stall recovery exhausted for issue #${issue_num} (${_std_exhausted_attempts} attempts in '${phase}', limit ${effective_max_recoveries}). Issue closed with ai:closed." "CRITICAL"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          took_action="true"
+        fi
         ;;
       dispatch_rb_judge)
         # Autonomous escape from ai:review-blocked: dispatch the
@@ -28316,6 +29495,22 @@ The security pass that parked this project ran on workflow engine \`${SP_AUTO_RE
       ]
       | last // empty
     ')"
+
+    # Harness heal auto-revalidate (Refs #8291): with no pending /revalidate,
+    # a parked ai:harness-broken project whose heal issue merged gets one
+    # poller-posted /revalidate, handled below on this tick. A pending human
+    # /revalidate always wins. §14 API budget: at most one GET
+    # repos/shubhodeep1/coding-workflows/issues/<n> per tracker per tick
+    # (shared with the hold via _VALIDATION_HARNESS_ISSUE_CACHE, and only
+    # when a trusted routing marker names the issue and no once-only marker
+    # exists), plus at most one comment POST per heal issue ever.
+    if { [ -z "${REVALIDATE_COMMENT_JSON}" ] || [ "${REVALIDATE_COMMENT_JSON}" = "null" ]; } \
+      && has_label "${TRACKING_LABELS}" "ai:harness-broken"; then
+      harness_heal_auto_revalidate || true
+      if [ -n "${HHAR_POSTED_COMMENT_JSON:-}" ]; then
+        REVALIDATE_COMMENT_JSON="${HHAR_POSTED_COMMENT_JSON}"
+      fi
+    fi
 
     if [ -n "${REVALIDATE_COMMENT_JSON}" ] && [ "${REVALIDATE_COMMENT_JSON}" != "null" ]; then
       REVALIDATE_COMMENT_BODY="$(printf '%s' "${REVALIDATE_COMMENT_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
@@ -32121,6 +33316,9 @@ fi
     fi
 
     if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then
+    # Stuck-states P3b: failure-signature breaker for managed wave issues.
+    # Runs before check-stalls so a tripped label is visible this tick.
+    run_managed_failure_fingerprint_breaker
     # Grouping repeated failures (issue #8427, P8): items whose newest failure
     # shares a failure key with another open item of this wave are paused
     # under one owner. Switch off, this only removes leftover state fields.
@@ -32324,6 +33522,9 @@ fi
 
     STALL_STATE_CHANGED=false
     STALL_HEALING_CHANGED=false
+    if [ "${FFB_MANAGED_STATE_CHANGED:-false}" = "true" ]; then
+      STALL_STATE_CHANGED=true
+    fi
 
     if [ "${STALL_COUNT}" -gt 0 ]; then
       echo "Detected ${STALL_COUNT} stalled issue(s). Checking for active workflow runs..."

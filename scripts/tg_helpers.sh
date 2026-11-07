@@ -19,7 +19,14 @@ _TG_HELPERS_LOADED="true"
 
 # Source rate-limit helpers (provides curl_gh_api)
 # shellcheck source=gh_helpers.sh
-if [ -f "scripts/gh_helpers.sh" ]; then
+# A verified support bundle (SUPPORT_SCRIPTS_DIR, staged by
+# stage_workflow_support.sh / stage_support_for_phase.sh) wins over the
+# checkout's scripts/, which may come from another branch. Unset keeps the
+# cwd-relative lookup below.
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ] && [ ! -L "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
+	# shellcheck disable=SC1091
+	source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
+elif [ -f "scripts/gh_helpers.sh" ]; then
 	# shellcheck disable=SC1091
 	source scripts/gh_helpers.sh
 fi
@@ -90,6 +97,20 @@ _tg_should_send()
 	[ "${msg_num}" -ge "${threshold_num}" ]
 }
 
+# tg_alert_configured — returns 0 only when tg_send_msg could really send a
+# message at LEVEL: a bot token, a chat ID, and a level that meets the
+# ALERT_MSG_LEVEL threshold (so ALERT_MSG_LEVEL=SILENT counts as not
+# configured). No I/O. The needs-human alert claim (stuck-states P6b) checks
+# it first so a run that could never send does not use up the only attempt.
+# Usage: if tg_alert_configured CRITICAL; then ...; fi
+tg_alert_configured()
+{
+	local level="${1:-CRITICAL}"
+	[ -n "${TG_BOT_SECRET:-}" ] || return 1
+	[ -n "$(_tg_chat_id)" ] || return 1
+	_tg_should_send "${level}"
+}
+
 # _tg_prepend_level — prepend "ICON LEVEL: " to a message.
 _tg_prepend_level()
 {
@@ -121,7 +142,9 @@ tg_send_msg()
 		return 0
 	fi
 	local resp
-	resp=$(curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+	# Bounded like tg_send_report_msg: the needs-human alert (P6b) sends once
+	# after its claim, so a hung endpoint must not stall the judge or poller.
+	resp=$(curl -s --max-time 30 -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
 		-d "chat_id=${chat_id}" \
 		-d "disable_web_page_preview=true" \
 		--data-urlencode "text=${msg}" 2>/dev/null) || {
@@ -130,6 +153,10 @@ tg_send_msg()
 	}
 	local msg_id
 	msg_id=$(printf '%s' "${resp}" | jq -r '.result.message_id // empty' 2>/dev/null)
+	if [ -z "${msg_id}" ]; then
+		# Telegram's own error text (never contains the bot token), as tg_send_report_msg logs it.
+		echo "::warning::Telegram returned no message id: $(printf '%s' "${resp}" | jq -r '.description // "unknown"' 2>/dev/null | tr -cd '[:print:]' | cut -c1-200)" >&2
+	fi
 	printf '%s' "${msg_id:-}"
 }
 

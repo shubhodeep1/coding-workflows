@@ -85,6 +85,9 @@ env:
   # ALLOW_WORKFLOW_EDITS) because vars.* are not auto-exposed to the shell.
   ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
   ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+  # Data paths the scope guard auto-allows outside files_touched (comma-separated
+  # globs; 'none' disables). Automation prefixes are never auto-allowed.
+  SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}
   # Optional per-issue ai:scope:<glob> label. Default false during
   # acceptance so existing implement behavior is unchanged until the
   # feature is exercised on a real issue.
@@ -1450,6 +1453,11 @@ jobs:
         env:
           STAGE_PROMPT_PRELUDE_REFACTOR_ENABLED: ${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}
           STAGE_UNATTENDED_IDENTITY_REINJECT_ENABLED: ${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}
+          # Kill switch for the one-source support bundle
+          # (docs/plans/remove-unattended-pipeline-stuck-states-plan.md P2b):
+          # `false` restores the legacy copy loop below and the bare
+          # scripts/ paths (SUPPORT_SCRIPTS_DIR stays unset).
+          SUPPORT_SCRIPTS_UNIFIED_ENABLED: ${{ vars.SUPPORT_SCRIPTS_UNIFIED_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -1482,7 +1490,57 @@ jobs:
           mkdir -p scripts
           mkdir -p -- "${RUNTIME_DIR}/host_python"
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh attempt_journal.py acceptance_check.py evidence_pack.py gh_api_retry.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_stale_branch_check.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py partial_delivery.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
+          # One source for support scripts (P2b): stage_support_for_phase.sh
+          # verifies the support checkout and stages a bundle from that one
+          # commit under RUNNER_TEMP (SUPPORT_SCRIPTS_DIR); no executable is
+          # written into the issue checkout. Pre-editor steps call
+          # "${SUPPORT_SCRIPTS_DIR:-scripts}/<helper>", and the trusted run dir
+          # below is filled from support_run_src (the bundle, or scripts/
+          # under the kill switch).
+          support_unified="${SUPPORT_SCRIPTS_UNIFIED_ENABLED:-true}"
+          support_helper_path=".codex-workflow-src/scripts/stage_support_for_phase.sh"
+          support_list_names=""
+          if [ "${support_unified}" = "true" ] && { [ ! -f "${support_helper_path}" ] || [ -L "${support_helper_path}" ]; }; then
+            echo "::warning::stage_support_for_phase.sh is not in ${wf_source}@${SCRIPT_REF}; using the legacy support staging."
+            support_unified="false"
+          fi
+          # Capability probe: an older support ref whose helper has no
+          # implement case exits 2 on --list and keeps the legacy staging. The
+          # names also feed the consumer scripts/.gitignore (commit exclusions).
+          if [ "${support_unified}" = "true" ] && ! support_list_names="$(bash "${support_helper_path}" implement --list)"; then
+            echo "::warning::stage_support_for_phase.sh in ${wf_source}@${SCRIPT_REF} cannot stage the implement phase; using the legacy support staging."
+            support_unified="false"
+          fi
+          if [ "${support_unified}" = "true" ]; then
+            bash .codex-workflow-src/scripts/stage_support_for_phase.sh implement --host-python-dir "${RUNTIME_DIR}/host_python"
+            # SUPPORT_SCRIPTS_DIR is only visible from the next step: read the
+            # stager's export back and fail closed on anything unexpected.
+            support_run_src="$(sed -n 's/^SUPPORT_SCRIPTS_DIR=//p' "${GITHUB_ENV}" | tail -n 1)"
+            if [[ "${RUNNER_TEMP:-}" != /* ]] || [[ "${support_run_src}" != "${RUNNER_TEMP}"/* ]] || [[ "${support_run_src}" == *..* ]] \
+              || [ -L "${support_run_src}" ] || [ ! -d "${support_run_src}" ]; then
+              echo "::error::stage_support_for_phase.sh did not export a usable SUPPORT_SCRIPTS_DIR under RUNNER_TEMP." >&2
+              exit 1
+            fi
+            # Only names the bundle really holds become commit exclusions, as
+            # in the legacy loop: a skipped optional helper must not hide a
+            # consumer-owned scripts/<name> from the implementation commit.
+            while IFS= read -r support_list_name; do
+              [ -n "${support_list_name}" ] || continue
+              if [ -f "${support_run_src}/${support_list_name}" ] && [ ! -L "${support_run_src}/${support_list_name}" ]; then
+                _fetched_scripts+=("${support_list_name}")
+              fi
+            done <<< "$(printf '%s\n' "${support_list_names}" codex_model_catalog.json)"
+            # setup_serena.sh reads ${SCRIPT_DIR}/templates; a consumer-tracked
+            # regular template (data only, never executed) still wins.
+            serena_caller_template="scripts/templates/serena_project.yml.j2"
+            if [ "${is_self_repo}" = "false" ] && [ ! -L scripts/templates ] && [ -f "${serena_caller_template}" ] && [ ! -L "${serena_caller_template}" ] \
+              && git ls-files --error-unmatch -- "${serena_caller_template}" >/dev/null 2>&1; then
+              echo "::notice::Consumer repo already tracks scripts/templates/serena_project.yml.j2; preserving caller-owned Serena template."
+              install -D -m 0644 "${serena_caller_template}" "${support_run_src}/templates/serena_project.yml.j2"
+            fi
+          else
+          # support-scripts-legacy:begin
+          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_stale_branch_check.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py partial_delivery.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1513,14 +1571,6 @@ jobs:
           _fetched_scripts+=(claude_settings.json.tmpl)
           _staged_support_installed_paths+=(scripts/claude_settings.json.tmpl)
 
-          # The guard rejection handler runs after implement_commit_changes.sh,
-          # whose fetched-manifest cleanup can remove repository support files.
-          # Preserve a runtime copy outside that cleanup set for the late step.
-          # The handler sources the gh_helpers.sh copy beside it for gh_retry
-          # (fail-open: without it the handler keeps its raw gh calls).
-          install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"
-          install -m 0644 scripts/gh_helpers.sh "${RUNTIME_DIR}/gh_helpers.sh"
-
           # Optional: files_touched scope-enforcement guard helper. Fail-open —
           # if it is unavailable on ${SCRIPT_REF} (e.g. ref skew during a
           # rollout) the scope guard steps degrade to a logged skip rather than
@@ -1534,6 +1584,25 @@ jobs:
             fi
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional files_touched scope guard ${f} is unavailable on ${SCRIPT_REF}; scope enforcement will fail open this run."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+            _staged_support_installed_paths+=("scripts/${f}")
+          done
+
+          # Attempt-journal, done-check and evidence-pack helpers (issues #8428
+          # P1 and #8427 P2/P4): optional, so a support ref without them never
+          # fails implementation while the PERSIST_* switches are off. They are
+          # not in the required loop above because that list must match the
+          # implement case of stage_support_for_phase.sh.
+          for f in attempt_journal.py acceptance_check.py evidence_pack.py gh_api_retry.py; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional persistence helper ${f} is unavailable on ${SCRIPT_REF}; its PERSIST_* feature skips this run."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
@@ -1618,14 +1687,6 @@ jobs:
             _staged_support_installed_paths+=("scripts/${f}")
           done
 
-          if [ "${is_self_repo}" = "false" ]; then
-            {
-              echo "# Auto-generated by coding-workflows — DO NOT EDIT"
-              echo "# Prevents runtime-fetched support scripts and their bytecode caches from being committed."
-              printf '%s\n' "${_fetched_scripts[@]}" __pycache__/ .gitignore
-            } > scripts/.gitignore
-          fi
-
           catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
           if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
             catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
@@ -1638,6 +1699,25 @@ jobs:
             fi
           else
             echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
+          fi
+          support_run_src="scripts"
+          # support-scripts-legacy:end
+          fi
+
+          # The guard rejection handler runs after implement_commit_changes.sh,
+          # whose fetched-manifest cleanup can remove repository support files.
+          # Preserve a runtime copy outside that cleanup set for the late step.
+          # The handler sources the gh_helpers.sh copy beside it for gh_retry
+          # (fail-open: without it the handler keeps its raw gh calls).
+          install -m 0755 "${support_run_src}/implement_handle_guard_block.sh" "${RUNTIME_DIR}/implement_handle_guard_block.sh"
+          install -m 0644 "${support_run_src}/gh_helpers.sh" "${RUNTIME_DIR}/gh_helpers.sh"
+
+          if [ "${is_self_repo}" = "false" ]; then
+            {
+              echo "# Auto-generated by coding-workflows — DO NOT EDIT"
+              echo "# Prevents runtime-fetched support scripts and their bytecode caches from being committed."
+              printf '%s\n' "${_fetched_scripts[@]}" __pycache__/ .gitignore
+            } > scripts/.gitignore
           fi
 
           mkdir -p ai-memory/schemas
@@ -1834,10 +1914,15 @@ jobs:
           rm -rf -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
           mkdir -p -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
           for _staged_support_runtime_script in "${_fetched_scripts[@]}"; do
-            install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"
+            # Both branches list only names they staged; a gap is a staging bug.
+            if [ ! -f "${support_run_src}/${_staged_support_runtime_script}" ]; then
+              echo "::error::Staged support ${_staged_support_runtime_script} is missing from ${support_run_src}." >&2
+              exit 1
+            fi
+            install -m 0755 "${support_run_src}/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"
           done
-          if [ -f scripts/codex_model_catalog.json ]; then
-            install -m 0644 scripts/codex_model_catalog.json "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_model_catalog.json"
+          if [ -f "${support_run_src}/codex_model_catalog.json" ]; then
+            install -m 0644 "${support_run_src}/codex_model_catalog.json" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_model_catalog.json"
           fi
           # Pre-push affected-test gate (#8190): optional pre-editor copies, run dir only.
           mkdir -p -- "${RUNTIME_DIR}/staged_support_run/prompts"
@@ -1881,7 +1966,7 @@ jobs:
           set -euo pipefail
           CODEX_THREAD_REUSE_AVAILABLE=false
           # shellcheck source=/dev/null
-          source scripts/codex_thread_reuse.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/codex_thread_reuse.sh"
           if codex_thread_reuse_truthy "${CODEX_THREAD_REUSE_ENABLED:-false}" && codex_thread_reuse_probe_supported; then
             CODEX_THREAD_REUSE_AVAILABLE=true
           fi
@@ -1916,7 +2001,7 @@ jobs:
           WORKSPACE_REUSE_ENABLED="${WORKSPACE_REUSE_ENABLED:-false}" \
           WORKSPACE_ISSUE_IDENTIFIER="${ISSUE_NUMBER}" \
           WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
-            bash scripts/workspace_init.sh metadata
+            bash "${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_init.sh" metadata
 
       - name: Restore reusable workspace cache
         if: env.SKIP_IMPLEMENT != 'true' && steps.workspace_meta.outputs.workspace_reuse_enabled == 'true'
@@ -1949,7 +2034,7 @@ jobs:
           WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
           WORKSPACE_FINGERPRINT="${{ steps.workspace_meta.outputs.workspace_fingerprint }}" \
           WORKSPACE_CACHE_MATCHED_KEY="${workspace_cache_matched_key}" \
-            bash scripts/workspace_init.sh metadata
+            bash "${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_init.sh" metadata
 
       - name: Finalize workspace contents
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1959,7 +2044,7 @@ jobs:
           WORKSPACE_PATH="${{ steps.workspace_state.outputs.workspace_path }}" \
           WORKSPACE_REUSE_ENABLED="${{ steps.workspace_state.outputs.workspace_reuse_enabled }}" \
           WORKSPACE_CACHE_RESTORE_STATE="${{ steps.workspace_state.outputs.workspace_cache_restore_state }}" \
-            bash scripts/workspace_init.sh finalize
+            bash "${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_init.sh" finalize
 
       - name: Activate workspace shell context
         if: env.SKIP_IMPLEMENT != 'true'
@@ -2047,12 +2132,12 @@ jobs:
             echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
             exit 0
           fi
-          if [ ! -f scripts/install_semble.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/install_semble.sh" ]; then
             echo "::warning::Optional Semble installer is unavailable on ${SCRIPT_REF}; leaving Semble disabled for this run."
             echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
             exit 0
           fi
-          if ! bash scripts/install_semble.sh; then
+          if ! bash "${SUPPORT_SCRIPTS_DIR:-scripts}/install_semble.sh"; then
             echo "::warning::Semble install helper failed; leaving Semble disabled for this run."
             echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
           fi
@@ -2067,9 +2152,9 @@ jobs:
           # for the rationale (semble 0.1.3 lacks the index/query CLI).
           # Fail-soft: writes SEMBLE_INDEX_AVAILABLE=false on any error and
           # exits 0, falling back to legacy implement context paths.
-          if [ -f scripts/build_semble_wrapper.sh ]; then
+          if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/build_semble_wrapper.sh" ]; then
             SEMBLE_INDEX_PATH="${semble_index_path}" \
-              bash scripts/build_semble_wrapper.sh
+              bash "${SUPPORT_SCRIPTS_DIR:-scripts}/build_semble_wrapper.sh"
           else
             echo "::notice::scripts/build_semble_wrapper.sh not staged; falling back to legacy implement context paths."
             echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"
@@ -2083,7 +2168,7 @@ jobs:
           IMPLEMENT_METADATA_PR_BASE_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           issue_meta_matches_issue() {
@@ -2313,17 +2398,18 @@ jobs:
           WORKFLOW_HEAL_EVIDENCE_MAX_RUNS: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_RUNS || '' }}
           HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED: ${{ vars.HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED || '' }}
         run: |
-          bash scripts/implement_heal_preflight.sh
+          bash "${SUPPORT_SCRIPTS_DIR:-scripts}/implement_heal_preflight.sh"
 
       - name: Validate approval phase label
         if: env.SKIP_IMPLEMENT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
-          source scripts/label_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh"
           # Recheck just before advancing the phase. /approved must not
           # bypass a still-open security prerequisite or a failed API read.
           DEPENDENCY_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>/dev/null || true)"
@@ -2420,7 +2506,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh"
           memory_bootstrap --ensure-branch
 
           check_json="$(memory_processed_command_check \
@@ -2571,7 +2657,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh"
 
           memory_record_run_event \
             --run-id "${{ github.run_id }}" \
@@ -2591,7 +2677,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh"
           tg_cleanup_phase_msgs "${ISSUE_NUMBER}" "plan"
 
       - name: Extract implementation plan
@@ -2679,7 +2765,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          source scripts/codex_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/codex_helpers.sh"
           # Centralised in scripts/write_codex_config.sh — wires the
           # apply_patch fix (model_catalog_json), the v0.113+ trust pre-
           # seed, and the elevated approval/sandbox combo at one place
@@ -2694,16 +2780,16 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          source scripts/emit_event.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/emit_event.sh" 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
-          if [ ! -f scripts/setup_serena.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/setup_serena.sh" ]; then
             echo "::warning::Optional Serena bootstrap helper is unavailable on ${SCRIPT_REF:-current checkout}; leaving Serena disabled for this run."
             echo "SERENA_FALLBACK target=implement reason=setup-failure" >&2
             emit_event "SERENA_FALLBACK" "target=implement" "reason=setup-failure"
             echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"
             exit 0
           fi
-          if ! SERENA_FALLBACK_TARGET="implement" bash scripts/setup_serena.sh; then
+          if ! SERENA_FALLBACK_TARGET="implement" bash "${SUPPORT_SCRIPTS_DIR:-scripts}/setup_serena.sh"; then
             echo "::warning::Serena bootstrap helper failed; leaving Serena disabled for this run."
             echo "SERENA_FALLBACK target=implement reason=setup-failure" >&2
             emit_event "SERENA_FALLBACK" "target=implement" "reason=setup-failure"
@@ -2745,13 +2831,13 @@ jobs:
               export STATIC_CONTEXT_CANONICAL_UNAVAILABLE_REASON=helper_unsupported
             fi
           fi
-          bash scripts/build_static_context.sh implement ./pre_assembled_static.txt
+          bash "${SUPPORT_SCRIPTS_DIR:-scripts}/build_static_context.sh" implement ./pre_assembled_static.txt
 
       - name: Retrieve implementation memory context
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh"
           memory_bootstrap --require memory_retrieve
 
           ISSUE_TITLE_JSON="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
@@ -2765,9 +2851,10 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"
           if ! gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"; then
             echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=metadata_unavailable outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
@@ -2831,9 +2918,9 @@ jobs:
           any_claude="false"
           for role in IMPLEMENT IMPLEMENT_REPAIR IMPLEMENT_DIAGNOSE; do
             engine="codex"
-            if [ -f scripts/ai_engine.sh ]; then
+            if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh" ]; then
               # shellcheck disable=SC1091
-              source scripts/ai_engine.sh
+              source "${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh"
               engine="$(ai_engine_for_role "${role}" || echo codex)"
             fi
             [ "${engine}" = "claude" ] || engine="codex"
@@ -2841,9 +2928,9 @@ jobs:
             echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
           done
           summariser_engine="codex"
-          if [ -f scripts/ai_engine.sh ]; then
+          if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh" ]; then
             # shellcheck disable=SC1091
-            source scripts/ai_engine.sh
+            source "${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh"
             summariser_engine="$(ai_engine_for_role SUMMARISER || echo codex)"
           fi
           [ "${summariser_engine}" = "claude" ] || summariser_engine="codex"
@@ -2854,7 +2941,7 @@ jobs:
           if [ "${summariser_engine}" = "claude" ]; then
             claude_engine_support_dest="${RUNNER_TEMP}/claude-engine-support"
             # shellcheck disable=SC1091
-            if [ -f scripts/ai_engine.sh ] && source scripts/ai_engine.sh &&
+            if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh" ] && source "${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh" &&
                ai_engine_stage_support "${GITHUB_WORKSPACE}/.codex-workflow-src" "${claude_engine_support_dest}"; then
               echo "CLAUDE_ENGINE_SUPPORT_DIR=${claude_engine_support_dest}" >> "$GITHUB_ENV"
               any_claude="true"

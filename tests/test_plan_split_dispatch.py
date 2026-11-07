@@ -70,9 +70,11 @@ def _run(issue: dict | None = None, *, plan: str = PLAN, internal: str = "active
 			"PLAN_FILE": str(plan_file), "PLAN_PATH_COUNT": "51", "RUN_URL": "https://github.com/owner/repo/actions/runs/9",
 		})
 		env.update(extra_env or {})
-		# The script sources scripts/*.sh relative to its cwd; none exist here,
-		# so its fallbacks (plain gh, no Telegram) are exercised.
-		result = subprocess.run(["bash", str(SCRIPT)], cwd=tmp, env=env, text=True, capture_output=True)
+		# The script sources its helpers from its own directory; a copy in tmp
+		# has none beside it, so its fallbacks (plain gh, no Telegram) are exercised.
+		script_copy = tmp / SCRIPT.name
+		script_copy.write_bytes(SCRIPT.read_bytes())
+		result = subprocess.run(["bash", str(script_copy)], cwd=tmp, env=env, text=True, capture_output=True)
 		raw = log.read_text(encoding="utf-8") if log.exists() else ""
 		calls = [line.rstrip("\0").split("\0") for line in raw.split("\0\n") if line.strip("\0\n")]
 		return result.returncode, result.stdout + result.stderr, calls

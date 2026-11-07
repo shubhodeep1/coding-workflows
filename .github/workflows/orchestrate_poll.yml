@@ -294,6 +294,28 @@ jobs:
             echo "::warning::review_merge_train.sh release exited ${_mt_rc}; continuing the poll (fail-open)."
           fi
 
+      - name: Resume dependency waits
+        # Stuck-states P8b (Refs #8291): runs on EVERY tick, before the
+        # tracking-issue gate below exits early, because standalone issues
+        # parked in ai:waiting-on-dependency must resume without an active
+        # project. One GraphQL call when nothing waits; fail-open (the helper
+        # always exits 0 and this step never fails the poll).
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}
+          DEPENDENCY_WAIT_ESCALATE_DAYS: ${{ vars.DEPENDENCY_WAIT_ESCALATE_DAYS || '7' }}
+        run: |
+          set -uo pipefail
+          helper=".codex-workflow-src/scripts/dependency_wait_resume.py"
+          if [ ! -f "${helper}" ] || [ -L "${helper}" ]; then
+            echo "::notice::DEPENDENCY_WAIT_RESUME op=scan outcome=skip reason=helper_missing"
+            exit 0
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${helper}" scan --repo "${GITHUB_REPOSITORY}" \
+            || echo "::warning::DEPENDENCY_WAIT_RESUME op=scan outcome=error reason=helper_exit; continuing the poll (fail-open)."
+
       - name: Find active tracking issues
         id: find_tracking
         env:
@@ -979,6 +1001,7 @@ jobs:
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
           PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+          SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}
         run: |
           set -euo pipefail
           # Consumers pinned to older support commits may not have this
@@ -1359,6 +1382,7 @@ jobs:
           ORCH_IMPLEMENTS_MARKER_ENABLED: ${{ vars.ORCH_IMPLEMENTS_MARKER_ENABLED || 'true' }}
           PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          UNBLOCK_MAX_ROUNDS_PER_ITEM: ${{ vars.UNBLOCK_MAX_ROUNDS_PER_ITEM || '3' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
           ORPHAN_FIXUP_CLOSE_DRY_RUN: ${{ vars.ORPHAN_FIXUP_CLOSE_DRY_RUN || 'false' }}
@@ -1378,9 +1402,12 @@ jobs:
           VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED: ${{ vars.VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED || 'true' }}
           VALIDATION_HARNESS_HEAL_ENABLED: ${{ vars.VALIDATION_HARNESS_HEAL_ENABLED || 'true' }}
           VALIDATION_HARNESS_HOLD_MAX_DAYS: ${{ vars.VALIDATION_HARNESS_HOLD_MAX_DAYS || '14' }}
+          DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}
+          DEPENDENCY_WAIT_ESCALATE_DAYS: ${{ vars.DEPENDENCY_WAIT_ESCALATE_DAYS || '7' }}
           VALIDATION_HARNESS_MAX_RESUMES_PER_FP: ${{ vars.VALIDATION_HARNESS_MAX_RESUMES_PER_FP || '2' }}
           VALIDATION_HARNESS_MAX_RESUMES: ${{ vars.VALIDATION_HARNESS_MAX_RESUMES || '4' }}
           VALIDATION_HARNESS_ROUTE_LOGIN: ${{ vars.VALIDATION_HARNESS_ROUTE_LOGIN || '' }}
+          HARNESS_HEAL_AUTO_REVALIDATE_ENABLED: ${{ vars.HARNESS_HEAL_AUTO_REVALIDATE_ENABLED || 'true' }}
           STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           # Issue #7657: the close sweep leaves a bound partial-delivery PR's issue open.
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
@@ -1390,6 +1417,7 @@ jobs:
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
           PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+          SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
           APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
@@ -1400,6 +1428,9 @@ jobs:
           COMPREHENSIVE_CYCLE_BOT_LOGINS: ${{ vars.COMPREHENSIVE_CYCLE_BOT_LOGINS || 'github-actions[bot]' }}
           COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
           COMPREHENSIVE_VERIFICATION_RETRY_MAX: ${{ vars.COMPREHENSIVE_VERIFICATION_RETRY_MAX || '24' }}
+          # Release-blocker heal reports from the promote cycle (Refs #8291).
+          RELEASE_BLOCKER_HEAL_ENABLED: ${{ vars.RELEASE_BLOCKER_HEAL_ENABLED || 'true' }}
+          RELEASE_BLOCKER_HEAL_PY: scripts/workflow_failure_heal.py
           MAX_JUDGE_CYCLES: ${{ vars.MAX_JUDGE_CYCLES || '25' }}
           # Master switch for the orchestrator-aware PR autofix flow.  Read
           # by the final-PR-phase MAX_JUDGE_CYCLES cap bypass in
@@ -1434,6 +1465,8 @@ jobs:
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
+          STALL_FINGERPRINT_BREAKER_ENABLED: ${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}
+          STALL_FINGERPRINT_REPEAT_MAX: ${{ vars.STALL_FINGERPRINT_REPEAT_MAX || '2' }}
           # Standalone conflict sweep: page once per PR head after this many
           # automatic resolution attempts (0 disables the alert).
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
@@ -1580,6 +1613,7 @@ jobs:
           ORCH_IMPLEMENTS_MARKER_ENABLED: ${{ vars.ORCH_IMPLEMENTS_MARKER_ENABLED || 'true' }}
           PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          UNBLOCK_MAX_ROUNDS_PER_ITEM: ${{ vars.UNBLOCK_MAX_ROUNDS_PER_ITEM || '3' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
           ORPHAN_FIXUP_CLOSE_DRY_RUN: ${{ vars.ORPHAN_FIXUP_CLOSE_DRY_RUN || 'false' }}
@@ -1597,9 +1631,12 @@ jobs:
           VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED: ${{ vars.VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED || 'true' }}
           VALIDATION_HARNESS_HEAL_ENABLED: ${{ vars.VALIDATION_HARNESS_HEAL_ENABLED || 'true' }}
           VALIDATION_HARNESS_HOLD_MAX_DAYS: ${{ vars.VALIDATION_HARNESS_HOLD_MAX_DAYS || '14' }}
+          DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}
+          DEPENDENCY_WAIT_ESCALATE_DAYS: ${{ vars.DEPENDENCY_WAIT_ESCALATE_DAYS || '7' }}
           VALIDATION_HARNESS_MAX_RESUMES_PER_FP: ${{ vars.VALIDATION_HARNESS_MAX_RESUMES_PER_FP || '2' }}
           VALIDATION_HARNESS_MAX_RESUMES: ${{ vars.VALIDATION_HARNESS_MAX_RESUMES || '4' }}
           VALIDATION_HARNESS_ROUTE_LOGIN: ${{ vars.VALIDATION_HARNESS_ROUTE_LOGIN || '' }}
+          HARNESS_HEAL_AUTO_REVALIDATE_ENABLED: ${{ vars.HARNESS_HEAL_AUTO_REVALIDATE_ENABLED || 'true' }}
           STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           # Issue #7657: the close sweep leaves a bound partial-delivery PR's issue open.
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
@@ -1609,6 +1646,7 @@ jobs:
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
           PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+          SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
           APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
@@ -1619,6 +1657,9 @@ jobs:
           COMPREHENSIVE_CYCLE_BOT_LOGINS: ${{ vars.COMPREHENSIVE_CYCLE_BOT_LOGINS || 'github-actions[bot]' }}
           COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
           COMPREHENSIVE_VERIFICATION_RETRY_MAX: ${{ vars.COMPREHENSIVE_VERIFICATION_RETRY_MAX || '24' }}
+          # Release-blocker heal reports from the promote cycle (Refs #8291).
+          RELEASE_BLOCKER_HEAL_ENABLED: ${{ vars.RELEASE_BLOCKER_HEAL_ENABLED || 'true' }}
+          RELEASE_BLOCKER_HEAL_PY: scripts/workflow_failure_heal.py
           MAX_JUDGE_CYCLES: ${{ vars.MAX_JUDGE_CYCLES || '25' }}
           ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
           ORCH_TASK_FILES_ENABLED: ${{ vars.ORCH_TASK_FILES_ENABLED || 'false' }}
@@ -1640,6 +1681,8 @@ jobs:
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
+          STALL_FINGERPRINT_BREAKER_ENABLED: ${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}
+          STALL_FINGERPRINT_REPEAT_MAX: ${{ vars.STALL_FINGERPRINT_REPEAT_MAX || '2' }}
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
           STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           MAX_STALL_RECOVERIES_DONE: ${{ vars.MAX_STALL_RECOVERIES_DONE || '99' }}
@@ -1706,6 +1749,7 @@ jobs:
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
           PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+          SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}
         run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
 
       - name: Run unblock scan without active projects
@@ -1718,6 +1762,7 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          UNBLOCK_MAX_ROUNDS_PER_ITEM: ${{ vars.UNBLOCK_MAX_ROUNDS_PER_ITEM || '3' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
           ORPHAN_FIXUP_CLOSE_DRY_RUN: ${{ vars.ORPHAN_FIXUP_CLOSE_DRY_RUN || 'false' }}
@@ -1738,6 +1783,7 @@ jobs:
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
           PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+          SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: bash scripts/orchestrate_poll_process.sh
 

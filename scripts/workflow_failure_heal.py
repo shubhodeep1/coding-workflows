@@ -81,7 +81,7 @@ MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 # project validations fail on it.
 SCHEDULED_CHECK_WORKFLOW_NAMES: tuple[str, ...] = ("Nightly Validation Self-Test",)
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding", "validation_failure", "synced_check_failure")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding", "validation_failure", "synced_check_failure", "release_blocker")
 
 # A refused AI engine fallback (plan item 3e, D1): Claude was unavailable for a
 # non-capacity reason and the role failed instead of running codex. The report
@@ -463,12 +463,53 @@ REPORT_IDENTITY_WORKFLOW_BY_KIND = {
 	"synced_check_failure": ("check_failure_triage.yml",),
 	# The consumer's runtime validation run (reusable validate.yml).
 	"validation_failure": ("validate.yml",),
+	# Release-health blocker producers (stuck-states P4, Phases 2 and 3): the
+	# auto-release / promotion workflows and the reusable poller.
+	"release_blocker": ("auto-release-stable.yml", "promote-main-to-stable.yml", "orchestrate_poll.yml"),
 }
 # Kinds whose run_refs the intake's provenance gate already binds to the
 # source repository (run repository, workflow path, failure, issue/PR link);
 # claim binding leaves their runs to that gate so its current-run ordering and
 # successful-review-job fallback stay intact.
 PROVENANCE_BOUND_KINDS = ("phase_failure", "autofix_failure", "workflow_run", "validation_failure")
+# A release-health blocker (stuck-states P4, docs/plans/release-blocker-heal-reports-plan.md
+# Phase 1): no run failed, but a release or promotion has been held back by the
+# same condition for a while (a skipped gate, a stale candidate, a red tip).
+# Only this repository's own producers send it, only for `stable` / `main`.
+# The report may claim the failed gate runs in run_refs (bound like a label
+# report's runs) and names its producing run in ``reporter_run``; the intake
+# verifies that run (verify_release_blocker_reporter_run) and uses the
+# producer's fixed paths below as the heal scope, so the payload never widens it.
+RELEASE_BLOCKER_FAILURE_REASON = "release_blocker"
+_BLOCKER_REASON_RE = re.compile(r"^[a-z_:]{1,80}$")
+BLOCKER_EVIDENCE_LIMIT = ISSUE_EXCERPT_LIMIT
+RELEASE_BLOCKER_BRANCHES: tuple[str, ...] = ("stable", "main")
+RELEASE_BLOCKER_PAYLOAD_KEYS = frozenset({
+	"schema_version", "source_repo", "source_kind", "issue_title", "workflow_name", "wrapper_sha", "conclusion", "reported_at",
+	"blocker_reason", "blocker_evidence", "blocker_age_secs", "head_branch", "head_sha", "run_refs", "reporter_run", "reporter_run_url",
+})
+# Producer workflow file -> the heal scope of a blocker that producer reported.
+RELEASE_BLOCKER_PRODUCER_SCOPE_PATHS: dict[str, tuple[str, ...]] = {
+	"auto-release-stable.yml": (".github/workflows/auto-release-stable.yml", "scripts/auto_release_stable.sh"),
+	"promote-main-to-stable.yml": (".github/workflows/promote-main-to-stable.yml", "scripts/promote_main_cycle.sh"),
+	"internal-orchestrate-poll.yml": (
+		".github/workflows/internal-orchestrate-poll.yml",
+		".github/workflows/orchestrate_poll.yml",
+		"scripts/orchestrate_poll_process.sh",
+	),
+}
+# Fields validate_payload adds to a normalised release_blocker payload. The
+# intake re-validates that normalised payload (compose-issue, compose-occurrence),
+# so they are accepted again, but only with the empty value normalisation gives
+# them: no free text reaches the issue through them.
+_RELEASE_BLOCKER_NEUTRAL_KEYS = frozenset({
+	"issue_number", "issue_url", "label", "labels", "source_gen", "source_root",
+	"issue_excerpt", "comments_excerpt", "failure_evidence", "failure_fingerprint",
+})
+RELEASE_BLOCKER_FOREIGN_REPO_SKIP_REASON = "release_blocker_foreign_repo"
+# Occurrence throttle (release_blocker duplicates only): the trailing marker
+# compose_occurrence_comment writes, read back by occurrence_throttled.
+DEFAULT_OCCURRENCE_THROTTLE_SECONDS = 86400
 FAILED_JOB_CONCLUSIONS = ("failure", "timed_out", "cancelled")
 SIGNATURE_LINE_LIMIT = 5
 # Ownership facts carried by an autofix_failure report (self-repo routing).
@@ -2179,6 +2220,123 @@ def verify_engine_reporter_run(payload: dict[str, Any], run: Any, *, max_age: in
 	}
 
 
+def _release_blocker_age(value: Any) -> int | None:
+	"""A non-negative integer blocker age in seconds (an int or a digit string), else None."""
+	if isinstance(value, bool):
+		return None
+	if isinstance(value, int):
+		return value if 0 <= value <= 10**10 else None
+	if isinstance(value, str) and re.fullmatch(r"[0-9]{1,10}", value):
+		return int(value)
+	return None
+
+
+def build_blocker_payload(
+	*,
+	repo: str,
+	workflow_name: str,
+	reason: str,
+	evidence: str,
+	age_secs: Any,
+	head_branch: str,
+	head_sha: str | None,
+	run_refs: Iterable[Any],
+	reporter_run: Any,
+	reporter_run_url: str | None,
+	now: datetime | None = None,
+) -> dict[str, Any]:
+	"""Build the dispatch payload for a release-health blocker (release_blocker).
+
+	The producers (Phases 2 and 3 of the release-blocker plan) call this from
+	coding-workflows only. ``run_refs`` are run ids (or ``{run_id}`` dicts) of
+	failed gate runs in ``repo``; ``reporter_run`` is ``{run_id, run_attempt}``
+	of the producing run. Malformed optional values are dropped, so the output
+	always passes ``validate_payload``; an invalid reason or branch raises.
+	"""
+	now = now or _utc_now()
+	if not (isinstance(reason, str) and _BLOCKER_REASON_RE.fullmatch(reason)):
+		raise ValueError("reason must match ^[a-z_:]{1,80}$")
+	if head_branch not in RELEASE_BLOCKER_BRANCHES:
+		raise ValueError("head_branch must be one of " + ", ".join(RELEASE_BLOCKER_BRANCHES))
+	name = single_line(workflow_name, 200)
+	if not name:
+		raise ValueError("workflow_name is required")
+	refs: list[dict[str, Any]] = []
+	for ref in run_refs or []:
+		run_number = _positive_int(ref.get("run_id") if isinstance(ref, dict) else ref)
+		if run_number is None or any(item["run_id"] == str(run_number) for item in refs):
+			continue
+		refs.append({"repo": repo, "run_id": str(run_number), "url": f"https://github.com/{repo}/actions/runs/{run_number}"})
+		if len(refs) >= MAX_RUN_REFS:
+			break
+	claimed = _engine_reporter_run(reporter_run)
+	sha = head_sha.lower() if isinstance(head_sha, str) and is_valid_sha(head_sha.lower()) else None
+	return {
+		"schema_version": SCHEMA_VERSION,
+		"source_repo": repo,
+		"source_kind": "release_blocker",
+		"issue_title": f"Release blocker: {reason} on {head_branch}",
+		"workflow_name": name,
+		"blocker_reason": reason,
+		"blocker_evidence": sanitize_text(evidence, BLOCKER_EVIDENCE_LIMIT),
+		"blocker_age_secs": _release_blocker_age(age_secs),
+		"head_branch": head_branch,
+		"head_sha": sha,
+		"run_refs": refs,
+		"reporter_run": claimed,
+		"reporter_run_url": sanitize_text(reporter_run_url, 300) or (f"https://github.com/{repo}/actions/runs/{claimed['run_id']}" if claimed else None),
+		"reported_at": _iso(now),
+	}
+
+
+def verify_release_blocker_reporter_run(payload: dict[str, Any], run: Any, *, max_age: int, now: datetime | None = None) -> dict[str, Any]:
+	"""Bind a release_blocker report's ``reporter_run`` to GitHub's run object.
+
+	The checks of verify_engine_reporter_run, plus: the run's ``path`` must be
+	``.github/workflows/<file>`` for a producer in
+	RELEASE_BLOCKER_PRODUCER_SCOPE_PATHS. Returns ``{"ok", "reason"}`` plus,
+	when ok, ``run_ref``, ``run_attempt``, ``producer`` and that producer's
+	``scope_paths``.
+	"""
+	now = now or _utc_now()
+	if not isinstance(payload, dict) or payload.get("source_kind") != "release_blocker":
+		return {"ok": False, "reason": "not_release_blocker"}
+	claimed = _engine_reporter_run(payload.get("reporter_run"))
+	if claimed is None:
+		return {"ok": False, "reason": "no_reporter_run"}
+	if not isinstance(run, dict) or not run:
+		return {"ok": False, "reason": "run_unavailable"}
+	if str(run.get("id")) != claimed["run_id"]:
+		return {"ok": False, "reason": "run_id_mismatch"}
+	repository = run.get("repository") if isinstance(run.get("repository"), dict) else {}
+	source_repo = str(payload.get("source_repo") or "")
+	if str(repository.get("full_name") or "").lower() != source_repo.lower() or not source_repo:
+		return {"ok": False, "reason": "run_not_in_source_repo"}
+	run_path = run.get("path") if isinstance(run.get("path"), str) else ""
+	producer = run_path.removeprefix(".github/workflows/") if run_path.startswith(".github/workflows/") else ""
+	# GitHub may append `@<ref>` to a run's path; the file name decides.
+	producer = producer.split("@", 1)[0]
+	if producer not in RELEASE_BLOCKER_PRODUCER_SCOPE_PATHS:
+		return {"ok": False, "reason": "workflow_path_mismatch"}
+	if not payload.get("workflow_name") or single_line(run.get("name"), 200) != payload.get("workflow_name"):
+		return {"ok": False, "reason": "workflow_name_mismatch"}
+	attempt = _positive_int(run.get("run_attempt"))
+	if attempt is None or attempt < int(claimed["run_attempt"]):
+		return {"ok": False, "reason": "run_attempt_mismatch"}
+	if run.get("status") not in ("queued", "in_progress"):
+		finished = _parse_iso(run.get("updated_at"))
+		if finished is None or (now - finished).total_seconds() > max_age or finished > now + timedelta(seconds=ENGINE_REPORTER_RUN_CLOCK_SKEW_SECONDS):
+			return {"ok": False, "reason": "run_stale"}
+	return {
+		"ok": True,
+		"reason": "verified",
+		"run_ref": f"{source_repo}:{claimed['run_id']}",
+		"run_attempt": claimed["run_attempt"],
+		"producer": producer,
+		"scope_paths": list(RELEASE_BLOCKER_PRODUCER_SCOPE_PATHS[producer]),
+	}
+
+
 def _normalize_script_ref(value: Any) -> str | None:
 	"""``script_ref`` is the coding-workflows ref the run staged: a SHA or ``stable``."""
 	ref = str(value or "").strip()
@@ -2435,6 +2593,36 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		failure_reason = SYNCED_CHECK_FAILURE_REASON
 		failure_streak = 1
 		failure_fingerprint = None
+	elif kind == "release_blocker":
+		extra_keys = sorted(
+			key for key in payload
+			if key not in RELEASE_BLOCKER_PAYLOAD_KEYS
+			and not (key in _RELEASE_BLOCKER_NEUTRAL_KEYS and payload[key] in (None, "", []))
+			and not (key == "failure_reason" and payload[key] in (None, RELEASE_BLOCKER_FAILURE_REASON))
+			and not (key == "failure_streak" and payload[key] in (None, 1))
+		)
+		if extra_keys:
+			raise ValueError("release_blocker reports carry no other fields: " + ", ".join(safe_token(key, 40) or "?" for key in extra_keys[:5]))
+		if not single_line(payload.get("workflow_name"), 200):
+			raise ValueError("workflow_name is required for release_blocker reports")
+		raw_blocker_reason = payload.get("blocker_reason")
+		if not (isinstance(raw_blocker_reason, str) and _BLOCKER_REASON_RE.fullmatch(raw_blocker_reason)):
+			raise ValueError("blocker_reason is missing or malformed for release_blocker reports")
+		if payload.get("head_branch") not in RELEASE_BLOCKER_BRANCHES:
+			raise ValueError("head_branch must be one of " + ", ".join(RELEASE_BLOCKER_BRANCHES) + " for release_blocker reports")
+		raw_blocker_sha = payload.get("head_sha")
+		if raw_blocker_sha is not None and not (isinstance(raw_blocker_sha, str) and is_valid_sha(raw_blocker_sha.lower())):
+			raise ValueError("head_sha must be a 40-hex commit SHA for release_blocker reports")
+		if _release_blocker_age(payload.get("blocker_age_secs")) is None and payload.get("blocker_age_secs") is not None:
+			raise ValueError("blocker_age_secs must be a non-negative integer")
+		raw_blocker_refs = payload.get("run_refs")
+		if raw_blocker_refs is not None and (not isinstance(raw_blocker_refs, list) or len(raw_blocker_refs) > MAX_RUN_REFS):
+			raise ValueError(f"release_blocker reports carry at most {MAX_RUN_REFS} run references")
+		issue_number = None
+		label = None
+		failure_reason = RELEASE_BLOCKER_FAILURE_REASON
+		failure_streak = 1
+		failure_fingerprint = None
 	elif kind == "validation_failure":
 		extra_keys = sorted(key for key in payload if key not in VALIDATION_FAILURE_PAYLOAD_KEYS)
 		if extra_keys:
@@ -2560,6 +2748,25 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 			"reporter_run": _engine_reporter_run(payload.get("reporter_run")),
 			# At most one valid pool reason line survives (issue #8406).
 			"failure_evidence": _filter_engine_pool_reason_lines(normalized["failure_evidence"])})
+	if kind == "release_blocker":
+		blocker_reason = payload["blocker_reason"]
+		normalized.update({
+			"issue_title": f"Release blocker: {blocker_reason} on {head_branch}",
+			"issue_url": None,
+			"labels": [],
+			"source_gen": None,
+			"source_root": None,
+			"issue_excerpt": "",
+			"comments_excerpt": "",
+			"conclusion": None,
+			"failure_evidence": "",
+			"blocker_reason": blocker_reason,
+			# Producer-written text: sanitised, cut and redacted here; the
+			# issue body and the prompt fence it as UNTRUSTED.
+			"blocker_evidence": redact_secrets(sanitize_text(payload.get("blocker_evidence"), BLOCKER_EVIDENCE_LIMIT)),
+			"blocker_age_secs": _release_blocker_age(payload.get("blocker_age_secs")),
+			"reporter_run": _engine_reporter_run(payload.get("reporter_run")),
+		})
 	if kind == "synced_security_finding":
 		# Only validated fields: no title, excerpt, label, branch or conclusion
 		# text from the report reaches the public issue (Q245).
@@ -2697,6 +2904,9 @@ def skip_reason(
 	):
 		return HOST_ONLY_CONFLICT_SKIP_REASON
 	repo = payload.get("source_repo")
+	# Release-health blockers come only from this repository's own producers.
+	if payload.get("source_kind") == "release_blocker" and repo != self_repo:
+		return RELEASE_BLOCKER_FOREIGN_REPO_SKIP_REASON
 	if repo != self_repo and repo not in set(registered_repos):
 		return "unregistered_source_repo"
 	title = payload.get("issue_title") or ""
@@ -3287,6 +3497,122 @@ def fingerprint(workflow_name: str, failing_step: str, signature: str) -> str:
 		]
 	)
 	return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Phase failure-fingerprint marker (stuck-states P3a, producer side)
+# ---------------------------------------------------------------------------
+
+# The plan and clarify "Comment on issue failure" steps append one marker to
+# the failure comment they already post; the poller's failure-signature
+# breaker (scripts/orchestrate_lib.py, evaluate_failure_fingerprint_breaker)
+# trips once the same (phase, fp) repeats. orchestrate_lib.py is not staged
+# for plan or clarify, so its regex is copied here verbatim; a test pins the
+# two patterns byte for byte.
+PHASE_FAILURE_FINGERPRINT_PHASES = ("plan", "clarify")
+PHASE_FAILURE_FINGERPRINT_MARKER_RE = re.compile(
+	r"<!-- AI_FAILURE_FINGERPRINT_V1 phase=([a-z][a-z0-9-]{0,31}) fp=([0-9a-f]{12}) run=([1-9][0-9]{0,19}) -->"
+)
+PHASE_FAILURE_FINGERPRINT_NO_ERROR = "no-error-line"
+_PHASE_FAILURE_FINGERPRINT_RUN_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
+
+
+def _phase_failure_failed_step(jobs: Any, runner_name: Any) -> str:
+	"""Name of the first failed step of the job running on ``runner_name``, or "".
+
+	Same selection as review_autofix_step_assemble_failure_evidence.sh: the
+	first job whose runner_name matches, then its first step with
+	conclusion == "failure". A ``continue-on-error`` step reports
+	conclusion "success", so it is never picked here.
+	"""
+	if not isinstance(jobs, dict) or not isinstance(runner_name, str) or not runner_name:
+		return ""
+	job_list = jobs.get("jobs")
+	if not isinstance(job_list, list):
+		return ""
+	for job in job_list:
+		if not isinstance(job, dict) or job.get("runner_name") != runner_name:
+			continue
+		steps = job.get("steps")
+		if not isinstance(steps, list):
+			return ""
+		for step in steps:
+			if isinstance(step, dict) and step.get("conclusion") == "failure":
+				name = step.get("name")
+				return single_line(name, 200) if isinstance(name, str) else ""
+		return ""
+	return ""
+
+
+def _phase_failure_first_error(annotations: Any) -> str:
+	"""Normalized first non-generic failure annotation, or "".
+
+	Best effort: the first failure-level annotation may come from an earlier
+	``continue-on-error`` step that printed ``::error::``. That is still
+	deterministic for a repeated failure, which is all the breaker needs.
+	"""
+	if not isinstance(annotations, list):
+		return ""
+	for annotation in annotations:
+		if not isinstance(annotation, dict) or annotation.get("annotation_level") != "failure":
+			continue
+		message = annotation.get("message")
+		if not isinstance(message, str):
+			continue
+		first = next((line.strip() for line in sanitize_text(message).split("\n") if line.strip()), "")
+		if not first or _GENERIC_ERROR_RE.match(first):
+			continue
+		normalized = normalize_error_line(first)
+		if normalized:
+			return normalized
+	return ""
+
+
+def phase_failure_fingerprint(
+	*,
+	phase: Any,
+	run_id: Any,
+	runner_name: Any,
+	jobs: Any,
+	annotations: Any,
+) -> dict[str, Any]:
+	"""Compute the AI_FAILURE_FINGERPRINT_V1 marker for a failed plan/clarify job. No I/O.
+
+	Returns ``{"marker", "fp", "reason", "error_present"}``. ``marker`` is ""
+	when no marker may be emitted (``reason`` says why). The result never
+	carries the step name or the error text, only their hash.
+	"""
+	result: dict[str, Any] = {"marker": "", "fp": "", "reason": "", "error_present": False}
+	if not isinstance(phase, str) or phase not in PHASE_FAILURE_FINGERPRINT_PHASES:
+		result["reason"] = "invalid_phase"
+		return result
+	run_text = run_id if isinstance(run_id, str) else (str(run_id) if isinstance(run_id, int) and not isinstance(run_id, bool) else "")
+	if not _PHASE_FAILURE_FINGERPRINT_RUN_ID_RE.match(run_text):
+		result["reason"] = "invalid_run_id"
+		return result
+	step_name = _phase_failure_failed_step(jobs, runner_name)
+	if not step_name:
+		# Unknown step: no marker, so the legacy stall ladder keeps running.
+		result["reason"] = "step_unknown"
+		return result
+	error_line = _phase_failure_first_error(annotations)
+	result["error_present"] = bool(error_line)
+	material = "|".join(
+		[
+			phase,
+			step_name.lower(),
+			(error_line or PHASE_FAILURE_FINGERPRINT_NO_ERROR)[:SIGNATURE_CHAR_LIMIT],
+		]
+	)
+	fp = hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
+	marker = f"<!-- AI_FAILURE_FINGERPRINT_V1 phase={phase} fp={fp} run={run_text} -->"
+	if not PHASE_FAILURE_FINGERPRINT_MARKER_RE.fullmatch(marker):
+		result["reason"] = "marker_invalid"
+		return result
+	result["marker"] = marker
+	result["fp"] = fp
+	result["reason"] = "ok"
+	return result
 
 
 # ---------------------------------------------------------------------------
@@ -5514,11 +5840,36 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 		reporter_run = _engine_reporter_run(payload.get("reporter_run"))
 		if reporter_run:
 			lines.append(f"- **Reporting run:** https://github.com/{payload['source_repo']}/actions/runs/{reporter_run['run_id']}/attempts/{reporter_run['run_attempt']}")
-	if payload.get("workflow_name"):
-		lines.append(f"- **Failed workflow:** `{neutralize_untrusted_routing(single_line(payload['workflow_name']))[0]}` (conclusion: `{payload.get('conclusion') or 'unknown'}`)")
-	if payload.get("head_branch"):
-		lines.append(f"- **Failed on branch:** `{payload['head_branch']}`")
-	if payload.get("head_sha"):
+	if kind == "release_blocker":
+		lines.append(f"- **Blocker reason:** `{safe_token(payload.get('blocker_reason'), 80) or 'unknown'}`")
+		blocker_age = _release_blocker_age(payload.get("blocker_age_secs"))
+		if blocker_age is not None:
+			lines.append(f"- **Blocked for:** {blocker_age / 3600:.1f} hours")
+		if payload.get("head_sha"):
+			lines.append(f"- **Blocked tip:** `{payload['head_sha']}`")
+		reporter_run = _engine_reporter_run(payload.get("reporter_run"))
+		if reporter_run:
+			lines.append(f"- **Reporting run:** https://github.com/{payload['source_repo']}/actions/runs/{reporter_run['run_id']}/attempts/{reporter_run['run_attempt']}")
+		blocker_evidence = _neutralize_heal_routing_text(sanitize_text(payload.get("blocker_evidence"), BLOCKER_EVIDENCE_LIMIT)).strip()
+		if blocker_evidence:
+			lines.append("- **Evidence (UNTRUSTED):**")
+			lines.append("")
+			lines.append("```")
+			lines.extend(neutralize_untrusted_routing(blocker_evidence)[0].replace("```", "` ` `").splitlines())
+			lines.append("```")
+			lines.append("")
+	if kind == "release_blocker":
+		# No run failed: name the producer and the held-back branch instead.
+		if payload.get("workflow_name"):
+			lines.append(f"- **Reporting workflow:** `{neutralize_untrusted_routing(single_line(payload['workflow_name']))[0]}`")
+		if payload.get("head_branch"):
+			lines.append(f"- **Blocked branch:** `{payload['head_branch']}`")
+	else:
+		if payload.get("workflow_name"):
+			lines.append(f"- **Failed workflow:** `{neutralize_untrusted_routing(single_line(payload['workflow_name']))[0]}` (conclusion: `{payload.get('conclusion') or 'unknown'}`)")
+		if payload.get("head_branch"):
+			lines.append(f"- **Failed on branch:** `{payload['head_branch']}`")
+	if payload.get("head_sha") and kind != "release_blocker":
 		lines.append(f"- **Head SHA:** `{payload['head_sha']}`")
 	if payload.get("wrapper_sha"):
 		lines.append(f"- **Consumer wrapper pin (coding-workflows release SHA):** `{payload['wrapper_sha']}`")
@@ -5544,6 +5895,8 @@ def compose_issue_title(payload: dict[str, Any], *, workflow_name: str | None) -
 		return f"Workflow heal: {name or 'review/autofix'} failed {streak}x for {target} ({payload.get('failure_reason')})"
 	if payload.get("source_kind") == "validation_failure":
 		return _validation_failure_title(payload.get("validation_stage"), payload.get("validation_reason"))
+	if payload.get("source_kind") == "release_blocker":
+		return f"Release blocker: {safe_token(payload.get('blocker_reason'), 80) or 'unknown'} on {payload.get('head_branch') or 'unknown branch'} ({name or 'release workflow'})"
 	if payload.get("source_kind") == "engine_fallback":
 		return f"Workflow heal: AI engine fallback refused for {payload.get('engine_role')} ({payload.get('engine_reason')})"
 	if payload.get("source_kind") == "phase_failure":
@@ -5640,6 +5993,12 @@ def compose_issue_body(
 				"source, so this issue was filed automatically for the clarify -> plan -> implement -> "
 				"review pipeline to fix it here."
 			)
+		elif payload.get("source_kind") == "release_blocker":
+			intro = (
+				"No workflow run failed. A release-health condition has held back a release or promotion "
+				f"on `{payload.get('head_branch') or 'unknown'}` and has persisted; it is described below. This issue "
+				"was filed automatically for the clarify -> plan -> implement -> review pipeline to remove the cause."
+			)
 		elif payload.get("source_kind") == "phase_failure":
 			intro = (
 				"A clarify / plan / implement run failed on an issue. The diagnosis below attributes it to "
@@ -5721,13 +6080,69 @@ def compose_issue_body(
 	return body
 
 
-def compose_occurrence_comment(payload: dict[str, Any], *, intake_run_url: str) -> str:
-	lines = [f"<!-- {MARKER_PREFIX}occurrence -->", "Another occurrence of this failure was reported:", ""]
+def compose_occurrence_comment(payload: dict[str, Any], *, intake_run_url: str, now: datetime | None = None) -> str:
+	headline = "The release blocker was reported again:" if payload.get("source_kind") == "release_blocker" else "Another occurrence of this failure was reported:"
+	lines = [f"<!-- {MARKER_PREFIX}occurrence -->", headline, ""]
 	lines.extend(_context_lines(payload, run_summaries=[]))
 	for ref in payload.get("run_refs") or []:
 		lines.append(f"- **Failed run:** {ref['url']}")
 	lines.append(f"- **Heal intake run:** {intake_run_url}")
+	# Last line, never the first: _recovery_occurrence_runs compares lines[0]
+	# with the bare occurrence marker. occurrence_throttled reads it back and
+	# counts only release_blocker markers, so another kind's occurrence on a
+	# shared heal issue (a gate failure's workflow_run) never throttles a blocker.
+	kind = safe_token(payload.get("source_kind"), 40) or "unknown"
+	lines.append(f"<!-- {MARKER_PREFIX}occurrence_at={_iso(now or _utc_now())} kind={kind} -->")
 	return "\n".join(lines) + "\n"
+
+
+_OCCURRENCE_AT_RE = re.compile(r"^<!-- " + re.escape(MARKER_PREFIX) + r"occurrence_at=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z) kind=([a-z_]{1,40}) -->$")
+# compose_issue_title's prefix for a release_blocker heal issue.
+_RELEASE_BLOCKER_TITLE_PREFIX = "Release blocker: "
+
+
+def occurrence_throttled(comments: Iterable[Any], *, now: datetime, throttle_secs: int, trusted_login: str, issue: Any = None) -> dict[str, Any]:
+	"""Whether a release_blocker duplicate was already recorded recently.
+
+	Only an occurrence comment written by ``trusted_login`` (the pipeline
+	account) counts, and only through the ``occurrence_at`` marker on its last
+	line, so neither another commenter nor evidence text quoted inside the
+	comment can silence an alert. The newest such marker younger than
+	``throttle_secs`` throttles. No trusted login, no marker, or an unparsable
+	marker means not throttled (fails open towards visibility). Only markers
+	with ``kind=release_blocker`` count.
+
+	``issue`` (optional, an entry of the intake's heal issue list with
+	``author``, ``title`` and ``created_at``) opens the window when the heal
+	issue itself is a release_blocker issue the pipeline account filed: its
+	"filed" WARNING already reached a person, so the next tick's repeat waits.
+	Returns ``{"throttled", "age_secs"}`` (``age_secs`` None without a marker).
+	"""
+	login = trusted_login.strip().casefold() if isinstance(trusted_login, str) else ""
+	newest: datetime | None = None
+	if login and isinstance(issue, dict) and str(issue.get("author") or "").strip().casefold() == login \
+		and str(issue.get("title") or "").startswith(_RELEASE_BLOCKER_TITLE_PREFIX):
+		created = _parse_iso(issue.get("created_at"))
+		if created is not None and created <= now + timedelta(seconds=ENGINE_REPORTER_RUN_CLOCK_SKEW_SECONDS):
+			newest = created
+	if login:
+		for comment in comments or []:
+			text = comment.get("body") if isinstance(comment, dict) else None
+			if not isinstance(text, str) or _comment_author_login(comment).casefold() != login:
+				continue
+			lines = [line.strip() for line in text.strip().splitlines()]
+			if not lines or lines[0] != f"<!-- {MARKER_PREFIX}occurrence -->":
+				continue
+			match = _OCCURRENCE_AT_RE.match(lines[-1])
+			stamp = _parse_iso(match.group(1)) if match and match.group(2) == "release_blocker" else None
+			if stamp is None or stamp > now + timedelta(seconds=ENGINE_REPORTER_RUN_CLOCK_SKEW_SECONDS):
+				continue
+			if newest is None or stamp > newest:
+				newest = stamp
+	if newest is None:
+		return {"throttled": False, "age_secs": None}
+	age = max(0, int((now - newest).total_seconds()))
+	return {"throttled": age < max(1, int(throttle_secs)), "age_secs": age}
 
 
 # ---------------------------------------------------------------------------
@@ -6919,6 +7334,53 @@ def _cmd_verify_engine_reporter_run(args: argparse.Namespace) -> int:
 	return 0 if result["ok"] else 1
 
 
+def _cmd_build_blocker_payload(args: argparse.Namespace) -> int:
+	evidence = _read_bounded_text(args.evidence_file) if args.evidence_file else ""
+	reporter_run = {"run_id": args.reporter_run_id, "run_attempt": args.reporter_run_attempt or "1"} if args.reporter_run_id else None
+	payload = build_blocker_payload(
+		repo=args.repo,
+		workflow_name=args.workflow_name,
+		reason=args.reason,
+		evidence=evidence,
+		age_secs=args.age_secs or None,
+		head_branch=args.head_branch,
+		head_sha=args.head_sha or None,
+		run_refs=args.run_id or [],
+		reporter_run=reporter_run,
+		reporter_run_url=args.reporter_run_url or None,
+	)
+	validate_payload(payload)
+	_write_json(payload)
+	return 0
+
+
+def _cmd_verify_release_blocker_reporter_run(args: argparse.Namespace) -> int:
+	payload = _load_json_file(args.payload_json)
+	try:
+		run = _load_json_file(args.run_json) if args.run_json else {}
+	except (OSError, ValueError):
+		run = {}
+	result = verify_release_blocker_reporter_run(payload, run, max_age=max(1, int(args.max_age)))
+	_write_json(result)
+	return 0 if result["ok"] else 1
+
+
+def _cmd_occurrence_throttle(args: argparse.Namespace) -> int:
+	try:
+		comments = _load_json_file(args.comments_json)
+	except (OSError, ValueError):
+		comments = []
+	issue: Any = None
+	if args.issue_json:
+		try:
+			issue = _load_json_file(args.issue_json)
+		except (OSError, ValueError):
+			issue = None
+	throttle = int(args.throttle_secs) if re.fullmatch(r"[0-9]{1,10}", str(args.throttle_secs or "")) and int(args.throttle_secs) > 0 else DEFAULT_OCCURRENCE_THROTTLE_SECONDS
+	_write_json(occurrence_throttled(comments if isinstance(comments, list) else [], now=_utc_now(), throttle_secs=throttle, trusted_login=args.trusted_login or "", issue=issue))
+	return 0
+
+
 def _cmd_engine_fallback_fingerprint(args: argparse.Namespace) -> int:
 	if not _ENGINE_ROLE_RE.match(args.role) or not _ENGINE_REASON_RE.match(args.reason):
 		raise ValueError("invalid engine role or reason")
@@ -7030,6 +7492,47 @@ def _cmd_classify_pipeline_ownership(args: argparse.Namespace) -> int:
 	sys.stdout.write(ownership + "\n")
 	for path in files:
 		sys.stdout.write(path + "\n")
+	return 0
+
+
+def _cmd_phase_failure_fingerprint(args: argparse.Namespace) -> int:
+	"""Print marker= / fp= / error_present= / reason= lines; always exits 0 (fail open)."""
+	jobs: Any = None
+	reason = ""
+	try:
+		jobs = _load_json_file(args.jobs_json)
+	except (OSError, ValueError):
+		reason = "jobs_unavailable"
+	annotations: Any = []
+	if args.annotations_json and not reason:
+		# The workflow step deletes this file when the annotations fetch fails
+		# or the job id is unknown. Emitting a phase+step-only marker then would
+		# merge distinct failures into one fingerprint and could trip the
+		# breaker, so a missing or unusable file posts no marker (fail open).
+		try:
+			annotations = _load_json_file(args.annotations_json)
+		except (OSError, ValueError):
+			annotations = None
+		if not isinstance(annotations, list):
+			# No annotations file is written when the job lookup found no job,
+			# so name the real cause rather than an annotations outage.
+			reason = "annotations_unavailable" if _phase_failure_failed_step(jobs, args.runner_name) else "step_unknown"
+	if reason:
+		result = {"marker": "", "fp": "", "reason": reason, "error_present": False}
+	else:
+		result = phase_failure_fingerprint(
+			phase=args.phase,
+			run_id=args.run_id,
+			runner_name=args.runner_name,
+			jobs=jobs,
+			annotations=annotations,
+		)
+	sys.stdout.write(
+		f"marker={result['marker']}\n"
+		f"fp={result['fp']}\n"
+		f"error_present={1 if result['error_present'] else 0}\n"
+		f"reason={result['reason']}\n"
+	)
 	return 0
 
 
@@ -8152,6 +8655,33 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--max-age", default=str(DEFAULT_REPORT_MAX_AGE_SECONDS), help="max seconds since a finished run ended")
 	p.set_defaults(func=_cmd_verify_engine_reporter_run)
 
+	p = sub.add_parser("build-blocker-payload", help="Build the payload for a release-health blocker (release_blocker)")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--workflow-name", required=True, help="display name of the producing workflow run")
+	p.add_argument("--reason", required=True, help="blocker reason token (^[a-z_:]{1,80}$)")
+	p.add_argument("--evidence-file", default="", help="file with the producer's evidence lines")
+	p.add_argument("--age-secs", default="", help="how long the condition has persisted, in seconds")
+	p.add_argument("--head-branch", required=True, choices=RELEASE_BLOCKER_BRANCHES)
+	p.add_argument("--head-sha", default="")
+	p.add_argument("--run-id", action="append", default=[], help="a failed gate run in --repo (repeatable)")
+	p.add_argument("--reporter-run-id", default="", help="GITHUB_RUN_ID of the producing run")
+	p.add_argument("--reporter-run-attempt", default="", help="GITHUB_RUN_ATTEMPT of the producing run (default 1)")
+	p.add_argument("--reporter-run-url", default="")
+	p.set_defaults(func=_cmd_build_blocker_payload)
+
+	p = sub.add_parser("verify-release-blocker-reporter-run", help="Bind a release_blocker report's reporter_run to the fetched run object; exit 1 when it does not bind")
+	p.add_argument("--payload-json", required=True, help="the validated payload")
+	p.add_argument("--run-json", default="", help="GET repos/<source_repo>/actions/runs/<run_id> response")
+	p.add_argument("--max-age", default=str(DEFAULT_REPORT_MAX_AGE_SECONDS), help="max seconds since a finished run ended")
+	p.set_defaults(func=_cmd_verify_release_blocker_reporter_run)
+
+	p = sub.add_parser("occurrence-throttle", help="Print {throttled, age_secs} for a release_blocker duplicate from the heal issue's comments")
+	p.add_argument("--comments-json", required=True, help="issue comments (REST list)")
+	p.add_argument("--throttle-secs", default=str(DEFAULT_OCCURRENCE_THROTTLE_SECONDS))
+	p.add_argument("--trusted-login", default="", help="pipeline account; only its markers count")
+	p.add_argument("--issue-json", default="", help="the duplicate heal issue's list entry (author, title, created_at)")
+	p.set_defaults(func=_cmd_occurrence_throttle)
+
 	p = sub.add_parser("engine-fallback-fingerprint", help="Print the dedup fingerprint of a refused AI engine fallback (role, reason)")
 	p.add_argument("--role", required=True)
 	p.add_argument("--reason", required=True)
@@ -8288,6 +8818,14 @@ def build_parser() -> argparse.ArgumentParser:
 	p = sub.add_parser("classify-pipeline-ownership", help="Print pr / none, then the pipeline files the PR changes, for a failure that names no file")
 	p.add_argument("--payload-json", required=True)
 	p.set_defaults(func=_cmd_classify_pipeline_ownership)
+
+	p = sub.add_parser("phase-failure-fingerprint", help="Print marker= / fp= / error_present= / reason= for a failed plan/clarify job (stuck-states P3a); always exits 0")
+	p.add_argument("--phase", required=True, choices=PHASE_FAILURE_FINGERPRINT_PHASES)
+	p.add_argument("--run-id", required=True)
+	p.add_argument("--runner-name", required=True)
+	p.add_argument("--jobs-json", required=True, help="jobs API response of the current run attempt")
+	p.add_argument("--annotations-json", default="", help="check-run annotations of the current job; omitted is []; a supplied file that is missing, unreadable or not a list gives reason=annotations_unavailable (step_unknown when no failed step is found) and no marker")
+	p.set_defaults(func=_cmd_phase_failure_fingerprint)
 
 	p = sub.add_parser("autofix-failure-streak", help="Count trailing review/autofix failure comments on a PR")
 	p.add_argument("--comments-json", required=True)

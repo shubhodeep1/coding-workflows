@@ -289,10 +289,12 @@ esac
 			prompt = root / "prompt"
 			prompt.write_text("diagnose\n", encoding="utf-8")
 			env = os.environ.copy()
-			for name in ("BASH_ENV", "ENV", "CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS"):
+			for name in ("BASH_ENV", "ENV", "CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS", "CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED"):
 				env.pop(name, None)
 			env.update({
 				"CLARIFY_SOURCE_ROOT": str(checkout),
+				# Legacy roots/suffix filter; the all-text variant is in tests/test_clarify_isolated_run.py.
+				"CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED": "false",
 				"MODEL_EDITOR": "openai/gpt-6-sol", "MODEL_REASONING_EFFORT": "high",
 				"OPENROUTER_API_KEY": "test-key",
 				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",

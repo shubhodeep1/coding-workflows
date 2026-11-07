@@ -48,6 +48,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:needs-human"]="e11d48"
 	["ai:claude-capacity-wait"]="fbca04"
 	["ai:blocked"]="b60205"
+	["ai:waiting-on-dependency"]="fbca04"
 	["ai:merged"]="5319e7"
 	["ai:review-blocked"]="e11d48"
 	["ai:resolver-escalated"]="b60205"
@@ -115,6 +116,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:needs-human"]="Escalated for human intervention; autonomous stall recovery is paused"
 	["ai:claude-capacity-wait"]="Claude pool at capacity; work is waiting for the hourly resume pass"
 	["ai:blocked"]="Orchestrator auto-answer loop blocked pending human intervention"
+	["ai:waiting-on-dependency"]="Waiting on a PR, issue or release dependency; the poller resumes it when the dependency lands"
 	["ai:merged"]="Linked PR merged"
 	["ai:review-blocked"]="PR review/autofix could not resolve all issues — needs human intervention"
 	["ai:resolver-escalated"]="Integration conflict resolver hit the escape threshold; redispatch waits for a new PR head"
@@ -154,7 +156,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:verify-pending"]="Merged; waiting for the check after merge"
 )
 
-_AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
+_AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:waiting-on-dependency","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
 
 # Process-local cache of labels confirmed to exist, keyed "<repo>|<label>".
 # Holds only confirmed outcomes (create succeeded, or GitHub said the label

@@ -87,17 +87,20 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	assert 'TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"' in PLAN_RUNNER.read_text(encoding="utf-8")
 	# Heal issues (#6463) collect verified evidence and switch the runner to
 	# the isolated planner before it starts; ordinary issues run it unchanged.
+	# plan.yml runs the support bundle copies (stuck-states plan P2a); the
+	# `:-scripts` default keeps the kill-switch path on the checkout's scripts/.
+	support = "${SUPPORT_SCRIPTS_DIR:-scripts}"
 	assert step.split("        run: |\n", 1)[1] == (
-		'          if ! heal_route="$(python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}")"; then\n'
+		f'          if ! heal_route="$(python3 "{support}/workflow_failure_heal.py" heal-route --issue-json "${{ISSUE_META_FILE}}")"; then\n'
 		"            echo '::error::Heal route classification failed' >&2\n"
 		'            exit 1\n'
 		'          fi\n'
 		'          if [ "${heal_route}" = true ]; then\n'
 		"            echo 'HEAL_ROUTE=true' >> \"${GITHUB_ENV}\"\n"
-		'            HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md" bash scripts/workflow_failure_heal_evidence.sh\n'
+		f'            HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${{RUNTIME_DIR}}/heal_evidence.md" WORKFLOW_HEAL_PY="{support}/workflow_failure_heal.py" bash "{support}/workflow_failure_heal_evidence.sh"\n'
 		'            export HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md"\n'
 		"          fi\n"
-		"          bash scripts/run_plan_codex.sh\n"
+		f'          bash "{support}/run_plan_codex.sh"\n'
 	)
 	assert len(step.encode("utf-8")) < 2_000
 

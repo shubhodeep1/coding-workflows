@@ -630,7 +630,12 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 			assert '--github-env "${GITHUB_ENV}"' in workflow_text, workflow_path
 
 	assert 'python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/load_workflow_overlay.py"' in (REPO_ROOT / ".github" / "workflows" / "clarify.yml").read_text(encoding="utf-8")
-	assert 'python3 scripts/load_workflow_overlay.py' in (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
+	# plan.yml (stuck-states plan P2a) runs the loader from the verified
+	# support checkout in unified mode and from scripts/ under the kill switch.
+	plan_workflow_text = (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
+	assert 'python3 "${support_overlay_loader}"' in plan_workflow_text
+	assert 'support_overlay_loader=".codex-workflow-src/scripts/load_workflow_overlay.py"' in plan_workflow_text
+	assert 'support_overlay_loader="scripts/load_workflow_overlay.py"' in plan_workflow_text
 	# Isolated mode (issue #7159): execute trusted runner-temp copies, not in-tree copies.
 	assert 'python3 -I -B "${RUNTIME_DIR}/host_python/load_workflow_overlay.py"' in (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
 	review_autofix_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")

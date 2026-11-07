@@ -41,9 +41,13 @@ SOURCE_MARKER_PREFIX="<!-- ai:plan-split:v1 issue="
 RELEASE_MARKER_PREFIX="<!-- ai:plan-split-released:v1 issue="
 TRACKING_MARKER_PREFIX="<!-- ai:plan-split-source:v1 issue="
 
-if [ -f scripts/gh_helpers.sh ]; then
+# Sibling helpers come from this script's own directory: the verified support
+# bundle (SUPPORT_SCRIPTS_DIR) in unified mode, the checkout's scripts/ under
+# the kill switch (docs/plans/remove-unattended-pipeline-stuck-states-plan.md P2a).
+PLAN_SPLIT_SUPPORT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${PLAN_SPLIT_SUPPORT_DIR}/gh_helpers.sh" ]; then
 	# shellcheck disable=SC1091
-	source scripts/gh_helpers.sh >/dev/null 2>&1 || true
+	source "${PLAN_SPLIT_SUPPORT_DIR}/gh_helpers.sh" >/dev/null 2>&1 || true
 fi
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
@@ -151,13 +155,13 @@ The plan for #${ISSUE_NUMBER} lists ${path_count} files, more than one pipeline 
 EOF
 )"
 
-if [ -f scripts/label_helpers.sh ]; then
+if [ -f "${PLAN_SPLIT_SUPPORT_DIR}/label_helpers.sh" ]; then
 	# shellcheck disable=SC1091
-	source scripts/label_helpers.sh >/dev/null 2>&1 || true
+	source "${PLAN_SPLIT_SUPPORT_DIR}/label_helpers.sh" >/dev/null 2>&1 || true
 fi
-if [ -f scripts/tg_helpers.sh ]; then
+if [ -f "${PLAN_SPLIT_SUPPORT_DIR}/tg_helpers.sh" ]; then
 	# shellcheck disable=SC1091
-	source scripts/tg_helpers.sh >/dev/null 2>&1 || true
+	source "${PLAN_SPLIT_SUPPORT_DIR}/tg_helpers.sh" >/dev/null 2>&1 || true
 fi
 split_notify()
 {

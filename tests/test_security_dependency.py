@@ -158,3 +158,68 @@ def test_isolated_helper_ignores_poisoned_branch_modules(tmp_path: Path):
 	assert isolated.returncode == 0, isolated.stderr
 	assert json.loads(isolated.stdout)["status"] == "none"
 	assert not sentinel.exists()
+
+
+def test_unmerged_predecessor_releases_unless_switched_off(monkeypatch):
+	"""Stuck-states P8c: a predecessor closed without ai:merged is ready by default."""
+	target = _issue(["ai:security"], "<!-- ai:security-finding:abc -->\n- Depends on: #8")
+	closed = {"number": 8, "repository_url": target["repository_url"], "state": "closed", "labels": []}
+	monkeypatch.delenv("DEPENDENCY_WAIT_RESUME_ENABLED", raising=False)
+	assert dep.security_dependency_verdict(target, closed) == {"status": "ready", "reason": "dependency closed without ai:merged", "depends_on": 8}
+	for on in ("true", "1", "on", "garbage"):
+		monkeypatch.setenv("DEPENDENCY_WAIT_RESUME_ENABLED", on)
+		assert dep.security_dependency_verdict(target, closed)["status"] == "ready", on
+	for off in ("false", "FALSE", "0", "no", " off "):
+		monkeypatch.setenv("DEPENDENCY_WAIT_RESUME_ENABLED", off)
+		assert dep.security_dependency_verdict(target, closed) == {"status": "held", "reason": "dependency closed without ai:merged", "depends_on": 8}, off
+	monkeypatch.delenv("DEPENDENCY_WAIT_RESUME_ENABLED", raising=False)
+	# Open, unreadable and mismatched predecessors stay held with the switch on.
+	assert dep.security_dependency_verdict(target, {**closed, "state": "open"})["status"] == "held"
+	assert dep.security_dependency_verdict(target, {**closed, "labels": None})["status"] == "held"
+	assert dep.security_dependency_verdict(target, {**closed, "state": "weird"})["status"] == "held"
+	assert dep.security_dependency_verdict(target, {**closed, "repository_url": "https://api.github.com/repos/o/x"})["status"] == "held"
+	assert dep.security_dependency_verdict(target, {**closed, "pull_request": {}})["status"] == "held"
+	assert dep.security_dependency_verdict({**target, "labels": []}, closed)["status"] == "held"
+
+
+def test_isolated_cli_honours_the_resume_switch(tmp_path: Path):
+	"""python3 -I keeps os.environ, so the gates' env row reaches the helper."""
+	issue_json = tmp_path / "issue.json"
+	issue_json.write_text(json.dumps(_issue(["ai:security"], "<!-- ai:security-finding:abc -->\n- Depends on: #8")), encoding="utf-8")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text(
+		"#!/bin/sh\n"
+		f"printf '%s' '{json.dumps({'number': 8, 'repository_url': f'https://api.github.com/repos/{REPO}', 'state': 'closed', 'labels': []})}'\n",
+		encoding="utf-8",
+	)
+	gh.chmod(0o755)
+	args = [sys.executable, "-I", "-B", str(SCRIPT), "security-dependency", "--issue-json", str(issue_json), "--repo", REPO, "--issue-number", "9"]
+	for value, expected in ((None, "ready"), ("true", "ready"), ("false", "held")):
+		env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PATH=f"{bin_dir}:{os.environ['PATH']}")
+		env.pop("DEPENDENCY_WAIT_RESUME_ENABLED", None)
+		if value is not None:
+			env["DEPENDENCY_WAIT_RESUME_ENABLED"] = value
+		out = subprocess.run(args, capture_output=True, text=True, env=env, check=False)
+		assert out.returncode == 0, out.stderr
+		assert json.loads(out.stdout) == {"status": expected, "reason": "dependency closed without ai:merged", "depends_on": 8}, value
+
+
+def test_resume_switch_reaches_every_gate_and_the_poller():
+	clarify = (ROOT / ".github/workflows/clarify.yml").read_text(encoding="utf-8")
+	implement = (ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
+	poller = (ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	row = "DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}"
+	for text, step in (
+		(clarify, "- name: Decide clarify route"),
+		(implement, "- name: Validate approval phase label"),
+		(implement, "- name: Recheck security dependency before edits"),
+	):
+		start = text.index(step)
+		body = text[start:text.index("\n      - name:", start + len(step))]
+		assert row in body, step
+		assert "security_dependency.py\" security-dependency" in body, step
+	assert 'export DEPENDENCY_WAIT_RESUME_ENABLED="${_security_dependency_resume_enabled}"' in poller
+	assert "<!-- AI_SECURITY_DEPENDENCY_RELEASED_V1 reason=predecessor_unmerged issue=${issue_num} depends_on=${_security_dependency_depends_on} -->" in poller
+	assert "<!-- ai:needs-human-latch reason=security_dependency_wait depends_on=${depends_on} held_since=${_sdh_held} -->" in poller

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source scripts/gh_helpers.sh 2>/dev/null || true
+# Sibling helpers come from this script's own directory: the verified support
+# bundle (SUPPORT_SCRIPTS_DIR) in unified mode, the checkout's scripts/ under
+# the kill switch (docs/plans/remove-unattended-pipeline-stuck-states-plan.md
+# P2a). Prompt templates stay relative to the checkout working directory.
+RUN_PLAN_CODEX_SUPPORT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${RUN_PLAN_CODEX_SUPPORT_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"
 
@@ -288,9 +293,9 @@ EOF
   # Inject the configurable tool call budget before the static heredoc
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
   echo
-  bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+  bash "${RUN_PLAN_CODEX_SUPPORT_DIR}/render_prompt.sh" "${PROMPT_TEMPLATE_FILE}"
   echo
-  REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash scripts/render_prompt.sh prompts/header.txt
+  REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash "${RUN_PLAN_CODEX_SUPPORT_DIR}/render_prompt.sh" prompts/header.txt
   echo
   echo "=== AI MEMORY CONTEXT ==="
   cat "${RUNTIME_DIR}/memory_context.txt"
@@ -323,7 +328,7 @@ if [ "${HEAL_ROUTE:-false}" = true ]; then
 	heal_cf_prompt="prompts/mode-plan-heal-counterfactual.txt"
 	heal_cf_rendered=""
 	if [ -f "${heal_cf_prompt}" ] && [ ! -L "${heal_cf_prompt}" ] \
-		&& heal_cf_rendered="$(bash scripts/render_prompt.sh "${heal_cf_prompt}")" && [ -n "${heal_cf_rendered}" ]; then
+		&& heal_cf_rendered="$(bash "${RUN_PLAN_CODEX_SUPPORT_DIR}/render_prompt.sh" "${heal_cf_prompt}")" && [ -n "${heal_cf_rendered}" ]; then
 		{
 			echo
 			printf '%s\n' "${heal_cf_rendered}"
@@ -446,7 +451,7 @@ fi
 # holds GH_TOKEN, the OpenRouter key or the checkout's .git. Model traffic,
 # including the provider-hosted web_search tool, goes through the host-side
 # broker. Isolation failures fail the attempt; Codex never runs on the host.
-CODEX_ISOLATED_EXEC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolated_exec.sh"
+CODEX_ISOLATED_EXEC="${RUN_PLAN_CODEX_SUPPORT_DIR}/codex_isolated_exec.sh"
 
 # Claude engine (replace-claude-sessions plan Phase 5a). PLAN_ENGINE comes
 # from the workflow's "Resolve AI engine" step; anything but `claude` runs the
@@ -454,9 +459,9 @@ CODEX_ISOLATED_EXEC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolate
 # as AI_ENGINE_FALLBACK) the attempt and the rest run codex (plan D1).
 PLAN_ENGINE="${PLAN_ENGINE:-codex}"
 if [ "${PLAN_ENGINE}" = "claude" ]; then
-  if [ -f scripts/ai_engine.sh ]; then
+  if [ -f "${RUN_PLAN_CODEX_SUPPORT_DIR}/ai_engine.sh" ]; then
     # shellcheck source=ai_engine.sh
-    source scripts/ai_engine.sh
+    source "${RUN_PLAN_CODEX_SUPPORT_DIR}/ai_engine.sh"
   else
     echo "AI_ENGINE_FALLBACK role=PLAN reason=support_missing" >&2
     PLAN_ENGINE="codex"
@@ -540,11 +545,11 @@ for attempt in $(seq 1 "${max_attempts}"); do
   fi
   plan_rc=0
   if [ "${HEAL_ROUTE:-false}" = true ]; then
-    MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" "${PLAN_ENGINE}" PLAN || plan_rc=$?
+    MODEL_EDITOR="${attempt_model}" bash "${RUN_PLAN_CODEX_SUPPORT_DIR}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" "${PLAN_ENGINE}" PLAN || plan_rc=$?
     if [ "${plan_rc}" -eq 75 ]; then
       PLAN_ENGINE=codex
       plan_engine_name="Codex"
-      MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" codex PLAN || plan_rc=$?
+      MODEL_EDITOR="${attempt_model}" bash "${RUN_PLAN_CODEX_SUPPORT_DIR}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" codex PLAN || plan_rc=$?
     fi
   elif [ "${PLAN_ENGINE}" = "claude" ]; then
     AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \

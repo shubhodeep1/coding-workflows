@@ -109,6 +109,10 @@
       "color": "b60205",
       "description": "Orchestrator auto-answer loop blocked pending human intervention"
     },
+    "ai:waiting-on-dependency": {
+      "color": "fbca04",
+      "description": "Waiting on a PR, issue or release dependency; the poller resumes it when the dependency lands"
+    },
     "ai:merged": {
       "color": "5319e7",
       "description": "Linked PR merged"
@@ -278,6 +282,7 @@
         "ai:done",
         "ai:ready-to-merge",
         "ai:needs-human",
+        "ai:waiting-on-dependency",
         "ai:blocked",
         "ai:review-blocked",
         "ai:implementation-failed",

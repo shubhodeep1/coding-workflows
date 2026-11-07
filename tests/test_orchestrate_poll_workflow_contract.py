@@ -503,6 +503,111 @@ def test_validation_harness_hold_env_is_wired_into_both_poller_steps() -> None:
 	yaml.safe_load(wf)
 
 
+DEPENDENCY_WAIT_ENV_LINES = (
+	"DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}",
+	"DEPENDENCY_WAIT_ESCALATE_DAYS: ${{ vars.DEPENDENCY_WAIT_ESCALATE_DAYS || '7' }}",
+)
+
+
+def test_dependency_wait_env_is_wired_into_both_poller_steps() -> None:
+	"""Refs #8291 (P8c): the security-dependency hold switches reach every full-poller step."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	for step_name in ("Process each tracking issue", STANDALONE_SWEEP_STEP):
+		block = _step_block(wf, step_name)
+		for line in DEPENDENCY_WAIT_ENV_LINES:
+			assert block.count(line) == 1, (step_name, line)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'case "$(printf \'%s\' "${DEPENDENCY_WAIT_RESUME_ENABLED:-true}" | tr \'[:upper:]\' \'[:lower:]\')" in' in poller
+	assert '[[ "${DEPENDENCY_WAIT_ESCALATE_DAYS:-7}" =~ ^[0-9]{1,4}$ ]]' in poller
+	security_dependency = (REPO_ROOT / "scripts" / "security_dependency.py").read_text(encoding="utf-8")
+	assert 'os.environ.get("DEPENDENCY_WAIT_RESUME_ENABLED", "true")' in security_dependency
+	yaml.safe_load(wf)
+
+
+DEPENDENCY_WAIT_RESUME_STEP = "Resume dependency waits"
+
+
+def test_dependency_wait_resume_step_runs_before_tracking_gate() -> None:
+	"""Refs #8291 (P8b): the resume scan runs every tick, fail-open, before the tracking-issue early exit."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	steps = yaml.safe_load(wf)["jobs"]["poll"]["steps"]
+	names = [step.get("name") for step in steps]
+	step = steps[names.index(DEPENDENCY_WAIT_RESUME_STEP)]
+	assert (
+		names.index("Stage gh retry helper")
+		< names.index("Release merge-queued PRs (merge train backstop)")
+		< names.index(DEPENDENCY_WAIT_RESUME_STEP)
+		< names.index("Find active tracking issues")
+	)
+	assert "if" not in step
+	assert step.get("continue-on-error") is True
+	assert step["env"] == {
+		"GH_TOKEN": "${{ secrets.GH_PAT }}",
+		"GITHUB_REPOSITORY": "${{ github.repository }}",
+		"DEPENDENCY_WAIT_RESUME_ENABLED": "${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}",
+		"DEPENDENCY_WAIT_ESCALATE_DAYS": "${{ vars.DEPENDENCY_WAIT_ESCALATE_DAYS || '7' }}",
+	}
+	run = step["run"]
+	assert 'helper=".codex-workflow-src/scripts/dependency_wait_resume.py"' in run
+	assert 'if [ ! -f "${helper}" ] || [ -L "${helper}" ]; then' in run
+	assert "::notice::DEPENDENCY_WAIT_RESUME op=scan outcome=skip reason=helper_missing" in run
+	assert run.index("exit 0") < run.index("python3 -I -B")
+	assert 'PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${helper}" scan --repo "${GITHUB_REPOSITORY}"' in run
+	assert (REPO_ROOT / "scripts" / "dependency_wait_resume.py").is_file()
+
+
+def test_dependency_wait_resume_log_prefix_is_registered() -> None:
+	agents_text = _agents_text_with_fragments()
+	assert "- `DEPENDENCY_WAIT_RESUME`" in agents_text
+	assert "LOG_PREFIX.name=DEPENDENCY_WAIT_RESUME" in agents_text
+
+
+HARNESS_HEAL_AUTO_REVALIDATE_ENV_LINES = (
+	"HARNESS_HEAL_AUTO_REVALIDATE_ENABLED: ${{ vars.HARNESS_HEAL_AUTO_REVALIDATE_ENABLED || 'true' }}",
+)
+
+
+def test_harness_heal_auto_revalidate_env_is_wired_into_both_poller_steps() -> None:
+	"""Refs #8291 (P7b): the auto-revalidate switch reaches every step that runs the full poller."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	for step_name in ("Process each tracking issue", STANDALONE_SWEEP_STEP):
+		block = _step_block(wf, step_name)
+		for line in HARNESS_HEAL_AUTO_REVALIDATE_ENV_LINES:
+			assert line in block, (step_name, line)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'case "$(printf \'%s\' "${HARNESS_HEAL_AUTO_REVALIDATE_ENABLED:-}" | tr \'[:upper:]\' \'[:lower:]\')" in' in poller
+	assert "harness_heal_auto_revalidate() {" in poller
+	yaml.safe_load(wf)
+
+
+def test_harness_heal_auto_revalidate_log_prefix_is_registered() -> None:
+	agents_text = _agents_text_with_fragments()
+	assert "- `HARNESS_HEAL_AUTO_REVALIDATE`" in agents_text
+	assert "LOG_PREFIX.name=HARNESS_HEAL_AUTO_REVALIDATE" in agents_text
+
+
+RELEASE_BLOCKER_POLLER_ENV_LINES = (
+	"RELEASE_BLOCKER_HEAL_ENABLED: ${{ vars.RELEASE_BLOCKER_HEAL_ENABLED || 'true' }}",
+	"RELEASE_BLOCKER_HEAL_PY: scripts/workflow_failure_heal.py",
+)
+
+
+def test_release_blocker_reporter_env_is_wired_into_both_poller_steps() -> None:
+	"""Refs #8291: the poller's release-blocker reporter switches reach every full-poller step."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	for step_name in ("Process each tracking issue", STANDALONE_SWEEP_STEP):
+		block = _step_block(wf, step_name)
+		for line in RELEASE_BLOCKER_POLLER_ENV_LINES:
+			assert line in block, (step_name, line)
+	assert "workflow_failure_heal.py" in wf
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'RELEASE_BLOCKER_HEAL_ENABLED="${RELEASE_BLOCKER_HEAL_ENABLED:-true}"' in poller
+	assert 'RELEASE_BLOCKER_HEAL_PY="${RELEASE_BLOCKER_HEAL_PY:-${ORCH_SCRIPTS_ROOT}/workflow_failure_heal.py}"' in poller
+	assert 'RELEASE_BLOCKER_POLLER_PRODUCER_FILE="internal-orchestrate-poll.yml"' in poller
+	heal = (REPO_ROOT / "scripts" / "workflow_failure_heal.py").read_text(encoding="utf-8")
+	assert '"internal-orchestrate-poll.yml"' in heal
+
+
 def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "worktree_registry.sh" in wf
@@ -702,6 +807,12 @@ def main() -> int:
 	test_standalone_recovery_sweep_runs_without_tracking_issues()
 	test_engine_and_claude_steps_run_on_idle_ticks_when_needed()
 	test_validation_harness_hold_env_is_wired_into_both_poller_steps()
+	test_dependency_wait_env_is_wired_into_both_poller_steps()
+	test_dependency_wait_resume_step_runs_before_tracking_gate()
+	test_dependency_wait_resume_log_prefix_is_registered()
+	test_harness_heal_auto_revalidate_env_is_wired_into_both_poller_steps()
+	test_harness_heal_auto_revalidate_log_prefix_is_registered()
+	test_release_blocker_reporter_env_is_wired_into_both_poller_steps()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	test_find_tracking_step_maps_standalone_recovery_switch()
 	test_standalone_stall_probe_log_prefix_is_registered()

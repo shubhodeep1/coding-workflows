@@ -84,8 +84,44 @@ never auto-releases a parked item.
   operator_step_issue.py needs-human prune --repo OWNER/REPO [--trusted-login LOGIN]
 
 `park` prints `issue`, `url`, `item`, `outcome` (parked|updated|skip),
-`newly_parked`, `entries`, `overflow`. The caller sends the single CRITICAL
-alert when `newly_parked` is true; this module never talks to Telegram.
+`newly_parked`, `entries`, `overflow` and `parking`: the digest entry's
+`parked=` stamp, the literal `overflow` when the item is only in the overflow
+list or dropped count, or null on the disabled path. This module never talks
+to Telegram.
+
+At most one persisted CRITICAL alert attempt per parking (stuck-states P6b,
+Refs #8291). The caller (unblock judge, poller project park) runs, after
+every successful park that returns a `parking`:
+
+  operator_step_issue.py needs-human alert-claim --repo OWNER/REPO --item N
+      --parking STAMP|overflow [--trusted-login LOGIN]
+  operator_step_issue.py needs-human alert-confirm --repo OWNER/REPO --item N
+      --parking STAMP|overflow --comment-id ID --message-id ID
+
+The caller first checks that Telegram can send at CRITICAL (no claim
+otherwise). `alert-claim` reads the item's comments; a claim comment by the
+pipeline login whose last non-empty line is
+`<!-- ai:unblock-park-alert:v1 item=N parked=<STAMP|overflow> state=attempted|confirmed[ message=ID] -->`
+for the same parking (or for `overflow`, which covers a later entry stamp)
+means the attempt was already made: `claimed` false, reason
+`already_attempted`. Otherwise it posts one `state=attempted` claim, re-reads
+the comments, and wins only when its claim is the lowest-id matching trusted
+claim (`lost_race` / `claim_unverified` otherwise). Only a winner sends, once,
+with no retry; a numeric Telegram message id is then recorded in place with
+`alert-confirm` (`state=confirmed message=ID`). Any write or re-read failure
+exits 2 and the caller does not send: a lost page is preferred to a duplicate
+one, and the digest stays the durable notice. The comment's `created_at` is
+the attempt time. The `ai:unblock` prefix keeps the claim out of the unblock
+scan's new-evidence check and out of the judge's round count. Each outcome
+logs `NEEDS_HUMAN_ALERT item= parking= outcome=claimed|skip|confirmed|failed
+reason=` on stderr. The kill switch below makes both a no-op.
+
+Alert API budget (CLAUDE.md §15), per call: alert-claim makes at most one
+identity read (none with --trusted-login), two paginated comment reads on the
+item and one comment POST (one read and no write when already attempted);
+alert-confirm makes one comment PATCH. The judge's run-start comment read is
+minutes stale and the digest listing carries no item comments, so neither can
+answer the claim question.
 `prune` drops entries whose item is no longer open with `ai:needs-human`
 (merged, closed or cleared by a person) and promotes overflow items into
 free slots; whenever it read the digest it prints `items`, the item numbers the
@@ -476,6 +512,14 @@ NEEDS_HUMAN_ENTRY_RE = re.compile(
 )
 NEEDS_HUMAN_OVERFLOW_RE = re.compile(r"^<!-- ai:needs-human:overflow items=([0-9,]*) dropped=([0-9]+) -->$")
 NEEDS_HUMAN_STOP_RE = re.compile(r"^[a-z][a-z-]{0,63}$")
+_NEEDS_HUMAN_PARKING_PATTERN = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z|overflow"
+NEEDS_HUMAN_PARKING_RE = re.compile(rf"^(?:{_NEEDS_HUMAN_PARKING_PATTERN})$")
+NEEDS_HUMAN_ALERT_MARKER_RE = re.compile(
+	rf"^<!-- ai:unblock-park-alert:v1 item=([1-9][0-9]{{0,9}}) parked=({_NEEDS_HUMAN_PARKING_PATTERN}) "
+	r"state=(attempted|confirmed)(?: message=([1-9][0-9]{0,19}))? -->$"
+)
+NEEDS_HUMAN_ALERT_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
+NEEDS_HUMAN_ALERT_TEXT = "Needs-human alert attempt recorded for this parking; the needs-human digest lists this item."
 NEEDS_HUMAN_INTRO = (
 	"Every automated judge round is spent for the items below. They stay open and wait "
 	"for a person to decide. An entry disappears once its item is merged or closed, or "
@@ -630,7 +674,8 @@ def needs_human_park(
 	log_reason = reason_text.split(" ", 1)[0] if reason_text else stop
 	if not needs_human_enabled():
 		_needs_human_log(item, kind, log_reason, "skip")
-		return {"issue": None, "url": "", "item": item, "outcome": "skip", "reason": "disabled", "newly_parked": False}
+		return {"issue": None, "url": "", "item": item, "outcome": "skip", "reason": "disabled", "newly_parked": False,
+			"parking": None}
 	login = _resolve_login(trusted_login)
 	if not item_labeled:
 		# Label first: prune keys on the label, so an entry is never listed without it.
@@ -683,7 +728,7 @@ def _needs_human_park_digest(repo: str, item: int, kind: str, stop: str, reason_
 				continue
 			_needs_human_log(item, kind, log_reason, "parked")
 			return {"issue": number, "url": created.get("html_url", ""), "item": item, "outcome": "parked",
-				"newly_parked": True, "entries": 1, "overflow": 0}
+				"newly_parked": True, "entries": 1, "overflow": 0, "parking": stamp}
 		body = str(digest.get("body") or "")
 		entries, overflow, dropped = parse_digest(body)
 		if newly_parked is None:
@@ -708,8 +753,14 @@ def _needs_human_park_digest(repo: str, item: int, kind: str, stop: str, reason_
 		raise ApiError(f"needs-human digest did not converge after {MAX_UPSERT_ATTEMPTS} attempts")
 	outcome = "parked" if newly_parked else "updated"
 	_needs_human_log(item, kind, log_reason, outcome)
+	# The parking identity comes from the rendered body: an entry the body
+	# limit spilled into overflow is an overflow parking (prune later promotes
+	# it with a fresh stamp, which an `overflow` alert claim still covers).
+	rendered_entries = parse_digest(new_body)[0]
+	parking = rendered_entries[item]["parked"] if item in rendered_entries else "overflow"
 	return {"issue": int(digest["number"]) if digest else None, "url": (digest or {}).get("html_url", ""), "item": item,
-		"outcome": outcome, "newly_parked": bool(newly_parked), "entries": len(entries), "overflow": len(overflow)}
+		"outcome": outcome, "newly_parked": bool(newly_parked), "entries": len(entries), "overflow": len(overflow),
+		"parking": parking}
 
 
 def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | None = None) -> dict:
@@ -798,6 +849,112 @@ def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | No
 		"entries": len(entries), "overflow": len(overflow), "items": sorted(set(entries) | set(overflow))}
 
 
+# --- at most one persisted alert attempt per parking (stuck-states P6b) -------
+
+
+def _needs_human_alert_log(item: object, parking: object, outcome: str, reason: str) -> None:
+	safe_parking = re.sub(r"[^A-Za-z0-9_.:-]", "_", str(parking))[:40] or "none"
+	safe_reason = re.sub(r"[^A-Za-z0-9_.:-]", "_", reason)[:80] or "none"
+	print(f"NEEDS_HUMAN_ALERT item={item} parking={safe_parking} outcome={outcome} reason={safe_reason}", file=sys.stderr)
+
+
+def _validate_alert_args(repo: str, item: object, parking: object) -> None:
+	if not REPO_RE.match(repo or ""):
+		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
+	if not isinstance(item, int) or isinstance(item, bool) or item < 1:
+		raise UsageError("--item must be a positive issue or PR number")
+	if not isinstance(parking, str) or not NEEDS_HUMAN_PARKING_RE.match(parking):
+		raise UsageError(f"--parking must be an ISO UTC stamp (YYYY-MM-DDTHH:MM:SSZ) or 'overflow', got {parking!r}")
+
+
+def render_alert_claim(item: int, parking: str, state: str, message_id: str | None = None) -> str:
+	message = f" message={message_id}" if message_id else ""
+	return f"{NEEDS_HUMAN_ALERT_TEXT}\n\n<!-- ai:unblock-park-alert:v1 item={item} parked={parking} state={state}{message} -->"
+
+
+def alert_claims(comments: object, trusted_login: str, item: int, parking: str) -> list[dict]:
+	"""Trusted claims for this parking, lowest comment id first.
+
+	Only the pipeline login counts, and only when the marker is the last
+	non-empty line with the same item. An `overflow` claim covers every
+	parking of the item (a promoted overflow item gets a fresh stamp)."""
+	found: list[dict] = []
+	for comment in comments if isinstance(comments, list) else []:
+		if not isinstance(comment, dict):
+			continue
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		comment_id = comment.get("id")
+		if (not trusted_login or user.get("login") != trusted_login
+				or not isinstance(comment_id, int) or isinstance(comment_id, bool)):
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").replace("\r\n", "\n").split("\n") if line.strip()]
+		match = NEEDS_HUMAN_ALERT_MARKER_RE.match(lines[-1]) if lines else None
+		if not match or int(match.group(1)) != item:
+			continue
+		if match.group(2) != parking and match.group(2) != "overflow":
+			continue
+		found.append({"id": comment_id, "parked": match.group(2), "state": match.group(3), "message": match.group(4)})
+	return sorted(found, key=lambda claim: claim["id"])
+
+
+def needs_human_alert_claim(repo: str, item: int, parking: str, trusted_login: str | None = None,
+		now: str | None = None) -> dict:
+	_validate_alert_args(repo, item, parking)
+	result: dict = {"item": item, "parking": parking, "claimed": False}
+	if not needs_human_enabled():
+		_needs_human_alert_log(item, parking, "skip", "disabled")
+		return dict(result, reason="disabled")
+	login = _resolve_login(trusted_login)
+	existing = alert_claims(load_entry_comments(repo, item), login, item, parking)
+	if existing:
+		_needs_human_alert_log(item, parking, "skip", "already_attempted")
+		return dict(result, reason="already_attempted", state=existing[0]["state"], comment_id=existing[0]["id"])
+	try:
+		raw = _gh(["api", f"repos/{repo}/issues/{item}/comments", "-f", f"body={render_alert_claim(item, parking, 'attempted')}"])
+		created = json.loads(raw or "{}")
+	except (ApiError, ValueError) as exc:
+		_needs_human_alert_log(item, parking, "failed", "claim_write_failed")
+		raise ApiError(f"needs-human alert claim write failed: {exc}") from exc
+	comment_id = created.get("id") if isinstance(created, dict) else None
+	if not isinstance(comment_id, int) or isinstance(comment_id, bool) or comment_id <= 0:
+		_needs_human_alert_log(item, parking, "failed", "claim_write_failed")
+		raise ApiError("needs-human alert claim write returned no comment id")
+	try:
+		claims = alert_claims(load_entry_comments(repo, item), login, item, parking)
+	except ApiError:
+		_needs_human_alert_log(item, parking, "failed", "claim_reread_failed")
+		raise
+	claim_ids = [claim["id"] for claim in claims]
+	if comment_id not in claim_ids:
+		_needs_human_alert_log(item, parking, "skip", "claim_unverified")
+		return dict(result, reason="claim_unverified", comment_id=comment_id)
+	if claim_ids[0] != comment_id:
+		_needs_human_alert_log(item, parking, "skip", "lost_race")
+		return dict(result, reason="lost_race", comment_id=comment_id)
+	attempted_at = now or (created.get("created_at") if isinstance(created.get("created_at"), str) else "") or _now_iso()
+	_needs_human_alert_log(item, parking, "claimed", "won")
+	return dict(result, claimed=True, comment_id=comment_id, alert_attempted_at=attempted_at)
+
+
+def needs_human_alert_confirm(repo: str, item: int, parking: str, comment_id: str, message_id: str) -> dict:
+	_validate_alert_args(repo, item, parking)
+	for flag, value in (("--comment-id", comment_id), ("--message-id", message_id)):
+		if not isinstance(value, str) or not NEEDS_HUMAN_ALERT_ID_RE.match(value):
+			raise UsageError(f"{flag} must be a positive decimal id of at most 20 digits, got {value!r}")
+	result: dict = {"item": item, "parking": parking, "comment_id": int(comment_id), "confirmed": False}
+	if not needs_human_enabled():
+		_needs_human_alert_log(item, parking, "skip", "disabled")
+		return dict(result, reason="disabled")
+	body = render_alert_claim(item, parking, "confirmed", message_id)
+	try:
+		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/comments/{comment_id}", "-f", f"body={body}"])
+	except ApiError:
+		_needs_human_alert_log(item, parking, "failed", "confirm_write_failed")
+		raise
+	_needs_human_alert_log(item, parking, "confirmed", "sent")
+	return dict(result, confirmed=True, message_id=message_id)
+
+
 def main(argv: list[str] | None = None) -> int:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True)
@@ -826,12 +983,27 @@ def main(argv: list[str] | None = None) -> int:
 	prune_cmd = digest_sub.add_parser("prune")
 	prune_cmd.add_argument("--repo", required=True)
 	prune_cmd.add_argument("--trusted-login", default="")
+	claim_cmd = digest_sub.add_parser("alert-claim")
+	claim_cmd.add_argument("--repo", required=True)
+	claim_cmd.add_argument("--item", required=True, type=int)
+	claim_cmd.add_argument("--parking", required=True)
+	claim_cmd.add_argument("--trusted-login", default="")
+	confirm_cmd = digest_sub.add_parser("alert-confirm")
+	confirm_cmd.add_argument("--repo", required=True)
+	confirm_cmd.add_argument("--item", required=True, type=int)
+	confirm_cmd.add_argument("--parking", required=True)
+	confirm_cmd.add_argument("--comment-id", required=True)
+	confirm_cmd.add_argument("--message-id", required=True)
 	args = parser.parse_args(argv)
 	try:
 		if args.command == "needs-human" and args.digest_command == "park":
 			result = needs_human_park(args.repo, args.item, args.kind, args.stop, args.reason, args.link,
 				args.trusted_login or None, args.item_labeled)
-		elif args.command == "needs-human":
+		elif args.command == "needs-human" and args.digest_command == "alert-claim":
+			result = needs_human_alert_claim(args.repo, args.item, args.parking, args.trusted_login or None)
+		elif args.command == "needs-human" and args.digest_command == "alert-confirm":
+			result = needs_human_alert_confirm(args.repo, args.item, args.parking, args.comment_id, args.message_id)
+		elif args.command == "needs-human" and args.digest_command == "prune":
 			result = needs_human_prune(args.repo, args.trusted_login or None)
 		elif args.command == "tick":
 			result = tick(args.repo, args.stable_sha, args.repo_dir, args.trusted_login or None)
