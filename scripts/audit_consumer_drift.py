@@ -737,6 +737,20 @@ def _sync_pull_request_is_stale(created_at: Any, now: datetime) -> bool:
 	return (now - opened).total_seconds() >= SYNC_PR_STALE_AFTER_SECONDS
 
 
+def _sync_pull_request_created_at_or_none(created_at: Any) -> str | None:
+	"""Return ``created_at`` when it is a parsable ISO timestamp, else None.
+
+	The report step then shows "unknown date" instead of the raw text.
+	"""
+	if not isinstance(created_at, str) or not created_at:
+		return None
+	try:
+		datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+	except ValueError:
+		return None
+	return created_at
+
+
 def _sync_pull_request_is_for_release(ref: str, stable_sha: str) -> bool:
 	"""Return False when an ``auto/update-workflows-<sha12>`` ref names another release.
 
@@ -981,7 +995,7 @@ class DriftRepairer:
 				reason="sync_pull_request_open",
 				pr_number=pull.get("number"),
 				pr_url=pull.get("html_url"),
-				pr_created_at=created_at if isinstance(created_at, str) else None,
+				pr_created_at=_sync_pull_request_created_at_or_none(created_at),
 				pr_stale=stale,
 				pr_for_release=for_release,
 			)

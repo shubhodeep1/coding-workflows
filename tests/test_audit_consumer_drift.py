@@ -1192,7 +1192,8 @@ def test_repair_records_sync_pull_request_age() -> None:
 				result = repairer.repair("owner/repo", {"ai-plan.yml"})
 			assert result.reason == "sync_pull_request_open", result
 			assert result.pr_stale is expected_stale, (created_at, result)
-			assert result.pr_created_at == (created_at if created_at else None)
+			# An unparsable date is not kept, so the report says "unknown date".
+			assert result.pr_created_at == (created_at if created_at and created_at != "not-a-date" else None)
 			assert f"stale={'true' if expected_stale else 'false'}" in out.getvalue()
 
 
