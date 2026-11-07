@@ -1063,6 +1063,14 @@ def _workspace_module():
 	return module
 
 
+def test_prepush_hook_pair_fixture_conflicts_on_both_paths(tmp_path):
+	"""The xfail below must fail only because of the gap, not the fixture."""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_paired_hook_conflict(repo, False, hook_rel=PREPUSH_HOOK)
+	assert sorted(_unmerged(repo)) == sorted([PREPUSH_HOOK, PREPUSH_HOOK_TEMPLATE])
+
+
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=PREPUSH_GAP_REASON)
 def test_prepush_hook_pair_is_listed_in_paired_live_report(tmp_path):
 	repo = tmp_path / "repo"
@@ -1102,6 +1110,17 @@ def test_prepush_live_hook_stays_outside_the_sandbox(tmp_path):
 	assert f"::error::Conflict resolver: host-only conflicted path(s) need a manual merge: {PREPUSH_HOOK}" in result.stderr
 	assert re.search(r"REVIEW_RESOLVER_PATH_REJECTED reason=(dot_directory|live_safety_hook) path=\.claude/hooks/prepush_affected_tests\.py", result.stderr)
 	assert env_text == ""
+
+
+def test_prepush_hook_conflict_is_taken_from_base_off_integration_sync(tmp_path):
+	"""Positive control: the fixture reaches take-base when no integration-sync gate applies."""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_host_only_conflict(repo, hook_rel=PREPUSH_HOOK)
+	result, _runtime, github_env, _ = _run_take_base(tmp_path, repo)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert f"CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE pr=7 path={PREPUSH_HOOK} base=main stages=1 2 3" in result.stdout
+	assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
 
 
 @pytest.mark.parametrize("kwargs", [{"target_branch": "orchestrator/project-8434"}, {"integration_sync": True}])
