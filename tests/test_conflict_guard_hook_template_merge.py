@@ -29,11 +29,29 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+try:
+	import pytest
+except ImportError:  # script mode without pytest: record the mark main() reads
+	import types
+
+	def _xfail_without_pytest(**kwargs):
+		def wrap(func):
+			func.pytestmark = [*getattr(func, "pytestmark", []), types.SimpleNamespace(name="xfail", kwargs=kwargs)]
+			return func
+		return wrap
+
+	pytest = types.SimpleNamespace(mark=types.SimpleNamespace(xfail=_xfail_without_pytest))
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PREPARE = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
 
 LIVE = ".claude/hooks/pr_merge_status_guard.py"
 TEMPLATE = "workflow-templates/.claude/hooks/pr_merge_status_guard.py"
+# A second paired live hook (#7137). The template merge does not cover it yet
+# (#8973), so an integration-sync conflict on it fails closed.
+PREPUSH_LIVE = ".claude/hooks/prepush_affected_tests.py"
+PREPUSH_TEMPLATE = "workflow-templates/.claude/hooks/prepush_affected_tests.py"
+PREPUSH_GAP_REASON = "#8973: guard-hook template merge covers only pr_merge_status_guard.py; scripts outside heal scope"
 MERGE_RESOLVE_COMMIT_MESSAGE = "[ai-merge-resolve] resolve merge conflicts"
 BASE_LINES = [f"line {i}" for i in range(1, 11)]
 
@@ -98,18 +116,25 @@ def _body(change_first: str | None = None, change_last: str | None = None) -> st
 	return "\n".join(lines) + "\n"
 
 
-def _make_conflict(repo: Path, variant: str = "pass", *, other_conflict: bool = False) -> None:
+def _make_conflict(
+	repo: Path,
+	variant: str = "pass",
+	*,
+	other_conflict: bool = False,
+	live_rel: str = LIVE,
+	template_rel: str = TEMPLATE,
+) -> None:
 	"""Leave ``repo`` on ``feat`` mid-merge of ``main`` with the live hook conflicted."""
 	_git(repo, "init", "-q", "-b", "main")
 	_git(repo, "config", "user.name", "t")
 	_git(repo, "config", "user.email", "t@t")
 	_git(repo, "config", "core.fileMode", "true")
-	_write(repo, LIVE, "old\n")
+	_write(repo, live_rel, "old\n")
 	if variant == "template_symlink":
-		(repo / TEMPLATE).parent.mkdir(parents=True)
-		os.symlink("../../../" + LIVE, repo / TEMPLATE)
+		(repo / template_rel).parent.mkdir(parents=True)
+		os.symlink("../../../" + live_rel, repo / template_rel)
 	elif variant != "template_missing":
-		_write(repo, TEMPLATE, _body())
+		_write(repo, template_rel, _body())
 	_write(repo, "other.txt", "base\n", 0o644)
 	_git(repo, "add", "-A")
 	_git(repo, "commit", "-qm", "base")
@@ -119,26 +144,26 @@ def _make_conflict(repo: Path, variant: str = "pass", *, other_conflict: bool = 
 
 	_git(repo, "checkout", "-q", "-b", "feat")
 	if variant == "one_sided_delete":
-		_git(repo, "rm", "-q", "--", LIVE)
+		_git(repo, "rm", "-q", "--", live_rel)
 	else:
-		_write(repo, LIVE, ours + ("x" if variant == "ours_mismatch" else ""))
+		_write(repo, live_rel, ours + ("x" if variant == "ours_mismatch" else ""))
 	if variant == "template_unmerged":
-		_write(repo, TEMPLATE, _body(change_first="ours template"))
-		_write(repo, LIVE, _body(change_first="ours template"))
+		_write(repo, template_rel, _body(change_first="ours template"))
+		_write(repo, live_rel, _body(change_first="ours template"))
 	elif variant not in ("template_missing", "template_symlink"):
-		_write(repo, TEMPLATE, ours)
+		_write(repo, template_rel, ours)
 	if other_conflict:
 		_write(repo, "other.txt", "ours\n", 0o644)
 	_git(repo, "add", "-A")
 	_git(repo, "commit", "-qm", "ours")
 
 	_git(repo, "checkout", "-q", "main")
-	_write(repo, LIVE, theirs, 0o644 if variant == "theirs_mode_mismatch" else 0o755)
+	_write(repo, live_rel, theirs, 0o644 if variant == "theirs_mode_mismatch" else 0o755)
 	if variant == "template_unmerged":
-		_write(repo, TEMPLATE, _body(change_first="theirs template"))
-		_write(repo, LIVE, _body(change_first="theirs template"))
+		_write(repo, template_rel, _body(change_first="theirs template"))
+		_write(repo, live_rel, _body(change_first="theirs template"))
 	elif variant not in ("template_missing", "template_symlink"):
-		_write(repo, TEMPLATE, theirs)
+		_write(repo, template_rel, theirs)
 	if other_conflict:
 		_write(repo, "other.txt", "theirs\n", 0o644)
 	_git(repo, "add", "-A")
@@ -147,7 +172,7 @@ def _make_conflict(repo: Path, variant: str = "pass", *, other_conflict: bool = 
 	_git(repo, "checkout", "-q", "feat")
 	merge = _git(repo, "merge", "--no-commit", "--no-ff", "main", check=False)
 	assert merge.returncode != 0, "fixture must produce a conflicted merge"
-	assert _git(repo, "ls-files", "-u", "--", LIVE).stdout.strip(), "live hook must be unmerged"
+	assert _git(repo, "ls-files", "-u", "--", live_rel).stdout.strip(), "live hook must be unmerged"
 
 
 def _run(
@@ -202,18 +227,18 @@ echo "REGION_FELL_THROUGH"
 	return result, github_env, allowlist
 
 
-def _assert_resolved_from_template(repo: Path) -> None:
-	staged = _git(repo, "ls-files", "-s", "--", LIVE).stdout.strip()
-	tpl = _git(repo, "ls-files", "-s", "--", TEMPLATE).stdout.strip()
+def _assert_resolved_from_template(repo: Path, *, live_rel: str = LIVE, template_rel: str = TEMPLATE) -> None:
+	staged = _git(repo, "ls-files", "-s", "--", live_rel).stdout.strip()
+	tpl = _git(repo, "ls-files", "-s", "--", template_rel).stdout.strip()
 	tpl_mode, tpl_oid, tpl_stage = tpl.split("\t")[0].split()
 	assert tpl_stage == "0", tpl
-	assert staged == f"{tpl_mode} {tpl_oid} 0\t{LIVE}", staged
-	assert _git(repo, "ls-files", "-u", "--", LIVE).stdout == ""
-	live_bytes = (repo / LIVE).read_bytes()
-	assert live_bytes == (repo / TEMPLATE).read_bytes()
+	assert staged == f"{tpl_mode} {tpl_oid} 0\t{live_rel}", staged
+	assert _git(repo, "ls-files", "-u", "--", live_rel).stdout == ""
+	live_bytes = (repo / live_rel).read_bytes()
+	assert live_bytes == (repo / template_rel).read_bytes()
 	assert b"<<<<<<<" not in live_bytes
 	assert live_bytes == _body(change_first="ours first line", change_last="theirs last line").encode()
-	assert os.access(repo / LIVE, os.X_OK) == (tpl_mode == "100755")
+	assert os.access(repo / live_rel, os.X_OK) == (tpl_mode == "100755")
 
 
 def _with_repo(variant: str = "pass", **kwargs):
@@ -321,6 +346,44 @@ def test_refuses_symlinked_template() -> None:
 	_assert_refused("template_symlink", "template_not_regular")
 
 
+# ------------------------------------------------- second paired hook (#8973)
+
+
+def test_prepush_hook_fixture_has_the_clean_template_shape() -> None:
+	"""The xfail below must fail only because of the gap, not the fixture."""
+	tmpdir, _tmp, repo = _with_repo(live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
+	with tmpdir:
+		live_unmerged = _git(repo, "ls-files", "-u", "--", PREPUSH_LIVE).stdout.splitlines()
+		assert {line.split()[2] for line in live_unmerged} == {"1", "2", "3"}
+		assert _git(repo, "ls-files", "-u", "--", PREPUSH_TEMPLATE).stdout == ""
+		tpl_entries = _git(repo, "ls-files", "-s", "--", PREPUSH_TEMPLATE).stdout.splitlines()
+		assert len(tpl_entries) == 1 and tpl_entries[0].split("\t")[0].split()[2] == "0", tpl_entries
+		for ref, stage in (("HEAD", "2"), ("MERGE_HEAD", "3")):
+			tree = _git(repo, "ls-tree", "--full-tree", ref, "--", PREPUSH_TEMPLATE).stdout.strip()
+			t_mode, t_type, t_oid = tree.split("\t")[0].split()
+			assert t_type == "blob"
+			live = [line.split()[:2] for line in live_unmerged if line.split()[2] == stage]
+			assert live == [[t_mode, t_oid]], (ref, live, tree)
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=PREPUSH_GAP_REASON)
+def test_prepush_hook_integration_sync_conflict_is_resolved_from_template() -> None:
+	"""PR #8436 (run 42355218108): both sides changed the prepush hook and its template in step."""
+	tmpdir, tmp, repo = _with_repo(live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
+	with tmpdir:
+		region = _guard_and_union_region(_prepare_text()) + _hook_only_commit_region(_prepare_text())
+		result, github_env, _ = _run(
+			repo, tmp, region=region, head_ref="orchestrator/project-8434", integration_sync=True,
+		)
+		out = result.stdout + result.stderr
+		assert result.returncode == 0, out
+		assert "Guard-hook template merge: resolved " + PREPUSH_LIVE in result.stdout, out
+		assert "REGION_FELL_THROUGH" not in result.stdout, out
+		assert "CONFLICT_RESOLVED=true" in github_env.read_text(encoding="utf-8").splitlines()
+		assert len(_git(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()) == 3
+		_assert_resolved_from_template(repo, live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
+
+
 # ---------------------------------------------------------------- contract
 
 
@@ -364,12 +427,25 @@ def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	failed = 0
 	for func in test_funcs:
+		expect_fail = any(getattr(mark, "name", "") == "xfail" for mark in getattr(func, "pytestmark", []))
 		try:
 			func()
-			print(f"  PASS  {func.__name__}")
+		except AssertionError as e:
+			if expect_fail:
+				print(f"  XFAIL  {func.__name__}")
+				continue
+			print(f"  FAIL  {func.__name__}: {e}")
+			failed += 1
+			continue
 		except Exception as e:  # noqa: BLE001
 			print(f"  FAIL  {func.__name__}: {e}")
 			failed += 1
+			continue
+		if expect_fail:
+			print(f"  XPASS(strict)  {func.__name__}")
+			failed += 1
+		else:
+			print(f"  PASS  {func.__name__}")
 	print(f"\n{len(test_funcs) - failed} passed, {failed} failed, {len(test_funcs)} total")
 	return 1 if failed else 0
 

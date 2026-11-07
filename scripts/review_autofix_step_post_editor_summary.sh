@@ -256,7 +256,64 @@ if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_commit
   fi
 fi
 
-if gh_retry gh api repos/${AUTOFIX_STEP_REPOSITORY}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")${sandbox_excluded_marker_suffix}" >/dev/null; then
+# Clean same-head marker (#8952). A full review whose real editor summary
+# reports "Change status: not-edited", with positive evidence that nothing was
+# committed and no sandbox-excluded finding, ends its summary comment with
+# `<!-- review-autofix-clean:v1 head=<sha> base=<sha> support=<sha|none>
+# run=<id> -->` as the last line. The review gate
+# (review_autofix_step_evaluate_gate.sh) then skips another full review of the
+# same head, base and review-support SHA. The fallback summary, a commit, a
+# sandbox-excluded finding (a failure path even without its marker), or a
+# missing head / base / run id writes no marker, so today's behaviour holds.
+# AUTOFIX_CLEAN_MARKER_BASE_SHA defaults to empty (no marker): an older
+# workflow that does not pass the gate's base_sha degrades safely.
+clean_marker_suffix=""
+clean_marker_reason="none"
+clean_marker_head="$(printf '%s' "${AUTOFIX_FAILURE_HEAD_SHA:-}" | tr 'A-F' 'a-f')"
+clean_marker_base="$(printf '%s' "${AUTOFIX_CLEAN_MARKER_BASE_SHA:-}" | tr 'A-F' 'a-f')"
+clean_marker_status=""
+if [ "${editor_summary_is_real}" = "1" ]; then
+  clean_marker_status="$(tr -d '\r' < "${EDITOR_SUMMARY_FILE}" | awk '
+    BEGIN { section = ""; status = "" }
+    /^(Changes made|Change status|Already satisfied \(suggested but already present\)|Ignored suggestions \(with short reason\)|Reviewer files processed|Review file issue audit|PR comment audit|Regression fingerprint|Runtime failure path):[ \t]*$/ {
+      section = $0
+      sub(/:[ \t]*$/, "", section)
+      next
+    }
+    section == "Change status" && status == "" && /^[ \t]*-[ \t]+/ {
+      value = $0
+      sub(/^[ \t]*-[ \t]+/, "", value)
+      sub(/[ \t]+$/, "", value)
+      status = tolower(value)
+    }
+    END { print status }
+  ' 2>/dev/null || true)"
+fi
+if [ "${editor_summary_is_real}" != "1" ]; then
+  clean_marker_reason="fallback"
+elif [ "${clean_marker_status}" != "not-edited" ]; then
+  clean_marker_reason="not_not_edited"
+elif [ "${sandbox_excluded_nothing_committed}" != "1" ] || [ "${DID_COMMIT:-}" = "true" ]; then
+  clean_marker_reason="committed"
+elif [ -n "${sandbox_excluded_marker_suffix}" ] || [ "${sandbox_excluded_findings:-0}" != "0" ]; then
+  clean_marker_reason="sandbox_excluded"
+elif ! [[ "${clean_marker_head}" =~ ^[0-9a-f]{40}$ ]]; then
+  clean_marker_reason="head_unavailable"
+elif ! [[ "${clean_marker_base}" =~ ^[0-9a-f]{40}$ ]]; then
+  clean_marker_reason="base_unavailable"
+elif ! [[ "${AUTOFIX_STEP_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
+  clean_marker_reason="run_unavailable"
+else
+  clean_marker_support="$(printf '%s' "${REVIEW_SUPPORT_SHA:-}" | tr 'A-F' 'a-f')"
+  [[ "${clean_marker_support}" =~ ^[0-9a-f]{40}$ ]] || clean_marker_support="none"
+  clean_marker_suffix=$'\n\n'"<!-- review-autofix-clean:v1 head=${clean_marker_head} base=${clean_marker_base} support=${clean_marker_support} run=${AUTOFIX_STEP_RUN_ID} -->"
+fi
+clean_marker_pr="${PR_NUMBER:-}"
+[[ "${clean_marker_pr}" =~ ^[0-9]+$ ]] || clean_marker_pr="unknown"
+[[ "${clean_marker_head}" =~ ^[0-9a-f]{40}$ ]] || clean_marker_head="unknown"
+echo "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=$([ -n "${clean_marker_suffix}" ] && echo written || echo not_written) reason=${clean_marker_reason} pr=${clean_marker_pr} head=${clean_marker_head}"
+
+if gh_retry gh api repos/${AUTOFIX_STEP_REPOSITORY}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")${sandbox_excluded_marker_suffix}${clean_marker_suffix}" >/dev/null; then
   echo "Posted editor summary comment."
   # Signal to the failure-comment step (line ~3269) that the
   # editor summary already landed on the PR thread. The generic
