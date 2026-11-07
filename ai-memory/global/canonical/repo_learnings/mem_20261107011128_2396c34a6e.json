@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Several merged changes target incomplete comment context in review and polling paths. When context is truncated or missing, detect that state explicitly and fail closed rather than allowing an incomplete judge input to produce an actionable verdict.",
+  "fingerprint": "f1599eacb9724d1a62a8b87b95f4ae4c175abf1858b01be60bbe2a93826a05ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42322298202",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42322298202",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8909",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8920",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8925",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8926",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8930",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8910",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8922",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8927",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8928",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8931"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261107011128_2396c34a6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Treat incomplete PR-comment or review context as insufficient evidence for a positive judge result.",
+  "timestamps": {
+    "created_at": "2026-11-07T01:11:28Z",
+    "promoted_at": "2026-11-07T01:12:11Z",
+    "superseded_at": null
+  }
+}

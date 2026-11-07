@@ -38,11 +38,11 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "candidate",
+  "status": "promoted",
   "summary": "Treat incomplete PR-comment or review context as insufficient evidence for a positive judge result.",
   "timestamps": {
     "created_at": "2026-11-07T01:11:28Z",
-    "promoted_at": null,
+    "promoted_at": "2026-11-07T01:12:11Z",
     "superseded_at": null
   }
 }
