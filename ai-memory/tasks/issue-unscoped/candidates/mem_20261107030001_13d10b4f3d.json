@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_rb_judge_label_propagation.py:3098-3141 | severity=medium | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate reports the `ruff` unit as failing and caused by this change, but static inspection of the added helper and tests shows no E/F-class finding.\n  WHY: The gate unit stays red on every re-run and the root cause is not identifiable from the diff. Source severity MAJOR.\n- tests/test_ai_label_precreation_contract.py:223-342 | severity=medium | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The gate classifies `test_review_rb_judge_fallback_label_metadata_matches_label_contract` as failing because of this change, but the only script edit is inside `_resilient_phase_swap` (scripts/review_rb_judge.sh:961-1068), which this test does not read.\n  WHY: No diff hunk can reach the test's assertions, so the red gate unit is unexplained and may be a gate misattribution. Source severity MAJOR.\n- (no repository file; check-run copilot-pull-request-reviewer) | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot reviewer check failed with \"Prompt too big after adding system message\" (custom_instructions_too_large, HTTP 422), which is bot infrastructure and not a defect in this diff.\n  WHY: The failure is outside this PR's scope and no code fix exists in it. Source severity NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The linked issue lists tests/test_ai_label_precreation_contract.py as an expected file, and the pre-push gate reports it failing because of this change.\n  expected_change_site: tests/test_ai_label_precreation_contract.py (test_review_rb_judge_fallback_label_metadata_matches_label_contract)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR diff has no changes to tests/test_ai_label_precreation_contract.py. pr_changed_files.txt lists only changelog.d/8942-rb-judge-terminal-swap-additive.md, scripts/review_rb_judge.sh and tests/test_review_rb_judge_label_propagation.py. minimax_minimax-m3 notes the script change (lines 960-1067) does not overlap the ensure_label_exists fallback block at 924-954. Disagreement: minimax_minimax-m3 rates it NIT with confidence 2, and google_gemini-3_1-flash-lite rates it MAJOR with confidence 4. z-ai_glm-5_3-flash judged this not a valid gap because the expected-files list is advisory.\n- requirement: Pass pre-push CI gates including `ruff` and unit tests.\n  expected_change_site: scripts/review_rb_judge.sh, tests/test_review_rb_judge_label_propagation.py\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR carries a red gate status with `ruff` failures and tests/test_ai_label_precreation_contract.py failures attributed to this change.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Update the expected files mentioned in the linked issue, specifically including tests and registries this change affects.\n  Expected change site: tests/test_ai_label_precreation_contract.py\n  Evidence of absence: The linked issue explicitly identified tests/test_ai_label_precreation_contract.py as an expected file requiring updates, and the pre-push gate reports it as failing due to the PR changes, yet the PR diff contains no changes to this file.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: Pass pre-push CI gates including `ruff` and unit tests.\n  Expected change site: scripts/review_rb_judge.sh, tests/test_review_rb_judge_label_propagation.py\n  Evidence of absence: The PR carries a red gate status with `ruff` failures and `tests/test_ai_label_precreation_contract.py` failures directly attributed to this change.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: The linked issue's Required change item 4 specifies \"If the reconciliation GET fails, warn and return 0 without further deletes.\" The PR diff implements this. However, the pre-push test gate flagged `tests/test_ai_label_precreation_contract.py` as \"Failures caused by this change\" even though the PR does not touch that test file or the `ensure_label_exists` fallback function it reads (scripts/review_rb_judge.sh:924-954).\n  Expected change site: tests/test_ai_label_precreation_contract.py:test_review_rb_judge_fallback_label_metadata_matches_label_contract (or the gate's classification of which files failed).\n  Evidence of absence: pr_changed_files.txt lists only changelog.d/8942-rb-judge-terminal-swap-additive.md, scripts/review_rb_judge.sh and tests/test_review_rb_judge_label_propagation.py. The script change is confined to lines 960-1067, which does not overlap the ensure_label_exists fallback block at lines 924-954 that the test extracts.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_rb_judge_label_propagation.py:3098-3141 | severity=MAJOR | confidence=3\n  PROBLEM: The pre-push gate reports the `ruff` unit as failing and caused by this change, but static inspection of the changed Python shows no E/F-class finding.\n  WHY: The gate unit stays red and re-fails on every re-run; the root cause is not identifiable from the diff.\n- tests/test_ai_label_precreation_contract.py:223-342 | severity=MAJOR | confidence=3\n  PROBLEM: The gate classifies this test as failing and caused by this change, but the PR's only edit to `scripts/review_rb_judge.sh` is inside `_resilient_phase_swap`, which the test does not read.\n  WHY: The unit passed on the merge-base and fails on the head per the gate, but no diff hunk can reach its assertions.\n- (no repository file; check-run copilot-pull-request-reviewer) | severity=NIT | confidence=4\n  PROBLEM: The Copilot reviewer failed with \"Prompt too big after adding system message\" (custom_instructions_too_large, HTTP 422), which is not a defect in this diff.\n  WHY: The failure is bot infrastructure, and no code fix exists in this PR's scope.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "67be752b6d78d188ba138493680220f79bd7d4c7e56d7929f24c015ad04e2a48",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8949,
+    "run_id": "42329631543",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42329631543",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261107030001_13d10b4f3d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8949,
+    "run_id": "42329631543"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-07T03:00:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
