@@ -558,7 +558,7 @@ def is_auto_heal_companion_path(path: str) -> bool:
 	"""True for ``db/contracts/<name>.yml`` (one level) or top-level ``tests/test_<name>.py``."""
 	if not isinstance(path, str) or ".." in path.split("/"):
 		return False
-	return bool(_AUTO_HEAL_CONTRACT_RE.match(path) or _AUTO_HEAL_TEST_RE.match(path))
+	return bool(_AUTO_HEAL_CONTRACT_RE.fullmatch(path) or _AUTO_HEAL_TEST_RE.fullmatch(path))
 
 
 def auto_heal_companions_allowed(issue_body: object, author_login: object, pipeline_login: object) -> bool:
