@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8944,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8944\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8946\",\"pr_number\":8946,\"branch\":\"ai/issue-8944\",\"run_id\":\"42327790252\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42327790252\",\"changed_files\":[\"changelog.d/8944-poller-comments-dump-redaction.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_ci_wires_every_test_file.py\",\"tests/test_gh_retry_final_stderr_redaction.py\",\"tests/test_poller_tracking_comments_dump_redaction.py\"]}",
+  "fingerprint": "c2f6dca2614101d4c86551691478de01f412adadbc085a44782fbddf2d3c7ff8",
+  "lineage": {
+    "issue_number": 8944,
+    "parent_ids": [],
+    "pr_number": 8946,
+    "run_id": "42327790252",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42327790252",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8946"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261107022049_7cd81f6fc1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8944,
+    "level": "run",
+    "pr_number": 8946,
+    "run_id": "42327790252"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8944: https://github.com/shubhodeep1/coding-workflows/pull/8946",
+  "timestamps": {
+    "created_at": "2026-11-07T02:20:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
