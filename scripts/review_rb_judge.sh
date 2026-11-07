@@ -1053,7 +1053,7 @@ _resilient_phase_swap()
 		'.[] | select(. as $lbl | ($p | index($lbl)) != null and . != $t)')
 	if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
 		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
-		echo "::warning::_resilient_phase_swap: terminal reconciliation GET failed for #${_rps_issue}; target was added without further deletes." >&2
+		echo "::warning::_resilient_phase_swap: terminal reconciliation GET failed for #${_rps_issue}; target ${_rps_target} was added and observed prior phase labels were removed, but the ai:merged-wins check was skipped." >&2
 		return 0
 	fi
 	if [ "${_rps_target}" = "ai:closed" ] && [ "${_rps_merged_seen}" != "true" ] \
