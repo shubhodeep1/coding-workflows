@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-08T13:59:38Z",
+  "issue_number": 9060,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=(none; external check-run 42486004980, copilot-pull-request-reviewer):1; cited_path=copilot-pull-request-reviewer check-run; files_touched=.github/workflows/test-and-mark-stable.yml, changelog.d/wfopt-2026-10-07-3-idle-test-quoting.md, tests/test_test_and_mark_stable_step_scripts_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 9063,
+  "record_id": "lesson_20261108135938_9b46ca9ee7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer check-run",
+    "(none; external check-run 42486004980, copilot-pull-request-reviewer)",
+    ".github/workflows/test-and-mark-stable.yml",
+    "changelog.d/wfopt-2026-10-07-3-idle-test-quoting.md",
+    "tests/test_test_and_mark_stable_step_scripts_contract.py"
+  ]
+}
