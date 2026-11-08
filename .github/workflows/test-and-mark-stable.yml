@@ -1031,7 +1031,7 @@ jobs:
             fi
 
             # Inactivity timeout
-            if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
+            if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
               echo "::error::Clarify phase stalled — no activity for ${PHASE_TIMEOUT} minutes"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               exit 1
@@ -1330,7 +1330,7 @@ jobs:
             fi
 
             # Inactivity timeout
-            if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
+            if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
               echo "::error::Plan phase stalled — no activity for ${PLAN_PHASE_TIMEOUT} minutes"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               exit 1
@@ -2806,7 +2806,7 @@ jobs:
             fi
 
             # Inactivity timeout
-            if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
+            if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
               echo "::warning::Review-blocked sim stalled — no activity for ${PHASE_TIMEOUT} minutes"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \

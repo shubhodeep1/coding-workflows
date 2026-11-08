@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **The stable release gate's inactivity-watchdog tests now quote their operands.** The three remaining `if [ $IDLE -ge $INACTIVITY_LIMIT ]` checks in `.github/workflows/test-and-mark-stable.yml` (Phase 1 clarify wait, Phase 2 plan wait and the review-blocked simulation wait) now read `if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]`, matching the other sites, so an empty or multi-word value can no longer word-split into a misparsed `test` call (SHELL-002, workflow-optimization-2026-10-07-3). Refs #9058.
