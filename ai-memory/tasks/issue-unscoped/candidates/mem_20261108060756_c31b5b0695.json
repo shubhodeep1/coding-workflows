@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:958-1031 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The moved test steps are defined as top-level steps under the `jobs:` section instead of inside a job definition.\n  WHY: This would be an invalid workflow structure that fails parsing. The source rated it BLOCKER, and it is mapped to critical here. Three other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) checked the file and refuted it: the steps sit at lines 982 and 1008 inside `tests-hooks-and-orchestrator` (lines 519-1028).\n- tests/test_agents_fragment_contract.py:74-82 | severity=medium | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate attributes five failing test groups to this change, but those tests read only files the diff does not touch. The five are tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py and tests/test_workflow_checkout_integration_ref_audit.py.\n  WHY: Either the gate misclassified the failures or a real regression exists whose cause is not in the diff, so the merge gate stays red with an unmapped cause.\n- .github/workflows/ci.yml:external check-run copilot-pull-request-reviewer | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The external Copilot reviewer check-run failed with `custom_instructions_too_large` (HTTP 422).\n  WHY: It is an infrastructure failure unrelated to any step this PR moves, and it cannot be fixed from this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml (step-selection rationale and destination job choice, comments at lines 975-981 and 1001-1007)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The comments at ci.yml lines 975-981 and 1001-1007 say the step timings could not be read and the pick is an estimate from test and subprocess counts, and the changelog fragment says the same. Nothing in the diff shows the moved steps were the slowest or that `tests-hooks-and-orchestrator` has the most headroom, and tests/test_ci_poll_test_sharding.py records that job reaching 15m07s, 15m27s and 15m06s. Severity disagreement: NIT (anthropic_claude-sonnet-5_5), MAJOR (google_gemini-3_1-flash-lite, openai_gpt-6-luna). minimax_minimax-m3 and z-ai_glm-5_3-flash judged the requirement satisfied.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: the step-selection rationale in `.github/workflows/ci.yml` (the comments above the moved steps), and the target job choice.\n  Evidence of absence: The step timings for run 42445170048 could not be read, and the comments at `ci.yml` lines 975-981 and 1001-1007 and the changelog fragment say the pick is an estimate. Nothing in the diff shows that `tests-hooks-and-orchestrator` has the most headroom. tests/test_ci_poll_test_sharding.py records that job at 15m07s, 15m27s and 15m06s.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:958-1031 | severity=BLOCKER | confidence=5\n  PROBLEM: The moved test steps are defined as top-level steps under the `jobs:` section instead of inside a job definition.\n  WHY: This is an invalid workflow structure that would stop the workflow from parsing.\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: The step-selection rationale in .github/workflows/ci.yml\n  Evidence of absence: The comments at .github/workflows/ci.yml lines 975-981 and 1001-1007 say the step timings could not be read. The diff does not show that the moved steps were the slowest in run 42445170048, or that `tests-hooks-and-orchestrator` has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection of steps to move and the choice of destination job.\n  Evidence of absence: At lines 975-981 and 1001-1007 the workflow says the step timings could not be read and the selection is an estimate. Neither the workflow nor the diff establishes that the moved steps were the slowest or that the destination had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_agents_fragment_contract.py:74-82 | severity=MAJOR | confidence=3\n  PROBLEM: The pre-push gate attributes five failure groups to this change, but every failing assertion reads only files outside the diff. The same pattern applies to tests/test_files_touched_scope_guard.py (lines 36-41), tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py and tests/test_workflow_checkout_integration_ref_audit.py (lines 18-24).\n  WHY: If the failures are real, the merge gate stays red with an unmapped cause. If they are noise, the false attribution hides the true signal.\n- .github/workflows/ci.yml:external check-run copilot-pull-request-reviewer (run 42451965767, job 128642924146) | severity=NIT | confidence=4\n  PROBLEM: The only failed check-run on the head SHA is an infrastructure failure of the external Copilot reviewer app (`custom_instructions_too_large`, statusCode 422).\n  WHY: It does not read or depend on any step this PR moves, and it cannot be fixed from this PR's files_touched grant.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9e57e365fa1af0f408bfaefcd2fc7f1fabafd8cff7bb0ce20849073b9dbe8943",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9049,
+    "run_id": "42451959172",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42451959172",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108060756_c31b5b0695",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9049,
+    "run_id": "42451959172"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T06:07:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
