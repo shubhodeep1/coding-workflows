@@ -108,6 +108,10 @@
 # A `heal_report` op (harness routing): one actions/runs listing and one
 # repository_dispatch to shubhodeep1/coding-workflows; a `hold_request` op:
 # one comment on the tracking issue.
+# CONSIST-001: the identity, item, item re-check, item comments and cited-run
+# reads go through gh_retry, so a transient error (5xx, connection reset) may
+# repeat one of them up to GH_RETRY_MAX_ATTEMPTS times, with capped rate-limit
+# waits. Permanent errors and every write still make one attempt.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
 #      UNBLOCK_JUDGE item= op=hold hold= ref= outcome=held|holding|met|expired|skip reason=
 #      UNBLOCK_JUDGE item= op=reissue outcome=superseded pr= head=
