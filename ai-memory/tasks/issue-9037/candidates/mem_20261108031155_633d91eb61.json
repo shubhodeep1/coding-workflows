@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9037,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9037\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9041\",\"pr_number\":9041,\"branch\":\"ai/issue-9037\",\"run_id\":\"42438780285\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42438780285\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/9037-ci-poll-group-3-judges-harness-to-group-4.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "3b0db4654e1b48c854b4085b76cec5ba3183fb3ccbf39a9cd1ceb9f8aebba64b",
+  "lineage": {
+    "issue_number": 9037,
+    "parent_ids": [],
+    "pr_number": 9041,
+    "run_id": "42438780285",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42438780285",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9041"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261108031155_633d91eb61",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9037,
+    "level": "run",
+    "pr_number": 9041,
+    "run_id": "42438780285"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9037: https://github.com/shubhodeep1/coding-workflows/pull/9041",
+  "timestamps": {
+    "created_at": "2026-11-08T03:11:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
