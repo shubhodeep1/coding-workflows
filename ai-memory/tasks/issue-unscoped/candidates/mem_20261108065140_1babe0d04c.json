@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1084 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, anthropic_claude-sonnet-5_5]\n  PROBLEM: The `cat` command replays test logs inside a `::group::` block without prefixing, so a log line starting with `::` is interpreted as a workflow command.\n  WHY: Log output containing `::` sequences (e.g. `::error::`) can trigger unintended Actions behaviour such as annotations or secret masking. Severity disagreement: gemini rated MAJOR with confidence 4. anthropic gave it as a hardening suggestion with risk score 1, and its suggested fix is `{ cat \"/tmp/heal_shard_${shard}.log\" 2>/dev/null || true; } | sed 's/^/| /'`. z-ai_glm-5_3-flash saw the same unprefixed `cat` as a prior-round residual and did not re-flag it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, with a step moved from `tests-heal-plan-and-validation` to a destination CI job\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: No step is moved between jobs, and the diff shards 14 modules into the existing step's shards instead. `.github/workflows/ci.yml` lines 998-1009 document the deviation (#7387, #9018). The approved plan chose this approach, and job names, step names and `timeout-minutes` are unchanged. Severity ranged from NIT (anthropic, minimax) to MAJOR (gemini, openai). z-ai_glm-5_3-flash treated it as an approved deviation with no missing deliverable.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml (`::group::workflow failure heal modules shard ${shard}` replay, `cat \"/tmp/heal_shard_${shard}.log\" || true`) | hardening suggestion, HARDENING_RISK_SCORE: 1\n  PROBLEM: GitHub Actions still processes workflow commands inside a collapsed group, and a `::`-prefixed line from a test log is replayed unprefixed.\n  WHY: Suggested minimal fix: `{ cat \"/tmp/heal_shard_${shard}.log\" 2>/dev/null || true; } | sed 's/^/| /'` (about 1 line changed). The reviewer called this advisory only, since the behaviour predates the last run.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`; a step would be removed from `tests-heal-plan-and-validation` and added to a destination job.\n  Evidence of absence: No step is moved, and the diff shards 14 modules into the existing 4 local shards. The approved plan and issue summary chose this, and the `ci.yml` comment cites #7387 and #9018. The hard constraints are met, so the reviewer called it a documented deviation, not a code defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1084 | severity=MAJOR | confidence=4\n  PROBLEM: The `cat` command replays test logs inside a `::group::` block without prefixing, so a log line starting with `::` is interpreted as a workflow command.\n  WHY: Log output containing `::` sequences (e.g. `::error::`) can trigger unintended Actions behaviour such as annotations or secret masking.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`\n  Evidence of absence: The PR shards the modules within the existing `tests-heal-plan-and-validation` job instead of moving the slow steps to a different CI job. The documentation cites #7387 and #9018, but the reviewer said this directly contradicts the issue's instruction to \"move its slowest steps\".\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, with a step removed from `tests-heal-plan-and-validation` and added to a destination job that has spare headroom.\n  Evidence of absence: No step moves between jobs, and the 14 serial modules are sharded in place. The deviation is documented at `.github/workflows/ci.yml` lines 998-1009 and in the AI issue summary, so the literal \"move\" instruction is unmet by design. The other constraints are met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, with a step moved from `tests-heal-plan-and-validation` to a destination CI job.\n  Evidence of absence: `.github/workflows/ci.yml` lines 998-1005 state that no step moved and instead add 14 modules to the existing step's shards. The reviewer said the requested step move is not implemented.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8d0e141378f3df3b1b453b07b4a46828112e2a0f2ef74b32d9a63878741d4491",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9048,
+    "run_id": "42455247601",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42455247601",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108065140_1babe0d04c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9048,
+    "run_id": "42455247601"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T06:51:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
