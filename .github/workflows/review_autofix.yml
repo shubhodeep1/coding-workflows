@@ -2434,12 +2434,15 @@ jobs:
           done
           [ -n "${chatgpt_model}" ] && [ -n "${chatgpt_replaces}" ] || chatgpt_slot=false
           # No account is fetched for a slot whose replaced slug is not on the panel.
-          if [ "${chatgpt_slot}" = "true" ] && ! printf '%s\n' "${REVIEWER_MODELS:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fxq -- "${chatgpt_replaces}"; then
+          if [ "${chatgpt_slot}" = "true" ] && ! printf '%s\n' "${REVIEWER_MODELS:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fx -- "${chatgpt_replaces}" >/dev/null; then
             chatgpt_slot=false
             chatgpt_line="${chatgpt_line} panel=replaces_not_in_panel"
           fi
-          # Logged only when the slot is on or an operator set the switch, so off-path logs stay unchanged.
-          if [ "${chatgpt_slot}" = "true" ] || [ -n "${REVIEWER_CHATGPT_SLOT_ENABLED:-}" ]; then
+          # Logged when the slot is on, an operator set the switch, or a configured slot was forced off;
+          # a plain switch-off or a missing file stays silent, so off-path logs stay unchanged.
+          chatgpt_forced_off=false
+          case "${chatgpt_line}" in *panel=replaces_not_in_panel*|*reason=var_invalid*|*reason=config_invalid*) chatgpt_forced_off=true ;; esac
+          if [ "${chatgpt_slot}" = "true" ] || [ -n "${REVIEWER_CHATGPT_SLOT_ENABLED:-}" ] || [ "${chatgpt_forced_off}" = "true" ]; then
             echo "REVIEWER_CHATGPT: resolve slot=${chatgpt_slot} ${chatgpt_line:-reason=helper_unavailable}"
           fi
           {

@@ -28,7 +28,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "scripts"
 REVIEWERS = SCRIPTS / "review_run_reviewers.sh"
@@ -587,7 +586,7 @@ def _post(port: int, body: dict | bytes, path: str = "/backend-api/codex/respons
 	sent.update(headers or {})
 	connection.request(method, path, payload if method == "POST" else None, {k: v for k, v in sent.items() if v is not None})
 	response = connection.getresponse()
-	result = (response.status, dict((k.lower(), v) for k, v in response.getheaders()), response.read())
+	result = (response.status, {k.lower(): v for k, v in response.getheaders()}, response.read())
 	connection.close()
 	return result
 
@@ -656,7 +655,7 @@ def test_relay_credential_file_must_be_owner_only_and_not_a_symlink(tmp_path: Pa
 	(linked / "auth.json").symlink_to(real)
 	with pytest.raises(OSError):
 		relay.read_credentials(str(linked))
-	proc = subprocess.run([sys.executable, str(RELAY), "broker", str(tmp_path / "s.sock"), str(loose.parent), "gpt-6-sol"], env=_env(), capture_output=True, text=True, timeout=10)
+	proc = subprocess.run([sys.executable, str(RELAY), "broker", str(tmp_path / "s.sock"), str(loose.parent), "gpt-6-sol"], env=_env(), capture_output=True, text=True, timeout=10, check=False)
 	assert proc.returncode == 2 and proc.stdout == "" and "real-access-token" not in proc.stderr
 
 
@@ -700,7 +699,7 @@ def _sandbox_run(tmp_path: Path, *args: str, engine_file: str | None = None, **e
 			PATH=f"{bin_dir}:{os.environ['PATH']}", SUPPORT_SCRIPTS_DIR=str(SCRIPTS), REVIEW_SANDBOX_ROOT=str(root),
 			RUNNER_TEMP=str(runner_temp), FAKE_DOCKER_LOG=str(tmp_path / "docker.log"), **env,
 		),
-		capture_output=True, text=True, timeout=60,
+		capture_output=True, text=True, timeout=60, check=False,
 	)
 
 
@@ -864,3 +863,32 @@ def test_resolve_step_keeps_the_slot_off_when_replaces_is_not_on_the_panel(tmp_p
 	)
 	outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
 	assert outputs["chatgpt_slot"] == "false"
+
+
+@pytest.mark.parametrize(
+	("config", "panel", "logged"),
+	[
+		(SHIPPED_CONFIG, PANEL, False),
+		(None, PANEL, False),
+		(ON, ["minimax/minimax-m3", "z-ai/glm-5.3-flash"], True),
+	],
+)
+def test_resolve_step_logs_a_configured_slot_forced_off(tmp_path: Path, config: str | None, panel: list[str], logged: bool) -> None:
+	support = tmp_path / "support"
+	support.mkdir()
+	(support / "claude_engine.py").write_text(ENGINE.read_text(encoding="utf-8"), encoding="utf-8")
+	ai = tmp_path / "ws" / ".codex-workflow-src" / ".github" / "ai"
+	ai.mkdir(parents=True)
+	if config is not None:
+		(ai / "chatgpt_pool.json").write_text(config, encoding="utf-8")
+	proc = subprocess.run(
+		["bash", "-c", _resolve_step_body()],
+		env=_env(SUPPORT_SCRIPTS_DIR=str(support), GITHUB_WORKSPACE=str(tmp_path / "ws"), GITHUB_OUTPUT=str(tmp_path / "out"),
+			GITHUB_ENV=str(tmp_path / "env"), REVIEWER_MODELS="\n".join(panel)),
+		capture_output=True, text=True, check=True,
+	)
+	lines = [line for line in proc.stdout.splitlines() if line.startswith("REVIEWER_CHATGPT: resolve")]
+	if logged:
+		assert len(lines) == 1 and "slot=false" in lines[0] and "panel=replaces_not_in_panel" in lines[0]
+	else:
+		assert lines == []
