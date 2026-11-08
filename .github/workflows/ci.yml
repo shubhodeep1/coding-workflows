@@ -1081,7 +1081,7 @@ jobs:
           for shard in $(seq 0 "$((heal_shards - 1))"); do
             [ -s "/tmp/heal_shard_${shard}.txt" ] || continue
             echo "::group::workflow failure heal modules shard ${shard}"
-            cat "/tmp/heal_shard_${shard}.log" || true
+            { cat "/tmp/heal_shard_${shard}.log" 2>/dev/null || true; } | sed 's/^/| /'
             echo "::endgroup::"
             shard_rc="$(cat "/tmp/heal_shard_${shard}.rc" 2>/dev/null || true)"
             if [ "${shard_rc}" != "0" ]; then
