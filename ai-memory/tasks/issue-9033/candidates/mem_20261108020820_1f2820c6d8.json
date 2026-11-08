@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply analysis recommendations from workflow-optimization-2026-10-07-2.md\",\"issues\":[{\"id\":\"impl-failed-reissue-order\",\"title\":\"Poller: create and verify the replacement before closing an implementation-failed source issue (wfopt 2026-10-07-2 BUG-002)\",\"priority\":1},{\"id\":\"resolver-terminal-record\",\"title\":\"Conflict resolver: emit one sanitized RESOLVER_TERMINAL record from the exit trap (wfopt 2026-10-07-2 Reliability 1)\",\"priority\":2},{\"id\":\"triage-post-stage-codes\",\"title\":\"Check-failure triage: log a stage code on every exit of the posting step (wfopt 2026-10-07-2 Reliability 2)\",\"priority\":2},{\"id\":\"wfopt-2026-10-07-2-report\",\"title\":\"Record verdicts for workflow-optimization-2026-10-07-2.md and delete the source doc\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"impl-failed-reissue-order\",\"to\":\"wfopt-2026-10-07-2-report\"},{\"from\":\"resolver-terminal-record\",\"to\":\"wfopt-2026-10-07-2-report\"},{\"from\":\"triage-post-stage-codes\",\"to\":\"wfopt-2026-10-07-2-report\"}]}",
+  "fingerprint": "3427847bb63e6aadfb1a0ae91d972973c6c61e75143754399dcbbbc6996a9ba5",
+  "lineage": {
+    "issue_number": 9033,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42436554781",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42436554781",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261108020820_1f2820c6d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9033,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42436554781"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply analysis recommendations from workflow-optimization-2026-10-07-2.md' into 4 issues (tracking #9033)",
+  "timestamps": {
+    "created_at": "2026-11-08T02:08:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
