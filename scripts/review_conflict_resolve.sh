@@ -4738,6 +4738,8 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
       fi
     fi
   done
+  # The commit landed, so a later failure is not a commit failure.
+  RESOLVER_TERMINAL_EXIT_CLASS="other"
   git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
   # NOTE: push deferred to final "Push all pending commits" step.
   echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
