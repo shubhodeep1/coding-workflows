@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:1827-2000 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The external copilot-pull-request-reviewer check fails with HTTP 422 custom_instructions_too_large, and the additions to agents.md grow the instruction payload it loads.\n  WHY: Severity disagreement: gemini said MAJOR, luna said NIT, glm said NIT. The highest is used. glm notes the identical failure was already consolidated as out-of-scope on PR #9065 (lesson 20261108172043), so the size was already over budget, and it says no edit inside this forward-merge can fix it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- none (external check-run copilot-pull-request-reviewer, run 42513313194) | severity=NIT | confidence=4\n  PROBLEM: The third-party reviewer fails with HTTP 422 custom_instructions_too_large after loading AGENTS.md and CLAUDE.md. The agents.md additions in this PR increase the size of the instruction file it loads. The reviewer labelled this an out-of-scope note, not a code defect.\n  WHY: The folded agents.md text is already on stable. Trimming it here would make main diverge from stable and break the ancestry-based promote preflight. The same failure was previously rejected as out of scope (lesson 20261108172043).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:1830-1996 | severity=MAJOR | confidence=5\n  PROBLEM: The external copilot-pull-request-reviewer check failed with HTTP 422 custom_instructions_too_large.\n  WHY: The repository's instruction files (AGENTS.md, CLAUDE.md), built from the extensive additions to agents.md, exceed the external review tool's prompt-size limit. Automated reviews cannot complete.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:1830-1996 | severity=NIT | confidence=3\n  PROBLEM: This change adds extensive content to an instruction file loaded by the Copilot PR reviewer, which fails with HTTP 422 custom_instructions_too_large and produces no review.\n  WHY: The failed check confirms the combined custom-instruction payload exceeds the reviewer's limit, and the new sections add to it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md:1827-2000 | severity=NIT | confidence=4\n  PROBLEM: The check-run copilot-pull-request-reviewer fails on head fa4f91af (run 42513313194) with HTTP 422 custom_instructions_too_large. This PR grows agents.md by about 247 lines of folded fragments.\n  WHY: The failure was already recorded as out-of-scope on PR #9065 (run 42500290174, lesson 20261108172043), so the size was already over budget. It cannot be shown whether this PR's growth tipped the limit. No edit inside this forward-merge can fix it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1be6fdbe250568098032eb3a68a422b7a979064eee1e56a6265b533958f8603b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9077,
+    "run_id": "42513303004",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42513303004",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108193544_cac8415820",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9077,
+    "run_id": "42513303004"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T19:35:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
