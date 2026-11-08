@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_gh_api_write_guard.py:(no line given) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Infrastructure tests (test_gh_api_write_guard.py, test_pr_watch_guard.py, test_workflow_checkout_integration_ref_audit.py) fail after the 'Install actionlint' step in .github/workflows/ci.yml was modified.\n  WHY: The tests appear to hardcode expectations or checksums for that step that were not updated for the new curl flags (--retry 5 --retry-delay 15 --retry-max-time 300). Reviewer severity was MAJOR, mapped to high.\n- tests/test_files_touched_scope_guard.py:(no line given) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The scope guard test fails after the ci.yml modification.\n  WHY: The test likely enforces scope based on ci.yml content and was not updated to accept the new step configuration. Reviewer severity was MAJOR, mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Selected Option B specifies `--retry 5 --retry-delay 5` (about 25 seconds of total retry delay); the linked issue names this as an example, \"or similar\".\n  expected_change_site: `.github/workflows/ci.yml` `Install actionlint` step; `tests/test_ci_actionlint_install_retry.py` retry-delay contract (test_curl_uses_fixed_retry_delay)\n  confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: ci.yml uses `--retry-delay 15` (line 319) with `--retry-max-time 300`, the test accepts only delays of 10-60 seconds (lines 93-99) so the literal 5-second delay would fail it, the total retry delay is 75 seconds against the 25 seconds of Option B (reviewers rated this NIT, a refinement the \"or similar\" wording permits)\n- requirement: New workflow changes of high materiality require a corresponding mandatory agents.d/ fragment per agents.md instructions.\n  expected_change_site: agents.d/9053-ci-retry-hardening.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No agents.d/ fragment was added in the PR or the last AI autofix run to document the high-materiality ci.yml change, as test_agents_fragment_contract.py requires (reviewer severity NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_gh_api_write_guard.py:(Infrastructure tests for workflow integrity and integration) | severity=MAJOR | confidence=4\n  PROBLEM: The infrastructure tests (test_gh_api_write_guard.py, test_pr_watch_guard.py, test_workflow_checkout_integration_ref_audit.py) fail after the 'Install actionlint' step in .github/workflows/ci.yml was modified.\n  WHY: They appear to hardcode expectations or checksums for that step that were not updated for the new curl flags (--retry 5 --retry-delay 15 --retry-max-time 300).\n- tests/test_files_touched_scope_guard.py:(Scope guard test) | severity=MAJOR | confidence=4\n  PROBLEM: This test fails after the ci.yml modification.\n  WHY: It likely enforces the scope guard from ci.yml content and was not updated to accept the new step configuration.\n- TASK_GAP: Requirement: New workflow changes (high materiality) require a corresponding mandatory agents.d/ fragment as per agents.md instructions.\n  Expected change site: agents.d/9053-ci-retry-hardening.md\n  Evidence of absence: No agents.d/ fragment was introduced in the PR or the last AI autofix run to document the high-materiality change to .github/workflows/ci.yml, as required by the CI tests (test_agents_fragment_contract.py).\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: The PR description's AD-1 selected Option B, which specifies \"change the actionlint `curl` in `.github/workflows/ci.yml` to `--retry 5 --retry-delay 5`, which waits about 25 seconds in total.\" The linked issue's \"Suggested fix\" also names `--retry 5 --retry-delay 5` as the example hardening, qualified by \"or similar.\"\n  Expected change site: `.github/workflows/ci.yml` `Install actionlint` step (line ~316); retry contract in `tests/test_ci_actionlint_install_retry.py:test_curl_uses_fixed_retry_delay`.\n  Evidence of absence: The diff implements `--retry 5 --retry-delay 15 --retry-max-time 300` and the test asserts `--retry-delay` is in the range `[10, 60]`, so the literal Option-B value of 5 seconds cannot be set without failing the new test. The implementation hardens the retry window to 75 seconds total delay, three times longer than the approved option's 25 seconds. The AI issue summary's \"Expected outcome\" line (a fixed 15s delay inside a 300s window) is consistent with the implementation but is not what AD-1 transcribed from Option B. The issue text permits \"or similar,\" so this is a refinement rather than a violation, but the change in retry window magnitude is larger than the wording suggests.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: The selected Option B specifies `--retry 5 --retry-delay 5`, for about 25 seconds of retry delay.\n  Expected change site: `.github/workflows/ci.yml`, the `Install actionlint` step; `tests/test_ci_actionlint_install_retry.py`, the retry-delay contract.\n  Evidence of absence: `.github/workflows/ci.yml` uses `--retry-delay 15` at line 319. The test accepts only delays from 10 to 60 seconds at lines 93-99, so it does not enforce the selected 5-second delay.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7d31b57bbe0a2a4219746ab8bb36aef869000eb38ba537c1a0d554e0c008d494",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9055,
+    "run_id": "42473462932",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42473462932",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108111354_81e0f38812",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9055,
+    "run_id": "42473462932"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T11:13:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
