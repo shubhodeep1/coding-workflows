@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-08T13:36:02Z",
+  "issue_number": 9059,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=(external check-run, not in diff):n/a; cited_path=copilot-pull-request-reviewer check-run; files_touched=changelog.d/wfopt-2026-10-07-3-retro-fanout-prompt-checks.md, scripts/workflow_retro_fanout.sh, tests/test_workflow_retro_fanout.py.",
+  "phase": "review_autofix",
+  "pr_number": 9062,
+  "record_id": "lesson_20261108133602_80411405d9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer check-run",
+    "(external check-run, not in diff)",
+    "changelog.d/wfopt-2026-10-07-3-retro-fanout-prompt-checks.md",
+    "scripts/workflow_retro_fanout.sh",
+    "tests/test_workflow_retro_fanout.py"
+  ]
+}
