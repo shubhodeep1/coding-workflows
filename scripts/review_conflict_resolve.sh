@@ -457,8 +457,12 @@ _resolver_terminal_attempt_end() {
 }
 
 # Opens a new attempt timer (closing any timer a path forgot to close).
+# Clears the per-attempt counts so an attempt that exits before soft
+# validation records fp_violations=0 markers=unknown, not stale values.
 _resolver_terminal_attempt_begin() {
   _resolver_terminal_attempt_end || true
+  _fp_count=""
+  _marker_count=""
   RESOLVER_TERMINAL_ATTEMPTS=$((RESOLVER_TERMINAL_ATTEMPTS + 1))
   _resolver_terminal_attempt_open_ms="$(_resolver_terminal_now_ms)"
   return 0
@@ -2227,7 +2231,7 @@ PY
 }
 
 if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-  _resolver_attempt_state capture || exit 1
+  _resolver_attempt_state capture || { RESOLVER_TERMINAL_EXIT_CLASS="scope"; exit 1; }
 fi
 
 _capture_fingerprints_baseline()
@@ -3690,6 +3694,7 @@ resolver_conflict_path_report="${RUNTIME_DIR}/resolver_conflict_path_report.txt"
 rm -f -- "${resolver_conflict_path_report}"
 if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${RESOLVER_MODEL_PATHS_FILE}" "${resolver_conflict_path_report}" >/dev/null 2>"${RESOLVER_CHECK_PATHS_STDERR_FILE}"; then
   _resolver_report_rejected_path
+  RESOLVER_TERMINAL_EXIT_CLASS="scope"
   _resolver_fail_closed_for_conflict_paths "${resolver_conflict_path_report}"
 fi
 
@@ -3766,6 +3771,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if [ "${attempt}" -gt 1 ]; then
     if ! _restore_attempt_base; then
       echo "::error::Resolver retry-base restoration could not be verified; refusing another model attempt."
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
     _build_retry_prompt "$((attempt - 1))" \
@@ -3921,6 +3927,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         _resolver_fail_closed sandbox_prepare_failed
       elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${RESOLVER_MODEL_PATHS_FILE}" "${RUNTIME_DIR}/resolver_conflict_path_report.txt" 2>"${RESOLVER_CHECK_PATHS_STDERR_FILE}"; then
         _resolver_report_rejected_path
+        RESOLVER_TERMINAL_EXIT_CLASS="scope"
         _resolver_fail_closed_for_conflict_paths "${RUNTIME_DIR}/resolver_conflict_path_report.txt"
       fi
       rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
@@ -4621,6 +4628,8 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
     done < "${RESOLVER_TOUCHED_FILE}"
     rm -f "${RESOLVER_TOUCHED_FILE}"
   else
+    # Consumer-repo staging/commit failures record exit_class=commit.
+    RESOLVER_TERMINAL_EXIT_CLASS="commit"
     # Build per-file exclusions from scripts/.gitignore when present.
     # If it is absent, keep exclusions empty so consumer-owned scripts/
     # changes are still staged.

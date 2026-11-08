@@ -252,3 +252,28 @@ def test_emitter_failure_does_not_change_rc_or_skip_dispatch(tmp_path):
 	proc = _run(tmp_path, body)
 	assert proc.returncode == 4
 	assert "DISPATCH" in proc.stdout
+
+
+def test_path_guard_and_capture_exits_record_scope():
+	src = _src()
+	assert 'RESOLVER_TERMINAL_EXIT_CLASS="scope"\n  _resolver_fail_closed_for_conflict_paths "${resolver_conflict_path_report}"' in src
+	assert 'RESOLVER_TERMINAL_EXIT_CLASS="scope"\n        _resolver_fail_closed_for_conflict_paths "${RUNTIME_DIR}/resolver_conflict_path_report.txt"' in src
+	assert '_resolver_attempt_state capture || { RESOLVER_TERMINAL_EXIT_CLASS="scope"; exit 1; }' in src
+
+
+def test_consumer_staging_branch_records_commit():
+	src = _src()
+	else_idx = src.index("    # Build per-file exclusions from scripts/.gitignore when present.")
+	staged_idx = src.index('echo "Staged files before commit:"')
+	branch = src[src.rindex("  else\n", 0, else_idx):staged_idx]
+	assert 'RESOLVER_TERMINAL_EXIT_CLASS="commit"' in branch
+	assert branch.index('RESOLVER_TERMINAL_EXIT_CLASS="commit"') < branch.index("git add -u")
+
+
+def test_attempt_begin_clears_stale_counts(tmp_path):
+	body = "_fp_count=3\n_marker_count=2\n_resolver_terminal_attempt_begin\nexit 1\n"
+	proc = _run(tmp_path, body)
+	assert proc.returncode == 1
+	fields = _fields(_records(proc.stdout)[0])
+	assert fields["fp_violations"] == "0"
+	assert fields["markers"] == "unknown"
