@@ -40,6 +40,12 @@ stdout, diagnostics to stderr):
   * ``choose [--gate G] < probes.json`` — the usable accounts under the
     gate, the one whose spare 7-day quota expires soonest first (ties to the
     alphabetically first name), or why none is usable.
+  * ``chatgpt-slot --config F [--override V] [--model M] [--replaces R]`` —
+    whether the ChatGPT account review slot is on (fail closed), as one
+    ``enabled=… model=… replaces=… reasoning=… source=… reason=…`` line.
+  * ``chatgpt-classify --events T [--exit-code N] [--field F]`` — one
+    ``codex exec --json`` run of that slot: ``ok``, ``auth_rejected``,
+    ``quota_exhausted`` or ``run_failed`` (reason codes only).
 
 Exit codes: 0 success; 1 the input describes a failure (``extract`` found
 no result); 2 invalid arguments or input.
@@ -195,6 +201,119 @@ WORKFLOW_DENY_MARKER = "/.github/workflows/"
 
 class EngineError(ValueError):
 	"""Invalid input to an engine subcommand."""
+
+
+# --- ChatGPT account review-panel slot (trial plan Phase 2, Refs #8969) ------
+# The slot never runs Claude, so its role stays out of ROLES (which drives the
+# Claude role defaults and claude_engine.json normalisation).
+CHATGPT_ROLES: tuple[str, ...] = ("PANEL_REVIEWER_CHATGPT",)
+CHATGPT_SLOT_DEFAULTS: dict[str, str] = {"model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}
+CHATGPT_MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}$")
+CHATGPT_REPLACES_RE = re.compile(r"^[a-z0-9-]+/[a-z0-9._-]+$")
+CHATGPT_REASONING: tuple[str, ...] = ("none", "low", "medium", "high", "xhigh")
+CHATGPT_AUTH_RE = re.compile(
+	r"\b40[13]\b|unauthori[sz]ed|forbidden|\blog ?in\b|refresh[_ ]token|token (?:is )?(?:invalid|expired|revoked)|authenticat",
+	re.IGNORECASE,
+)
+CHATGPT_QUOTA_RE = re.compile(r"\b429\b|usage[_ ]limit|rate[_ -]?limit|quota|too many requests", re.IGNORECASE)
+
+
+def resolve_chatgpt_slot(config_path: Path, override: str = "", model_var: str = "", replaces_var: str = "") -> dict[str, Any]:
+	"""Whether the ChatGPT review slot is on, failing closed.
+
+	Only a JSON boolean ``true`` for ``reviewer_slot_enabled`` (or an override
+	of exactly ``true``) turns it on. A missing or unreadable file, invalid
+	JSON, a non-object, a non-boolean switch, an invalid model / replaces /
+	reasoning value, or an override other than empty, ``true`` or ``false``
+	keeps it off. Printed values are always validated (or the defaults), so
+	they are safe to write to a step output.
+	"""
+	values = dict(CHATGPT_SLOT_DEFAULTS)
+	errors: list[str] = []
+	switch = False
+	source = "default"
+	raw: Any = None
+	try:
+		raw = json.loads(config_path.read_text(encoding="utf-8"))
+	except FileNotFoundError:
+		errors.append("config_missing")
+	except (OSError, ValueError):
+		errors.append("config_invalid")
+	if not errors:
+		source = "file"
+		if not isinstance(raw, dict):
+			errors.append("config_invalid")
+		else:
+			flag = raw.get("reviewer_slot_enabled", False)
+			if isinstance(flag, bool):
+				switch = flag
+			else:
+				errors.append("config_invalid")
+			checks = (("model", CHATGPT_MODEL_RE), ("replaces", CHATGPT_REPLACES_RE))
+			for key, pattern in checks:
+				if key in raw:
+					value = raw[key]
+					if isinstance(value, str) and pattern.fullmatch(value):
+						values[key] = value
+					else:
+						errors.append("config_invalid")
+			if "reasoning" in raw:
+				if raw["reasoning"] in CHATGPT_REASONING:
+					values["reasoning"] = raw["reasoning"]
+				else:
+					errors.append("config_invalid")
+	for key, value, pattern in (("model", model_var, CHATGPT_MODEL_RE), ("replaces", replaces_var, CHATGPT_REPLACES_RE)):
+		value = (value or "").strip()
+		if not value:
+			continue
+		if pattern.fullmatch(value):
+			values[key] = value
+		else:
+			errors.append("var_invalid")
+	override = (override or "").strip()
+	if override in ("true", "false"):
+		switch = override == "true"
+		source = "var"
+	elif override:
+		errors.append("var_invalid")
+	enabled = switch and not errors
+	reason = "ok" if enabled else (errors[0] if errors else "switch_off")
+	return {"enabled": enabled, **values, "source": source, "reason": reason}
+
+
+def classify_chatgpt_events(text: str, exit_code: int | None) -> dict[str, str]:
+	"""Classify one ``codex exec --json`` run of the ChatGPT slot.
+
+	``auth_rejected``: an ``error`` / ``turn.failed`` event naming a 401/403,
+	an unauthorized, login or refresh failure. ``quota_exhausted``: one naming
+	a 429, usage limit, rate limit or quota. ``ok``: exit code 0 with an agent
+	message and no such failure. Anything else is ``run_failed``. Returns
+	reason codes only, never event text.
+	"""
+	messages: list[str] = []
+	has_agent_message = False
+	for event in read_events(text):
+		event_type = event.get("type")
+		if event_type in ("error", "turn.failed"):
+			error = event.get("error")
+			message = event.get("message")
+			if isinstance(error, dict):
+				message = error.get("message", message)
+			elif isinstance(error, str):
+				message = error
+			messages.append(str(message or ""))
+		elif event_type == "item.completed":
+			item = event.get("item")
+			if isinstance(item, dict) and item.get("type") in ("agent_message", "assistant_message"):
+				has_agent_message = True
+	joined = "\n".join(messages)
+	if messages and CHATGPT_AUTH_RE.search(joined):
+		return {"outcome": "failed", "reason": "auth_rejected"}
+	if messages and CHATGPT_QUOTA_RE.search(joined):
+		return {"outcome": "failed", "reason": "quota_exhausted"}
+	if exit_code == 0 and has_agent_message and not any(event.get("type") == "turn.failed" for event in read_events(text)):
+		return {"outcome": "ok", "reason": "ok"}
+	return {"outcome": "failed", "reason": "run_failed"}
 
 
 # --- support files ---------------------------------------------------------
@@ -1238,6 +1357,24 @@ def cmd_pool_usage(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_chatgpt_slot(args: argparse.Namespace) -> int:
+	slot = resolve_chatgpt_slot(Path(args.config), args.override, args.model, args.replaces)
+	print(
+		f"enabled={'true' if slot['enabled'] else 'false'} model={slot['model']} replaces={slot['replaces']} "
+		f"reasoning={slot['reasoning']} source={slot['source']} reason={slot['reason']}"
+	)
+	return 0
+
+
+def cmd_chatgpt_classify(args: argparse.Namespace) -> int:
+	verdict = classify_chatgpt_events(_read_text(args.events), args.exit_code)
+	if args.field:
+		print(verdict[args.field])
+	else:
+		_print_json(verdict)
+	return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True)
@@ -1307,6 +1444,19 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--gate", type=float, default=None)
 	p.add_argument("--config", default="")
 	p.set_defaults(func=cmd_pool_usage)
+
+	p = sub.add_parser("chatgpt-slot")
+	p.add_argument("--config", required=True)
+	p.add_argument("--override", default="")
+	p.add_argument("--model", default="")
+	p.add_argument("--replaces", default="")
+	p.set_defaults(func=cmd_chatgpt_slot)
+
+	p = sub.add_parser("chatgpt-classify")
+	p.add_argument("--events", required=True)
+	p.add_argument("--exit-code", type=int, default=None)
+	p.add_argument("--field", choices=("outcome", "reason"), default="")
+	p.set_defaults(func=cmd_chatgpt_classify)
 	return parser
 
 

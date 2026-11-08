@@ -10,7 +10,9 @@ case "${action}" in prepare|prepare-ephemeral|run|cleanup|seed) ;; *) exit 2 ;; 
 prepare_engine="${2:-codex}"
 if [ "${action}" = prepare-ephemeral ]; then
 	prepare_engine="${2:-claude}"
-	case "${prepare_engine}" in claude|codex) ;; *) exit 2 ;; esac
+	# chatgpt: the ChatGPT account review slot (Codex CLI behind
+	# scripts/chatgpt_codex_relay.py, read-only PANEL_REVIEWER only).
+	case "${prepare_engine}" in claude|codex|chatgpt) ;; *) exit 2 ;; esac
 fi
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Review isolation requires Docker and Python' >&2; exit 1; }
 [ -f "${support}/review_untrusted_workspace.py" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/review_sandbox/Dockerfile" ] || { echo '::error::Review isolation support missing' >&2; exit 1; }
@@ -118,6 +120,12 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		[[ "${claude_cli_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review Claude CLI version' >&2; exit 1; }
 		image="$(_review_sandbox_build_image 900 --build-arg "OPENCODE_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_cli_version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 		printf 'claude\n' > "${root}/engine"
+	elif [ "${prepare_engine}" = chatgpt ] && [ "${action}" = prepare-ephemeral ]; then
+		[ -f "${support}/chatgpt_codex_relay.py" ] && [ ! -L "${support}/chatgpt_codex_relay.py" ] && [ -f "${support}/claude_engine.py" ] || { echo '::error::Review ChatGPT support missing' >&2; exit 1; }
+		chatgpt_cli_version="${CODEX_VERSION:-v0.114.0}"
+		[[ "${chatgpt_cli_version}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review Codex CLI version' >&2; exit 1; }
+		image="$(_review_sandbox_build_image 900 --build-arg "OPENCODE_VERSION=${version}" --build-arg "CODEX_CLI_VERSION=${chatgpt_cli_version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
+		printf 'chatgpt\n' > "${root}/engine"
 	else
 		image="$(_review_sandbox_build_image 0 --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 	fi
@@ -414,7 +422,7 @@ model="$4"
 variant="$5"
 config="$6"
 engine="${7:-codex}"
-case "${engine}" in codex|claude) ;; *) exit 2 ;; esac
+case "${engine}" in codex|claude|chatgpt) ;; *) exit 2 ;; esac
 claude_role="${8:-REVIEW_EDITOR}"
 case "${claude_role}" in REVIEW_EDITOR|REVIEW_CONSOLIDATOR|RB_JUDGE|CONFLICT_RESOLVER|WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM|PANEL_REVIEWER) ;; *) exit 2 ;; esac
 claude_access="${9:-write}"
@@ -432,6 +440,10 @@ case "${claude_role}" in
 	WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM|PANEL_REVIEWER)
 		[ "${claude_access}" = read ] || exit 2 ;;
 esac
+# The ChatGPT account slot is the read-only review-panel role only.
+if [ "${engine}" = chatgpt ] && { [ "${claude_role}" != PANEL_REVIEWER ] || [ "${claude_access}" != read ]; }; then
+	exit 2
+fi
 # The interim judge has no Claude engine role; it runs sandboxed OpenCode only.
 if [ "${claude_role}" = JUDGE_INTERIM ] && [ "${engine}" != codex ]; then
 	exit 2
@@ -645,6 +657,116 @@ if [ "${engine}" = claude ]; then
 		fi
 	fi
 	exit "${rc}"
+fi
+# ChatGPT account review slot (engine chatgpt, trial plan Phase 2, Refs
+# #8969): the Codex CLI runs in the same --network none container with a
+# read-only /source and a placeholder ChatGPT-mode auth.json. Its model
+# traffic goes over the provider socket to scripts/chatgpt_codex_relay.py on
+# the host, which alone reads the real auth.json from CHATGPT_POOL_CODEX_HOME
+# (written by .github/actions/chatgpt-pool-token; never mounted, never on
+# argv). <model> is a bare Codex model, <variant> its reasoning effort and
+# <config> is unused. Nothing is transferred back. Any failure prints
+# AI_ENGINE_FALLBACK role=PANEL_REVIEWER_CHATGPT reason=<r> on stderr and
+# exits 76 (chatgpt_pool_unavailable, auth_rejected, quota_exhausted,
+# run_failed); the caller skips the slot.
+if [ "${engine}" = chatgpt ]; then
+	chatgpt_unavailable()
+	{
+		echo "AI_ENGINE_FALLBACK role=PANEL_REVIEWER_CHATGPT reason=$1" >&2
+		exit 76
+	}
+	[[ "${model}" =~ ^[a-z0-9][a-z0-9.-]{0,63}$ ]] && [[ "${variant}" =~ ^(none|low|medium|high|xhigh)$ ]] || exit 2
+	[ "$(cat "${root}/engine" 2>/dev/null)" = chatgpt ] || chatgpt_unavailable chatgpt_pool_unavailable
+	for required in chatgpt_codex_relay.py claude_engine.py; do
+		[ -f "${support}/${required}" ] && [ ! -L "${support}/${required}" ] || chatgpt_unavailable chatgpt_pool_unavailable
+	done
+	[ -s "${prompt}" ] || { echo '::error::Review relay preflight failed' >&2; exit 1; }
+	chatgpt_pool_root="$(realpath -e -- "${RUNNER_TEMP:-/tmp}/chatgpt-pool" 2>/dev/null || echo /invalid)"
+	chatgpt_codex_home="$(realpath -e -- "${CHATGPT_POOL_CODEX_HOME:-/invalid}" 2>/dev/null || echo /invalid)"
+	if [ ! -d "${chatgpt_codex_home}" ] || [[ "${chatgpt_codex_home}" == *$'\n'* ]] \
+		|| [ "$(dirname -- "${chatgpt_codex_home}")" != "${chatgpt_pool_root}" ] \
+		|| [ "$(stat -c %a -- "${chatgpt_codex_home}" 2>/dev/null)" != 700 ] \
+		|| [ ! -f "${chatgpt_codex_home}/auth.json" ] || [ -L "${chatgpt_codex_home}/auth.json" ]; then
+		chatgpt_unavailable chatgpt_pool_unavailable
+	fi
+	image="$(< "${root}/image")"
+	[[ "${image}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo '::error::Invalid review image ID' >&2; exit 1; }
+	chatgpt_home="$(mktemp -d "${root}/home-chatgpt-XXXXXXXX")"
+	container="review-editor-$$"
+	broker_pid=""
+	chatgpt_finish()
+	{
+		[ -z "${broker_pid}" ] || { kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; }
+		env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f "${container}" >/dev/null 2>&1 || true
+		rm -f -- "${root}/active-container" "${root}/socket/provider.sock"
+		rm -rf -- "${chatgpt_home}"
+	}
+	trap chatgpt_finish EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
+	mkdir -m 0700 "${chatgpt_home}/.codex"
+	# Every value below passed a fixed-pattern check, so the TOML is literal.
+	{
+		printf 'model = "%s"\n' "${model}"
+		printf 'model_reasoning_effort = "%s"\n' "${variant}"
+		printf 'model_provider = "chatgpt_relay"\n'
+		printf 'approval_policy = "never"\n'
+		printf 'sandbox_mode = "read-only"\n'
+		printf 'web_search = "disabled"\n'
+		printf '\n[model_providers.chatgpt_relay]\n'
+		printf 'name = "chatgpt_relay"\n'
+		printf 'base_url = "http://127.0.0.1:8765/backend-api/codex"\n'
+		printf 'wire_api = "responses"\n'
+		printf 'requires_openai_auth = true\n'
+	} > "${chatgpt_home}/.codex/config.toml"
+	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/chatgpt_codex_relay.py" placeholder-auth "${chatgpt_home}/.codex/auth.json" \
+		|| chatgpt_unavailable chatgpt_pool_unavailable
+	install -m 0600 "${prompt}" "${root}/prompt"
+	review_append_hidden_build_note
+	printf '%s\n' "${container}" > "${root}/active-container"
+	rm -f -- "${root}/socket/provider.sock"
+	env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
+		python3 "${support}/chatgpt_codex_relay.py" broker "${root}/socket/provider.sock" "${chatgpt_codex_home}" "${model}" &
+	broker_pid=$!
+	for _ in $(seq 1 50); do
+		[ -S "${root}/socket/provider.sock" ] && break
+		kill -0 "${broker_pid}" 2>/dev/null || break
+		sleep 0.1
+	done
+	[ -S "${root}/socket/provider.sock" ] || chatgpt_unavailable chatgpt_pool_unavailable
+	# No host checkout, HOME, Docker socket, auth.json or Git remote is mounted.
+	run_rc=0
+	env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container}" \
+		--user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL \
+		--security-opt no-new-privileges --pids-limit 128 --memory 3g --cpus 2 \
+		--tmpfs /tmp:rw,nosuid,nodev,size=128m \
+		--mount "type=bind,src=${root}/source,dst=/source,readonly" \
+		--mount "type=bind,src=${root}/socket,dst=/socket,readonly" \
+		--mount "type=bind,src=${chatgpt_home},dst=/home/agent" \
+		--mount "type=bind,src=${root}/prompt,dst=/prompt,readonly" \
+		--mount "type=bind,src=$(realpath "${support}/chatgpt_codex_relay.py"),dst=/relay.py,readonly" \
+		--env HOME=/home/agent --env CODEX_HOME=/home/agent/.codex \
+		--env "MODEL=${model}" --workdir /source "${image}" /bin/bash -c '
+			set -uo pipefail
+			python3 /relay.py bridge /socket/provider.sock &
+			bridge_pid=$!
+			trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
+			python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\'' || exit 1
+			export PATH=/source/.review-venv/bin:$PATH NO_COLOR=1
+			codex_rc=0
+			codex --ask-for-approval never exec --json --skip-git-repo-check --model "${MODEL}" --sandbox read-only \
+				--output-last-message /tmp/last.txt < /prompt > /home/agent/events.jsonl 2> /home/agent/codex.err || codex_rc=$?
+			[ ! -f /tmp/last.txt ] || cat /tmp/last.txt
+			exit "${codex_rc}"
+		' > "${output}" || run_rc=$?
+	kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
+	# Reason codes only: the classifier never echoes event text, and model
+	# output (stdout) is never read for a reason.
+	chatgpt_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 "${support}/claude_engine.py" chatgpt-classify --events "${chatgpt_home}/events.jsonl" --exit-code "${run_rc}" --field reason 2>/dev/null)" || chatgpt_reason=run_failed
+	case "${chatgpt_reason}" in ok|auth_rejected|quota_exhausted|run_failed) ;; *) chatgpt_reason=run_failed ;; esac
+	echo "REVIEWER_CHATGPT: sandbox outcome=$([ "${chatgpt_reason}" = ok ] && echo ok || echo failed) reason=${chatgpt_reason} exit_code=${run_rc}" >&2
+	[ "${chatgpt_reason}" = ok ] || chatgpt_unavailable "${chatgpt_reason}"
+	exit 0
 fi
 [[ "${model}" =~ ^[a-zA-Z0-9._:+-]+/[a-zA-Z0-9._:+/-]+$ ]] && [[ "${variant}" =~ ^(none|low|medium|high|xhigh)$ ]] || exit 2
 [ -n "${OPENROUTER_API_KEY:-}" ] && [ -s "${prompt}" ] || { echo '::error::Review relay preflight failed' >&2; exit 1; }
