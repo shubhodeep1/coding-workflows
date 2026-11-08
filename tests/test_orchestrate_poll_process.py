@@ -8489,6 +8489,310 @@ def test_security_pass_fix_successor_malformed_state_is_inconclusive() -> None:
 		assert result.stdout.splitlines() == ["2", "2"]
 		assert not api_call_path.exists()
 
+def _rb_reissue_body(tracking: int, replaces: int, *, local_id: str = "phase1") -> str:
+	return (
+		"Redo the phase.\r\n\r\n---\r\n**Orchestrator metadata** (do not edit)\r\n"
+		f"- Tracking issue: #{tracking}\r\n"
+		"- Integration branch: `orchestrator/project-8969`\r\n"
+		f"- Local ID: `{local_id}`\r\n\r\n---\r\n"
+		"**Review-blocked reissue metadata**\r\n"
+		f"- Replaces: #{replaces} (PR #8972 closed — approach rework)\r\n"
+		"- Type: review-blocked-reissue"
+	)
+
+
+def _rb_reissue_xref(number: int, body: str, labels: list[str], *, pr: bool = False, repo: str = "owner/repo", state: str = "open") -> dict:
+	issue: dict = {
+		"number": number,
+		"state": state,
+		"body": body,
+		"labels": [{"name": name} for name in labels],
+		"repository_url": f"https://api.github.com/repos/{repo}",
+		"pull_request": {"url": f"https://api.github.com/repos/{repo}/pulls/{number}"} if pr else None,
+	}
+	return {"event": "cross-referenced", "source": {"type": "issue", "issue": issue}}
+
+
+def _run_rb_reissue_harness(timeline_pages: list | None, script_tail: str, state: dict | None = None) -> subprocess.CompletedProcess:
+	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helpers = _extract_bash_function(
+		poller_source, "resolve_review_blocked_reissue_successor() {"
+	) + _extract_bash_function(poller_source, "adopt_review_blocked_reissue_successor() {")
+	with tempfile.TemporaryDirectory() as temp_dir:
+		temp_path = Path(temp_dir)
+		timeline_path = temp_path / "timeline.json"
+		state_path = temp_path / "state.json"
+		state_path.write_text(json.dumps(state or {}), encoding="utf-8")
+		if timeline_pages is None:
+			fake = 'gh_retry_to_file() { : > "$1"; return 1; }\n'
+		else:
+			timeline_path.write_text("".join(json.dumps(page) for page in timeline_pages), encoding="utf-8")
+			fake = f'gh_retry_to_file() {{ cp {str(timeline_path)!r} "$1"; }}\n'
+		harness = (
+			"set -euo pipefail\n"
+			f"STATE_FILE={str(state_path)!r}\n"
+			f"RUNTIME_DIR={str(temp_path)!r}\n"
+			"TRACKING_NUM=8969\nWAVE_IDX=0\nGITHUB_REPOSITORY=owner/repo\n"
+			+ fake
+			+ helpers
+			+ "\n"
+			+ script_tail
+			+ f"\necho STATE=$(jq -c . {str(state_path)!r})\n"
+		)
+		harness_path = temp_path / "harness.sh"
+		harness_path.write_text(harness, encoding="utf-8")
+		return subprocess.run(["bash", str(harness_path)], capture_output=True, text=True, check=False)
+
+
+_RB_RESOLVE_TAIL = 'rc=0; out="$(resolve_review_blocked_reissue_successor 8970)" || rc=$?; echo "rc=${rc}"; echo "out=${out}"\n'
+
+
+def test_rb_reissue_successor_resolves_review_pipeline_reissue() -> None:
+	"""Regression for project #8969 (2026-11-07): review_rb_judge.sh reissued
+	wave issue #8970 as #8994, the poller never mapped it, and the wave judge
+	opened duplicate #8995.  The resolver must find #8994 (and not the judge's
+	own redo, whose body has no ``Replaces`` line) from #8970's timeline."""
+	result = _run_rb_reissue_harness(
+		[
+			[
+				_rb_reissue_xref(8969, "tracking body", ["ai:orchestrator-tracking"]),
+				_rb_reissue_xref(8972, "Closes #8970", ["ai:engine-claude"], pr=True),
+			],
+			[
+				_rb_reissue_xref(8994, _rb_reissue_body(8969, 8970), ["ai:merged", "ai:orchestrator-managed"], state="closed"),
+				_rb_reissue_xref(8995, "Phase 1 redo.\n- Tracking issue: #8969\nSee #8970.", ["ai:done", "ai:orchestrator-managed"]),
+			],
+		],
+		_RB_RESOLVE_TAIL,
+	)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	assert "rc=0" in lines
+	out = json.loads(next(line for line in lines if line.startswith("out="))[4:])
+	assert out == {"number": 8994, "state": "closed", "labels": ["ai:merged", "ai:orchestrator-managed"]}
+
+
+def test_rb_reissue_successor_rejects_untrusted_or_mismatched_sources() -> None:
+	body = _rb_reissue_body(8969, 8970)
+	result = _run_rb_reissue_harness(
+		[
+			[
+				# No ai:orchestrator-managed label: forged markers are not enough.
+				_rb_reissue_xref(9001, body, []),
+				# A PR, not an issue.
+				_rb_reissue_xref(9002, body, ["ai:orchestrator-managed"], pr=True),
+				# Another repository.
+				_rb_reissue_xref(9003, body, ["ai:orchestrator-managed"], repo="other/repo"),
+				# Another project.
+				_rb_reissue_xref(9004, _rb_reissue_body(1234, 8970), ["ai:orchestrator-managed"]),
+				# Replaces a different issue whose number starts with 8970.
+				_rb_reissue_xref(9005, _rb_reissue_body(8969, 89701), ["ai:orchestrator-managed"]),
+				# Older than the closed issue.
+				_rb_reissue_xref(8000, body, ["ai:orchestrator-managed"]),
+				# Missing the reissue type marker.
+				_rb_reissue_xref(9006, body.replace("- Type: review-blocked-reissue", ""), ["ai:orchestrator-managed"]),
+			]
+		],
+		_RB_RESOLVE_TAIL,
+	)
+	assert result.returncode == 0, result.stderr
+	assert "rc=1" in result.stdout.splitlines()
+
+
+def test_rb_reissue_successor_picks_highest_match_and_fails_open_on_lookup_error() -> None:
+	body = _rb_reissue_body(8969, 8970)
+	result = _run_rb_reissue_harness(
+		[[_rb_reissue_xref(8994, body, ["ai:orchestrator-managed"]), _rb_reissue_xref(8999, body, ["ai:orchestrator-managed"])]],
+		_RB_RESOLVE_TAIL,
+	)
+	assert result.returncode == 0, result.stderr
+	assert '"number":8999' in result.stdout
+
+	failed = _run_rb_reissue_harness(None, _RB_RESOLVE_TAIL)
+	assert failed.returncode == 0, failed.stderr
+	assert "rc=2" in failed.stdout.splitlines()
+
+
+def _rb_reissue_state() -> dict:
+	return {
+		"issue_number_map": {"phase1": 8970, "phase1-redo": 8995},
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "phase1", "github_issue": 8970, "status": "closed", "last_seen_phase": "ai:closed", "status_since_ts": 1, "stall_recovery_count": 2},
+					{"id": "phase1-redo", "github_issue": 8995, "status": "done"},
+				],
+			},
+			{"wave": 2, "issues": [{"id": "phase2", "github_issue": None, "status": "pending"}]},
+		],
+	}
+
+
+def test_rb_reissue_adoption_repoints_wave_entry_once() -> None:
+	result = _run_rb_reissue_harness(
+		[],
+		'rc=0; lid="$(adopt_review_blocked_reissue_successor 8970 8994)" || rc=$?; echo "adopt=${rc}:${lid}"\n'
+		'rc=0; adopt_review_blocked_reissue_successor 8970 8994 || rc=$?; echo "again=${rc}"\n',
+		state=_rb_reissue_state(),
+	)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	assert "adopt=0:phase1" in lines
+	assert "again=3" in lines
+	state = json.loads(next(line for line in lines if line.startswith("STATE="))[6:])
+	assert state["issue_number_map"] == {"phase1": 8994, "phase1-redo": 8995}
+	entry = state["waves"][0]["issues"][0]
+	assert entry["github_issue"] == 8994
+	assert entry["status"] == "pending"
+	assert entry["last_seen_phase"] == ""
+	assert entry["stall_recovery_count"] == 0
+	assert state["waves"][0]["issues"][1] == {"id": "phase1-redo", "github_issue": 8995, "status": "done"}
+
+
+def test_rb_reissue_adoption_refuses_tracked_successor_and_terminal_entries() -> None:
+	state = _rb_reissue_state()
+	state["waves"][0]["issues"].append({"id": "phase1-b", "github_issue": 8971, "status": "merged"})
+	state["waves"][0]["issues"].append({"id": "phase1-c", "github_issue": 8973, "status": "skipped"})
+	result = _run_rb_reissue_harness(
+		[],
+		'rc=0; adopt_review_blocked_reissue_successor 8970 8995 || rc=$?; echo "tracked=${rc}"\n'
+		'rc=0; adopt_review_blocked_reissue_successor 8971 9100 || rc=$?; echo "merged=${rc}"\n'
+		'rc=0; adopt_review_blocked_reissue_successor 8973 9101 || rc=$?; echo "skipped=${rc}"\n'
+		'rc=0; adopt_review_blocked_reissue_successor 7777 9102 || rc=$?; echo "absent=${rc}"\n',
+		state=state,
+	)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	for expected in ("tracked=3", "merged=1", "skipped=1", "absent=1"):
+		assert expected in lines, result.stdout
+	after = json.loads(next(line for line in lines if line.startswith("STATE="))[6:])
+	assert after == state
+
+
+def test_rb_reissue_adoption_replaces_orphan_entry_for_successor() -> None:
+	"""A successor the orphan sweep injected as ``orphan-rb-<n>`` into the
+	current wave does not block adoption; the orphan entry is removed."""
+	state = _rb_reissue_state()
+	state["waves"][0]["issues"].append({"id": "orphan-rb-8994", "github_issue": 8994, "status": "in_progress"})
+	result = _run_rb_reissue_harness(
+		[],
+		'rc=0; lid="$(adopt_review_blocked_reissue_successor 8970 8994)" || rc=$?; echo "adopt=${rc}:${lid}"\n',
+		state=state,
+	)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	assert "adopt=0:phase1" in lines
+	after = json.loads(next(line for line in lines if line.startswith("STATE="))[6:])
+	ids = [entry["id"] for entry in after["waves"][0]["issues"]]
+	assert ids == ["phase1", "phase1-redo"]
+	assert after["waves"][0]["issues"][0]["github_issue"] == 8994
+
+
+def test_rb_reissue_adoption_seeds_successor_pr_state() -> None:
+	"""Wiring guard: the adoption loop gives the successor a PR_STATES_JSON
+	entry so check-wave-status does not read a closed successor whose PR
+	merged before ai:merged landed as closed-without-merge."""
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	adopt = source.index('adopt_review_blocked_reissue_successor "${_rb_reissue_closed}" "${_rb_reissue_num}"')
+	seed = source.index('PR_STATES_JSON="$(printf \'%s\' "${PR_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}"')
+	wave_status = source.index('--pr-states-json "${PR_STATES_JSON}"')
+	assert adopt < seed < wave_status
+
+
+def _run_rb_reissue_adoption_loop(xref_stub: str, fetch_stub: str, pr_states: str = "{}") -> dict:
+	"""Run the real adoption loop (candidate loop through its unset line) with
+	stubbed helpers; return the JSON maps it hands to check-wave-status."""
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = source.index('  for _rb_reissue_candidate in ${RB_REISSUE_ADOPTION_CANDIDATES[@]+')
+	end = source.index("\n", source.index("  unset _rb_reissue_candidate", start)) + 1
+	loop = source[start:end]
+	jq_field = _extract_bash_function(source, "_jq_field()\n{")
+	succ = json.dumps({"number": 8994, "state": "closed", "labels": ["ai:orchestrator-managed"]})
+	harness = (
+		"set -euo pipefail\n"
+		"TRACKING_NUM=8969\n"
+		"ISSUE_NUMS=' 8970 8995'\n"
+		f"PR_STATES_JSON={pr_states!r}\nLABELS_JSON='{{}}'\nISSUE_STATES_JSON='{{}}'\n"
+		"RB_REISSUE_ADOPTION_STATE_CHANGED=false\n"
+		f"RB_REISSUE_ADOPTION_CANDIDATES=(\"8970\"$'\\t'{succ!r})\n"
+		"adopt_review_blocked_reissue_successor() { echo phase1; }\n"
+		"add_healing_note() { :; }\n"
+		"post_state_comment() { :; }\n"
+		"_pr_json_is_issue_implementation_pr() { return 0; }\n"
+		+ xref_stub + "\n" + fetch_stub + "\n" + jq_field + "\n" + loop
+		+ 'printf \'PR=%s\\nISSUES=%s\\n\' "${PR_STATES_JSON}" "${ISSUE_STATES_JSON}"\n'
+	)
+	with tempfile.TemporaryDirectory() as temp_dir:
+		harness_path = Path(temp_dir) / "harness.sh"
+		harness_path.write_text(harness, encoding="utf-8")
+		result = subprocess.run(["bash", str(harness_path)], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	return {
+		"stdout": result.stdout,
+		"pr": json.loads(next(line for line in lines if line.startswith("PR="))[3:]),
+		"issues": json.loads(next(line for line in lines if line.startswith("ISSUES="))[7:]),
+	}
+
+
+def test_rb_reissue_adoption_inconclusive_pr_lookup_does_not_read_as_unmerged() -> None:
+	"""A failed successor PR lookup must not be seeded as merged:false, which
+	check-wave-status reads as closed-without-merge (duplicate redo).  The
+	successor counts as open for that tick and a warning is logged."""
+	ok_fetch = '_fetch_pr_json() { echo \'{"state":"closed","merged_at":"2026-11-07T18:00:00Z"}\'; }'
+	for xref, fetch in (
+		("_issue_cross_ref_pr_numbers_unique() { return 1; }", ok_fetch),
+		("_issue_cross_ref_pr_numbers_unique() { echo 9003; }", "_fetch_pr_json() { echo '{}'; }"),
+	):
+		out = _run_rb_reissue_adoption_loop(xref, fetch)
+		assert "8994" not in out["pr"], out
+		assert out["issues"]["8994"] == "open", out
+		assert "outcome=inconclusive successor=8994 reason=successor_pr_lookup_failed" in out["stdout"]
+
+	merged = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { echo 9003; }", ok_fetch)
+	assert merged["pr"]["8994"] == {"state": "closed", "merged": True}
+	assert merged["issues"]["8994"] == "closed"
+	assert "reason=successor_pr_lookup_failed" not in merged["stdout"]
+
+	no_pr = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { :; }", ok_fetch)
+	assert no_pr["pr"]["8994"] == {"state": "unknown", "merged": False}
+	assert no_pr["issues"]["8994"] == "closed"
+
+
+def test_rb_reissue_adoption_rechecks_stale_unknown_pr_entry() -> None:
+	"""An orphan-rb successor the reconcile loop already read may carry a
+	default {state: unknown, merged: false} entry from a failed lookup.  The
+	adoption loop must look the PR up again instead of trusting it."""
+	stale = '{"8994":{"state":"unknown","merged":false}}'
+	ok_fetch = '_fetch_pr_json() { echo \'{"state":"closed","merged_at":"2026-11-07T18:00:00Z"}\'; }'
+	merged = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { echo 9003; }", ok_fetch, stale)
+	assert merged["pr"]["8994"] == {"state": "closed", "merged": True}
+	assert merged["issues"]["8994"] == "closed"
+
+	failed = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { return 1; }", ok_fetch, stale)
+	assert failed["issues"]["8994"] == "open", failed
+	assert "reason=successor_pr_lookup_failed" in failed["stdout"]
+
+	authoritative = '{"8994":{"state":"closed","merged":true}}'
+	kept = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { return 1; }", ok_fetch, authoritative)
+	assert kept["pr"]["8994"] == {"state": "closed", "merged": True}
+	assert "reason=successor_pr_lookup_failed" not in kept["stdout"]
+
+
+def test_rb_reissue_adoption_runs_before_wave_status_and_persists_state() -> None:
+	"""Wiring guard: the lookup sits in the reconcile loop and the adoption
+	runs, and is persisted, before the first check-wave-status read."""
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	lookup = source.index('_rb_reissue_json="$(resolve_review_blocked_reissue_successor "${inum}")"')
+	adopt = source.index('adopt_review_blocked_reissue_successor "${_rb_reissue_closed}" "${_rb_reissue_num}"')
+	persist = source.index('if [ "${RB_REISSUE_ADOPTION_STATE_CHANGED}" = "true" ]; then\n    post_state_comment || true')
+	wave_status = source.index('WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \\\n    --state-file "${STATE_FILE}" \\\n    --labels-json "${LABELS_JSON}" \\\n    --issue-states-json')
+	assert lookup < adopt < persist < wave_status
+	reset = source.index("  RB_REISSUE_ADOPTION_CANDIDATES=()\n  RB_REISSUE_ADOPTION_STATE_CHANGED=false\n  for inum in ${ISSUE_NUMS}; do")
+	assert reset < lookup
+
+
 def _security_pass_fixing_state_with_closed_fix_issue() -> dict:
 	state = _base_state(status="security-pass-fixing")
 	state.update(
