@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:32060-32095 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: When both state-file rewrite attempts fail, the code logs `state_update_failed` but still bumps the no-op counter, relabels the source `ai:closed` and closes it, leaving the replacement issue untracked in the wave state.\n  WHY: The poller cannot manage or retry the orphaned replacement. Severity disagreement: gemini rated it BLOCKER, minimax and luna rated it MAJOR, so the highest is used. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash examined this and rejected it as an intentional trade-off that prevents a duplicate replacement every poll cycle.\n- scripts/orchestrate_poll_process.sh:32070 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: If the final rewrite attempt has a successful `jq` but a failed `mv`, the loop ends without running `rm` on the stale `.tmp` file.\n  WHY: A stale `STATE_FILE.tmp` would stay on disk (rated NIT). anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash found that the `rm -f` at line 32070 runs after every failed attempt, so no stale file is left.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Check the snapshot first\" and, when it is unreadable, continue without any mutation: no label change, no close, no no-op counter bump, no state change.\n  expected_change_site: scripts/orchestrate_poll_process.sh, top of the implementation-failed loop, before the defer-state clear (31907-31921) and the no-op cap branch (31923-31958)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The guard sits at lines 31985-31988 (gemini cites 31980; luna cites 31965-31987), after the defer-state clear at 31907-31921 and the no-op cap branch at 31945-31957, which bump the counter, relabel and close. The contract test inspects only from the snapshot read onward. z-ai_glm-5_3-flash concluded this is not a gap (NIT, confidence 2), and anthropic_claude-sonnet-5_5 also rejected it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:32060-32076 | severity=BLOCKER | confidence=5\n  PROBLEM: If both state file rewrite attempts fail, the script closes the source issue and labels it 'ai:closed' although the state file was not updated to map the wave entry to the new replacement issue.\n  WHY: The replacement issue is orphaned and the poller cannot manage the task.\n- scripts/orchestrate_poll_process.sh:32070 | severity=NIT | confidence=4\n  PROBLEM: If the final rewrite attempt has a successful `jq` but a failed `mv`, the loop ends without running `rm` on the stale `.tmp` file.\n  WHY: A stale `STATE_FILE.tmp` is left on disk and could affect later state writers.\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: Check the snapshot first (before any other logic in the implementation-failed loop) and, when it is unreadable, continue without any mutation: no label change, no close, no no-op counter bump, no state change.\n  Expected change site: Top of the implementation-failed loop in scripts/orchestrate_poll_process.sh.\n  Evidence of absence: The unreadable-snapshot guard is at line 31980, after the no-op check and `bump_impl_noop_count`, so it is not the first operation.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:32063-32095 | severity=MAJOR | confidence=4\n  PROBLEM: When both state-rewrite attempts fail, the loop still bumps the no-op counter (32081-32083), relabels the source to `ai:closed` (32086-32088) and closes it (32089-32095). The wave entry still points at the closed source and the new replacement is untracked.\n  WHY: The wave-completion judge sees a wave entry for a closed issue with no live successor. The code comment at 32073-32074 acknowledges this trade-off instead of gating the close on a successful state rewrite.\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \"Check the snapshot first. ... then continue without any mutation: no label change, no close, no no-op counter bump, no state change.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, top of the implementation-failed loop body, before the defer-state rewrite at 31907-31921 and the no-op cap branch at 31923-31958.\n  Evidence of absence: The guard (31985-31988) comes after the defer-state clear (31907-31921) and the no-op cap branch (31923-31958), which call `bump_impl_noop_count`, `gh issue edit` and close. The contract test only inspects the region from the source read onward.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:32072-32094 | severity=MAJOR | confidence=5\n  PROBLEM: When both state-file rewrite attempts fail, the code logs `state_update_failed` but continues to bump the no-op counter, relabel the source and close it.\n  WHY: The replacement exists, but the wave state still points at the source issue, so the poller cannot manage or retry the replacement.\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: \"Check the snapshot first.\" If it is unreadable, continue without any mutation, including no no-op counter bump, label change, close or state change.\n  Expected change site: scripts/orchestrate_poll_process.sh, before the stale defer-state clear and no-op cap handling in the implementation-failed loop.\n  Evidence of absence: The snapshot read and guard occur at lines 31965-31987. Lines 31907-31920 can clear defer state before them, and lines 31945-31957 can bump the counter, relabel and close the source. The contract test starts at the snapshot read.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP | severity=NIT | confidence=2\n  Requirement: \"Check the snapshot first \u2026 then `continue` without any mutation\" before the no-op cap branch and defer-state clear.\n  Expected change site: scripts/orchestrate_poll_process.sh before line 31907 (defer-state clear) and lines 31945-31957 (no-op cap branch).\n  Evidence of absence: Not a gap. The issue scopes the guard to the read-create-close sequence. The cap branch is a separate designed terminal close, and the issue says to keep `sync_implementation_fixup_blockers` where it is. The guard is present at lines 31985-31988 and the contract test pins it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e90e1b92348772809162a5b74494807e3aede85d469f09395b80171abef33bcc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9043,
+    "run_id": "42444332975",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42444332975",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108040941_15b269b177",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9043,
+    "run_id": "42444332975"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T04:09:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
