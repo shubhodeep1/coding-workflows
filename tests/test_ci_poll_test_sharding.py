@@ -4126,6 +4126,8 @@ class HealStepShardingContractTest(unittest.TestCase):
 		self.assertIn("No tests collected from ${heal_listed_module}.", self.run)
 		self.assertIn("No tests collected from the workflow failure heal modules.", self.run)
 		self.assertIn("/tmp/heal_tests.txt", self.run[: self.run.index("--collect-only")])
+		# The in-group shard log replay is prefixed so its text cannot act as a workflow command.
+		self.assertIn("""{ cat "/tmp/heal_shard_${shard}.log" 2>/dev/null || true; } | sed 's/^/| /'""", self.run)
 
 	def test_partition_expression_is_a_true_partition(self) -> None:
 		match = HEAL_9045_AWK_RE.search(self.run)
