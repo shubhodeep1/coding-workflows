@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-08T02:11:55Z",
+  "tick_at": "2026-11-08T21:09:59Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -16,7 +16,7 @@
   "tracking_issues": [
     {
       "current_wave": 16,
-      "integration_ahead_by": "148",
+      "integration_ahead_by": "156",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -36,10 +36,10 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "16",
+      "current_wave": 3,
+      "integration_ahead_by": "25",
       "issue_counts": {
-        "closed": 1,
+        "closed": 0,
         "done": 1,
         "implementation_failed": 0,
         "in_progress": 0,
@@ -51,7 +51,7 @@
       },
       "number": 8969,
       "project_complete": false,
-      "status": "failed",
+      "status": "in-progress",
       "title": "[Orchestrator] ChatGPT account reviewer trial: run the review panel's GPT slot on a ChatGPT account via claude-pool-broker (Phases 1-4)",
       "total_waves": 4,
       "wave_complete": false
