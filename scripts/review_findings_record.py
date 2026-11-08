@@ -321,9 +321,12 @@ def parse_review_issues(text: str, warnings: set[str], safe_to_slug: dict[str, s
 			"merged_from": merged_from,
 		})
 
-	for line in text.splitlines():
-		if PASSTHROUGH_START_RE.match(line):
-			warnings.add("passthrough_blocks_skipped")
+	lines = text.splitlines()
+	# Scan the whole input: the parser appends passthrough blocks after the
+	# parsed blocks, so the capped loop below can stop before reaching them.
+	if any(PASSTHROUGH_START_RE.match(line) for line in lines):
+		warnings.add("passthrough_blocks_skipped")
+	for line in lines:
 		start = ISSUE_START_RE.match(line)
 		if start:
 			if current is not None:

@@ -503,6 +503,19 @@ def test_passthrough_blocks_warn_and_unmatched_tokens_keep_prefix(tmp_path: Path
 	assert record["issues"][1]["flagged_by"] == ["google/gemini-4-pro", "review_unknown_model"]
 
 
+def test_passthrough_warning_survives_issue_cap(tmp_path: Path) -> None:
+	env = _fixture(tmp_path)
+	blocks = "".join(f"=== ISSUE {n:03d} ===\nFILE: a.sh\nLINES: 1\n=== END ISSUE {n:03d} ===\n" for n in range(1, 503))
+	blocks += "=== ISSUE PASSTHROUGH 001 ===\nFILE: other.sh\n=== END ISSUE PASSTHROUGH 001 ===\n"
+	_write(Path(env["RUNTIME_DIR"]) / "review_issues.txt", blocks)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	assert _run(env, output).returncode == 0
+	record = json.loads(output.read_text(encoding="utf-8"))
+	assert len(record["issues"]) == 500
+	assert "issues_truncated" in record["warnings"]
+	assert "passthrough_blocks_skipped" in record["warnings"]
+
+
 def test_parser_stats_override_without_runtime_dir(tmp_path: Path) -> None:
 	env = _fixture(tmp_path)
 	runtime = Path(env.pop("RUNTIME_DIR"))
