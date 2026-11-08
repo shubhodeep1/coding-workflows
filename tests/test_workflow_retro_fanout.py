@@ -230,6 +230,7 @@ def _run_fanout(
 	run_from_temp_dir: bool = False,
 	cat_fail_match: str | None = None,
 	sanitize_fail_match: str | None = None,
+	sanitize_corrupt_match: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
 	with tempfile.TemporaryDirectory(prefix="retro-fanout-test-") as td:
 		tmp_path = Path(td)
@@ -252,6 +253,12 @@ def _run_fanout(
 			with (support_root / "scripts" / "gh_helpers.sh").open("a", encoding="utf-8") as helpers:
 				helpers.write(
 					'\nsanitize_codex_prompt_file() { case "${1:-}" in *"${MOCK_SANITIZE_FAIL_MATCH}"*) return 1 ;; esac; return 0; }\n'
+				)
+		if sanitize_corrupt_match is not None:
+			# A sanitizer that reports success but leaves invalid UTF-8 behind.
+			with (support_root / "scripts" / "gh_helpers.sh").open("a", encoding="utf-8") as helpers:
+				helpers.write(
+					'\nsanitize_codex_prompt_file() { case "${1:-}" in *"${MOCK_SANITIZE_CORRUPT_MATCH}"*) printf \'\\377\' >> "$1" ;; esac; return 0; }\n'
 				)
 		# workflow_retro.py reads ai-memory run events from the workspace's
 		# origin (a git fetch per repo); a workspace without a remote fails
@@ -287,6 +294,8 @@ def _run_fanout(
 			env["MOCK_CAT_FAIL_MATCH"] = cat_fail_match
 		if sanitize_fail_match is not None:
 			env["MOCK_SANITIZE_FAIL_MATCH"] = sanitize_fail_match
+		if sanitize_corrupt_match is not None:
+			env["MOCK_SANITIZE_CORRUPT_MATCH"] = sanitize_corrupt_match
 		env.update(extra_env or {})
 		proc = subprocess.run(
 			["bash", str(staged_script)],
@@ -609,6 +618,21 @@ def test_fanout_sanitizer_failure_skips_model_call_and_continues() -> None:
 		proc,
 		final_state,
 		"::warning::retro-fanout: prompt sanitization failed for owner/bad-repo; skipping the model call.",
+	)
+
+
+def test_fanout_invalid_utf8_after_sanitizer_skips_model_call_and_continues() -> None:
+	state = {"issue_list_responses": [[]], "next_issue_number": 9700}
+	proc, final_state = _run_fanout(
+		state,
+		report=_active_report(["owner/bad-repo", "owner/good-repo"]),
+		consumer_repos=["owner/bad-repo", "owner/good-repo"],
+		sanitize_corrupt_match="owner__bad-repo-prompt.txt",
+	)
+	_assert_bad_repo_failed_good_repo_posted(
+		proc,
+		final_state,
+		"::warning::retro-fanout: prompt for owner/bad-repo is not valid UTF-8 after sanitization; skipping the model call.",
 	)
 
 

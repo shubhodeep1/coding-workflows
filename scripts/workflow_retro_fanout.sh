@@ -224,6 +224,12 @@ run_consumer_retro() {
 				echo "::warning::retro-fanout: prompt sanitization failed for ${target_repo}; skipping the model call."
 				return 1
 			fi
+			# The shared helper is best-effort and returns 0 even when it
+			# could not rewrite the file, so verify its result here.
+			if ! python3 -I -c 'import sys; open(sys.argv[1], "rb").read().decode("utf-8")' "${prompt_file}" 2>/dev/null; then
+				echo "::warning::retro-fanout: prompt for ${target_repo} is not valid UTF-8 after sanitization; skipping the model call."
+				return 1
+			fi
 		fi
 		set +e
 		retro_fanout_model_call "${prompt_file}" "${body_file}"
