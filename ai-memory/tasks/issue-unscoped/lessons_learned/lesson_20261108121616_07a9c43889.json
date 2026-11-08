@@ -1,0 +1,33 @@
+{
+  "discovered_at": "2026-11-08T12:16:16Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=analysis/recommendation-processing-report.md:2169; cited_path=.github/workflows/review_autofix.yml; files_touched=.github/workflows/check_failure_triage.yml, .github/workflows/ci.yml, agents.d/wfopt-2026-10-07-2-impl-failed-reissue-order.md, agents.d/wfopt-2026-10-07-2-resolver-terminal.md, agents.d/wfopt-2026-10-07-2-triage-post-stage.md, analysis/recommendation-processing-report.md, analysis/workflow-optimization-2026-10-07-2.md, changelog.d/9053-actionlint-download-retry-window.md, changelog.d/wfopt-2026-10-07-2-impl-failed-reissue-order.md, changelog.d/wfopt-2026-10-07-2-resolver-terminal.md, changelog.d/wfopt-2026-10-07-2-triage-post-stage.md, scripts/orchestrate_poll_process.sh, scripts/review_conflict_resolve.sh, tests/test_alert_levels_human_only.py, tests/test_check_failure_triage_post_stage.py, tests/test_ci_actionlint_install_retry.py, tests/test_ci_wires_every_test_file.py, tests/test_orchestrate_poll_process.py, tests/test_poller_impl_failed_reissue_order.py, tests/test_review_conflict_resolve_terminal_record.py.",
+  "phase": "review_autofix",
+  "pr_number": 9038,
+  "record_id": "lesson_20261108121616_07a9c43889",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix.yml",
+    "analysis/recommendation-processing-report.md",
+    ".github/workflows/check_failure_triage.yml",
+    ".github/workflows/ci.yml",
+    "agents.d/wfopt-2026-10-07-2-impl-failed-reissue-order.md",
+    "agents.d/wfopt-2026-10-07-2-resolver-terminal.md",
+    "agents.d/wfopt-2026-10-07-2-triage-post-stage.md",
+    "analysis/workflow-optimization-2026-10-07-2.md",
+    "changelog.d/9053-actionlint-download-retry-window.md",
+    "changelog.d/wfopt-2026-10-07-2-impl-failed-reissue-order.md",
+    "changelog.d/wfopt-2026-10-07-2-resolver-terminal.md",
+    "changelog.d/wfopt-2026-10-07-2-triage-post-stage.md",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/review_conflict_resolve.sh",
+    "tests/test_alert_levels_human_only.py",
+    "tests/test_check_failure_triage_post_stage.py",
+    "tests/test_ci_actionlint_install_retry.py",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_orchestrate_poll_process.py",
+    "tests/test_poller_impl_failed_reissue_order.py",
+    "tests/test_review_conflict_resolve_terminal_record.py"
+  ]
+}
