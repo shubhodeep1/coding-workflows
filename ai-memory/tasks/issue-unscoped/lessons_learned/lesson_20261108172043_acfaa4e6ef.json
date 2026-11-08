@@ -1,0 +1,25 @@
+{
+  "discovered_at": "2026-11-08T17:20:43Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=(external check-run copilot-pull-request-reviewer, no repository file):n/a; cited_path=external check-run `copilot-pull-request-reviewer` (run 42500290174, HTTP 422 `custom_instructions_too_large`); files_touched=.github/workflows/test-and-mark-stable.yml, analysis/recommendation-processing-report.md, analysis/workflow-optimization-2026-10-07-3.md, changelog.d/wfopt-2026-10-07-3-idle-test-quoting.md, changelog.d/wfopt-2026-10-07-3-retro-fanout-prompt-checks.md, changelog.d/wfopt-2026-10-07-3-unblock-judge-gh-retry.md, scripts/unblock_judge.sh, scripts/workflow_retro_fanout.sh, tests/test_test_and_mark_stable_step_scripts_contract.py, tests/test_unblock_judge.py, tests/test_workflow_retro_fanout.py.",
+  "phase": "review_autofix",
+  "pr_number": 9065,
+  "record_id": "lesson_20261108172043_acfaa4e6ef",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "external check-run `copilot-pull-request-reviewer` (run 42500290174, HTTP 422 `custom_instructions_too_large`)",
+    "(external check-run copilot-pull-request-reviewer, no repository file)",
+    ".github/workflows/test-and-mark-stable.yml",
+    "analysis/recommendation-processing-report.md",
+    "analysis/workflow-optimization-2026-10-07-3.md",
+    "changelog.d/wfopt-2026-10-07-3-idle-test-quoting.md",
+    "changelog.d/wfopt-2026-10-07-3-retro-fanout-prompt-checks.md",
+    "changelog.d/wfopt-2026-10-07-3-unblock-judge-gh-retry.md",
+    "scripts/unblock_judge.sh",
+    "scripts/workflow_retro_fanout.sh",
+    "tests/test_test_and_mark_stable_step_scripts_contract.py",
+    "tests/test_unblock_judge.py",
+    "tests/test_workflow_retro_fanout.py"
+  ]
+}
