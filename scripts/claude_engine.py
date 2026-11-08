@@ -287,7 +287,9 @@ def classify_chatgpt_events(text: str, exit_code: int | None) -> dict[str, str]:
 	``auth_rejected``: an ``error`` / ``turn.failed`` event naming a 401/403,
 	an unauthorized, login or refresh failure. ``quota_exhausted``: one naming
 	a 429, usage limit, rate limit or quota. ``ok``: exit code 0 with an agent
-	message and no such failure. Anything else is ``run_failed``. Returns
+	message and no ``turn.failed`` event, checked first, so a non-terminal
+	error the run recovered from does not discard it. Anything else is
+	``run_failed``. Returns
 	reason codes only, never event text.
 	"""
 	messages: list[str] = []
@@ -306,13 +308,14 @@ def classify_chatgpt_events(text: str, exit_code: int | None) -> dict[str, str]:
 			item = event.get("item")
 			if isinstance(item, dict) and item.get("type") in ("agent_message", "assistant_message"):
 				has_agent_message = True
+	# A completed run wins over earlier non-terminal errors Codex recovered from.
+	if exit_code == 0 and has_agent_message and not any(event.get("type") == "turn.failed" for event in read_events(text)):
+		return {"outcome": "ok", "reason": "ok"}
 	joined = "\n".join(messages)
 	if messages and CHATGPT_AUTH_RE.search(joined):
 		return {"outcome": "failed", "reason": "auth_rejected"}
 	if messages and CHATGPT_QUOTA_RE.search(joined):
 		return {"outcome": "failed", "reason": "quota_exhausted"}
-	if exit_code == 0 and has_agent_message and not any(event.get("type") == "turn.failed" for event in read_events(text)):
-		return {"outcome": "ok", "reason": "ok"}
 	return {"outcome": "failed", "reason": "run_failed"}
 
 

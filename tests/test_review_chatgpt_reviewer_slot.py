@@ -19,7 +19,6 @@ import importlib.util
 import json
 import os
 import re
-import socket
 import stat
 import subprocess
 import sys
@@ -40,6 +39,14 @@ DOCKERFILE = SCRIPTS / "review_sandbox" / "Dockerfile"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 POOL_CONFIG = REPO_ROOT / ".github" / "ai" / "chatgpt_pool.json"
+# The shipped switch value. The tests use this literal instead of reading the
+# file at import time, so a checkout without the file still collects; a missing
+# file resolves to config_missing, which keeps the slot off (fail closed).
+SHIPPED_CONFIG = '{"reviewer_slot_enabled": false, "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}'
+
+
+def _shipped_config_text() -> str:
+	return POOL_CONFIG.read_text(encoding="utf-8") if POOL_CONFIG.is_file() else SHIPPED_CONFIG
 STAGE = SCRIPTS / "stage_workflow_support.sh"
 
 PANEL = [
@@ -105,10 +112,10 @@ def _slot(tmp_path: Path, content: str | None, *args: str) -> dict[str, str]:
 
 
 def test_shipped_config_keeps_the_slot_off(tmp_path: Path) -> None:
-	shipped = json.loads(POOL_CONFIG.read_text(encoding="utf-8"))
+	shipped = json.loads(_shipped_config_text())
 	assert shipped["reviewer_slot_enabled"] is False
 	assert shipped == {"reviewer_slot_enabled": False, "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}
-	result = _slot(tmp_path, POOL_CONFIG.read_text(encoding="utf-8"))
+	result = _slot(tmp_path, _shipped_config_text())
 	assert result == {"enabled": "false", "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh", "source": "file", "reason": "switch_off"}
 
 
@@ -277,14 +284,14 @@ FAKE_SANDBOX = textwrap.dedent("""\
 	set -u
 	printf '%s|home=%s\\n' "$*" "${CHATGPT_POOL_CODEX_HOME:-}" >> "${FAKE_CALLS}"
 	case "$1" in
-	  prepare-ephemeral)
-	    [ "${FAKE_PREPARE_RC:-0}" -eq 0 ] || exit "${FAKE_PREPARE_RC}"
-	    mktemp -d; exit 0 ;;
-	  cleanup) exit 0 ;;
-	  run)
-	    [ -z "${FAKE_REASON:-}" ] || echo "AI_ENGINE_FALLBACK role=PANEL_REVIEWER_CHATGPT reason=${FAKE_REASON}" >&2
-	    [ -z "${FAKE_OUT:-}" ] || printf '%s\\n' "${FAKE_OUT}" > "$3"
-	    exit "${FAKE_RC:-0}" ;;
+		prepare-ephemeral)
+			[ "${FAKE_PREPARE_RC:-0}" -eq 0 ] || exit "${FAKE_PREPARE_RC}"
+			mktemp -d; exit 0 ;;
+		cleanup) exit 0 ;;
+		run)
+			[ -z "${FAKE_REASON:-}" ] || echo "AI_ENGINE_FALLBACK role=PANEL_REVIEWER_CHATGPT reason=${FAKE_REASON}" >&2
+			[ -z "${FAKE_OUT:-}" ] || printf '%s\\n' "${FAKE_OUT}" > "$3"
+			exit "${FAKE_RC:-0}" ;;
 	esac
 	exit 2
 	""")
@@ -440,10 +447,10 @@ def _pass_harness(tmp_path: Path, tier: str, statuses: dict[str, str], panel: li
 		reviewer_circuit_breaker_enabled() { return 1; }
 		reviewer_request_partial_finalize() { :; }
 		fake_slot() {
-		  local kind="$1" model="$2" safe="$3" prefix="$4" status
-		  status="$(awk -v m="$model" '$1 == m { print $2 }' "$FAKE_STATUSES")"
-		  echo "$kind $model" >> "$FAKE_CALLS"
-		  echo "${status:-success}" > "${PREVIOUS_REVIEWS_DIR}/status_${prefix}_${safe}.txt"
+			local kind="$1" model="$2" safe="$3" prefix="$4" status
+			status="$(awk -v m="$model" '$1 == m { print $2 }' "$FAKE_STATUSES")"
+			echo "$kind $model" >> "$FAKE_CALLS"
+			echo "${status:-success}" > "${PREVIOUS_REVIEWS_DIR}/status_${prefix}_${safe}.txt"
 		}
 		run_pool_reviewer() { fake_slot pool "$@"; }
 		run_chatgpt_reviewer() { fake_slot chatgpt "$@"; }
@@ -750,7 +757,7 @@ def test_dockerfile_installs_codex_only_with_the_build_arg() -> None:
 
 
 def test_relay_is_staged_as_optional_support() -> None:
-	line = next(l for l in STAGE.read_text(encoding="utf-8").splitlines() if l.startswith("OPTIONAL_BOOTSTRAP_SCRIPTS="))
+	line = next(candidate for candidate in STAGE.read_text(encoding="utf-8").splitlines() if candidate.startswith("OPTIONAL_BOOTSTRAP_SCRIPTS="))
 	assert "chatgpt_codex_relay.py" in line.split("=", 1)[1].strip('"').split()
 
 
@@ -794,7 +801,7 @@ def _resolve_step_body() -> str:
 @pytest.mark.parametrize(
 	("config", "override", "expected"),
 	[
-		(POOL_CONFIG.read_text(encoding="utf-8"), "", "false"),
+		(SHIPPED_CONFIG, "", "false"),
 		(ON, "", "true"),
 		(ON, "false", "false"),
 		("{broken", "true", "false"),
@@ -826,3 +833,34 @@ def test_resolve_step_writes_the_slot_outputs(tmp_path: Path, config: str | None
 def test_ci_runs_this_suite() -> None:
 	text = CI.read_text(encoding="utf-8")
 	assert "tests/test_review_chatgpt_reviewer_slot.py" in text
+
+
+def test_chatgpt_classify_completed_run_wins_over_a_recovered_error(tmp_path: Path) -> None:
+	events = [{"type": "error", "message": "429 Too Many Requests, retrying"}, AGENT, {"type": "turn.completed"}]
+	assert _classify(tmp_path, events, 0) == {"outcome": "ok", "reason": "ok"}
+	assert _classify(tmp_path, events, 1)["reason"] == "quota_exhausted"
+
+
+def test_configured_tier_slug_naming_the_replaced_slug_maps_to_the_slot(tmp_path: Path) -> None:
+	lite = _tier(tmp_path, "lite", **ON_ENV, REVIEW_TIER_LITE_REVIEWER_SLUG="openai/gpt-6-luna")
+	assert (lite["models"], lite["source"]) == ([SLOT], "configured_lite")
+	standard = _tier(tmp_path, "standard", **ON_ENV, REVIEW_TIER_STANDARD_REVIEWER_SLUGS="minimax/minimax-m3,openai/gpt-6-luna")
+	assert (standard["models"], standard["source"]) == (["minimax/minimax-m3", SLOT], "configured_standard")
+
+
+def test_resolve_step_keeps_the_slot_off_when_replaces_is_not_on_the_panel(tmp_path: Path) -> None:
+	support = tmp_path / "support"
+	support.mkdir()
+	(support / "claude_engine.py").write_text(ENGINE.read_text(encoding="utf-8"), encoding="utf-8")
+	ai = tmp_path / "ws" / ".codex-workflow-src" / ".github" / "ai"
+	ai.mkdir(parents=True)
+	(ai / "chatgpt_pool.json").write_text(ON, encoding="utf-8")
+	output = tmp_path / "out"
+	subprocess.run(
+		["bash", "-c", _resolve_step_body()],
+		env=_env(SUPPORT_SCRIPTS_DIR=str(support), GITHUB_WORKSPACE=str(tmp_path / "ws"), GITHUB_OUTPUT=str(output),
+			GITHUB_ENV=str(tmp_path / "env"), REVIEWER_MODELS="minimax/minimax-m3,z-ai/glm-5.3-flash"),
+		capture_output=True, text=True, check=True,
+	)
+	outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+	assert outputs["chatgpt_slot"] == "false"

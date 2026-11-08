@@ -1901,6 +1901,11 @@ resolve_review_tier_active_models() {
 
   while IFS= read -r model; do
     [ -z "${model}" ] && continue
+    # ChatGPT slot active: a configured slug naming the replaced panel slug
+    # means the account slot now in its panel position.
+    if [ "${REVIEWER_CHATGPT_SLOT_ACTIVE:-false}" = "true" ] && [ "${model}" = "${REVIEWER_CHATGPT_REPLACES_RESOLVED:-}" ]; then
+      model="${REVIEWER_CHATGPT_SLOT_SLUG}"
+    fi
     if [ -z "${live_models_map["${model}"]:-}" ]; then
       invalid_model="${model}"
       break

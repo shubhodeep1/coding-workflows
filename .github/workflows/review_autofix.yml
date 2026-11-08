@@ -2433,7 +2433,15 @@ jobs:
             esac
           done
           [ -n "${chatgpt_model}" ] && [ -n "${chatgpt_replaces}" ] || chatgpt_slot=false
-          echo "REVIEWER_CHATGPT: resolve slot=${chatgpt_slot} ${chatgpt_line:-reason=helper_unavailable}"
+          # No account is fetched for a slot whose replaced slug is not on the panel.
+          if [ "${chatgpt_slot}" = "true" ] && ! printf '%s\n' "${REVIEWER_MODELS:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fxq -- "${chatgpt_replaces}"; then
+            chatgpt_slot=false
+            chatgpt_line="${chatgpt_line} panel=replaces_not_in_panel"
+          fi
+          # Logged only when the slot is on or an operator set the switch, so off-path logs stay unchanged.
+          if [ "${chatgpt_slot}" = "true" ] || [ -n "${REVIEWER_CHATGPT_SLOT_ENABLED:-}" ]; then
+            echo "REVIEWER_CHATGPT: resolve slot=${chatgpt_slot} ${chatgpt_line:-reason=helper_unavailable}"
+          fi
           {
             echo "chatgpt_slot=${chatgpt_slot}"
             echo "chatgpt_model=${chatgpt_model}"
