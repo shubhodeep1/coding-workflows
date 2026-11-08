@@ -1154,11 +1154,20 @@ GROUP_PINNED_STEPS = {
 	# Moved from tests-release-and-log-analysis in #8777, and from group 1 to
 	# group 2 in #8805.
 	"Validation bootstrap and family direct-run tests": 2,
+	# Moved from tests-release-and-log-analysis in #7689, and from group 3 to
+	# group 4 in #9037.
+	"Orchestrator judges on the Claude engine tests (Phase 5c)": 4,
+	# Moved from tests-release-and-log-analysis in #7689, and from group 3 to
+	# group 4 in #9037.
+	"Validation harness sandbox tests": 4,
 }
 # The only steps pinned to the last matrix group (#8118; #8772's step moved
-# on to group 0 in #8980).
+# on to group 0 in #8980; #9037 moved the Claude engine judges and validation
+# harness sandbox steps in from group 3).
 LAST_GROUP_PINNED_STEPS = (
 	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)",
+	"Orchestrator judges on the Claude engine tests (Phase 5c)",
+	"Validation harness sandbox tests",
 )
 POLL_JOB_UNGUARDED_STEPS = {
 	"Checkout repository",
@@ -1200,7 +1209,8 @@ class PollGroupPinnedStepsTest(unittest.TestCase):
 		"""Group 4 was added for capacity (#8113); #8118 moved one step into it.
 
 		#8772 moved the CI wiring guard part 2 step into it as well, and #8980
-		moved that step on to group 0.
+		moved that step on to group 0. #9037 moved the Claude engine judges
+		and validation harness sandbox steps in from group 3.
 
 		A later move into group 4 must update LAST_GROUP_PINNED_STEPS on purpose.
 		"""
@@ -1711,14 +1721,15 @@ class WiringGuardPartOneShardingContractTest(unittest.TestCase):
 # Steps moved from tests-release-and-log-analysis (budget-watch issue #7689):
 # step name -> (matrix group that runs it, module paths its body names).
 # The two group-2 steps moved out of the matrix again in #7697; see
-# MOVED_POLL_GROUP_TWO_STEPS below.
+# MOVED_POLL_GROUP_TWO_STEPS below. Both steps below moved from group 3 to
+# group 4 in #9037; see MOVED_POLL_GROUP_THREE_9037_STEPS.
 MOVED_RELEASE_STEPS = {
 	"Orchestrator judges on the Claude engine tests (Phase 5c)": (
-		3,
+		4,
 		("tests/test_orchestrator_judges_claude_engine.py",),
 	),
 	"Validation harness sandbox tests": (
-		3,
+		4,
 		("tests/test_validation_harness_sandbox.py",),
 	),
 }
@@ -2898,11 +2909,11 @@ POLL_GROUP_THREE_8472_SETUP_STEP = "Install Python CI dependencies"
 MOVED_POLL_GROUP_THREE_8472_STEPS = {
 	VALIDATION_SELFTEST_STEP: ("static-checks", VALIDATION_SELFTEST_MODULES),
 }
-# Group 3's pinned steps once #8472 moved the step above out.
+# Group 3's pinned steps once #8472 moved the step above out. #9037 then
+# moved the Claude engine judges and validation harness sandbox steps on to
+# group 4, so only the single-file module step stays.
 POLL_GROUP_THREE_8472_REMAINING_STEPS = {
 	SINGLE_FILE_MODULES_STEP,
-	"Orchestrator judges on the Claude engine tests (Phase 5c)",
-	"Validation harness sandbox tests",
 }
 
 
@@ -2958,6 +2969,8 @@ class MovedPollGroupThree8472StepsContractTest(unittest.TestCase):
 				self.assertNotIn(name, poll_names)
 
 	def test_group_three_pins_the_single_file_judges_and_harness_steps(self) -> None:
+		# Since #9037 the judges and harness steps run in group 4, so group 3
+		# pins only the single-file module step (name kept for history).
 		guarded = {
 			step.get("name")
 			for step in load_poll_job()["steps"]
@@ -3606,6 +3619,107 @@ class MovedPollGroupFour8980StepsContractTest(unittest.TestCase):
 		for name in MOVED_POLL_GROUP_FOUR_8980_STEPS:
 			with self.subTest(step=name):
 				self.assertNotEqual(GROUP_PINNED_STEPS.get(name), POLL_GROUP_FOUR_8980_SOURCE_GROUP)
+
+
+# Steps moved out of orchestrate-poll (3), which took 15m16s of its 20 minutes
+# (run 42436104717, budget-watch issue #9037): step name -> new matrix group.
+# The run's step timings could not be read, so the pair was chosen by test and
+# subprocess counts (an estimate, not a measurement). Group 4 shed the much
+# larger CI wiring guard part 2 step in #8980 and gained nothing since. Names
+# and bodies unchanged; only the guards moved.
+POLL_GROUP_THREE_9037_SOURCE_GROUP = 3
+POLL_GROUP_THREE_9037_TARGET_GROUP = 4
+POLL_GROUP_THREE_9037_SETUP_STEP = "Install Python CI dependencies"
+MOVED_POLL_GROUP_THREE_9037_STEPS = {
+	"Orchestrator judges on the Claude engine tests (Phase 5c)": POLL_GROUP_THREE_9037_TARGET_GROUP,
+	"Validation harness sandbox tests": POLL_GROUP_THREE_9037_TARGET_GROUP,
+}
+POLL_GROUP_THREE_9037_STEP_MODULES = {
+	"Orchestrator judges on the Claude engine tests (Phase 5c)": "tests/test_orchestrator_judges_claude_engine.py",
+	"Validation harness sandbox tests": "tests/test_validation_harness_sandbox.py",
+}
+
+
+class MovedPollGroupThree9037StepsContractTest(unittest.TestCase):
+	"""The Claude engine judges and harness sandbox steps run once, in orchestrate-poll group 4 (#9037)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_steps_are_owned_only_by_the_poll_job(self) -> None:
+		for name in MOVED_POLL_GROUP_THREE_9037_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(
+					[owner for owner, _step in self.owning_steps(name)],
+					[POLL_JOB_ID],
+				)
+
+	def test_steps_are_guarded_to_their_new_group(self) -> None:
+		self.assertNotEqual(POLL_GROUP_THREE_9037_TARGET_GROUP, POLL_GROUP_THREE_9037_SOURCE_GROUP)
+		for name, group in MOVED_POLL_GROUP_THREE_9037_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual(group, POLL_GROUP_THREE_9037_TARGET_GROUP)
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), group)
+				self.assertEqual(MOVED_RELEASE_STEPS[name][0], group)
+				# A guard naming a group the matrix does not run would skip the step silently.
+				self.assertLess(group, poll_group_count())
+				for _owner, step in self.owning_steps(name):
+					self.assertEqual(step.get("if"), f"strategy.job-index == {group}")
+
+	def test_steps_left_the_source_group(self) -> None:
+		source_guard = f"strategy.job-index == {POLL_GROUP_THREE_9037_SOURCE_GROUP}"
+		source_names = {
+			step.get("name")
+			for step in load_poll_job()["steps"]
+			if str(step.get("if", "")) == source_guard
+		}
+		for name in MOVED_POLL_GROUP_THREE_9037_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+				self.assertNotIn(name, POLL_GROUP_THREE_8472_REMAINING_STEPS)
+
+	def test_steps_run_after_the_poll_job_setup(self) -> None:
+		names = [step.get("name") for step in load_poll_job()["steps"]]
+		self.assertIn(POLL_GROUP_THREE_9037_SETUP_STEP, names)
+		setup_index = names.index(POLL_GROUP_THREE_9037_SETUP_STEP)
+		for name in MOVED_POLL_GROUP_THREE_9037_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				self.assertLess(setup_index, names.index(name))
+
+	def test_step_bodies_still_name_their_modules(self) -> None:
+		self.assertEqual(set(POLL_GROUP_THREE_9037_STEP_MODULES), set(MOVED_POLL_GROUP_THREE_9037_STEPS))
+		for name, module in POLL_GROUP_THREE_9037_STEP_MODULES.items():
+			steps = self.owning_steps(name)
+			with self.subTest(step=name):
+				self.assertEqual(len(steps), 1)
+				self.assertTrue((REPO_ROOT / module).is_file(), module)
+				self.assertIn(module, steps[0][1]["run"])
+
+	def test_other_pinned_steps_keep_their_groups(self) -> None:
+		self.assertEqual(
+			GROUP_PINNED_STEPS.get(SINGLE_FILE_MODULES_STEP),
+			POLL_GROUP_THREE_9037_SOURCE_GROUP,
+		)
+		self.assertEqual(
+			poll_job_step(SINGLE_FILE_MODULES_STEP).get("if"),
+			f"strategy.job-index == {POLL_GROUP_THREE_9037_SOURCE_GROUP}",
+		)
+		self.assertEqual(
+			GROUP_PINNED_STEPS.get(UNBLOCK_STEP_NAME),
+			POLL_GROUP_THREE_9037_TARGET_GROUP,
+		)
+		for name in MOVED_POLL_GROUP_THREE_9037_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, LAST_GROUP_PINNED_STEPS)
 
 
 # Issue #9021: orchestrate-poll (0) took 15m15s of its 20 minutes (run
