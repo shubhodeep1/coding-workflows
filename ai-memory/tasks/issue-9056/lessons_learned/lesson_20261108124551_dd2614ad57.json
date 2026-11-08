@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-08T12:45:51Z",
+  "issue_number": 9056,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=(CI check-run) copilot-pull-request-reviewer:n/a; cited_path=copilot-pull-request-reviewer check-run (run 42480302404); files_touched=.github/workflows/ci.yml, changelog.d/9056-actionlint-tarball-cache.md, tests/test_ci_actionlint_cache.py.",
+  "phase": "review_autofix",
+  "pr_number": 9057,
+  "record_id": "lesson_20261108124551_dd2614ad57",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer check-run (run 42480302404)",
+    "(CI check-run) copilot-pull-request-reviewer",
+    ".github/workflows/ci.yml",
+    "changelog.d/9056-actionlint-tarball-cache.md",
+    "tests/test_ci_actionlint_cache.py"
+  ]
+}
