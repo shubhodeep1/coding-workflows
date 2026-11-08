@@ -77,6 +77,9 @@ CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 ISSUE_START_RE = re.compile(r"^=== ISSUE ([0-9]+) ===$")
 ISSUE_END_RE = re.compile(r"^=== END ISSUE [0-9]+ ===$")
+# review_parse_consolidator.sh appends these for reviewer anchors the
+# consolidator did not cover; they are not recorded, only counted as a warning.
+PASSTHROUGH_START_RE = re.compile(r"^=== ISSUE PASSTHROUGH [0-9]+ ===$")
 HEADER_RE = re.compile(r"^([A-Z_]+):(?:[ \t](.*))?$")
 ISSUE_HEADER_KEYS = (
 	"FILE",
@@ -264,7 +267,7 @@ def _flagged_by_token(entry: str, safe_to_slug: dict[str, str]) -> str | None:
 		if name.startswith(prefix) and len(name) > len(prefix):
 			name = name[len(prefix):]
 			break
-	return safe_to_slug.get(name, name)
+	return safe_to_slug.get(name, entry)
 
 
 def parse_review_issues(text: str, warnings: set[str], safe_to_slug: dict[str, str] | None = None) -> tuple[list[dict], int]:
@@ -319,6 +322,8 @@ def parse_review_issues(text: str, warnings: set[str], safe_to_slug: dict[str, s
 		})
 
 	for line in text.splitlines():
+		if PASSTHROUGH_START_RE.match(line):
+			warnings.add("passthrough_blocks_skipped")
 		start = ISSUE_START_RE.match(line)
 		if start:
 			if current is not None:
@@ -532,8 +537,9 @@ def build_record(previous_reviews_dir: str) -> dict:
 			warnings.add("issues_file_missing")
 	else:
 		warnings.add("issues_file_" + issues_err)
-	if runtime_dir:
-		stats_text, _ = _read_bounded(_env("PARSER_STATS_FILE") or os.path.join(runtime_dir, "parser_stats.txt"), STATUS_READ_LIMIT_BYTES)
+	stats_path = _env("PARSER_STATS_FILE") or (os.path.join(runtime_dir, "parser_stats.txt") if runtime_dir else "")
+	if stats_path:
+		stats_text, _ = _read_bounded(stats_path, STATUS_READ_LIMIT_BYTES)
 		if stats_text and re.search(r"(?m)^parse_failed=1$", stats_text):
 			warnings.add("consolidator_parse_failed")
 	record["consolidator"] = {"ran": consolidator_ran, "issue_count": len(issues), "flagged_by_dropped": flagged_by_dropped}

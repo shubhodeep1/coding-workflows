@@ -488,6 +488,34 @@ def test_override_count_only_counts_ignored_override_bullets(tmp_path: Path) -> 
 	assert record["issues"][0]["editor"]["override"] is False
 
 
+def test_passthrough_blocks_warn_and_unmatched_tokens_keep_prefix(tmp_path: Path) -> None:
+	env = _fixture(tmp_path)
+	text = ISSUES_TEXT.replace(
+		"FLAGGED_BY: google/gemini-4-pro",
+		"FLAGGED_BY: google/gemini-4-pro, review_unknown_model",
+	) + "=== ISSUE PASSTHROUGH 001 ===\nFILE: other.sh\nLINES: 3\nCLASSIFICATION: unclassified\n=== END ISSUE PASSTHROUGH 001 ===\n"
+	_write(Path(env["RUNTIME_DIR"]) / "review_issues.txt", text)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	assert _run(env, output).returncode == 0
+	record = json.loads(output.read_text(encoding="utf-8"))
+	assert [issue["id"] for issue in record["issues"]] == ["001", "002"]
+	assert "passthrough_blocks_skipped" in record["warnings"]
+	assert record["issues"][1]["flagged_by"] == ["google/gemini-4-pro", "review_unknown_model"]
+
+
+def test_parser_stats_override_without_runtime_dir(tmp_path: Path) -> None:
+	env = _fixture(tmp_path)
+	runtime = Path(env.pop("RUNTIME_DIR"))
+	env["REVIEW_ISSUES_FILE"] = str(runtime / "review_issues.txt")
+	env["EDITOR_SUMMARY_FILE"] = str(runtime / "editor_summary.txt")
+	stats = tmp_path / "stats.txt"
+	stats.write_text("parse_failed=1\n", encoding="utf-8")
+	env["PARSER_STATS_FILE"] = str(stats)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	assert _run(env, output).returncode == 0
+	assert "consolidator_parse_failed" in json.loads(output.read_text(encoding="utf-8"))["warnings"]
+
+
 def _step_block(text: str, name: str) -> str:
 	start = text.index(f"\n      - name: {name}\n")
 	end = text.find("\n      - name: ", start + 1)
