@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-08T09:27:59Z",
+  "issue_number": 9045,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=AGENTS.md:1; cited_path=AGENTS.md; files_touched=.github/workflows/ci.yml, changelog.d/9045-heal-step-shard-remaining-modules.md, tests/test_ci_poll_test_sharding.py.",
+  "phase": "review_autofix",
+  "pr_number": 9048,
+  "record_id": "lesson_20261108092759_729fe73af4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md",
+    ".github/workflows/ci.yml",
+    "changelog.d/9045-heal-step-shard-remaining-modules.md",
+    "tests/test_ci_poll_test_sharding.py"
+  ]
+}
