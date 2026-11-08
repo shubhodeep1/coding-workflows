@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The expanded workflow text (use the existing `expanded_test_and_mark_stable_text()` helper if the file already uses it, otherwise read the workflow file) contains no `[ $IDLE -ge` occurrence, i.e. every IDLE comparison quotes its operands.\n  expected_change_site: tests/test_test_and_mark_stable_step_scripts_contract.py, test_workflow_idle_comparisons_quote_their_operands (lines 79-87)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The new test reads `_raw()` (lines 85-86) instead of `expanded_test_and_mark_stable_text()`, which is imported at line 28 and used at line 183, scripts/stable_e2e_step_wait_review.sh:805 still has the unquoted `if [ $IDLE -ge $INACTIVITY_LIMIT ]; then` (pinned by tests/test_test_and_mark_stable_review_blocked_budget.py:874), fixing it needs a scripts/ edit outside the issue's files_touched grant; the narrowing is documented in the test docstring and changelog and a follow-up issue is needed. Severity NIT in all four reviews.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: The issue asks the new assertion to check the expanded workflow text, using `expanded_test_and_mark_stable_text()` if the test file already uses it, so that no `[ $IDLE -ge` remains.\n  Expected change site: `tests/test_test_and_mark_stable_step_scripts_contract.py`, `test_workflow_idle_comparisons_quote_their_operands`.\n  Evidence of absence: The test reads `_raw()` instead of the expanded text. The expanded text would pull in `scripts/stable_e2e_step_wait_review.sh:805`, which still has `if [ $IDLE -ge $INACTIVITY_LIMIT ]; then`. `tests/test_test_and_mark_stable_review_blocked_budget.py:874` asserts that exact unquoted string. Quoting that site needs an edit under `scripts/` and a change to that test, both outside the issue's grant. Documented residual; needs a follow-up issue.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- All other lenses: NONE. CI note: copilot-pull-request-reviewer failed with custom_instructions_too_large (HTTP 422), third-party; five pre-push gate failures not linked to this diff, unreproduced.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"the expanded workflow text (use the existing `expanded_test_and_mark_stable_text()` helper from `tests/review_autofix_step_scripts.py` if the file already uses it, otherwise read the workflow file) contains no `[ $IDLE -ge` occurrence, i.e. every IDLE comparison quotes its operands.\"\n  Expected change site: tests/test_test_and_mark_stable_step_scripts_contract.py, test_workflow_idle_comparisons_quote_their_operands (lines 79-87)\n  Evidence of absence: The new test reads `_raw()` rather than `expanded_test_and_mark_stable_text()`, already imported at line 28 and used at line 183. The expanded text contains the unquoted comparison at scripts/stable_e2e_step_wait_review.sh:805 (pinned by tests/test_test_and_mark_stable_review_blocked_budget.py:874). The issue restricts the fix to the three workflow sites and the grant excludes `scripts/`. Autofix deferred it (TASK_GAP_DEFERRED) and disclosed the narrowing in docstring and changelog.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- All other lenses: NONE. Verified the three quoted sites at .github/workflows/test-and-mark-stable.yml:1034, 1333, 2809. Five pre-push failures judged inherited noise; Copilot 422 is a third-party issue.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The expanded workflow text ... contains no `[ $IDLE -ge` occurrence.\"\n  Expected change site: `tests/test_test_and_mark_stable_step_scripts_contract.py`, `test_workflow_idle_comparisons_quote_their_operands`\n  Evidence of absence: The new assertion reads `_raw()` at lines 85\u201386 instead of `expanded_test_and_mark_stable_text()`, which the file already imports and uses. The expanded text includes an unquoted comparison at `scripts/stable_e2e_step_wait_review.sh:805`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- All other lenses: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Add one assertion to tests/test_test_and_mark_stable_step_scripts_contract.py: the expanded workflow text (use the existing expanded_test_and_mark_stable_text() helper from tests/review_autofix_step_scripts.py if the file already uses it, otherwise read the workflow file) contains no `[ $IDLE -ge` occurrence, i.e. every IDLE comparison quotes its operands.\"\n  Expected change site: tests/test_test_and_mark_stable_step_scripts_contract.py, test_workflow_idle_comparisons_quote_their_operands (lines 79-87)\n  Evidence of absence: The test reads _raw() at line 85 instead of the expanded text, so scripts/stable_e2e_step_wait_review.sh:805 is never checked. Quoting it needs a scripts/ edit outside the grant plus an update to tests/test_test_and_mark_stable_review_blocked_budget.py:874. Narrowing documented in docstring (lines 82-83) and changelog; a prior autofix deferred it. Reported at NIT, not a new last-run regression.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- All other lenses: NONE. Static verification: the workflow has zero unquoted `[ $IDLE -ge` and seven quoted sites (lines 1034, 1333, 1824, 2696, 2766, 2780, 2809). Copilot 422 is third-party.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7b926912c579e75d8195dd55a32bf8a270de3ca3a8c68611b70e3aba364ac790",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9063,
+    "run_id": "42487670812",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42487670812",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108143446_89f6347b4e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9063,
+    "run_id": "42487670812"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T14:34:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
