@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue improve?\nChoices:\nA. Clarify / plan / implement issue pipeline workflows\nB. Review & autofix workflow (`review_autofix.yml` and its helper scripts)\nC. Orchestrator (`orchestrate*.yml`, `scripts/orchestrate_*`)\nD. Validate workflow / validation harness\nE. AI memory subsystem (`scripts/ai_memory.py`, `scripts/memory_helpers.sh`)\nF. Documentation only (README / docs)\nG. Other. Name the file(s) or workflow in your `/answer` (RECOMMENDED)\nQ2: What kind of improvement is wanted?\nChoices:\nA. Fix a specific bug or failure. Include the run URL, log excerpt or reproduction steps in your `/answer` (RECOMMENDED)\nB. Reduce runtime or LLM/API cost\nC. Improve reliability (fewer flaky or stalled runs)\nD. Add a new feature or behaviour. Describe it in your `/answer`\nE. Improve the docs or how clear the logs are\nQ3: How will we know the change worked?\nChoices:\nA. You state a concrete, checkable outcome in your `/answer` (for example, \"workflow X no longer fails with error Y\" or \"phase Z finishes in under N minutes\") (RECOMMENDED)\nB. New or updated contract tests covering the changed behaviour pass in CI\nC. A+B",
+  "fingerprint": "496a910c3806726d0f6a0fd2b604942b7c84ebbaf20cbc8508b679aade024b14",
+  "lineage": {
+    "issue_number": 9069,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42505389574",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42505389574",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261108173510_a66103bc4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9069,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42505389574"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #9069 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-08T17:35:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
