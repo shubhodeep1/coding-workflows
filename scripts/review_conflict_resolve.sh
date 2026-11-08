@@ -411,6 +411,98 @@ _dispatch_integration_judge_now() {
     --run-id "${GITHUB_RUN_ID:-}" || echo "::warning::Immediate orchestrator-poll dispatch helper failed; cron tick will pick up the integration-sync stall within 5 min."
 }
 
+# RESOLVER_TERMINAL record (wfopt-2026-10-07-2, Reliability 1): one stable
+# stdout line per resolver EXIT trap naming why the resolver exited. State is
+# in-process only: no new env vars (CLAUDE.md section 8), no GitHub API calls,
+# no GITHUB_ENV writes. Every printed field is an integer or an enum token;
+# paths, branches, URLs, model output and credentials never reach the line.
+# Exit sites set RESOLVER_TERMINAL_EXIT_CLASS right before their `exit`;
+# rc 0 always records `ok`.
+RESOLVER_TERMINAL_EXIT_CLASS="other"
+RESOLVER_TERMINAL_ATTEMPTS=0
+RESOLVER_TERMINAL_ATTEMPT_MS=()
+_resolver_terminal_attempt_open_ms=""
+
+# Millisecond wall clock (pattern: _memory_epoch_ms in memory_helpers.sh).
+# Always returns 0; prints 0 when no clock is usable.
+_resolver_terminal_now_ms() {
+  local _rt_ms _rt_s
+  _rt_ms="$(date +%s%3N 2>/dev/null || true)"
+  if [[ "${_rt_ms}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${_rt_ms}"
+    return 0
+  fi
+  _rt_s="$(date +%s 2>/dev/null || true)"
+  if [[ "${_rt_s}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$(( _rt_s * 1000 ))"
+    return 0
+  fi
+  printf '0\n'
+  return 0
+}
+
+# Closes the open attempt timer (idempotent: no-op when none is open).
+_resolver_terminal_attempt_end() {
+  local _rt_now _rt_elapsed
+  [ -n "${_resolver_terminal_attempt_open_ms:-}" ] || return 0
+  _rt_now="$(_resolver_terminal_now_ms)"
+  _rt_elapsed=0
+  if [[ "${_rt_now}" =~ ^[0-9]+$ ]] && [[ "${_resolver_terminal_attempt_open_ms}" =~ ^[0-9]+$ ]]; then
+    _rt_elapsed=$(( _rt_now - _resolver_terminal_attempt_open_ms ))
+    [ "${_rt_elapsed}" -ge 0 ] || _rt_elapsed=0
+  fi
+  RESOLVER_TERMINAL_ATTEMPT_MS+=("${_rt_elapsed}")
+  _resolver_terminal_attempt_open_ms=""
+  return 0
+}
+
+# Opens a new attempt timer (closing any timer a path forgot to close).
+_resolver_terminal_attempt_begin() {
+  _resolver_terminal_attempt_end || true
+  RESOLVER_TERMINAL_ATTEMPTS=$((RESOLVER_TERMINAL_ATTEMPTS + 1))
+  _resolver_terminal_attempt_open_ms="$(_resolver_terminal_now_ms)"
+  return 0
+}
+
+# Prints exactly one RESOLVER_TERMINAL line. Always invoked in a subshell
+# from _resolver_exit_trap so a failure here cannot change the trap's rc or
+# skip the integration-judge dispatch.
+_resolver_terminal_emit_record() {
+  trap - EXIT
+  set +e +u
+  local _rt_rc="$1" _rt_run_id _rt_run_attempt _rt_pr _rt_attempts _rt_ms _rt_entry _rt_class _rt_fp _rt_markers
+  [[ "${_rt_rc}" =~ ^[0-9]+$ ]] || _rt_rc=1
+  _resolver_terminal_attempt_end || true
+  _rt_run_id="${GITHUB_RUN_ID:-}"
+  [[ "${_rt_run_id}" =~ ^[0-9]+$ ]] || _rt_run_id="none"
+  _rt_run_attempt="${GITHUB_RUN_ATTEMPT:-}"
+  [[ "${_rt_run_attempt}" =~ ^[0-9]+$ ]] || _rt_run_attempt="none"
+  _rt_pr="${PR_NUMBER:-}"
+  [[ "${_rt_pr}" =~ ^[0-9]+$ ]] || _rt_pr="none"
+  _rt_attempts="${RESOLVER_TERMINAL_ATTEMPTS:-0}"
+  [[ "${_rt_attempts}" =~ ^[0-9]+$ ]] || _rt_attempts=0
+  _rt_ms=""
+  for _rt_entry in "${RESOLVER_TERMINAL_ATTEMPT_MS[@]}"; do
+    [[ "${_rt_entry}" =~ ^[0-9]+$ ]] || continue
+    _rt_ms="${_rt_ms:+${_rt_ms},}${_rt_entry}"
+  done
+  [ -n "${_rt_ms}" ] || _rt_ms="none"
+  if [ "${_rt_rc}" -eq 0 ]; then
+    _rt_class="ok"
+  else
+    case "${RESOLVER_TERMINAL_EXIT_CLASS:-}" in
+      timeout|no_progress|markers|fingerprint|scope|commit|other) _rt_class="${RESOLVER_TERMINAL_EXIT_CLASS}" ;;
+      *) _rt_class="other" ;;
+    esac
+  fi
+  _rt_fp="${_fp_count:-}"
+  [[ "${_rt_fp}" =~ ^[0-9]+$ ]] || _rt_fp=0
+  _rt_markers="${_marker_count:-}"
+  [[ "${_rt_markers}" =~ ^[0-9]+$ ]] || _rt_markers="unknown"
+  printf 'RESOLVER_TERMINAL run_id=%s run_attempt=%s pr=%s attempts=%s attempt_ms=%s exit_class=%s rc=%s fp_violations=%s markers=%s\n' \
+    "${_rt_run_id}" "${_rt_run_attempt}" "${_rt_pr}" "${_rt_attempts}" "${_rt_ms}" "${_rt_class}" "${_rt_rc}" "${_rt_fp}" "${_rt_markers}"
+}
+
 # EXIT trap — fires the dispatch on any non-zero exit from this
 # script (resolver loop exhaustion, no-progress, allowlist guard,
 # check_resolver_diff failure).  Idempotent (function early-returns
@@ -419,6 +511,7 @@ _dispatch_integration_judge_now() {
 # succeeded in deciding no commit was needed.
 _resolver_exit_trap() {
   local _rc=$?
+  ( _resolver_terminal_emit_record "${_rc}" ) 2>/dev/null || true
   if [ "${_rc}" -ne 0 ]; then
     _dispatch_integration_judge_now || true
   fi
@@ -1831,6 +1924,8 @@ _resolver_test_repair_main()
 
 if [ -n "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then
   # No integration-judge dispatch and no retry-state writes in this mode.
+  # No RESOLVER_TERMINAL record either: the EXIT trap is never installed when
+  # RESOLVER_TEST_REPAIR_RESULT_FILE is set, so `trap - EXIT` is a no-op here.
   trap - EXIT
   _resolver_test_repair_main
   exit 0
@@ -3661,6 +3756,7 @@ _resolver_sandbox_opencode_attempt()
 resolver_commit_engine="codex"
 attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
+  _resolver_terminal_attempt_begin || true
   emit_conflict_resolver_substate "PreparingWorkspace" "${attempt}"
   # On retries: restore the working tree to its post-merge-replay
   # state (so retries don't compound the previous attempt's bad
@@ -3771,6 +3867,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
     if ! _resolver_scope_state capture; then
       echo "::error::Cannot capture resolver attempt baseline; refusing to invoke model."
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
   fi
@@ -3880,6 +3977,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     _resolver_scope_state check || _scope_rc=$?
     if [ "${_scope_rc}" -ne 0 ] && [ "${_scope_rc}" -ne 1 ]; then
       echo "::error::Resolver attempt scope cannot be verified; refusing to retry or commit."
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
     if [ "${_scope_rc}" -eq 1 ]; then
@@ -3887,20 +3985,24 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       sed 's/^/ - /' "${RESOLVER_SCOPE_VIOLATIONS_FILE}"
       if ! _resolver_scope_state restore || ! _resolver_scope_state verify; then
         echo "::error::Resolver attempt scope restore could not be verified; refusing to retry or commit."
+        RESOLVER_TERMINAL_EXIT_CLASS="scope"
         exit 1
       fi
       echo "Resolver attempt scope drift discarded; pre-attempt tree and merge index verified."
       if [ "${_codex_exit}" -eq 78 ]; then
+        RESOLVER_TERMINAL_EXIT_CLASS="scope"
         exit 78
       fi
       rm -f "${tmp_output}"
       emit_conflict_resolver_substate "Failed" "${attempt}"
       if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
         echo "::error::Conflict resolver exhausted ${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} attempts with out-of-scope edits; refusing to commit."
+        RESOLVER_TERMINAL_EXIT_CLASS="scope"
         exit 1
       fi
       _prev_attempt_failure_kind="scope"
       attempt=$((attempt + 1))
+      _resolver_terminal_attempt_end || true
       sleep 2
       continue
     fi
@@ -3908,6 +4010,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if [ "${_codex_exit}" -eq 78 ]; then
     echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation."
     emit_conflict_resolver_substate "Failed" "${attempt}"
+    RESOLVER_TERMINAL_EXIT_CLASS="scope"
     exit 78
   fi
   # Check the attempt-relative tree even when the agent exited non-zero.
@@ -3918,6 +4021,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     _resolver_attempt_state check || _scope_status=$?
     if [ "${_scope_status}" -eq 2 ]; then
       echo "::error::Resolver attempt state cannot be trusted; refusing to commit or retry."
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
     if [ "${_scope_status}" -ne 0 ]; then
@@ -3926,9 +4030,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       emit_conflict_resolver_substate "Failed" "${attempt}"
       if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
         echo "::error::Conflict resolver exhausted ${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} attempts with out-of-conflict edits; refusing [ai-merge-resolve] commit."
+        RESOLVER_TERMINAL_EXIT_CLASS="scope"
         exit 1
       fi
       attempt=$((attempt + 1))
+      _resolver_terminal_attempt_end || true
       sleep 2
       continue
     fi
@@ -4041,9 +4147,15 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       else
         echo "Conflict resolver failed after retries (final attempt: OpenCode non-zero exit ${_codex_exit})."
       fi
+      if [ "${_prev_attempt_failure_kind}" = "timeout" ] || [ "${_prev_attempt_failure_kind}" = "stall_guard" ]; then
+        RESOLVER_TERMINAL_EXIT_CLASS="timeout"
+      else
+        RESOLVER_TERMINAL_EXIT_CLASS="other"
+      fi
       exit 1
     fi
     attempt=$((attempt + 1))
+    _resolver_terminal_attempt_end || true
     sleep 2
     continue
   fi
@@ -4152,6 +4264,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     sort -- "${RESOLVER_FP_VIOLATIONS_PREV_FILE}" > "${_np_prev}" || true
     if cmp -s "${_np_cur}" "${_np_prev}"; then
       echo "::warning::Conflict resolver no-progress detected: attempt ${attempt} produced the same ${_fp_count} fingerprint violation(s) as attempt $((attempt - 1)). Escalating to orchestrator integration judge instead of continuing the retry loop."
+      RESOLVER_TERMINAL_EXIT_CLASS="no_progress"
       attempt="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}"
     else
       # Count-not-decreasing fallback: even if the violation text
@@ -4165,6 +4278,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       _fp_count_prev="${_fp_count_prev:-0}"
       if [ "${_fp_count}" -ge "${_fp_count_prev}" ]; then
         echo "::warning::Conflict resolver no-progress detected: attempt ${attempt} produced ${_fp_count} fingerprint violation(s), not fewer than the ${_fp_count_prev} from attempt $((attempt - 1)). Escalating to orchestrator integration judge instead of continuing the retry loop."
+        RESOLVER_TERMINAL_EXIT_CLASS="no_progress"
         attempt="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}"
       fi
     fi
@@ -4205,12 +4319,14 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       if [ "${_final_fp_exit}" -eq 1 ]; then
         echo "::error::Aborting [ai-merge-resolve] commit: integration fingerprint verification rejected the resolver output."
         echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+        [ "${RESOLVER_TERMINAL_EXIT_CLASS}" = "no_progress" ] || RESOLVER_TERMINAL_EXIT_CLASS="fingerprint"
         exit 1
       fi
     fi
     if [ "${_marker_count}" -gt 0 ]; then
       echo "::error::Conflict resolver exhausted ${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} attempts; ${_marker_count} file(s) still contain unresolved Git conflict markers. Aborting [ai-merge-resolve] commit."
       echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+      [ "${RESOLVER_TERMINAL_EXIT_CLASS}" = "no_progress" ] || RESOLVER_TERMINAL_EXIT_CLASS="markers"
       exit 1
     fi
     # Any other soft-failure class falls through to a generic
@@ -4218,6 +4334,13 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     # the next poll tick.
     echo "::error::Conflict resolver exhausted ${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} attempts with soft-validation failures that could not be auto-recovered."
     echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+    if [ "${RESOLVER_TERMINAL_EXIT_CLASS}" != "no_progress" ]; then
+      if [[ "${_fp_count:-0}" =~ ^[0-9]+$ ]] && [ "${_fp_count:-0}" -gt 0 ]; then
+        RESOLVER_TERMINAL_EXIT_CLASS="fingerprint"
+      else
+        RESOLVER_TERMINAL_EXIT_CLASS="other"
+      fi
+    fi
     exit 1
   fi
   # Snapshot this attempt's fingerprint violations so the next
@@ -4227,8 +4350,10 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     cp -a "${RESOLVER_FP_VIOLATIONS_FILE}" "${RESOLVER_FP_VIOLATIONS_PREV_FILE}" || true
   fi
   attempt=$((attempt + 1))
+  _resolver_terminal_attempt_end || true
   sleep 2
 done
+_resolver_terminal_attempt_end || true
 
 # Remove root-level workflow-generated artifacts so they are never
 # committed to caller repos.  Skip when running on coding-workflows
@@ -4393,6 +4518,7 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
         fi
         echo "Workflow files touched by resolver but NOT in allowlist:"
         sed 's/^/ - /' "${WORKFLOW_VIOLATIONS_FILE}" || true
+        RESOLVER_TERMINAL_EXIT_CLASS="scope"
         exit 1
       fi
     else
@@ -4420,6 +4546,7 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
       echo "::error::Conflicted-paths snapshot missing; refusing to create [ai-merge-resolve] commit without resolver validation."
       echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
       rm -f "${RESOLVER_TOUCHED_FILE}"
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
 
@@ -4427,6 +4554,7 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
       echo "::error::check_resolver_diff.sh is missing or not executable; refusing to create [ai-merge-resolve] commit without resolver validation."
       echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
       rm -f "${RESOLVER_TOUCHED_FILE}"
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
 
@@ -4437,8 +4565,12 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
       echo "::error::Conflict resolver output failed validation; skipping [ai-merge-resolve] commit."
       echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
       rm -f "${RESOLVER_TOUCHED_FILE}"
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
+    # Staging/commit failures from here on (including an implicit set -e
+    # failure of `git commit`) record exit_class=commit; exit 0 records ok.
+    RESOLVER_TERMINAL_EXIT_CLASS="commit"
 
     # Stage the editor's conflict resolutions on top of the
     # existing merge index.  Crucially, we KEEP .git/MERGE_HEAD
