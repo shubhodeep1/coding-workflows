@@ -308,10 +308,15 @@ jobs:
           cd /tmp
           tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           # Bounded retries cover transient 5xx and connection resets (CI run
-          # 35615284953 failed on an HTTP 504 here). `--retry-delay 0` keeps
-          # curl's built-in exponential backoff; the sha256 check below still
-          # guards integrity.
-          curl -sSLf --retry 3 --retry-all-errors --retry-delay 0 \
+          # 35615284953 failed on an HTTP 504 here). CI run 42465389350
+          # (PR #9038) hit HTTP 504 again and used up the old 1s/2s/4s
+          # exponential backoff in about 7 seconds, so curl now makes up to 5
+          # retries (6 attempts in total) a fixed 15 seconds apart. When each
+          # attempt fails fast, that rides out an outage of about 75 seconds.
+          # `--retry-max-time 300` only caps the total time spent retrying, so
+          # slow attempts (each bounded by `--max-time 120`) get fewer retries.
+          # The sha256 check below still guards integrity.
+          curl -sSLf --retry 5 --retry-all-errors --retry-delay 15 --retry-max-time 300 \
             --connect-timeout 20 --max-time 120 -o "${tarball}" \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
           echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
