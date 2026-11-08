@@ -310,8 +310,10 @@ jobs:
           # Bounded retries cover transient 5xx and connection resets (CI run
           # 35615284953 failed on an HTTP 504 here). `--retry-delay 0` keeps
           # curl's built-in exponential backoff; the sha256 check below still
-          # guards integrity.
-          curl -sSLf --retry 3 --retry-all-errors --retry-delay 0 \
+          # guards integrity. Run 42465084748 used up 3 retries within about
+          # 18 seconds of 504s, so 5 retries with a 120-second total retry
+          # window let the backoff outlast a short outage.
+          curl -sSLf --retry 5 --retry-all-errors --retry-delay 0 --retry-max-time 120 \
             --connect-timeout 20 --max-time 120 -o "${tarball}" \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
           echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
