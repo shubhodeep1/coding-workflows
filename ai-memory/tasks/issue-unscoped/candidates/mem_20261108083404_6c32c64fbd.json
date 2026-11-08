@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, the tests-heal-plan-and-validation job and the destination CI job\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR diff does not move steps between jobs; the 14 modules join the existing 4 local shards inside the same step in tests-heal-plan-and-validation, and the ci.yml hunk states \"No step moved\". The deviation is documented in ci.yml comments at lines 998-1009 (#7387, #9018) and follows the approved plan (issue comment 6717834140). Severity reported as MAJOR by all three.\n- requirement: Never add to agents.md (or AGENTS.md) directly; write a fragment instead (CLAUDE.md \u00a730); agents.d fragment for the workflow change\n  expected_change_site: agents.d/9045-heal-step-shard-remaining-modules.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: PR diff adds only .github/workflows/ci.yml, changelog.d/9045-heal-step-shard-remaining-modules.md and tests/test_ci_poll_test_sharding.py; no agents.d/ fragment is created, and the pre-push gate lists test_agents_fragment_contract.py as failing. Severity disagreement: gemini MAJOR, minimax NIT (confidence 3, says the failure may be a sandbox snapshot artifact and the change is internal CI sharding).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\n  Expected change site: .github/workflows/ci.yml, the tests-heal-plan-and-validation job and the destination CI job.\n  Evidence of absence: The PR diff does not move steps between jobs. Instead, the 14 modules join the existing 4 local shards inside the same step in tests-heal-plan-and-validation. The changed hunk explicitly states \"No step moved\".\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: Never add to agents.md (or AGENTS.md) directly. Write a fragment instead. (CLAUDE.md 30).\n  Expected change site: agents.d/9045-heal-step-shard-remaining-modules.md\n  Evidence of absence: The workflow sharding represents a significant change to CI workflow architecture, but no corresponding agents fragment was added to agents.d/. As a result, the pre-push gate test_agents_fragment_contract.py fails, indicating the documentation contract is violated.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml - a step should be relocated from tests-heal-plan-and-validation to another CI job with available headroom.\n  Evidence of absence: The PR diff and the ci.yml comment at lines 998-1009 explicitly state \"No step moved out this time.\" The 14 modules join the existing 4 local shards inside the same step. Justification cites #7387, #9018, and every other test job over 15 minutes. The planning comment (issue comment 6717834140) chose in-place sharding. Hard limits are met and the deviation is documented in the workflow.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: CLAUDE.md \u00a730 \u2014 agents.d/ fragment required when the diff alters workflow behavior or ships a workflow change documented in agents.md.\n  Expected change site: agents.d/9045-heal-step-shard-remaining-modules.md (alongside changelog.d/9045-heal-step-shard-remaining-modules.md).\n  Evidence of absence: PR diff adds only ci.yml, the changelog fragment and tests/test_ci_poll_test_sharding.py. The pre-push gate lists tests/test_agents_fragment_contract.py::test_instructions_point_at_fragments as a failure. Prior autofix rounds argue this is a sandbox snapshot artifact; the actual requirement is not independently verified. The change is internal CI sharding, which weakens the strict \u00a730 trigger.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the `tests-heal-plan-and-validation` job and the destination CI job.\n  Evidence of absence: The PR changes the heal step's sharding within its existing job; no step is moved to another job. The workflow diff explicitly says \"No step moved.\"\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1dde64cd90d852214b4ebb953fe309d6c6955c0585cd9ce73fdd7caf89240259",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9048,
+    "run_id": "42462187698",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42462187698",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108083404_6c32c64fbd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9048,
+    "run_id": "42462187698"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T08:34:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
