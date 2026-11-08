@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9021,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9021\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9030\",\"pr_number\":9030,\"branch\":\"ai/issue-9021\",\"run_id\":\"42429105733\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42429105733\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/9021-ci-wiring-guard-part2-sharded.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "4b4334d7a93870164433d1a6e31d120599e4ec4db33bf6836ff5a425b1926bbe",
+  "lineage": {
+    "issue_number": 9021,
+    "parent_ids": [],
+    "pr_number": 9030,
+    "run_id": "42429105733",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42429105733",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9030"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261108010010_40c4e6307e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9021,
+    "level": "run",
+    "pr_number": 9030,
+    "run_id": "42429105733"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9021: https://github.com/shubhodeep1/coding-workflows/pull/9030",
+  "timestamps": {
+    "created_at": "2026-11-08T01:00:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
