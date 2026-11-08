@@ -2483,12 +2483,14 @@ MOVED_HEAL_8993_STEPS = {
 			"tests/test_orchestrator_concurrency_caps.py",
 		),
 	),
+	# Issue #9078 moved it on to tests-release-and-log-analysis.
 	"Merge-base freshness gate (pr_checks_lib) tests": (
-		"tests-hooks-and-orchestrator",
+		"tests-release-and-log-analysis",
 		("tests/test_pr_base_freshness_gate.py",),
 	),
+	# Issue #9078 moved it on to tests-release-and-log-analysis.
 	"Conflict-dispatch active-run visibility contract tests": (
-		"tests-hooks-and-orchestrator",
+		"tests-release-and-log-analysis",
 		(
 			"tests/test_conflict_dispatch_active_run_visibility.py",
 			"tests/test_review_dispatch_default_branch.py",
@@ -2795,8 +2797,9 @@ VALIDATION_SELFTEST_MODULES = (
 STATIC_8394_SOURCE_JOB_ID = "static-checks"
 STATIC_8394_SETUP_STEP = "Install Python CI dependencies"
 MOVED_STATIC_8394_STEPS = {
+	# Issue #9078 moved it on to tests-release-and-log-analysis.
 	"Implement post-Codex recovery unit tests": (
-		"tests-hooks-and-orchestrator",
+		"tests-release-and-log-analysis",
 		("tests/test_implement_post_codex_recovery.py",),
 	),
 	# "Validation self-test unit tests" moved on to orchestrate-poll (3), then
@@ -3796,6 +3799,88 @@ class MovedPollGroupThree9037StepsContractTest(unittest.TestCase):
 		for name in MOVED_POLL_GROUP_THREE_9037_STEPS:
 			with self.subTest(step=name):
 				self.assertIn(name, LAST_GROUP_PINNED_STEPS)
+
+
+# Steps moved out of tests-hooks-and-orchestrator, which took 15m33s of its 20
+# minutes (run 42513195209, budget-watch issue #9078): step name -> (target job
+# id, module paths its body names). The run's step timings were not readable;
+# the pick is the hooks job's slowest unsplit steps in the planning sandbox, an
+# estimate. None needs Node or the prepared .claude/ live copies, so they run
+# at the end of tests-release-and-log-analysis without a guard.
+HOOKS_9078_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
+HOOKS_9078_SETUP_STEP = "Install Python CI dependencies"
+MOVED_HOOKS_9078_STEPS = {
+	"Implement post-Codex recovery unit tests": (
+		"tests-release-and-log-analysis",
+		("tests/test_implement_post_codex_recovery.py",),
+	),
+	"Merge-base freshness gate (pr_checks_lib) tests": (
+		"tests-release-and-log-analysis",
+		("tests/test_pr_base_freshness_gate.py",),
+	),
+	"Conflict-dispatch active-run visibility contract tests": (
+		"tests-release-and-log-analysis",
+		(
+			"tests/test_conflict_dispatch_active_run_visibility.py",
+			"tests/test_review_dispatch_default_branch.py",
+		),
+	),
+}
+
+
+class MovedHooks9078StepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-hooks-and-orchestrator run once, in their target job (#9078)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_target_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_HOOKS_9078_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
+
+	def test_each_step_has_no_guard(self) -> None:
+		for name in MOVED_HOOKS_9078_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, GROUP_PINNED_STEPS)
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_job_id, modules) in MOVED_HOOKS_9078_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[HOOKS_9078_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_HOOKS_9078_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_target_job_setup(self) -> None:
+		for name, (job_id, _modules) in MOVED_HOOKS_9078_STEPS.items():
+			names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+			with self.subTest(step=name):
+				self.assertIn(HOOKS_9078_SETUP_STEP, names, job_id)
+				self.assertIn(name, names)
+				self.assertLess(names.index(HOOKS_9078_SETUP_STEP), names.index(name))
+
+	def test_no_target_is_the_source_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_HOOKS_9078_STEPS.items():
+			with self.subTest(step=name):
+				self.assertNotEqual(job_id, HOOKS_9078_SOURCE_JOB_ID)
 
 
 # Issue #9021: orchestrate-poll (0) took 15m15s of its 20 minutes (run

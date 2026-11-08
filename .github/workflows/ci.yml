@@ -945,43 +945,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run tests/test_render_scenario_trace.py
           python3 -m coverage report --include='scripts/render_scenario_trace.py' --fail-under=80
 
-      # Moved from tests-heal-plan-and-validation, which measured 15m08s of
-      # its 20 minutes on main (run 38222993326, issue #7250); static-checks
-      # measured about 2 minutes. Step names and bodies are unchanged.
-      # "Regression tests wired by the CI wiring guard (part 1)", moved here
-      # with it, moved on to tests-release-and-log-analysis in #7382, was in
-      # tests-heal-plan-and-validation from #7406 and is in
-      # tests-promote-stall-and-review since #9018.
-      # Moved on from static-checks, which took 11m17s of its 15 minutes on
-      # main (run 40954844196, budget-watch issue #8394). The pick is an
-      # estimate from test and subprocess counts, not measured; the run's step
-      # timings were not readable. Name and body unchanged.
-      - name: Implement post-Codex recovery unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
-
-      # Moved from tests-heal-plan-and-validation, which took 16m08s of its 20
-      # minutes on main (run 42373283876, budget-watch issue #8993). Step
-      # timings could not be read; picked as that job's next slowest unsplit
-      # steps in the planning sandbox (about 29s and 23s, relative weights
-      # only). This job has the fewest subprocess call sites of the 20-minute
-      # non-matrix jobs (about 221), and nothing has moved into it since #8730
-      # moved its largest unsplit step out. Conflict-dispatch first came to the
-      # heal job from tests-release-and-log-analysis (#8208). Names and bodies
-      # unchanged.
-      - name: Merge-base freshness gate (pr_checks_lib) tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_base_freshness_gate.py
-
-      - name: Conflict-dispatch active-run visibility contract tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_dispatch_active_run_visibility.py
-          # Issue #4701: default-branch review dispatches and PR-named run lookups.
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_dispatch_default_branch.py
-
       # Moved from tests-promote-stall-and-review, which took 15m33s of its 20
       # minutes on main (run 41042353484, budget-watch issue #8466). Picked by
       # test and subprocess counts because the run's step timings could not be
@@ -2485,6 +2448,57 @@ jobs:
           set -euo pipefail
           npm ci --no-audit --no-fund
           npx vitest run
+
+      # Moved from tests-heal-plan-and-validation, which measured 15m08s of
+      # its 20 minutes on main (run 38222993326, issue #7250); static-checks
+      # measured about 2 minutes. Step names and bodies are unchanged.
+      # "Regression tests wired by the CI wiring guard (part 1)", moved here
+      # with it, moved on to tests-release-and-log-analysis in #7382, was in
+      # tests-heal-plan-and-validation from #7406 and is in
+      # tests-promote-stall-and-review since #9018.
+      # Moved on from static-checks, which took 11m17s of its 15 minutes on
+      # main (run 40954844196, budget-watch issue #8394). The pick is an
+      # estimate from test and subprocess counts, not measured; the run's step
+      # timings were not readable. Name and body unchanged.
+      #
+      # Moved again from tests-hooks-and-orchestrator, which took 15m33s of its
+      # 20 minutes on main (run 42513195209, budget-watch issue #9078), to this
+      # job together with the two steps below. That run's step timings could
+      # not be read, so the pick is an estimate from the planning sandbox (about
+      # 31s for this step and 34s and 32s for the two below, relative weights
+      # only), not a measurement. This job has the fewest subprocess call sites
+      # of the 20-minute non-matrix test jobs (about 284) and checks out full
+      # history. None of the three steps needs Node or the prepared .claude/
+      # live copies. Names and bodies unchanged.
+      - name: Implement post-Codex recovery unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
+
+      # Moved from tests-heal-plan-and-validation, which took 16m08s of its 20
+      # minutes on main (run 42373283876, budget-watch issue #8993). Step
+      # timings could not be read; picked as that job's next slowest unsplit
+      # steps in the planning sandbox (about 29s and 23s, relative weights
+      # only). This job has the fewest subprocess call sites of the 20-minute
+      # non-matrix jobs (about 221), and nothing has moved into it since #8730
+      # moved its largest unsplit step out. Conflict-dispatch first came to the
+      # heal job from tests-release-and-log-analysis (#8208). Names and bodies
+      # unchanged.
+      #
+      # Moved again from tests-hooks-and-orchestrator to this job in budget-watch
+      # issue #9078, with the step above; see its comment. Names and bodies
+      # unchanged.
+      - name: Merge-base freshness gate (pr_checks_lib) tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_base_freshness_gate.py
+
+      - name: Conflict-dispatch active-run visibility contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_dispatch_active_run_visibility.py
+          # Issue #4701: default-branch review dispatches and PR-named run lookups.
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_dispatch_default_branch.py
 
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
