@@ -5,13 +5,24 @@
   "entry_id": "processed_command_9061_6721809763_approved",
   "issue_number": 9061,
   "metadata": {
+    "branch": "ai/issue-9061",
+    "changed_files": [
+      "changelog.d/wfopt-2026-10-07-3-unblock-judge-gh-retry.md",
+      "scripts/unblock_judge.sh",
+      "tests/test_unblock_judge.py"
+    ],
+    "issue_number": 9061,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9061",
+    "pr_number": 9064,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9064",
+    "run_attempt": "1",
+    "run_id": "42482904710",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42482904710"
   },
   "run_attempt": 1,
   "run_id": "42482904710",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-08T13:02:37Z",
+  "status": "completed",
+  "timestamp": "2026-11-08T13:58:00Z",
   "workflow": "implement"
 }
