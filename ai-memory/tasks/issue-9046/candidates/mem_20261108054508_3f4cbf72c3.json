@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9046,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9046\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9049\",\"pr_number\":9049,\"branch\":\"ai/issue-9046\",\"run_id\":\"42449598022\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42449598022\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/9046-ci-poll-group-0-steps-to-hooks-job.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "55188d8dd53a2d49363a9d9e949980fcd05527d5f0214584b9c20e70e413f54e",
+  "lineage": {
+    "issue_number": 9046,
+    "parent_ids": [],
+    "pr_number": 9049,
+    "run_id": "42449598022",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42449598022",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9049"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261108054508_3f4cbf72c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9046,
+    "level": "run",
+    "pr_number": 9049,
+    "run_id": "42449598022"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9046: https://github.com/shubhodeep1/coding-workflows/pull/9049",
+  "timestamps": {
+    "created_at": "2026-11-08T05:45:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
