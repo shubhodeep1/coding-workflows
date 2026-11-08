@@ -344,10 +344,21 @@ jobs:
             # attempt fails fast, that rides out an outage of about 75 seconds.
             # `--retry-max-time 300` only caps the total time spent retrying, so
             # slow attempts (each bounded by `--max-time 120`) get fewer retries.
-            # The sha256 check below still guards integrity.
-            curl -sSLf --retry 5 --retry-all-errors --retry-delay 15 --retry-max-time 300 \
-              --connect-timeout 20 --max-time 120 -o "${tarball}" \
-              "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+            # The sha256 check below still guards integrity. Runs 42465084748
+            # and 42469096786 also failed on 504s after one curl run gave up, so
+            # an outer loop runs curl up to 4 times with a 20-second pause
+            # between runs to ride out a longer outage.
+            actionlint_rc=1
+            for actionlint_attempt in 1 2 3 4; do
+              actionlint_rc=0
+              curl -sSLf --retry 5 --retry-all-errors --retry-delay 15 --retry-max-time 300 \
+                --connect-timeout 20 --max-time 120 -o "${tarball}" \
+                "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}" || actionlint_rc=$?
+              if [ "${actionlint_rc}" -eq 0 ]; then break; fi
+              echo "actionlint download run ${actionlint_attempt}/4 failed (curl exit ${actionlint_rc})."
+              if [ "${actionlint_attempt}" -lt 4 ]; then sleep 20; fi
+            done
+            if [ "${actionlint_rc}" -ne 0 ]; then echo "::error::actionlint download failed after 4 curl runs (curl exit ${actionlint_rc})."; exit "${actionlint_rc}"; fi
           fi
           # Runs on a cache hit and on a miss: a corrupt or poisoned cache entry fails closed.
           echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
@@ -1100,21 +1111,71 @@ jobs:
           # test function (parametrized cases stay together), every collected
           # function runs exactly once, and a shard with no recorded exit code
           # counts as failed.
+          #
+          # Budget-watch issue #9045: this job took 17m00s of its 20 minutes on
+          # main (run 42445170048). No step moved out this time. The #7387
+          # evidence above shows this step cannot move whole, #9018 moved a
+          # 604-test step out and the job only fell from 17m59s to 17m00s, and
+          # every other test job has a recorded total over 15 minutes after its
+          # last move-in. Instead the 14 modules this step used to run in two
+          # serial pytest commands after the shards now join the same 4 shards,
+          # split by test function with the main module. The step name, job,
+          # timeout and module set are unchanged. That run's step timings could
+          # not be read, so the saving is an estimate from test and subprocess
+          # counts. None of the 14 modules writes a fixed shared path (each test
+          # writes into its own temp dir), so they can share the shards.
           heal_shards=4
           heal_module="tests/test_workflow_failure_heal.py"
-          rm -f /tmp/heal_collect.log /tmp/heal_shard_*.txt /tmp/heal_shard_*.log /tmp/heal_shard_*.rc
+          heal_other_modules=(
+            tests/test_workflow_failure_heal_non_retryable_backfill.py
+            tests/test_workflow_failure_heal_pr_reconcile.py
+            tests/test_heal_isolated_editor.py
+            tests/test_heal_reproduce.py
+            tests/test_workflow_failure_heal_scope_tests.py
+            tests/test_workflow_failure_heal_recovery_scan.py
+            tests/test_workflow_failure_heal_synced_security.py
+            tests/test_workflow_failure_heal_queue.py
+            tests/test_workflow_failure_heal_evidence_bundle.py
+            tests/test_workflow_failure_heal_verify.py
+            tests/test_heal_port_to_default.py
+            # Model-provider outage classifier, tracker and resume (issue #6633).
+            tests/test_provider_outage.py
+            tests/test_review_autofix_provider_outage_contract.py
+            tests/test_claude_capacity_wait_call_sites.py
+          )
+          heal_all_modules=("${heal_module}" "${heal_other_modules[@]}")
+          rm -f /tmp/heal_collect.log /tmp/heal_tests.txt /tmp/heal_shard_*.txt /tmp/heal_shard_*.log /tmp/heal_shard_*.rc
           # Keep the raw collect output so a collection error prints its traceback.
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${heal_module}" \
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${heal_all_modules[@]}" \
             > /tmp/heal_collect.log 2>&1 \
-            || { cat /tmp/heal_collect.log; echo "::error::Test collection failed for ${heal_module}."; exit 1; }
-          { grep -F "${heal_module}::" /tmp/heal_collect.log || true; } \
-            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/heal_tests.txt
-          heal_test_count="$(wc -l < /tmp/heal_tests.txt | tr -d '[:space:]')"
-          if ! [ "${heal_test_count}" -ge 1 ] 2>/dev/null; then
-            echo "::error::No tests collected from ${heal_module}."
+            || { cat /tmp/heal_collect.log; echo "::error::Test collection failed for the workflow failure heal modules."; exit 1; }
+          # Keep only IDs that start with "<module>::" (anchored, so the main
+          # module's prefix does not match its _queue or _verify siblings), then
+          # group parametrized cases under their test function. A listed module
+          # that collects nothing would drop out silently, so it fails the step.
+          : > /tmp/heal_tests.txt
+          heal_empty_modules=()
+          for heal_listed_module in "${heal_all_modules[@]}"; do
+            heal_listed_ids="$(awk -v m="${heal_listed_module}::" 'index($0, m) == 1' /tmp/heal_collect.log \
+              | sed 's/\[.*$//' | awk '!seen[$0]++')"
+            if [ -z "${heal_listed_ids}" ]; then
+              heal_empty_modules+=("${heal_listed_module}")
+              continue
+            fi
+            printf '%s\n' "${heal_listed_ids}" >> /tmp/heal_tests.txt
+          done
+          if [ "${#heal_empty_modules[@]}" -gt 0 ]; then
+            for heal_listed_module in "${heal_empty_modules[@]}"; do
+              echo "::error::No tests collected from ${heal_listed_module}."
+            done
             exit 1
           fi
-          echo "${heal_module}: ${heal_test_count} test functions across ${heal_shards} shards"
+          heal_test_count="$(wc -l < /tmp/heal_tests.txt | tr -d '[:space:]')"
+          if ! [ "${heal_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from the workflow failure heal modules."
+            exit 1
+          fi
+          echo "heal modules: ${heal_test_count} test functions from ${#heal_all_modules[@]} modules across ${heal_shards} shards"
           heal_shard_pids=()
           for shard in $(seq 0 "$((heal_shards - 1))"); do
             awk -v n="${shard}" -v total="${heal_shards}" 'NR % total == n' \
@@ -1136,26 +1197,24 @@ jobs:
           heal_failed_shards=()
           for shard in $(seq 0 "$((heal_shards - 1))"); do
             [ -s "/tmp/heal_shard_${shard}.txt" ] || continue
-            echo "::group::${heal_module} shard ${shard}"
-            cat "/tmp/heal_shard_${shard}.log" || true
+            echo "::group::workflow failure heal modules shard ${shard}"
+            { cat "/tmp/heal_shard_${shard}.log" 2>/dev/null || true; } | sed 's/^/| /'
             echo "::endgroup::"
             shard_rc="$(cat "/tmp/heal_shard_${shard}.rc" 2>/dev/null || true)"
             if [ "${shard_rc}" != "0" ]; then
               heal_failed_shards+=("${shard}")
             fi
           done
-          # Repeat failing shards' tails outside the collapsed groups.
+          # Repeat failing shards' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
           for shard in "${heal_failed_shards[@]}"; do
-            echo "--- ${heal_module} shard ${shard} failed; last 40 log lines:"
-            tail -n 40 "/tmp/heal_shard_${shard}.log" || true
+            echo "--- workflow failure heal modules shard ${shard} failed; last 40 log lines:"
+            { tail -n 40 "/tmp/heal_shard_${shard}.log" 2>/dev/null || true; } | sed 's/^/| /'
           done
           if [ "${#heal_failed_shards[@]}" -gt 0 ]; then
-            echo "::error::${heal_module} shards failed: ${heal_failed_shards[*]}"
+            echo "::error::workflow failure heal modules shards failed: ${heal_failed_shards[*]}"
             exit 1
           fi
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal_non_retryable_backfill.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_heal_reproduce.py tests/test_workflow_failure_heal_scope_tests.py tests/test_workflow_failure_heal_recovery_scan.py tests/test_workflow_failure_heal_synced_security.py tests/test_workflow_failure_heal_queue.py tests/test_workflow_failure_heal_evidence_bundle.py tests/test_workflow_failure_heal_verify.py tests/test_heal_port_to_default.py
-          # Model-provider outage classifier, tracker and resume (issue #6633).
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_provider_outage.py tests/test_review_autofix_provider_outage_contract.py tests/test_claude_capacity_wait_call_sites.py
 
       - name: CI failure workflow_run trigger tests
         run: |
