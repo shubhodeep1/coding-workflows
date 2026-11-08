@@ -159,7 +159,7 @@ class PostStageBehaviourTests(unittest.TestCase):
 		self.bin = self.root / "bin"
 		for directory in (self.support / "scripts", self.runtime, self.bin):
 			directory.mkdir(parents=True)
-		for helper in ("gh_helpers.sh", "emit_event.sh"):
+		for helper in ("gh_helpers.sh", "emit_event.sh", "emit_event.py"):
 			shutil.copy2(REPO_ROOT / "scripts" / helper, self.support / "scripts" / helper)
 		(self.runtime / "issue_body.md").write_text(
 			f"<!-- check-failure-triage:fp={FINGERPRINT} -->\nTriage body\n", encoding="utf-8",
@@ -247,6 +247,11 @@ class PostStageBehaviourTests(unittest.TestCase):
 		proc = self._run(STUB_GH_RC="1", STUB_GH_STDOUT="", STUB_GH_STDERR="HTTP 502: Bad Gateway\n")
 		self.assertNotEqual(proc.returncode, 0)
 		self.assertIn("CHECK_TRIAGE op=post stage=create_failed pr=17 http_class=5xx attempts=1", proc.stdout)
+
+	def test_create_with_two_http_tokens_on_one_line_uses_the_first(self) -> None:
+		proc = self._run(STUB_GH_RC="1", STUB_GH_STDOUT="", STUB_GH_STDERR="HTTP 403: denied; HTTP 502: retry\n")
+		self.assertNotEqual(proc.returncode, 0)
+		self.assertIn("CHECK_TRIAGE op=post stage=create_failed pr=17 http_class=4xx attempts=1", proc.stdout)
 
 	def test_create_without_http_token_reports_unknown(self) -> None:
 		proc = self._run(STUB_GH_RC="1", STUB_GH_STDOUT="", STUB_GH_STDERR="GraphQL: boom\n")

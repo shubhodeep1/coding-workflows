@@ -778,7 +778,7 @@ jobs:
           if ! triage_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
             --title "CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}" \
             --body-file "${body_file}" --label "ai:check-triage" 2>"${triage_post_create_stderr_file}")"; then
-            triage_post_http_token="$(grep -oE -m1 'HTTP [0-9]{3}' "${triage_post_create_stderr_file}" 2>/dev/null || true)"
+            triage_post_http_token="$(grep -oE -m1 'HTTP [0-9]{3}' "${triage_post_create_stderr_file}" 2>/dev/null | head -n1 || true)"
             case "${triage_post_http_token}" in
               "HTTP 4"??) triage_post_http_class=4xx ;;
               "HTTP 5"??) triage_post_http_class=5xx ;;
