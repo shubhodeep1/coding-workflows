@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3157-3181 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The two steps moved from group 3 to group 4 were chosen by estimation rather than measurement, so group 4 may also be overloaded and hit further timeouts.\n  WHY: The reviewer rated this a NIT with no functional failure. The only risk is a runtime performance failure if the group 4 headroom estimate is wrong.\n- .github/workflows/ci.yml:3172,3178 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: No defect found. The reviewer reported this as a clean-audit note: the moved steps' guards, job names, step bodies, `timeout-minutes: 20` and the 5-group matrix are intact and consistent with the updated test constants.\n  WHY: The reviewer rated it NIT. Its confidence of 5 is confidence that the change is correct.\n- .github/workflows/ci.yml (check-run `copilot-pull-request-reviewer`, run 42441673359) | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large` (HTTP 422). The reviewer attributes this to the external tool and not to this change.\n  WHY: The reviewer rated it NIT and non-actionable infrastructure noise, and surfaced it only to follow the check-run mapping rules.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Move the slowest steps of `orchestrate-poll (3)` unchanged to the CI job with the most headroom.\n  expected_change_site: .github/workflows/ci.yml\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The steps were chosen by test and subprocess counts because the run's step timings could not be read. The requirement is therefore met only by proxy and not by direct verification. The reviewer rated this a NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:3157-3181 | severity=NIT | confidence=2\n  PROBLEM: The moved steps now run in group 4, but the choice relies on estimation, so group 4 may also be overloaded and hit further timeouts.\n  WHY: This is not a functional failure. It is a potential runtime performance failure if the group 4 headroom estimate is wrong.\n- TASK_GAP:\n  Requirement: Move the slowest steps of `orchestrate-poll (3)` unchanged to the CI job with the most headroom.\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The steps were moved based on estimation, not measurement, because the run's step timings could not be read.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:3172,3178 | severity=NIT | confidence=5\n  PROBLEM: No defect found. The reviewer reported a clean-audit note: the moved steps' guards, job names, step bodies, `timeout-minutes: 20` and the 5-group matrix are intact and consistent with the test constants.\n  WHY: No failure path was demonstrated. Its confidence of 5 is confidence that the change is correct.\n- .github/workflows/ci.yml (check-run `copilot-pull-request-reviewer`, run 42441673359) | severity=NIT | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large` (HTTP 422). The reviewer attributes this to the external tool and not to this change.\n  WHY: This is an external tool limitation and non-actionable infrastructure noise.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d427c9d35255b82be0305ef3741f52f2c7261b0a87fbc3830647d9ed7812e55f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9041,
+    "run_id": "42443643327",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42443643327",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108035417_ca3c6b318a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9041,
+    "run_id": "42443643327"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-08T03:54:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
