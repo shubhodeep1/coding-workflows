@@ -694,8 +694,11 @@ jobs:
           cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
           source scripts/gh_helpers.sh
           body_file="${RUNTIME_DIR}/issue_body.md"
-          test -s "${body_file}"
-          PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${body_file}" <<'PY'
+          if [ ! -s "${body_file}" ]; then
+            printf 'CHECK_TRIAGE op=post stage=body_missing pr=%s\n' "${PR_NUMBER}"
+            exit 1
+          fi
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${body_file}" <<'PY'
           import json
           import os
           import pathlib
@@ -716,9 +719,22 @@ jobs:
               issue_body_text = issue_body_text[:60000 - len(truncation_note)] + truncation_note
           issue_body_path.write_text(issue_body_text, encoding="utf-8")
           PY
-          triage_post_fp="$(jq -er '.fingerprint' "${RUNTIME_DIR}/triage_metadata.json")"
-          triage_post_gen="$(jq -er '.generation' "${RUNTIME_DIR}/triage_metadata.json")"
-          triage_post_root="$(jq -er '.root' "${RUNTIME_DIR}/triage_metadata.json")"
+          then
+            printf 'CHECK_TRIAGE op=post stage=marker_invalid pr=%s\n' "${PR_NUMBER}"
+            exit 1
+          fi
+          if ! triage_post_fp="$(jq -er '.fingerprint' "${RUNTIME_DIR}/triage_metadata.json")"; then
+            printf 'CHECK_TRIAGE op=post stage=metadata_invalid pr=%s\n' "${PR_NUMBER}"
+            exit 1
+          fi
+          if ! triage_post_gen="$(jq -er '.generation' "${RUNTIME_DIR}/triage_metadata.json")"; then
+            printf 'CHECK_TRIAGE op=post stage=metadata_invalid pr=%s\n' "${PR_NUMBER}"
+            exit 1
+          fi
+          if ! triage_post_root="$(jq -er '.root' "${RUNTIME_DIR}/triage_metadata.json")"; then
+            printf 'CHECK_TRIAGE op=post stage=metadata_invalid pr=%s\n' "${PR_NUMBER}"
+            exit 1
+          fi
           # The script's existing issue-create call serves direct callers; this
           # workflow must post from its own token-scoped step instead.
           triage_post_check_name="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
@@ -751,12 +767,34 @@ jobs:
             printf 'CHECK_TRIAGE op=supersede outcome=skip_create rc=%s pr=%s\n' "${triage_supersede_check_rc}" "${PR_NUMBER}"
             exit 0
           fi
-          triage_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+          # Issue #9036: every exit path below logs one CHECK_TRIAGE op=post stage=<code>
+          # line. The token is only tested for emptiness (after the supersede gate,
+          # so the skip_create path is unchanged) and gh stderr goes to a run-local
+          # file that is never printed; only its HTTP class is logged.
+          if [ -z "${GH_TOKEN:-}" ]; then
+            printf 'CHECK_TRIAGE op=post stage=token_missing pr=%s\n' "${PR_NUMBER}"
+            exit 1
+          fi
+          triage_post_create_stderr_file="${RUNTIME_DIR}/triage_post_create_stderr.txt"
+          if ! triage_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
             --title "CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}" \
-            --body-file "${body_file}" --label "ai:check-triage")"
-          test -n "${triage_issue_url}"
+            --body-file "${body_file}" --label "ai:check-triage" 2>"${triage_post_create_stderr_file}")"; then
+            triage_post_http_token="$(grep -oE -m1 'HTTP [0-9]{3}' "${triage_post_create_stderr_file}" 2>/dev/null | head -n1 || true)"
+            case "${triage_post_http_token}" in
+              "HTTP 4"??) triage_post_http_class=4xx ;;
+              "HTTP 5"??) triage_post_http_class=5xx ;;
+              *) triage_post_http_class=unknown ;;
+            esac
+            printf 'CHECK_TRIAGE op=post stage=create_failed pr=%s http_class=%s attempts=1\n' "${PR_NUMBER}" "${triage_post_http_class}"
+            exit 1
+          fi
+          if [ -z "${triage_issue_url}" ]; then
+            printf 'CHECK_TRIAGE op=post stage=url_missing pr=%s\n' "${PR_NUMBER}"
+            exit 1
+          fi
           printf 'CHECK_TRIAGE created issue=%s fp=%s gen=%s root=%s pr=%s check=%s\n' \
             "${triage_issue_url}" "${triage_post_fp}" "${triage_post_gen}" "${triage_post_root}" "${PR_NUMBER}" "${triage_post_check_name}"
+          printf 'CHECK_TRIAGE op=post stage=created pr=%s\n' "${PR_NUMBER}"
           # Issue #8671: the new issue exists, so close the stale blocked issue
           # the collect stage recorded (same Issues-scoped token; never fatal).
           CHECK_TRIAGE_STAGE=supersede CHECK_TRIAGE_SUPERSEDE_NEW_ISSUE_URL="${triage_issue_url}" \

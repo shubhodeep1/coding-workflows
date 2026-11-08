@@ -165,16 +165,16 @@ def test_project_completion_alerts_stay_visible():
 def test_reported_auto_handled_alerts_are_debug():
 	"""The two alerts reported by the operator no longer page."""
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	line = next(l for l in script.splitlines() if "Standalone PR #${S_PR} has merge conflicts. Review workflow dispatched" in l)
+	line = next(script_line for script_line in script.splitlines() if "Standalone PR #${S_PR} has merge conflicts. Review workflow dispatched" in script_line)
 	assert line.rstrip().endswith('"DEBUG" >/dev/null 2>&1 || true'), line
-	stall = [l for l in script.splitlines() if 'tg_notify "Stall recovery:' in l or 'tg_notify_issue "${issue_num}" "Standalone stall recovery:' in l]
+	stall = [script_line for script_line in script.splitlines() if 'tg_notify "Stall recovery:' in script_line or 'tg_notify_issue "${issue_num}" "Standalone stall recovery:' in script_line]
 	assert stall
 	# Human-action stall notices stay WARNING: the standalone ancestor-chain
 	# no-op cap closes the issue with no judge behind it, and the plan
 	# auto-approval hold (sent once per hold marker) waits for a trusted
 	# files_touched grant or a human /approved.
 	human_action = ("ancestor-chain no-op cap", "plan auto-approval withheld")
-	paging = [l for l in stall if '"WARNING"' in l and not any(h in l for h in human_action)]
+	paging = [stall_line for stall_line in stall if '"WARNING"' in stall_line and not any(h in stall_line for h in human_action)]
 	assert not paging, paging
 
 
@@ -186,7 +186,7 @@ def test_reported_auto_handled_alerts_are_debug():
 def _conflict_harness(*, marker: str, threshold: str = "3", head: str = HEAD_A, loaded: bool | str = True, login: str = "bot", write_fails: bool = False, send_fails: bool = False, confirmation_fails: bool = False) -> tuple:
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	function = _extract_bash_function(script, "_standalone_conflict_count_attempt() {")
-	marker_constant = next(l for l in script.splitlines() if l.startswith("STANDALONE_CONFLICT_ATTEMPTS_MARKER="))
+	marker_constant = next(script_line for script_line in script.splitlines() if script_line.startswith("STANDALONE_CONFLICT_ATTEMPTS_MARKER="))
 	body = (
 		marker_constant + "\n"
 		f"STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS={threshold}\n"
@@ -667,3 +667,25 @@ def _collect_mark_validation_failed_marker_cases() -> None:
 
 
 _collect_mark_validation_failed_marker_cases()
+
+
+# The implementation-failed re-issue order cases (BUG-002) live in
+# tests/test_poller_impl_failed_reissue_order.py and are collected here for
+# the same reason: ci.yml was outside that issue's file grant.
+def _collect_impl_failed_reissue_order_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"poller_impl_failed_reissue_order_cases",
+		Path(__file__).resolve().parent / "test_poller_impl_failed_reissue_order.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	assert collected >= 8, f"only {collected} impl-failed re-issue order cases collected"
+
+
+_collect_impl_failed_reissue_order_cases()
