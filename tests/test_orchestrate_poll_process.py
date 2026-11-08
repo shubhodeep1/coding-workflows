@@ -8693,6 +8693,66 @@ def test_rb_reissue_adoption_seeds_successor_pr_state() -> None:
 	assert adopt < seed < wave_status
 
 
+def _run_rb_reissue_adoption_loop(xref_stub: str, fetch_stub: str) -> dict:
+	"""Run the real adoption loop (candidate loop through its unset line) with
+	stubbed helpers; return the JSON maps it hands to check-wave-status."""
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = source.index('  for _rb_reissue_candidate in ${RB_REISSUE_ADOPTION_CANDIDATES[@]+')
+	end = source.index("\n", source.index("  unset _rb_reissue_candidate", start)) + 1
+	loop = source[start:end]
+	jq_field = _extract_bash_function(source, "_jq_field()\n{")
+	succ = json.dumps({"number": 8994, "state": "closed", "labels": ["ai:orchestrator-managed"]})
+	harness = (
+		"set -euo pipefail\n"
+		"TRACKING_NUM=8969\n"
+		"ISSUE_NUMS=' 8970 8995'\n"
+		"PR_STATES_JSON='{}'\nLABELS_JSON='{}'\nISSUE_STATES_JSON='{}'\n"
+		"RB_REISSUE_ADOPTION_STATE_CHANGED=false\n"
+		f"RB_REISSUE_ADOPTION_CANDIDATES=(\"8970\"$'\\t'{succ!r})\n"
+		"adopt_review_blocked_reissue_successor() { echo phase1; }\n"
+		"add_healing_note() { :; }\n"
+		"post_state_comment() { :; }\n"
+		"_pr_json_is_issue_implementation_pr() { return 0; }\n"
+		+ xref_stub + "\n" + fetch_stub + "\n" + jq_field + "\n" + loop
+		+ 'printf \'PR=%s\\nISSUES=%s\\n\' "${PR_STATES_JSON}" "${ISSUE_STATES_JSON}"\n'
+	)
+	with tempfile.TemporaryDirectory() as temp_dir:
+		harness_path = Path(temp_dir) / "harness.sh"
+		harness_path.write_text(harness, encoding="utf-8")
+		result = subprocess.run(["bash", str(harness_path)], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	return {
+		"stdout": result.stdout,
+		"pr": json.loads(next(line for line in lines if line.startswith("PR="))[3:]),
+		"issues": json.loads(next(line for line in lines if line.startswith("ISSUES="))[7:]),
+	}
+
+
+def test_rb_reissue_adoption_inconclusive_pr_lookup_does_not_read_as_unmerged() -> None:
+	"""A failed successor PR lookup must not be seeded as merged:false, which
+	check-wave-status reads as closed-without-merge (duplicate redo).  The
+	successor counts as open for that tick and a warning is logged."""
+	ok_fetch = '_fetch_pr_json() { echo \'{"state":"closed","merged_at":"2026-11-07T18:00:00Z"}\'; }'
+	for xref, fetch in (
+		("_issue_cross_ref_pr_numbers_unique() { return 1; }", ok_fetch),
+		("_issue_cross_ref_pr_numbers_unique() { echo 9003; }", "_fetch_pr_json() { echo '{}'; }"),
+	):
+		out = _run_rb_reissue_adoption_loop(xref, fetch)
+		assert "8994" not in out["pr"], out
+		assert out["issues"]["8994"] == "open", out
+		assert "outcome=inconclusive successor=8994 reason=successor_pr_lookup_failed" in out["stdout"]
+
+	merged = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { echo 9003; }", ok_fetch)
+	assert merged["pr"]["8994"] == {"state": "closed", "merged": True}
+	assert merged["issues"]["8994"] == "closed"
+	assert "reason=successor_pr_lookup_failed" not in merged["stdout"]
+
+	no_pr = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { :; }", ok_fetch)
+	assert no_pr["pr"]["8994"] == {"state": "unknown", "merged": False}
+	assert no_pr["issues"]["8994"] == "closed"
+
+
 def test_rb_reissue_adoption_runs_before_wave_status_and_persists_state() -> None:
 	"""Wiring guard: the lookup sits in the reconcile loop and the adoption
 	runs, and is persisted, before the first check-wave-status read."""

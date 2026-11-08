@@ -29575,30 +29575,49 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     # check-wave-status reads PR truth by issue number.  Without an entry, a
     # closed successor whose implementation PR merged before ai:merged was
     # applied would read as closed-without-merge on this tick.
+    _rb_reissue_pr_inconclusive=false
     if ! printf '%s' "${PR_STATES_JSON}" | jq -e --arg key "${_rb_reissue_num}" 'has($key)' >/dev/null 2>&1; then
       _rb_reissue_pr_state="unknown"
       _rb_reissue_pr_merged="false"
+      _rb_reissue_pr_inconclusive=false
       if printf '%s' "${_rb_reissue_json}" | jq -e '.state == "closed" and (.labels | index("ai:merged") == null)' >/dev/null 2>&1; then
-        for _rb_reissue_pr in $(_issue_cross_ref_pr_numbers_unique "${_rb_reissue_num}" 2>/dev/null || echo ""); do
-          [[ "${_rb_reissue_pr}" =~ ^[0-9]+$ ]] || continue
-          _rb_reissue_pr_json="$(_fetch_pr_json "${_rb_reissue_pr}")"
-          [ -n "${_rb_reissue_pr_json}" ] && [ "${_rb_reissue_pr_json}" != "{}" ] || continue
-          _pr_json_is_issue_implementation_pr "${_rb_reissue_num}" "${_rb_reissue_pr_json}" || continue
-          _rb_reissue_pr_state="$(_jq_field "${_rb_reissue_pr_json}" '.state' 'open|closed|merged')"
-          _rb_reissue_pr_merged="$(_jq_field "${_rb_reissue_pr_json}" '.merged_at != null' 'true|false')"
-          [ "${_rb_reissue_pr_merged}" != "true" ] || break
-        done
+        if _rb_reissue_prs="$(_issue_cross_ref_pr_numbers_unique "${_rb_reissue_num}" 2>/dev/null)"; then
+          for _rb_reissue_pr in ${_rb_reissue_prs}; do
+            [[ "${_rb_reissue_pr}" =~ ^[0-9]+$ ]] || continue
+            _rb_reissue_pr_json="$(_fetch_pr_json "${_rb_reissue_pr}")"
+            if [ -z "${_rb_reissue_pr_json}" ] || [ "${_rb_reissue_pr_json}" = "{}" ]; then
+              _rb_reissue_pr_inconclusive=true
+              continue
+            fi
+            _pr_json_is_issue_implementation_pr "${_rb_reissue_num}" "${_rb_reissue_pr_json}" || continue
+            _rb_reissue_pr_state="$(_jq_field "${_rb_reissue_pr_json}" '.state' 'open|closed|merged')"
+            _rb_reissue_pr_merged="$(_jq_field "${_rb_reissue_pr_json}" '.merged_at != null' 'true|false')"
+            [ "${_rb_reissue_pr_merged}" != "true" ] || break
+          done
+        else
+          _rb_reissue_pr_inconclusive=true
+        fi
       fi
-      PR_STATES_JSON="$(printf '%s' "${PR_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" --arg state "${_rb_reissue_pr_state:-unknown}" --arg merged "${_rb_reissue_pr_merged:-false}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || printf '%s' "${PR_STATES_JSON}")"
+      [ "${_rb_reissue_pr_merged}" != "true" ] || _rb_reissue_pr_inconclusive=false
+      if [ "${_rb_reissue_pr_inconclusive}" != "true" ]; then
+        PR_STATES_JSON="$(printf '%s' "${PR_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" --arg state "${_rb_reissue_pr_state:-unknown}" --arg merged "${_rb_reissue_pr_merged:-false}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || printf '%s' "${PR_STATES_JSON}")"
+      fi
     fi
     LABELS_JSON="$(printf '%s' "${LABELS_JSON}" | jq -c --arg key "${_rb_reissue_num}" --argjson succ "${_rb_reissue_json}" '. + {($key): $succ.labels}' 2>/dev/null || printf '%s' "${LABELS_JSON}")"
     ISSUE_STATES_JSON="$(printf '%s' "${ISSUE_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" --argjson succ "${_rb_reissue_json}" '. + {($key): $succ.state}' 2>/dev/null || printf '%s' "${ISSUE_STATES_JSON}")"
+    # A failed PR lookup must not read as merged:false (closed-without-merge
+    # would let the wave judge open a duplicate redo).  Treat the successor as
+    # open for this tick only; the next tick's reconcile reads its real state.
+    if [ "${_rb_reissue_pr_inconclusive:-false}" = "true" ]; then
+      echo "::warning::RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=inconclusive successor=${_rb_reissue_num} reason=successor_pr_lookup_failed"
+      ISSUE_STATES_JSON="$(printf '%s' "${ISSUE_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" '. + {($key): "open"}' 2>/dev/null || printf '%s' "${ISSUE_STATES_JSON}")"
+    fi
     RB_REISSUE_ADOPTION_STATE_CHANGED=true
   done
   if [ "${RB_REISSUE_ADOPTION_STATE_CHANGED}" = "true" ]; then
     post_state_comment || true
   fi
-  unset _rb_reissue_candidate _rb_reissue_closed _rb_reissue_json _rb_reissue_num _rb_reissue_adopt_rc _rb_reissue_local_id _rb_reissue_issue_nums _rb_reissue_inum _rb_reissue_pr _rb_reissue_pr_json _rb_reissue_pr_state _rb_reissue_pr_merged
+  unset _rb_reissue_candidate _rb_reissue_closed _rb_reissue_json _rb_reissue_num _rb_reissue_adopt_rc _rb_reissue_local_id _rb_reissue_issue_nums _rb_reissue_inum _rb_reissue_pr _rb_reissue_prs _rb_reissue_pr_json _rb_reissue_pr_state _rb_reissue_pr_merged _rb_reissue_pr_inconclusive
 
   # ---------------------------------------------------------------
   # Update issue phase timestamps for stall tracking
