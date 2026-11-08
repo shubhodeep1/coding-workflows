@@ -9,7 +9,10 @@ bounded number of times. These tests pin that the step:
   2. bounds each attempt (`--max-time`, `--connect-timeout`);
   3. still fails on HTTP errors (`-sSLf`);
   4. still verifies the sha256 checksum after the download;
-  5. keeps the version and checksum pinned.
+  5. keeps the version and checksum pinned;
+  6. waits a fixed `--retry-delay` (at least 1s) inside a bounded
+     `--retry-max-time` window. CI run 42465389350 hit HTTP 504 again and
+     used up the old 1s/2s/4s exponential backoff in about 7 seconds.
 
 Run directly: `python3 tests/test_ci_actionlint_install_retry.py`.
 """
@@ -85,6 +88,17 @@ class ActionlintInstallRetryContract(unittest.TestCase):
 		self.assertRegex(value, r"^\d+$")
 		self.assertGreaterEqual(int(value), 1)
 		self.assertLessEqual(int(value), 5)
+
+	def test_curl_uses_fixed_retry_delay(self) -> None:
+		value = self._flag_value("--retry-delay")
+		self.assertRegex(value, r"^\d+$")
+		self.assertGreaterEqual(int(value), 1)
+
+	def test_curl_has_bounded_retry_window(self) -> None:
+		value = self._flag_value("--retry-max-time")
+		self.assertRegex(value, r"^\d+$")
+		self.assertGreater(int(value), 0)
+		self.assertLessEqual(int(value), 600)
 
 	def test_curl_has_bounded_max_time(self) -> None:
 		value = self._flag_value("--max-time")

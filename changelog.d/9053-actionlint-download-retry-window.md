@@ -1,0 +1,4 @@
+<!-- changelog: changed -->
+- **The actionlint download in the CI job `static-checks` now rides out longer GitHub outages.** CI run 35615284953 failed on an HTTP 504 from the release download, and CI run 42465389350 (PR #9038) hit the same 504 again: the old `--retry 3 --retry-delay 0` used up curl's 1s/2s/4s exponential backoff in about 7 seconds. The `Install actionlint` step now runs curl with `--retry 5 --retry-all-errors --retry-delay 15 --retry-max-time 300`, so it waits a fixed 15 seconds between attempts inside a 300-second retry window. `--connect-timeout 20 --max-time 120` still bound each attempt. actionlint still runs, the pinned version and URL are unchanged, and the sha256 check still verifies the tarball after the download; operators have nothing to do. `tests/test_ci_actionlint_install_retry.py` now also checks that the retry delay is a fixed value of at least 1 second and that the retry window is bounded.
+
+Refs #9053.
