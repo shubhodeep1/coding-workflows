@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:29588 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The adoption loop seeds the successor's status as `open` in `ISSUE_STATES_JSON` when its PR lookup is inconclusive.\n  WHY: This masks the true state for a tick and is inconsistent with the fail-open principle of retrying next tick without modifying state. The source labelled it MAJOR, which is mapped here to high. Sonnet-5.5, minimax-m3 and glm-5.3-flash judged this override intended or non-defective.\n- scripts/orchestrate_poll_process.sh:29576 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The adoption loop's sequential updates to `PR_STATES_JSON`, `LABELS_JSON` and `ISSUE_NUMS` across multiple reissues in one tick are said to be fragile and might lose data from previous iterations.\n  WHY: The reviewer concluded the logic is functionally correct for the states, so this is only a fragility concern. The source labelled it NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A lookup failure changes nothing and retries next tick.\" (agents.d/8969-rb-reissue-adoption.md)\n  expected_change_site: scripts/orchestrate_poll_process.sh adoption loop (`_rb_reissue_pr_inconclusive` branch) / agents.d/8969-rb-reissue-adoption.md workflow-architecture paragraph\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The inconclusive branch writes `ISSUE_STATES_JSON[successor]=\"open\"` (scripts/orchestrate_poll_process.sh:29627-29634), so a failed PR lookup does not \"change nothing\". Severity disagreement: gemini-3.1-flash-lite said MAJOR, while sonnet-5.5 and minimax-m3 said NIT. Sonnet-5.5 (confidence 2) did not confirm a gap and called it wording ambiguity only. Minimax-m3 said the fix belongs in the fragment wording.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP (reported as not confirmed):\n- Requirement: \"A lookup failure changes nothing and retries next tick.\" (agents.d/8969-rb-reissue-adoption.md)\n  Expected change site: the `RB_REISSUE_ADOPTION` handling in the reconcile loop of `scripts/orchestrate_poll_process.sh`\n  Evidence of absence: Not confirmed as a gap. The sentence refers to the timeline lookup in `resolve_review_blocked_reissue_successor`, so it is a wording-ambiguity NIT.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:29588 | severity=MAJOR | confidence=4\n  PROBLEM: The adoption loop seeds the successor's status as `open` when its PR lookup is inconclusive.\n  WHY: It masks the true state for a tick and is inconsistent with the \"fail open\" principle of retrying next tick without modifying the state file.\n- scripts/orchestrate_poll_process.sh:29576 | severity=NIT | confidence=2\n  PROBLEM: The adoption loop overwrites `PR_STATES_JSON` and `LABELS_JSON` entries in a loop if multiple reissues are adopted in one tick, potentially losing data from previous iterations.\n  WHY: The reviewer found the state updates functionally correct, but called the `ISSUE_NUMS` handling fragile if the list is not fully re-read.\n\nTASK_GAP:\n- Requirement: \"A lookup failure changes nothing and retries next tick.\" (documented in agents.d/8969-rb-reissue-adoption.md)\n  Expected change site: scripts/orchestrate_poll_process.sh: adoption loop\n  Evidence of absence: The last run introduced an `ISSUE_STATES_JSON` update to \"open\" when `_rb_reissue_pr_inconclusive` is true, which does NOT \"change nothing\".\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"A lookup failure changes nothing and retries next tick.\" (agents.d/8969-rb-reissue-adoption.md, workflow-architecture paragraph)\n  Expected change site: agents.d/8969-rb-reissue-adoption.md workflow-architecture paragraph; the same text in scripts/orchestrate_poll_process.sh's adoption loop where `_rb_reissue_pr_inconclusive` is set.\n  Evidence of absence: The code path at scripts/orchestrate_poll_process.sh:29627-29634 writes `ISSUE_STATES_JSON[successor]=\"open\"` whenever the successor's PR lookup fails, so it does not \"change nothing\". The design intent is the former, so the fix belongs in the fragment wording.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3fb9f6e6f6664dda39f0a319b348ac8a8f63fd5257057c2ff346c1f05411f7a7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9020,
+    "run_id": "42439962397",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42439962397",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108030651_000e6b969b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9020,
+    "run_id": "42439962397"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T03:06:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
