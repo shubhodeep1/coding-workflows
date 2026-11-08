@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-08T19:54:01Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=agents.md:1827-2000; cited_path=agents.md; files_touched=CHANGELOG.md, agents.md, agents.d/*, changelog.d/* (forward-merge release fold of `stable` into `main`).",
+  "phase": "review_autofix",
+  "pr_number": 9077,
+  "record_id": "lesson_20261108195401_10f91b8209",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.md",
+    "CHANGELOG.md",
+    "agents.d/*",
+    "changelog.d/* (forward-merge release fold of `stable` into `main`)"
+  ]
+}
