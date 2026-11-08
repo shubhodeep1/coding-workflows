@@ -1147,10 +1147,10 @@ GROUP_PINNED_STEPS = {
 	# for static-checks in #8472.
 	# Moved from tests-release-and-log-analysis in #8759.
 	"Review autofix review-pipeline plumbing contract test": 1,
-	# Moved from tests-release-and-log-analysis in #8759.
-	"Review synthesize-smoke contract test": 0,
-	# Moved from tests-release-and-log-analysis in #8777.
-	"Clarify loop guard unit tests": 0,
+	# "Review synthesize-smoke contract test" (group 0 since #8759) and
+	# "Clarify loop guard unit tests" (group 0 since #8777) left the matrix
+	# for tests-hooks-and-orchestrator in #9046; see
+	# MOVED_POLL_GROUP_ZERO_9046_STEPS.
 	# Moved from tests-release-and-log-analysis in #8777, and from group 1 to
 	# group 2 in #8805.
 	"Validation bootstrap and family direct-run tests": 2,
@@ -2318,8 +2318,9 @@ MOVED_PROMOTE_8466_STEPS = {
 		"tests/test_render_prompt_validate_analytics_modes.py",
 	),
 	# "Review synthesize-smoke contract test" left the release job for
-	# orchestrate-poll (0) in #8759; its module list is in
-	# MOVED_RELEASE_8759_STEPS.
+	# orchestrate-poll (0) in #8759 and moved on to
+	# tests-hooks-and-orchestrator in #9046; its module list is in
+	# MOVED_POLL_GROUP_ZERO_9046_STEPS.
 }
 
 
@@ -2698,8 +2699,9 @@ MOVED_HEAL_TO_RELEASE_STEPS = {
 		"tests/test_operator_step_issue.py",
 	),
 	# "Clarify loop guard unit tests" left the release job for
-	# orchestrate-poll (0) in #8777; its module list is in
-	# MOVED_RELEASE_8777_STEPS.
+	# orchestrate-poll (0) in #8777 and moved on to
+	# tests-hooks-and-orchestrator in #9046; its module list is in
+	# MOVED_POLL_GROUP_ZERO_9046_STEPS.
 	"Implement files_touched scope guard unit tests": (
 		"tests/test_files_touched_scope_guard.py",
 	),
@@ -3127,10 +3129,9 @@ MOVED_RELEASE_8759_STEPS = {
 		1,
 		MOVED_HEAL_TO_HOOKS_STEPS["Review autofix review-pipeline plumbing contract test"],
 	),
-	"Review synthesize-smoke contract test": (
-		0,
-		("tests/test_review_synthesise_smoke.py",),
-	),
+	# "Review synthesize-smoke contract test" (group 0) moved on to
+	# tests-hooks-and-orchestrator in budget-watch issue #9046; see
+	# MOVED_POLL_GROUP_ZERO_9046_STEPS.
 }
 
 
@@ -3205,28 +3206,9 @@ RELEASE_8777_SOURCE_JOB_ID = "tests-release-and-log-analysis"
 RELEASE_8777_TARGET_JOB_ID = POLL_JOB_ID
 RELEASE_8777_SETUP_STEP = "Install Python CI dependencies"
 MOVED_RELEASE_8777_STEPS = {
-	"Clarify loop guard unit tests": (
-		0,
-		(
-			"tests/test_phase_wrapper_predicate_contract.py",
-			"tests/test_orchestrate_clarify_loop_guard.py",
-			"tests/test_ai_memory_processed_command_entry.py",
-			"tests/test_ai_memory_push_retry_backoff.py",
-			"tests/test_ai_memory_push_retry_reasons.py",
-			"tests/test_ai_memory_git_env_isolation.py",
-			"tests/test_plan_clarify_blocked_output.py",
-			"tests/test_plan_check_triage_branch_guard.py",
-			"tests/test_plan_clarify_header_prompt_staging.py",
-			"tests/test_plan_auto_approve_safe_state_fetch.py",
-			"tests/test_plan_split_dispatch.py",
-			"tests/test_workflow_gh_retry_fallback_contract.py",
-			"tests/test_plan_auto_answer_recommended_parser.py",
-			"tests/test_plan_codex_step_extraction.py",
-			"tests/test_plan_diagrams_contract.py",
-			"tests/test_plan_scope_mode_contract.py",
-			"tests/test_phase_skip_gate_telemetry_contract.py",
-		),
-	),
+	# "Clarify loop guard unit tests" (group 0) moved on to
+	# tests-hooks-and-orchestrator in budget-watch issue #9046; its module
+	# list is in MOVED_POLL_GROUP_ZERO_9046_STEPS.
 	# Moved on from group 1 to group 2 in budget-watch issue #8805; see
 	# MOVED_POLL_GROUP_ONE_8805_STEPS.
 	"Validation bootstrap and family direct-run tests": (
@@ -3314,6 +3296,100 @@ class MovedRelease8777StepsContractTest(unittest.TestCase):
 		for name, (group, _modules) in MOVED_RELEASE_8777_STEPS.items():
 			with self.subTest(step=name):
 				self.assertNotEqual(group, last_group)
+
+
+# Steps moved out of orchestrate-poll group 0, which took 15m34s of its 20
+# minutes (run 42445170048, budget-watch issue #9046): step name -> (target job
+# id, module paths its body names). The run's step timings were not readable;
+# the pick is group 0's heaviest steps not already split across processes, an
+# estimate from the planning sandbox and test and subprocess counts. Both use
+# only temp git repos and need no Node or prepared .claude/ live copies, so
+# they run at the end of tests-hooks-and-orchestrator without a matrix guard.
+POLL_GROUP_ZERO_9046_SOURCE_JOB_ID = POLL_JOB_ID
+POLL_GROUP_ZERO_9046_SETUP_STEP = "Install Python CI dependencies"
+MOVED_POLL_GROUP_ZERO_9046_STEPS = {
+	"Review synthesize-smoke contract test": (
+		"tests-hooks-and-orchestrator",
+		("tests/test_review_synthesise_smoke.py",),
+	),
+	"Clarify loop guard unit tests": (
+		"tests-hooks-and-orchestrator",
+		(
+			"tests/test_phase_wrapper_predicate_contract.py",
+			"tests/test_orchestrate_clarify_loop_guard.py",
+			"tests/test_ai_memory_processed_command_entry.py",
+			"tests/test_ai_memory_push_retry_backoff.py",
+			"tests/test_ai_memory_push_retry_reasons.py",
+			"tests/test_ai_memory_git_env_isolation.py",
+			"tests/test_plan_clarify_blocked_output.py",
+			"tests/test_plan_check_triage_branch_guard.py",
+			"tests/test_plan_clarify_header_prompt_staging.py",
+			"tests/test_plan_auto_approve_safe_state_fetch.py",
+			"tests/test_plan_split_dispatch.py",
+			"tests/test_workflow_gh_retry_fallback_contract.py",
+			"tests/test_plan_auto_answer_recommended_parser.py",
+			"tests/test_plan_codex_step_extraction.py",
+			"tests/test_plan_diagrams_contract.py",
+			"tests/test_plan_scope_mode_contract.py",
+			"tests/test_phase_skip_gate_telemetry_contract.py",
+		),
+	),
+}
+
+
+class MovedPollGroupZero9046StepsContractTest(unittest.TestCase):
+	"""The steps moved out of orchestrate-poll group 0 run once, in their target job (#9046)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_target_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_POLL_GROUP_ZERO_9046_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_POLL_GROUP_ZERO_9046_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, GROUP_PINNED_STEPS)
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_job_id, modules) in MOVED_POLL_GROUP_ZERO_9046_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_poll_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[POLL_GROUP_ZERO_9046_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_POLL_GROUP_ZERO_9046_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_target_job_setup(self) -> None:
+		for name, (job_id, _modules) in MOVED_POLL_GROUP_ZERO_9046_STEPS.items():
+			names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+			with self.subTest(step=name):
+				self.assertIn(POLL_GROUP_ZERO_9046_SETUP_STEP, names, job_id)
+				self.assertIn(name, names)
+				self.assertLess(names.index(POLL_GROUP_ZERO_9046_SETUP_STEP), names.index(name))
+
+	def test_no_target_is_the_source_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_POLL_GROUP_ZERO_9046_STEPS.items():
+			with self.subTest(step=name):
+				self.assertNotEqual(job_id, POLL_GROUP_ZERO_9046_SOURCE_JOB_ID)
 
 
 # Step moved out of orchestrate-poll (2), which took 15m18s of its 20 minutes
