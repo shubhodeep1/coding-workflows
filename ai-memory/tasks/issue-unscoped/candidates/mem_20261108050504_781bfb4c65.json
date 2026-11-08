@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- Pre-push test gate:CI failures listed in the PR INTENT CONTEXT | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The autofix application introduced 5 new test failures (tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py).\n  WHY: The applied fixes violated existing contract test invariants, causing CI to fail and preventing merge (reviewer severity MAJOR).\n- copilot-pull-request-reviewer check-run:CI log failure | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reviewer check-run failed with \"Prompt too big after adding system message\".\n  WHY: The total prompt size exceeds the external service's limits, preventing the automated review from completing (reviewer severity MAJOR).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"On every exit path, emit exactly one line\" `CHECK_TRIAGE op=post stage=<code> pr=<PR_NUMBER>` (use explicit `if ! ...; then printf ...; exit 1; fi` instead of silent `set -e`); only `skip_create` is excepted\n  expected_change_site: .github/workflows/check_failure_triage.yml, step `Post check-failure triage issue` (cd line 693, source line 694, check-name sanitiser lines 739-752)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: cd (line 693), source (line 694) and the check-name sanitiser command substitution (lines 739-752) can fail under `set -euo pipefail` without emitting a `CHECK_TRIAGE op=post stage=` line; the agents fragment documents them as exceptions, but the issue only specifies the `skip_create` exception. Severity disagreement: sonnet-5_5 rated NIT at confidence 2 (deliberate carve-out, each failure prints its own shell/Python error), others MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"On every exit path, emit exactly one line\" `CHECK_TRIAGE op=post stage=<code> pr=<PR_NUMBER>`.\n  Expected change site: `.github/workflows/check_failure_triage.yml`, step `Post check-failure triage issue`, at `cd` (line 693), `source` (line 694) and the check-name sanitiser (lines 739-752).\n  Evidence of absence: These three commands can fail under `set -euo pipefail` without a stage line, and the agents fragment says so. The issue's code list has no code for them and its list of silent exits names none of them. Each failure prints its own shell or Python error. Deliberate carve-out reviewed and kept by the previous autofix pass; the issue's listed codes are all implemented.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Pre-push test gate:CI failures listed in the PR INTENT CONTEXT | severity=MAJOR | confidence=5\n  PROBLEM: The autofix application introduced 5 new test failures (tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py).\n  WHY: The applied fixes violated existing contract test invariants, causing CI to fail and preventing merge.\n- copilot-pull-request-reviewer check-run:CI log failure | severity=MAJOR | confidence=5\n  PROBLEM: The reviewer check-run failed with \"Prompt too big after adding system message\".\n  WHY: The total prompt size exceeds the external service's limits, preventing the automated review from completing.\nTASK_GAP:\n- Requirement: \"Use explicit `if ! ...; then printf ...; exit 1; fi` ... instead of relying on silent `set -e`\" for every exit path of the step.\n  Expected change site: `.github/workflows/check_failure_triage.yml`, `Post check-failure triage issue` step.\n  Evidence of absence: The step still relies on silent `set -e` exits for the `cd` (line 693), `source` (line 694), and check-name sanitizer command substitution (lines 739-752), which log no `CHECK_TRIAGE op=post stage=...` diagnostic before exiting.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"On every exit path, emit exactly one line\" in the form `CHECK_TRIAGE op=post stage=<code> pr=<PR_NUMBER>`, with the unchanged `skip_create` path as the specified exception.\n  Expected change site: `.github/workflows/check_failure_triage.yml`, `Post check-failure triage issue` step.\n  Evidence of absence: The step can exit at `cd` or `source` (lines 693\u2013694), and the check-name sanitizer command substitution can fail at lines 739\u2013752 under `set -euo pipefail`. None of those paths emits a `CHECK_TRIAGE op=post stage=` line. The agents fragment documents these as exceptions, but the issue only specifies the `skip_create` exception.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "89400e64985acd3e8f51ba4fcd58478dc0b5da653362c0de6ece2b40d8358089",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9040,
+    "run_id": "42445737783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42445737783",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108050504_781bfb4c65",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9040,
+    "run_id": "42445737783"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T05:05:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
