@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:87-110 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The header comment's per-run API read budget (\"API budget (CLAUDE.md \u00a715), per run: ...\") does not mention that the five wrapped reads can now retry up to GH_RETRY_MAX_ATTEMPTS times.\n  WHY: Documentation drift only; retries are bounded and there is no functional failure. Sonnet rated it NIT with confidence 2, and glm rated the hardening suggestion risk 1.\n- tests/test_files_touched_scope_guard.py:1372-1385, tests/test_workflow_checkout_integration_ref_audit.py:74-88 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate attributes failures in these two test files to this change, but static reading ties neither to the diff.\n  WHY: The failures are likely a false positive or inherited, and need a re-run on the PR head and the merge-base. Sonnet rated it NIT with confidence 1 and glm rated it NIT with confidence 2.\n- scripts/unblock_judge.sh:179,1668,1673,2333,2454 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `2>/dev/null` after each wrapped call also discards gh_retry's per-attempt `::warning::` lines and its terminal `::error::` line.\n  WHY: A read that exhausts its retries leaves only the generic skip reason in the judge log, which makes post-mortems harder. This was raised as a hardening suggestion with risk score 2.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/unblock_judge.sh:near line 87 | severity=low (NIT) | confidence=2\n  PROBLEM: The header comment states a per-run read budget, but the wrapped reads can now repeat up to GH_RETRY_MAX_ATTEMPTS (default 5) attempts on transient errors.\n  WHY: Documentation drift only; retries are bounded and no functional failure results.\n- tests/test_files_touched_scope_guard.py, tests/test_workflow_checkout_integration_ref_audit.py | severity=low (NIT) | confidence=1\n  PROBLEM: The pre-push gate lists both tests as caused by this change, but neither could be tied to the diff.\n  WHY: Both need a re-run on the PR head and the merge-base.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_files_touched_scope_guard.py:1372-1385, tests/test_workflow_checkout_integration_ref_audit.py:74-88 | severity=low (NIT) | confidence=2\n  PROBLEM: The pre-push gate reports both files as \"failures caused by this change\", but static analysis ties neither to the diff.\n  WHY: Likely a false positive of the affected-file heuristic, so a re-run on the PR head and the merge-base is needed.\n- scripts/unblock_judge.sh:179,1668,1673,2333,2454 | hardening | risk=2\n  PROBLEM: `2>/dev/null` after each wrapped call discards gh_retry's `::warning::` and `::error::` lines.\n  WHY: Post-mortems of transient API outages get harder because only the generic skip reason remains.\n- scripts/unblock_judge.sh:87-110 | hardening | risk=1\n  PROBLEM: The header comment's API budget inventory now understates the worst case, since each read may be attempted up to 5 times and rate-limit waits can reach 600 s.\n  WHY: The stale comment is the \u00a715 budget reference future readers will trust.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "43087467afb664b903022ba30d268a481eee9881c6293c94d36f981f37cf9c39",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9064,
+    "run_id": "42487374537",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42487374537",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108144301_4cf76ae8ce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9064,
+    "run_id": "42487374537"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T14:43:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
