@@ -4027,6 +4027,315 @@ class WiringGuardPartTwoShardingContractTest(unittest.TestCase):
 		self.assertNotIn("shard 3", result.stdout)
 
 
+# Issue #9045: tests-heal-plan-and-validation took 17m00s of its 20 minutes
+# (run 42445170048). The heal step cannot move whole (#7387), so the 14 modules
+# it used to run in two serial pytest commands after its shards now join the
+# same 4 local shards. Same job, step name, timeout and module set.
+HEAL_9045_JOB_ID = "tests-heal-plan-and-validation"
+HEAL_9045_STEP_NAME = "Workflow failure heal contract and driver tests"
+HEAL_9045_SHARDS = 4
+HEAL_9045_TIMEOUT_MINUTES = 20
+HEAL_9045_MAIN_MODULE = "tests/test_workflow_failure_heal.py"
+HEAL_9045_MODULES = (
+	HEAL_9045_MAIN_MODULE,
+	"tests/test_workflow_failure_heal_non_retryable_backfill.py",
+	"tests/test_workflow_failure_heal_pr_reconcile.py",
+	"tests/test_heal_isolated_editor.py",
+	"tests/test_heal_reproduce.py",
+	"tests/test_workflow_failure_heal_scope_tests.py",
+	"tests/test_workflow_failure_heal_recovery_scan.py",
+	"tests/test_workflow_failure_heal_synced_security.py",
+	"tests/test_workflow_failure_heal_queue.py",
+	"tests/test_workflow_failure_heal_evidence_bundle.py",
+	"tests/test_workflow_failure_heal_verify.py",
+	"tests/test_heal_port_to_default.py",
+	"tests/test_provider_outage.py",
+	"tests/test_review_autofix_provider_outage_contract.py",
+	"tests/test_claude_capacity_wait_call_sites.py",
+)
+HEAL_9045_AWK_RE = re.compile(
+	r"""awk -v n="\$\{shard\}" -v total="\$\{heal_shards\}" '(?P<expr>[^']+)'"""
+)
+
+
+def heal_9045_job() -> dict:
+	return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"][HEAL_9045_JOB_ID]
+
+
+def heal_9045_step() -> dict:
+	matches = [step for step in heal_9045_job()["steps"] if step.get("name") == HEAL_9045_STEP_NAME]
+	if len(matches) != 1:
+		raise AssertionError(f"expected one {HEAL_9045_STEP_NAME!r} step, found {len(matches)}")
+	return matches[0]
+
+
+def heal_9045_other_modules(step_run: str) -> tuple[str, ...]:
+	"""Parse the `heal_other_modules=( ... )` array, skipping comment lines."""
+	start = step_run.index("heal_other_modules=(\n") + len("heal_other_modules=(\n")
+	end = step_run.index("\n)\n", start)
+	entries: list[str] = []
+	for line in step_run[start:end].splitlines():
+		line = line.strip()
+		if line and not line.startswith("#"):
+			entries.append(line)
+	return tuple(entries)
+
+
+def run_heal_9045_judge(step_run: str, files: dict[int, dict[str, str]]) -> subprocess.CompletedProcess:
+	"""Run the heal step's judgment part against fake shard files.
+
+	`files` maps a shard index to the files it left (`txt`, `log`, `rc`).
+	The cut starts at the judge block and ends at the final exit, so the
+	shipped shell is exercised, pointed at a temp dir.
+	"""
+	start = step_run.index("heal_failed_shards=()")
+	end = step_run.index("\nfi\n", step_run.index("workflow failure heal modules shards failed")) + len("\nfi\n")
+	with tempfile.TemporaryDirectory(prefix="test_heal_9045_judge_") as tmp:
+		for shard, shard_files in files.items():
+			for suffix, content in shard_files.items():
+				Path(tmp, f"heal_shard_{shard}.{suffix}").write_text(content, encoding="utf-8")
+		script = step_run[start:end].replace("/tmp/heal_", f"{tmp}/heal_")
+		return subprocess.run(
+			["bash", "-c", f"set -euo pipefail\nheal_shards={HEAL_9045_SHARDS}\n{script}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+
+def run_heal_9045_filter(
+	step_run: str, modules: list[str], collect_log: str
+) -> tuple[subprocess.CompletedProcess, list[str]]:
+	"""Run the heal step's ID filter and per-module guard against a fake collect log.
+
+	Returns the process result and the filtered test IDs it wrote.
+	"""
+	start = step_run.index(": > /tmp/heal_tests.txt")
+	end = step_run.index("\n", step_run.index('echo "heal modules: ')) + 1
+	with tempfile.TemporaryDirectory(prefix="test_heal_9045_filter_") as tmp:
+		Path(tmp, "heal_collect.log").write_text(collect_log, encoding="utf-8")
+		script = step_run[start:end].replace("/tmp/heal_", f"{tmp}/heal_")
+		array = " ".join(f"'{module}'" for module in modules)
+		result = subprocess.run(
+			["bash", "-c", f"set -euo pipefail\nheal_shards={HEAL_9045_SHARDS}\nheal_all_modules=({array})\n{script}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		tests_file = Path(tmp, "heal_tests.txt")
+		tests = tests_file.read_text(encoding="utf-8").splitlines() if tests_file.exists() else []
+		return result, tests
+
+
+class HealStepShardingContractTest(unittest.TestCase):
+	"""The heal step runs all 15 of its modules in its local shards (#9045).
+
+	`tests-heal-plan-and-validation` took 17m00s of its 20 minutes (run
+	42445170048). The step's two serial pytest commands after its shards
+	are gone; their 14 modules join the main heal module in the same 4
+	shards, split by test function. Every listed module must collect at
+	least one test, every test must run exactly once, and a shard that
+	fails or records no exit code must fail the step.
+	"""
+
+	def setUp(self) -> None:
+		self.step = heal_9045_step()
+		self.run = self.step["run"]
+
+	def green(self) -> dict[int, dict[str, str]]:
+		return {n: {"txt": f"t{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(HEAL_9045_SHARDS)}
+
+	def modules(self) -> tuple[str, ...]:
+		main = re.search(r'^heal_module="(?P<module>[^"]+)"$', self.run, re.MULTILINE)
+		self.assertIsNotNone(main)
+		return (main.group("module"),) + heal_9045_other_modules(self.run)
+
+	def test_step_is_owned_only_by_the_heal_job_and_unguarded(self) -> None:
+		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+		owners = [
+			job_id
+			for job_id, job in jobs.items()
+			for step in job.get("steps", [])
+			if step.get("name") == HEAL_9045_STEP_NAME
+		]
+		self.assertEqual(owners, [HEAL_9045_JOB_ID])
+		self.assertNotIn("if", self.step)
+		self.assertNotIn("continue-on-error", self.step)
+		self.assertIn(f"heal_shards={HEAL_9045_SHARDS}\n", self.run)
+		self.assertIn('heal_all_modules=("${heal_module}" "${heal_other_modules[@]}")', self.run)
+
+	def test_job_timeout_is_unchanged(self) -> None:
+		self.assertEqual(heal_9045_job().get("timeout-minutes"), HEAL_9045_TIMEOUT_MINUTES)
+
+	def test_module_arrays_are_the_pinned_set_and_the_only_paths_named(self) -> None:
+		modules = self.modules()
+		self.assertEqual(modules, HEAL_9045_MODULES)
+		self.assertEqual(len(set(modules)), len(modules))
+		# No module path outside the pinned set may appear anywhere in the body.
+		self.assertEqual(set(re.findall(r"tests/[A-Za-z0-9_]+\.py", self.run)), set(HEAL_9045_MODULES))
+		# Each moved module is named once, in the array, so no serial
+		# command still runs it a second time.
+		for module in HEAL_9045_MODULES[1:]:
+			with self.subTest(module=module):
+				self.assertEqual(len(re.findall(re.escape(module) + r"(?![A-Za-z0-9_])", self.run)), 1)
+		for module in modules:
+			with self.subTest(module=module):
+				self.assertTrue((REPO_ROOT / module).is_file(), module)
+
+	def test_no_serial_pytest_run_remains_outside_the_shards(self) -> None:
+		invocations = re.findall(r"python3 -m pytest[^\n]*", self.run)
+		self.assertEqual(
+			invocations,
+			[
+				'python3 -m pytest --collect-only -q -p no:cacheprovider "${heal_all_modules[@]}" \\',
+				"python3 -m pytest -q -p no:cacheprovider \\",
+			],
+		)
+		shard_cmd = self.run.index("python3 -m pytest -q -p no:cacheprovider \\")
+		self.assertLess(self.run.rindex("(\n", 0, shard_cmd), shard_cmd)
+		self.assertLess(shard_cmd, self.run.index(") &\n", shard_cmd))
+		self.assertIn('"${shard_tests[@]}"', self.run)
+
+	def test_collection_error_strings_are_present(self) -> None:
+		self.assertIn('--collect-only -q -p no:cacheprovider "${heal_all_modules[@]}"', self.run)
+		self.assertIn("Test collection failed for the workflow failure heal modules.", self.run)
+		self.assertIn("No tests collected from ${heal_listed_module}.", self.run)
+		self.assertIn("No tests collected from the workflow failure heal modules.", self.run)
+		self.assertIn("/tmp/heal_tests.txt", self.run[: self.run.index("--collect-only")])
+		# The in-group shard log replay is prefixed so its text cannot act as a workflow command.
+		self.assertIn("""{ cat "/tmp/heal_shard_${shard}.log" 2>/dev/null || true; } | sed 's/^/| /'""", self.run)
+
+	def test_partition_expression_is_a_true_partition(self) -> None:
+		match = HEAL_9045_AWK_RE.search(self.run)
+		self.assertIsNotNone(match)
+		expression = match.group("expr").strip()
+		self.assertEqual(expression, "NR % total == n")
+		for count in (1, 2, 3, 4, 5, 97, 600):
+			names = [f"tests/test_x.py::test_{i:03d}" for i in range(count)]
+			with self.subTest(count=count):
+				collected: list[str] = []
+				for n in range(HEAL_9045_SHARDS):
+					collected.extend(ShardPartitionTest.shard(self, names, HEAL_9045_SHARDS, n, expression))
+				self.assertCountEqual(collected, names)
+
+	def test_partition_covers_the_real_test_functions(self) -> None:
+		import ast
+
+		names: list[str] = []
+		for module in self.modules():
+			tree = ast.parse((REPO_ROOT / module).read_text(encoding="utf-8"))
+			module_names = [
+				f"{module}::{node.name}"
+				for node in ast.walk(tree)
+				if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+			]
+			with self.subTest(module=module):
+				self.assertGreater(len(module_names), 0)
+			names.extend(module_names)
+		expression = HEAL_9045_AWK_RE.search(self.run).group("expr").strip()
+		collected: list[str] = []
+		for n in range(HEAL_9045_SHARDS):
+			collected.extend(ShardPartitionTest.shard(self, names, HEAL_9045_SHARDS, n, expression))
+		self.assertCountEqual(collected, names)
+
+	def test_every_process_is_reaped_before_any_is_judged(self) -> None:
+		self.assertLess(self.run.index('wait "${shard_pid}"'), self.run.index("heal_failed_shards=()"))
+		self.assertLess(self.run.index('wait "${shard_pid}"'), self.run.index('.rc" 2>/dev/null'))
+
+	def test_filter_keeps_listed_modules_and_groups_parametrized_cases(self) -> None:
+		modules = ["tests/test_a.py", "tests/test_b.py"]
+		collect_log = (
+			"tests/test_a.py::test_one\n"
+			"tests/test_a.py::test_two[x]\n"
+			"tests/test_a.py::test_two[y]\n"
+			"tests/test_b.py::TestK::test_three\n"
+			"tests/other_test_a.py::test_stray\n"
+			"xtests/test_a.py::test_prefixed\n"
+			"\n"
+			"4 tests collected in 0.1s\n"
+		)
+		result, tests = run_heal_9045_filter(self.run, modules, collect_log)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertEqual(
+			tests,
+			[
+				"tests/test_a.py::test_one",
+				"tests/test_a.py::test_two",
+				"tests/test_b.py::TestK::test_three",
+			],
+		)
+		self.assertIn("heal modules: 3 test functions from 2 modules across 4 shards", result.stdout)
+
+	def test_filter_does_not_confuse_the_main_module_with_its_siblings(self) -> None:
+		modules = [HEAL_9045_MAIN_MODULE, "tests/test_workflow_failure_heal_queue.py"]
+		collect_log = (
+			"tests/test_workflow_failure_heal_queue.py::test_q\n"
+			"tests/test_workflow_failure_heal.py::test_main\n"
+			"tests/test_workflow_failure_heal_verify.py::test_unlisted\n"
+		)
+		result, tests = run_heal_9045_filter(self.run, modules, collect_log)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertEqual(
+			tests,
+			[
+				"tests/test_workflow_failure_heal.py::test_main",
+				"tests/test_workflow_failure_heal_queue.py::test_q",
+			],
+		)
+		# Only sibling IDs present must still count as "nothing collected"
+		# for the main module.
+		result, _tests = run_heal_9045_filter(
+			self.run, modules, "tests/test_workflow_failure_heal_queue.py::test_q\n"
+		)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn(f"::error::No tests collected from {HEAL_9045_MAIN_MODULE}.\n", result.stdout)
+
+	def test_module_without_collected_tests_fails(self) -> None:
+		modules = ["tests/test_a.py", "tests/test_b.py", "tests/test_c.py"]
+		collect_log = "tests/test_b.py::test_one\n1 test collected in 0.1s\n"
+		result, _tests = run_heal_9045_filter(self.run, modules, collect_log)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::No tests collected from tests/test_a.py.\n", result.stdout)
+		self.assertIn("::error::No tests collected from tests/test_c.py.\n", result.stdout)
+		self.assertNotIn("tests/test_b.py.", result.stdout)
+		self.assertNotIn("test functions from", result.stdout)
+
+	def test_all_green_passes(self) -> None:
+		result = run_heal_9045_judge(self.run, self.green())
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("failed", result.stdout)
+
+	def test_failing_shard_fails_the_step_and_prints_its_tail(self) -> None:
+		files = self.green()
+		files[1] = {"txt": "t1\n", "log": "FAILED tests/test_a.py::test_x\n", "rc": "1\n"}
+		result = run_heal_9045_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::workflow failure heal modules shards failed: 1\n", result.stdout)
+		tail = result.stdout[result.stdout.index("shard 1 failed; last 40 log lines"):]
+		self.assertIn("| FAILED tests/test_a.py::test_x", tail)
+
+	def test_missing_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[2] = {"txt": "t2\n", "log": "partial\n"}
+		result = run_heal_9045_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::workflow failure heal modules shards failed: 2\n", result.stdout)
+
+	def test_non_numeric_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[0] = {"txt": "t0\n", "log": "ok\n", "rc": "zero\n"}
+		result = run_heal_9045_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::workflow failure heal modules shards failed: 0\n", result.stdout)
+
+	def test_empty_shard_is_skipped(self) -> None:
+		files = self.green()
+		del files[3]
+		result = run_heal_9045_judge(self.run, files)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("shard 3", result.stdout)
+
+
 PROMOTE_CYCLE_STEP_NAME = "Promote cycle and blocked-verdict unit tests"
 # Moved from tests-release-and-log-analysis in budget-watch issue #8278.
 PROMOTE_CYCLE_JOB_ID = "tests-promote-stall-and-review"
