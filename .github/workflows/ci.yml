@@ -2299,7 +2299,8 @@ jobs:
       # from tests-promote-stall-and-review (#7677). None needs Node or the
       # prepared .claude/ live copies. Names and bodies unchanged.
       # `Clarify loop guard unit tests` moved on to orchestrate-poll (0) in
-      # budget-watch issue #8777; the other three remain below.
+      # budget-watch issue #8777, and then to tests-hooks-and-orchestrator in
+      # budget-watch issue #9046; the other three remain below.
       - name: Validate process cross-cycle escalation unit tests
         run: |
           set -euo pipefail
