@@ -2370,6 +2370,8 @@ jobs:
     # group 1).
     # Since #8980, group 0 runs the CI wiring guard part 2 step (moved from
     # group 4).
+    # Since #9021, the group 0 CI wiring guard part 2 step splits its test
+    # functions across 4 local processes.
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -2688,65 +2690,157 @@ jobs:
       # flagged next, measure step timings before moving this step again. The
       # step needs only checkout, Python 3.12 and the shared pip install, which
       # every group has. It now runs in group 0 only, once per CI run. Name
-      # and body unchanged.
+      # and body unchanged by that move.
+      # Sharded in place, not moved (#9021): orchestrate-poll (0) took 15m15s
+      # of its 20 minutes on main (run 42426489708). That run's step timings
+      # could not be read, so this is an estimate, not a measurement. The step
+      # has moved twice (group 2 to 4 in #8772, group 4 to 0 in #8980), and
+      # every group it landed in was flagged soon after; every other group has
+      # a recorded total above 15 minutes. By AST count it names 53 modules
+      # with about 639 test functions (#8772 counted about 568), and in
+      # #7690's sandbox it was the heaviest step (37.2s). Its test functions
+      # now run across 4 local pytest processes on the runner's 4 cores, as
+      # #8150 and #8246 did. Every listed module must collect at least one
+      # test, each collected function runs exactly once, and a shard without
+      # exit code 0 fails the step. Name, guard and module set unchanged.
       - name: Regression tests wired by the CI wiring guard (part 2)
         if: strategy.job-index == 0
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_ai_memory_sync_reference_files.py \
-            tests/test_ai_memory_workflow_log_analysis_cache.py \
-            tests/test_assemble_changelog.py \
-            tests/test_branch_rebuild_threshold_decision_log.py \
-            tests/test_changelog_fragment_contract.py \
-            tests/test_check_workflow_script_refs.py \
-            tests/test_ci_actionlint_install_retry.py \
-            tests/test_codex_heartbeat.py \
-            tests/test_codex_isolated_exec_claude_contract.py \
-            tests/test_cost_audit_serena_metrics.py \
-            tests/test_gh_helpers_list_runs_method.py \
-            tests/test_implement_prompt_pinned_sha_contract.py \
-            tests/test_memory_helpers_fail_open_telemetry.py \
-            tests/test_plan_reuse_audit_contract.py \
-            tests/test_plan_template_owned_path_guard.py \
-            tests/test_plan_superseded_merged_pr.py \
-            tests/test_plan_superseded_merged_pr_workflow.py \
-            tests/test_pytest_git_env_isolation.py \
-            tests/test_render_validation_templates.py \
-            tests/test_render_validation_templates_repo_checks.py \
-            tests/test_render_validation_templates_shell_quoting.py \
-            tests/test_retrigger_default_branch_dispatch.py \
-            tests/test_review_autofix_reasoning_schedule.py \
-            tests/test_review_autofix_sweep_merge_queued_skip.py \
-            tests/test_review_commit_changelog_fragment_preserved.py \
-            tests/test_review_conflict_prepare_state_author.py \
-            tests/test_review_floor_rules.py \
-            tests/test_review_host_python_safe_path.py \
-            tests/test_review_issue_ledger.py \
-            tests/test_review_ledger_cache_path_stability.py \
-            tests/test_review_rb_judge_reference_staging.py \
-            tests/test_review_resolve_review_threads.py \
-            tests/test_review_reviewer_attempt_prompt_isolation.py \
-            tests/test_review_reviewer_common_context_sections.py \
-            tests/test_review_reviewer_prompt_components.py \
-            tests/test_static_context_agents_index.py \
-            tests/test_static_context_agents_index_clarify_plan.py \
-            tests/test_static_context_agents_index_implement.py \
-            tests/test_static_context_agents_index_self_assembled.py \
-            tests/test_static_context_symlink_guard.py \
-            tests/test_summarize_unselected_runs.py \
-            tests/test_test_and_mark_stable_phase7_unconflict.py \
-            tests/test_test_and_mark_stable_phase7_timeout_status.py \
-            tests/test_test_and_mark_stable_live_log_cooldown.py \
-            tests/test_test_and_mark_stable_orchestrate_child_count.py \
-            tests/test_validate_lint_bounded_tail_capture.py \
-            tests/test_validate_lint_external_tool_dependencies.py \
-            tests/test_validate_lint_import_audit_safety.py \
-            tests/test_validate_lint_service_tool_scope.py \
-            tests/test_validate_lint_shell_parity.py \
-            tests/test_validate_process_fixup_labels.py \
-            tests/test_verify_integration_fingerprints_baseline.py \
+          wg2_shards=4
+          wg2_modules=(
+            tests/test_ai_memory_sync_reference_files.py
+            tests/test_ai_memory_workflow_log_analysis_cache.py
+            tests/test_assemble_changelog.py
+            tests/test_branch_rebuild_threshold_decision_log.py
+            tests/test_changelog_fragment_contract.py
+            tests/test_check_workflow_script_refs.py
+            tests/test_ci_actionlint_install_retry.py
+            tests/test_codex_heartbeat.py
+            tests/test_codex_isolated_exec_claude_contract.py
+            tests/test_cost_audit_serena_metrics.py
+            tests/test_gh_helpers_list_runs_method.py
+            tests/test_implement_prompt_pinned_sha_contract.py
+            tests/test_memory_helpers_fail_open_telemetry.py
+            tests/test_plan_reuse_audit_contract.py
+            tests/test_plan_template_owned_path_guard.py
+            tests/test_plan_superseded_merged_pr.py
+            tests/test_plan_superseded_merged_pr_workflow.py
+            tests/test_pytest_git_env_isolation.py
+            tests/test_render_validation_templates.py
+            tests/test_render_validation_templates_repo_checks.py
+            tests/test_render_validation_templates_shell_quoting.py
+            tests/test_retrigger_default_branch_dispatch.py
+            tests/test_review_autofix_reasoning_schedule.py
+            tests/test_review_autofix_sweep_merge_queued_skip.py
+            tests/test_review_commit_changelog_fragment_preserved.py
+            tests/test_review_conflict_prepare_state_author.py
+            tests/test_review_floor_rules.py
+            tests/test_review_host_python_safe_path.py
+            tests/test_review_issue_ledger.py
+            tests/test_review_ledger_cache_path_stability.py
+            tests/test_review_rb_judge_reference_staging.py
+            tests/test_review_resolve_review_threads.py
+            tests/test_review_reviewer_attempt_prompt_isolation.py
+            tests/test_review_reviewer_common_context_sections.py
+            tests/test_review_reviewer_prompt_components.py
+            tests/test_static_context_agents_index.py
+            tests/test_static_context_agents_index_clarify_plan.py
+            tests/test_static_context_agents_index_implement.py
+            tests/test_static_context_agents_index_self_assembled.py
+            tests/test_static_context_symlink_guard.py
+            tests/test_summarize_unselected_runs.py
+            tests/test_test_and_mark_stable_phase7_unconflict.py
+            tests/test_test_and_mark_stable_phase7_timeout_status.py
+            tests/test_test_and_mark_stable_live_log_cooldown.py
+            tests/test_test_and_mark_stable_orchestrate_child_count.py
+            tests/test_validate_lint_bounded_tail_capture.py
+            tests/test_validate_lint_external_tool_dependencies.py
+            tests/test_validate_lint_import_audit_safety.py
+            tests/test_validate_lint_service_tool_scope.py
+            tests/test_validate_lint_shell_parity.py
+            tests/test_validate_process_fixup_labels.py
+            tests/test_verify_integration_fingerprints_baseline.py
             tests/test_workflow_untrusted_input_contract.py
+          )
+          rm -f /tmp/wiring_part2_collect.log /tmp/wiring_part2_modules.txt /tmp/wiring_part2_tests.txt \
+            /tmp/wiring_part2_shard_*.txt /tmp/wiring_part2_shard_*.log /tmp/wiring_part2_shard_*.rc
+          # Keep the raw collect output so a collection error prints its traceback.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${wg2_modules[@]}" \
+            > /tmp/wiring_part2_collect.log 2>&1 \
+            || { sed 's/^/| /' /tmp/wiring_part2_collect.log; echo "::error::Test collection failed for the wiring guard part 2 modules."; exit 1; }
+          # Keep only IDs whose path (the text before the first "::") is a listed
+          # module, then group parametrized cases under their test function.
+          printf '%s\n' "${wg2_modules[@]}" > /tmp/wiring_part2_modules.txt
+          awk 'NR == FNR { listed[$0] = 1; next } { i = index($0, "::"); if (i > 1 && (substr($0, 1, i - 1) in listed)) print }' \
+            /tmp/wiring_part2_modules.txt /tmp/wiring_part2_collect.log \
+            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/wiring_part2_tests.txt
+          # A listed module that collects nothing would drop out silently.
+          wg2_empty=()
+          for wg2_module in "${wg2_modules[@]}"; do
+            grep -q -F "${wg2_module}::" /tmp/wiring_part2_tests.txt || wg2_empty+=("${wg2_module}")
+          done
+          if [ "${#wg2_empty[@]}" -gt 0 ]; then
+            for wg2_module in "${wg2_empty[@]}"; do
+              echo "::error::No tests collected from ${wg2_module}."
+            done
+            exit 1
+          fi
+          wg2_test_count="$(wc -l < /tmp/wiring_part2_tests.txt | tr -d '[:space:]')"
+          if ! [ "${wg2_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from the wiring guard part 2 modules."
+            exit 1
+          fi
+          echo "wiring guard part 2: ${wg2_test_count} test functions across ${wg2_shards} shards"
+          wg2_pids=()
+          for wg2_shard in $(seq 0 "$((wg2_shards - 1))"); do
+            awk -v n="${wg2_shard}" -v total="${wg2_shards}" 'NR % total == n' \
+              /tmp/wiring_part2_tests.txt > "/tmp/wiring_part2_shard_${wg2_shard}.txt"
+            [ -s "/tmp/wiring_part2_shard_${wg2_shard}.txt" ] || continue
+            (
+              mapfile -t wg2_shard_tests < "/tmp/wiring_part2_shard_${wg2_shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+                "${wg2_shard_tests[@]}" > "/tmp/wiring_part2_shard_${wg2_shard}.log" 2>&1
+              echo "$?" > "/tmp/wiring_part2_shard_${wg2_shard}.rc"
+            ) &
+            wg2_pids+=("$!")
+          done
+          # Reap every process before judging any, so none is left orphaned.
+          for wg2_pid in "${wg2_pids[@]}"; do
+            wait "${wg2_pid}" || true
+          done
+          wg2_ids=()
+          for wg2_shard in $(seq 0 "$((wg2_shards - 1))"); do
+            [ -s "/tmp/wiring_part2_shard_${wg2_shard}.txt" ] || continue
+            wg2_ids+=("${wg2_shard}")
+          done
+          wg2_failed=()
+          for wg2_id in "${wg2_ids[@]}"; do
+            wg2_stem="/tmp/wiring_part2_shard_${wg2_id}"
+            echo "::group::wiring guard part 2 shard ${wg2_id}"
+            # Prefix every line so log text cannot act as a workflow command.
+            sed 's/^/| /' "${wg2_stem}.log" || true
+            echo "::endgroup::"
+            # A missing or non-numeric exit code counts as a failure.
+            wg2_rc="$(cat "${wg2_stem}.rc" 2>/dev/null || echo 1)"
+            case "${wg2_rc}" in
+              ''|*[!0-9]*) wg2_rc=1 ;;
+            esac
+            if [ "${wg2_rc}" != "0" ]; then
+              wg2_failed+=("${wg2_id}")
+            fi
+          done
+          # Repeat failing shards' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
+          for wg2_id in "${wg2_failed[@]}"; do
+            echo "--- wiring guard part 2 shard ${wg2_id} failed; last 40 log lines:"
+            { tail -n 40 "/tmp/wiring_part2_shard_${wg2_id}.log" 2>/dev/null || true; } | sed 's/^/| /'
+          done
+          if [ "${#wg2_failed[@]}" -gt 0 ]; then
+            echo "::error::wiring guard part 2 shards failed: ${wg2_failed[*]}"
+            exit 1
+          fi
 
       # Moved from tests-hooks-and-orchestrator, which took 15m06s of its 20
       # minutes on main (run 39575950300, budget-watch issue #7798). That run's
