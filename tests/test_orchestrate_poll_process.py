@@ -8693,7 +8693,7 @@ def test_rb_reissue_adoption_seeds_successor_pr_state() -> None:
 	assert adopt < seed < wave_status
 
 
-def _run_rb_reissue_adoption_loop(xref_stub: str, fetch_stub: str) -> dict:
+def _run_rb_reissue_adoption_loop(xref_stub: str, fetch_stub: str, pr_states: str = "{}") -> dict:
 	"""Run the real adoption loop (candidate loop through its unset line) with
 	stubbed helpers; return the JSON maps it hands to check-wave-status."""
 	source = POLLER_SCRIPT.read_text(encoding="utf-8")
@@ -8706,7 +8706,7 @@ def _run_rb_reissue_adoption_loop(xref_stub: str, fetch_stub: str) -> dict:
 		"set -euo pipefail\n"
 		"TRACKING_NUM=8969\n"
 		"ISSUE_NUMS=' 8970 8995'\n"
-		"PR_STATES_JSON='{}'\nLABELS_JSON='{}'\nISSUE_STATES_JSON='{}'\n"
+		f"PR_STATES_JSON={pr_states!r}\nLABELS_JSON='{{}}'\nISSUE_STATES_JSON='{{}}'\n"
 		"RB_REISSUE_ADOPTION_STATE_CHANGED=false\n"
 		f"RB_REISSUE_ADOPTION_CANDIDATES=(\"8970\"$'\\t'{succ!r})\n"
 		"adopt_review_blocked_reissue_successor() { echo phase1; }\n"
@@ -8751,6 +8751,26 @@ def test_rb_reissue_adoption_inconclusive_pr_lookup_does_not_read_as_unmerged() 
 	no_pr = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { :; }", ok_fetch)
 	assert no_pr["pr"]["8994"] == {"state": "unknown", "merged": False}
 	assert no_pr["issues"]["8994"] == "closed"
+
+
+def test_rb_reissue_adoption_rechecks_stale_unknown_pr_entry() -> None:
+	"""An orphan-rb successor the reconcile loop already read may carry a
+	default {state: unknown, merged: false} entry from a failed lookup.  The
+	adoption loop must look the PR up again instead of trusting it."""
+	stale = '{"8994":{"state":"unknown","merged":false}}'
+	ok_fetch = '_fetch_pr_json() { echo \'{"state":"closed","merged_at":"2026-11-07T18:00:00Z"}\'; }'
+	merged = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { echo 9003; }", ok_fetch, stale)
+	assert merged["pr"]["8994"] == {"state": "closed", "merged": True}
+	assert merged["issues"]["8994"] == "closed"
+
+	failed = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { return 1; }", ok_fetch, stale)
+	assert failed["issues"]["8994"] == "open", failed
+	assert "reason=successor_pr_lookup_failed" in failed["stdout"]
+
+	authoritative = '{"8994":{"state":"closed","merged":true}}'
+	kept = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { return 1; }", ok_fetch, authoritative)
+	assert kept["pr"]["8994"] == {"state": "closed", "merged": True}
+	assert "reason=successor_pr_lookup_failed" not in kept["stdout"]
 
 
 def test_rb_reissue_adoption_runs_before_wave_status_and_persists_state() -> None:

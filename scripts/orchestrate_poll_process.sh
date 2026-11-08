@@ -29576,7 +29576,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     # closed successor whose implementation PR merged before ai:merged was
     # applied would read as closed-without-merge on this tick.
     _rb_reissue_pr_inconclusive=false
-    if ! printf '%s' "${PR_STATES_JSON}" | jq -e --arg key "${_rb_reissue_num}" 'has($key)' >/dev/null 2>&1; then
+    # An existing {state:"unknown", merged:false} entry (an orphan-rb entry the
+    # reconcile loop read, possibly after a failed lookup) is not authoritative:
+    # look the PR up again so a failed read cannot read as closed-without-merge.
+    if ! printf '%s' "${PR_STATES_JSON}" | jq -e --arg key "${_rb_reissue_num}" 'has($key) and ((.[$key].state // "unknown") != "unknown" or .[$key].merged == true)' >/dev/null 2>&1; then
       _rb_reissue_pr_state="unknown"
       _rb_reissue_pr_merged="false"
       _rb_reissue_pr_inconclusive=false
