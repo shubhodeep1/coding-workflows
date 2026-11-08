@@ -836,6 +836,7 @@ def _run_poller(
 	issue_labels: dict[int, list[str]] | None = None,
 	issue_comments: dict[int, list[str | dict]] | None = None,
 	issue_bodies: dict[int, str] | None = None,
+	issue_titles: dict[int, str] | None = None,
 	issue_events: dict[int, list[dict]] | None = None,
 	issue_events_after_first_get: dict[int, list[dict]] | None = None,
 	issue_authors: dict[int, dict] | None = None,
@@ -951,6 +952,7 @@ def _run_poller(
 		issue_labels = {10: ["ai:merged"]}
 	issue_comments = issue_comments or {}
 	issue_bodies = issue_bodies or {}
+	issue_titles = issue_titles or {}
 	issue_authors = issue_authors or {}
 	issue_events = issue_events or {}
 	issue_events_after_first_get = issue_events_after_first_get or {}
@@ -1395,6 +1397,11 @@ esac
 			issues[str(inum)] = {
 				"labels": list(labels),
 				"comments": issue_comment_entries,
+				# A real issue always has a title; the implementation-failed
+				# re-issue loop defers an issue whose title reads empty (BUG-002).
+				# issue_titles overrides it (an empty string reads as no title,
+				# for paths that test a fallback title).
+				"title": issue_titles.get(inum, f"Issue {inum}"),
 				"body": issue_bodies.get(inum, f"Issue {inum}"),
 				"closed": bool(issue_closed.get(inum, False)),
 				"author_login": str(issue_authors.get(inum, {}).get("login", "octocat")),
@@ -9024,6 +9031,8 @@ def test_security_pass_implementation_failed_fix_with_resolved_blockers_is_reiss
 		issue_closed={701: True},
 		issue_comments={700: [_security_pass_post_codex_fixup_comment(700, 701)]},
 		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		# No source title, so the re-issue uses its deterministic fallback.
+		issue_titles={700: ""},
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
