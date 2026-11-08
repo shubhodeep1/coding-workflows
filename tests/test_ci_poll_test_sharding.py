@@ -1133,7 +1133,7 @@ class MergeTrainStepContractTest(unittest.TestCase):
 # Without its guard such a step would run in every group.
 GROUP_PINNED_STEPS = {
 	# Moved from group 2 to group 4 in #8772, and from group 4 to group 0 in
-	# #8980.
+	# #8980, and split across 4 local processes in #9021.
 	"Regression tests wired by the CI wiring guard (part 2)": 0,
 	# Moved from group 3 to group 1 in #8072, to group 0 in #8091, and to
 	# group 4 in #8118.
@@ -3308,6 +3308,7 @@ class MovedRelease8777StepsContractTest(unittest.TestCase):
 # Picked by test and subprocess counts because the run's step timings could
 # not be read (an estimate, not a measurement). Group 4 has the oldest
 # budget-watch record (#8150). Name and body unchanged; only the guard moved.
+# #9021 later split the body across 4 local processes and kept its 53 modules.
 POLL_GROUP_TWO_8772_SOURCE_GROUP = 2
 POLL_GROUP_TWO_8772_SETUP_STEP = "Install Python CI dependencies"
 POLL_GROUP_TWO_8772_STEP_NAME = "Regression tests wired by the CI wiring guard (part 2)"
@@ -3316,8 +3317,8 @@ MOVED_POLL_GROUP_TWO_8772_STEPS = {
 	# MOVED_POLL_GROUP_FOUR_8980_STEPS.
 	POLL_GROUP_TWO_8772_STEP_NAME: 0,
 }
-# The body's first and last module and the module count, so an edit to the
-# moved body is caught (the move kept it unchanged).
+# The body's first and last module, the module count and the sha256 below pin
+# the step's module set, which #9021's in-place sharding kept.
 POLL_GROUP_TWO_8772_BOUNDARY_MODULES = (
 	"tests/test_ai_memory_sync_reference_files.py",
 	"tests/test_workflow_untrusted_input_contract.py",
@@ -3381,6 +3382,7 @@ class MovedPollGroupTwo8772StepsContractTest(unittest.TestCase):
 				self.assertLess(setup_index, names.index(name))
 
 	def test_step_body_is_unchanged(self) -> None:
+		"""The step's module set is unchanged (#9021 sharded the body in place)."""
 		steps = self.owning_steps(POLL_GROUP_TWO_8772_STEP_NAME)
 		self.assertEqual(len(steps), 1)
 		body = steps[0][1]["run"]
@@ -3510,7 +3512,8 @@ class MovedPollGroupOne8805StepsContractTest(unittest.TestCase):
 # named since #8150. Group 0's latest budget-watch record (17m01s, #8118)
 # predates the unblock step leaving it, and no group 0 total has been recorded
 # since; see the ci.yml comment for the basis and its limits. Name and body
-# unchanged; only the guard moved.
+# unchanged; only the guard moved. #9021 later split the body across 4 local
+# processes and kept its 53 modules.
 POLL_GROUP_FOUR_8980_SOURCE_GROUP = 4
 POLL_GROUP_FOUR_8980_SETUP_STEP = "Install Python CI dependencies"
 POLL_GROUP_FOUR_8980_STEP_NAME = POLL_GROUP_TWO_8772_STEP_NAME
@@ -3575,6 +3578,7 @@ class MovedPollGroupFour8980StepsContractTest(unittest.TestCase):
 				self.assertLess(setup_index, names.index(name))
 
 	def test_step_body_is_unchanged(self) -> None:
+		"""The step's module set is unchanged (#9021 sharded the body in place)."""
 		steps = self.owning_steps(POLL_GROUP_FOUR_8980_STEP_NAME)
 		self.assertEqual(len(steps), 1)
 		body = steps[0][1]["run"]
@@ -3602,6 +3606,235 @@ class MovedPollGroupFour8980StepsContractTest(unittest.TestCase):
 		for name in MOVED_POLL_GROUP_FOUR_8980_STEPS:
 			with self.subTest(step=name):
 				self.assertNotEqual(GROUP_PINNED_STEPS.get(name), POLL_GROUP_FOUR_8980_SOURCE_GROUP)
+
+
+# Issue #9021: orchestrate-poll (0) took 15m15s of its 20 minutes (run
+# 42426489708). The CI wiring guard part 2 step stays in group 0, by name and
+# guard, and splits its test functions across 4 local processes, the way the
+# part 1 step did in #8246. Its module set stays pinned by the #8772 constants.
+WIRING_PART2_STEP_NAME = POLL_GROUP_TWO_8772_STEP_NAME
+WIRING_PART2_GROUP = 0
+WIRING_PART2_SHARDS = 4
+WIRING_PART2_AWK_RE = re.compile(
+	r"""awk -v n="\$\{wg2_shard\}" -v total="\$\{wg2_shards\}" '(?P<expr>[^']+)'"""
+)
+
+
+def run_wiring_part2_judge(step_run: str, files: dict[int, dict[str, str]]) -> subprocess.CompletedProcess:
+	"""Run the wiring part 2 step's judgment part against fake shard files.
+
+	`files` maps a shard index to the files it left (`txt`, `log`, `rc`).
+	The cut starts after the reap loop and ends at the final exit, so the
+	shipped shell is exercised, pointed at a temp dir.
+	"""
+	start = step_run.index("wg2_ids=()")
+	end = step_run.index("\nfi\n", step_run.index("wiring guard part 2 shards failed")) + len("\nfi\n")
+	with tempfile.TemporaryDirectory(prefix="test_wg2_judge_") as tmp:
+		for shard, shard_files in files.items():
+			for suffix, content in shard_files.items():
+				Path(tmp, f"wiring_part2_shard_{shard}.{suffix}").write_text(content, encoding="utf-8")
+		script = step_run[start:end].replace("/tmp/wiring_part2_", f"{tmp}/wiring_part2_")
+		return subprocess.run(
+			["bash", "-c", f"set -euo pipefail\nwg2_shards={WIRING_PART2_SHARDS}\n{script}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+
+def run_wiring_part2_filter(
+	step_run: str, modules: list[str], collect_log: str
+) -> tuple[subprocess.CompletedProcess, list[str]]:
+	"""Run the part 2 step's ID filter and per-module guard against a fake collect log.
+
+	Returns the process result and the filtered test IDs it wrote.
+	"""
+	start = step_run.index("printf '%s\\n' \"${wg2_modules[@]}\"")
+	end = step_run.index("\n", step_run.index('echo "wiring guard part 2: ')) + 1
+	with tempfile.TemporaryDirectory(prefix="test_wg2_filter_") as tmp:
+		Path(tmp, "wiring_part2_collect.log").write_text(collect_log, encoding="utf-8")
+		script = step_run[start:end].replace("/tmp/wiring_part2_", f"{tmp}/wiring_part2_")
+		array = " ".join(f"'{module}'" for module in modules)
+		result = subprocess.run(
+			["bash", "-c", f"set -euo pipefail\nwg2_shards={WIRING_PART2_SHARDS}\nwg2_modules=({array})\n{script}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		tests_file = Path(tmp, "wiring_part2_tests.txt")
+		tests = tests_file.read_text(encoding="utf-8").splitlines() if tests_file.exists() else []
+		return result, tests
+
+
+class WiringGuardPartTwoShardingContractTest(unittest.TestCase):
+	"""The wiring guard part 2 step runs its 53 modules in local shards (#9021).
+
+	`orchestrate-poll (0)` took 15m15s of its 20 minutes (run 42426489708).
+	The step stays in group 0, by name and guard, and splits its test
+	functions across 4 processes, the way #8150 and #8246 did. Its module
+	set is pinned by the #8772/#8980 constants. Every listed module must
+	collect at least one test, every test must run exactly once, and a shard
+	that fails or records no exit code must fail the step.
+	"""
+
+	def setUp(self) -> None:
+		self.step = poll_job_step(WIRING_PART2_STEP_NAME)
+		self.run = self.step["run"]
+
+	def green(self) -> dict[int, dict[str, str]]:
+		return {n: {"txt": f"t{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(WIRING_PART2_SHARDS)}
+
+	def modules(self) -> tuple[str, ...]:
+		array = re.search(r"wg2_modules=\((?P<mods>[^)]*)\)", self.run)
+		self.assertIsNotNone(array)
+		return tuple(array.group("mods").split())
+
+	def test_step_stays_in_group_zero_of_the_poll_job(self) -> None:
+		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+		owners = [
+			job_id
+			for job_id, job in jobs.items()
+			for step in job.get("steps", [])
+			if step.get("name") == WIRING_PART2_STEP_NAME
+		]
+		self.assertEqual(owners, [POLL_JOB_ID])
+		self.assertEqual(self.step.get("if"), f"strategy.job-index == {WIRING_PART2_GROUP}")
+		self.assertEqual(GROUP_PINNED_STEPS.get(WIRING_PART2_STEP_NAME), WIRING_PART2_GROUP)
+		self.assertIn(f"wg2_shards={WIRING_PART2_SHARDS}", self.run)
+
+	def test_module_array_is_the_pinned_set_and_the_only_paths_named(self) -> None:
+		modules = self.modules()
+		# No module path may appear in the body outside the array.
+		self.assertEqual(modules, tuple(re.findall(r"tests/[A-Za-z0-9_]+\.py", self.run)))
+		self.assertEqual(len(modules), POLL_GROUP_TWO_8772_MODULE_COUNT)
+		self.assertEqual(len(set(modules)), POLL_GROUP_TWO_8772_MODULE_COUNT)
+		digest = hashlib.sha256("\n".join(sorted(modules)).encode("utf-8")).hexdigest()
+		self.assertEqual(digest, POLL_GROUP_TWO_8772_MODULE_SET_SHA256, modules)
+		for module in modules:
+			with self.subTest(module=module):
+				self.assertTrue((REPO_ROOT / module).is_file(), module)
+
+	def test_collection_error_strings_are_present(self) -> None:
+		self.assertIn('--collect-only -q -p no:cacheprovider "${wg2_modules[@]}"', self.run)
+		self.assertIn("Test collection failed for the wiring guard part 2 modules.", self.run)
+		self.assertIn("No tests collected from ${wg2_module}.", self.run)
+		self.assertIn("No tests collected from the wiring guard part 2 modules.", self.run)
+		# The collect log reaches the job log prefixed, so its text cannot act
+		# as a workflow command.
+		self.assertIn("|| { sed 's/^/| /' /tmp/wiring_part2_collect.log;", self.run)
+		self.assertNotIn("cat /tmp/wiring_part2_collect.log", self.run)
+
+	def test_partition_expression_is_a_true_partition(self) -> None:
+		match = WIRING_PART2_AWK_RE.search(self.run)
+		self.assertIsNotNone(match)
+		expression = match.group("expr").strip()
+		self.assertEqual(expression, "NR % total == n")
+		names = [f"tests/test_x.py::test_{i:03d}" for i in range(97)]
+		for total in range(1, 7):
+			with self.subTest(shards=total):
+				collected: list[str] = []
+				for n in range(total):
+					collected.extend(ShardPartitionTest.shard(self, names, total, n, expression))
+				self.assertCountEqual(collected, names)
+
+	def test_partition_covers_the_real_test_functions(self) -> None:
+		import ast
+
+		names: list[str] = []
+		for module in self.modules():
+			tree = ast.parse((REPO_ROOT / module).read_text(encoding="utf-8"))
+			names.extend(
+				f"{module}::{node.name}"
+				for node in ast.walk(tree)
+				if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+			)
+		self.assertGreater(len(names), 0)
+		expression = WIRING_PART2_AWK_RE.search(self.run).group("expr").strip()
+		collected: list[str] = []
+		for n in range(WIRING_PART2_SHARDS):
+			collected.extend(ShardPartitionTest.shard(self, names, WIRING_PART2_SHARDS, n, expression))
+		self.assertCountEqual(collected, names)
+
+	def test_every_process_is_reaped_before_any_is_judged(self) -> None:
+		self.assertLess(self.run.index('wait "${wg2_pid}"'), self.run.index("wg2_ids=()"))
+		self.assertLess(self.run.index('wait "${wg2_pid}"'), self.run.index('.rc" 2>/dev/null'))
+
+	def test_does_not_share_part_one_scratch_paths(self) -> None:
+		self.assertNotIn("/tmp/wiring_part1_", self.run)
+		self.assertNotIn("wg1_", self.run)
+
+	def test_filter_keeps_listed_modules_and_groups_parametrized_cases(self) -> None:
+		modules = ["tests/test_a.py", "tests/test_b.py"]
+		collect_log = (
+			"tests/test_a.py::test_one\n"
+			"tests/test_a.py::test_two[x]\n"
+			"tests/test_a.py::test_two[y]\n"
+			"tests/test_b.py::TestK::test_three\n"
+			"tests/other_test_a.py::test_stray\n"
+			"xtests/test_a.py::test_prefixed\n"
+			"\n"
+			"4 tests collected in 0.1s\n"
+		)
+		result, tests = run_wiring_part2_filter(self.run, modules, collect_log)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertEqual(
+			tests,
+			[
+				"tests/test_a.py::test_one",
+				"tests/test_a.py::test_two",
+				"tests/test_b.py::TestK::test_three",
+			],
+		)
+		self.assertIn("wiring guard part 2: 3 test functions across 4 shards", result.stdout)
+
+	def test_module_without_collected_tests_fails(self) -> None:
+		modules = ["tests/test_a.py", "tests/test_b.py", "tests/test_c.py"]
+		collect_log = "tests/test_b.py::test_one\n1 test collected in 0.1s\n"
+		result, _tests = run_wiring_part2_filter(self.run, modules, collect_log)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::No tests collected from tests/test_a.py.\n", result.stdout)
+		self.assertIn("::error::No tests collected from tests/test_c.py.\n", result.stdout)
+		self.assertNotIn("tests/test_b.py.", result.stdout)
+		self.assertNotIn("test functions across", result.stdout)
+
+	def test_all_green_passes(self) -> None:
+		result = run_wiring_part2_judge(self.run, self.green())
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("failed", result.stdout)
+
+	def test_failing_shard_fails_the_step_with_prefixed_tail(self) -> None:
+		files = self.green()
+		files[1] = {"txt": "t1\n", "log": "::error::forged\nFAILED x\n", "rc": "1\n"}
+		result = run_wiring_part2_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::wiring guard part 2 shards failed: 1\n", result.stdout)
+		tail = result.stdout[result.stdout.index("shard 1 failed; last 40 log lines"):]
+		self.assertIn("| ::error::forged", tail)
+		self.assertNotIn("\n::error::forged", tail)
+		group = result.stdout[: result.stdout.index("shard 1 failed; last 40 log lines")]
+		self.assertIn("| ::error::forged", group)
+		self.assertNotIn("\n::error::forged", "\n" + group)
+
+	def test_missing_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[2] = {"txt": "t2\n", "log": "partial\n"}
+		result = run_wiring_part2_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::wiring guard part 2 shards failed: 2\n", result.stdout)
+
+	def test_non_numeric_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[0] = {"txt": "t0\n", "log": "ok\n", "rc": "zero\n"}
+		result = run_wiring_part2_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::wiring guard part 2 shards failed: 0\n", result.stdout)
+
+	def test_empty_shard_is_skipped(self) -> None:
+		files = self.green()
+		del files[3]
+		result = run_wiring_part2_judge(self.run, files)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("shard 3", result.stdout)
 
 
 PROMOTE_CYCLE_STEP_NAME = "Promote cycle and blocked-verdict unit tests"
