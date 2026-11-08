@@ -2284,6 +2284,7 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_post_stage.py
 
       # Moved again from tests-heal-plan-and-validation, which took 16m08s of
       # its 20 minutes on main (run 42373283876, budget-watch issue #8993). The
