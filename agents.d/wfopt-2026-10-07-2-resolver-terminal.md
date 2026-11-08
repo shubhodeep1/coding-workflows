@@ -1,0 +1,3 @@
+<!-- agents: section="Stable log prefixes (contractual)" -->
+- `RESOLVER_TERMINAL` (`scripts/review_conflict_resolve.sh`, stdout, exactly one line per resolver EXIT trap, emitted fail-open in a subshell before the integration-judge dispatch and never changing the exit code: `RESOLVER_TERMINAL run_id=<n|none> run_attempt=<n|none> pr=<n|none> attempts=<n> attempt_ms=<n,n,...|none> exit_class=<ok|timeout|no_progress|markers|fingerprint|scope|commit|other> rc=<n> fp_violations=<n> markers=<n|unknown>`; keys and order are fixed, every value is an integer or enum token, `exit_class=ok` whenever rc is 0; not emitted in `--test-repair` mode, where the trap is not installed, nor when the step is killed by a signal)
+LOG_PREFIX.name=RESOLVER_TERMINAL

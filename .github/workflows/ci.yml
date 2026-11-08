@@ -308,18 +308,21 @@ jobs:
           cd /tmp
           tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           # Bounded retries cover transient 5xx and connection resets (CI run
-          # 35615284953 failed on an HTTP 504 here). `--retry-delay 0` keeps
-          # curl's built-in exponential backoff; the sha256 check below still
-          # guards integrity. curl's own backoff (1, 2, 4, 8, 16 seconds) ends
-          # about 31 seconds after the first failure with `--retry 5` (runs
-          # 42465084748 and 42469096786 failed that way on 504s), and
-          # `--retry-max-time 120` only caps one curl run. So an outer loop
-          # runs curl up to 4 times with a 20-second pause between runs,
-          # which rides out about 3 minutes of 504s.
+          # 35615284953 failed on an HTTP 504 here). CI run 42465389350
+          # (PR #9038) hit HTTP 504 again and used up the old 1s/2s/4s
+          # exponential backoff in about 7 seconds, so curl now makes up to 5
+          # retries (6 attempts in total) a fixed 15 seconds apart. When each
+          # attempt fails fast, that rides out an outage of about 75 seconds.
+          # `--retry-max-time 300` only caps the total time spent retrying, so
+          # slow attempts (each bounded by `--max-time 120`) get fewer retries.
+          # The sha256 check below still guards integrity. Runs 42465084748
+          # and 42469096786 also failed on 504s after one curl run gave up, so
+          # an outer loop runs curl up to 4 times with a 20-second pause
+          # between runs to ride out a longer outage.
           actionlint_rc=1
           for actionlint_attempt in 1 2 3 4; do
             actionlint_rc=0
-            curl -sSLf --retry 5 --retry-all-errors --retry-delay 0 --retry-max-time 120 \
+            curl -sSLf --retry 5 --retry-all-errors --retry-delay 15 --retry-max-time 300 \
               --connect-timeout 20 --max-time 120 -o "${tarball}" \
               "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}" || actionlint_rc=$?
             if [ "${actionlint_rc}" -eq 0 ]; then
@@ -530,6 +533,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_integrity.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_conflict_resolve_terminal_record.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_touched_set_symlink_aware.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
@@ -2430,6 +2434,7 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_post_stage.py
 
       # Moved again from tests-heal-plan-and-validation, which took 16m08s of
       # its 20 minutes on main (run 42373283876, budget-watch issue #8993). The

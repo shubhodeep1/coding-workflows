@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (135)
+## Processed source docs (136)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -140,6 +140,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-10-06.md`
 - `analysis/workflow-optimization-2026-10-06-2.md`
 - `analysis/workflow-optimization-2026-10-07.md`
+- `analysis/workflow-optimization-2026-10-07-2.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -2135,3 +2136,38 @@ Sibling work for this doc was tracked under Refs #8975. The squash-merge PR numb
 | Executive Summary; Speed 1-4; Cost 1-4; Reliability 1, 2, 3 and 5; AI Memory Health; GH API Call Audit merge-train and per-item rows and the `gh_retry` call-site instrumentation; Prompt Cache & Memory System; Orchestrator Health; Pipeline Flow Bottlenecks | rejected | Instrumentation-only or diagnostic, with no defect established. `GH_PAT_BUDGET ... used_in_job=` in `scripts/gh_helpers.sh` already gives per-job usage. |
 | Per-Repo Breakdown / Metrics Appendix / Section 1 Python 3.11 note on `scripts/workflow_retro.py` | informational | No action. |
 | Consolidation Candidates (MERGE-###) / Dead Calls (DEAD-API-###) | informational | The doc reports none. |
+
+### `analysis/workflow-optimization-2026-10-07-2.md`
+Source doc: `analysis/workflow-optimization-2026-10-07-2.md`
+Processed: 2026-11-08
+Source commit: `68ac90d017f20613f047c136ea698a47f57c1b85`
+
+Sibling work for this doc was tracked under Refs #9033. The squash-merge PR numbers are not visible on this ref (flattened history), so applied rows cite their changelog fragment instead of a guessed PR number.
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| BUG-002 (implementation-failed re-issue closed the source issue before the replacement was confirmed) | applied | The implementation-failed re-issue path in `scripts/orchestrate_poll_process.sh` now confirms the replacement before mutating the source issue. Residual risk: a create that GitHub accepts but whose response is lost leaves the source open, so the next cycle can file a second replacement (no pre-create lookup was added), and a failed local state rewrite after a confirmed create still closes the source; test `tests/test_poller_impl_failed_reissue_order.py`; fragment `changelog.d/wfopt-2026-10-07-2-impl-failed-reissue-order.md`. Refs #9033. |
+| Reliability 1 (classify resolver terminal failures; also the attempt and terminal-reason part of Cost 1) | applied | `scripts/review_conflict_resolve.sh` emits a sanitized `RESOLVER_TERMINAL` record with the attempt count, per-attempt milliseconds and exit class. It does not record the head SHA: the record carries only integers and enum tokens, and the run id ties it to the checked-out head; test `tests/test_review_conflict_resolve_terminal_record.py`; fragment `changelog.d/wfopt-2026-10-07-2-resolver-terminal.md`. Refs #9033. |
+| Cost 1 (model, reasoning and token-category part) | rejected | Experiment only, with no defect established. |
+| Reliability 2 and GH API Call Audit triage row (classify triage posting failures) | applied | The posting step in `.github/workflows/check_failure_triage.yml` logs `CHECK_TRIAGE op=post stage=` stage codes; test `tests/test_check_failure_triage_post_stage.py`; fragment `changelog.d/wfopt-2026-10-07-2-triage-post-stage.md`. Refs #9033. |
+| BUG-001 (merged-PR checks substitute `{}`) | already-implemented | In `scripts/review_rb_judge.sh`, a failed guard re-fetch leaves `RB_LIVE_HEAD_SHA` empty. `fix`, `close_and_reissue` and the security-converted fix are then refused with `judge_skip_reason=head_unverified`, judge_handled stays false (the review-blocked fallback keeps `ai:review-blocked`), and merge actions bind `--match-head-commit`. |
+| BUG-003 (review-blocked merges without `--match-head-commit`) | already-implemented | Every poller merge, including the review-blocked paths, goes through `_orch_squash_merge_bound` in `scripts/orchestrate_poll_process.sh`, which passes `--match-head-commit` and refuses a SHA that is not 40 hex characters. `merge_with_followup` binds `_rb_mwf_match_arg`. |
+| BUG-004 (retried `gh issue create` could duplicate) | already-implemented | `gh_retry` makes one attempt for `issue create` (`_gh_cmd_is_unsafe_post` in `scripts/gh_helpers.sh`, #6634). A post-failure fingerprint lookup would add API reads with no duplicate risk left to remove. |
+| BUG-005 (retro fan-out POST after an ambiguous PATCH) | already-implemented | `scripts/workflow_retro_fanout.sh` re-reads the comment after a failed PATCH and POSTs only on `HTTP 404`. |
+| SEC-001 (raw response logged on invalid JSON) | already-implemented | `gh_api_json_to_file` in `scripts/gh_helpers.sh` logs only bytes, sha256 and category (#8095). |
+| API-001 (two reads for title and body) | already-implemented | The loop does a single `_safe_gh_jq ... --jq '.'` read; the no-mutation guard is delivered by BUG-002. |
+| Speed 4 (merge-train scan reason counts) | already-implemented | The `MERGE_TRAIN_RELEASE_SUMMARY` line in `scripts/review_merge_train.sh` carries the per-reason counts. The issue-cited fragment `changelog.d/8899-merge-train-release-reason-counts.md` is not present on this ref (already folded), so the script is cited instead. Elapsed milliseconds are rejected as instrumentation only. |
+| API-002, BATCH-001, BATCH-002, BATCH-003, MERGE-001, REUSE-001 | rejected | The doc tags them RISKY_SKIP itself. |
+| DUP-001, DUP-002, DUP-003 | rejected | Refactor only (minimal-change rule). |
+| EXPR-001, EXPR-002 | rejected | Static headroom only, with no expression-size breach (earlier precedent). |
+| DEBT-001 (`review_autofix.yml` size headroom) | rejected | Advisory about future growth of `review_autofix.yml`. The file is 382,700 bytes on this ref, under the 480,000-byte guard, so nothing needs to change now. |
+| DEAD-001 (unreachable `raise RuntimeError(last_error)` in `_gh_json`, `scripts/workflow_retro.py`) | rejected | A defensive unreachable fallback; removing it changes no behaviour (minimal-change rule). |
+| Speed 1 (pace review dispatch bursts) | rejected | Medium risk of delaying reviews; queueing reflects hosted-runner capacity, and no saving is established. |
+| Speed 2 (stage timings / same-head shortcut) | rejected | `REVIEW_AUTOFIX_RUN_SUMMARY_V1` already records the elapsed budget and resume head, and the doc rates the shortcut high risk. |
+| Speed 3 (trusted PR number for branch-to-PR discovery) | rejected | The cited `resolve-claude-branch-pr` job and `Resolve PR for head branch` step do not exist under `.github/workflows/` on this ref, and trusting dispatch metadata would need its own security review. |
+| Speed 5 (Codex install cache reuse) | rejected | Micro-optimisation of at most about 5 s. |
+| Reliability 3 (checkout terminal record) | rejected | Two failures; the step already retries fetches and keeps its stale-head refusals. Instrumentation only, in the size-constrained review workflow. |
+| Reliability 4 (head-gate status skip / post-job submodule warning) | rejected | Non-fatal; produced by `actions/checkout` cleanup (earlier precedent). |
+| Cost 2-5; AI Memory Health; GH API Call Audit review and merge-train rows; Prompt Cache & Memory System; Orchestrator Health; Pipeline Flow Bottlenecks | rejected | Instrumentation-only or diagnostic experiments with no defect established. `GH_PAT_BUDGET ... used_in_job=` in `scripts/gh_helpers.sh` already gives per-job API usage, and `push_attempts` is already in memory telemetry. |
+| Executive Summary / Per-Repo Breakdown / Metrics Appendix | informational | No action. |
+| Dead Calls (DEAD-API-###) | informational | The doc reports none. |
