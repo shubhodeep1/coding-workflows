@@ -1088,10 +1088,11 @@ jobs:
               heal_failed_shards+=("${shard}")
             fi
           done
-          # Repeat failing shards' tails outside the collapsed groups.
+          # Repeat failing shards' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
           for shard in "${heal_failed_shards[@]}"; do
             echo "--- workflow failure heal modules shard ${shard} failed; last 40 log lines:"
-            tail -n 40 "/tmp/heal_shard_${shard}.log" || true
+            { tail -n 40 "/tmp/heal_shard_${shard}.log" 2>/dev/null || true; } | sed 's/^/| /'
           done
           if [ "${#heal_failed_shards[@]}" -gt 0 ]; then
             echo "::error::workflow failure heal modules shards failed: ${heal_failed_shards[*]}"

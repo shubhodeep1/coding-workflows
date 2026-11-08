@@ -4234,7 +4234,7 @@ class HealStepShardingContractTest(unittest.TestCase):
 		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
 		self.assertIn("::error::workflow failure heal modules shards failed: 1\n", result.stdout)
 		tail = result.stdout[result.stdout.index("shard 1 failed; last 40 log lines"):]
-		self.assertIn("FAILED tests/test_a.py::test_x", tail)
+		self.assertIn("| FAILED tests/test_a.py::test_x", tail)
 
 	def test_missing_rc_counts_as_failure(self) -> None:
 		files = self.green()
