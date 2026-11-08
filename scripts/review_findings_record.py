@@ -57,6 +57,14 @@ REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 RUN_ID_RE = re.compile(r"^[0-9]{1,20}$")
 RUN_ATTEMPT_RE = re.compile(r"^[0-9]{1,6}$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+# Tier reasons from review_run_reviewers.sh carry "<=" (e.g. code_<=200_loc).
+TIER_REASON_RE = re.compile(r"^[A-Za-z0-9_.:<>=-]{1,64}$")
+# Consolidator lens names are prose, e.g. "CORRECTNESS & LOGIC" or
+# "DOCS COVERAGE (DIATAXIS)" (prompts/review-consolidator.txt).
+LENS_RE = re.compile(r"^[A-Za-z0-9 &/()_.:-]{1,64}$")
+# review_parse_consolidator.sh keeps only KNOWN_REVIEWERS tokens: bundle file
+# basenames ("review_<safe_name>" or "<safe_name>") and "reviewer_N".
+REVIEWER_TOKEN_PREFIXES = ("review_", "pass1_")
 LINES_RE = re.compile(r"^[A-Za-z0-9_.:,-]{1,64}$")
 ISSUE_ID_RE = re.compile(r"^[0-9]{1,6}$")
 MERGED_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
@@ -243,7 +251,24 @@ def _clean_text(value: str, max_len: int) -> str | None:
 	return value
 
 
-def parse_review_issues(text: str, warnings: set[str]) -> tuple[list[dict], int]:
+def _flagged_by_token(entry: str, safe_to_slug: dict[str, str]) -> str | None:
+	"""Return the recorded form of one FLAGGED_BY entry, or None to drop it."""
+	if len(entry) > 160:
+		return None
+	if SLUG_RE.match(entry):
+		return entry
+	if not SAFE_NAME_RE.match(entry):
+		return None
+	name = entry
+	for prefix in REVIEWER_TOKEN_PREFIXES:
+		if name.startswith(prefix) and len(name) > len(prefix):
+			name = name[len(prefix):]
+			break
+	return safe_to_slug.get(name, name)
+
+
+def parse_review_issues(text: str, warnings: set[str], safe_to_slug: dict[str, str] | None = None) -> tuple[list[dict], int]:
+	safe_to_slug = safe_to_slug or {}
 	issues: list[dict] = []
 	flagged_by_dropped = 0
 	current: dict | None = None
@@ -262,11 +287,12 @@ def parse_review_issues(text: str, warnings: set[str]) -> tuple[list[dict], int]
 				unverified = True
 				if entry not in flagged_by:
 					flagged_by.append(entry)
-			elif SLUG_RE.match(entry) and len(entry) <= 128:
-				if entry not in flagged_by:
-					flagged_by.append(entry)
 			else:
-				flagged_by_dropped += 1
+				token = _flagged_by_token(entry, safe_to_slug)
+				if token is None:
+					flagged_by_dropped += 1
+				elif token not in flagged_by:
+					flagged_by.append(token)
 		tags = [tag.strip() for tag in (block.get("PARSER_TAGS") or "").split(",")]
 		if FLAGGED_BY_UNVERIFIED_TAG in tags:
 			unverified = True
@@ -283,7 +309,7 @@ def parse_review_issues(text: str, warnings: set[str]) -> tuple[list[dict], int]
 			"id": issue_id,
 			"file": file_value,
 			"lines": _token(block.get("LINES"), LINES_RE),
-			"lens": _token(block.get("LENS"), TOKEN_RE),
+			"lens": _token(block.get("LENS"), LENS_RE),
 			"severity": _token(block.get("SEVERITY"), TOKEN_RE),
 			"classification": _token(block.get("CLASSIFICATION"), TOKEN_RE),
 			"rejection_kind": _token(block.get("REJECTION_KIND"), TOKEN_RE),
@@ -373,8 +399,6 @@ def parse_editor_summary(text: str, issue_ids: list[str], warnings: set[str]) ->
 	current: str | None = None
 	override_count = 0
 	for line in text.splitlines():
-		if "CONSOLIDATOR_OVERRIDDEN:" in line:
-			override_count += 1
 		stripped = line.strip()
 		if line[:1] not in (" ", "\t") and EDITOR_SECTION_HEADING_RE.match(stripped):
 			current = stripped if stripped in sections else None
@@ -384,6 +408,10 @@ def parse_editor_summary(text: str, issue_ids: list[str], warnings: set[str]) ->
 		bullet = EDITOR_BULLET_RE.match(line)
 		if bullet:
 			sections[current].append(bullet.group(1).strip())
+			# Count only override bullets in the Ignored section (the editor
+			# contract), including "no-issue-id" overrides.
+			if current == EDITOR_SECTION_IGNORED and OVERRIDE_RE.search(bullet.group(1)):
+				override_count += 1
 
 	change_status = "unknown"
 	for value in sections[EDITOR_SECTION_STATUS]:
@@ -468,7 +496,7 @@ def build_record(previous_reviews_dir: str) -> dict:
 	elif tier_name is None:
 		warnings.add("invalid_tier")
 	tier_reason_raw = _env("REVIEW_TIER_REASON")
-	tier_reason = _token(tier_reason_raw, TOKEN_RE)
+	tier_reason = _token(tier_reason_raw, TIER_REASON_RE)
 	if tier_reason_raw and tier_reason is None:
 		warnings.add("invalid_tier_reason")
 	record["tier"] = {"name": tier_name, "reason": tier_reason}
@@ -489,14 +517,26 @@ def build_record(previous_reviews_dir: str) -> dict:
 	issues_text, issues_err = _read_bounded(issues_path)
 	issues: list[dict] = []
 	flagged_by_dropped = 0
-	if issues_text is not None:
-		issues, flagged_by_dropped = parse_review_issues(issues_text, warnings)
+	safe_to_slug = {slot["safe_name"]: slot["slug"] for slot in slots if slot["slug"]}
+	consolidator_ran = False
+	if issues_text is not None and issues_text.strip():
+		consolidator_ran = True
+		issues, flagged_by_dropped = parse_review_issues(issues_text, warnings, safe_to_slug)
+	elif issues_text is not None:
+		# review_parse_consolidator.sh truncates the file on a parse failure or
+		# when no issue markers were found; do not record that as a clean round.
+		if consolidator_expected:
+			warnings.add("issues_file_empty")
 	elif issues_err == "missing":
 		if consolidator_expected:
 			warnings.add("issues_file_missing")
 	else:
 		warnings.add("issues_file_" + issues_err)
-	record["consolidator"] = {"ran": issues_text is not None, "issue_count": len(issues), "flagged_by_dropped": flagged_by_dropped}
+	if runtime_dir:
+		stats_text, _ = _read_bounded(_env("PARSER_STATS_FILE") or os.path.join(runtime_dir, "parser_stats.txt"), STATUS_READ_LIMIT_BYTES)
+		if stats_text and re.search(r"(?m)^parse_failed=1$", stats_text):
+			warnings.add("consolidator_parse_failed")
+	record["consolidator"] = {"ran": consolidator_ran, "issue_count": len(issues), "flagged_by_dropped": flagged_by_dropped}
 
 	editor_path = _env("EDITOR_SUMMARY_FILE") or (os.path.join(runtime_dir, "editor_summary.txt") if runtime_dir else "")
 	editor_text, editor_err = _read_bounded(editor_path)
@@ -526,6 +566,8 @@ def write_atomic(path: str, data: dict) -> None:
 	try:
 		with os.fdopen(fd, "w", encoding="utf-8") as handle:
 			handle.write(payload)
+			handle.flush()
+			os.fsync(handle.fileno())
 		os.chmod(tmp_path, 0o644)
 		os.replace(tmp_path, path)
 		tmp_path = ""

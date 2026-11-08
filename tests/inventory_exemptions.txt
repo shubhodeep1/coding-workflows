@@ -6,3 +6,4 @@ prompts/mode-orchestrate-revise.txt | issue #8427 P10 adds this prompt; docs/INV
 prompts/mode-plan-evidence-request.txt | issue #8427 P11 adds this prompt; docs/INVENTORY.md is outside the P11 file grant, so the entry is added at the next docs sync
 scripts/evidence_broker.py | issue #8427 P11 adds this helper; docs/INVENTORY.md is outside the P11 file grant, so the entry is added at the next docs sync
 scripts/chatgpt_codex_relay.py | ChatGPT account reviewer slot host relay (trial plan Phase 2, Refs #8969): documented in agents.d/chatgpt-reviewer-slot.md and docs/scripts-pending-removal.md; docs/INVENTORY.md is outside the #9044 plan grant, so move this line there in the next INVENTORY edit.
+scripts/review_findings_record.py | Review findings record (ChatGPT account reviewer trial plan Phase 3, Refs #8969): documented in agents.d/chatgpt-review-findings-record.md; docs/INVENTORY.md is outside the #9052 plan grant, so move this line there in the next INVENTORY edit.

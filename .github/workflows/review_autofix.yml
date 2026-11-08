@@ -4048,6 +4048,7 @@ jobs:
           REVIEWER_CHATGPT_SLOT_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_slot || '' }}
           REVIEWER_CHATGPT_MODEL_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_model || '' }}
           REVIEWER_CHATGPT_REPLACES_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_replaces || '' }}
+          AUTOFIX_ITERATION_METRIC: ${{ steps.retrigger_guard.outputs.autofix_iteration || '' }}
         run: |
           REVIEW_FINDINGS_RECORD_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_findings_record.py"
           [ -f "${REVIEW_FINDINGS_RECORD_SCRIPT}" ] || REVIEW_FINDINGS_RECORD_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_findings_record.py"

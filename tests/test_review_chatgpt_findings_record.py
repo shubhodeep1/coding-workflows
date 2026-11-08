@@ -438,9 +438,61 @@ def test_redactor_unavailable_drops_reason(tmp_path: Path) -> None:
 	assert SECRET_TAIL not in raw
 
 
+def test_production_token_shapes_are_kept(tmp_path: Path) -> None:
+	# review_parse_consolidator.sh emits bundle basenames and reviewer_N, never
+	# vendor/model slugs; tier reasons carry "<=" and lenses are prose.
+	env = _fixture(tmp_path)
+	env["REVIEW_TIER"] = "standard"
+	env["REVIEW_TIER_REASON"] = "code_<=200_loc"
+	text = ISSUES_TEXT.replace(
+		"FLAGGED_BY: chatgpt/gpt-6-sol, anthropic/claude-opus-5",
+		"FLAGGED_BY: review_chatgpt_gpt-6-sol, anthropic_claude-opus-5, reviewer_3",
+	).replace("LENS: correctness", "LENS: CORRECTNESS & LOGIC").replace("LENS: docs", "LENS: DOCS COVERAGE (DIATAXIS)")
+	_write(Path(env["RUNTIME_DIR"]) / "review_issues.txt", text)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	assert _run(env, output).returncode == 0
+	record = json.loads(output.read_text(encoding="utf-8"))
+	first, second = record["issues"]
+	assert first["flagged_by"] == ["chatgpt/gpt-6-sol", "anthropic/claude-opus-5", "reviewer_3"]
+	assert first["lens"] == "CORRECTNESS & LOGIC"
+	assert second["lens"] == "DOCS COVERAGE (DIATAXIS)"
+	assert record["consolidator"]["flagged_by_dropped"] == 0
+	assert record["tier"] == {"name": "standard", "reason": "code_<=200_loc"}
+	assert record["warnings"] == []
+
+
+def test_empty_issues_file_is_not_a_clean_round(tmp_path: Path) -> None:
+	env = _fixture(tmp_path)
+	runtime = Path(env["RUNTIME_DIR"])
+	_write(runtime / "review_issues.txt", "")
+	_write(runtime / "parser_stats.txt", "parsed_blocks=0\nparse_failed=1\n")
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	assert _run(env, output).returncode == 0
+	record = json.loads(output.read_text(encoding="utf-8"))
+	assert record["consolidator"] == {"ran": False, "issue_count": 0, "flagged_by_dropped": 0}
+	assert "issues_file_empty" in record["warnings"]
+	assert "consolidator_parse_failed" in record["warnings"]
+
+
+def test_override_count_only_counts_ignored_override_bullets(tmp_path: Path) -> None:
+	env = _fixture(tmp_path)
+	editor = EDITOR_TEXT.replace(
+		"- ISSUE 002: not applicable",
+		"- CONSOLIDATOR_OVERRIDDEN: no-issue-id — advisory guidance wrong\n- ISSUE 002: not applicable",
+	) + "Notes: CONSOLIDATOR_OVERRIDDEN: 001 mentioned outside the section\n"
+	_write(Path(env["RUNTIME_DIR"]) / "editor_summary.txt", editor)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	assert _run(env, output).returncode == 0
+	record = json.loads(output.read_text(encoding="utf-8"))
+	assert record["editor"]["override_count"] == 1
+	assert record["issues"][0]["editor"]["override"] is False
+
+
 def _step_block(text: str, name: str) -> str:
 	start = text.index(f"\n      - name: {name}\n")
 	end = text.find("\n      - name: ", start + 1)
+	if end == -1:
+		end = len(text)
 	return text[start:end]
 
 
@@ -460,6 +512,7 @@ def test_workflow_steps_contract() -> None:
 	assert ".codex-workflow-src/scripts/review_findings_record.py" in write_step
 	assert "outcome=skipped reason=helper_unavailable" in write_step
 	assert "REVIEWER_CHATGPT_SLOT_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_slot || '' }}" in write_step
+	assert "AUTOFIX_ITERATION_METRIC: ${{ steps.retrigger_guard.outputs.autofix_iteration || '' }}" in write_step
 	assert "uses: actions/upload-artifact@v6" in upload_step
 	assert "name: reviewer-findings-${{ github.run_id }}-${{ github.run_attempt }}" in upload_step
 	assert "path: ${{ env.PREVIOUS_REVIEWS_DIR }}/review_findings_record.json" in upload_step
