@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for the canary file update\n\nPlanning ref: `git rev-parse HEAD` = `64b35b14f15b55d2685e7175b53597ee39d14efe`, symbolic branch `main` (resolved checkout ref `main`). The PLANNING REF CONTEXT reports `Integration branch mismatch: unknown`, not `true`, so the integration-branch blocker does not apply.\n\nClarification mapping: no Q<ID> questions were asked. The `[auto-answered-by-clarify]` answer confirms the issue is fully specified.\n\nCurrent file state on the planning ref: `tests/e2e_smoke_canary.txt` is two lines, `status: ok` and `decompose-run: 41445772297`, ending with a trailing newline. It does not yet hold the requested content, so there is work to do.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n\nNone. Overwrite `tests/e2e_smoke_canary.txt` so its entire content is these exact bytes:\n\n```\nstatus: ok\\nrun_id: 42505129225\\nupdated-by: ai-pipeline\\n\n```\n\nThat is three lines with exactly one trailing newline after the last line. There are no comments, headers, blank lines or carriage returns. The `decompose-run:` line is removed.\n\n## Data structures affected\n\nOnly the plain-text canary fixture. No schemas, code or contracts change.\n\n## API or interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Overwrite the whole file instead of editing lines\n- Chosen: replace the full file content, as in `printf 'status: ok\\nrun_id: 42505129225\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n- Alternatives considered: keep `status: ok` and edit only the second line, or append the new lines.\n- Why: the issue requires the file to be exactly these three lines. A full overwrite is deterministic and cannot leave stale content behind.\n\n## Security considerations\n\n- No trust boundary, endpoint, credential or money-handling surface is touched.\n- The new content is a static literal. Nothing external is read or interpolated.\n- There is no abuse case: this is a test fixture file with no executable meaning.\n\n## Risks and edge cases\n\n- The `decompose-run:` line in the current file differs from what the issue implies. The issue only says the file \"already exists\", so this is not a conflict; the line is simply replaced.\n- An editor could add a missing or doubled final newline, or CRLF line endings. The bytes must match exactly.\n- Scope must stay limited to this one file. No changelog fragment and no `agents.d` fragment are added, because the issue forbids touching any other file.\n\n## Testing considerations\n\n- `cat -A tests/e2e_smoke_canary.txt` should print exactly `status: ok$`, `run_id: 42505129225$` and `updated-by: ai-pipeline$`.\n- `wc -l` on the file should report `3`.\n- `git diff --stat` should list only `tests/e2e_smoke_canary.txt`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies the content of one existing file and forbids touching any other file. Overwriting that file is both the complete option and the smallest one, so no expansion or reduction applies. This is consistent with \u00a76 Core Priorities: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Pre-execution self-check\n\nThe plan touches one file and specifies its exact bytes. It adds no new scripts, scheduler wiring, supervisor or database work. It contains no auto-close keywords.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "9e7b692cc2beb96438865232036977bc3320f5738cf1d1b572a33445c0c3695d",
+  "lineage": {
+    "issue_number": 9070,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42505707645",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42505707645",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9070"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261108174025_0147065158",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9070,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42505707645"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9070",
+  "timestamps": {
+    "created_at": "2026-11-08T17:40:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
