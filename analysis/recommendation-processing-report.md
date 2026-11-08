@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (136)
+## Processed source docs (137)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -141,6 +141,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-10-06-2.md`
 - `analysis/workflow-optimization-2026-10-07.md`
 - `analysis/workflow-optimization-2026-10-07-2.md`
+- `analysis/workflow-optimization-2026-10-07-3.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -2171,3 +2172,38 @@ Sibling work for this doc was tracked under Refs #9033. The squash-merge PR numb
 | Cost 2-5; AI Memory Health; GH API Call Audit review and merge-train rows; Prompt Cache & Memory System; Orchestrator Health; Pipeline Flow Bottlenecks | rejected | Instrumentation-only or diagnostic experiments with no defect established. `GH_PAT_BUDGET ... used_in_job=` in `scripts/gh_helpers.sh` already gives per-job API usage, and `push_attempts` is already in memory telemetry. |
 | Executive Summary / Per-Repo Breakdown / Metrics Appendix | informational | No action. |
 | Dead Calls (DEAD-API-###) | informational | The doc reports none. |
+
+### `analysis/workflow-optimization-2026-10-07-3.md`
+Source doc: `analysis/workflow-optimization-2026-10-07-3.md`
+Processed: 2026-11-08
+Source commit: `64b35b14f15b55d2685e7175b53597ee39d14efe`
+
+Sibling work for this doc was tracked under Refs #9058. The squash-merge PR numbers are not visible on this ref (flattened history), so applied rows cite their changelog fragment instead of a guessed PR number.
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| SHELL-001 (unchecked prompt assembly and sanitizer in `run_consumer_retro`) | applied | In `scripts/workflow_retro_fanout.sh`, a failed prompt write or a failed `sanitize_codex_prompt_file` call now logs `::warning::retro-fanout: ...`, skips the model call and marks the repo `status=failed`; the prompt is also checked for valid UTF-8 after sanitizing; fragment `changelog.d/wfopt-2026-10-07-3-retro-fanout-prompt-checks.md`. Refs #9058. |
+| SHELL-002 (unquoted `$IDLE`/`$INACTIVITY_LIMIT` tests) | applied | The three remaining checks in `.github/workflows/test-and-mark-stable.yml` now read `if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]`. The Phase 4 wait in `scripts/stable_e2e_step_wait_review.sh` still uses the unquoted form, but both of its values are integers the script computes itself; fragment `changelog.d/wfopt-2026-10-07-3-idle-test-quoting.md`. Refs #9058. |
+| CONSIST-001 (raw `gh api` reads in `scripts/unblock_judge.sh`) | applied | The five read-only lookups are wrapped in `gh_retry`, and writes still make one attempt; fragment `changelog.d/wfopt-2026-10-07-3-unblock-judge-gh-retry.md`. Refs #9058. |
+| BUG-001 (dedup listing failure read as empty) | already-implemented | `scripts/check_failure_triage.sh` logs `reason=dedup_list_failed` and exits 1 on an unconfirmed listing (#8126). |
+| BUG-002 (retried `gh issue create`) | already-implemented | `gh_retry` makes one attempt for `issue create` (`_gh_cmd_is_unsafe_post` in `scripts/gh_helpers.sh`, #6634), and the post step logs `attempts=1`. |
+| SEC-001 (argv/body in failure diagnostics) | already-implemented | `_gh_cmd_log_summary` prints no flag values, `gh_api_json_to_file` logs only bytes, sha256 and category, and stderr excerpts are capped at 2,048 bytes and escaped (#8095). |
+| SEC-002 (`github.ref_name` substituted into shell) | already-implemented | `.github/workflows/test-and-mark-stable.yml` passes it through the `DISPATCH_REF_NAME` env var; `.github/workflows/mark-stable.yml` has no `github.ref_name`; `.github/workflows/workflow-log-analysis.yml` uses it only in the concurrency group key. |
+| BUG-003 (`closingIssuesReferences(first:50)` truncation) | rejected | `scripts/review_collect_pr_metadata.sh` already sets the linked-issue scope status to `failed` on a full 50-node page, so the safety-relevant consumer fails closed. No PR with more than 50 closing references has been observed. |
+| EXPR-001, EXPR-002 | already-implemented | Both `implement.yml` steps take GitHub expressions through step `env:`, and `tests/test_workflow_file_size_limit.py` enforces `GITHUB_RUN_EXPRESSION_LIMIT_CHARS = 21_000`. |
+| DEBT-001 (`review_autofix.yml` size headroom) | rejected | `wc -c .github/workflows/review_autofix.yml` measures 382,700 bytes on this ref, under the 480,000-byte guard; the CI budget check warns at 440,000 (`CI_BUDGET_WORKFLOW_WARN_BYTES` default in `.github/workflows/ci.yml`). |
+| API-001, API-002, API-003, BATCH-001, REUSE-001 | rejected | The doc tags them RISKY_SKIP itself. |
+| BATCH-002, BATCH-003 | rejected | NEEDS_VERIFICATION with negligible call savings (earlier precedent). |
+| DUP-001, DUP-002, DUP-003 | rejected | Refactor only (minimal-change rule). |
+| Speed 1 (`dispatch_decision` events) | rejected | Skipped runs execute no steps and cannot emit events, and the integration-readiness job must not be skipped. |
+| Speed 2 / Reliability 3 (review checkout terminal record) | rejected | Instrumentation only, in the size-constrained review workflow. The step already retries fetches four times and keeps its distinct stale-head (`AUTOFIX_STALE_BASE_SKIP`) and unwritable-head (`CAN_PUSH=false`) exits (precedent from 2026-10-07-2). |
+| Speed 3 / Cost 2 (attempt outcomes) | already-implemented | `AI_ATTEMPT_JOURNAL_V1` (`scripts/attempt_journal.py`). |
+| Speed 4 / Cost 3 (Semble query metrics) | already-implemented | `SEMBLE_QUERY target= chunks= bytes= ms=` in `scripts/semble_helpers.sh`. |
+| Cost 1 (review usage attribution) | already-implemented | `scripts/review_run_reviewers.sh` logs `INFO: openrouter usage phase= call= model= ... usage_available= usage_missing_reason=` for each call. Reasoning and tier experiments are rejected (earlier precedent). |
+| Cost 4 (Serena) | informational | No action proposed. |
+| Reliability 1 (CI guard-test diagnostics) | rejected | Diagnostic only. No failing assertion was demonstrated, and pytest names and tracebacks are already in the job logs. |
+| Reliability 2 (triage stage instrumentation) | already-implemented | `CHECK_TRIAGE op=post stage=` in `.github/workflows/check_failure_triage.yml` (#9036), plus the reason-coded dedup failure in the collect step. |
+| Reliability 4 (Semble availability) | rejected | The poller defaults to `SEMBLE_BOOTSTRAP_MODE=lazy` (`.github/workflows/orchestrate_poll.yml`), so `SEMBLE_AVAILABLE=false` before the first query is expected. Bootstrap failures already log `SEMBLE_BOOTSTRAP ... state=failed` and `SEMBLE_FALLBACK` in `scripts/semble_helpers.sh`. |
+| AI Memory Health; GH API Call Audit (including the `GH_API_CALL` rollup); Prompt Cache & Memory System; Orchestrator Health; Pipeline Flow Bottlenecks | rejected | Instrumentation only, with no defect established. `GH_PAT_BUDGET` in `scripts/gh_helpers.sh` already reports per-job usage, the state-snapshot artifact and run-substate ledger record per-tick state, and `REVIEWER_PROMPT_COMPONENTS` in `scripts/review_run_reviewers.sh` carries `static_prefix_sha256`. |
+| Executive Summary / Per-Repo Breakdown / Metrics Appendix | informational | No action. |
+| Consolidation Candidates (MERGE-###) / Dead Calls (DEAD-API-###) | informational | The doc reports none. |
