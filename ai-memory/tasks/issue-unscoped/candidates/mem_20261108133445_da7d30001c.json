@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_retro_fanout.sh:221-227 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The new fail-closed branch on `sanitize_codex_prompt_file` cannot fire in production because the shipped helper (scripts/gh_helpers.sh:2895-2929) returns 0 on every path, including `mktemp` failure and the fall-through `rm -f`. An unsanitized prompt can therefore still reach `retro_fanout_model_call`.\n  WHY: Severity disagreement: sonnet and glm rated NIT, gemini and luna rated MAJOR, so the highest (MAJOR, mapped to high) is used. If iconv and python3 are both unusable, the model call goes ahead on an unsanitized prompt.\n- tests/test_workflow_retro_fanout.py:584-637 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The PR description lists the PR's own new tests under \"Inherited failures (also failing on the merge-base)\", although they do not exist on the merge-base.\n  WHY: The gate's \"Failures caused by this change: 0\" therefore does not show that the new fail-closed tests pass on the PR head. The reviewer rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_retro_fanout.sh:221-227 | severity=low (NIT) | confidence=4\n  PROBLEM: The shipped helper (scripts/gh_helpers.sh:2895-2929) never returns non-zero, so the new fail-closed branch cannot fire in production. The unit test only exercises it through an appended stub.\n  WHY: When iconv and python3 are unusable, the prompt stays unsanitized and the model call proceeds. The reviewer calls this a limitation of the shared helper, not a defect in the PR, because changing the helper is outside the approved file list.\n- HARDENING_SUGGESTIONS: after the sanitize call, run a python3 UTF-8 decode check on `${prompt_file}` and `return 1` on failure (about 4 lines changed). HARDENING_RISK_SCORE: 2\n- Two pass-1 items were deliberately not reported: the copilot-pull-request-reviewer `custom_instructions_too_large` check-run failure, and the \"Inherited failures\" listing in the PR body.\n- All other checklist categories: NONE. TASK COMPLETENESS: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_retro_fanout.sh:221-227 | severity=high (MAJOR) | confidence=3\n  PROBLEM: The sanitization contract relies solely on the sanitizer function's exit code.\n  WHY: If `sanitize_codex_prompt_file` fails to sanitize but returns 0, the fan-out sends an unsanitized prompt to the model.\n- HARDENING_SUGGESTIONS: add a post-sanitization UTF-8 validity check with python3 and `return 1` on failure (about 4 lines changed). HARDENING_RISK_SCORE: 3\n- All other checklist categories: NONE. TASK COMPLETENESS: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_retro_fanout.sh:223-229 (related helper scripts/gh_helpers.sh:2902, 2928-2929) | severity=high (MAJOR) | confidence=4\n  PROBLEM: The new check relies on `sanitize_codex_prompt_file` returning non-zero on failure, but the helper returns success when `mktemp` fails and on its fall-through cleanup path.\n  WHY: If the helper cannot create its temp file, it returns 0 without changing the prompt, so `retro_fanout_model_call` runs on the original prompt instead of the repo failing before the model call.\n- All other checklist categories: NONE. TASK COMPLETENESS: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_retro_fanout.sh:221-227 (interacting with scripts/gh_helpers.sh:2895-2929) | severity=low (NIT) | confidence=4\n  PROBLEM: The shipped `sanitize_codex_prompt_file` returns 0 on every path, so the new fail-closed branch cannot fire. The code comment at line 222 and the changelog headline in changelog.d/wfopt-2026-10-07-3-retro-fanout-prompt-checks.md overstate what is enforced.\n  WHY: When iconv and python3 cannot rewrite the prompt, the helper silently no-ops and the model call at line 229 proceeds. The reviewer says the in-scope fix is to correct the comment and changelog wording, since scripts/gh_helpers.sh is outside the issue's `files_touched` grant.\n- tests/test_workflow_retro_fanout.py:584-637 | severity=low (NIT) | confidence=4\n  PROBLEM: The PR description lists the PR's own new tests under \"Inherited failures (also failing on the merge-base)\", although they do not exist on the merge-base.\n  WHY: The gate's \"Failures caused by this change: 0\" does not establish that the new fail-closed tests pass on the PR head. The PR-head CI test jobs were still in_progress at review time.\n- HARDENING_SUGGESTIONS: add a strict python3 UTF-8 decode check on `${prompt_file}` after the sanitize branch and `return 1` on failure (about 5 lines changed). HARDENING_RISK_SCORE: 3\n- All other checklist categories: NONE. TASK COMPLETENESS: NONE.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "eb0f009a7b65b1a032d7a98e8b0e1d837d179d454d487d22dab20a89a67f2cfb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9062,
+    "run_id": "42483500939",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42483500939",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108133445_da7d30001c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9062,
+    "run_id": "42483500939"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T13:34:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
