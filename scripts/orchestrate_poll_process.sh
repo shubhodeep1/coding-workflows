@@ -31958,9 +31958,6 @@ ${RB_FIX_DESC}
       fi
 
       echo "  Issue #${if_issue} has implementation-failed (no-op state=${OBSERVED_NOOP_COUNT}, ancestors=${ANCESTOR_NOOP_COUNT}, cap=${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
-
-      # Increment no-op counter before re-issuing
-      bump_impl_noop_count "${IF_LOCAL_ID}"
     else
       echo "  Issue #${if_issue} has implementation-failed (${IF_MODE}; blockers resolved). Closing and re-issuing..."
     fi
@@ -31980,22 +31977,23 @@ ${RB_FIX_DESC}
       IF_BODY=""
     fi
 
+    # BUG-002 (analysis/workflow-optimization-2026-10-07-2.md): a failed
+    # read left the title empty, the replacement create then failed, and the
+    # source had already been closed, so the task was lost. Defer with no
+    # mutation (no label, close, no-op counter or state change); the next
+    # poll cycle retries the read.
+    if [ -z "${IF_ISSUE_JSON}" ] || [ -z "${IF_TITLE}" ] || [ "${IF_TITLE}" = "null" ]; then
+      echo "::warning::IMPL_FAILED_REISSUE issue=${if_issue} outcome=deferred reason=source_unreadable"
+      continue
+    fi
+
     sync_implementation_fixup_blockers "${if_issue}" "${IF_LOCAL_ID}" "${WAVE_IDX}" "${IF_COMMENTS_JSON}" || true
     if [ "${SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED:-false}" = "true" ]; then
       IMPL_FAILED_STATE_CHANGED=true
     fi
 
-    # Close the failed issue
-    ensure_label_exists "ai:closed"
-    gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-      --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
-    if [ "${IF_MODE}" = "post-codex-validation" ]; then
-      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-        -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this source task is being re-issued with blocker-sequenced guidance." 2>/dev/null || true
-    else
-      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-        -c "Closing: implementation produced no changes. Re-issuing with additional guidance." 2>/dev/null || true
-    fi
+    # The source is closed only after the replacement is confirmed (see the
+    # confirmed-create branch below), so a failed create leaves it retryable.
 
     # Create replacement issue with extra guidance
     if [ "${IF_MODE}" = "post-codex-validation" ]; then
@@ -32045,23 +32043,58 @@ REISSUE_EOF
       --body "${NEW_BODY}" \
       --label "ai:clarification" \
       --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
+    # Reset per iteration so a value from an earlier if_issue can never
+    # confirm a failed create.
+    NEW_ISSUE_NUM=""
     if [ -n "${NEW_ISSUE_URL}" ]; then
       NEW_ISSUE_URL_CLEAN="$(printf '%s\n' "${NEW_ISSUE_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
       NEW_ISSUE_NUM="$(basename "${NEW_ISSUE_URL_CLEAN%%[?#]*}")"
+    fi
+    # Confirmed create: only now rewrite state, bump the no-op counter, and
+    # relabel/close the source (BUG-002).
+    if [[ "${NEW_ISSUE_NUM}" =~ ^[0-9]+$ ]]; then
       echo "  Created replacement issue #${NEW_ISSUE_NUM} for failed #${if_issue}."
 
       # Update state file: replace the old issue number with the new one
       # (impl_noop_count is preserved on the issue entry since we only
       # change github_issue, not the issue object itself)
-      if [[ "${NEW_ISSUE_NUM}" =~ ^[0-9]+$ ]]; then
-        jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
-          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      if jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+        :
+      else
+        # The replacement exists, so the source is still closed below;
+        # leaving it open would create another replacement every cycle.
+        rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+        echo "::warning::IMPL_FAILED_REISSUE issue=${if_issue} outcome=state_update_failed new_issue=${NEW_ISSUE_NUM}"
       fi
+
+      # Increment the no-op counter only after the replacement is confirmed,
+      # so a failed create does not spend MAX_IMPL_NOOP_REISSUES. The counter
+      # is keyed by local_id, so the github_issue rewrite above is harmless.
+      if [ "${IF_MODE}" = "no-op-implementation" ]; then
+        bump_impl_noop_count "${IF_LOCAL_ID}"
+      fi
+
+      # Close the failed issue
+      ensure_label_exists "ai:closed"
+      gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+        --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+      if [ "${IF_MODE}" = "post-codex-validation" ]; then
+        gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this source task was re-issued as #${NEW_ISSUE_NUM} with blocker-sequenced guidance." 2>/dev/null || true
+      else
+        gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: implementation produced no changes. Re-issued as #${NEW_ISSUE_NUM} with additional guidance." 2>/dev/null || true
+      fi
+      echo "IMPL_FAILED_REISSUE issue=${if_issue} outcome=reissued new_issue=${NEW_ISSUE_NUM} mode=${IF_MODE}"
 
       tg_notify "Re-issued implementation-failed issue #${if_issue} as #${NEW_ISSUE_NUM}: ${IF_TITLE}"$'\n'"Old issue: $(_gh_url "issues/${if_issue}")"$'\n'"New issue: $(_gh_url "issues/${NEW_ISSUE_NUM}")" "DEBUG"
       IMPL_FAILED_STATE_CHANGED=true
     else
       echo "::warning::Could not create replacement issue for #${if_issue}."
+      # The source keeps ai:implementation-failed and the state is untouched,
+      # so the next poll cycle selects it again and retries the create.
+      echo "IMPL_FAILED_REISSUE issue=${if_issue} outcome=deferred reason=create_failed"
     fi
   done < <(echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "implementation-failed") | .github_issue')
 

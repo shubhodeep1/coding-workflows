@@ -1395,6 +1395,9 @@ esac
 			issues[str(inum)] = {
 				"labels": list(labels),
 				"comments": issue_comment_entries,
+				# A real issue always has a title; the implementation-failed
+				# re-issue loop defers an issue whose title reads empty (BUG-002).
+				"title": f"Issue {inum}",
 				"body": issue_bodies.get(inum, f"Issue {inum}"),
 				"closed": bool(issue_closed.get(inum, False)),
 				"author_login": str(issue_authors.get(inum, {}).get("login", "octocat")),
