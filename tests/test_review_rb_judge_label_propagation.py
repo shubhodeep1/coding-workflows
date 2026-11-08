@@ -810,6 +810,69 @@ def test_close_and_reissue_carries_parent_orchestrator_metadata_before_reissue_f
 	assert "REISSUE_ORCHESTRATOR_METADATA_CARRIED parent=41 lines=5" in state["_stdout"]
 
 
+def test_close_and_reissue_carries_wave_issue_metadata_with_bare_integration_branch() -> None:
+	"""Regression for project #8969 (2026-11-07).
+
+	Wave issues write ``- Integration branch: orchestrator/project-N`` with no
+	backticks.  The parser only accepted the backticked form, so reissue #8994
+	of wave issue #8970 dropped ``Local ID``, ``Priority`` and ``Managed by``
+	and carried only the two base-derived lines."""
+	parent_body = textwrap.dedent(
+		"""\
+		Phase 1 work.
+
+		---
+		**Orchestrator metadata** (do not edit)
+		- Tracking issue: #8969
+		- Integration branch: orchestrator/project-8969
+		- Local ID: `phase1-broker-chatgpt-store-token-action`
+		- Priority: 1
+		- Managed by: AI Orchestrator
+		"""
+	)
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={
+			"FIRST_ISSUE_LINEAGE_BODY": parent_body,
+			"PR_BASE_REF": "orchestrator/project-8969",
+		},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	lines = body.split("\n")
+	for marker in (
+		"- Tracking issue: #8969",
+		"- Integration branch: `orchestrator/project-8969`",
+		"- Local ID: `phase1-broker-chatgpt-store-token-action`",
+		"- Priority: 1",
+		"- Managed by: AI Orchestrator",
+	):
+		assert lines.count(marker) == 1, f"expected exactly one {marker!r} line in:\n{body}"
+	assert "REISSUE_ORCHESTRATOR_METADATA_CARRIED parent=41 lines=5" in state["_stdout"]
+	assert "Ignoring parent issue orchestrator metadata" not in state["_stdout"] + state["_stderr"]
+
+
+def test_close_and_reissue_rejects_half_backticked_integration_branch() -> None:
+	parent_body = textwrap.dedent(
+		"""\
+		---
+		**Orchestrator metadata** (do not edit)
+		- Tracking issue: #8969
+		- Integration branch: `orchestrator/project-8969
+		- Local ID: `phase1`
+		"""
+	)
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={
+			"FIRST_ISSUE_LINEAGE_BODY": parent_body,
+			"PR_BASE_REF": "orchestrator/project-8969",
+		},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	assert "- Local ID: `phase1`" not in body
+	assert "REISSUE_ORCHESTRATOR_METADATA_CARRIED parent=41 lines=2" in state["_stdout"]
+
+
 def test_close_and_reissue_rejects_parent_metadata_inconsistent_with_pr_base() -> None:
 	state = _run_close_and_reissue(
 		["ai:orchestrator-managed"],

@@ -7203,6 +7203,185 @@ resolve_security_pass_fix_successor() {
   return 1
 }
 
+# resolve_review_blocked_reissue_successor <closed_issue_num>
+#
+# Find the replacement issue that the review pipeline's review-blocked
+# judge (scripts/review_rb_judge.sh, `close_and_reissue`) opened for a
+# wave issue it closed.
+#
+# Why this exists: the poller's own review-blocked judge re-points wave
+# state when it reissues, but the review_autofix judge only writes body
+# markers.  Nothing mapped its reissue into wave state, so the closed
+# predecessor read as closed-without-merge and the wave judge opened a
+# second redo for the same work.  Project #8969: #8970 was reissued as
+# #8994 at 13:23Z on 2026-11-07, the poller marked #8970 closed at 13:31Z,
+# and the wave judge opened duplicate #8995 at 13:34Z.  Both PRs (#9003,
+# #9005) built Phase 1; #9003 merged and #9005 was left conflicting.
+#
+# Match rules (all required), read from the closed issue's REST timeline
+# `cross-referenced` events (the reissue body names `#<closed>`, so the
+# reference is recorded there):
+#   - the source is an issue (not a PR) in this repository, numbered
+#     above the closed issue;
+#   - it carries `ai:orchestrator-managed` (only collaborators and the
+#     pipeline can label, so forged body markers alone are not enough);
+#   - its body has the exact lines `- Tracking issue: #<TRACKING_NUM>` and
+#     `- Type: review-blocked-reissue`, and a line starting
+#     `- Replaces: #<closed>` followed by a space or end of line.
+# The highest matching number wins.  A reissue of a reissue is followed on
+# a later tick, once the adopted successor itself reads as closed.
+#
+# API cost (§15): one paginated REST `GET issues/<n>/timeline`, issued only
+# for a current-wave issue that is closed with no merged implementation PR.
+# The per-tick timeline read in the reconcile loop goes through
+# gh_issue_timeline_with_cross_refs, whose GraphQL shape keeps only the
+# number of an Issue source (no body, labels or state), so it cannot
+# identify a reissue.  Once adopted, the predecessor leaves the wave and
+# is never read again.
+#
+# Args:
+#   closed_issue_num — the closed wave issue number recorded in state
+# Stdout:
+#   on a match, one compact JSON object:
+#   {"number": <n>, "state": "open"|"closed", "labels": [<name>, ...]}
+# Returns:
+#   0 — successor found (JSON on stdout)
+#   1 — lookup succeeded and no successor exists
+#   2 — lookup inconclusive (API or parse failure); callers keep state as
+#       it is and retry next tick (fail open)
+resolve_review_blocked_reissue_successor() {
+  local closed_issue_num="$1"
+  local rb_reissue_timeline_file rb_reissue_successor_json
+
+  [[ "${closed_issue_num}" =~ ^[0-9]+$ ]] || return 2
+  [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]] || return 2
+
+  rb_reissue_timeline_file="${RUNTIME_DIR}/rb_reissue_timeline_${TRACKING_NUM}_${closed_issue_num}.json"
+  rm -f "${rb_reissue_timeline_file}"
+  if ! gh_retry_to_file "${rb_reissue_timeline_file}" gh api --paginate \
+    "repos/${GITHUB_REPOSITORY}/issues/${closed_issue_num}/timeline?per_page=100"; then
+    rm -f "${rb_reissue_timeline_file}"
+    return 2
+  fi
+  if [ ! -s "${rb_reissue_timeline_file}" ]; then
+    rm -f "${rb_reissue_timeline_file}"
+    return 2
+  fi
+  if ! rb_reissue_successor_json="$(jq -sc \
+    --arg tracking_marker "- Tracking issue: #${TRACKING_NUM}" \
+    --arg type_marker "- Type: review-blocked-reissue" \
+    --arg replaces_prefix "- Replaces: #${closed_issue_num}" \
+    --arg repo_suffix "/repos/${GITHUB_REPOSITORY}" \
+    --argjson closed_issue "${closed_issue_num}" '
+      def body_lines: (.body // "") | split("\n") | map(rtrimstr("\r"));
+      if length == 0 or (all(.[]; type == "array") | not) then
+        error("timeline pagination output must contain JSON arrays")
+      else
+        [
+          .[][]
+          | select(.event == "cross-referenced")
+          | .source.issue
+          | select(type == "object")
+          | select(.pull_request == null)
+          | select((.number | type) == "number" and .number > $closed_issue)
+          | select(((.repository_url // "") | ascii_downcase | endswith($repo_suffix | ascii_downcase)))
+          | select(any((.labels // [])[]; (.name? // .) == "ai:orchestrator-managed"))
+          | . as $issue
+          | ($issue | body_lines) as $lines
+          | select(($lines | index($tracking_marker)) != null)
+          | select(($lines | index($type_marker)) != null)
+          | select(any($lines[]; . == $replaces_prefix or startswith($replaces_prefix + " ")))
+          | {
+              number: $issue.number,
+              state: (if $issue.state == "closed" then "closed" else "open" end),
+              labels: [($issue.labels // [])[] | (.name? // .) | select(type == "string")]
+            }
+        ]
+        | max_by(.number) // empty
+      end
+    ' "${rb_reissue_timeline_file}" 2>/dev/null)"; then
+    rm -f "${rb_reissue_timeline_file}"
+    return 2
+  fi
+  rm -f "${rb_reissue_timeline_file}"
+  if [ -n "${rb_reissue_successor_json}" ]; then
+    printf '%s\n' "${rb_reissue_successor_json}"
+    return 0
+  fi
+  return 1
+}
+
+# adopt_review_blocked_reissue_successor <closed_issue_num> <successor_num>
+#
+# Re-point the current-wave entry of a closed issue at its review-blocked
+# reissue, the same writes the poller's own close_and_reissue arm makes:
+# `.issue_number_map[<local_id>]` and the wave entry's `github_issue`, with
+# status reset to `pending` so this tick's check-wave-status reads the
+# successor's labels.  Writes STATE_FILE only; the caller persists it.
+#
+# Returns 1 when no non-terminal-merged entry in the current wave holds
+# <closed_issue_num>, and 3 when <successor_num> is already tracked by any
+# wave entry or issue_number_map value (no double mapping).  An
+# `orphan-rb-<successor>` entry the orphan sweep injected into the current
+# wave does not count as tracked: adoption removes it, so the successor keeps the original local id.
+# Returns 2 on a state read/write failure.
+adopt_review_blocked_reissue_successor() {
+  local closed_issue_num="$1"
+  local successor_num="$2"
+  local rb_reissue_local_id
+
+  [[ "${closed_issue_num}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${successor_num}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${WAVE_IDX:-}" =~ ^[0-9]+$ ]] || return 2
+
+  if ! rb_reissue_local_id="$(jq -r \
+    --argjson wi "${WAVE_IDX}" \
+    --argjson closed_issue "${closed_issue_num}" \
+    --argjson successor "${successor_num}" '
+      if (
+        [(.waves // []) | to_entries[] | .key as $k | .value.issues[]?
+          | select(($k == $wi and .id == ("orphan-rb-" + ($successor | tostring))) | not)
+          | .github_issue | tostring] | index($successor | tostring)
+      ) != null then "__rb_reissue_already_tracked__"
+      elif (
+        [(.issue_number_map // {}) | to_entries[] | .value | tostring] | index($successor | tostring)
+      ) != null then "__rb_reissue_already_tracked__"
+      else
+        [.waves[$wi].issues[]?
+          | select((.github_issue | tostring) == ($closed_issue | tostring))
+          | select((.status // "") != "merged" and (.status // "") != "skipped")
+          | .id
+          | select(type == "string" and length > 0)
+        ] | first // empty
+      end
+    ' "${STATE_FILE}" 2>/dev/null)"; then
+    return 2
+  fi
+  [ -n "${rb_reissue_local_id}" ] || return 1
+  [ "${rb_reissue_local_id}" != "__rb_reissue_already_tracked__" ] || return 3
+
+  if ! jq --arg lid "${rb_reissue_local_id}" \
+    --argjson wi "${WAVE_IDX}" \
+    --argjson successor "${successor_num}" \
+    --argjson now "$(date +%s)" '
+      .waves[$wi].issues |= map(select(.id != ("orphan-rb-" + ($successor | tostring))))
+      | .issue_number_map[$lid] = $successor
+      | (.waves[$wi].issues[] | select(.id == $lid)) |= (
+          .github_issue = $successor
+          | .status = "pending"
+          | .last_seen_phase = ""
+          | .status_since_ts = $now
+          | .stall_recovery_count = 0
+        )
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
+    rm -f "${STATE_FILE}.tmp"
+    return 2
+  fi
+  mv "${STATE_FILE}.tmp" "${STATE_FILE}" || return 2
+  printf '%s\n' "${rb_reissue_local_id}"
+  return 0
+}
+
 security_pass_closed_fix_failure() {
   local issue_number="$1"
 
@@ -30478,6 +30657,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # with PERSIST_ORCH_CONTEXT_ENABLED, never persisted (PR_STATES_JSON unchanged).
   PERSIST_ORCH_MERGED_PRS_JSON='{}'
   RECONCILE_LABELS_CHANGED=false
+  RB_REISSUE_ADOPTION_CANDIDATES=()
+  RB_REISSUE_ADOPTION_STATE_CHANGED=false
   for inum in ${ISSUE_NUMS}; do
     if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
       continue
@@ -30533,7 +30714,108 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       RECONCILE_LABELS_CHANGED=true
       LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" --argjson labels "${AFTER_LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
     fi
+
+    # A closed issue with no merged PR may have been reissued by the review
+    # pipeline's review-blocked judge; see resolve_review_blocked_reissue_successor.
+    # Merged, implementation-failed (own reissue path) and skipped issues are left alone.
+    if [ "${ISSUE_STATE}" = "closed" ] && [ "${PR_MERGED}" != "true" ] \
+      && ! printf '%s' "${AFTER_LABELS}" | jq -e 'index("ai:merged") != null or index("ai:implementation-failed") != null' >/dev/null 2>&1 \
+      && jq -e --argjson wi "${WAVE_IDX}" --arg gh "${inum}" \
+        'any(.waves[$wi].issues[]?; (.github_issue | tostring) == $gh and (.status // "") != "merged" and (.status // "") != "skipped")' \
+        "${STATE_FILE}" >/dev/null 2>&1; then
+      _rb_reissue_rc=0
+      _rb_reissue_json="$(resolve_review_blocked_reissue_successor "${inum}")" || _rb_reissue_rc=$?
+      if [ "${_rb_reissue_rc}" -eq 0 ]; then
+        RB_REISSUE_ADOPTION_CANDIDATES+=("${inum}"$'\t'"${_rb_reissue_json}")
+      elif [ "${_rb_reissue_rc}" -eq 2 ]; then
+        echo "RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${inum} outcome=inconclusive successor=none"
+      fi
+      unset _rb_reissue_rc _rb_reissue_json
+    fi
   done
+
+  # Adopt review-blocked reissues found above before wave status, stall
+  # recovery or the wave judge read the closed predecessor as a failure.
+  for _rb_reissue_candidate in ${RB_REISSUE_ADOPTION_CANDIDATES[@]+"${RB_REISSUE_ADOPTION_CANDIDATES[@]}"}; do
+    _rb_reissue_closed="${_rb_reissue_candidate%%$'\t'*}"
+    _rb_reissue_json="${_rb_reissue_candidate#*$'\t'}"
+    _rb_reissue_num="$(printf '%s' "${_rb_reissue_json}" | jq -r '.number // empty' 2>/dev/null || true)"
+    [[ "${_rb_reissue_num}" =~ ^[0-9]+$ ]] || continue
+    _rb_reissue_adopt_rc=0
+    _rb_reissue_local_id="$(adopt_review_blocked_reissue_successor "${_rb_reissue_closed}" "${_rb_reissue_num}")" || _rb_reissue_adopt_rc=$?
+    if [ "${_rb_reissue_adopt_rc}" -ne 0 ]; then
+      if [ "${_rb_reissue_adopt_rc}" -eq 1 ]; then
+        echo "RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=skipped successor=${_rb_reissue_num} reason=no_wave_entry"
+      elif [ "${_rb_reissue_adopt_rc}" -eq 3 ]; then
+        echo "RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=skipped successor=${_rb_reissue_num} reason=already_tracked"
+      else
+        echo "::warning::RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=error successor=${_rb_reissue_num} reason=state_write_failed"
+      fi
+      continue
+    fi
+    echo "RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=adopted successor=${_rb_reissue_num} local_id=${_rb_reissue_local_id}"
+    add_healing_note "Issue #${_rb_reissue_closed}: review-blocked reissue #${_rb_reissue_num} adopted for \`${_rb_reissue_local_id}\` (rb_reissue_adopted)"
+    # Feed this tick's wave-status read from the timeline payload; the full
+    # label/PR reconcile for the successor runs on the next tick.
+    _rb_reissue_issue_nums=""
+    for _rb_reissue_inum in ${ISSUE_NUMS}; do
+      # An adopted orphan-rb-<successor> entry was removed; drop its number.
+      [ "${_rb_reissue_inum}" != "${_rb_reissue_num}" ] || continue
+      if [ "${_rb_reissue_inum}" = "${_rb_reissue_closed}" ]; then
+        _rb_reissue_inum="${_rb_reissue_num}"
+      fi
+      _rb_reissue_issue_nums="${_rb_reissue_issue_nums} ${_rb_reissue_inum}"
+    done
+    ISSUE_NUMS="${_rb_reissue_issue_nums}"
+    # check-wave-status reads PR truth by issue number.  Without an entry, a
+    # closed successor whose implementation PR merged before ai:merged was
+    # applied would read as closed-without-merge on this tick.
+    _rb_reissue_pr_inconclusive=false
+    # An existing {state:"unknown", merged:false} entry (an orphan-rb entry the
+    # reconcile loop read, possibly after a failed lookup) is not authoritative:
+    # look the PR up again so a failed read cannot read as closed-without-merge.
+    if ! printf '%s' "${PR_STATES_JSON}" | jq -e --arg key "${_rb_reissue_num}" 'has($key) and ((.[$key].state // "unknown") != "unknown" or .[$key].merged == true)' >/dev/null 2>&1; then
+      _rb_reissue_pr_state="unknown"
+      _rb_reissue_pr_merged="false"
+      _rb_reissue_pr_inconclusive=false
+      if printf '%s' "${_rb_reissue_json}" | jq -e '.state == "closed" and (.labels | index("ai:merged") == null)' >/dev/null 2>&1; then
+        if _rb_reissue_prs="$(_issue_cross_ref_pr_numbers_unique "${_rb_reissue_num}" 2>/dev/null)"; then
+          for _rb_reissue_pr in ${_rb_reissue_prs}; do
+            [[ "${_rb_reissue_pr}" =~ ^[0-9]+$ ]] || continue
+            _rb_reissue_pr_json="$(_fetch_pr_json "${_rb_reissue_pr}")"
+            if [ -z "${_rb_reissue_pr_json}" ] || [ "${_rb_reissue_pr_json}" = "{}" ]; then
+              _rb_reissue_pr_inconclusive=true
+              continue
+            fi
+            _pr_json_is_issue_implementation_pr "${_rb_reissue_num}" "${_rb_reissue_pr_json}" || continue
+            _rb_reissue_pr_state="$(_jq_field "${_rb_reissue_pr_json}" '.state' 'open|closed|merged')"
+            _rb_reissue_pr_merged="$(_jq_field "${_rb_reissue_pr_json}" '.merged_at != null' 'true|false')"
+            [ "${_rb_reissue_pr_merged}" != "true" ] || break
+          done
+        else
+          _rb_reissue_pr_inconclusive=true
+        fi
+      fi
+      [ "${_rb_reissue_pr_merged}" != "true" ] || _rb_reissue_pr_inconclusive=false
+      if [ "${_rb_reissue_pr_inconclusive}" != "true" ]; then
+        PR_STATES_JSON="$(printf '%s' "${PR_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" --arg state "${_rb_reissue_pr_state:-unknown}" --arg merged "${_rb_reissue_pr_merged:-false}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || printf '%s' "${PR_STATES_JSON}")"
+      fi
+    fi
+    LABELS_JSON="$(printf '%s' "${LABELS_JSON}" | jq -c --arg key "${_rb_reissue_num}" --argjson succ "${_rb_reissue_json}" '. + {($key): $succ.labels}' 2>/dev/null || printf '%s' "${LABELS_JSON}")"
+    ISSUE_STATES_JSON="$(printf '%s' "${ISSUE_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" --argjson succ "${_rb_reissue_json}" '. + {($key): $succ.state}' 2>/dev/null || printf '%s' "${ISSUE_STATES_JSON}")"
+    # A failed PR lookup must not read as merged:false (closed-without-merge
+    # would let the wave judge open a duplicate redo).  Treat the successor as
+    # open for this tick only; the next tick's reconcile reads its real state.
+    if [ "${_rb_reissue_pr_inconclusive:-false}" = "true" ]; then
+      echo "::warning::RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=inconclusive successor=${_rb_reissue_num} reason=successor_pr_lookup_failed"
+      ISSUE_STATES_JSON="$(printf '%s' "${ISSUE_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" '. + {($key): "open"}' 2>/dev/null || printf '%s' "${ISSUE_STATES_JSON}")"
+    fi
+    RB_REISSUE_ADOPTION_STATE_CHANGED=true
+  done
+  if [ "${RB_REISSUE_ADOPTION_STATE_CHANGED}" = "true" ]; then
+    post_state_comment || true
+  fi
+  unset _rb_reissue_candidate _rb_reissue_closed _rb_reissue_json _rb_reissue_num _rb_reissue_adopt_rc _rb_reissue_local_id _rb_reissue_issue_nums _rb_reissue_inum _rb_reissue_pr _rb_reissue_prs _rb_reissue_pr_json _rb_reissue_pr_state _rb_reissue_pr_merged _rb_reissue_pr_inconclusive
 
   # ---------------------------------------------------------------
   # Update issue phase timestamps for stall tracking
