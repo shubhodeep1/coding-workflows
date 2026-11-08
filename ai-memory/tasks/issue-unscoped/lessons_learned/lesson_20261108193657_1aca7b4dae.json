@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-08T19:36:57Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=agents.md:1830-1996; cited_path=CLAUDE.md; files_touched=CHANGELOG.md, agents.md, agents.d/*.md (deleted fragments), changelog.d/*.md (deleted fragments).",
+  "phase": "review_autofix",
+  "pr_number": 9077,
+  "record_id": "lesson_20261108193657_1aca7b4dae",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "CLAUDE.md",
+    "agents.md",
+    "CHANGELOG.md",
+    "agents.d/*.md (deleted fragments)",
+    "changelog.d/*.md (deleted fragments)"
+  ]
+}
