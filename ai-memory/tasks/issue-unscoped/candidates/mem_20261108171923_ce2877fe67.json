@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:181 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: In unblock_fetch_comments, the pipeline `gh_retry gh api ... | jq -s 'add // []'` fails to reliably propagate failure when GitHub API calls are exhausted if the script lacks `set -o pipefail`.\n  WHY: If gh_retry fails but jq succeeds, the function returns success with an empty comment list instead of taking the fail-closed comments_unavailable skip. Severity MAJOR. Disputed: anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash found that `set -uo pipefail` at scripts/unblock_judge.sh:130 makes the pipeline fail, so the fail-closed branch still runs.\n- External check run copilot-pull-request-reviewer (run 42500290174, job 128791363127; no repository file) | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The check fails with HTTP 422 `custom_instructions_too_large` and produces no review.\n  WHY: The failure is external to the changed code, but the PR has no Copilot review coverage. Severity NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CONSIST-001: \"Source the verified `scripts/gh_helpers.sh` and use `gh_retry` for read-only calls\", preserving each existing fail-closed skip and pagination check.\n  expected_change_site: scripts/unblock_judge.sh, the remaining read-only `gh api` GETs\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: Only five reads are wrapped (comments, identity, item metadata, item re-check, cited run; lines 184, 1673, 1678, 2338, 2459). Raw GETs remain at lines 363, 404, 418, 432, 456-457, 876, 896, 1716 and 2085, and repository metadata, issue state, PR metadata and compare status are also unwrapped. The changelog and analysis/recommendation-processing-report.md scope the change to \"five read-only lookups\", so this is likely deliberate. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- External check run copilot-pull-request-reviewer (run 42500290174) | severity=low | confidence=5\n  PROBLEM: The check fails with `custom_instructions_too_large` (422). The PR touches neither AGENTS.md nor CLAUDE.md.\n  WHY: No change in this diff can fix it, so it is not a defect in the changed code. It leaves the PR without Copilot review coverage. Severity NIT.\n- TASK_GAP:\n  Requirement: CONSIST-001 says to \"Source the verified `scripts/gh_helpers.sh` and use `gh_retry` for read-only calls\".\n  Expected change site: scripts/unblock_judge.sh, the remaining raw read-only `gh api` GETs.\n  Evidence of absence: The PR wraps the five reads the analysis document names. Other raw GETs remain, for example repository metadata, issue state, PR metadata and compare status. The changelog and analysis/recommendation-processing-report.md scope the change to \"five read-only lookups\", so this is a deliberate limit. SEVERITY: NIT, ISSUE_CONFIDENCE: 2.\n- Checked and rejected: the disputed unblock_fetch_comments finding at scripts/unblock_judge.sh:184 does not hold, because `set -uo pipefail` at line 130 makes the pipeline fail.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:181 | severity=high | confidence=4\n  PROBLEM: In unblock_fetch_comments, the pipeline `gh_retry gh api ... | jq -s 'add // []'` fails to reliably propagate failure when GitHub API calls are exhausted if the script lacks `set -o pipefail`.\n  WHY: If gh_retry fails but jq succeeds, the function returns success with an empty comment list. The judge then proceeds with incomplete evidence instead of the fail-closed skip (reason=comments_unavailable). Source severity MAJOR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- External check run copilot-pull-request-reviewer (run 42500290174, job 128791363127) | severity=low | confidence=5\n  PROBLEM: The reviewer check exits before producing a review (HTTP 422 `custom_instructions_too_large`).\n  WHY: The failure is external to the changed code. Severity NIT.\n- TASK_GAP:\n  Requirement: CONSIST-001 recommends using `gh_retry` for read-only calls in `scripts/unblock_judge.sh`, preserving existing fail-closed skips and pagination checks.\n  Expected change site: The remaining read-only GitHub API calls in `scripts/unblock_judge.sh`.\n  Evidence of absence: The diff wraps five reads, but other direct `gh api` calls remain: issue, PR, compare, variable and secret lookups in `unblock_hold_condition` (lines 363, 404, 418, 432, 456-457), heal-report issue and runs reads (lines 876, 896), and PR and check-run reads (lines 1716, 2085). SEVERITY: NIT, ISSUE_CONFIDENCE: 4.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP:\n  Requirement: CONSIST-001 (analysis/workflow-optimization-2026-10-07-3.md): \"The judge runs from verified support but makes raw `gh api` reads for comments, identity, item metadata, and cited runs... Recommended fix: Source the verified `scripts/gh_helpers.sh` and use `gh_retry` for read-only calls, preserving each existing fail-closed skip and pagination check.\"\n  Expected change site: scripts/unblock_judge.sh, the remaining read-only `gh api` GETs on the judge paths.\n  Evidence of absence: Only five reads are wrapped (lines 184, 1673, 1678, 2338, 2459). Raw GETs remain at scripts/unblock_judge.sh:404, 418, 432, 456-457 and 1716. The processing report scopes the change to \"the five read-only lookups\", so this may be a deliberate limit. SEVERITY: NIT, ISSUE_CONFIDENCE: 3.\n- Verification note: the pass-1 MAJOR on unblock_fetch_comments was rejected. `set -uo pipefail` at scripts/unblock_judge.sh:130 has no later toggle, and gh_retry returns 1 with empty stdout (scripts/gh_helpers.sh:1226-1281), so the fail-closed branch at scripts/unblock_judge.sh:185-186 runs. The sourcing of gh_helpers.sh (scripts/unblock_judge.sh:155-158) follows the precedent at scripts/check_failure_triage.sh:365-366.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "df59ad6c058a97a14b9a1f5417710b8381b663155484c7e9c7414ff016b44a77",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9065,
+    "run_id": "42502395519",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42502395519",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108171923_ce2877fe67",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9065,
+    "run_id": "42502395519"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T17:19:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
