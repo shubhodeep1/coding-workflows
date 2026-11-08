@@ -5,13 +5,24 @@
   "entry_id": "processed_command_9059_6721757319_approved",
   "issue_number": 9059,
   "metadata": {
+    "branch": "ai/issue-9059",
+    "changed_files": [
+      "changelog.d/wfopt-2026-10-07-3-retro-fanout-prompt-checks.md",
+      "scripts/workflow_retro_fanout.sh",
+      "tests/test_workflow_retro_fanout.py"
+    ],
+    "issue_number": 9059,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9059",
+    "pr_number": 9062,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9062",
+    "run_attempt": "1",
+    "run_id": "42482499989",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42482499989"
   },
   "run_attempt": 1,
   "run_id": "42482499989",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-08T12:58:19Z",
+  "status": "completed",
+  "timestamp": "2026-11-08T13:09:13Z",
   "workflow": "implement"
 }
