@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:29482-29511,29578-29607 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The inconclusive-lookup handling runs only when the successor is absent from `PR_STATES_JSON`. If the orphan sweep has already put the successor in `ISSUE_NUMS`, the initial reconcile writes a `merged=false` entry even when its PR lookup failed, so the adoption guard is skipped.\n  WHY: Adoption then supplies the successor's closed state without `ai:merged`, so `check-wave-status` marks it failed and the wave judge can open a duplicate redo. Reviewers rated this MAJOR. Sonnet-5_5 and minimax-m3 examined the same path and judged it unreachable or unlikely, so they did not report it.\n- scripts/orchestrate_poll_process.sh:29579-29584 | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: A stale `{state:\"unknown\", merged:false}` entry written by a failed initial lookup is indistinguishable from an authoritative entry, so it blocks the guarded re-lookup.\n  WHY: The fail-open contract at lines 29608-29610 (\"A failed PR lookup must not read as merged:false\") is not honored here, so the successor counts as a closed failure for the tick.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description, adoption-loop bullet: when the successor PR lookup fails, no entry is written and the successor counts as open for that tick only (`outcome=inconclusive reason=successor_pr_lookup_failed`), so a failed read never reads as a closed-without-merge failure.\n  expected_change_site: scripts/orchestrate_poll_process.sh, adoption loop PR-state seeding guard (line 29579)\n  confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The inconclusive handling sits only inside `if ! ... 'has($key)'`. No hunk handles the has-entry-but-unknown/false case written at line 29511 after orphan-sweep injection, and the new tests only exercise `PR_STATES_JSON='{}'`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:29579-29584 | severity=MAJOR | confidence=5\n  PROBLEM: The inconclusive-lookup handling runs only when the successor is absent from `PR_STATES_JSON`. When the orphan sweep has already added the successor to `ISSUE_NUMS`, the initial reconcile stores a PR-state entry, defaulting to `merged=false`.\n  WHY: If the successor's PR has merged but `ai:merged` has not yet been applied, adoption skips the guarded lookup because the entry exists. It supplies the successor's closed state without `ai:merged`, so wave-status reconciliation marks it failed and the wave judge can open a duplicate redo.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nHardening suggestion only (HARDENING_RISK_SCORE: 1):\n- scripts/orchestrate_poll_process.sh:29601\n  PROBLEM: `[ \"${_rb_reissue_pr_merged}\" != \"true\" ] || _rb_reissue_pr_inconclusive=false` uses `||` as a side-effect carrier. It is correct but not obvious on read.\n  WHY: Replace it with an explicit `if [ \"${_rb_reissue_pr_merged}\" = \"true\" ]; then ... fi`. This changes no behaviour.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:29482-29511, 29578-29607 | severity=MAJOR | confidence=5\n  PROBLEM: When a reissue is already in `ISSUE_NUMS` as an `orphan-rb-*` entry, the initial reconcile always adds its PR state to `PR_STATES_JSON`, even if linked-PR discovery or every PR fetch failed. Adoption then skips its guarded lookup because that entry exists.\n  WHY: If the successor's PR has merged but `ai:merged` has not yet been applied, adoption replaces the issue state with the closed state but keeps the stale `merged: false` PR state. `check-wave-status` can then mark the adopted item failed and let the wave judge open another redo.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:29579-29604 (interacting with 29511 and 29352-29411/29404) | severity=MAJOR | confidence=5\n  PROBLEM: The inconclusive-lookup handling only runs when the successor is absent from `PR_STATES_JSON`. When the orphan sweep has injected the successor, the initial reconcile writes `{state:\"unknown\", merged:false}` at line 29511 even after a failed lookup, and the adoption guard then skips.\n  WHY: `check-wave-status` receives closed plus `merged:false` for the successor, sets `any_failed=true`, and the wave judge opens a duplicate redo (project #8969, duplicate #8995).\n- scripts/orchestrate_poll_process.sh:29579-29584 | severity=MAJOR | confidence=4\n  PROBLEM: The stale `{state:\"unknown\", merged:false}` entry from a failed initial lookup is not treated as inconclusive, though it is indistinguishable from a fresh failed lookup.\n  WHY: The fail-open contract at lines 29608-29610 is not honored for this composition, so the successor counts as a closed failure this tick.\n- TASK_GAP: Requirement: PR description, adoption-loop bullet: when the successor PR lookup fails, no entry is written and the successor counts as open for that tick only (`outcome=inconclusive reason=successor_pr_lookup_failed`).\n  Expected change site: scripts/orchestrate_poll_process.sh, adoption loop PR-state seeding guard (line 29579)\n  Evidence of absence: The inconclusive handling sits only inside `if ! ... 'has($key)'`. No hunk handles the has-entry-but-unknown/false case, and the new tests only exercise `PR_STATES_JSON='{}'`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "210566a595feab98f2a3e8ccabb550eb40df9dbf7c28b66cbcbfd82c997c6e5d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9020,
+    "run_id": "42435565069",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42435565069",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108020432_dbbcb72cc9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9020,
+    "run_id": "42435565069"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T02:04:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
