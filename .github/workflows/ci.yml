@@ -724,6 +724,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_chatgpt_reviewer_slot.py
 
+      - name: ChatGPT review findings record tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_chatgpt_findings_record.py
+
       - name: CI budget watch tests
         run: |
           set -euo pipefail

@@ -4038,6 +4038,36 @@ jobs:
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
+      # ChatGPT account reviewer trial plan Phase 3 (Refs #8969): per-round
+      # findings record (slot statuses, consolidated issues, editor
+      # dispositions). Fail-open: no secrets, continue-on-error, exit 0.
+      - name: Write review findings record
+        if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
+        continue-on-error: true
+        env:
+          REVIEWER_CHATGPT_SLOT_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_slot || '' }}
+          REVIEWER_CHATGPT_MODEL_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_model || '' }}
+          REVIEWER_CHATGPT_REPLACES_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_replaces || '' }}
+        run: |
+          REVIEW_FINDINGS_RECORD_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_findings_record.py"
+          [ -f "${REVIEW_FINDINGS_RECORD_SCRIPT}" ] || REVIEW_FINDINGS_RECORD_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_findings_record.py"
+          if [ ! -f "${REVIEW_FINDINGS_RECORD_SCRIPT}" ]; then
+            echo "REVIEW_FINDINGS_RECORD: outcome=skipped reason=helper_unavailable"
+            exit 0
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 "${REVIEW_FINDINGS_RECORD_SCRIPT}" write --output "${PREVIOUS_REVIEWS_DIR}/review_findings_record.json" \
+            || echo "::warning::REVIEW_FINDINGS_RECORD: outcome=failed reason=helper_exit"
+
+      - name: Upload review findings record
+        if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: reviewer-findings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.PREVIOUS_REVIEWS_DIR }}/review_findings_record.json
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Clear Serena after editor
         if: always() && env.SERENA_ENABLED == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         continue-on-error: true
