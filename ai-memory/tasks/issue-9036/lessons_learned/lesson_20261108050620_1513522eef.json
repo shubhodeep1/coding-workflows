@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-08T05:06:20Z",
+  "issue_number": 9036,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=copilot-pull-request-reviewer check-run:unspecified; cited_path=copilot-pull-request-reviewer check-run; files_touched=.github/workflows/check_failure_triage.yml, .github/workflows/ci.yml, agents.d/wfopt-2026-10-07-2-triage-post-stage.md, changelog.d/wfopt-2026-10-07-2-triage-post-stage.md, tests/test_check_failure_triage_post_stage.py.",
+  "phase": "review_autofix",
+  "pr_number": 9040,
+  "record_id": "lesson_20261108050620_1513522eef",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer check-run",
+    ".github/workflows/check_failure_triage.yml",
+    ".github/workflows/ci.yml",
+    "agents.d/wfopt-2026-10-07-2-triage-post-stage.md",
+    "changelog.d/wfopt-2026-10-07-2-triage-post-stage.md",
+    "tests/test_check_failure_triage_post_stage.py"
+  ]
+}
