@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- ci.yml:(Pre-push test gate; no line given) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR fails 5 pre-push tests (`tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_pr_watch_guard.py`, `tests/test_workflow_checkout_integration_ref_audit.py`).\n  WHY: The PR pipeline rejects these failures, so the PR cannot merge until they are resolved; the source rated this BLOCKER, mapped here to critical. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash found nothing in the diff that these tests read, and did not raise it as a defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, moving one or more steps out of the `tests-heal-plan-and-validation` job into another job with headroom\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: No step is moved out of `tests-heal-plan-and-validation`, ci.yml lines 998-1009 state \"No step moved out this time\", the 14 serial modules were folded into the existing four shards of the same step, changelog `changelog.d/9045-heal-step-shard-remaining-modules.md` reflects the same, hard constraints (timeout, job and step names, no new required jobs) are met, the approved plan records in-place sharding; severity disagreement: NIT (anthropic_claude-sonnet-5_5, minimax_minimax-m3) vs MAJOR (google_gemini-3_1-flash-lite, openai_gpt-6-luna)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, moving a step from `tests-heal-plan-and-validation` into another job.\n  Evidence of absence: The PR moves no step. It shards the 14 serial modules into the existing four shards inside the same step. The CI comment and changelog say so, citing #7387, #9018 and every other test job already over 15 minutes. The approved plan records in-place sharding. Hard limits are met. Previously evaluated and deferred. The time saving is an unmeasured estimate.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- ci.yml:(Pre-push test gate) | severity=BLOCKER | confidence=5\n  PROBLEM: The PR fails 5 pre-push tests (`tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_pr_watch_guard.py`, `tests/test_workflow_checkout_integration_ref_audit.py`).\n  WHY: The PR pipeline rejects these failures, rendering the PR non-mergeable. These failures must be resolved before merging.\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, moving steps out of `tests-heal-plan-and-validation` into another job.\n  Evidence of absence: The PR keeps the step in its existing job and moves no step out. The author and the approved plan implemented in-place sharding instead.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, moving one or more steps out of the `tests-heal-plan-and-validation` job into a different job with spare budget.\n  Evidence of absence: No diff hunk relocates a step. ci.yml lines 998-1009 say \"No step moved out this time\", and changelog `changelog.d/9045-heal-step-shard-remaining-modules.md` agrees. The 14 modules were folded into the existing 4 local shards. Hard constraints are met. The approved plan (PR comment 6717834140) records in-place sharding. The saving is an acknowledged estimate. Previously deferred by the earlier autofix pass.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the `tests-heal-plan-and-validation` job and the destination CI job with the most headroom.\n  Evidence of absence: The workflow keeps the tests in the original step and shards the modules there. Lines 998-1005 state \"No step moved out this time\"; no step is relocated. Job and step names, timeout and module set are unchanged, but the step-move deliverable is absent.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "18eb8153650c3ff5463b813b37c942ded5f07ccdb719047e6f84b10a62e7460f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9048,
+    "run_id": "42458236568",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42458236568",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108073848_85f49c59e1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9048,
+    "run_id": "42458236568"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T07:38:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
