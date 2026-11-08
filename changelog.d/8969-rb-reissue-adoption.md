@@ -5,7 +5,7 @@ On project #8969, wave issue #8970 was reissued as #8994 by `scripts/review_rb_j
 
 | The numbers that matter | Value |
 | --- | --- |
-| Extra API calls | 1 REST timeline read per closed-without-merge wave issue per tick, none once adopted |
+| Extra API calls | 1 REST timeline read per closed-without-merge wave issue per tick, until it is adopted or leaves the wave |
 | New log prefix | `RB_REISSUE_ADOPTION` |
 | Incident | project #8969: #8970 → #8994, duplicate #8995 |
 

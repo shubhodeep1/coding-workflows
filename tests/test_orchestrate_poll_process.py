@@ -8632,7 +8632,7 @@ def test_rb_reissue_adoption_repoints_wave_entry_once() -> None:
 	assert result.returncode == 0, result.stderr
 	lines = result.stdout.splitlines()
 	assert "adopt=0:phase1" in lines
-	assert "again=1" in lines
+	assert "again=3" in lines
 	state = json.loads(next(line for line in lines if line.startswith("STATE="))[6:])
 	assert state["issue_number_map"] == {"phase1": 8994, "phase1-redo": 8995}
 	entry = state["waves"][0]["issues"][0]
@@ -8657,10 +8657,40 @@ def test_rb_reissue_adoption_refuses_tracked_successor_and_terminal_entries() ->
 	)
 	assert result.returncode == 0, result.stderr
 	lines = result.stdout.splitlines()
-	for expected in ("tracked=1", "merged=1", "skipped=1", "absent=1"):
+	for expected in ("tracked=3", "merged=1", "skipped=1", "absent=1"):
 		assert expected in lines, result.stdout
 	after = json.loads(next(line for line in lines if line.startswith("STATE="))[6:])
 	assert after == state
+
+
+def test_rb_reissue_adoption_replaces_orphan_entry_for_successor() -> None:
+	"""A successor the orphan sweep injected as ``orphan-rb-<n>`` into the
+	current wave does not block adoption; the orphan entry is removed."""
+	state = _rb_reissue_state()
+	state["waves"][0]["issues"].append({"id": "orphan-rb-8994", "github_issue": 8994, "status": "in_progress"})
+	result = _run_rb_reissue_harness(
+		[],
+		'rc=0; lid="$(adopt_review_blocked_reissue_successor 8970 8994)" || rc=$?; echo "adopt=${rc}:${lid}"\n',
+		state=state,
+	)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	assert "adopt=0:phase1" in lines
+	after = json.loads(next(line for line in lines if line.startswith("STATE="))[6:])
+	ids = [entry["id"] for entry in after["waves"][0]["issues"]]
+	assert ids == ["phase1", "phase1-redo"]
+	assert after["waves"][0]["issues"][0]["github_issue"] == 8994
+
+
+def test_rb_reissue_adoption_seeds_successor_pr_state() -> None:
+	"""Wiring guard: the adoption loop gives the successor a PR_STATES_JSON
+	entry so check-wave-status does not read a closed successor whose PR
+	merged before ai:merged landed as closed-without-merge."""
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	adopt = source.index('adopt_review_blocked_reissue_successor "${_rb_reissue_closed}" "${_rb_reissue_num}"')
+	seed = source.index('PR_STATES_JSON="$(printf \'%s\' "${PR_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}"')
+	wave_status = source.index('--pr-states-json "${PR_STATES_JSON}"')
+	assert adopt < seed < wave_status
 
 
 def test_rb_reissue_adoption_runs_before_wave_status_and_persists_state() -> None:
