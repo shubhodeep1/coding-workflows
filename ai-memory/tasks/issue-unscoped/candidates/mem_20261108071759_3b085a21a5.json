@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:958-1008 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The moved test steps `Review synthesize-smoke contract test` and `Clarify loop guard unit tests` sit in the `tests-hooks-and-orchestrator` steps list without confirmation that the job has the environment, dependencies or `PYTHONDONTWRITEBYTECODE=1` they need.\n  WHY: The job environment might not support these tests. Source severity was MAJOR; mapped to high.\n- tests/test_gh_api_write_guard.py:604-612 | severity=high | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate reports 5 test files failing \"caused by this change\" (test_agents_fragment_contract::test_instructions_point_at_fragments, test_files_touched_scope_guard, test_gh_api_write_guard [5 tests], test_pr_watch_guard, test_workflow_checkout_integration_ref_audit). No cited test reads a file the diff touches, so the failures are unexplained and unmapped. Related lines: test_gh_api_write_guard.py:1074-1119, test_pr_watch_guard.py:311, test_gh_api_write_guard.py:1134.\n  WHY: If the failures reproduce on the PR head in CI, the gate stays red and the pipeline cannot merge. If they are sandbox artifacts, the gate result misleads the editor pass. Source severity was MAJOR; mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\"\n  expected_change_site: .github/workflows/ci.yml, steps moved from orchestrate-poll (0) to tests-hooks-and-orchestrator\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The step timings for run 42445170048 could not be read, and the PR comments and changelog describe the selection as an estimate based on test and subprocess counts, so the diff does not establish that the moved steps were the slowest or that the target job had the most headroom. Source severity: MAJOR. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) judged this an accepted, documented estimate and did not report it as a gap.\n- requirement: Add documentation for required convention via agents.d fragment.\n  expected_change_site: agents.d/9046-ci-poll-group-0-steps-to-hooks-job.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer says a pass-1 contract test failure in tests/test_agents_fragment_contract.py is due to a missing agents.d fragment, and the PR only added a changelog fragment. Source severity: BLOCKER. Disputed by anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash, who read tests/test_agents_fragment_contract.py:74-82 and found it requires no per-PR fragment.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:958-982, 1008 | severity=MAJOR | confidence=3\n  PROBLEM: The moved test steps `Review synthesize-smoke contract test` and `Clarify loop guard unit tests` sit in the `tests-hooks-and-orchestrator` steps list without confirmation that the job has the environment, dependencies or `PYTHONDONTWRITEBYTECODE=1` they need.\n  WHY: The job environment might not support these tests, and relying on `PYTHONDONTWRITEBYTECODE` in the run command might be insufficient.\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\"\n  Expected change site: .github/workflows/ci.yml, orchestrate-poll job steps.\n  Evidence of absence: The step timings for run 42445170048 could not be read, as acknowledged in the PR comments. The PR gives an estimate but does not meet the requirement of moving steps by measured slowness.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP:\n  Requirement: \"Add documentation for required convention via agents.d fragment.\"\n  Expected change site: agents.d/9046-ci-poll-group-0-steps-to-hooks-job.md\n  Evidence of absence: A pass-1 consensus finding identified a contract test failure in `tests/test_agents_fragment_contract.py` due to a missing required `agents.d` fragment documenting the changes to `ci.yml`. The PR only added a changelog fragment.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `orchestrate-poll (0)` and their target job.\n  Evidence of absence: The diff moves two steps to `tests-hooks-and-orchestrator`, but its comments and changelog say the run's step timings could not be read and call the selection an estimate based on test and subprocess counts. The diff does not establish that the moved steps were the slowest or that the target job had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_gh_api_write_guard.py:604-612 | severity=MAJOR | confidence=3\n  PROBLEM: The pre-push gate reports 5 test files failing \"caused by this change\" (test_agents_fragment_contract::test_instructions_point_at_fragments, test_files_touched_scope_guard, test_gh_api_write_guard [5 tests], test_pr_watch_guard, test_workflow_checkout_integration_ref_audit). No cited test reads a file the diff touches, so the failures are unexplained and unmapped. Related lines: test_gh_api_write_guard.py:1074-1119, test_pr_watch_guard.py:311, test_gh_api_write_guard.py:1134.\n  WHY: If the failures reproduce on the PR head in CI, the gate stays red and the pipeline cannot merge. If they are sandbox artifacts, the gate result misleads the editor pass.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "827b6ff7562be2f4e5adbbaf17d02c1d844b72bbaa8a6ee49ae6a08e43dae7cd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9049,
+    "run_id": "42456809462",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42456809462",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108071759_3b085a21a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9049,
+    "run_id": "42456809462"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T07:17:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
