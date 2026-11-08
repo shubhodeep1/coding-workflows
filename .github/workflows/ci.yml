@@ -510,6 +510,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_integrity.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_conflict_resolve_terminal_record.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_touched_set_symlink_aware.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
@@ -2368,6 +2369,8 @@ jobs:
     # group 4).
     # Since #9021, the group 0 CI wiring guard part 2 step splits its test
     # functions across 4 local processes.
+    # Since #9037, group 4 also pins the Claude engine judges and validation
+    # harness sandbox steps (moved from group 3).
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -3156,14 +3159,25 @@ jobs:
       # every git use in these modules is a temp repo or a text assertion),
       # Node or the prepared .claude/ live copies, and this job has the same
       # pip set and Python 3.12. Names and bodies unchanged.
+      # Both steps then moved from group 3 to group 4: orchestrate-poll (3)
+      # took 15m16s of its 20 minutes on main (run 42436104717, budget-watch
+      # issue #9037). The run's step timings could not be read, so the pair
+      # was chosen by test and subprocess counts (about 173 tests and 106
+      # subprocess sites together), an estimate, not a measurement. Group 4
+      # was not flagged from #8150 until #8772, then took 15m15s carrying the
+      # much larger CI wiring guard part 2 step, which left for group 0 in
+      # #8980; nothing moved into group 4 since. Group 3 keeps its slice and
+      # the single-file module step. Names and bodies unchanged; each step
+      # still runs once per CI run. If budget-watch flags group 4 next,
+      # measure step timings before moving anything again.
       - name: Orchestrator judges on the Claude engine tests (Phase 5c)
-        if: strategy.job-index == 3
+        if: strategy.job-index == 4
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
 
       - name: Validation harness sandbox tests
-        if: strategy.job-index == 3
+        if: strategy.job-index == 4
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
