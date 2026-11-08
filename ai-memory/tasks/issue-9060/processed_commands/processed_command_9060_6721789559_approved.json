@@ -5,13 +5,24 @@
   "entry_id": "processed_command_9060_6721789559_approved",
   "issue_number": 9060,
   "metadata": {
+    "branch": "ai/issue-9060",
+    "changed_files": [
+      ".github/workflows/test-and-mark-stable.yml",
+      "changelog.d/wfopt-2026-10-07-3-idle-test-quoting.md",
+      "tests/test_test_and_mark_stable_step_scripts_contract.py"
+    ],
+    "issue_number": 9060,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9060",
+    "pr_number": 9063,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9063",
+    "run_attempt": "1",
+    "run_id": "42482740657",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42482740657"
   },
   "run_attempt": 1,
   "run_id": "42482740657",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-08T13:00:37Z",
+  "status": "completed",
+  "timestamp": "2026-11-08T13:40:26Z",
   "workflow": "implement"
 }
