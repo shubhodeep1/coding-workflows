@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2689-2705 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: wg2_shards=4 is hardcoded and assumes a 4-core runner. The only recorded measurement of the step is 37.2s, so sharding it may save little and group 0 may stay near the 15-minute budget.\n  WHY: Not a code failure; the wall-clock win may not materialise (minimax: unverified nproc, NIT, confidence 3; z-ai_glm: goal-efficacy risk, NIT, confidence 2). Both reviewers rated it NIT, so there is no severity disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\" (issue #9021)\n  expected_change_site: .github/workflows/ci.yml, step \"Regression tests wired by the CI wiring guard (part 2)\" (relocate out of the strategy.job-index == 0 group)\n  confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: The step still appears once in ci.yml, still guarded by if: strategy.job-index == 0, and is sharded in place (wg2_shards=4) rather than moved. Both reviewers note that AD-2 in the PR description documents in-place sharding as an approved, deliberate deviation. Severity disagreement: minimax rated it MAJOR (confidence 3); sonnet rated it NIT (confidence 2) and asked for no code change.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps ... into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, a job or `strategy.job-index` group other than group 0.\n  Evidence of absence: the step still appears once in `ci.yml`, still guarded by `strategy.job-index == 0`, and is split into 4 processes in place (`wg2_shards=4`). Approved decision AD-2 chose in-place sharding on purpose. This is a documented, approved deviation, so no code change is requested.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:2689-2705 | severity=NIT | confidence=3\n  PROBLEM: wg2_shards=4 is hardcoded (line 2705, comment at lines 2689-2700 says \"the runner's 4 cores\"), and nproc is not checked at runtime. On a runner with fewer cores the 4 background pytest processes oversubscribe it.\n  WHY: The step still succeeds under set -euo pipefail, but the budget goal that motivated #9021 may not be met on smaller runners.\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\" (issue #9021)\n  Expected change site: .github/workflows/ci.yml, a step relocation so the part 2 step no longer runs under strategy.job-index == 0.\n  Evidence of absence: The step still occurs once, still guarded by if: strategy.job-index == 0, and wg2_shards=4 shards the same group's load in place. The run's step timings could not be read. AD-2 documents the in-place shard as a deliberate deviation, which is defensible but still departs from the issue text.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:2689-2705 | severity=NIT | confidence=2\n  PROBLEM: The only recorded measurement of this step is 37.2s. Sharding a step of roughly 37-60s across 4 processes saves at most tens of seconds, minus the new serial collect pass at ci.yml:2764-2766, so group 0 likely stays near 15 minutes.\n  WHY: Not a code failure; a goal-efficacy risk. The comment concedes the choice is an estimate, and the budget-watch feedback loop mitigates it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d310bf3de1d9daa77487fcf1de88761968c28d5d816ef25da33ba4ff19f49c12",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9030,
+    "run_id": "42434631220",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42434631220",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108015042_d98f473bca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9030,
+    "run_id": "42434631220"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T01:50:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
