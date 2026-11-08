@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Can you provide the per-step timings for `orchestrate-poll (0)` from run 42426489708? The repository comment says to measure before moving again, and earlier fixes could not read these timings.\nChoices:\nA) Yes. I'll paste the step durations in the `/answer` (at least: \"Regression tests wired by the CI wiring guard (part 2)\", \"Clarify loop guard unit tests\", \"Review synthesize-smoke contract test\", the fast-fail subset step and the sharded poll-slice step). (RECOMMENDED)\nB) No. Go ahead with an estimate based on test and subprocess counts, and write in the step's comment that it was not measured.\nQ2: How should group 0's load be reduced?\nChoices:\nA) Split \"Regression tests wired by the CI wiring guard (part 2)\" across 4 parallel pytest processes, inside the same step in group 0. Each test function runs exactly once. This uses the existing pattern already used by \"wiring guard part 1\", the heal step and the #8150 unblock step. The step name and `if:` stay the same and only the body changes, which departs from the issue's \"unchanged\" wording. (RECOMMENDED)\nB) Move that step unchanged (same name and body) to another job or group, as the issue asks, even though both groups it has run in went over 15 minutes. The plan would choose the destination from the Q1 timings, or from count estimates if Q1=B.\nC) Leave wiring guard part 2 in group 0 and move a different group-0 step unchanged instead (\"Clarify loop guard unit tests\" or \"Review synthesize-smoke contract test\"). The plan would choose the destination as in B.\n**Note:** B and C need a destination job. If you pick Q1=B with either of them, the destination is a guess and that job may be flagged next.",
+  "fingerprint": "831175820f15b2634f4be4d6ff33f387411dd1c31ee11ee1b4a791f5ce970985",
+  "lineage": {
+    "issue_number": 9021,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42427694444",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42427694444",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261108000501_8589d3e7b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9021,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42427694444"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9021 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-08T00:05:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
