@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-08T06:09:03Z",
+  "issue_number": 9046,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=.github/workflows/ci.yml:1-1; cited_path=.github/workflows/ci.yml (check-run \"copilot-pull-request-reviewer\"); files_touched=.github/workflows/ci.yml, changelog.d/9046-ci-poll-group-0-steps-to-hooks-job.md, tests/test_ci_poll_test_sharding.py.",
+  "phase": "review_autofix",
+  "pr_number": 9049,
+  "record_id": "lesson_20261108060903_e64bdc1216",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml (check-run \"copilot-pull-request-reviewer\")",
+    ".github/workflows/ci.yml",
+    "changelog.d/9046-ci-poll-group-0-steps-to-hooks-job.md",
+    "tests/test_ci_poll_test_sharding.py"
+  ]
+}
