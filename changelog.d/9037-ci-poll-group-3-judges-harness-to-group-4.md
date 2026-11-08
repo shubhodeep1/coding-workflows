@@ -1,0 +1,2 @@
+<!-- changelog: changed -->
+- **Claude engine judges and validation harness sandbox steps moved from `orchestrate-poll` group 3 to group 4.** `orchestrate-poll (3)` took 15m16s of its 20-minute timeout on main (run 42436104717). The steps `Orchestrator judges on the Claude engine tests (Phase 5c)` and `Validation harness sandbox tests` now run in group 4 only, once per CI run; their names, bodies, job, `timeout-minutes` and the matrix are unchanged, and group 3 keeps its slice and the single-file module step. Refs #9037.
