@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:1208 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: Test method name test_last_group_runs_its_slice_and_only_the_unblock_step is stale because group 4 now pins three steps.\n  WHY: The misleading name gives maintainers a wrong picture of what the test guards. Reviewers rated it NIT. The cited line is 1209 in google_gemini-3_1-flash-lite and 1208 in the other two.\n- tests/test_ci_poll_test_sharding.py:2971 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: Test method name test_group_three_pins_the_single_file_judges_and_harness_steps is stale because group 3 now pins only SINGLE_FILE_MODULES_STEP.\n  WHY: The misleading name gives maintainers a wrong picture of the group-3 layout. Reviewers rated it NIT, and the confidence values were 5, 5 and 4.\n- tests/test_gh_api_write_guard.py, tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_pr_watch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py:Infrastructure test suites | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate reports five test files as failing and classifies them as caused by the group 3 to group 4 job-index change in .github/workflows/ci.yml.\n  WHY: Severity disagreement: google_gemini-3_1-flash-lite rated it MAJOR with confidence 4 and accepted the gate's attribution, while z-ai_glm-5_3-flash rated it MAJOR with confidence 3 and found no causal mechanism, so the failures may be sandbox noise. The highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_gh_api_write_guard.py, tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_pr_watch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py:Infrastructure test suites | severity=MAJOR | confidence=4\n  PROBLEM: The CI infrastructure tests are failing due to the job index change in .github/workflows/ci.yml.\n  WHY: The tests expect these steps to run in group 3, as verified by the CI failures reported in the PR description after moving them to group 4.\n- tests/test_ci_poll_test_sharding.py:2971 | severity=NIT | confidence=5\n  PROBLEM: The test method name test_group_three_pins_the_single_file_judges_and_harness_steps is stale.\n  WHY: The name implies group 3 still pins these steps, but they have been moved to group 4, which is misleading for maintainers.\n- tests/test_ci_poll_test_sharding.py:1209 | severity=NIT | confidence=4\n  PROBLEM: The test method name test_last_group_runs_its_slice_and_only_the_unblock_step is stale.\n  WHY: The name implies only the unblock step runs in group 4, but three steps now run in that group, which is misleading.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_poll_test_sharding.py:1208 | severity=NIT | confidence=4\n  PROBLEM: The test method name still says \"only the unblock step\", but LAST_GROUP_PINNED_STEPS now holds three steps. The body asserts guarded_last == set(LAST_GROUP_PINNED_STEPS), and the docstring was updated but the method name was not.\n  WHY: This is not a runtime failure and the assertion still passes. Future maintainers may rename or scope the test from the misleading name and narrow what it guards.\n- tests/test_ci_poll_test_sharding.py:2971 | severity=NIT | confidence=5\n  PROBLEM: The test method name says \"judges_and_harness\", but POLL_GROUP_THREE_8472_REMAINING_STEPS now contains only SINGLE_FILE_MODULES_STEP. The assertion at line 2979 reflects that, and a comment notes \"name kept for history\".\n  WHY: This is not a runtime failure and the assertion passes. The name gives maintainers an incorrect mental model of the group-3 layout and raises the chance of a regression when a step is next added back to group 3.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml (gate-flagged via tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_files_touched_scope_guard.py, tests/test_agents_fragment_contract.py:74-82, tests/test_workflow_checkout_integration_ref_audit.py):PR head cd91826; diff hunks at ci.yml:2370-2371, 3157-3181 and tests/test_ci_poll_test_sharding.py | severity=MAJOR | confidence=3\n  PROBLEM: The PR description's pre-push test gate reports Status: fail with 5 test files classified as \"failures caused by this change\". Static verification finds no mechanism, because none of the five files reads the changed ci.yml hunks, the new changelog.d fragment, or the updated test registry constants. Two of them (test_files_touched_scope_guard.py, test_pr_watch_guard.py) failed whole-file with no individual test named, a collection-error pattern consistent with sandbox environment noise.\n  WHY: If the classification is accepted at face value, merge stays blocked on failures the diff cannot have caused. If it is sandbox noise, the classification wastes an autofix round. PR CI was still in_progress at collection time, so the authoritative verdict is not yet available.\n- tests/test_ci_poll_test_sharding.py:1208 | severity=NIT | confidence=4\n  PROBLEM: The test name says group 4 runs \"only the unblock step\", but the test now asserts guarded_last == set(LAST_GROUP_PINNED_STEPS) with 3 steps (test_ci_poll_test_sharding.py:1228). The name is misleading even though the body and docstring were updated.\n  WHY: There is no runtime failure, but the name misleads future maintainers about the matrix layout the test enforces.\n- tests/test_ci_poll_test_sharding.py:2971 | severity=NIT | confidence=4\n  PROBLEM: The name says group 3 pins the single-file, judges, and harness steps, but the test asserts group 3 pins only SINGLE_FILE_MODULES_STEP (test_ci_poll_test_sharding.py:2974-2979). The comment at 2972-2973 acknowledges the mismatch but the stale name remains.\n  WHY: There is no runtime failure, but the misleading name gives a wrong mental model of the group-3 layout.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e2356b020ebb3de5d0fe74d6c7f361d8d3dc7ab3bacac697a3a84f24d6c46daf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9041,
+    "run_id": "42441665222",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42441665222",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108033247_d06fd1fc5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9041,
+    "run_id": "42441665222"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T03:32:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
