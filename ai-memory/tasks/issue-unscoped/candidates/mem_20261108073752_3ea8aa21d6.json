@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2299-2306 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The history comment ends with \"the other three remain below\" even though, per the reviewer, only two of the four steps moved in #7677 remain in tests-release-and-log-analysis.\n  WHY: The count is stale, so a reader tracking which steps still live in this job will be off by one. The reviewer rated it NIT with no runtime impact. Another reviewer (z-ai_glm-5_3-flash) checked the same comment (ci.yml:2301-2303) and judged it accurate.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps from `orchestrate-poll (0)` and their target job\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The moved steps at .github/workflows/ci.yml:975-1008 were chosen from a planning-sandbox estimate and test/subprocess counts because the run's step timings could not be read, and the target was picked as the job with the fewest subprocess call sites, not shown to have the most headroom. (Reviewer severity MAJOR. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash saw the same limitation and treated it as a documented, accepted estimate, not an unmet requirement.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:2299-2306 | severity=NIT | confidence=3\n  PROBLEM: The history comment ends with \"the other three remain below\" even though, per the reviewer, only two of the four steps moved in #7677 remain in tests-release-and-log-analysis.\n  WHY: The count is stale, so a reader tracking which steps still live in this job will be off by one. There is no runtime failure.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps from `orchestrate-poll (0)` and their target job.\n  Evidence of absence: The moved steps at `.github/workflows/ci.yml:975-1008` were selected using a planning-sandbox estimate and test/subprocess counts because the run's step timings could not be read. The target is described as the job with the fewest subprocess call sites, not established as the job with the most headroom. The diff therefore does not implement the requested timing-based selection.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "19cbb14e88a4b3ef555ae2aa23fa50f0625e4367a7c298c4778ad14449e184af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9049,
+    "run_id": "42458764215",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42458764215",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108073752_3ea8aa21d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9049,
+    "run_id": "42458764215"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-08T07:37:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
