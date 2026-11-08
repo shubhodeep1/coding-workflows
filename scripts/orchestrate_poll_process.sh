@@ -32058,13 +32058,20 @@ REISSUE_EOF
       # Update state file: replace the old issue number with the new one
       # (impl_noop_count is preserved on the issue entry since we only
       # change github_issue, not the issue object itself)
-      if jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
-        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
-        :
-      else
+      # One bounded retry narrows the window in which a transient write
+      # failure leaves the replacement untracked in state.
+      IF_STATE_REWRITE_OK=false
+      for _ in 1 2; do
+        if jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+          IF_STATE_REWRITE_OK=true
+          break
+        fi
+        rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      done
+      if [ "${IF_STATE_REWRITE_OK}" != "true" ]; then
         # The replacement exists, so the source is still closed below;
         # leaving it open would create another replacement every cycle.
-        rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
         echo "::warning::IMPL_FAILED_REISSUE issue=${if_issue} outcome=state_update_failed new_issue=${NEW_ISSUE_NUM}"
       fi
 

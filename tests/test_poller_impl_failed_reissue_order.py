@@ -18,11 +18,11 @@ these cases.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POLLER = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
-AGENTS_FRAGMENT = REPO_ROOT / "agents.d" / "wfopt-2026-10-07-2-impl-failed-reissue-order.md"
 
 LOOP_START = "  while read -r if_issue; do\n"
 LOOP_END = "  done < <(echo \"${WAVE_STATUS}\" | jq -r '.issues[] | select(.status == \"implementation-failed\") | .github_issue')"
@@ -137,8 +137,12 @@ def test_existing_log_and_templates_preserved():
 
 
 def test_log_prefix_registered():
-	text = AGENTS_FRAGMENT.read_text(encoding="utf-8")
-	assert '<!-- agents: section="Stable log prefixes (contractual)" -->' in text
+	# The release fold moves the fragment into agents.md and deletes it, so
+	# read the rendered agents text (agents.md plus any pending fragments).
+	sys.path.insert(0, str(Path(__file__).resolve().parent))
+	from agents_doc import agents_text
+
+	text = agents_text()
 	assert "- `IMPL_FAILED_REISSUE`" in text
 	assert "LOG_PREFIX.name=IMPL_FAILED_REISSUE" in text
 
