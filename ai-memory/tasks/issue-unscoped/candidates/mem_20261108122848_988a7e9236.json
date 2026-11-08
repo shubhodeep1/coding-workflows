@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:check-run `copilot-pull-request-reviewer` (run 42477530594, job 128722085059) | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The third-party Copilot reviewer check fails with `custom_instructions_too_large` (\"Prompt too big after adding system message\") before producing a review, because AGENTS.md and CLAUDE.md exceed its prompt limit.\n  WHY: Both reviewers call it an external check failure with no tie to any changed hunk, so no code change in this PR can fix it. Both rated it NIT, and confidence ranged from 4 to 5.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:`copilot-pull-request-reviewer` check-run, run 42477530594, job 128722085059 | severity=NIT | confidence=5\n  PROBLEM: The Copilot review check failed with `custom_instructions_too_large` before producing a review.\n  WHY: The check-run log reports \"Prompt too big after adding system message\" while loading `AGENTS.md` and `CLAUDE.md`. This is an external check failure, not a defect traced to a changed workflow hunk.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:check-run `copilot-pull-request-reviewer`, run 42477530594, job 128722085059, head abe3f1e9d2d7 | severity=NIT | confidence=4\n  PROBLEM: The third-party Copilot reviewer check fails before reading the diff because AGENTS.md plus CLAUDE.md exceed its custom-instructions prompt limit.\n  WHY: The tool builds the repo instruction files into its prompt, and the combined size breaches its limit on any commit of this repo. No hunk in this PR, or in the last-run diff, touches that tool's inputs, so no code change in this PR can fix it. It is surfaced per the failed-check-run rule and is non-actionable here.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cfde32bcb42748f654441a8d831a5b7b55a76f81c283459b6edfd46988f384cf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9038,
+    "run_id": "42477524113",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42477524113",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108122848_988a7e9236",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9038,
+    "run_id": "42477524113"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T12:28:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
