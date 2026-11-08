@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- N/A (external check-run `copilot-pull-request-reviewer`, job https://github.com/shubhodeep1/coding-workflows/actions/runs/42439258711/job/128604757471) | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The third-party Copilot reviewer check fails with \"Prompt too big after adding system message\" (errorCode `custom_instructions_too_large`, statusCode 422) because the repo's custom instructions (AGENTS.md and CLAUDE.md) exceed its prompt budget.\n  WHY: It is an environmental limit of the external bot that fails on every PR regardless of diff content, and cannot be fixed from this data-only PR; both reviewers rated it NIT (mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- N/A (external check-run `copilot-pull-request-reviewer`, job https://github.com/shubhodeep1/coding-workflows/actions/runs/42439258711/job/128604757471) | severity=NIT | confidence=4\n  PROBLEM: The third-party Copilot reviewer could not start because the repo's custom instructions (AGENTS.md and CLAUDE.md) exceed its prompt budget (log tail: \"Prompt too big after adding system message\", errorCode `custom_instructions_too_large`, statusCode 422).\n  WHY: The check fails on every PR whatever the diff contains. This PR only changes `consecutive_green_runs` (176 to 177) and `latest_run.generated_at` in `analysis/validation-selftest-status.json`. It is a configuration limit of the external bot and cannot be fixed from this data-only PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- N/A (external check-run copilot-pull-request-reviewer, job https://github.com/shubhodeep1/coding-workflows/actions/runs/42439258711/job/128604757471) | severity=NIT | confidence=4\n  PROBLEM: The Copilot PR reviewer check fails before analyzing any diff because the repository's combined custom instruction files (AGENTS.md + CLAUDE.md) exceed its prompt budget (log line \"Error: Prompt too big after adding system message\", errorCode custom_instructions_too_large, statusCode 422).\n  WHY: The failure is inside the third-party reviewer bot's runtime, not caused by the 2-line JSON update in this PR; it reproduces on any PR regardless of content, and is not fixable within this PR. Environmental only.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "42349172ba82212bafc23e5614f06f60914b3114c4f9d7c712d0e9f74af2eb72",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9039,
+    "run_id": "42439249554",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42439249554",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108031515_22706930f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9039,
+    "run_id": "42439249554"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T03:15:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
