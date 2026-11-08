@@ -74,6 +74,12 @@ SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,160}$")
 CHATGPT_MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}$")
 CHATGPT_REPLACES_RE = re.compile(r"^[a-z0-9-]+/[a-z0-9._-]+$")
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+# Credential shapes that the header allowlists would otherwise accept
+# (GitHub, OpenAI / OpenRouter / Anthropic, Slack, AWS). Checked even when
+# workflow_failure_heal.redact_secrets cannot be imported.
+CREDENTIAL_SHAPE_RE = re.compile(
+	r"(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|sk-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})"
+)
 
 ISSUE_START_RE = re.compile(r"^=== ISSUE ([0-9]+) ===$")
 ISSUE_END_RE = re.compile(r"^=== END ISSUE [0-9]+ ===$")
@@ -270,6 +276,22 @@ def _flagged_by_token(entry: str, safe_to_slug: dict[str, str]) -> str | None:
 	return safe_to_slug.get(name, entry)
 
 
+_REDACTOR_CACHE: list = []
+
+
+def _credential_free(value: str | None, warnings: set[str]) -> str | None:
+	"""Drop a header value that looks like a credential (never copy it)."""
+	if value is None:
+		return None
+	if not _REDACTOR_CACHE:
+		_REDACTOR_CACHE.append(_load_redactor())
+	redactor = _REDACTOR_CACHE[0]
+	if CREDENTIAL_SHAPE_RE.search(value) or (redactor is not None and redactor(value) != value):
+		warnings.add("issue_header_redacted")
+		return None
+	return value
+
+
 def parse_review_issues(text: str, warnings: set[str], safe_to_slug: dict[str, str] | None = None) -> tuple[list[dict], int]:
 	safe_to_slug = safe_to_slug or {}
 	issues: list[dict] = []
@@ -292,6 +314,8 @@ def parse_review_issues(text: str, warnings: set[str], safe_to_slug: dict[str, s
 					flagged_by.append(entry)
 			else:
 				token = _flagged_by_token(entry, safe_to_slug)
+				if token is not None and CREDENTIAL_SHAPE_RE.search(token):
+					token = None
 				if token is None:
 					flagged_by_dropped += 1
 				elif token not in flagged_by:
@@ -310,12 +334,12 @@ def parse_review_issues(text: str, warnings: set[str], safe_to_slug: dict[str, s
 				warnings.add("invalid_issue_file")
 		issues.append({
 			"id": issue_id,
-			"file": file_value,
-			"lines": _token(block.get("LINES"), LINES_RE),
-			"lens": _token(block.get("LENS"), LENS_RE),
-			"severity": _token(block.get("SEVERITY"), TOKEN_RE),
-			"classification": _token(block.get("CLASSIFICATION"), TOKEN_RE),
-			"rejection_kind": _token(block.get("REJECTION_KIND"), TOKEN_RE),
+			"file": _credential_free(file_value, warnings),
+			"lines": _credential_free(_token(block.get("LINES"), LINES_RE), warnings),
+			"lens": _credential_free(_token(block.get("LENS"), LENS_RE), warnings),
+			"severity": _credential_free(_token(block.get("SEVERITY"), TOKEN_RE), warnings),
+			"classification": _credential_free(_token(block.get("CLASSIFICATION"), TOKEN_RE), warnings),
+			"rejection_kind": _credential_free(_token(block.get("REJECTION_KIND"), TOKEN_RE), warnings),
 			"flagged_by": flagged_by,
 			"flagged_by_unverified": unverified,
 			"merged_from": merged_from,
@@ -426,7 +450,7 @@ def parse_editor_summary(text: str, issue_ids: list[str], warnings: set[str]) ->
 		value = value.strip().strip("`").strip().lower()
 		if value in ("edited", "not-edited"):
 			change_status = value
-		break
+			break
 
 	redactor = None
 	redactor_loaded = False
@@ -528,8 +552,12 @@ def build_record(previous_reviews_dir: str) -> dict:
 	safe_to_slug = {slot["safe_name"]: slot["slug"] for slot in slots if slot["slug"]}
 	consolidator_ran = False
 	if issues_text is not None and issues_text.strip():
-		consolidator_ran = True
+		# The parser fails open (REVIEW_PARSER_FAILOPEN=1) and can leave a
+		# file with only passthrough blocks; that is not a consolidator run.
+		consolidator_ran = any(ISSUE_START_RE.match(line) for line in issues_text.splitlines())
 		issues, flagged_by_dropped = parse_review_issues(issues_text, warnings, safe_to_slug)
+		if not consolidator_ran and consolidator_expected:
+			warnings.add("issues_file_no_blocks")
 	elif issues_text is not None:
 		# review_parse_consolidator.sh truncates the file on a parse failure or
 		# when no issue markers were found; do not record that as a clean round.

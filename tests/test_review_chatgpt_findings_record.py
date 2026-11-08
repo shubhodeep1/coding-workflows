@@ -576,3 +576,52 @@ def test_ci_and_docs_wiring() -> None:
 	assert '<!-- agents: section="Stable log prefixes (contractual)" -->' in fragment
 	assert "LOG_PREFIX.name=REVIEW_FINDINGS_RECORD" in fragment
 	assert "Refs #8969" in CHANGELOG_FRAGMENT.read_text(encoding="utf-8")
+
+
+def test_passthrough_only_issues_file_is_not_a_consolidator_run(tmp_path: Path) -> None:
+	env = _fixture(tmp_path)
+	_write(
+		Path(env["RUNTIME_DIR"]) / "review_issues.txt",
+		"=== ISSUE PASSTHROUGH 001 ===\nFILE: other.sh\nLINES: 3\nCLASSIFICATION: unclassified\n=== END ISSUE PASSTHROUGH 001 ===\n",
+	)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	assert _run(env, output).returncode == 0
+	record = json.loads(output.read_text(encoding="utf-8"))
+	assert record["consolidator"] == {"ran": False, "issue_count": 0, "flagged_by_dropped": 0}
+	assert "issues_file_no_blocks" in record["warnings"]
+	assert "passthrough_blocks_skipped" in record["warnings"]
+
+
+def test_change_status_skips_invalid_first_bullet(tmp_path: Path) -> None:
+	env = _fixture(tmp_path)
+	_write(Path(env["RUNTIME_DIR"]) / "editor_summary.txt", EDITOR_TEXT.replace("Change status:\n- edited", "Change status:\n- (see above)\n- edited"))
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	assert _run(env, output).returncode == 0
+	assert json.loads(output.read_text(encoding="utf-8"))["editor"]["change_status"] == "edited"
+
+
+@pytest.mark.parametrize("use_redactor", [True, False])
+def test_credential_shaped_header_values_are_dropped(tmp_path: Path, use_redactor: bool) -> None:
+	env = _fixture(tmp_path)
+	token = "ghp_" + SECRET_TAIL
+	text = ISSUES_TEXT.replace("SEVERITY: low", f"SEVERITY: {token}").replace("CLASSIFICATION: actionable\nEVIDENCE:\n  something", f"CLASSIFICATION: {token}\nREJECTION_KIND: {token}\nEVIDENCE:\n  something").replace("LENS: docs", f"LENS: {token}").replace("FLAGGED_BY: google/gemini-4-pro", f"FLAGGED_BY: google/gemini-4-pro, {token}")
+	_write(Path(env["RUNTIME_DIR"]) / "review_issues.txt", text)
+	script = SCRIPT
+	if not use_redactor:
+		isolated = tmp_path / "isolated"
+		isolated.mkdir()
+		script = isolated / SCRIPT.name
+		shutil.copy2(SCRIPT, script)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	result = _run(env, output, script=script)
+	assert result.returncode == 0
+	raw = output.read_text(encoding="utf-8")
+	assert SECRET_TAIL not in raw
+	assert SECRET_TAIL not in result.stdout
+	second = json.loads(raw)["issues"][1]
+	assert second["severity"] is None
+	assert second["lens"] is None
+	assert second["classification"] is None
+	assert second["rejection_kind"] is None
+	assert second["flagged_by"] == ["google/gemini-4-pro"]
+	assert "issue_header_redacted" in json.loads(raw)["warnings"]
