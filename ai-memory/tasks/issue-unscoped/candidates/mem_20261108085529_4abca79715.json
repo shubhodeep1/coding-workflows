@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, moving the selected step(s) out of `tests-heal-plan-and-validation` into the job with the most headroom\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: No step leaves `tests-heal-plan-and-validation`, the 14 serial modules were folded into the step's existing 4 local shards instead (ci.yml:998-1009), the ci.yml comment and approved plan comment 6717834140 record this as a deliberate deviation (severity disagreement: NIT/MAJOR; the highest is MAJOR; z-ai_glm-5_3-flash saw it as resolved by the approved plan and did not re-raise it)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, moving a step out of `tests-heal-plan-and-validation` into another job.\n  Evidence of absence: No step leaves `tests-heal-plan-and-validation`. The 14 serial modules join the step's existing 4 local shards instead. The ci.yml comment explains why a move was rejected (#7387, #9018's move only cut the job from 17m59s to 17m00s, every other test job already runs over 15 minutes). The approved plan comment (issue comment 6717834140) chose this approach and the hard limits are met, so this is a deliberate deviation from the plan, not a missed requirement. Whether the job fits its budget will only show in `budget-watch` on main.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n(All other checklist categories: NONE.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, by moving the slow test steps from tests-heal-plan-and-validation into another CI job that has sufficient headroom.\n  Evidence of absence: No test steps were moved out of the tests-heal-plan-and-validation job. The implementation sharded all 15 test modules (the original main module + 14 previously serial) across the existing 4 shards in the same job. This addresses the CI budget timeout but does not follow the explicit instruction to move the steps to another job.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n(All other checklist categories: NONE.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, transferring the selected step(s) out of `tests-heal-plan-and-validation` into a different job whose recorded total is below its timeout.\n  Evidence of absence: No step moves out of `tests-heal-plan-and-validation`. The PR folds 14 modules into the existing 4 local shards of the same step (ci.yml:998-1009). The issue's hard limits are met, but the literal \"move\" directive is not. ci.yml records that #9018's step-move only dropped the job from 17m59s to 17m00s and that no other test job has headroom, so the approved plan comment (issue comment 6717834140) deliberately chose in-place sharding. The time saving is an estimate, and whether the job fits its 20-minute budget will only show on the next `budget-watch` run on main.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- Reviewer notes: the last run diff is two lines added in `HealStepShardingContractTest.test_collection_error_strings_are_present`, pinning the in-group `| ` prefix on the shard log replay, so no new defect comes from this hunk. The contract tests cover partition truth, the anchored per-module prefix filter, the per-module empty-collection guard, the failing-shard tail prefix, and the missing/non-numeric `rc` paths (ci.yml:994-1103). The pre-push gate's 5 \"failures caused by this change\" are out of scope of this diff.\n(All other checklist categories: NONE.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\u201d\n  Expected change site: `.github/workflows/ci.yml`, moving the selected step or steps out of `tests-heal-plan-and-validation` and into the job with the most headroom.\n  Evidence of absence: The workflow diff moves no steps to another job. Instead, it adds 14 modules to the existing step\u2019s four shards. The issue does not defer the requested move to a follow-up.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n(All other checklist categories: NONE.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nNote: the TASK COMPLETENESS section was NONE. The reviewer skipped the \"Move its slowest steps\" requirement because the approved plan (PR comment 6717834140) resolved it to shard in place (ci.yml:998-1009), so it was not re-raised. The reviewer verified that the assertion at tests/test_ci_poll_test_sharding.py:4130 is byte-identical to ci.yml:1084.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2a7706de40b8c7b5820cbce549a1fc5dfb8dd89f68207905cf6bb24168c4a38b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9048,
+    "run_id": "42463930652",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42463930652",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108085529_4abca79715",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9048,
+    "run_id": "42463930652"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T08:55:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
