@@ -392,3 +392,14 @@ Copy this block when adding a new entry:
   - No open issue carries its port marker: `gh issue list -R shubhodeep1/coding-workflows -l ai:workflow-heal -s open --search 'in:body "Ported from heal:"' --json number --jq length` prints `0`.
   - `tests/test_heal_port_to_default.py` (and its `ci.yml` entry) and the `heal-port` subcommand of `scripts/workflow_failure_heal.py` are removed in the same PR.
 - **Owner:** @shubhodeep1
+
+### `scripts/chatgpt_codex_relay.py` + the `chatgpt/` review-panel slot (`run_chatgpt_reviewer` in `scripts/review_run_reviewers.sh`, the `chatgpt` engine of `scripts/review_untrusted_sandbox.sh`, the "ChatGPT pool token" step of `.github/workflows/review_autofix.yml`)
+
+- **Introduced in:** PR for #9044 (2026-11-08), Refs #8969
+- **Type:** long-running
+- **Removal trigger:** when the review panel no longer has a `chatgpt/` slot (the ChatGPT account reviewer trial ends or the slot is retired).
+- **Removal preflight checks:**
+  - `REVIEWER_MODELS` in `.github/workflows/review_autofix.yml` and `.github/ai/chatgpt_pool.json` on `main` and `stable` reference no `chatgpt/` slot, and `gh variable get REVIEWER_CHATGPT_SLOT_ENABLED -R shubhodeep1/coding-workflows` is unset or `false`.
+  - The broker's `GET /v1/chatgpt/status` (`.github/actions/chatgpt-pool-token` with `mode: status`) shows no account read in the last 7 days.
+  - `grep -rn "chatgpt_codex_relay\|run_chatgpt_reviewer\|chatgpt-slot" .github/workflows scripts` returns no callers other than the files removed in the same PR, and `tests/test_review_chatgpt_reviewer_slot.py` (and its `ci.yml` entry) go with them.
+- **Owner:** @shubhodeep1

@@ -151,6 +151,14 @@ env:
   # Sonnet run does not succeed it retries once on this pool model; a
   # pool-wide outage skips the slot (status skipped_pool).
   REVIEWER_POOL_FALLBACK_MODEL: ${{ vars.REVIEWER_POOL_FALLBACK_MODEL || 'claude-haiku-5-5' }}
+  # ChatGPT account reviewer slot (trial plan Phase 2, Refs #8969). Off unless
+  # the trusted .github/ai/chatgpt_pool.json has reviewer_slot_enabled: true
+  # (shipped false). REVIEWER_CHATGPT_SLOT_ENABLED=true|false overrides the
+  # file; empty reads it. REVIEWER_CHATGPT_MODEL / REVIEWER_CHATGPT_REPLACES
+  # override the file's model and the panel slug it replaces.
+  REVIEWER_CHATGPT_SLOT_ENABLED: ${{ vars.REVIEWER_CHATGPT_SLOT_ENABLED || '' }}
+  REVIEWER_CHATGPT_MODEL: ${{ vars.REVIEWER_CHATGPT_MODEL || '' }}
+  REVIEWER_CHATGPT_REPLACES: ${{ vars.REVIEWER_CHATGPT_REPLACES || '' }}
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
   # Capacity-fallback editor (autofix) model. On the final editor attempt
   # scripts/review_apply_fixes.sh switches --model to this slug, which sits in
@@ -2402,6 +2410,47 @@ jobs:
           fi
           echo "AI_ENGINE_RESOLVED_PANEL_REVIEWER=${panel_engine}" >> "$GITHUB_ENV"
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+          # ChatGPT account reviewer slot: resolved once from the trusted
+          # support copy of chatgpt_pool.json, never the PR checkout. A
+          # missing helper, a failure or any invalid value means off.
+          chatgpt_slot=false
+          chatgpt_model=""
+          chatgpt_replaces=""
+          chatgpt_reasoning=""
+          chatgpt_line=""
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/claude_engine.py" ]; then
+            chatgpt_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/claude_engine.py" chatgpt-slot \
+              --config "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src/.github/ai/chatgpt_pool.json" \
+              --override "${REVIEWER_CHATGPT_SLOT_ENABLED:-}" --model "${REVIEWER_CHATGPT_MODEL:-}" \
+              --replaces "${REVIEWER_CHATGPT_REPLACES:-}" 2>/dev/null)" || chatgpt_line=""
+          fi
+          for chatgpt_kv in ${chatgpt_line}; do
+            case "${chatgpt_kv}" in
+              enabled=true) chatgpt_slot=true ;;
+              model=*) chatgpt_model="${chatgpt_kv#model=}" ;;
+              replaces=*) chatgpt_replaces="${chatgpt_kv#replaces=}" ;;
+              reasoning=*) chatgpt_reasoning="${chatgpt_kv#reasoning=}" ;;
+            esac
+          done
+          [ -n "${chatgpt_model}" ] && [ -n "${chatgpt_replaces}" ] || chatgpt_slot=false
+          # No account is fetched for a slot whose replaced slug is not on the panel.
+          if [ "${chatgpt_slot}" = "true" ] && ! printf '%s\n' "${REVIEWER_MODELS:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fx -- "${chatgpt_replaces}" >/dev/null; then
+            chatgpt_slot=false
+            chatgpt_line="${chatgpt_line} panel=replaces_not_in_panel"
+          fi
+          # Logged when the slot is on, an operator set the switch, or a configured slot was forced off;
+          # a plain switch-off or a missing file stays silent, so off-path logs stay unchanged.
+          chatgpt_forced_off=false
+          case "${chatgpt_line}" in *panel=replaces_not_in_panel*|*reason=var_invalid*|*reason=config_invalid*) chatgpt_forced_off=true ;; esac
+          if [ "${chatgpt_slot}" = "true" ] || [ -n "${REVIEWER_CHATGPT_SLOT_ENABLED:-}" ] || [ "${chatgpt_forced_off}" = "true" ]; then
+            echo "REVIEWER_CHATGPT: resolve slot=${chatgpt_slot} ${chatgpt_line:-reason=helper_unavailable}"
+          fi
+          {
+            echo "chatgpt_slot=${chatgpt_slot}"
+            echo "chatgpt_model=${chatgpt_model}"
+            echo "chatgpt_replaces=${chatgpt_replaces}"
+            echo "chatgpt_reasoning=${chatgpt_reasoning}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI
         if: env.PR_CLOSED != 'true' && steps.ai_engine.outputs.any_claude == 'true'
@@ -2416,6 +2465,19 @@ jobs:
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      # ChatGPT account reviewer slot (Refs #8969): runs only when the trusted
+      # switch resolved on. The action writes a 0600 auth.json under
+      # $RUNNER_TEMP/chatgpt-pool/ and its post step deletes it; a failure
+      # skips the slot (chatgpt_pool_unavailable), never the review.
+      - name: ChatGPT pool token
+        id: chatgpt_pool
+        if: env.PR_CLOSED != 'true' && steps.ai_engine.outputs.chatgpt_slot == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/chatgpt-pool-token
+        with:
+          mode: token
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Record Claude pool capacity
@@ -3467,6 +3529,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
+          REVIEWER_CHATGPT_SLOT_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_slot || '' }}
+          REVIEWER_CHATGPT_MODEL_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_model || '' }}
+          REVIEWER_CHATGPT_REPLACES_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_replaces || '' }}
+          REVIEWER_CHATGPT_REASONING_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_reasoning || '' }}
+          CHATGPT_POOL_STEP_AVAILABLE: ${{ steps.chatgpt_pool.outputs.available || '' }}
+          CHATGPT_POOL_STEP_REASON: ${{ steps.chatgpt_pool.outputs.reason || '' }}
+          CHATGPT_POOL_STEP_ACCOUNT: ${{ steps.chatgpt_pool.outputs.account || '' }}
+          CHATGPT_POOL_STEP_CODEX_HOME: ${{ steps.chatgpt_pool.outputs.codex_home || '' }}
         run: |
           set -euo pipefail
           materiality_pid=""

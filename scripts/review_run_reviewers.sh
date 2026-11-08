@@ -1677,6 +1677,127 @@ reviewer_pick_seeded_models() {
   done
 }
 
+# ── ChatGPT account review-panel slot: switch + tier pinning ──
+# Trial plan Phase 2 (Refs #8969). The "Resolve AI engine" step resolves the
+# switch once from the trusted .github/ai/chatgpt_pool.json
+# (claude_engine.py chatgpt-slot) and passes REVIEWER_CHATGPT_*_RESOLVED.
+# Every unset value means off: the panel, the tiers and the log stay exactly
+# as before. When on, the `replaces` slug (default openai/gpt-6-luna) becomes
+# chatgpt/<model> in the same panel position, served by run_chatgpt_reviewer
+# on the ChatGPT account, never OpenRouter. These run before the tier
+# classifier, so they are defined here, ahead of reviewer_is_pool_slot.
+REVIEWER_CHATGPT_SLOT_ACTIVE=false
+REVIEWER_CHATGPT_SLOT_SLUG=""
+
+reviewer_is_chatgpt_slot() {
+  case "${1:-}" in
+    chatgpt/*) return 0 ;;
+  esac
+  return 1
+}
+
+# An account slot: the Claude pool slot (anthropic/claude-*, see
+# reviewer_is_pool_slot) or the ChatGPT account slot.
+reviewer_is_account_slot() {
+  case "${1:-}" in
+    anthropic/claude-*|chatgpt/*) return 0 ;;
+  esac
+  return 1
+}
+
+reviewer_chatgpt_slot_resolve() {
+  local chatgpt_switch="${REVIEWER_CHATGPT_SLOT_RESOLVED:-}"
+  local chatgpt_model="${REVIEWER_CHATGPT_MODEL_RESOLVED:-}"
+  local chatgpt_replaces="${REVIEWER_CHATGPT_REPLACES_RESOLVED:-}"
+  local chatgpt_entry
+  local chatgpt_swapped=false
+  local -a chatgpt_panel=()
+
+  REVIEWER_CHATGPT_SLOT_ACTIVE=false
+  REVIEWER_CHATGPT_SLOT_SLUG=""
+  [ "${chatgpt_switch}" = "true" ] || return 0
+  if ! [[ "${chatgpt_model}" =~ ^[a-z0-9][a-z0-9.-]{0,63}$ ]] || ! [[ "${chatgpt_replaces}" =~ ^[a-z0-9-]+/[a-z0-9._-]+$ ]]; then
+    echo "REVIEWER_CHATGPT: switch=on swap=skipped reason=invalid_resolved_value"
+    return 0
+  fi
+  while IFS= read -r chatgpt_entry; do
+    [ -z "${chatgpt_entry}" ] && continue
+    if [ "${chatgpt_swapped}" = "false" ] && [ "${chatgpt_entry}" = "${chatgpt_replaces}" ]; then
+      chatgpt_panel+=("chatgpt/${chatgpt_model}")
+      chatgpt_swapped=true
+    else
+      chatgpt_panel+=("${chatgpt_entry}")
+    fi
+  done <<< "$(normalize_reviewer_model_list "${REVIEWER_MODELS:-}")"
+  if [ "${chatgpt_swapped}" != "true" ]; then
+    echo "REVIEWER_CHATGPT: switch=on swap=skipped reason=replaces_not_in_panel replaces=${chatgpt_replaces}"
+    return 0
+  fi
+  REVIEWER_MODELS="$(printf '%s\n' "${chatgpt_panel[@]}")"
+  REVIEWER_CHATGPT_SLOT_ACTIVE=true
+  REVIEWER_CHATGPT_SLOT_SLUG="chatgpt/${chatgpt_model}"
+  echo "REVIEWER_CHATGPT: switch=on swap=${chatgpt_replaces}->${REVIEWER_CHATGPT_SLOT_SLUG}"
+}
+
+# Tier pinning while the slot is active and the tier's slug variable is empty
+# (a configured slug list still wins): lite runs the account slots;
+# standard runs them plus (4 - pinned) seeded draws from the other live
+# models, in panel order; full is unchanged. Returns 1 (caller falls through
+# to the seeded random pick) when the panel has no account slot.
+reviewer_chatgpt_tier_pin() {
+  local tier="$1"
+  shift
+  local chatgpt_pin_model
+  local chatgpt_pin_want=0
+  local -A chatgpt_pin_picked=()
+  local -a chatgpt_pin_pinned=()
+  local -a chatgpt_pin_rest=()
+  local -a chatgpt_pin_draw=()
+  local -a chatgpt_pin_selected=()
+
+  for chatgpt_pin_model in "$@"; do
+    if reviewer_is_account_slot "${chatgpt_pin_model}"; then
+      chatgpt_pin_pinned+=("${chatgpt_pin_model}")
+    else
+      chatgpt_pin_rest+=("${chatgpt_pin_model}")
+    fi
+  done
+  [ "${#chatgpt_pin_pinned[@]}" -gt 0 ] || return 1
+
+  if [ "${tier}" = "lite" ]; then
+    reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${chatgpt_pin_pinned[@]}"
+    REVIEW_TIER_ACTIVE_MODELS_SOURCE="pinned_lite"
+    return 0
+  fi
+
+  chatgpt_pin_want=$((4 - ${#chatgpt_pin_pinned[@]}))
+  [ "${chatgpt_pin_want}" -ge 0 ] || chatgpt_pin_want=0
+  [ "${chatgpt_pin_want}" -le "${#chatgpt_pin_rest[@]}" ] || chatgpt_pin_want="${#chatgpt_pin_rest[@]}"
+  if [ "${chatgpt_pin_want}" -gt 0 ]; then
+    while IFS= read -r chatgpt_pin_model; do
+      [ -z "${chatgpt_pin_model}" ] && continue
+      chatgpt_pin_draw+=("${chatgpt_pin_model}")
+      chatgpt_pin_picked["${chatgpt_pin_model}"]=1
+    done < <(reviewer_pick_seeded_models "${chatgpt_pin_want}" "${PR_NUMBER:-0}" "${chatgpt_pin_rest[@]}")
+    # A broken pick fails open to the full panel, as the random path does.
+    if [ "${#chatgpt_pin_draw[@]}" -ne "${chatgpt_pin_want}" ]; then
+      echo "::warning::Review tier ${tier} pinned reviewer pick returned ${#chatgpt_pin_draw[@]} of ${chatgpt_pin_want} models. Failing open to full reviewer set." >&2
+      reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "$@"
+      REVIEW_TIER_ACTIVE_MODELS_SOURCE="fallback_full_random_pick_failed"
+      return 0
+    fi
+  fi
+  for chatgpt_pin_model in "$@"; do
+    if reviewer_is_account_slot "${chatgpt_pin_model}" || [ -n "${chatgpt_pin_picked["${chatgpt_pin_model}"]:-}" ]; then
+      chatgpt_pin_selected+=("${chatgpt_pin_model}")
+    fi
+  done
+  reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${chatgpt_pin_selected[@]}"
+  REVIEW_TIER_ACTIVE_MODELS_SOURCE="pinned_standard"
+  return 0
+}
+# ── End ChatGPT account review-panel slot: switch + tier pinning ──
+
 resolve_review_tier_active_models() {
   local tier="$1"
   local selected_raw=""
@@ -1728,6 +1849,11 @@ resolve_review_tier_active_models() {
   # PR number. A repo that sets the variable keeps exactly the reviewers it
   # names (validated below).
   if [ -z "$(normalize_reviewer_model_list "${selected_raw}")" ]; then
+    # ChatGPT account slot active: pin the account slots (see
+    # reviewer_chatgpt_tier_pin). Off, this branch is never entered.
+    if [ "${REVIEWER_CHATGPT_SLOT_ACTIVE:-false}" = "true" ] && reviewer_chatgpt_tier_pin "${tier}" "${live_models[@]}"; then
+      return 0
+    fi
     # Pool for the random pick: the whole live panel, except that an unpinned
     # lite tier draws from the standard tier's reviewer list when a repo sets
     # that list and every slug in it is on the panel. The default list is
@@ -1775,6 +1901,11 @@ resolve_review_tier_active_models() {
 
   while IFS= read -r model; do
     [ -z "${model}" ] && continue
+    # ChatGPT slot active: a configured slug naming the replaced panel slug
+    # means the account slot now in its panel position.
+    if [ "${REVIEWER_CHATGPT_SLOT_ACTIVE:-false}" = "true" ] && [ "${model}" = "${REVIEWER_CHATGPT_REPLACES_RESOLVED:-}" ]; then
+      model="${REVIEWER_CHATGPT_SLOT_SLUG}"
+    fi
     if [ -z "${live_models_map["${model}"]:-}" ]; then
       invalid_model="${model}"
       break
@@ -1978,6 +2109,7 @@ classify_review_tier() {
 }
 # ── End reviewer risk-tier helpers ───────────────────────────────────
 
+reviewer_chatgpt_slot_resolve
 classify_reviewer_risk_tier
 classify_review_tier
 
@@ -5690,6 +5822,195 @@ run_pool_reviewer() {
   esac
   return 0
 }
+# ── ChatGPT account review-panel slot (PANEL_REVIEWER_CHATGPT) ──
+# A chatgpt/<model> panel entry (put there by reviewer_chatgpt_slot_resolve)
+# runs the Codex CLI on the ChatGPT account from
+# .github/actions/chatgpt-pool-token, in a read-only `prepare-ephemeral
+# chatgpt` review sandbox behind scripts/chatgpt_codex_relay.py, which alone
+# holds the credential. One attempt, no fallback model, no OpenRouter. Any
+# unavailability skips the slot with status skipped_pool and logs
+# AI_ENGINE_FALLBACK role=PANEL_REVIEWER_CHATGPT reason=<r> action=skip:
+# switch_off, chatgpt_pool_unavailable (no credential, prepare failed),
+# auth_rejected, quota_exhausted, run_failed. It writes the same
+# output/status/log files as run_reviewer and ends with the same REVIEWER_POOL
+# line as run_pool_reviewer; only a success feeds the circuit breaker.
+run_chatgpt_reviewer() {
+  local model="$1"
+  local safe_name="$2"
+  local output_prefix="${3:-review}"
+  local prompt_file="${4:-${REVIEWER_PROMPT_FILE}}"
+  local reasoning_level="${5:-}"
+  local output_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.txt"
+  local status_file="${PREVIOUS_REVIEWS_DIR}/status_${output_prefix}_${safe_name}.txt"
+  local log_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.log"
+  local chatgpt_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+  local chatgpt_slot_model="${model#chatgpt/}"
+  local chatgpt_reasoning=""
+  local chatgpt_runtime_dir=""
+  local chatgpt_prompt_file=""
+  local chatgpt_sandbox_root=""
+  local chatgpt_skip_reason=""
+  local chatgpt_detail=""
+  local chatgpt_attempt=0
+  local chatgpt_attempt_rc=0
+  local chatgpt_attempt_output=""
+  local chatgpt_attempt_stderr=""
+  local chatgpt_attempt_wall=0
+  local chatgpt_budget_remaining=0
+  local chatgpt_rejected_file=""
+  local chatgpt_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
+  local chatgpt_success_model=""
+
+  : > "${log_file}"
+
+  chatgpt_log() {
+    printf '%s\n' "$*" | tee -a "${log_file}" >&2
+  }
+
+  chatgpt_finish() {
+    local chatgpt_final_status="$1"
+    local chatgpt_final_message="$2"
+    if [ -n "${chatgpt_sandbox_root}" ]; then
+      REVIEW_SANDBOX_ROOT="${chatgpt_sandbox_root}" bash "${chatgpt_sandbox_sh}" cleanup 2>>"${log_file}" \
+        || chatgpt_log "::warning::Reviewer slot ${model}: ChatGPT review sandbox cleanup failed."
+      chatgpt_sandbox_root=""
+    fi
+    [ -z "${chatgpt_runtime_dir}" ] || rm -rf "${chatgpt_runtime_dir}" 2>/dev/null || true
+    if [ "${chatgpt_final_status}" != "success" ]; then
+      printf '%s\n' "${chatgpt_final_message}" > "${output_file}"
+    fi
+    echo "${chatgpt_final_status}" > "${status_file}"
+    if [ "${chatgpt_final_status}" = "skipped_pool" ]; then
+      chatgpt_log "AI_ENGINE_FALLBACK role=PANEL_REVIEWER_CHATGPT reason=${chatgpt_skip_reason:-run_failed} action=skip"
+    fi
+    if [ "${chatgpt_final_status}" = "success" ] && command -v reviewer_record_health_outcome >/dev/null 2>&1; then
+      reviewer_record_health_outcome "${model}" "primary_success" "${chatgpt_success_model}" "" "${log_file}" || true
+    fi
+    chatgpt_log "REVIEWER_POOL: slot=${model} pass=${output_prefix} status=${chatgpt_final_status} model=${chatgpt_success_model:-${chatgpt_slot_model:-none}} attempts=${chatgpt_attempt} reason=${chatgpt_skip_reason:-none}"
+    if command -v reviewer_log_slot_state >/dev/null 2>&1; then
+      reviewer_log_slot_state "${log_file}" "${model}" 0 none 0 false false unknown false >&2
+    fi
+  }
+
+  if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    chatgpt_log "Reviewer slot ${model} skipped — PR #${PR_NUMBER} was closed/merged."
+    chatgpt_finish pr_closed "Reviewer slot ${model} skipped because PR #${PR_NUMBER} was closed or merged."
+    return 0
+  fi
+
+  if [ "${REVIEWER_CHATGPT_SLOT_ACTIVE:-false}" != "true" ] || [ "${model}" != "${REVIEWER_CHATGPT_SLOT_SLUG:-}" ]; then
+    chatgpt_skip_reason="switch_off"
+    chatgpt_finish skipped_pool "Reviewer slot ${model} skipped: the ChatGPT reviewer slot is switched off (.github/ai/chatgpt_pool.json reviewer_slot_enabled)."
+    return 0
+  fi
+  if ! [[ "${chatgpt_slot_model}" =~ ^[a-z0-9][a-z0-9.-]{0,63}$ ]]; then
+    chatgpt_skip_reason="switch_off"
+    chatgpt_finish skipped_pool "Reviewer slot ${model} skipped: its ChatGPT model is invalid."
+    return 0
+  fi
+  if [ "${CHATGPT_POOL_STEP_AVAILABLE:-}" != "true" ] || [ -z "${CHATGPT_POOL_STEP_CODEX_HOME:-}" ]; then
+    chatgpt_skip_reason="chatgpt_pool_unavailable"
+    chatgpt_finish skipped_pool "Reviewer slot ${model} skipped: no ChatGPT account credential is available (${CHATGPT_POOL_STEP_REASON:-unknown})."
+    return 0
+  fi
+
+  chatgpt_budget_remaining="$(date +%s)"
+  if command -v codex_run_budget_remaining_secs >/dev/null 2>&1; then
+    chatgpt_budget_remaining="$(codex_run_budget_remaining_secs "${chatgpt_budget_remaining}" 2>/dev/null || true)"
+  else
+    chatgpt_budget_remaining="$(reviewer_budget_remaining_secs_fallback "${chatgpt_budget_remaining}")"
+  fi
+  case "${chatgpt_budget_remaining}" in
+    ''|*[!0-9]*) chatgpt_budget_remaining=0 ;;
+  esac
+  if [ "${chatgpt_budget_remaining}" -lt 300 ]; then
+    chatgpt_log "Reviewer slot ${model} skipped — only ${chatgpt_budget_remaining}s of run budget remain (need 300s)."
+    chatgpt_finish skipped_budget "Reviewer slot ${model} skipped because the run budget is nearly exhausted."
+    return 0
+  fi
+  chatgpt_attempt_wall=$((chatgpt_budget_remaining - 120))
+  if [ "${chatgpt_attempt_wall}" -gt "${chatgpt_max_wall}" ]; then
+    chatgpt_attempt_wall="${chatgpt_max_wall}"
+  fi
+
+  # The configured slot reasoning (chatgpt_pool.json `reasoning`) wins; the
+  # pass's reviewer reasoning is the fallback.
+  case "${REVIEWER_CHATGPT_REASONING_RESOLVED:-}" in
+    none|low|medium|high|xhigh) chatgpt_reasoning="${REVIEWER_CHATGPT_REASONING_RESOLVED}" ;;
+    *) chatgpt_reasoning="$(reviewer_base_reasoning_effort "${reasoning_level}")" ;;
+  esac
+
+  chatgpt_runtime_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/chatgpt_reviewer.${safe_name}.XXXXXX")"
+  chatgpt_prompt_file="$(prepare_reviewer_prompt_for_model "${model}" "${prompt_file}" "${safe_name}" "${chatgpt_runtime_dir}" "${log_file}")"
+  if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+    sanitize_codex_prompt_file "${chatgpt_prompt_file}"
+  fi
+  if [ ! -s "${chatgpt_prompt_file}" ]; then
+    chatgpt_skip_reason="run_failed"
+    chatgpt_log "Reviewer slot ${model}: its review prompt was empty."
+    chatgpt_finish skipped_pool "Reviewer slot ${model} skipped: its review prompt was empty."
+    return 0
+  fi
+
+  if [ ! -f "${chatgpt_sandbox_sh}" ] \
+    || ! chatgpt_sandbox_root="$(cd "${WORKSPACE_PATH:-${GITHUB_WORKSPACE:-$PWD}}" && bash "${chatgpt_sandbox_sh}" prepare-ephemeral chatgpt 2>>"${log_file}")" \
+    || [ -z "${chatgpt_sandbox_root}" ]; then
+    chatgpt_sandbox_root=""
+    chatgpt_skip_reason="chatgpt_pool_unavailable"
+    chatgpt_finish skipped_pool "Reviewer slot ${model} skipped: the ChatGPT review sandbox could not be prepared."
+    return 0
+  fi
+
+  chatgpt_attempt=1
+  chatgpt_attempt_output="${chatgpt_runtime_dir}/attempt_1.txt"
+  chatgpt_attempt_stderr="${chatgpt_runtime_dir}/attempt_1.err"
+  chatgpt_log "Reviewer slot ${model}: ${chatgpt_slot_model} on the ChatGPT account (effort ${chatgpt_reasoning}, wall ${chatgpt_attempt_wall}s)."
+  CHATGPT_POOL_CODEX_HOME="${CHATGPT_POOL_STEP_CODEX_HOME}" REVIEW_SANDBOX_ROOT="${chatgpt_sandbox_root}" \
+    timeout --signal=TERM --kill-after=30s "${chatgpt_attempt_wall}s" \
+    bash "${chatgpt_sandbox_sh}" run "${chatgpt_prompt_file}" "${chatgpt_attempt_output}" "${chatgpt_slot_model}" "${chatgpt_reasoning}" /dev/null chatgpt PANEL_REVIEWER read \
+    2>"${chatgpt_attempt_stderr}" || chatgpt_attempt_rc=$?
+  tee -a "${log_file}" < "${chatgpt_attempt_stderr}" >&2 || true
+  if [ "${chatgpt_attempt_rc}" -eq 0 ] && { reviewer_output_has_findings "${chatgpt_attempt_output}" || reviewer_output_has_explicit_none "${chatgpt_attempt_output}"; }; then
+    mv -f "${chatgpt_attempt_output}" "${output_file}"
+    chatgpt_success_model="${chatgpt_slot_model}"
+    chatgpt_log "Reviewer slot ${model} (${chatgpt_slot_model}) succeeded."
+    chatgpt_finish success ""
+    return 0
+  fi
+  case "${chatgpt_attempt_rc}" in
+    0)
+      chatgpt_detail="malformed_output"
+      chatgpt_skip_reason="run_failed"
+      ;;
+    76)
+      # Reasons come only from the sandbox's stderr, never from model output.
+      chatgpt_skip_reason="$({ grep -Eo 'AI_ENGINE_FALLBACK role=PANEL_REVIEWER_CHATGPT reason=[a-z_]+' "${chatgpt_attempt_stderr}" 2>/dev/null || true; } | tail -n 1 | sed 's/.*reason=//')"
+      case "${chatgpt_skip_reason}" in
+        chatgpt_pool_unavailable|auth_rejected|quota_exhausted|run_failed) ;;
+        *) chatgpt_skip_reason="run_failed" ;;
+      esac
+      chatgpt_detail="${chatgpt_skip_reason}"
+      ;;
+    124|137)
+      chatgpt_detail="timeout"
+      chatgpt_skip_reason="run_failed"
+      ;;
+    *)
+      chatgpt_detail="exit_${chatgpt_attempt_rc}"
+      chatgpt_skip_reason="run_failed"
+      ;;
+  esac
+  chatgpt_log "Reviewer slot ${model} (${chatgpt_slot_model}) did not succeed (exit=${chatgpt_attempt_rc}, reason=${chatgpt_skip_reason}, detail=${chatgpt_detail})."
+  if [ "${chatgpt_detail}" = "malformed_output" ] && [ -s "${chatgpt_attempt_output}" ]; then
+    # Keep up to 64 KiB next to the per-reviewer log, as run_pool_reviewer
+    # does; the rejected_ prefix keeps it out of the reviewer-output globs.
+    chatgpt_rejected_file="${PREVIOUS_REVIEWS_DIR}/rejected_${output_prefix}_${safe_name}_attempt1.txt"
+    head -c 65536 "${chatgpt_attempt_output}" > "${chatgpt_rejected_file}" 2>/dev/null || true
+  fi
+  chatgpt_finish skipped_pool "Reviewer slot ${model} skipped: the ChatGPT account run did not succeed (${chatgpt_skip_reason})."
+  return 0
+}
+# ── End ChatGPT account review-panel slot ──
 # ── Two-pass reviewer architecture ──────────────────────────────────────
 # Pass 1: broad sweep at lower thinking level → collect findings
 # Cross-pollination: summarise pass 1 findings for pass 2 context
@@ -5776,6 +6097,8 @@ run_reviewer_pass() {
 
     if reviewer_is_pool_slot "${model}"; then
       run_pool_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2 &
+    elif reviewer_is_chatgpt_slot "${model}"; then
+      run_chatgpt_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2 &
     else
       run_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2 &
     fi
@@ -5853,6 +6176,50 @@ run_reviewer_pass() {
         pass_budget_skipped=1
         # A sole-slot context overflow is deferrable when GPT cannot start.
         pass_hard_failures=0
+      fi
+    fi
+  fi
+
+  # Lite floor (ChatGPT trial plan Phase 2): a pinned lite pass made only of
+  # account slots that ended with no success runs one seeded live reviewer
+  # from the rest of the panel, so no PR is left unreviewed. Off when the
+  # ChatGPT slot is inactive.
+  if [ "${REVIEW_TIER:-}" = "lite" ] && [ "${REVIEWER_CHATGPT_SLOT_ACTIVE:-false}" = "true" ] \
+    && [ "${pass_successful}" -eq 0 ] && [ "${#pass_models[@]}" -gt 0 ] \
+    && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER:-}" ]; then
+    local chatgpt_floor_all_account=true
+    local chatgpt_floor_model=""
+    local chatgpt_floor_safe=""
+    local chatgpt_floor_status=""
+    local chatgpt_floor_entry
+    local -a chatgpt_floor_pool=()
+    for chatgpt_floor_entry in "${pass_models[@]}"; do
+      reviewer_is_account_slot "${chatgpt_floor_entry}" || chatgpt_floor_all_account=false
+    done
+    if [ "${chatgpt_floor_all_account}" = "true" ]; then
+      while IFS= read -r chatgpt_floor_entry; do
+        [ -z "${chatgpt_floor_entry}" ] && continue
+        reviewer_is_account_slot "${chatgpt_floor_entry}" || chatgpt_floor_pool+=("${chatgpt_floor_entry}")
+      done <<< "$(normalize_reviewer_model_list "${REVIEWER_MODELS}")"
+      if [ "${#chatgpt_floor_pool[@]}" -gt 0 ]; then
+        chatgpt_floor_model="$(reviewer_pick_seeded_models 1 "${PR_NUMBER:-0}" "${chatgpt_floor_pool[@]}" | head -n 1)"
+      fi
+      if [ -n "${chatgpt_floor_model}" ] && {
+        ! reviewer_circuit_breaker_enabled || {
+          reviewer_health_dispatch_prepare "${chatgpt_floor_model}"
+          [ "${REVIEWER_HEALTH_DISPATCH_DECISION}" != "skip_open" ]
+        }
+      }; then
+        echo "REVIEWER_CHATGPT: lite_floor model=${chatgpt_floor_model} reason=account_slots_unsuccessful" >&2
+        chatgpt_floor_safe="$(echo "${chatgpt_floor_model}" | tr '/.:' '___')"
+        run_reviewer "${chatgpt_floor_model}" "${chatgpt_floor_safe}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2
+        chatgpt_floor_status="$(cat "${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_${chatgpt_floor_safe}.txt" 2>/dev/null || true)"
+        if [ "${chatgpt_floor_status}" = "success" ]; then
+          pass_successful=1
+          reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${chatgpt_floor_model}"
+        elif [ "${chatgpt_floor_status}" = "skipped_budget" ]; then
+          pass_budget_skipped=1
+        fi
       fi
     fi
   fi
