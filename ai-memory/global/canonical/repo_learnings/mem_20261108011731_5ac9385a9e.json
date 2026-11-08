@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Changes to review gates have paired targeted tests covering clean or terminal same-head cases, CI freshness, pre-push checks, and sandbox-only conflict resolution. When modifying review automation, preserve these distinct safety cases rather than relying only on broad workflow tests.",
+  "fingerprint": "b6c231d5e846b55459142c5847c439428a6dd48e64bce0e6c01bb9b4278648c3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42433228848",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42433228848",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8973",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8980",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8994",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9016",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9018",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8989",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9003",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9009",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9017",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9019"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261108011731_5ac9385a9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Review/autofix safety behavior is guarded by focused tests for same-head skips, freshness, and conflict handling.",
+  "timestamps": {
+    "created_at": "2026-11-08T01:17:31Z",
+    "promoted_at": "2026-11-08T01:18:07Z",
+    "superseded_at": null
+  }
+}
