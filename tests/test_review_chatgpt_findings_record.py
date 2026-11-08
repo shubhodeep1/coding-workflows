@@ -625,3 +625,32 @@ def test_credential_shaped_header_values_are_dropped(tmp_path: Path, use_redacto
 	assert second["rejection_kind"] is None
 	assert second["flagged_by"] == ["google/gemini-4-pro"]
 	assert "issue_header_redacted" in json.loads(raw)["warnings"]
+
+
+def test_merged_from_and_flagged_by_credentials_warn(tmp_path: Path) -> None:
+	env = _fixture(tmp_path)
+	text = ISSUES_TEXT.replace("MERGED_FROM: 003, 004", "MERGED_FROM: 003, AKIAIOSFODNN7EXAMPLE").replace(
+		"FLAGGED_BY: google/gemini-4-pro", "FLAGGED_BY: google/gemini-4-pro, ghp_" + SECRET_TAIL
+	)
+	_write(Path(env["RUNTIME_DIR"]) / "review_issues.txt", text)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	assert _run(env, output).returncode == 0
+	raw = output.read_text(encoding="utf-8")
+	assert "AKIAIOSFODNN7EXAMPLE" not in raw
+	assert SECRET_TAIL not in raw
+	record = json.loads(raw)
+	assert record["issues"][0]["merged_from"] == ["003"]
+	assert record["issues"][1]["flagged_by"] == ["google/gemini-4-pro"]
+	assert record["consolidator"]["flagged_by_dropped"] == 1
+	assert "issue_header_redacted" in record["warnings"]
+
+
+def test_hyphenated_path_with_sk_is_kept(tmp_path: Path) -> None:
+	env = _fixture(tmp_path)
+	text = ISSUES_TEXT.replace("FILE: docs/bar.md", "FILE: src/task-management-overview.ts")
+	_write(Path(env["RUNTIME_DIR"]) / "review_issues.txt", text)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	assert _run(env, output).returncode == 0
+	record = json.loads(output.read_text(encoding="utf-8"))
+	assert record["issues"][1]["file"] == "src/task-management-overview.ts"
+	assert "issue_header_redacted" not in record["warnings"]

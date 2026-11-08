@@ -78,7 +78,7 @@ CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 # (GitHub, OpenAI / OpenRouter / Anthropic, Slack, AWS). Checked even when
 # workflow_failure_heal.redact_secrets cannot be imported.
 CREDENTIAL_SHAPE_RE = re.compile(
-	r"(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|sk-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})"
+	r"(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})"
 )
 
 ISSUE_START_RE = re.compile(r"^=== ISSUE ([0-9]+) ===$")
@@ -314,8 +314,7 @@ def parse_review_issues(text: str, warnings: set[str], safe_to_slug: dict[str, s
 					flagged_by.append(entry)
 			else:
 				token = _flagged_by_token(entry, safe_to_slug)
-				if token is not None and CREDENTIAL_SHAPE_RE.search(token):
-					token = None
+				token = _credential_free(token, warnings)
 				if token is None:
 					flagged_by_dropped += 1
 				elif token not in flagged_by:
@@ -326,7 +325,9 @@ def parse_review_issues(text: str, warnings: set[str], safe_to_slug: dict[str, s
 		merged_from: list[str] = []
 		for entry in re.split(r"[,\s]+", block.get("MERGED_FROM") or ""):
 			if entry and MERGED_ID_RE.match(entry) and entry not in merged_from:
-				merged_from.append(entry)
+				# MERGED_FROM is untrusted consolidator text: screen it like the other headers.
+				if _credential_free(entry, warnings) is not None:
+					merged_from.append(entry)
 		file_value = None
 		if block.get("FILE"):
 			file_value = _clean_text(block["FILE"], MAX_FILE_PATH_LEN)
