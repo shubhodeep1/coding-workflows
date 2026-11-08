@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:113 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The header comment (\"may repeat one of them up to GH_RETRY_MAX_ATTEMPTS times\") overstates the retry count by one, because GH_RETRY_MAX_ATTEMPTS is the total attempt count.\n  WHY: The header's API-budget section is read as a contract, so the wording allows one extra call per read compared with what the code does. The reviewer rated it SEVERITY: NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/unblock_judge.sh:113 | severity=NIT | confidence=3\n  PROBLEM: The comment overstates the retry count by one. `GH_RETRY_MAX_ATTEMPTS` is the total attempt count (`scripts/gh_helpers.sh:1061-1087`, `while [ \"${_attempt}\" -le \"${_max}\" ]`), so a transient failure is repeated at most `GH_RETRY_MAX_ATTEMPTS - 1` times. With the test default of 1 it is never repeated.\n  WHY: There is no runtime failure. Operators read the header to budget API calls, and as written it allows one extra call per read compared with what the code does.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4a4e48154d5440b0d43a9e3a4e02fe034128bdd7e505fb265a6fac0771fda48f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9064,
+    "run_id": "42492185753",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42492185753",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108151456_9ceeebc8ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9064,
+    "run_id": "42492185753"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-08T15:14:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
