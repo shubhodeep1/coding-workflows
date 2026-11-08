@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_findings_record.py:324-334 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In parse_review_issues, the `passthrough_blocks_skipped` check (`if PASSTHROUGH_START_RE.match(line)`) runs inside the parse loop. That loop exits at `if len(issues) >= MAX_ISSUES: truncated = True; break` when it reaches the 501st issue header. review_parse_consolidator.sh line 969 (`cat \"${parsed_blocks_file}\" \"${passthrough_file}\" > \"${REVIEW_ISSUES_FILE}\"`) always appends passthrough blocks after the parsed blocks, so once the cap trips the loop never reaches them.\n  WHY: A round with more than 500 parsed issues plus uncovered reviewer anchors gets a record that has `issues_truncated` but no `passthrough_blocks_skipped`, which contradicts the agents fragment (`agents.d/chatgpt-review-findings-record.md`) and the log-prefix registry. All four reviewers rated it SEVERITY: NIT, mapped here to low; there was no disagreement. The suggested fix is about 2 lines: run one regex search over `text` before or after the loop, or check in the truncation branch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_findings_record.py:parse_review_issues | severity=NIT | confidence=4\n  PROBLEM: The passthrough warning check sits at the top of the `for line in text.splitlines():` loop, and the cap branch `if len(issues) >= MAX_ISSUES: truncated = True; break` exits that loop. scripts/review_parse_consolidator.sh line 969 runs `cat \"${parsed_blocks_file}\" \"${passthrough_file}\" > \"${REVIEW_ISSUES_FILE}\"`, and lines 954-962 write the passthrough blocks as `=== ISSUE PASSTHROUGH ${pass_code} ===`. Passthrough blocks therefore always come after the parsed blocks.\n  WHY: With more than 500 issues plus uncovered anchors, the record carries `issues_truncated` but not `passthrough_blocks_skipped`, which contradicts the agents fragment. Suggested fix: a whole-text `re.search(r\"(?m)^=== ISSUE PASSTHROUGH [0-9]+ ===$\", text)`, or read `passthrough_blocks=<n>` from the parser stats file (write_stats line 34). Impact is low because it only happens above the cap. The reviewer also gave this as a hardening suggestion (2 lines, HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_findings_record.py:parse_review_issues for-loop | severity=NIT | confidence=4\n  PROBLEM: The passthrough-block warning is only checked inside the issue-parsing loop, and that loop breaks after 500 issues. `review_parse_consolidator.sh` concatenates `passthrough_file` AFTER `parsed_blocks_file` (line 969, `cat \"${parsed_blocks_file}\" \"${passthrough_file}\" > \"${REVIEW_ISSUES_FILE}\"`), so once the cap is reached the warning is never added.\n  WHY: With more than 500 issues plus any uncovered reviewer anchor, `warnings` omits `passthrough_blocks_skipped`, which contradicts `agents.d/chatgpt-review-findings-record.md` and the log-prefix registry. Operators cannot tell from `warnings` that passthrough blocks were skipped. The reviewer also gave this as a hardening suggestion: run one whole-text regex scan before the loop, or replace the `break` with a flag and a final scan (2 lines, HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_findings_record.py:324-334 | severity=NIT | confidence=4\n  PROBLEM: Passthrough-block detection runs inside the parsing loop, which stops when it reaches the issue cap.\n  WHY: With 500 parsed issues followed by passthrough blocks, the next issue header triggers the `break` before those blocks are scanned, so the record omits `passthrough_blocks_skipped`. The parser appends passthrough blocks after the parsed blocks (`scripts/review_parse_consolidator.sh`, line 969). The reviewer also gave this as a hardening suggestion: detect passthrough headers before the `break` at line 334 or independently of the loop (2 lines, HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_findings_record.py:324-334 | severity=NIT | confidence=4\n  PROBLEM: The `passthrough_blocks_skipped` warning is only emitted while the parse loop is running. The loop exits at `if len(issues) >= MAX_ISSUES: truncated = True; break` (line 332-334) on the 501st issue header. review_parse_consolidator.sh appends `=== ISSUE PASSTHROUGH <n> ===` blocks after all parsed issue blocks, so the loop never reaches them.\n  WHY: With more than 500 parsed issues plus uncovered reviewer anchors, the record reports `issues_truncated` but omits `passthrough_blocks_skipped`, so it understates what was left out. Suggested fix (1-2 lines): move detection out of the loop, or add the check in the truncation branch.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7d5a1aa5ee53c3afec7fb12ed20ea93c2541b08900652c30559267edc656df8d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9054,
+    "run_id": "42473024872",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42473024872",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261108110941_6090f5ceb0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9054,
+    "run_id": "42473024872"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-08T11:09:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
