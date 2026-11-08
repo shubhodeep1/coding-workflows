@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Should this issue produce a code change, and if so, how much should the actionlint download retries be hardened?\nContext: The failure was a GitHub-side 504 lasting about 7 seconds of retries (backoff of 1s, 2s and 4s), and it has now happened twice. Every option below keeps the pinned version, the `ACTIONLINT_SHA256` check, `-sSLf`, `--connect-timeout 20` and `--max-time 120`. The contract test allows at most `--retry 5`, so going above 5 would also mean changing that test.\nChoices:\n- A: Make no code change. Re-run CI runs 42465389350 and 42465385872 and close this issue as a transient outage.\n- B: Harden the retries within the current test limit: change the actionlint `curl` in `.github/workflows/ci.yml` to `--retry 5 --retry-delay 5`, which waits about 25 seconds in total. Update the step comment to cite CI run 42465389350, and keep `tests/test_ci_actionlint_install_retry.py` passing, adding an assertion for the new delay if useful. (RECOMMENDED)\n- C: Harden further: keep `--retry 5` but add `--retry-max-time 300` with a longer fixed `--retry-delay` (for example 15), so the download can wait out an outage of a few minutes. Update the comment and the contract test the same way as in B.",
+  "fingerprint": "bcf7658a9bbea3bec2132570b9db04d811e95ead2012ee02ead6f1467d01c671",
+  "lineage": {
+    "issue_number": 9053,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42466657293",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42466657293",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261108092240_79d033f3e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9053,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42466657293"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #9053 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-08T09:22:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
