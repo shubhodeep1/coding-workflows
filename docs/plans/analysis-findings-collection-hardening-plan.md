@@ -346,17 +346,52 @@ Each run therefore makes at most the effective candidate cap plus
 
 Marker-carrying docs can still fill the front of the newest-first scan:
 under D5, docs from failed or closed projects keep their markers (the lookup
-matches closed tracking issues too) and are never purged. When the marker
-cap is reached before any doc is printed, the scan does not report an empty
-backlog. Dispatch mode logs `APPLY_ANALYSIS_SKIPPED
-reason=scan_capped_behind_markers searches=<n>` instead of
-`all_docs_processed`, and list-only mode adds `capped_behind_markers=true` to
-its `APPLY_ANALYSIS_CANDIDATES` line. `scripts/promote_main_cycle.sh` then
-skips with `PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers` instead
-of `insufficient_docs`, at WARNING level, naming the skipped docs. The fix
-is a human decision, as D5 intends: record each abandoned doc in the
-processing report (which also makes it eligible for the P5 purge), or raise
+matches closed tracking issues too) and are never purged. The scan reports
+that case instead of an empty backlog. "Capped" means the marker cap stopped
+the scan while at least one candidate was still unexamined; a cap reached on
+the last candidate is a complete scan, so a backlog of exactly 20
+marker-carrying docs still ends as `all_docs_processed`.
+
+How the capped state leaves `unprocessed_docs`: both callers run it as
+`docs_output="$(unprocessed_docs)"` (lines 405 and 448), so stdout stays the
+doc list and nothing else. A global flag would be lost in the subshell, and
+return code 2 keeps meaning `guard_unavailable`. So:
+
+- stdout carries only doc paths, as today, including any docs printed
+  before the cap stopped the scan;
+- `APPLY_ANALYSIS_CANDIDATE_CAP` and the per-doc marker-skip warnings go to
+  stderr, which both callers let through to the job log;
+- a capped scan returns a new code, 3. Return 0 still means a complete scan
+  and 2 still means a failed lookup.
+
+The callers handle return code 3 as follows:
+
+- list-only mode counts the printed docs as before and appends
+  `capped_behind_markers=true` to its `APPLY_ANALYSIS_CANDIDATES` line (it
+  writes that line itself, at line 418);
+- dispatch mode dispatches normally when docs were printed. With no doc
+  printed it logs `APPLY_ANALYSIS_SKIPPED reason=scan_capped_behind_markers
+  searches=<n>` instead of `all_docs_processed`.
+
+`scripts/promote_main_cycle.sh` already reads the `APPLY_ANALYSIS_CANDIDATES`
+line from stdout. When that line carries `capped_behind_markers=true` and the
+count is below `PROMOTE_CYCLE_MIN_DOCS`, which includes a capped scan that
+printed one doc, it skips with `PROMOTE_CYCLE_SKIPPED
+reason=scan_capped_behind_markers available=<n> required=<m>` instead of
+`insufficient_docs`. It also prints that line as a `::warning::` annotation.
+The script and its workflow step have no Telegram credential, so the
+annotation and the log line are the whole alert, and no workflow change is
+needed. The docs that used up the cap are named by the dispatcher's existing
+per-doc `::warning::... was dispatched to the orchestrator before` lines,
+which reach the same job log through stderr. The fix is a human decision, as
+D5 intends: record each abandoned doc in the processing report (which also
+makes it eligible for the P5 purge), or raise
 `APPLY_ANALYSIS_MAX_MARKER_SEARCHES`.
+
+At the defaults a run makes at most 3 + 20 = 23 `search/issues` calls, plus
+one comments read for each doc whose search matched. Hitting the search rate
+limit mid-scan fails that lookup, and the run skips as `guard_unavailable`,
+the existing fail-closed outcome.
 
 The bound applies in both modes. A failed lookup still fails closed as
 `guard_unavailable` (the loop guard must never dispatch a doc it could not
@@ -431,7 +466,7 @@ P3's `coverage.repositories_failed`, so P2 merges after both P1 and P3.
 | P3 | Collector `coverage`, coverage log line, alert, prompt sentence | `scripts/collect_workflow_logs.py`, `workflow-log-analysis.yml`, `prompts/_templates/mode-workflow-analysis.txt` (+ regenerated `prompts/mode-workflow-analysis.txt`), tests | revert; the extra JSON key is ignored by readers |
 | P4 | `since_last_report` input, window marker, gate covers all repos | `workflow-log-analysis.yml`, `test-and-mark-stable.yml`, tests | `WORKFLOW_LOG_ANALYSIS_GATE_ALL_REPOS=false`; the input defaults to off |
 | P5 | The purge keeps every unprocessed doc (D5) | `workflow-log-analysis.yml`, tests | revert |
-| P6 | Check findings first in the project description; bound the marker searches | `scripts/apply_analysis_on_main.sh`, `scripts/promote_main_cycle.sh`, `tests/test_apply_analysis_on_main.py`, `README.md` | revert |
+| P6 | Check findings first in the project description; bound the marker searches | `scripts/apply_analysis_on_main.sh`, `scripts/promote_main_cycle.sh`, `tests/test_apply_analysis_on_main.py`, `tests/test_promote_main_cycle.py`, `README.md` | revert |
 
 Each phase is safe in production at merge:
 
@@ -562,22 +597,39 @@ Each phase is safe in production at merge:
    default 3, raised to `PROMOTE_CYCLE_MIN_DOCS` when that is larger) or
    `APPLY_ANALYSIS_MAX_MARKER_SEARCHES` docs (default 20) have been skipped
    for a dispatch marker, whichever comes first. Both are positive integers
-   defaulted in the script. When the marker cap is reached with no doc
-   printed, emit the `scan_capped_behind_markers` reason (dispatch mode) or
-   `capped_behind_markers=true` (list-only mode) from the Approach, and make
-   `scripts/promote_main_cycle.sh` log
-   `PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers` with a WARNING
-   alert. Test that:
+   defaulted in the script. Keep stdout to doc paths only, send the cap log
+   to stderr, and return 3 when the marker cap stopped the scan with at least
+   one candidate unexamined (see the Approach). Update both callers: list-only
+   mode treats 3 as success and appends `capped_behind_markers=true`;
+   dispatch mode dispatches the printed docs, or logs
+   `reason=scan_capped_behind_markers` when none was printed. Make
+   `scripts/promote_main_cycle.sh` skip with
+   `PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers` and a
+   `::warning::` annotation when the candidates line is capped and its count
+   is below `PROMOTE_CYCLE_MIN_DOCS`. Test that:
    - a backlog of 10 unprocessed docs makes 3 searches in either mode;
    - with `PROMOTE_CYCLE_MIN_DOCS=4`, a backlog of 10 unprocessed docs
      prints 4 and logs `APPLY_ANALYSIS_CANDIDATE_CAP raised_to=4`;
    - a backlog of 25 docs that all carry a dispatch marker makes 20 searches,
      prints none and logs `reason=scan_capped_behind_markers`, not
      `all_docs_processed` or `insufficient_docs`;
+   - exactly 20 docs that all carry a dispatch marker end as
+     `all_docs_processed`, not `scan_capped_behind_markers`;
+   - 1 unprocessed doc followed by 25 marker-carrying docs prints that doc,
+     lists `count=1 ... capped_behind_markers=true`, and in dispatch mode
+     dispatches it;
+   - no cap log line appears on stdout in either mode;
    - marker-carrying docs ahead of an unprocessed doc within the marker cap
      do not hide it;
    - list-only mode still reports `count=2` or more when at least 2
      unprocessed docs exist within the bound.
+
+   In `tests/test_promote_main_cycle.py`, next to
+   `test_insufficient_docs_skips_before_the_smoke_gate`, test that a capped
+   candidates line with `count=0` and one with `count=1` (below the default
+   minimum of 2) both skip with `reason=scan_capped_behind_markers` and a
+   `::warning::` line, and that an uncapped `count=1` still skips with
+   `insufficient_docs`.
 4. Add README rows for `APPLY_ANALYSIS_MAX_CANDIDATES` and
    `APPLY_ANALYSIS_MAX_MARKER_SEARCHES`, add both to the env-var header
    comment of `scripts/apply_analysis_on_main.sh`, add the
@@ -599,7 +651,8 @@ Each phase is safe in production at merge:
 - `scripts/promote_main_cycle.sh`: P6 (new skip reason)
 - Tests: `tests/test_collect_workflow_logs.py`,
   `tests/test_workflow_log_analysis_failure_contract.py`,
-  `tests/test_apply_analysis_on_main.py`, and new
+  `tests/test_apply_analysis_on_main.py`, `tests/test_promote_main_cycle.py`,
+  and new
   `tests/test_workflow_log_analysis_publish_report.py` and
   `tests/test_check_workflow_analysis_report.py`
 - Docs: `README.md` rows, `agents.d/` and `changelog.d/` fragments per phase
@@ -649,7 +702,8 @@ None.
   one named by an in-flight project (kept, `reason=in_flight_project`). A
   missing processing report must purge nothing and log
   `reason=processing_report_unavailable`.
-- **P6:** the description tests and the search-bound test above.
+- **P6:** the description tests, the search-bound tests and the
+  `tests/test_promote_main_cycle.py` skip tests above.
 - **Every phase:** run `python3 scripts/assemble_agents.py check --repo-root
   .`, `tests/test_workflow_file_size_limit.py`, and the existing
   `tests/test_workflow_untrusted_input_contract.py`.
@@ -677,7 +731,7 @@ None.
   bounds the number of searches in both modes (see P6). A failed lookup still
   skips the run, by design. Abandoned docs at the front of the scan can still
   use up the marker cap; that is logged as `scan_capped_behind_markers` with
-  a WARNING, never as an empty backlog.
+  a `::warning::` annotation, never as an empty backlog.
 - **The section jobs fail after the report branch exists.** `publish-report`
   still opens the PR, and the PR body says which sections are missing.
 - **The P6 wording changes how the orchestrator decomposes a project.** Only
