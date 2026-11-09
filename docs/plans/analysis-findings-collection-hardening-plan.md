@@ -87,8 +87,11 @@ in its own PR, so it is not part of this plan.
   run artifact even when that PR cannot be opened (Q4: A).
 - G2: The gate's analysis covers this repo plus every consumer in
   `.github/ai/consumer_repos.json` (Q5: A).
-- G3: The window starts where the last report on `main` ended, so gate runs
-  neither overlap nor leave gaps (Q6: A).
+- G3: The window starts where the last report on the branch ended, so gate
+  runs leave no gap while that report is at most 7 days old (Q6: A). An
+  older window end is clamped to 7 days, and with no readable marker the
+  window falls back to `lookback_days`; both are logged. Overlaps are
+  accepted (see P4). The outage since 2026-10-25 is not backfilled.
 - G4: A repo that could not be read, a capped run listing, a missing log
   directory, or a report that breaks the required structure is reported
   loudly, never silently (Q6: A).
@@ -141,7 +144,9 @@ in its own PR, so it is not part of this plan.
   - it pushes `HEAD:refs/heads/<run branch>`.
 
   It outputs `report_branch=<run branch>` next to `committed=` and
-  `report_file=`.
+  `report_file=`. The push uses `secrets.GH_PAT`, as the self-test precedent
+  does; without it the step logs `WORKFLOW_LOG_ANALYSIS_PUBLISH
+  outcome=failed reason=gh_pat_missing` and fails.
 - **Ruleset rejections.** A push refused by a ruleset (`GH006|GH013|protected
   branch|push declined|repository rule`, the same match the self-test uses)
   logs `WORKFLOW_LOG_ANALYSIS_PUBLISH outcome=failed
@@ -161,10 +166,17 @@ in its own PR, so it is not part of this plan.
     worth merging.
   - The existing review pipeline merges it, the same way as the self-test
     status PRs.
+  - `gh pr create` uses `secrets.GH_PAT`. A PR opened with `github.token`
+    starts no workflows, so its required checks never report and it cannot
+    merge. An empty `GH_PAT` logs `WORKFLOW_LOG_ANALYSIS_PUBLISH
+    outcome=failed reason=gh_pat_missing` and fails the job.
 - **Artifact.** The analyze job uploads the report file as artifact
   `workflow-log-analysis-report` with `if: always()` (retention 30 days)
   before "Commit and push report". If every later step fails, the findings
-  still exist.
+  still exist. That copy lacks the deep-audit and API-redundancy sections, so
+  `publish-report` uploads the run branch's final report again as
+  `workflow-log-analysis-report-final` (`if: always()`) before it opens the
+  PR.
 - **Repo variable `WORKFLOW_LOG_ANALYSIS_PUBLISH_MODE`.** It takes `pr`
   (default) or `push` (the old direct push to the dispatch branch, kept as the
   rollback path).
@@ -175,7 +187,8 @@ in its own PR, so it is not part of this plan.
   `--report <path> --collect-report workflow_log_report.json` and checks that:
   - all 11 required `## ` headings appear, in order;
   - `## Per-Repo Breakdown` has a `### ` subsection whose heading contains
-    each repository in `scope.repositories`;
+    each repository in `scope.repositories`, except repositories listed in
+    `coverage.repositories_failed` (P3) when that key is present;
   - the report is at least `--min-bytes` long (default 2,000).
 
   It prints `WORKFLOW_LOG_ANALYSIS_REPORT_CHECK outcome=ok|invalid
@@ -185,6 +198,7 @@ in its own PR, so it is not part of this plan.
   through the existing `handle_log_analysis_codex_failure`, so retries,
   failure markers and alerts are unchanged. A report that is still invalid
   after the last attempt is not committed, but the P1 artifact still holds it.
+  P2 therefore depends on P1 and must merge after it.
 - **Missing logs.** When the `workflow-log-output` download (already
   `continue-on-error`) is missing, the step logs
   `WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing` and adds a fixed line to the
@@ -201,7 +215,10 @@ in its own PR, so it is not part of this plan.
   `workflow_log_report.json`:
   `{"repositories_requested": [...], "repositories_failed": [{"repository",
   "message"}], "repositories_truncated": [...], "page_limit_reached": bool}`.
-  - `repositories_failed` is built from `errors[]` with `scope == "runs"`.
+  - `repositories_failed` lists repos whose run listing raised (the
+    collector's exception path), not every `errors[]` entry with
+    `scope == "runs"`: a `max-runs` cap appends an entry with the same scope
+    and counts only as truncated.
   - `repositories_truncated` lists repos where `capped` or
     `run_meta["page_limit_reached"]` was true.
   - Exit codes do not change (exit 1 only when every repo failed).
@@ -227,12 +244,18 @@ in its own PR, so it is not part of this plan.
 - **New `workflow_dispatch` input `since_last_report`** (string, default
   `"false"`). When it is `"true"`, and `since` is empty and this is not the
   PAT-budget run, the collect step reads the window end from the newest
-  `analysis/workflow-optimization-*.md` on the checked-out branch (version
-  sort, newest first), then:
-  - passes `--since <window_end>` when the window end is 1 to 7 days old;
-  - falls back to `--lookback-days` when there is no marker or the value
-    cannot be parsed;
-  - caps the window at 7 days.
+  `analysis/workflow-optimization-*.md` added on the checked-out branch, found
+  in git history (`git log --diff-filter=A`, then `git show <commit>:<path>`).
+  Reading history matters because an apply-analysis project's final PR
+  deletes its doc, and newest-first selection processes the newest doc first.
+  The step fetches at least 8 days of history (`git fetch --shallow-since`).
+  Then it:
+  - passes `--since <window_end>` when the window end is in the past and at
+    most 7 days old, however recent;
+  - passes `--since <now minus 7 days>` when the window end is older (the
+    window is clamped to 7 days, logged as `clamped=true`);
+  - falls back to `--lookback-days` when there is no marker, the value cannot
+    be parsed, the timestamp is in the future, or a git command fails.
 
   It logs `WORKFLOW_LOG_ANALYSIS_WINDOW source=last_report|lookback
   since=<ts> report=<path>`.
@@ -293,6 +316,13 @@ The rest of the text (scope, report entry, never touch the state files) is
 unchanged. The marker comment does not change, so the loop guard and the
 poller's marker parser are not affected.
 
+P6 also bounds the marker search, because D5 keeps every unprocessed doc. In
+dispatch mode, `unprocessed_docs` stops after it has printed
+`APPLY_ANALYSIS_MAX_CANDIDATES` docs (default 3, enough for the
+deleted-on-tip fallback), so each run makes at most that many
+`doc_dispatched_before` searches plus one per skipped already-dispatched doc.
+List-only mode keeps the full scan.
+
 ## Decisions
 
 ### D1 — Report delivery (Q4: A)
@@ -329,7 +359,8 @@ add a separate model call before dispatch.
 ### D7 — Phase split
 Six phases, each independently mergeable. P1 and P5 both edit "Commit and
 push report", and P4 and P2 both edit the analyze step. The merge train orders
-those edits, and none of the phases depends on another one being merged.
+those edits. One phase depends on another: P2 needs P1's report artifact,
+so P2 merges after P1.
 
 ## §18.E Automation summary
 
@@ -359,14 +390,15 @@ those edits, and none of the phases depends on another one being merged.
 | P3 | Collector `coverage`, coverage log line, alert, prompt sentence | `scripts/collect_workflow_logs.py`, `workflow-log-analysis.yml`, `prompts/_templates/mode-workflow-analysis.txt` (+ regenerated `prompts/mode-workflow-analysis.txt`), tests | revert; the extra JSON key is ignored by readers |
 | P4 | `since_last_report` input, window marker, gate covers all repos | `workflow-log-analysis.yml`, `test-and-mark-stable.yml`, tests | `WORKFLOW_LOG_ANALYSIS_GATE_ALL_REPOS=false`; the input defaults to off |
 | P5 | The purge keeps every unprocessed doc (D5) | `workflow-log-analysis.yml`, tests | revert |
-| P6 | Check findings first in the project description | `scripts/apply_analysis_on_main.sh`, `tests/test_apply_analysis_on_main.py` | revert |
+| P6 | Check findings first in the project description; bound the marker searches | `scripts/apply_analysis_on_main.sh`, `tests/test_apply_analysis_on_main.py` | revert |
 
 Each phase is safe in production at merge:
 
 - New behaviour is on by default with a repo-variable switch, or is additive.
 - The system works whichever subset of phases has merged.
-- P1 alone fixes the delivery outage, so it should be merged first. Nothing
-  requires that order, though.
+- P1 alone fixes the delivery outage, so it should be merged first. P2 must
+  merge after P1, because it withholds an invalid report from `main` and
+  relies on P1's artifact to keep it. No other phase depends on another.
 
 ## Implementation Steps
 
@@ -395,7 +427,8 @@ Each phase is safe in production at merge:
    - push to it with `git push origin HEAD:refs/heads/<report_branch>`.
 
    Otherwise keep today's behaviour.
-5. Add a `publish-report` job (`needs: [analyze-commit-notify, deep-audit,
+5. Add a `publish-report` job (env `GH_TOKEN: ${{ secrets.GH_PAT }}`, failing
+   with `reason=gh_pat_missing` when it is empty; `needs: [analyze-commit-notify, deep-audit,
    api-redundancy]`, `if: always() && needs.analyze-commit-notify.outputs.report_branch != ''`,
    `permissions: contents: read, pull-requests: write`). Model it on the
    self-test PR step:
@@ -439,7 +472,8 @@ Each phase is safe in production at merge:
 1. Add the `since_last_report` input (string, default `"false"`).
 2. In the collect step, add the branch before the `lookback_days` branch, as
    in the Approach. Only parse the first line, matched with an anchored
-   regex. Reject a timestamp in the future or more than 7 days old.
+   regex. A timestamp in the future falls back to `lookback_days`; one more
+   than 7 days old is clamped to 7 days.
 3. In the analyze step, add the window marker as the report's first line. The
    collect job outputs its start time as `window_end` and the computed
    `window_start`.
@@ -475,7 +509,12 @@ Each phase is safe in production at merge:
    - contain `before planning any implementation issue` and
      `If no finding is \`applied-candidate\``;
    - keep the marker lines unchanged.
-3. Add a changelog fragment.
+3. In `unprocessed_docs`, when `APPLY_ANALYSIS_LIST_ONLY` is not `true`,
+   return 0 once `APPLY_ANALYSIS_MAX_CANDIDATES` (default 3, positive
+   integer, defaulted in the script) docs have been printed. Test that a
+   backlog of 10 unprocessed docs makes at most 3 searches in dispatch mode
+   and 10 in list-only mode.
+4. Add a changelog fragment.
 
 ## Files & Modules
 
@@ -526,8 +565,10 @@ None.
 - **P4:** unit tests for the window branch:
   - a valid marker;
   - no marker;
-  - a future timestamp;
-  - more than 7 days old;
+  - a future timestamp (falls back);
+  - more than 7 days old (clamped to 7 days);
+  - under 1 day old (passed through);
+  - a marker found only in history (doc deleted on the tip);
   - `since` set explicitly, which wins.
 
   A contract test checks that the gate dispatch drops `repos_override` and
@@ -537,7 +578,7 @@ None.
   one named by an in-flight project (kept, `reason=in_flight_project`). A
   missing processing report must purge nothing and log
   `reason=processing_report_unavailable`.
-- **P6:** the description tests above.
+- **P6:** the description tests and the search-bound test above.
 - **Every phase:** run `python3 scripts/assemble_agents.py check --repo-root
   .`, `tests/test_workflow_file_size_limit.py`, and the existing
   `tests/test_workflow_untrusted_input_contract.py`.
@@ -558,10 +599,11 @@ None.
   overlap repeats findings, which the apply-analysis check classifies as
   already-implemented. It never leaves a gap.
 - **The `analysis/` backlog grows without limit (D5).** It is bounded only
-  by how fast the promote cycle processes docs. The docs are small Markdown
-  files, the dispatcher reads them locally, and the per-doc API calls stop at
-  the first unprocessed doc, which is the newest one. So the growth adds
-  checkout size, not API calls.
+  by how fast the promote cycle processes docs. The growth adds checkout size
+  and also API calls: `unprocessed_docs` calls `doc_dispatched_before` (one
+  `search/issues` call) for every doc not in the processing report, and one
+  failed lookup makes the dispatch skip as `guard_unavailable`. P6 therefore
+  bounds the scan in dispatch mode (see P6).
 - **The section jobs fail after the report branch exists.** `publish-report`
   still opens the PR, and the PR body says which sections are missing.
 - **The P6 wording changes how the orchestrator decomposes a project.** Only
