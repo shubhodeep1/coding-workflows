@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_checkout_head_diagnostics.py:146-151 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `layout` fixture skips only when `REAL_GIT is None` and never skips when `jq` is missing, although the step body calls `jq` (scripts/review_autofix_step_checkout_pr_head_branch.sh:150-151).\n  WHY: Without `jq`, every case aborts at the first `jq` call and fails with a misleading summary instead of skipping. Reviewers rated it NIT, and GitHub-hosted CI runners ship `jq`.\n- agents.d/wfopt-2026-10-08-review-checkout-diagnostics.md:2 | severity=low | confidence=3\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large`. openai_gpt-6-luna names this agents fragment as a candidate cause. z-ai_glm-5_3-flash says the failure cannot be attributed to the diff.\n  WHY: The failure is in the Copilot reviewer's prompt assembly, and no reviewer showed that this entry alone crossed the limit. The reviewers disagree on attribution; both rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_checkout_head_diagnostics.py: `layout` fixture, which skips only when `REAL_GIT is None` | severity=low | confidence=3\n  PROBLEM: The harness runs the real step body, which calls `jq` on `PR_META_FILE` and `PR_PAYLOAD_FILE`, but never skips when `jq` is missing.\n  WHY: On a runner without `jq`, every case fails with a misleading summary instead of skipping. CI runners ship `jq`, so this would not trigger there. The reviewer rated it NIT.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_checkout_head_diagnostics.py: `layout` fixture | severity=low | confidence=3\n  PROBLEM: The harness runs the real script body, which depends on `jq`, but does not check that `jq` exists or skip when it is missing.\n  WHY: Without `jq`, the test aborts with misleading error messages instead of skipping, which hinders CI debugging. The reviewer rated it NIT.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_checkout_head_diagnostics.py: `Layout` fixture / `Layout.env()` at lines ~140-200; `_summary` regex at the SUMMARY_RE definition | severity=low | confidence=3\n  PROBLEM: The harness runs the real step body, which calls `jq` on `PR_META_FILE` at script lines ~150 and ~165. The fixture skips only when `REAL_GIT` is `None` and does not probe for `jq`.\n  WHY: Without `jq`, every case aborts under `set -e` with exit 127 and reports a misleading failure instead of skipping, unlike the sibling convention. The reviewer rated it NIT.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_checkout_head_diagnostics.py:146-151 | severity=low | confidence=4\n  PROBLEM: The fixture skips when `git` is unavailable but does not check for `jq`, which the step body invokes at `scripts/review_autofix_step_checkout_pr_head_branch.sh:150-151`.\n  WHY: Without `jq`, the step exits at its first metadata lookup, so tests fail instead of skipping. The reviewer rated it NIT.\n- agents.d/wfopt-2026-10-08-review-checkout-diagnostics.md:2 | severity=low | confidence=3\n  PROBLEM: The PR's `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large`, and this lengthy new registry entry adds to that instruction context.\n  WHY: The run establishes the failure but does not prove this entry alone crossed the limit. The reviewer rated it NIT.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_checkout_head_diagnostics.py:104-140,150-156 | severity=low | confidence=4\n  PROBLEM: The harness runs the real step body, which requires `jq` (scripts/review_autofix_step_checkout_pr_head_branch.sh:150-151), but the fixture skips only when `REAL_GIT is None`.\n  WHY: Without `jq`, every case aborts under `set -e` with exit 127 and fails with a misleading summary assertion. The sibling convention is `needs_jq = pytest.mark.skipif(shutil.which(\"jq\") is None, ...)` in tests/test_update_workflows_pr_delivery.py:396. CI runners ship `jq`. The reviewer rated it NIT.\n- (not attributable to the diff) | severity=low | confidence=3\n  PROBLEM: The `copilot-pull-request-reviewer` check run on head SHA dab3687f failed with `Prompt too big after adding system message (errorCode: custom_instructions_too_large)`.\n  WHY: The failure is inside the Copilot reviewer action's prompt assembly, and the PR touches no files that feed it. The reviewer called it a pre-existing infra or configuration condition and rated it NIT.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d4171107f1ddf63ed10c6a41f5350177786ecac4beac81e838d5943647dcab95",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9131,
+    "run_id": "42621483131",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42621483131",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109134251_ba77f5108d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9131,
+    "run_id": "42621483131"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T13:42:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
