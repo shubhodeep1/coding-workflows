@@ -256,6 +256,40 @@ def test_dispatches_newest_unprocessed_doc_first_including_same_day_suffixes() -
 	assert len(final["dispatches"]) == 1
 
 
+def test_project_description_checks_findings_first_and_keeps_guardrails() -> None:
+	# Plan P6 (Refs #9116): the project must record a verdict for every finding
+	# against the current default branch before planning implementation issues.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": [_tracking(3)]}, docs=["analysis/workflow-optimization-2026-09-01.md"])
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	# Unescaped backticks in the unquoted heredoc would run as commands.
+	assert "command not found" not in proc.stderr
+	dispatch = final["dispatches"][0]
+	fields = {a.split("=", 1)[0]: a.split("=", 1)[1] for a in dispatch if "=" in a and not a.startswith("--")}
+	desc = fields["project_description"]
+	assert desc.startswith("Apply analysis recommendations from workflow-optimization-2026-09-01.md\n")
+	assert "before planning any implementation issue" in desc
+	assert "If no finding is `applied-candidate`" in desc
+	assert "`already-implemented`" in desc
+	assert "`rejected`" in desc
+	for guardrail in (
+		"never rename or remove existing identifiers without an alias",
+		"/db/contracts",
+		"no standalone manual scripts",
+		"never use auto-close keywords against ai:orchestrator-tracking issues",
+	):
+		assert guardrail in desc, guardrail
+	assert desc.index("before planning any implementation issue") < desc.index("never rename or remove existing identifiers")
+	assert "process ONLY the single source doc" in desc
+	assert "Source doc: analysis/workflow-optimization-2026-09-01.md (branch main at " in desc
+	assert "Never delete or modify analysis/last_collection_timestamp.txt or analysis/validation-selftest-status.json." in desc
+	assert re.search(r"(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s*:?\s*#\d+", desc) is None
+	marker = fields["tracking_comment"]
+	assert marker.startswith("<!-- apply-analysis-source-doc -->")
+	assert "apply-analysis-source-doc: analysis/workflow-optimization-2026-09-01.md\napply-analysis-role: proving" in marker
+	assert "dispatched=true" in final["github_output"]
+
+
 def test_untrusted_marker_comment_does_not_mark_a_doc_as_dispatched() -> None:
 	docs = ["analysis/workflow-optimization-2026-08-30.md", "analysis/workflow-optimization-2026-09-01.md"]
 	state = {
