@@ -1,0 +1,24 @@
+{
+  "discovered_at": "2026-11-09T22:12:15Z",
+  "issue_number": 9099,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Apply analysis recommendations from workflow-optimization-2026-10-08.md\" (#9099): issues stalled and needed automated recovery (1 time(s)). Causes: stuck in ai:implementing for 120m; recovery: retrigger_implement (#9102). Similar work may need smaller, more explicit issues for these phases.",
+  "phase": "orchestrator_completion",
+  "pr_number": 9107,
+  "record_id": "lesson-orchestrator-9099-stall-recovery-d031f72263f9dff5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:stall_recovery",
+    "project:9099",
+    "file:scripts/orchestrate_poll_process.sh",
+    "file:tests/test_orchestrate_poll_cycle_summary.py",
+    "file:agents.d/wfopt-2026-10-08-poller-cycle-timing.md",
+    "file:changelog.d/wfopt-2026-10-08-poller-cycle-timing.md",
+    "file:tests/test_actions_runs_fetch_unconfirmed_warning.py",
+    "file:tests/test_activation_verify.py",
+    "file:tests/test_ai_engine.py",
+    "file:tests/test_alert_levels_human_only.py",
+    "file:tests/test_branch_rebuild_threshold_decision_log.py",
+    "file:tests/test_ci_wires_every_test_file.py"
+  ]
+}
