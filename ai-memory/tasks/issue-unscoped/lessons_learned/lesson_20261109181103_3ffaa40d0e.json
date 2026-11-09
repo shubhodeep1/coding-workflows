@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-11-09T18:11:03Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 011 as out-of-scope; anchor=(none; external check run copilot-pull-request-reviewer 42661072645):n/a; cited_path=copilot-pull-request-reviewer check run (no repository file); files_touched=.github/workflows/ci.yml, .github/workflows/review_autofix.yml, scripts/activation_verify.sh, scripts/collect_workflow_logs.py, scripts/orchestrate_poll_process.sh, scripts/propagate_consumer_secrets.sh, scripts/review_autofix_step_checkout_pr_head_branch.sh, scripts/review_merge_train.sh, scripts/stage_workflow_support.sh.",
+  "phase": "review_autofix",
+  "pr_number": 9107,
+  "record_id": "lesson_20261109181103_3ffaa40d0e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer check run (no repository file)",
+    "(none; external check run copilot-pull-request-reviewer 42661072645)",
+    ".github/workflows/ci.yml",
+    ".github/workflows/review_autofix.yml",
+    "scripts/activation_verify.sh",
+    "scripts/collect_workflow_logs.py",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/propagate_consumer_secrets.sh",
+    "scripts/review_autofix_step_checkout_pr_head_branch.sh",
+    "scripts/review_merge_train.sh",
+    "scripts/stage_workflow_support.sh"
+  ]
+}
