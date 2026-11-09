@@ -3503,6 +3503,39 @@ def test_main_refetches_legacy_partial_snapshot_on_304() -> None:
 	assert written[-1]["repositories"]["owner/legacy"]["runs_etag"] is None
 
 
+def test_main_refetches_snapshot_within_a_page_of_page_cap_on_304() -> None:
+	"""Drift duplicates can leave a page-limited snapshot just below the cap."""
+	snapshot = [
+		collector._run_snapshot_for_cache(dict(_coverage_run(run_id), event="push"))
+		for run_id in (1, 2, 3)
+	]
+	cache = {"repositories": {"owner/drift": {"runs_etag": 'W/"drift"', "runs_snapshot": snapshot}}}
+	calls: list = []
+
+	def listing(repo: str, **kwargs):
+		calls.append(kwargs.get("etag"))
+		if kwargs.get("etag"):
+			return [], False, {"not_modified": True, "etag": 'W/"drift"'}
+		runs = [_coverage_run(run_id) for run_id in (1, 2, 3)]
+		return runs, False, {"not_modified": False, "etag": 'W/"fresh"', "page_limit_reached": True}
+
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-drift-") as td:
+		report_file = Path(td) / "report.json"
+		with patch.object(collector, "_cache_read_context", return_value=(cache, None, None)), \
+			patch.object(collector, "_cache_write_context", return_value=True), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main([
+				"--since", "2026-04-01T00:00:00Z", "--per-page", "2", "--max-pages", "2",
+				"--max-log-runs", "0", "--repo", "owner/drift", "--output", str(report_file),
+			])
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+	assert rc == 0
+	assert calls == ['W/"drift"', None]
+	assert report["coverage"]["repositories_truncated"] == ["owner/drift"]
+
+
 def test_build_report_omits_coverage_when_not_supplied() -> None:
 	report = collector.build_report(["owner/repo"], [], [])
 	assert "coverage" not in report

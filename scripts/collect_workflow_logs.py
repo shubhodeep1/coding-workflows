@@ -2126,7 +2126,9 @@ def main(argv: list[str] | None = None) -> int:
                     # or the page limit may be a partial listing cached before
                     # truncated ETags were dropped; a 304 carries no truncation
                     # flags, so refetch it to recompute coverage.
-                    snapshot_cap = min(1000, args.per_page * args.max_pages)
+                    # Drift-duplicate skipping can leave a page-limited
+                    # listing up to a page short of the cap; --max-runs is exact.
+                    snapshot_cap = max(1, min(1000, args.per_page * args.max_pages) - args.per_page)
                     if args.max_runs > 0:
                         snapshot_cap = min(snapshot_cap, args.max_runs)
                     snapshot_may_be_partial = len(cached_runs_snapshot) >= snapshot_cap
