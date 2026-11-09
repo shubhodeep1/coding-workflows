@@ -267,6 +267,15 @@ def test_unreadable_claude_probes_still_send_with_a_chatgpt_status(env: dict) ->
 	assert _sent_text(env).startswith("📊 Claude pool daily usage: probe results unreadable.")
 
 
+def test_send_with_an_oversized_chatgpt_status_reports_it_unavailable(env: dict) -> None:
+	status = json.dumps({"accounts": [], "pad": "x" * 100_001})
+	result = _run(env, "send", [_probe("ALPHA", 0.2, 0.1)], CHATGPT_POOL_STATUS=status, CHATGPT_POOL_STATUS_REASON="status")
+	assert result.returncode == 0 and "outcome=sent" in result.stdout
+	text = _sent_text(env)
+	assert text.startswith("📊 Claude pool daily usage: 1 account(s), 1 usable.\n")
+	assert "\n\nChatGPT accounts: unavailable (status_too_large).\n" in text
+
+
 def test_unknown_mode_never_fails(env: dict) -> None:
 	result = _run(env, "bogus")
 	assert result.returncode == 0

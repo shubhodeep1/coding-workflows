@@ -434,3 +434,17 @@ def test_orchestrate_poll_is_in_the_broker_allowlist() -> None:
 def test_ci_runs_this_file() -> None:
 	ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 	assert "tests/test_chatgpt_pool_health_alert.py" in ci
+
+
+def test_empty_outcome_is_stale_not_a_failed_refresh() -> None:
+	report = claude_engine.pool_health([], 0.9, now=NOW, chatgpt_status=_status(_account("ONE", hours_ago=None, outcome="")))
+	assert "stale (never refreshed)" in report["text"] and "last refresh failed" not in report["text"]
+	assert report["chatgpt_warning"] is True
+
+
+def test_shell_oversized_chatgpt_status_keeps_the_claude_alert(env: dict) -> None:
+	status = json.dumps({"accounts": [], "gate": 0.9, "pad": "x" * 100_001})
+	result = _run(env, [_claude_probe("ALPHA", 0.95, 0.1)], status, ALERT_MSG_LEVEL="DEBUG")
+	assert result.returncode == 0, result.stderr
+	assert "chatgpt_status=too_large" in result.stdout
+	assert "alert=sent" in result.stdout and "Claude pool: 1 of 1" in _sent_text(env)

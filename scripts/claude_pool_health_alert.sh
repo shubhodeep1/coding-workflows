@@ -65,6 +65,12 @@ case "$(printf '%s' "${CHATGPT_POOL_HEALTH_ALERT_ENABLED:-true}" | tr '[:upper:]
 	false|0|no|off) ;;
 	*) [ -z "${CHATGPT_POOL_STATUS:-}" ] || chatgpt_on=true ;;
 esac
+# An oversized status (over one argv element's limit) would fail the whole
+# engine call and drop the Claude alert too; skip only the ChatGPT part.
+if [ "${chatgpt_on}" = "true" ] && [ "${#CHATGPT_POOL_STATUS}" -gt 100000 ]; then
+	echo "::warning::CLAUDE_POOL_HEALTH chatgpt_status=too_large; ChatGPT part skipped"
+	chatgpt_on=false
+fi
 chatgpt_stale_hours="${CHATGPT_POOL_ALERT_STALE_HOURS:-12}"
 [[ "${chatgpt_stale_hours}" =~ ^[0-9]+([.][0-9]+)?$ ]] || chatgpt_stale_hours=12
 probes_json="${CLAUDE_POOL_PROBES:-}"

@@ -1090,6 +1090,8 @@ def _chatgpt_status_parse(raw: str | None) -> tuple[list[dict[str, Any]], float,
 		seen.add(name)
 		usage = entry.get("usage") if isinstance(entry.get("usage"), dict) else {}
 		outcome = entry.get("last_outcome")
+		if outcome == "":
+			outcome = None  # never refreshed: reported as stale, not as a failed refresh
 		if outcome is not None:
 			# A value outside the safe character set is still a non-ok outcome.
 			outcome = outcome if isinstance(outcome, str) and CHATGPT_STATUS_CODE_RE.fullmatch(outcome) else "unknown"

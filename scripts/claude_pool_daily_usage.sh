@@ -102,9 +102,16 @@ daily_usage_send()
 	# starts with `-` from being read as a flag; the engine re-validates it.
 	chatgpt_stale_hours="${CHATGPT_POOL_ALERT_STALE_HOURS:-12}"
 	[[ "${chatgpt_stale_hours}" =~ ^[0-9]+([.][0-9]+)?$ ]] || chatgpt_stale_hours=12
+	# An oversized status (over one argv element's limit) would fail the whole
+	# engine call; report it as unavailable instead of losing the Claude text.
+	local chatgpt_status="${CHATGPT_POOL_STATUS:-}" chatgpt_reason="${CHATGPT_POOL_STATUS_REASON:-}"
+	if [ "${#chatgpt_status}" -gt 100000 ]; then
+		chatgpt_status=""
+		chatgpt_reason="status_too_large"
+	fi
 	report_args+=(
-		"--chatgpt-status=${CHATGPT_POOL_STATUS:-}"
-		"--chatgpt-reason=${CHATGPT_POOL_STATUS_REASON:-}"
+		"--chatgpt-status=${chatgpt_status}"
+		"--chatgpt-reason=${chatgpt_reason}"
 		--chatgpt-stale-hours "${chatgpt_stale_hours}"
 	)
 	err_file="$(mktemp 2>/dev/null)" || err_file=/dev/null
