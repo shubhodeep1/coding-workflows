@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:1455-1460 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The gate-resolved branch removes `ai:planning` with `|| true`, so a failed removal is silent. There is no `label_state` capture, no `::warning::`, and no `label=` field in the resolved log line. This is weaker than the superseded close path it cites (plan.yml:1352-1371).\n  WHY: If the edit fails, the closed issue keeps `ai:planning` next to `ai:closed` with no operator-visible signal. All three reviewers rated this NIT; `ai:closed` takes precedence in phase resolution, so it is a label inconsistency and lost diagnostics, not a stall.\n- agents.md:4444 | severity=high | confidence=3\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The PR head's `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large` (422) while loading the custom instructions. The changed registry entry is part of those instructions.\n  WHY: The check aborts before producing a review. The reviewer says the check evidence does not isolate this entry's contribution to the size limit. Rated MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:1455-1460 | severity=low | confidence=4\n  PROBLEM: The comment at 1456-1457 says \"like the superseded close path (best effort)\", but the branch removes only `ai:planning` rather than three labels. It also uses `|| true`, with no `label_state` capture, no warning and no `label=` log field.\n  WHY: A failed removal silently leaves `ai:planning` on a closed issue next to `ai:closed`. The `PLAN_SUPERSEDED_MERGED_PR` registry line (agents.md:4444) documents `label=applied|failed`, and this branch does not contribute to it. Source severity: NIT.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/plan.yml:1458-1459 | severity=low | confidence=4\n  PROBLEM: The `ai:planning` label cleanup ignores failure with `|| true`.\n  WHY: If `gh issue edit` fails after the gate closes the issue, `ai:planning` stays alongside `ai:closed`. The workflow still logs `outcome=resolved` without exposing the failure. `ai:closed` takes precedence in phase resolution, so this is a label inconsistency and lost diagnostics, not a planning stall. Source severity: NIT.\n- agents.md:4444 | severity=high | confidence=3\n  PROBLEM: The PR head's `copilot-pull-request-reviewer` check fails while loading the custom instructions.\n  WHY: The check log reports `custom_instructions_too_large` (422) and aborts before producing a review. The check evidence does not isolate this entry's contribution to the size limit. Source severity: MAJOR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/plan.yml:1456-1460 | severity=low | confidence=4\n  PROBLEM: The new best-effort label cleanup is weaker than the superseded close path (plan.yml:1352-1365). That path sets `label_state=failed`, logs `label=failed` and emits a `::warning::` plus a Telegram note. The new `|| true` form has none of these. It also removes only `ai:planning`, though the reviewer concludes only the silent-failure half is real.\n  WHY: If the label write fails after the gate closes the issue, the closed issue keeps a phase label next to the terminal label. The resolved log still reports success, with no operator-visible signal. Source severity: NIT.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f00416ef199ea4d74028a090366ac6d115a853be7004619602595327fc6b68ef",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9126,
+    "run_id": "42675256051",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42675256051",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109185454_d752f9e6db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9126,
+    "run_id": "42675256051"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T18:54:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
