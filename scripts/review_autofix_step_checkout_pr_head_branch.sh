@@ -41,7 +41,7 @@ review_head_checkout_now_ms()
 {
   local review_head_checkout_now_value=""
   review_head_checkout_now_value="$(date +%s%3N 2>/dev/null || true)"
-  if [[ "${review_head_checkout_now_value}" =~ ^[0-9]+$ ]]; then
+  if [[ "${review_head_checkout_now_value}" =~ ^[0-9]{13,}$ ]]; then
     printf '%s' "${review_head_checkout_now_value}"
     return 0
   fi

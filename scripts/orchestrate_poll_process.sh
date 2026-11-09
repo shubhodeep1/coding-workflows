@@ -37,7 +37,7 @@ _orch_poll_cycle_now_ms()
 {
 	local _orch_poll_cycle_now_value=""
 	_orch_poll_cycle_now_value="$(date +%s%3N 2>/dev/null || true)"
-	if [[ "${_orch_poll_cycle_now_value}" =~ ^[0-9]+$ ]]; then
+	if [[ "${_orch_poll_cycle_now_value}" =~ ^[0-9]{13,}$ ]]; then
 		printf '%s' "${_orch_poll_cycle_now_value}"
 		return 0
 	fi
