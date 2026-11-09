@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `226abffcd9c865d84c1e20fb3aa7ec8dcf517ba6` on `main`. The integration branch mismatch is `unknown`, not `true`, so this run is not blocked.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_e2e_editor_smoke_canary.py\nACCEPTANCE: post-merge none: this smoke canary only changes data; post-merge checking is done by the end-to-end smoke workflow's own PR-branch check, not after merge.\n\n## Functions or modules to implement\n- None. This is a data-only edit. Overwrite `tests/e2e_smoke_canary.txt` so it holds exactly these bytes: `status: ok\\nrun_id: alt-42692493731\\nupdated-by: ai-pipeline\\n`. That is three LF-terminated lines with one trailing newline, matching the newline convention of the current file and `tests/e2e_smoke_canary_spec.txt`. There is no extra blank line and no CRLF.\n- The file currently holds `status: ok` and `decompose-run: 41445772297`. The `decompose-run` line is replaced.\n\n## Data structures affected\n- None.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Trailing newline\n- Chosen: end the last line with a single `\\n`.\n- Alternatives considered: no trailing newline.\n- Why: the current canary and the spec template both end each line with LF, and the byte-for-byte check in `tests/test_e2e_editor_smoke_canary.py` (`test_canary_matches_issue_spec_byte_for_byte`) compares content that ends in a newline.\n\n### D2 \u2014 Leave the spec template unchanged\n- Chosen: edit only `tests/e2e_smoke_canary.txt`.\n- Alternatives considered: also change `tests/e2e_smoke_canary_spec.txt`.\n- Why: the issue says to modify only the canary file.\n\n## Security considerations\n- No trust boundaries, endpoints, secrets or external input are touched. The only abuse case is the issue text itself, which is untrusted, and the edit simply writes its literal content.\n\n## Risks and edge cases\n- Open PR #9154 (issue #9149) and older smoke PRs also touch this file, so they may conflict on merge. These are separate smoke runs, not a duplicate of this issue's work.\n- `tests/test_e2e_editor_smoke_canary.py` skips unless the `E2E_*` environment variables are set, so it gives no CI signal either way. It also checks content fetched by the smoke workflow rather than this file directly.\n- Do not add any `E2E_EDITOR_BAIT_` marker.\n\n## Testing considerations\n- Check the result with `cat -A tests/e2e_smoke_canary.txt`. It should show exactly 3 lines ending in `$`.\n- Check that `git diff --stat` reports only this one file.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a single-file content replacement. No helpers, patterns or extra files apply. The complete change and the shortcut are the same change, so there is nothing to expand or reduce.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this smoke canary only changes data; post-merge checking is done by the end-to-end smoke workflow's own PR-branch check, not after merge.\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_e2e_editor_smoke_canary.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "5df376c9b74408378fc18c45ac06a76b49cf9e4d16b992fcdf1392a3dbd0ed92",
+  "lineage": {
+    "issue_number": 9150,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42694739019",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42694739019",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9150"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261109205624_bc1ba19cfa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9150,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42694739019"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9150",
+  "timestamps": {
+    "created_at": "2026-11-09T20:56:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
