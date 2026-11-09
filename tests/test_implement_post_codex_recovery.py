@@ -1870,7 +1870,7 @@ def test_commit_helper_self_repo_stages_allowlisted_github_ai_file() -> None:
 		assert ".github/ai/x.json" in committed, details
 		assert "tests/new_test.py" in committed, details
 		assert ".github/ai/y.json" not in committed, details
-		assert ".github/ai/y.json" in untracked.splitlines()
+		assert ".github/ai/y.json" in untracked.splitlines(), details
 
 
 def test_commit_helper_self_repo_github_ai_add_skips_glob_and_missing_allowlist() -> None:

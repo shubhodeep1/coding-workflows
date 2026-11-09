@@ -387,7 +387,9 @@ git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0
 # reads. The automation-path grant guard and the files_touched guard below
 # still check every staged path. Off switch:
 # IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED=false (unset/empty/true = on;
-# any other value = off with a warning). Consumer repos never run this.
+# any other value = off with a warning), read only from this script's
+# environment: implement.yml does not forward it from a repository variable.
+# Consumer repos never run this.
 if [ "${is_self_repo}" = "true" ]; then
   self_repo_github_ai_flag_raw="${IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED-}"
   self_repo_github_ai_flag="${self_repo_github_ai_flag_raw,,}"
@@ -415,20 +417,23 @@ if [ "${is_self_repo}" = "true" ]; then
     else
       self_repo_github_ai_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-github-ai-staged.XXXXXX")"
       self_repo_github_ai_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-github-ai-allowlist.XXXXXX")"
+      self_repo_github_ai_stderr_file="$(mktemp "${TMPDIR:-/tmp}/implement-github-ai-stderr.XXXXXX")"
       self_repo_github_ai_rc=0
       set +e
       python3 "${self_repo_github_ai_guard}" \
         "${self_repo_github_ai_input_flag}" "${self_repo_github_ai_input}" \
         --issue-number "${ISSUE_NUMBER:-}" \
         --staged-file "${self_repo_github_ai_staged_file}" \
-        --allowlist-out "${self_repo_github_ai_allowlist_file}" >/dev/null
+        --allowlist-out "${self_repo_github_ai_allowlist_file}" >/dev/null 2>"${self_repo_github_ai_stderr_file}"
       self_repo_github_ai_rc=$?
       set -e
+      cat -- "${self_repo_github_ai_stderr_file}" >&2 || true
       if [ "${self_repo_github_ai_rc}" -ne 0 ]; then
         if [ "${self_repo_github_ai_rc}" -eq 10 ]; then
           echo "::notice::self-repo .github/ai additions skipped (reason=no_allowlist)"
         else
-          echo "::notice::self-repo .github/ai additions skipped (reason=helper_rc_${self_repo_github_ai_rc})"
+          self_repo_github_ai_err="$(head -n1 -- "${self_repo_github_ai_stderr_file}" 2>/dev/null | tr -cd '[:print:]' | sed 's/::/: :/g' | cut -c1-200 || true)"
+          echo "::notice::self-repo .github/ai additions skipped (reason=helper_rc_${self_repo_github_ai_rc})${self_repo_github_ai_err:+ error=${self_repo_github_ai_err}}"
         fi
       elif [ ! -s "${self_repo_github_ai_allowlist_file}" ]; then
         echo "::notice::self-repo .github/ai additions skipped (reason=no_allowlist)"
@@ -446,7 +451,7 @@ if [ "${is_self_repo}" = "true" ]; then
           echo "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=${self_repo_github_ai_path}"
         done < <(git ls-files --others --exclude-standard -z -- .github/ai)
       fi
-      rm -f -- "${self_repo_github_ai_staged_file}" "${self_repo_github_ai_allowlist_file}"
+      rm -f -- "${self_repo_github_ai_staged_file}" "${self_repo_github_ai_allowlist_file}" "${self_repo_github_ai_stderr_file}"
     fi
   fi
 fi
