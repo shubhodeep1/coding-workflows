@@ -83,7 +83,9 @@ large_file_tests=""
 tests_file=""
 tests_file_given=0
 done_check_tests_file=""
+done_check_tests_file_given=0
 baseline_fail_file=""
+baseline_fail_file_given=0
 
 gate_log()
 {
@@ -115,8 +117,8 @@ while [ "$#" -gt 0 ]; do
 		--shards) shards="${2:-}"; shift 2 ;;
 		--large-file-tests) large_file_tests="${2:-}"; shift 2 ;;
 		--tests-only) [ "$#" -ge 2 ] || { synthetic_result usage_error; exit 0; }; tests_file="${2:-}"; tests_file_given=1; shift 2 ;;
-		--tests-file) done_check_tests_file="${2:-}"; shift 2 ;;
-		--expect-baseline-fail-file) baseline_fail_file="${2:-}"; shift 2 ;;
+		--tests-file) [ "$#" -ge 2 ] || { synthetic_result usage_error; exit 0; }; done_check_tests_file="${2:-}"; done_check_tests_file_given=1; shift 2 ;;
+		--expect-baseline-fail-file) [ "$#" -ge 2 ] || { synthetic_result usage_error; exit 0; }; baseline_fail_file="${2:-}"; baseline_fail_file_given=1; shift 2 ;;
 		*) gate_log "outcome=error reason=unknown_argument"; synthetic_result usage_error; exit 0 ;;
 	esac
 done
@@ -326,8 +328,9 @@ gate_input()
 		gate_log "outcome=warning reason=tests_file_rejected"
 	fi
 }
-[ -z "${done_check_tests_file}" ] || gate_input "${done_check_tests_file}" tests.txt --tests-file
-[ -z "${baseline_fail_file}" ] || gate_input "${baseline_fail_file}" baseline_fail.txt --expect-baseline-fail-file
+# An explicitly empty value is logged as rejected, not treated as absent.
+[ "${done_check_tests_file_given}" != 1 ] || gate_input "${done_check_tests_file}" tests.txt --tests-file
+[ "${baseline_fail_file_given}" != 1 ] || gate_input "${baseline_fail_file}" baseline_fail.txt --expect-baseline-fail-file
 [ "${inputs_used}" != true ] || mounts+=(--mount "type=bind,src=${root}/inputs,dst=/inputs,readonly")
 
 wall=$(( timeout_minutes * 60 + 120 ))

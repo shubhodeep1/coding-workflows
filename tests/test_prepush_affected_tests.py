@@ -1385,6 +1385,27 @@ def test_wrapper_trailing_tests_file_without_value_is_a_usage_error(tmp_path):
 	assert not log.exists()
 
 
+@pytest.mark.parametrize("flag", ["--tests-file", "--expect-baseline-fail-file"])
+def test_wrapper_trailing_done_check_option_without_value_is_a_usage_error(tmp_path, flag):
+	# A trailing option used to loop forever in the parser (shift 2 failed).
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, flag)
+	assert proc.returncode == 0
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["reason"] == "usage_error"
+	assert not log.exists()
+
+
+def test_wrapper_empty_done_check_value_is_logged_as_rejected(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-file", "")
+	assert proc.returncode == 0, proc.stderr
+	assert "reason=tests_file_rejected" in proc.stderr + proc.stdout
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert "--tests-file" not in run_line and "dst=/inputs" not in run_line
+
+
 TF_PR_MIXED = "def test_added():\n\tpass\n\n\ndef test_old_break():\n\tassert False\n"
 TF_BASE_MIXED = "def test_old_break():\n\tassert False\n"
 

@@ -14,7 +14,7 @@
 #                     (--sha SHA | --worktree DIR) [--repo DIR] [--remote NAME]
 #
 #   --tests-file  one `path[::name]` per line (blank lines and `#` comments
-#                 skipped), the --tests-file list of
+#                 skipped), passed as the --tests-only list of
 #                 scripts/prepush_test_gate_run.sh. Callers write it from the
 #                 `pairs` and `files` of extract_failing_tests
 #                 (scripts/workflow_failure_heal.py). Regular file, no
