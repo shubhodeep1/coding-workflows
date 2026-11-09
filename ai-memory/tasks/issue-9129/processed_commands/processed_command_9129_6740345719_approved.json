@@ -5,13 +5,24 @@
   "entry_id": "processed_command_9129_6740345719_approved",
   "issue_number": 9129,
   "metadata": {
+    "branch": "ai/issue-9129",
+    "changed_files": [
+      "changelog.d/wfopt-2026-10-08-activation-write-reconcile.md",
+      "scripts/activation_verify.sh",
+      "tests/test_activation_verify.py"
+    ],
+    "issue_number": 9129,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9129",
+    "pr_number": 9133,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9133",
+    "run_attempt": "1",
+    "run_id": "42619370601",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42619370601"
   },
   "run_attempt": 1,
   "run_id": "42619370601",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-09T12:53:19Z",
+  "status": "completed",
+  "timestamp": "2026-11-09T13:13:12Z",
   "workflow": "implement"
 }
