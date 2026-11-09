@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/propagate_consumer_secrets.sh:115-125 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The emptiness guard `if [ -n \"${PROPAGATE_TARGETS// /}\" ]; then` strips only spaces, so a tab-only or newline-only PROPAGATE_TARGETS passes the guard, yields an empty token array and empty TARGETS, and skips the registry fallback.\n  WHY: The run proceeds with zero targets (exit 0, `summary targets=0 set=0 skipped=0 failed=0`) instead of falling back to the registry; all reviewers rated it NIT, and minimax_minimax-m3 notes the old code reached validation and failed with `skipped_invalid_slug`, while z-ai_glm-5_3-flash says the old behaviour was the same zero-token result and the tests cover only \"\" and \"   \".\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue acceptance item (c) / \"Keep the documented semantics... the empty or whitespace-only behaviour... unchanged\": whitespace-only input still falls back to the registry\n  expected_change_site: scripts/propagate_consumer_secrets.sh line 117 (emptiness guard) and tests/test_propagate_consumer_secrets.py `test_whitespace_only_targets_fall_back_to_registry`\n  confidence=4\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: The guard `[ -n \"${PROPAGATE_TARGETS// /}\" ]` is left unchanged and strips only spaces, so tab-only or newline-only input yields no registry fallback, and the appended test exercises only \"\" and \"   \".\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/propagate_consumer_secrets.sh:117 (`if [ -n \"${PROPAGATE_TARGETS// /}\" ]; then`) | severity=NIT | confidence=2\n  PROBLEM: The guard strips only spaces, so a tab-only or newline-only value gives an empty array and empty TARGETS and skips the registry fallback.\n  WHY: The run proceeds with zero targets instead of falling back; the guard is unchanged by this PR and the issue says empty/whitespace behaviour must stay unchanged, so it is a note and not a required fix.\n- HARDENING_SUGGESTIONS: scripts/propagate_consumer_secrets.sh, the `read ... || true` line: `|| true` also hides a genuine `read` failure, and a non-blank value that yields zero tokens is accepted silently. Suggested fix: after the read, if the array is empty, print an `::error::propagate-consumer-secrets` line and exit 1 (about 4 lines). The reviewer does not recommend it for this PR because it conflicts with the issue's \"unchanged\" constraint. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/propagate_consumer_secrets.sh:115 | severity=NIT | confidence=2\n  PROBLEM: The emptiness guard `if [ -n \"${PROPAGATE_TARGETS// /}\" ]; then` only strips spaces, so tab-only or newline-only inputs yield an empty TARGETS and bypass the registry fallback.\n  WHY: The script executes with zero targets instead of falling back to the registry, potentially skipping consumer secret updates entirely.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/propagate_consumer_secrets.sh:117-125 | severity=NIT | confidence=3\n  PROBLEM: A tab-only or newline-only PROPAGATE_TARGETS bypasses the space-only guard, gives an empty array and TARGETS=\"\", and exits 0 with `summary targets=0 set=0 skipped=0 failed=0`; the pre-fix code produced `status=skipped_invalid_slug` with exit 1. The new test covers only \"\" and \"   \".\n  WHY: A misconfigured value now gives a green run with no work done instead of the previous explicit failure.\n- scripts/propagate_consumer_secrets.sh:117-122 | severity=NIT | confidence=3\n  PROBLEM: Same as the finding above: the tab/newline-only edge case is not guarded and not asserted by the appended tests, although the issue requires the empty/whitespace-only behaviour to stay unchanged.\n  WHY: The pure-tab / pure-newline case gives a green run with zero targets instead of the previous red run with a `skipped_invalid_slug` row.\n- TASK_GAP\n  Requirement: \"Keep the documented semantics... the empty or whitespace-only behaviour... unchanged\" (issue #9103, SHELL-001).\n  Expected change site: scripts/propagate_consumer_secrets.sh, lines 117-122; tests/test_propagate_consumer_secrets.py, the appended `test_whitespace_only_targets_fall_back_to_registry` test.\n  Evidence of absence: The pre-existing guard `if [ -n \"${PROPAGATE_TARGETS// /}\" ]; then` is left intact and strips only spaces, so tab/newline-only input silently no-ops instead of failing validation as it did pre-fix; the appended test asserts only the empty-string and three-space branches.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/propagate_consumer_secrets.sh:117 (interacting with lines 123-125) | severity=NIT | confidence=4\n  PROBLEM: The guard strips only spaces, so tab-only or newline-only input passes it, `read -r -d '' -a` assigns zero tokens, TARGETS ends up empty, and the registry fallback at line 127 is never taken.\n  WHY: The script performs a no-op propagation with `summary targets=0 set=0 skipped=0 failed=0` and exits 0; the behaviour is pre-existing and unchanged by the PR, and the new test covers only \"\" and \"   \".\n- TASK_GAP\n  Requirement: Issue acceptance test item (c): \"empty or whitespace-only input still falls back to the registry.\"\n  Expected change site: scripts/propagate_consumer_secrets.sh line 117 (the emptiness guard) and the new test `test_whitespace_only_targets_fall_back_to_registry` in tests/test_propagate_consumer_secrets.py (lines ~340-348).\n  Evidence of absence: The guard removes only spaces, so a tab-only or newline-only value takes the split branch (line 124), yields an empty array and an empty TARGETS with no registry fallback; the added test exercises only \"\" and \"   \". No hunk in the PR changes the guard, and the script's tail (lines 215-221) confirms an empty TARGETS exits 0 with zero targets.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "62130f16f88f2786157367e9a98930e35c7c5ebbc6273f36bc065a23d9a3f9b9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9104,
+    "run_id": "42565599696",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42565599696",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109054759_4cefd0992b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9104,
+    "run_id": "42565599696"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T05:47:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
