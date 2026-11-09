@@ -410,6 +410,14 @@ NON_RETRYABLE_FAILURE_REASONS = frozenset(
 		"review_editor_sandbox_path_excluded",
 	}
 )
+# Failure reasons whose trusted marker rides on a run that ends `success` by
+# design: the sandbox-excluded escalation (#8321) leaves the step's exit status
+# unchanged. The provenance gate accepts such a completed `success` run only
+# when the trusted account's canonical failure marker names that run, the
+# report head and one of these reasons; without it, every identical-failure
+# cap report for the reason was rejected as `no_verified_runs` and never
+# reached the non-retryable diagnosis (PR #9112, intake run 42583232747).
+SUCCESS_RUN_FAILURE_MARKER_REASONS = frozenset({"review_editor_sandbox_path_excluded"})
 # A non-retryable cap is re-armed once per verified review-support commit not
 # yet recorded (``support=``) on a trusted marker for the head, so a resolver
 # fix on main reaches a capped head without a manual rerun (#6911). Bounded
@@ -4871,6 +4879,25 @@ def _run_workflow_file(run: dict[str, Any]) -> str | None:
 	return path[len(prefix):]
 
 
+def _trusted_success_run_failure_marker(comments: list[dict[str, Any]] | None, *, run_id: str, trusted_login: str, head_sha: str) -> bool:
+	"""True when a trusted canonical failure marker records a green-run failure for ``run_id`` on ``head_sha``.
+
+	Only the trailing standalone marker of a comment by ``trusted_login`` counts,
+	and only for a reason in SUCCESS_RUN_FAILURE_MARKER_REASONS.
+	"""
+	author = str(trusted_login or "").strip().lower()
+	head = str(head_sha or "").strip().lower()
+	if not author or not is_valid_sha(head) or not run_id:
+		return False
+	for comment in comments or []:
+		if not isinstance(comment, dict) or _comment_author(comment) != author:
+			continue
+		fields = _marker_fields(_canonical_failure_marker(sanitize_text(comment.get("body"))))
+		if fields.get("run") == run_id and fields.get("head", "").lower() == head and fields.get("reason") in SUCCESS_RUN_FAILURE_MARKER_REASONS:
+			return True
+	return False
+
+
 def verify_run_provenance(
 	payload: dict[str, Any], *, runs: dict[str, Any], comments: list[dict[str, Any]] | None,
 	trusted_login: str, self_repo: str, default_branch: str = "",
@@ -4882,6 +4909,11 @@ def verify_run_provenance(
 	invalid ``default_branch`` rejects every CI run (fail closed). A scheduled
 	self-check run (``SCHEDULED_CHECK_WORKFLOW_FILES``) is accepted only when
 	GitHub reports it on ``default_branch``, under the same fail-closed rule.
+
+	An ``autofix_failure`` report may cite a completed ``success`` run only
+	when a trusted canonical failure marker names that run and the report head
+	with a SUCCESS_RUN_FAILURE_MARKER_REASONS reason; the run must still pass
+	the workflow-path and PR-link checks.
 	"""
 	kind = payload.get("source_kind")
 	refs = payload.get("run_refs") or []
@@ -4922,7 +4954,10 @@ def verify_run_provenance(
 		elif str(run.get("id")) != run_id:
 			reason = "run_id_mismatch"
 		elif run.get("status") == "completed":
-			if run.get("conclusion") not in REPORTABLE_CONCLUSIONS:
+			if run.get("conclusion") not in REPORTABLE_CONCLUSIONS and not (
+				kind == "autofix_failure" and run.get("conclusion") == "success"
+				and _trusted_success_run_failure_marker(comments, run_id=run_id, trusted_login=trusted_login, head_sha=report_head)
+			):
 				reason = "not_failed"
 		else:
 			pending = (kind == "phase_failure" and position == 0) or (kind == "autofix_failure" and run_id == reporter_id)
