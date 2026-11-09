@@ -876,6 +876,9 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
         run: |
           set -euo pipefail
+          # Job start, read by commit_report to keep its merge wait inside
+          # the job's 60-minute timeout.
+          echo "WLA_JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
           # Claude engine (plan item 3d): this job's model roles run Claude
           # through the engine root staged here from this workflow's own
           # checkout; the codex CLI stays installed as the fallback. No work
@@ -1663,6 +1666,12 @@ jobs:
               git commit --amend --no-edit
             fi
 
+            # A retry leases to the run branch's current remote head: only
+            # this run and attempt writes that branch, and an earlier push
+            # may have landed even though the client saw a failure.
+            if [ "${report_delivery_mode}" = "pr" ] && [ "${push_attempt}" -gt 1 ]; then
+              report_last_pushed_sha="$(git ls-remote origin "refs/heads/${REPORT_PR_BRANCH}" 2>/dev/null | cut -f1 || true)"
+            fi
             if [ "${report_delivery_mode}" = "push" ]; then
               if git pull --rebase origin "${TARGET_BRANCH}" \
                  && git push origin "HEAD:${TARGET_BRANCH}"; then
@@ -1670,10 +1679,10 @@ jobs:
               fi
             # PR mode: rebase onto the target tip the same way, but push to
             # the run-unique branch. The forced push is limited to that
-            # branch and leased to what this run last pushed there (nothing
-            # on the first push), so a retry can replace its own earlier
-            # push but never a head someone else wrote. TARGET_BRANCH is
-            # never forced.
+            # branch and leased to its remote head as read before a retry
+            # (nothing on the first push), so a retry can replace this run's
+            # own earlier push but never a head pushed after that read.
+            # TARGET_BRANCH is never forced.
             elif git pull --rebase origin "${TARGET_BRANCH}" \
                && git push --force-with-lease="refs/heads/${REPORT_PR_BRANCH}:${report_last_pushed_sha}" origin "HEAD:refs/heads/${REPORT_PR_BRANCH}"; then
               report_last_pushed_sha="$(git rev-parse HEAD)"
@@ -1773,8 +1782,10 @@ jobs:
               # bounded time for auto-merge to land the report: deep-audit,
               # api-redundancy and callers that read the newest report from
               # the branch after this run need it there. Git only (fetch +
-              # cat-file), no GitHub API call. 0 disables the wait; the
-              # cap keeps the job inside its 60-minute timeout.
+              # cat-file), no GitHub API call. 0 disables the wait. The
+              # deadline is also clamped to 55 minutes after the job started
+              # (WLA_JOB_START_EPOCH), so a slow analysis cannot push the
+              # wait past the job's 60-minute timeout.
               wla_wait_minutes="${WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES:-10}"
               if [[ ! "${wla_wait_minutes}" =~ ^(0|[1-9]|1[0-9]|20)$ ]]; then
                 echo "::warning::WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES must be an integer from 0 to 20; using 10."
@@ -1785,6 +1796,10 @@ jobs:
                 wla_poll_secs=30
               fi
               wla_wait_deadline=$(( $(date +%s) + wla_wait_minutes * 60 ))
+              if [[ "${WLA_JOB_START_EPOCH:-}" =~ ^[0-9]+$ ]] \
+                 && [ "${wla_wait_deadline}" -gt $(( WLA_JOB_START_EPOCH + 55 * 60 )) ]; then
+                wla_wait_deadline=$(( WLA_JOB_START_EPOCH + 55 * 60 ))
+              fi
               while : ; do
                 if git fetch origin "${TARGET_BRANCH}" --depth=1 2>/dev/null \
                    && git cat-file -e "FETCH_HEAD:${REPORT_FILE}" 2>/dev/null; then
@@ -1829,6 +1844,7 @@ jobs:
           WLA_REPORT_PR_URL: ${{ steps.commit_report.outputs.report_pr_url || '' }}
           WLA_REPORT_DELIVERY: ${{ steps.commit_report.outputs.delivery || '' }}
           WLA_COMMIT_OUTCOME: ${{ steps.commit_report.outcome || '' }}
+          WLA_REPORT_VIA_PR: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR || 'true' }}
         run: |
           set -euo pipefail
 
@@ -1854,12 +1870,19 @@ jobs:
             REPORT_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/${REPORT_FILE}"
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          if [ "${ANALYSIS_STATUS}" = "completed" ] && [ "${WLA_COMMIT_OUTCOME:-}" = "failure" ]; then
-            # The report was written but never reached the branch, so a
-            # blob link would 404. In PR mode it may be on the run branch.
+          if [ "${ANALYSIS_STATUS}" = "completed" ] \
+             && { [ "${WLA_COMMIT_OUTCOME:-}" = "failure" ] || [ "${WLA_COMMIT_OUTCOME:-}" = "cancelled" ]; }; then
+            # The report was written but never reached the branch (the step
+            # failed or the job was cancelled mid-step), so a blob link
+            # would 404. Only PR mode has a run branch it may be on.
             MSG="Workflow log analysis report delivery FAILED for ${{ github.repository }}"
             MSG+=$'\n'
-            MSG+="The report did not reach ${GITHUB_REF_NAME}; it may be on branch auto/workflow-log-analysis-report-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}."
+            case "$(printf '%s' "${WLA_REPORT_VIA_PR:-true}" | tr '[:upper:]' '[:lower:]')" in
+              false|0|no|off)
+                MSG+="The report did not reach ${GITHUB_REF_NAME}; it was not pushed and is lost with the runner." ;;
+              *)
+                MSG+="The report did not reach ${GITHUB_REF_NAME}; it may be on branch auto/workflow-log-analysis-report-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}." ;;
+            esac
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
             ALERT_LEVEL="WARNING"
@@ -1885,6 +1908,10 @@ jobs:
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
             ALERT_LEVEL="DEBUG"
+            # A report PR that did not land needs a person to merge it.
+            if [ "${WLA_REPORT_DELIVERY:-}" = "pr_auto_merge" ] || [ "${WLA_REPORT_DELIVERY:-}" = "pr_open" ]; then
+              ALERT_LEVEL="WARNING"
+            fi
           else
             MSG="Workflow log analysis FAILED for ${{ github.repository }} (status: ${ANALYSIS_STATUS:-unknown})"
             MSG+=$'\n'

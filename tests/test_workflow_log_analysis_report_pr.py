@@ -310,6 +310,24 @@ def test_report_pr_number_parsed_from_enterprise_url() -> None:
 		assert out["report_pr_url"] == "https://ghe.example.com/o/r/pull/314"
 
 
+def test_report_pr_merge_wait_clamped_to_job_budget() -> None:
+	import time
+
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		box.write_report()
+		started = time.monotonic()
+		# The job started an hour ago, so a 20-minute wait ends at once.
+		proc = box.run(
+			FAKE_GH_MERGE_RC="1",
+			WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES="20",
+			WLA_JOB_START_EPOCH=str(int(time.time()) - 3600),
+		)
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert time.monotonic() - started < 120
+		assert box.outputs()["delivery"] == "pr_auto_merge"
+
+
 def test_report_pr_stays_open_when_both_merges_refused() -> None:
 	with tempfile.TemporaryDirectory() as raw:
 		box = _Sandbox(Path(raw))
@@ -477,6 +495,17 @@ def test_report_pr_static_contract() -> None:
 	# The run-branch push is leased, never a bare --force.
 	assert "git push --force origin" not in step
 	assert '--force-with-lease="refs/heads/${REPORT_PR_BRANCH}:${report_last_pushed_sha}"' in step
+	# A retry leases to the run branch's remote head.
+	assert 'report_last_pushed_sha="$(git ls-remote origin "refs/heads/${REPORT_PR_BRANCH}"' in step
+	# The merge wait is clamped to the job budget.
+	assert 'echo "WLA_JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"' in wf
+	assert "WLA_JOB_START_EPOCH + 55 * 60" in step
+	# Telegram: a cancelled delivery is a failure, an unlanded PR is a WARNING,
+	# and the run branch is named only in PR mode.
+	assert '[ "${WLA_COMMIT_OUTCOME:-}" = "cancelled" ]' in wf
+	assert "WLA_REPORT_VIA_PR: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR || 'true' }}" in wf
+	telegram = wf.split("      - name: Send Telegram notification\n", 1)[1].split("\n  deep-audit:\n", 1)[0]
+	assert 'ALERT_LEVEL="WARNING"\n            fi\n          else' in telegram
 
 
 def main() -> int:
@@ -487,6 +516,7 @@ def main() -> int:
 	test_report_pr_renames_when_a_pending_report_pr_holds_the_path()
 	test_report_pr_unrecognized_switch_value_warns_and_uses_pr()
 	test_report_pr_number_parsed_from_enterprise_url()
+	test_report_pr_merge_wait_clamped_to_job_budget()
 	test_report_pr_stays_open_when_both_merges_refused()
 	test_report_pr_create_failure_fails_the_step()
 	test_report_pr_already_exists_looks_up_the_open_pr()
