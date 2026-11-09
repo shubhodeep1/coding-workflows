@@ -22,7 +22,7 @@ problems in that chain.
   - a missing full-log directory;
   - a near-empty report.
 - **The purge deletes unread docs.** The 30-day retention purge removes
-  unprocessed docs without saying so.
+  docs that were never processed.
 - **Findings are checked only after the work starts.** The orchestrator checks
   each finding against current code, but nothing makes that the first step.
 
@@ -92,7 +92,7 @@ in its own PR, so it is not part of this plan.
 - G4: A repo that could not be read, a capped run listing, a missing log
   directory, or a report that breaks the required structure is reported
   loudly, never silently (Q6: A).
-- G5: The purge never drops an unprocessed doc silently (Q6: A; see D5).
+- G5: The purge never deletes an unprocessed doc (Q6: A, Q7: B).
 - G6: Every apply-analysis project records a verdict for each finding before
   it plans any implementation issue. A doc with no valid findings becomes a
   single closing PR (Q3: A).
@@ -254,15 +254,26 @@ in its own PR, so it is not part of this plan.
 
 ### Purge (P5)
 
-The purge code stays in "Commit and push report" and takes its new behaviour
-from D5. Every unprocessed doc it deletes is logged as
-`WORKFLOW_LOG_ANALYSIS_PURGE_UNPROCESSED doc=<path> age_days=<n>`.
-"Unprocessed" means the doc is not recorded in
-`analysis/recommendation-processing-report.md` and has no trusted dispatch
-marker. The purge gets that list from one
-`APPLY_ANALYSIS_LIST_ONLY=true bash scripts/apply_analysis_on_main.sh` call,
-which uses existing reads only. The list of purged docs is added to the P1
-report PR body, under "Purged unprocessed docs".
+The purge code stays in "Commit and push report". Under D5 it deletes only
+docs that are past the retention window **and** recorded in
+`analysis/recommendation-processing-report.md`. It finds those with the same
+fixed-string basename match `scripts/apply_analysis_on_main.sh` already uses
+(`grep -qF -- <basename> <report>`): a local read with no API calls, which
+also works while `APPLY_ANALYSIS_ON_MAIN_ENABLED=false`.
+
+- An older doc the report does not record is kept and logged on the existing
+  prefix with a new reason value:
+  `WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc=<path> reason=unprocessed`.
+- If the processing report is missing or unreadable, the purge is skipped
+  for this run (fail closed), logged as
+  `WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=processing_report_unavailable`.
+- The existing in-flight guard (`reason=in_flight_project`) is unchanged and
+  runs first.
+
+The retention window (`WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS`, default
+30) now applies only to docs that were processed but never deleted.
+Normally the project's final PR deletes those docs, so the purge rarely
+deletes anything.
 
 ### Check findings first (P6)
 
@@ -303,14 +314,13 @@ An invalid report is retried through the existing loop, then held back from
 `main` but kept as an artifact. A missing log directory is published with a
 data-gap line, not rejected.
 
-### D5 — Purge of unprocessed docs (pending answer, default proposed)
-Proposed default: keep the 30-day purge and make every unprocessed deletion
-visible (log line plus PR-body list). The proving run now takes the newest doc
-first, 2-4 docs arrive per day, and about 2 are processed. Without a purge
-the oldest docs would pile up forever, and they are the most likely to be
-stale. The alternatives (never purge unprocessed docs, or a separate longer
-retention for them) are listed in the hand-off message. The phase follows
-whichever option is chosen.
+### D5 — Purge of unprocessed docs (Q7: B)
+An unprocessed doc is never deleted. "Unprocessed" means the processing
+report does not record it. Docs dispatched to a project that failed or closed
+without finishing are therefore kept too, which matches the dispatcher's
+loop guard: those are a human decision. The backlog under `analysis/` grows
+for as long as new docs arrive faster than about 2 a day are processed. That
+was accepted when Q7 was answered.
 
 ### D6 — Findings check (Q3: A)
 The check happens inside the project as a required first step. It does not
@@ -348,7 +358,7 @@ those edits, and none of the phases depends on another one being merged.
 | P2 | Report structure check, log-gap line | new `scripts/check_workflow_analysis_report.py`, `workflow-log-analysis.yml`, tests | `WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED=false` |
 | P3 | Collector `coverage`, coverage log line, alert, prompt sentence | `scripts/collect_workflow_logs.py`, `workflow-log-analysis.yml`, `prompts/_templates/mode-workflow-analysis.txt` (+ regenerated `prompts/mode-workflow-analysis.txt`), tests | revert; the extra JSON key is ignored by readers |
 | P4 | `since_last_report` input, window marker, gate covers all repos | `workflow-log-analysis.yml`, `test-and-mark-stable.yml`, tests | `WORKFLOW_LOG_ANALYSIS_GATE_ALL_REPOS=false`; the input defaults to off |
-| P5 | Purge visibility for unprocessed docs (per D5) | `workflow-log-analysis.yml`, tests | revert |
+| P5 | The purge keeps every unprocessed doc (D5) | `workflow-log-analysis.yml`, tests | revert |
 | P6 | Check findings first in the project description | `scripts/apply_analysis_on_main.sh`, `tests/test_apply_analysis_on_main.py` | revert |
 
 Each phase is safe in production at merge:
@@ -440,15 +450,20 @@ Each phase is safe in production at merge:
 6. Add an `agents.d/` fragment, README rows and a changelog fragment.
 
 ### P5
-1. Implement D5 as answered. For the default: before the age-based loop, run
-   `APPLY_ANALYSIS_LIST_ONLY=true bash scripts/apply_analysis_on_main.sh` to
-   get the unprocessed set. Log `WORKFLOW_LOG_ANALYSIS_PURGE_UNPROCESSED` for
-   each purged doc in that set, and write the list to a file the P1 PR body
-   includes when it exists.
-2. If the list-only call fails, carry on with the purge as today and log
-   `WORKFLOW_LOG_ANALYSIS_PURGE_UNPROCESSED outcome=unknown`. The in-flight
-   guard still protects docs that live projects read.
-3. Add an `agents.d/` fragment and a changelog fragment.
+1. In the age-based purge loop of "Commit and push report" (or in the
+   moved script, if P1 merged first), check every candidate after the
+   in-flight check and before `git rm`:
+   - when `analysis/recommendation-processing-report.md` does not contain the
+     doc's basename (`grep -qF --`), log
+     `WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc=<path> reason=unprocessed` and
+     `continue`.
+2. Before the loop, if the processing report file is missing or unreadable,
+   set `purge_guard_ok="false"` and log
+   `WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=processing_report_unavailable`.
+3. Update the inline comment above the purge and the README row for
+   `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS`, and add the new reason
+   values to the agents file through an `agents.d/` fragment. Add a changelog
+   fragment.
 
 ### P6
 1. Replace the validation paragraph of `project_description` in
@@ -517,9 +532,11 @@ None.
 
   A contract test checks that the gate dispatch drops `repos_override` and
   passes `since_last_report=true` when the switch is on.
-- **P5:** a purge harness in which one unprocessed doc older than the cutoff
-  is purged and logged, and a failed list-only call still purges, logged as
-  `outcome=unknown`.
+- **P5:** a purge harness with three docs older than the cutoff: one in the
+  processing report (purged), one not in it (kept, `reason=unprocessed`) and
+  one named by an in-flight project (kept, `reason=in_flight_project`). A
+  missing processing report must purge nothing and log
+  `reason=processing_report_unavailable`.
 - **P6:** the description tests above.
 - **Every phase:** run `python3 scripts/assemble_agents.py check --repo-root
   .`, `tests/test_workflow_file_size_limit.py`, and the existing
@@ -540,6 +557,11 @@ None.
 - **A report merges after the next run starts, so windows overlap.** The
   overlap repeats findings, which the apply-analysis check classifies as
   already-implemented. It never leaves a gap.
+- **The `analysis/` backlog grows without limit (D5).** It is bounded only
+  by how fast the promote cycle processes docs. The docs are small Markdown
+  files, the dispatcher reads them locally, and the per-doc API calls stop at
+  the first unprocessed doc, which is the newest one. So the growth adds
+  checkout size, not API calls.
 - **The section jobs fail after the report branch exists.** `publish-report`
   still opens the PR, and the PR body says which sections are missing.
 - **The P6 wording changes how the orchestrator decomposes a project.** Only
