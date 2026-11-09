@@ -200,7 +200,7 @@ def test_prepare_analysis_context_marks_insufficient_data_when_empty():
 	assert "insufficient" in ctx["analysis_guidance"].lower()
 
 
-def test_prepare_analysis_context_carries_collector_coverage():
+def test_prepare_analysis_context_carries_collector_coverage() -> None:
 	ctx = analyzer.prepare_analysis_context(
 		{
 			"source_files": [],
@@ -240,7 +240,7 @@ def test_prepare_analysis_context_carries_collector_coverage():
 	assert ctx_true["coverage"]["repositories_failed"] == []
 
 
-def test_prepare_analysis_context_omits_coverage_when_absent():
+def test_prepare_analysis_context_omits_coverage_when_absent() -> None:
 	base = {
 		"source_files": [],
 		"collector_report": {"runs": [], "summary": {"total_runs": 0}, "errors": []},

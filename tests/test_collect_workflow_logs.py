@@ -3536,6 +3536,62 @@ def test_main_refetches_snapshot_within_a_page_of_page_cap_on_304() -> None:
 	assert report["coverage"]["repositories_truncated"] == ["owner/drift"]
 
 
+def test_main_does_not_cache_etag_of_complete_listing_in_refetch_band() -> None:
+	"""A complete listing a later 304 would refetch anyway keeps no ETag."""
+	written: list[dict] = []
+
+	def listing(repo: str, **kwargs):
+		runs = [_coverage_run(run_id) for run_id in (1, 2, 3)]
+		return runs, False, {"not_modified": False, "etag": 'W/"band"'}
+
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-band-") as td:
+		report_file = Path(td) / "report.json"
+		with patch.object(collector, "_cache_read_context", return_value=({"repositories": {}}, None, None)), \
+			patch.object(collector, "_cache_write_context", side_effect=lambda **kw: written.append(kw["payload"]) or True), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main([
+				"--since", "2026-04-01T00:00:00Z", "--per-page", "2", "--max-pages", "2",
+				"--max-log-runs", "0", "--repo", "owner/band", "--output", str(report_file),
+			])
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+	assert rc == 0
+	assert report["coverage"]["repositories_truncated"] == []
+	assert written[-1]["repositories"]["owner/band"]["runs_etag"] is None
+
+
+def test_main_reuses_snapshot_on_304_with_single_page() -> None:
+	"""With --max-pages 1 there is no drift margin, so a small snapshot is reused."""
+	snapshot = [
+		collector._run_snapshot_for_cache(dict(_coverage_run(run_id), event="push"))
+		for run_id in (1, 2)
+	]
+	cache = {"repositories": {"owner/one": {"runs_etag": 'W/"one"', "runs_snapshot": snapshot}}}
+	calls: list = []
+
+	def listing(repo: str, **kwargs):
+		calls.append(kwargs.get("etag"))
+		return [], False, {"not_modified": True, "etag": 'W/"one"'}
+
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-onepage-") as td:
+		report_file = Path(td) / "report.json"
+		with patch.object(collector, "_cache_read_context", return_value=(cache, None, None)), \
+			patch.object(collector, "_cache_write_context", return_value=True), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main([
+				"--since", "2026-04-01T00:00:00Z", "--per-page", "5", "--max-pages", "1",
+				"--max-log-runs", "0", "--repo", "owner/one", "--output", str(report_file),
+			])
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+	assert rc == 0
+	assert calls == ['W/"one"']
+	assert report["coverage"]["repositories_truncated"] == []
+	assert len(report["runs"]) == 2
+
+
 def test_build_report_omits_coverage_when_not_supplied() -> None:
 	report = collector.build_report(["owner/repo"], [], [])
 	assert "coverage" not in report

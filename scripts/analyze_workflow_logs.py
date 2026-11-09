@@ -327,8 +327,9 @@ def _aggregate_runs_by_key(runs: list[dict[str, Any]], key_name: str) -> dict[st
 def _normalize_collector_coverage(raw: dict[str, Any]) -> dict[str, Any]:
 	"""Normalize the collector's optional `coverage` object (P3).
 
-	Lists of repository names become lists of strings; failed entries keep
-	only string `repository` and `message`; `page_limit_reached` is a bool.
+	Lists keep only their non-empty string items (other items are dropped,
+	not converted); failed entries keep only string `repository` and
+	`message`; `page_limit_reached` is a bool.
 	"""
 	def _str_list(value: Any) -> list[str]:
 		if not isinstance(value, list):

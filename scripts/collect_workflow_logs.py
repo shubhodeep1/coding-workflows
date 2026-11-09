@@ -2072,6 +2072,13 @@ def main(argv: list[str] | None = None) -> int:
             cached_etag = None
 
         budget_repo_incomplete = False
+        # Drift-duplicate skipping can leave a page-limited listing up to a
+        # page short of the cap; a single page cannot drift. --max-runs is exact.
+        page_cap = min(1000, args.per_page * args.max_pages)
+        page_snapshot_cap = max(1, page_cap - args.per_page) if args.max_pages > 1 else page_cap
+        snapshot_cap = page_snapshot_cap
+        if args.max_runs > 0:
+            snapshot_cap = min(snapshot_cap, args.max_runs)
         try:
             if pat_budget_day_utc is not None:
                 # The unfiltered created search can hit GitHub's 1,000-run
@@ -2126,11 +2133,6 @@ def main(argv: list[str] | None = None) -> int:
                     # or the page limit may be a partial listing cached before
                     # truncated ETags were dropped; a 304 carries no truncation
                     # flags, so refetch it to recompute coverage.
-                    # Drift-duplicate skipping can leave a page-limited
-                    # listing up to a page short of the cap; --max-runs is exact.
-                    snapshot_cap = max(1, min(1000, args.per_page * args.max_pages) - args.per_page)
-                    if args.max_runs > 0:
-                        snapshot_cap = min(snapshot_cap, args.max_runs)
                     snapshot_may_be_partial = len(cached_runs_snapshot) >= snapshot_cap
                     if (
                         cached_runs_snapshot
@@ -2282,9 +2284,13 @@ def main(argv: list[str] | None = None) -> int:
         # P3: never keep the ETag of a truncated listing. A later 304 would
         # restore the partial snapshot without its truncation flags, so the
         # coverage report would show the repo as complete; refetch instead.
+        # A listing at or above the page-based cap would be refetched after
+        # any 304, so its ETag would only add a wasted conditional request.
+        # (A listing of --max-runs runs is already capped, so truncated.)
+        etag_unusable = repo_truncated or (pat_budget_day_utc is None and len(runs) >= page_snapshot_cap)
         repo_cache_updated = {
             "runs_etag": None
-            if repo_truncated
+            if etag_unusable
             else (run_meta.get("etag") if isinstance(run_meta.get("etag"), str) else cached_etag),
             "runs_window_start": _format_iso8601(effective_since),
             "jobs_seen_set": jobs_seen_set,
