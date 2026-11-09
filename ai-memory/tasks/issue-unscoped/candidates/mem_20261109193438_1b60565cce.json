@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_cancelled_rerun.py:403-448 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The abandoned-class read cap (MAX_FAILED_JOBS_CLASSIFIED = 10) is exceeded by a total-loss run (5 single jobs + 5 orchestrate-poll matrix entries + lint = 11 reads), so the run is classified runner_shutdown_unverified and never re-run.\n  WHY: Part of the #9146 gap stays open for matrix-heavy total-loss runs; severity disagreement (MAJOR from gemini and minimax, NIT from glm, which notes the cap is documented as deliberate). sonnet-5_5 checked the same cap and did not report it, counting 4 matrix entries (10 reads, within the cap).\n- analysis/recommendation-processing-report.md:2260-2262 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The last autofix run added \"Partly applied\" text to two unrelated recommendation-history rows in a file outside the approved #9146 files_touched scope.\n  WHY: No runtime effect, but it bundles unrelated documentation edits into the CI rerun fix and exceeds the approved plan scope; severity disagreement (MAJOR from minimax, NIT from the other four).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- analysis/recommendation-processing-report.md:2260 and 2262 | severity=NIT | confidence=5\n  PROBLEM: The last autofix run added \"Partly applied\" text to the \"Speed #2 / Orchestrator Health\" and \"GH API audit #1\" rows, which are unrelated to the abandoned-job CI re-run. The file is not in the issue's files_touched grant.\n  WHY: It has no runtime effect; it bundles an unrelated documentation edit into a fix for #9146 and goes beyond the approved plan scope.\n- Reviewer checked and did not report the read cap at scripts/ci_cancelled_rerun.py:448. It counted 10 reads for run 42673807557 (within the cap) and noted the cap is a documented, intentional design limit.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ci_cancelled_rerun.py:403 | severity=MAJOR | confidence=3\n  PROBLEM: The limit of 10 reads (MAX_FAILED_JOBS_CLASSIFIED = 10) is too low when all jobs are abandoned in a matrix setup (5 jobs + 5 matrix entries + 1 lint aggregate = 11). Such runs are classified as unverified and not re-run.\n  WHY: CI reruns for total-loss abandoned matrix builds will continue to fail to recover.\n- analysis/recommendation-processing-report.md:2260-2262 | severity=NIT | confidence=5\n  PROBLEM: The file was edited as a side effect of the CI rerun fix but is outside the approved scope of issue #9146.\n  WHY: None at runtime, but it violates the strict implementation scope.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ci_cancelled_rerun.py:classify_runner_shutdown (new cap check `if len(failed) + len(aggregate_cancelled) > MAX_FAILED_JOBS_CLASSIFIED:`) | severity=MAJOR | confidence=3\n  PROBLEM: The cap allows at most 9 named cancelled jobs when only the lint aggregate failed. A run where GitHub abandons 10 or more upstream jobs hits \"unverified\" and is not re-run.\n  WHY: With a wide orchestrate-poll matrix, a total-loss run needs 11 reads, exceeds the cap of 10 and is never re-run, partially defeating the feature. The cap is a defensible rate-limit trade-off but may be too restrictive.\n- analysis/recommendation-processing-report.md:2260 and 2262 | severity=MAJOR | confidence=5\n  PROBLEM: The last run diff adds \"Partly applied\" notes to two recommendation-history rows (poller-cycle-timing PR 9113, merge-train-release-counters PR 9105) that are unrelated to #9146 and outside the approved files_touched scope.\n  WHY: No runtime impact; the autofix modified a file outside the approved scope.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- analysis/recommendation-processing-report.md:2260-2262 | severity=NIT | confidence=5\n  PROBLEM: The last-run changes amend two #9099 recommendation-history rows, but the file is outside the #9146 files_touched list.\n  WHY: No runtime failure; the unrelated report edits exceed the approved scope.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/ci_cancelled_rerun.py:448 (MAX_FAILED_JOBS_CLASSIFIED = 10 at line 89) | severity=NIT | confidence=3\n  PROBLEM: The per-run read cap excludes the total-loss case from the issue's evidence. 5 single jobs + 5 orchestrate-poll matrix groups + lint = 11 reads > 10, so the verdict is unverified and the run is never re-run.\n  WHY: The next all-jobs-abandoned failure is skipped as runner_shutdown_unverified. The README documents this as deliberate, so raising the cap is a tradeoff decision.\n- analysis/recommendation-processing-report.md:2260 and 2262 | severity=NIT | confidence=5\n  PROBLEM: The last-run diff edits two recommendation-history rows unrelated to abandoned CI re-runs, in a file outside the approved files_touched grant. The file is absent from pr_changed_files.txt.\n  WHY: No runtime effect, but it violates the plan's scope contract and pollutes the PR diff.\n- HARDENING_SUGGESTIONS: scripts/ci_cancelled_rerun.py line 448. Total-loss runs (11 reads) exceed the cap. No fix is forced. Options are to count already-read lint annotations against the budget, or to bump the cap by the number of named cancelled jobs with a documented per-tick ceiling (3-8 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "33911e717bbd9cf8e383c87b7503b260af5de32bc982d54f80238c0ee892787e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9147,
+    "run_id": "42681573538",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42681573538",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109193438_1b60565cce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9147,
+    "run_id": "42681573538"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T19:34:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
