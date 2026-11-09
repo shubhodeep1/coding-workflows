@@ -308,6 +308,7 @@ def _collect_report_pr_cases() -> None:
 		"workflow_log_analysis_report_pr_cases",
 		Path(__file__).resolve().parent / "test_workflow_log_analysis_report_pr.py",
 	)
+	assert spec is not None and spec.loader is not None, "cannot load tests/test_workflow_log_analysis_report_pr.py"
 	cases = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(cases)
 	for case_name in dir(cases):

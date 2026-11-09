@@ -506,6 +506,9 @@ def test_report_pr_static_contract() -> None:
 	assert "WLA_REPORT_VIA_PR: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR || 'true' }}" in wf
 	telegram = wf.split("      - name: Send Telegram notification\n", 1)[1].split("\n  deep-audit:\n", 1)[0]
 	assert 'ALERT_LEVEL="WARNING"\n            fi\n          else' in telegram
+	# Only a PR left open pages at WARNING; an armed auto-merge stays DEBUG.
+	assert 'if [ "${WLA_REPORT_DELIVERY:-}" = "pr_open" ]; then\n              ALERT_LEVEL="WARNING"' in telegram
+	assert '= "pr_auto_merge" ] || [ "${WLA_REPORT_DELIVERY:-}" = "pr_open" ]; then\n              ALERT_LEVEL' not in telegram
 
 
 def main() -> int:

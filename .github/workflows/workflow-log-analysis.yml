@@ -1908,8 +1908,9 @@ jobs:
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
             ALERT_LEVEL="DEBUG"
-            # A report PR that did not land needs a person to merge it.
-            if [ "${WLA_REPORT_DELIVERY:-}" = "pr_auto_merge" ] || [ "${WLA_REPORT_DELIVERY:-}" = "pr_open" ]; then
+            # A report PR left open needs a person to merge it. pr_auto_merge
+            # stays DEBUG: GitHub merges that PR itself once checks pass.
+            if [ "${WLA_REPORT_DELIVERY:-}" = "pr_open" ]; then
               ALERT_LEVEL="WARNING"
             fi
           else
