@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-09T10:32:41Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=docs/plans/analysis-findings-collection-hardening-plan.md:1-80; cited_path=.github/workflows/workflow-log-analysis.yml; files_touched=README.md, changelog.d/apply-analysis-newest-first.md, docs/plans/analysis-findings-collection-hardening-plan.md, scripts/apply_analysis_on_main.sh, tests/test_apply_analysis_on_main.py.",
+  "phase": "review_autofix",
+  "pr_number": 9115,
+  "record_id": "lesson_20261109103241_6eba2def69",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/workflow-log-analysis.yml",
+    "docs/plans/analysis-findings-collection-hardening-plan.md",
+    "README.md",
+    "changelog.d/apply-analysis-newest-first.md",
+    "scripts/apply_analysis_on_main.sh",
+    "tests/test_apply_analysis_on_main.py"
+  ]
+}
