@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-09T22:50:33Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=external check copilot-pull-request-reviewer (no repository path):n/a; cited_path=copilot-pull-request-reviewer; files_touched=CHANGELOG.md, agents.md, agents.d/*.md, changelog.d/*.md.",
+  "phase": "review_autofix",
+  "pr_number": 9157,
+  "record_id": "lesson_20261109225033_c7e673c28b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer",
+    "external check copilot-pull-request-reviewer (no repository path)",
+    "CHANGELOG.md",
+    "agents.md",
+    "agents.d/*.md",
+    "changelog.d/*.md"
+  ]
+}
