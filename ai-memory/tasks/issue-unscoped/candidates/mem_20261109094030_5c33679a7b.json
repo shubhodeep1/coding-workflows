@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:4892-4898, 4957-4960, 4996-5022 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash, minimax_minimax-m3]\n  PROBLEM: `_trusted_success_run_failure_marker` re-scans the full comment list for each run ref, duplicating work the existing linking loop already does over the same comments.\n  WHY: No runtime failure, since refs and comments are bounded and the helper only runs on the success short-circuit path; both reviewers rate it a nit or hardening item (nit and hardening-risk 1).\n- scripts/workflow_failure_heal.py:4896 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `fields.get(\"reason\") in SUCCESS_RUN_FAILURE_MARKER_REASONS` comparison is case-sensitive, and `safe_token` does not lowercase it, unlike `head` on the same line.\n  WHY: It fails closed (a differently-cased reason is rejected), so this is hardening only. Another reviewer judged the case-sensitive match consistent with the surrounding parsers and not worth reporting.\n- copilot-pull-request-reviewer (external GitHub check; no repository file) | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The Copilot reviewer check (run 42588112888, job 129062752638) failed with `custom_instructions_too_large` (\"Prompt too big after adding system message\") before producing a review.\n  WHY: The failure is not mapped to any code site in this diff; the reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/9112-heal-provenance-green-sandbox-excluded-run.md:6-9 | hardening_risk=0\n  PROBLEM: Copilot comment 4511012235 claims the table rows use a leading `||`; the file uses single leading pipes.\n  WHY: The comment is incorrect, so no change is required.\n- scripts/workflow_failure_heal.py:4896, 4957-4960 | hardening_risk=1\n  PROBLEM: The helper recomputes the same per-comment scan as the linking loop at 4982-5022. This is a constant-factor cost only, with no measurable runtime impact on bounded inputs.\n  WHY: Precomputing a per-head set would be a refactor of 10 or more lines, not a defensive guard. Suggested handling is a follow-up if input bounds change.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- copilot-pull-request-reviewer (external GitHub check; no repository file) | severity=NIT | confidence=5\n  PROBLEM: The reviewer check failed before producing a review (run 42588112888, job 129062752638; `custom_instructions_too_large`, \"Prompt too big after adding system message\"). The failure is not mapped to a code site in this diff.\n  WHY: The check run exited with code 1 before review creation.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_failure_heal.py:4892-4898, 4957-4960, 4996-5022 | severity=NIT | confidence=3\n  PROBLEM: `_trusted_success_run_failure_marker` re-iterates the full comment list for each run ref, duplicating work the linking loop (4996-5011) already does for the same (run_id, head) binding.\n  WHY: There is no runtime failure, and the cost is negligible with bounded refs and comments. Precomputing an eligible run-id set would make the gate O(N+M) instead of O(N\u00d7M).\n- scripts/workflow_failure_heal.py:4896 | hardening_risk=1\n  PROBLEM: The reason comparison is case-sensitive because `safe_token` (line 3774) does not lowercase, which diverges from the lowercase normalization applied to `head` on the same line. Suggested fix: compare `fields.get(\"reason\", \"\").lower()` against a lowercased frozenset (about 2 lines).\n  WHY: It fails closed, so a differently-cased reason is rejected rather than accepted.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "615bc5d6d78a685c8229a75661d46824a38e9649fa45da41037e0dd6fd67cd37",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9119,
+    "run_id": "42588099369",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42588099369",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109094030_5c33679a7b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9119,
+    "run_id": "42588099369"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T09:40:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
