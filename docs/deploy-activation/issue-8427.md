@@ -5,12 +5,12 @@
 - How it runs: inside the existing pipelines (clarify / plan / implement / review_autofix / orchestrate / orchestrate_poll cron / issue_pr_status on PR merge), each phase behind a default-off repo variable
 - Status: IN_PROGRESS
 - Last updated: 2026-11-09
-- Last note: Step 1 done; next is Step 2 (set PERSIST_JOURNAL_ENABLED=true)
-- Human-steps issue: https://github.com/shubhodeep1/coding-workflows/issues/6211 — key project-8427 (authoritative comment 6704272982)
+- Last note: Steps 1, 2 and 13 done; next is Step 3 (set PERSIST_ACCEPTANCE_ENABLED=true)
+- Human-steps issue: https://github.com/shubhodeep1/coding-workflows/issues/6211 — key project-8427 (authoritative comment now 6729299210, posted 2026-11-09; all 11 lines already ticked by the promote cycle)
 
 ## Runbook
 1. [x] Read current repo variables (PERSIST_*, PREPUSH_TEST_GATE_MODE, ENABLE_CLEAN_WAVE_JUDGE_SKIP) — done 2026-11-09: operator `gh variable list` shows none set
-2. [ ] Set PERSIST_JOURNAL_ENABLED=true (implement.yml:21, default 'false') — covers project-8427 «P1 attempt journal off (PERSIST_JOURNAL_ENABLED)»
+2. [x] Set PERSIST_JOURNAL_ENABLED=true (implement.yml:21, default 'false') — covers project-8427 «P1 attempt journal off (PERSIST_JOURNAL_ENABLED)» — done 2026-11-09: operator `gh variable get` returns `true`
 3. [ ] Set PERSIST_ACCEPTANCE_ENABLED=true (plan.yml:22, default 'false') — covers project-8427 «P2 plan acceptance / done-checks off (PERSIST_ACCEPTANCE_ENABLED)»
 4. [ ] Set PERSIST_REPAIR_LOOP_ENABLED=true (implement.yml:25, default 'false') — covers project-8427 «P3 multi-turn repair loop off (PERSIST_REPAIR_LOOP_ENABLED)»
 5. [ ] Set PERSIST_EVIDENCE_PACK_ENABLED=true (clarify.yml:23, default 'false') — covers project-8427 «P4 evidence pack off (PERSIST_EVIDENCE_PACK_ENABLED)»
@@ -21,7 +21,7 @@
 10. [ ] Set PERSIST_ORCH_WAVE_CHECK_ENABLED=true (orchestrate_poll.yml:58, default 'false') — covers project-8427 «P9 between-wave CI check off (PERSIST_ORCH_WAVE_CHECK_ENABLED)»
 11. [ ] Set PERSIST_ORCH_REDECOMPOSE_ENABLED=true (orchestrate_poll.yml:61, default 'false') — covers project-8427 «P10 re-decompose remaining waves off (PERSIST_ORCH_REDECOMPOSE_ENABLED)»
 12. [ ] Set PERSIST_EVIDENCE_BROKER_ENABLED=true (plan.yml:27, default 'false') — covers project-8427 «P11 plan evidence broker off (PERSIST_EVIDENCE_BROKER_ENABLED)»
-13. [ ] Verify `@stable` carries PR #8430 (automatic daily promote cycle; needed only for consumer repos)
+13. [x] Verify `@stable` carries PR #8430 (automatic daily promote cycle; needed only for consumer repos) — done 2026-11-09: tag `stable` = b996b678, contains 0480649
 14. [ ] Verify LIVE (all 11 variables read `true`; a pipeline run shows a gated step executing)
 
 ## Notes
@@ -30,3 +30,4 @@
 - The cloud session's GitHub proxy refuses Actions variable reads/writes (HTTP 403), so variable steps run on the operator's Mac.
 - Caveats from the tracker: P3 also needs PREPUSH_TEST_GATE_MODE unset or not 'off'; P9 needs ENABLE_CLEAN_WAVE_JUDGE_SKIP not 'false' (default 'true').
 - 2026-11-09: Step 1: no PERSIST_* variable set; PREPUSH_TEST_GATE_MODE and ENABLE_CLEAN_WAVE_JUDGE_SKIP unset, so the P3 and P9 side conditions hold by default. Step 1 covers no human-steps line.
+- 2026-11-09: a newer project-8427 entry, comment 6729299210, arrived with all 11 P-lines `[x]` and the marker "Done: the `stable` tag (`b996b67`) includes the merge `0480649`; ticked by the promote cycle." Those ticks mean "code released", not "variable set": Step 1 showed no PERSIST_* variable set that day. Nothing left to tick; the older comment 6704272982 is left unchanged because the pipeline reads only the newest. The runbook still sets the remaining 10 variables.
