@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_chatgpt_reviewer_slot.py:124 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The new test asserts that `.github/ai/chatgpt_pool.json` exists, but the PR does not add that file, so the assertion fails on every run.\n  WHY: The tests-hooks-and-orchestrator CI log shows \"FAILED tests/test_review_chatgpt_reviewer_slot.py::test_shipped_pool_config_file_exists_and_keeps_the_slot_off - AssertionError: missing shipped switch file: .github/ai/chatgpt_pool.json\" (1 failed, 87 passed), and that also fails the aggregate `lint` job. The test is correct; the fix is to add the data file. (The source severity was BLOCKER, mapped here to critical.)\n- changelog.d/chatgpt-pool-config-file.md:2 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The changelog fragment says `.github/ai/chatgpt_pool.json` is committed with `reviewer_slot_enabled: false`, but no file in the PR diff creates it.\n  WHY: If this merges as it is, the release changelog records a fix that did not ship. `claude_engine.py chatgpt-slot` would still hit the FileNotFoundError branch and return reason=config_missing with source=default (scripts/claude_engine.py lines 242-243 and 238). The fix is to add the file, not to reword the fragment. (The source severity was MAJOR, mapped here to high.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #9111 Required change item 1: \"Create `.github/ai/chatgpt_pool.json` with exactly the plan's content, JSON, 2-space indentation, trailing newline: {\"reviewer_slot_enabled\": false, \"model\": \"gpt-6-sol\", \"replaces\": \"openai/gpt-6-luna\", \"reasoning\": \"xhigh\"}\". `reviewer_slot_enabled` MUST stay `false`.\n  expected_change_site: .github/ai/chatgpt_pool.json (new file; listed first in the issue's files_touched)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: pr_changed_files.txt lists only changelog.d/chatgpt-pool-config-file.md and tests/test_review_chatgpt_reviewer_slot.py, the commit stat for head 245a491295e2 shows 2 files changed, a glob of `.github/ai/*` returns only `.github/ai/claude_engine.json`, two earlier autofix editor runs (PR comment entries 3 and 9) deferred the file because of sandbox write limits, and the review-blocked judge (entry 8) confirmed the file is still required.\n- requirement: Issue #9111 Acceptance: \"`PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_chatgpt_reviewer_slot.py` passes.\"\n  expected_change_site: .github/ai/chatgpt_pool.json (the test file needs no change)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The tests-hooks-and-orchestrator CI log ran exactly this command and got \"1 failed, 87 passed in 10.00s\", failing at tests/test_review_chatgpt_reviewer_slot.py:124 because the switch file is missing, so the criterion is not met on the current head.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_chatgpt_reviewer_slot.py:124 | severity=BLOCKER | confidence=5\n  PROBLEM: `assert POOL_CONFIG.is_file(), f\"missing shipped switch file: {POOL_CONFIG.relative_to(REPO_ROOT)}\"` requires `.github/ai/chatgpt_pool.json` (POOL_CONFIG is defined at line 40), but the PR does not add it. A glob of `.github/ai/*` returns only `.github/ai/claude_engine.json`.\n  WHY: The assertion fails on every run (CI: 1 failed, 87 passed), and that fails the aggregate `lint` job. The test is correct: once the file exists, resolve_chatgpt_slot sets source=\"file\" (line 247) and reason=\"switch_off\" (line 284). The fix is to add the data file.\n- changelog.d/chatgpt-pool-config-file.md:2 | severity=MAJOR | confidence=5\n  PROBLEM: The fragment says the switch file now ships, but no file in the PR diff creates it.\n  WHY: The changelog would record a fix that did not ship. chatgpt-slot would still return reason=config_missing with source=default (scripts/claude_engine.py lines 242-243 and 238). The fix is to add the file, not to reword the fragment.\n- TASK_GAP | severity=BLOCKER | confidence=5\n  Requirement: Issue #9111 Required change item 1: create `.github/ai/chatgpt_pool.json` with {\"reviewer_slot_enabled\": false, \"model\": \"gpt-6-sol\", \"replaces\": \"openai/gpt-6-luna\", \"reasoning\": \"xhigh\"}, 2-space indentation and a trailing newline. `reviewer_slot_enabled` MUST stay `false`. Acceptance: the file exists with those values.\n  Expected change site: .github/ai/chatgpt_pool.json (new file; listed first in the issue's files_touched)\n  Evidence of absence: Only 2 files changed (changelog.d/chatgpt-pool-config-file.md and tests/test_review_chatgpt_reviewer_slot.py, head 245a491295e2), and the glob shows only claude_engine.json. Earlier autofix editor runs (PR comment entries 3 and 9) deferred the file because of sandbox limits, and the judge (entry 8) confirmed it is still required. Each value passes the resolve_chatgpt_slot validators (scripts/claude_engine.py lines 256-268), so the result would be enabled=false, source=file, reason=switch_off.\n- TASK_GAP | severity=BLOCKER | confidence=5\n  Requirement: Issue #9111 Acceptance: \"`PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_chatgpt_reviewer_slot.py` passes.\"\n  Expected change site: .github/ai/chatgpt_pool.json (the test file needs no change)\n  Evidence of absence: CI ran this command and got \"1 failed, 87 passed in 10.00s\", failing at tests/test_review_chatgpt_reviewer_slot.py:124 because the switch file is missing.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "cd25def8bda2779faf0e6c46282c7848f655b2cc49e5701332ca5c44ae931f3f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9112,
+    "run_id": "42717084092",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42717084092",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109232920_7eb8393861",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9112,
+    "run_id": "42717084092"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-09T23:29:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
