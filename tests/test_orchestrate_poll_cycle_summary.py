@@ -122,7 +122,14 @@ def test_cycle_summary_static_gate_trap_is_chained():
 
 def test_cycle_summary_static_sleep_sites_keep_plain_sleep_fallback():
 	script = _script()
-	assert script.count(SLEEP_CALL) == 10 + 1  # ten call sites plus the header comment
+	# Every sleep call outside the wrapper's own passthrough goes through the
+	# ledger command (no exact site count, so later sleep sites need no edit).
+	assert script.count(SLEEP_CALL) >= 2
+	bare_sleep = re.compile(r'(^|[;&|(]|\bthen|\bdo|\belse)\s*sleep\b')
+	for line in script.splitlines():
+		if line.lstrip().startswith("#") or line.strip() == 'sleep "$@"':
+			continue
+		assert not bare_sleep.search(line), line
 	for line in script.splitlines():
 		if SLEEP_CALL in line and not line.lstrip().startswith("#"):
 			assert re.search(re.escape(SLEEP_CALL) + r' (\d+|\$\(\( [^)]*\)\)|"\$\{_std_backoff_sleeps\[\$\{_std_attempt\}\]\}")', line), line
