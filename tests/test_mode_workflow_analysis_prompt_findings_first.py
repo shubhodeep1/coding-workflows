@@ -102,6 +102,11 @@ def test_findings_first_block_present_in_both_sources() -> None:
 			assert word in block, (path, word)
 		assert FINDING_CHECK_LINE in block, path
 		assert "fails open" in block, path
+		for label in ("`Intentionally deferred`", "`already-satisfied`", "`applied in part`", "`rejected (obsolete)`"):
+			assert label in block, (path, label)
+		assert "never drop it as previously decided" in block, path
+		for section in ("AI Memory Health", "every prioritized action in Per-Repo Breakdown", "Executive Summary"):
+			assert section in block, (path, section)
 
 
 def test_findings_first_block_identical_in_both_sources() -> None:
