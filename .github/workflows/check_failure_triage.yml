@@ -254,6 +254,9 @@ jobs:
       CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED || 'true' }}
       # Issue #8671: supersede a blocked triage issue from an older PR head.
       CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED: ${{ vars.CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED || 'true' }}
+      # Issue #9120: re-run a first-attempt run whose failed jobs only hit a
+      # github.com release-download 502/503/504 once, instead of filing an issue.
+      CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED || 'true' }}
       # Issue #8265: a failure whose fix is only in unmodified upstream-managed
       # files goes upstream as one heal report instead of a consumer issue.
       CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED || 'true' }}

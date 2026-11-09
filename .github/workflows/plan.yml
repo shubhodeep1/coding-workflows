@@ -2271,12 +2271,26 @@ jobs:
             --remove-label 'ai:clarification' \
             --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
 
+          # Issue #9120: a blocked ai:check-triage issue is re-checked by the
+          # unblock judge, so it alerts at WARNING, not CRITICAL. Labels come from
+          # the issue metadata this run already fetched (no API call); a missing
+          # or unreadable file keeps CRITICAL and today's comment text.
+          BLOCKED_CHECK_TRIAGE=false
+          if [ -s "${ISSUE_META_FILE:-}" ] &&
+            jq -e 'any(.labels[]?.name; . == "ai:check-triage")' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+            BLOCKED_CHECK_TRIAGE=true
+          fi
+
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           {
             printf '%s\n' "Planning blocked: human input required."
             printf '\n'
             printf '%s\n' "Reason: ${BLOCKED_REASON}"
             printf '\n'
+            if [ "${BLOCKED_CHECK_TRIAGE}" = "true" ]; then
+              printf '%s\n' "This is a CI-failure triage issue. The unblock judge re-checks the failing check and closes this issue with evidence once it passes on the pull request's newer head or on the default branch; no reply is needed unless the check keeps failing."
+              printf '\n'
+            fi
             printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
             printf '%s\n' "Provide the required input, then reply with /answer."
             printf '\n'
@@ -2286,12 +2300,17 @@ jobs:
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${PLAN_COMMENT_FILE}")" >/dev/null
 
+          BLOCKED_ALERT_LEVEL=CRITICAL
           MSG="Planning blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
+          if [ "${BLOCKED_CHECK_TRIAGE}" = "true" ]; then
+            BLOCKED_ALERT_LEVEL=WARNING
+            MSG="Planning blocked for issue #${ISSUE_NUMBER} (CI triage; the unblock judge will re-check): ${BLOCKED_REASON}"
+          fi
           MSG+=$'\n'
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "CRITICAL"
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "${BLOCKED_ALERT_LEVEL}"
 
       - name: Complete /answer command (blocked)
         if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.blocked == 'true'

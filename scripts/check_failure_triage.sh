@@ -52,6 +52,12 @@
 #   CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED      "false" keeps a blocked triage issue from an
 #                                             older PR head as a duplicate instead of
 #                                             superseding it (default true; issue #8671)
+#   CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED
+#                                             "false" stops the collect stage re-running a
+#                                             first-attempt run whose failed jobs only hit a
+#                                             github.com release-download 502/503/504
+#                                             (default true; other values warn and stay
+#                                             on; issue #9120)
 #   CHECK_TRIAGE_SUPERSEDE_NEW_ISSUE_URL      supersede stage only: URL of the triage issue
 #                                             the workflow just created (default empty)
 #   CHECK_TRIAGE_PREPARE_ONLY                 true: write issue body without posting
@@ -451,6 +457,178 @@ case "$(printf '%s' "${CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED:-}" | tr '[:upper:]'
 		echo "::warning::CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED is not true or false; stale triage issues are not superseded"
 		;;
 esac
+# Issue #9120: re-run a first-attempt workflow run whose failed jobs only hit a
+# github.com release-download 502/503/504, instead of filing a triage issue.
+# Unset, empty or any-case "true" is on, "false" is off, and any other value
+# stays on with a warning (the gate fails open and re-runs a run at most once).
+RELEASE_DOWNLOAD_RERUN_ENABLED=true
+case "$(printf '%s' "${CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+	''|true) ;;
+	false) RELEASE_DOWNLOAD_RERUN_ENABLED=false ;;
+	*)
+		case "${TRIAGE_STAGE}" in
+			all|collect) echo "::warning::CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED is not true or false; the release-download re-run stays on" ;;
+		esac
+		;;
+esac
+# Memo of the gate's single run read; the base-branch gate reuses workflow_id
+# instead of reading the same run a second time.
+RELEASE_DOWNLOAD_RERUN_RUN_ID=""
+RELEASE_DOWNLOAD_RERUN_WORKFLOW_ID=""
+
+# Returns 0 when the annotations JSON array in $1 shows a github.com release
+# download that failed with HTTP 502/503/504. Annotation text is untrusted: it
+# is only pattern-matched here, never executed or used as a value. The
+# patterns live in this one place.
+triage_release_download_classify()
+{
+	local rd_status_re='\b50[234]\b'
+	local rd_release_url_re='https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/releases/(latest/)?download/'
+	local rd_codeql_failure_re='Unable to download and extract CodeQL CLI: Unexpected HTTP response: 50[234]'
+	local rd_codeql_url_re='github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/releases/download/'
+	local rd_codeql_status_re='HTTP status code: 50[234]'
+	jq -e \
+		--arg status_re "${rd_status_re}" \
+		--arg release_url_re "${rd_release_url_re}" \
+		--arg codeql_failure_re "${rd_codeql_failure_re}" \
+		--arg codeql_url_re "${rd_codeql_url_re}" \
+		--arg codeql_status_re "${rd_codeql_status_re}" '
+		if type == "array" and length < 100
+			and all(.[]; type == "object" and (.message | type) == "string" and (.annotation_level | type) == "string")
+		then
+			[.[] | select(.annotation_level == "failure")] as $failures
+			| any($failures[]; (.message | test($status_re)) and (.message | test($release_url_re)))
+				or (any($failures[]; .message | test($codeql_failure_re))
+					and any(.[]; (.message | test($codeql_url_re)) and (.message | test($codeql_status_re))))
+		else false end' "$1" >/dev/null 2>&1
+}
+
+# Collect-stage gate (issue #9120). Every path prints one
+# RELEASE_DOWNLOAD_RERUN line; a skip returns and triage continues as before
+# (fail open). Only a successful re-run stops the run, with exit 0 and no
+# ready=true, so neither diagnose nor post runs.
+triage_release_download_rerun_gate()
+{
+	local rd_url_re rd_run rd_job rd_run_file rd_run_json rd_workflow_id rd_status rd_attempt rd_head
+	local rd_jobs_json rd_ids rd_id rd_count rd_annotations_file rd_post_file rd_post_rc
+	local -a rd_id_list=()
+	if [ "${RELEASE_DOWNLOAD_RERUN_ENABLED}" != "true" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=disabled"
+		return 0
+	fi
+	if [ "${HISTORICAL_MODE}" = "true" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=historical_mode"
+		return 0
+	fi
+	rd_url_re='^https://[^/]+/([^/]+/[^/]+)/actions/runs/([1-9][0-9]*)(/job/([1-9][0-9]*))?/?$'
+	if ! [[ "${CHECK_DETAILS_URL}" =~ ${rd_url_re} ]] || [ "${BASH_REMATCH[1]}" != "${REPO}" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=details_url_unparseable"
+		return 0
+	fi
+	rd_run="${BASH_REMATCH[2]}"
+	rd_job="${BASH_REMATCH[4]}"
+	# check_run path: the URL names this check-run's job; workflow_run path
+	# (empty CHECK_RUN_ID): the URL names the run only.
+	if { [ -n "${CHECK_RUN_ID}" ] && [ "${rd_job}" != "${CHECK_RUN_ID}" ]; } ||
+		{ [ -z "${CHECK_RUN_ID}" ] && [ -n "${rd_job}" ]; }; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=details_url_unparseable"
+		return 0
+	fi
+
+	rd_run_file="${RUNTIME_DIR}/release_download_run.json"
+	# jq -e exits 0 on empty input, so a failed or empty read is checked first.
+	if ! rd_run_json="$(gh_retry gh api "repos/${REPO}/actions/runs/${rd_run}" 2>/dev/null)" ||
+		[ -z "${rd_run_json}" ] ||
+		! printf '%s' "${rd_run_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=run_unreadable run=${rd_run}"
+		return 0
+	fi
+	printf '%s\n' "${rd_run_json}" > "${rd_run_file}"
+	rd_workflow_id="$(jq -r '.workflow_id // "" | tostring' "${rd_run_file}" 2>/dev/null || true)"
+	if [[ "${rd_workflow_id}" =~ ^[0-9]+$ ]]; then
+		RELEASE_DOWNLOAD_RERUN_RUN_ID="${rd_run}"
+		RELEASE_DOWNLOAD_RERUN_WORKFLOW_ID="${rd_workflow_id}"
+	fi
+	rd_status="$(jq -r '.status // "" | tostring' "${rd_run_file}" 2>/dev/null || true)"
+	rd_attempt="$(jq -r '.run_attempt // "" | tostring' "${rd_run_file}" 2>/dev/null || true)"
+	rd_head="$(jq -r '.head_sha // "" | tostring' "${rd_run_file}" 2>/dev/null || true)"
+	if [ "${rd_status}" != "completed" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=run_not_completed run=${rd_run}"
+		return 0
+	fi
+	if [ "${rd_attempt}" != "1" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=not_first_attempt run=${rd_run}"
+		return 0
+	fi
+	if [ -z "${HEAD_SHA}" ] || [ "${rd_head,,}" != "${HEAD_SHA,,}" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=head_mismatch run=${rd_run}"
+		return 0
+	fi
+
+	if [ -n "${CHECK_RUN_ID}" ]; then
+		rd_ids="${CHECK_RUN_ID}"
+	else
+		# Validated like list_run_jobs() in scripts/ci_cancelled_rerun.py.
+		rd_jobs_json="$(gh_retry gh api -X GET "repos/${REPO}/actions/runs/${rd_run}/attempts/1/jobs" -f per_page=100 2>/dev/null || true)"
+		if [ -z "${rd_jobs_json}" ] || ! rd_ids="$(printf '%s' "${rd_jobs_json}" | jq -r '
+			if type == "object" and (.jobs | type) == "array" and (.total_count | type) == "number"
+				and .total_count == (.jobs | length) and .total_count < 100
+				and all(.jobs[]; type == "object" and .status == "completed"
+					and (.conclusion | type) == "string"
+					and (.check_run_url | type) == "string"
+					and (.check_run_url | test("/check-runs/[1-9][0-9]*$")))
+			then [.jobs[] | select(.conclusion == "failure") | .check_run_url | capture("/check-runs/(?<id>[1-9][0-9]*)$").id] | join(" ")
+			else error("invalid jobs payload") end' 2>/dev/null)"; then
+			echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=jobs_unreadable run=${rd_run}"
+			return 0
+		fi
+	fi
+	read -r -a rd_id_list <<< "${rd_ids}" || true
+	rd_count="${#rd_id_list[@]}"
+	if [ "${rd_count}" -eq 0 ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=no_failed_jobs run=${rd_run}"
+		return 0
+	fi
+	if [ "${rd_count}" -gt 3 ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=too_many_failed_jobs run=${rd_run} jobs=${rd_count}"
+		return 0
+	fi
+	rd_annotations_file="${RUNTIME_DIR}/release_download_annotations.json"
+	for rd_id in "${rd_id_list[@]}"; do
+		if ! gh_retry gh api -X GET "repos/${REPO}/check-runs/${rd_id}/annotations" -f per_page=100 > "${rd_annotations_file}" 2>/dev/null ||
+			! [ -s "${rd_annotations_file}" ] ||
+			! jq -e 'type == "array"' "${rd_annotations_file}" >/dev/null 2>&1; then
+			rm -f "${rd_annotations_file}"
+			echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=annotations_unreadable run=${rd_run} job=${rd_id}"
+			return 0
+		fi
+		if ! triage_release_download_classify "${rd_annotations_file}"; then
+			rm -f "${rd_annotations_file}"
+			echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=not_release_download run=${rd_run} job=${rd_id}"
+			return 0
+		fi
+	done
+	rm -f "${rd_annotations_file}"
+
+	# A write is never retried. The response (headers and body) goes to a
+	# private file that is never printed; success means exit 0 and HTTP 201,
+	# as rerun_failed_jobs() in scripts/ci_cancelled_rerun.py checks.
+	if ! rd_post_file="$(mktemp "${RUNTIME_DIR}/release_download_rerun.XXXXXX" 2>/dev/null)"; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=rerun_failed run=${rd_run}"
+		return 0
+	fi
+	rd_post_rc=0
+	gh api -i -X POST "repos/${REPO}/actions/runs/${rd_run}/rerun-failed-jobs" > "${rd_post_file}" 2>&1 || rd_post_rc=$?
+	if [ "${rd_post_rc}" -eq 0 ] && head -n 1 "${rd_post_file}" 2>/dev/null | grep -qE '^HTTP/[^[:space:]]+ 201([^0-9]|$)'; then
+		rm -f "${rd_post_file}"
+		echo "RELEASE_DOWNLOAD_RERUN outcome=rerun run=${rd_run} job=${rd_id_list[0]} jobs=${rd_count} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		log "skip reason=release_download_rerun run=${rd_run} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		exit 0
+	fi
+	rm -f "${rd_post_file}"
+	echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=rerun_failed run=${rd_run}"
+	return 0
+}
 SUPERSEDE_OLD_ISSUE=""
 SUPERSEDE_OLD_HEAD=""
 SUPERSEDE_NEW_HEAD=""
@@ -903,6 +1081,9 @@ if [ -n "${HEAD_REPO_FULL_NAME}" ] && [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ];
 	exit 0
 fi
 printf '%s' "${PR_JSON}" | jq -r '.body // ""' > "${RUNTIME_DIR}/pr_body.txt" 2>/dev/null || : > "${RUNTIME_DIR}/pr_body.txt"
+# Issue #9120: a first-attempt run that failed only on a github.com
+# release-download 5xx is re-run once and no issue is filed (exits 0 here).
+triage_release_download_rerun_gate
 
 # Opt-in routing (CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED, default off): route
 # the triage issue's fix to the failing PR's own branch, but only for an open
@@ -1178,7 +1359,11 @@ else
 		# workflow_run triage: the check name is the workflow name.
 		base_gate_run_id="$(printf '%s' "${CHECK_DETAILS_URL}" | sed -n 's#^https://[^/]*/[^/]*/[^/]*/actions/runs/\([0-9][0-9]*\).*#\1#p' | head -n 1)"
 		base_gate_workflow_id=""
-		if [[ "${base_gate_run_id}" =~ ^[0-9]+$ ]]; then
+		if [[ "${base_gate_run_id}" =~ ^[0-9]+$ ]] && [ "${RELEASE_DOWNLOAD_RERUN_RUN_ID}" = "${base_gate_run_id}" ] &&
+			[[ "${RELEASE_DOWNLOAD_RERUN_WORKFLOW_ID}" =~ ^[0-9]+$ ]]; then
+			# Issue #9120: reuse the release-download gate's read of this run.
+			base_gate_workflow_id="${RELEASE_DOWNLOAD_RERUN_WORKFLOW_ID}"
+		elif [[ "${base_gate_run_id}" =~ ^[0-9]+$ ]]; then
 			base_gate_workflow_id="$(gh_retry gh api "repos/${REPO}/actions/runs/${base_gate_run_id}" --jq '.workflow_id // ""' 2>/dev/null || true)"
 		fi
 		if [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then

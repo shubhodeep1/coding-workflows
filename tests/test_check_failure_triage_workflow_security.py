@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -12,8 +13,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-
-import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -26,6 +25,11 @@ ISOLATED_HELPER_PATH = REPO_ROOT / "scripts" / "clarify_isolated_run.sh"
 
 
 def _workflow() -> dict:
+	# Imported here, not at module level (issue #9120): the pre-push gate's
+	# container has no PyYAML, and tests/test_check_failure_triage_release_download_rerun.py
+	# loads this module as its harness for the collect-stage cases, which never parse YAML.
+	import yaml
+
 	return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
 
 
@@ -1324,6 +1328,23 @@ case "$*" in
     [ -n "${MOCK_HIST_LOG_FILE:-}" ] || { echo 'gh: HTTP 410: Gone (HTTP 410)' >&2; exit 1; }
     cat "${MOCK_HIST_LOG_FILE}" ;;
   "label create "*) ;;
+  "api repos/owner/repo/actions/runs/1")
+    [ -n "${MOCK_RD_RUN:-}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
+    printf '%s\\n' "${MOCK_RD_RUN}" ;;
+  "api -X GET repos/owner/repo/actions/runs/1/attempts/1/jobs -f per_page=100")
+    [ -n "${MOCK_RD_JOBS:-}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
+    printf '%s\\n' "${MOCK_RD_JOBS}" ;;
+  "api -X GET repos/owner/repo/check-runs/"*"/annotations -f per_page=100")
+    rd_check_run_id="${4#repos/owner/repo/check-runs/}"
+    rd_check_run_id="${rd_check_run_id%/annotations}"
+    rd_annotation_file="${MOCK_RD_ANNOTATIONS_DIR:-/nonexistent}/${rd_check_run_id}.json"
+    [ -f "${rd_annotation_file}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
+    cat "${rd_annotation_file}" ;;
+  "api -i -X POST repos/owner/repo/actions/runs/1/rerun-failed-jobs")
+    rd_rerun_status="${MOCK_RD_RERUN_STATUS:-201}"
+    printf 'HTTP/2.0 %s Mock\\r\\n\\r\\n{"message":"rerun-secret-body"}\\n' "${rd_rerun_status}"
+    [ "${rd_rerun_status}" = 201 ] && exit 0
+    exit "${MOCK_RD_RERUN_EXIT:-1}" ;;
   *) printf 'unexpected gh call: %s\\n' "$*" >&2; exit 2 ;;
 esac
 """,
@@ -1340,6 +1361,11 @@ esac
 	env.update(
 		{
 			"CHECK_FAILURE_TRIAGE_ENABLED": "true",
+			# Issue #9120: the release-download re-run gate is off here so the
+			# existing call expectations hold; extra_env turns it on (see
+			# tests/test_check_failure_triage_release_download_rerun.py) and the
+			# MOCK_RD_* routes above serve its reads and re-run POST.
+			"CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED": "false",
 			"CHECK_RUNS_AUTOFIX_ENABLED": "true" if check_runs_enabled else "false",
 			"CHECK_RUNS_WAIT_TIMEOUT_SECS": "0",
 			"CHECK_TRIAGE_CHECK_CONCLUSION": "failure",
@@ -3528,6 +3554,35 @@ exit 0
 		self.assertEqual(
 			job["env"]["CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED"], "${{ vars.CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED || 'true' }}",
 		)
+
+
+# Issue #9120: the release-download re-run cases live in
+# tests/test_check_failure_triage_release_download_rerun.py and are collected
+# here, since CI already runs this file and ci.yml was outside that issue's
+# file grant. That file loads this one as its harness under
+# "check_triage_release_download_harness", which skips this collection.
+def _collect_release_download_rerun_cases() -> None:
+	if __name__ == "check_triage_release_download_harness":
+		return
+	spec = importlib.util.spec_from_file_location(
+		"check_failure_triage_release_download_rerun_cases",
+		Path(__file__).resolve().parent / "test_check_failure_triage_release_download_rerun.py",
+	)
+	assert spec and spec.loader
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		case = getattr(cases, case_name)
+		if isinstance(case, type) and issubclass(case, unittest.TestCase) and case is not unittest.TestCase:
+			assert case_name not in globals(), case_name
+			globals()[case_name] = case
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 2, f"only {collected} release-download re-run case classes collected"
+
+
+_collect_release_download_rerun_cases()
 
 
 if __name__ == "__main__":
