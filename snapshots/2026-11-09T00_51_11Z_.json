@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-08T06:26:44Z",
+  "tick_at": "2026-11-09T00:51:11Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,12 +11,12 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 3
+    "tracking_issues": 2
   },
   "tracking_issues": [
     {
       "current_wave": 16,
-      "integration_ahead_by": "150",
+      "integration_ahead_by": "156",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -36,8 +36,8 @@
       "wave_complete": false
     },
     {
-      "current_wave": 2,
-      "integration_ahead_by": "19",
+      "current_wave": 3,
+      "integration_ahead_by": "25",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -54,27 +54,6 @@
       "status": "in-progress",
       "title": "[Orchestrator] ChatGPT account reviewer trial: run the review panel's GPT slot on a ChatGPT account via claude-pool-broker (Phases 1-4)",
       "total_waves": 4,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 1,
-      "integration_ahead_by": "5",
-      "issue_counts": {
-        "closed": 0,
-        "done": 1,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 2,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 9033,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-10-07-2.md",
-      "total_waves": 2,
       "wave_complete": false
     }
   ]
