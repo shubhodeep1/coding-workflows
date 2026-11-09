@@ -2752,6 +2752,8 @@ through `clarify → plan → implement → review`.
 | `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED` | `false` | Opt-in Phase A archive flag. When `true`, the implement, orchestrate-poll judge, review editor, and validate discover/diagnose success paths wrap their captured Codex output files into fail-open `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` archives. Archive I/O failures do not fail the host phase; they only log `TRANSCRIPT_ARCHIVE_FAIL`. |
 | `CLAUDE_POOL_HEALTH_ALERT_ENABLED` | `true` | Hourly Telegram `DEBUG` from `orchestrate_poll.yml` when accounts are only at or above `gate_utilization`; rejected tokens or failed probes make the notice `WARNING`. `false` turns it off. See "Near-cap alert" under the Claude engine. |
 | `CLAUDE_POOL_HEALTH_WINDOW_MINUTES` | `5` | The near-cap alert is sent only by the poll cycle whose UTC minute is below this value, so it goes out at most once an hour. |
+| `CHATGPT_POOL_HEALTH_ALERT_ENABLED` | `true` | Adds ChatGPT account problems (rejected login, failed or stale refresh, usage at the gate) to the hourly near-cap alert, and reads the ChatGPT pool status for it. `false` drops only the ChatGPT part. See "Near-cap alert" under the Claude engine. |
+| `CHATGPT_POOL_ALERT_STALE_HOURS` | `12` | A ChatGPT account whose last refresh is at least this many hours old (or missing) is reported as stale, at `WARNING`, in the near-cap alert and the daily usage report. |
 | `CLAUDE_POOL_DAILY_USAGE_ENABLED` | `true` | Daily Telegram report from `orchestrate_poll.yml` (coding-workflows only) listing every Claude pool account's 5-hour and 7-day usage in one message. `false` turns it off. See "Daily usage report" under the Claude engine. |
 | `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` | `0` | First UTC hour (0-23) at which the daily usage report may be sent; `0` is 08:00 Singapore time. The first poll tick at or after this hour sends it, once per UTC day. Invalid values fall back to `0`. |
 | `UNATTENDED_NAG_REMINDER_ENABLED` | `false` | Opt-in wrapper-level `<reminder>` injection after repeated silent reviewer/editor/judge turns. When `false`, the wrappers keep the existing retry behavior unchanged. |
@@ -3239,7 +3241,14 @@ and a cycle delayed past the window skips that hour instead of sending
 twice. `CLAUDE_POOL_HEALTH_ALERT_ENABLED=false` (repo variable) turns it
 off. The step logs `CLAUDE_POOL_HEALTH accounts= gated= auth_failed=
 probe_failed= alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes`
-and never fails the job.
+and never fails the job. The same message also carries a `ChatGPT pool:` block
+(ChatGPT trial plan Phase 4), built from the "Read ChatGPT pool status" step
+(`.github/actions/chatgpt-pool-token`, `mode: status`, never a token). The block
+appears when a ChatGPT account's login was rejected, its last refresh failed,
+its last refresh is older than `CHATGPT_POOL_ALERT_STALE_HOURS` (default `12`),
+or its usage is at or above the broker gate. The first three make the notice
+`WARNING`. `CHATGPT_POOL_HEALTH_ALERT_ENABLED=false` drops the ChatGPT part, and
+the log line ends with `chatgpt_accounts= chatgpt_alerts=`.
 
 **Daily usage report.** Once a day `orchestrate_poll.yml` sends one Telegram
 message listing every Claude pool account with its 5-hour and 7-day
@@ -3269,6 +3278,11 @@ the tick. `CLAUDE_POOL_DAILY_USAGE_ENABLED=false` turns it off. The steps log
 `CLAUDE_POOL_DAILY_USAGE op=slot in_slot= reason=due|before_hour|disabled|silent|telegram_not_configured`
 and `CLAUDE_POOL_DAILY_USAGE op=send accounts= usable= gated= auth_failed=
 probe_failed= outcome=sent|not_delivered truncated=true|false`, and never fail the job.
+The message ends with a "ChatGPT accounts" section: each account's 5-hour and
+weekly usage, the age of its last refresh and its last outcome. It reads
+`ChatGPT accounts: unavailable (<reason>).` when the ChatGPT pool status could
+not be read, and is left out when the pool has no accounts. The send log line
+ends with `chatgpt_accounts= chatgpt_alerts=`.
 
 The token action accepts only the deployed broker URL in Actions jobs and
 only removes pool directories immediately under `$RUNNER_TEMP`; a rejected
