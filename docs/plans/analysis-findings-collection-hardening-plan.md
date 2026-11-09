@@ -328,20 +328,37 @@ state files) is unchanged. The marker comment does not change, so the loop guard
 poller's marker parser are not affected.
 
 P6 also bounds the marker search, because D5 keeps every unprocessed doc.
-`unprocessed_docs` counts every `doc_dispatched_before` call, not only the
-docs it prints, and stops at whichever limit comes first:
+`unprocessed_docs` keeps two separate counters and stops at whichever limit
+comes first:
 
-- `APPLY_ANALYSIS_MAX_CANDIDATES` printed docs (default 3, enough for the
-  deleted-on-tip fallback; it must stay at or above
-  `PROMOTE_CYCLE_MIN_DOCS`, default 2);
-- `APPLY_ANALYSIS_MAX_MARKER_SEARCHES` searches (default 6), so docs skipped
-  because they carry a dispatch marker also count.
+- printed docs, capped at `APPLY_ANALYSIS_MAX_CANDIDATES` (default 3, enough
+  for the deleted-on-tip fallback). The script raises the effective cap to
+  `PROMOTE_CYCLE_MIN_DOCS` when that variable is a larger positive integer
+  and logs `APPLY_ANALYSIS_CANDIDATE_CAP raised_to=<n>
+  reason=promote_cycle_min_docs`, so a capped list-only count can never fall
+  below the promote cycle's minimum on its own;
+- docs skipped because they carry a trusted dispatch marker, capped at
+  `APPLY_ANALYSIS_MAX_MARKER_SEARCHES` (default 20). Only these skips count
+  toward this cap, so the docs it prints never use it up.
 
-The bound applies in both modes. List-only mode (the promote cycle's daily
-pre-check in `scripts/promote_main_cycle.sh`) only compares its count with
-`PROMOTE_CYCLE_MIN_DOCS`, so a capped count is enough there. Each run
-therefore makes at most `APPLY_ANALYSIS_MAX_MARKER_SEARCHES` searches,
-whatever the backlog size. A failed lookup still fails closed as
+Each run therefore makes at most the effective candidate cap plus
+`APPLY_ANALYSIS_MAX_MARKER_SEARCHES` searches, whatever the backlog size.
+
+Marker-carrying docs can still fill the front of the newest-first scan:
+under D5, docs from failed or closed projects keep their markers (the lookup
+matches closed tracking issues too) and are never purged. When the marker
+cap is reached before any doc is printed, the scan does not report an empty
+backlog. Dispatch mode logs `APPLY_ANALYSIS_SKIPPED
+reason=scan_capped_behind_markers searches=<n>` instead of
+`all_docs_processed`, and list-only mode adds `capped_behind_markers=true` to
+its `APPLY_ANALYSIS_CANDIDATES` line. `scripts/promote_main_cycle.sh` then
+skips with `PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers` instead
+of `insufficient_docs`, at WARNING level, naming the skipped docs. The fix
+is a human decision, as D5 intends: record each abandoned doc in the
+processing report (which also makes it eligible for the P5 purge), or raise
+`APPLY_ANALYSIS_MAX_MARKER_SEARCHES`.
+
+The bound applies in both modes. A failed lookup still fails closed as
 `guard_unavailable` (the loop guard must never dispatch a doc it could not
 check). The bound limits how many lookups can fail per run; it does not
 change that rule.
@@ -380,7 +397,8 @@ The check happens inside the project as a required first step. It does not
 add a separate model call before dispatch.
 
 ### D7 — Phase split
-Six phases, each independently mergeable. P1 and P5 both edit "Commit and
+Six phases, each in its own PR. Every phase except P2 can merge on its own;
+P2 must merge after P1 and P3. P1 and P5 both edit "Commit and
 push report", and P4 and P2 both edit the analyze step. The merge train orders
 those edits. Two orderings are required: P2 needs P1's report artifact and
 P3's `coverage.repositories_failed`, so P2 merges after both P1 and P3.
@@ -413,7 +431,7 @@ P3's `coverage.repositories_failed`, so P2 merges after both P1 and P3.
 | P3 | Collector `coverage`, coverage log line, alert, prompt sentence | `scripts/collect_workflow_logs.py`, `workflow-log-analysis.yml`, `prompts/_templates/mode-workflow-analysis.txt` (+ regenerated `prompts/mode-workflow-analysis.txt`), tests | revert; the extra JSON key is ignored by readers |
 | P4 | `since_last_report` input, window marker, gate covers all repos | `workflow-log-analysis.yml`, `test-and-mark-stable.yml`, tests | `WORKFLOW_LOG_ANALYSIS_GATE_ALL_REPOS=false`; the input defaults to off |
 | P5 | The purge keeps every unprocessed doc (D5) | `workflow-log-analysis.yml`, tests | revert |
-| P6 | Check findings first in the project description; bound the marker searches | `scripts/apply_analysis_on_main.sh`, `tests/test_apply_analysis_on_main.py` | revert |
+| P6 | Check findings first in the project description; bound the marker searches | `scripts/apply_analysis_on_main.sh`, `scripts/promote_main_cycle.sh`, `tests/test_apply_analysis_on_main.py`, `README.md` | revert |
 
 Each phase is safe in production at merge:
 
@@ -539,17 +557,34 @@ Each phase is safe in production at merge:
      scripts`, `never use auto-close keywords against
      ai:orchestrator-tracking issues`);
    - keep the marker lines unchanged.
-3. In `unprocessed_docs`, in both modes, return 0 once
-   `APPLY_ANALYSIS_MAX_CANDIDATES` docs have been printed (default 3) or
-   `APPLY_ANALYSIS_MAX_MARKER_SEARCHES` `doc_dispatched_before` calls have
-   been made (default 6), whichever comes first. Both are positive integers
-   defaulted in the script. Test that:
+3. In `unprocessed_docs`, in both modes, return 0 once the effective
+   candidate cap of docs has been printed (`APPLY_ANALYSIS_MAX_CANDIDATES`,
+   default 3, raised to `PROMOTE_CYCLE_MIN_DOCS` when that is larger) or
+   `APPLY_ANALYSIS_MAX_MARKER_SEARCHES` docs (default 20) have been skipped
+   for a dispatch marker, whichever comes first. Both are positive integers
+   defaulted in the script. When the marker cap is reached with no doc
+   printed, emit the `scan_capped_behind_markers` reason (dispatch mode) or
+   `capped_behind_markers=true` (list-only mode) from the Approach, and make
+   `scripts/promote_main_cycle.sh` log
+   `PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers` with a WARNING
+   alert. Test that:
    - a backlog of 10 unprocessed docs makes 3 searches in either mode;
-   - a backlog of 10 docs that all carry a dispatch marker makes 6 searches
-     and prints none;
+   - with `PROMOTE_CYCLE_MIN_DOCS=4`, a backlog of 10 unprocessed docs
+     prints 4 and logs `APPLY_ANALYSIS_CANDIDATE_CAP raised_to=4`;
+   - a backlog of 25 docs that all carry a dispatch marker makes 20 searches,
+     prints none and logs `reason=scan_capped_behind_markers`, not
+     `all_docs_processed` or `insufficient_docs`;
+   - marker-carrying docs ahead of an unprocessed doc within the marker cap
+     do not hide it;
    - list-only mode still reports `count=2` or more when at least 2
      unprocessed docs exist within the bound.
-4. Add a changelog fragment.
+4. Add README rows for `APPLY_ANALYSIS_MAX_CANDIDATES` and
+   `APPLY_ANALYSIS_MAX_MARKER_SEARCHES`, add both to the env-var header
+   comment of `scripts/apply_analysis_on_main.sh`, add the
+   `scan_capped_behind_markers` reason to the header of
+   `scripts/promote_main_cycle.sh`, and register `APPLY_ANALYSIS_CANDIDATE_CAP`
+   through an `agents.d/` fragment.
+5. Add a changelog fragment.
 
 ## Files & Modules
 
@@ -561,6 +596,7 @@ Each phase is safe in production at merge:
 - `prompts/_templates/mode-workflow-analysis.txt`,
   `prompts/mode-workflow-analysis.txt`: P3
 - `scripts/apply_analysis_on_main.sh`: P5 (read only), P6
+- `scripts/promote_main_cycle.sh`: P6 (new skip reason)
 - Tests: `tests/test_collect_workflow_logs.py`,
   `tests/test_workflow_log_analysis_failure_contract.py`,
   `tests/test_apply_analysis_on_main.py`, and new
@@ -639,7 +675,9 @@ None.
   `search/issues` call) for every doc not in the processing report, and one
   failed lookup makes the dispatch skip as `guard_unavailable`. P6 therefore
   bounds the number of searches in both modes (see P6). A failed lookup still
-  skips the run, by design.
+  skips the run, by design. Abandoned docs at the front of the scan can still
+  use up the marker cap; that is logged as `scan_capped_behind_markers` with
+  a WARNING, never as an empty backlog.
 - **The section jobs fail after the report branch exists.** `publish-report`
   still opens the PR, and the PR body says which sections are missing.
 - **The P6 wording changes how the orchestrator decomposes a project.** Only
