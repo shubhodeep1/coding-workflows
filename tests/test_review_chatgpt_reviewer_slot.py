@@ -118,6 +118,24 @@ def test_shipped_config_keeps_the_slot_off(tmp_path: Path) -> None:
 	assert result == {"enabled": "false", "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh", "source": "file", "reason": "switch_off"}
 
 
+def test_shipped_pool_config_file_exists_and_keeps_the_slot_off() -> None:
+	# Reads the committed file directly (no _shipped_config_text fallback), so a
+	# missing .github/ai/chatgpt_pool.json fails here instead of passing silently.
+	assert POOL_CONFIG.is_file(), f"missing shipped switch file: {POOL_CONFIG.relative_to(REPO_ROOT)}"
+	shipped = json.loads(POOL_CONFIG.read_text(encoding="utf-8"))
+	assert isinstance(shipped, dict)
+	assert shipped == json.loads(SHIPPED_CONFIG)
+	assert shipped["reviewer_slot_enabled"] is False
+	proc = subprocess.run(
+		[sys.executable, str(ENGINE), "chatgpt-slot", "--config", str(POOL_CONFIG)],
+		env=_env(), capture_output=True, text=True, check=True,
+	)
+	lines = proc.stdout.strip().splitlines()
+	assert len(lines) == 1
+	result = dict(part.split("=", 1) for part in lines[0].split())
+	assert (result["enabled"], result["reason"], result["source"]) == ("false", "switch_off", "file")
+
+
 ON = '{"reviewer_slot_enabled": true, "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}'
 
 
