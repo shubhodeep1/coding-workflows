@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.87,
+  "details": "Merged changes to CI jobs, GitHub Actions, and workflow scripts repeatedly paired the implementation with a targeted test file and a changelog fragment. When planning similar changes, look for the relevant contract-test pattern and include both artifacts where appropriate.",
+  "fingerprint": "30a3c2013dbc0a0569b4d0e346a15074c48194d491d74ced0319d354fa0834c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42544282894",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42544282894",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9045",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9059",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9060",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9061",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9066",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9048",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9062",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9063",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9064",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9067"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261109011510_4773056d2c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow and shell-script changes commonly include a focused contract test and a changelog.d entry.",
+  "timestamps": {
+    "created_at": "2026-11-09T01:15:10Z",
+    "promoted_at": "2026-11-09T01:15:43Z",
+    "superseded_at": null
+  }
+}
