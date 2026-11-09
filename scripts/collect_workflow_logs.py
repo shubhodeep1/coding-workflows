@@ -2265,8 +2265,13 @@ def main(argv: list[str] | None = None) -> int:
             run_rows.append(row)
             collected_rows_for_repo.append(dict(row))
 
+        # P3: never keep the ETag of a truncated listing. A later 304 would
+        # restore the partial snapshot without its truncation flags, so the
+        # coverage report would show the repo as complete; refetch instead.
         repo_cache_updated = {
-            "runs_etag": run_meta.get("etag") if isinstance(run_meta.get("etag"), str) else cached_etag,
+            "runs_etag": None
+            if repo_truncated
+            else (run_meta.get("etag") if isinstance(run_meta.get("etag"), str) else cached_etag),
             "runs_window_start": _format_iso8601(effective_since),
             "jobs_seen_set": jobs_seen_set,
             "cancelled_jobs_seen_set": cancelled_jobs_seen_set,

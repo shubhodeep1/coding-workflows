@@ -3437,6 +3437,41 @@ def test_main_coverage_pat_budget_partial_listing_is_truncated_not_failed() -> N
 	assert report["coverage"]["page_limit_reached"] is False
 
 
+def test_main_does_not_cache_etag_of_truncated_listing() -> None:
+	"""A 304 must never restore a truncated snapshot as a complete listing."""
+	written: list[dict] = []
+
+	def capture_write(**kwargs):
+		written.append(kwargs["payload"])
+		return True
+
+	def listing(repo: str, **kwargs):
+		meta = {"not_modified": False, "etag": f'W/"etag-{repo}"'}
+		if repo == "owner/capped":
+			return [_coverage_run(1)], True, meta
+		if repo == "owner/paged":
+			return [_coverage_run(2)], False, dict(meta, page_limit_reached=True)
+		return [_coverage_run(3)], False, meta
+
+	argv = ["--since", "2026-04-01T00:00:00Z", "--max-runs", "1", "--max-log-runs", "0"]
+	for repo in ("owner/capped", "owner/paged", "owner/ok"):
+		argv += ["--repo", repo]
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-etag-") as td:
+		argv += ["--output", str(Path(td) / "report.json")]
+		with patch.object(collector, "_cache_read_context", return_value=({"repositories": {}}, None, None)), \
+			patch.object(collector, "_cache_write_context", side_effect=capture_write), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main(argv)
+	assert rc == 0
+	assert written, "cache payload was not written"
+	repos = written[-1]["repositories"]
+	assert repos["owner/capped"]["runs_etag"] is None
+	assert repos["owner/paged"]["runs_etag"] is None
+	assert repos["owner/ok"]["runs_etag"] == 'W/"etag-owner/ok"'
+
+
 def test_build_report_omits_coverage_when_not_supplied() -> None:
 	report = collector.build_report(["owner/repo"], [], [])
 	assert "coverage" not in report
