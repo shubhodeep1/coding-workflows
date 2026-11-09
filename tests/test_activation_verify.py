@@ -1062,6 +1062,7 @@ def test_untrusted_verdict_marker_comment_is_ignored(tmp_path: Path) -> None:
 def test_trusted_crlf_verdict_marker_reconciles(tmp_path: Path) -> None:
 	extra = [{"endpoint": "repos/o/r/issues/7/comments", "body": f"## Activation: LIVE\r\n\r\n{LIVE_MARKER}\r\n", "user": {"login": "github-actions[bot]"}}]
 	result, state = _verify(tmp_path, LIVE, env_extra={"FAKE_GH_FAIL_COMMENT_POSTS": "1", "FAKE_GH_EXTRA_COMMENTS": json.dumps(extra)})
+	assert result.returncode == 0
 	assert "outcome=verdict_comment_reconciled" in result.stdout
 	assert len(_verdict_posts(state)) == 1 and state["comments"] == []
 

@@ -96,6 +96,9 @@
 # of work that is already under review. When every code gap is tagged, no fix
 # issue is searched for or opened.
 # POSTs are single-attempt: retrying after a lost response can duplicate writes.
+# The one exception is the verdict comment, which is retried once, and only
+# after a successful listing shows no trusted comment ending in its marker
+# (see the write-reconciliation note above). The fix-issue create is never retried.
 # Log: ACTIVATION_VERIFY mode= item= verdict= code_gaps= operator_gaps= outcome= reason=
 set -uo pipefail
 
@@ -665,9 +668,11 @@ activation_main()
 			activation_log "mode=${mode} item=${item} outcome=fix_issue_reused"
 			# Continue with operator steps and the missing verdict comment.
 		else
-			fix_body="$(jq -r --arg key "${key}" --arg label "${item_label}" '
+			# The jq variable is not named $label: "label" is a reserved keyword in
+			# jq 1.6, which then fails to compile the filter.
+			fix_body="$(jq -r --arg key "${key}" --arg source_label "${item_label}" '
 				"<!-- ai:activation-fix:v1 source=" + $key + " -->\n"
-				+ "## Activation gaps\n\nActivation verification of " + $label
+				+ "## Activation gaps\n\nActivation verification of " + $source_label
 				+ " found these gaps that code in this repository can close. Close each one with the smallest change; do not change unrelated behaviour.\n\n"
 				+ ([.gaps[] | select(.kind == "code" and .open_pr == null) | "- **" + .title + "**\n  Evidence: " + .evidence + "\n  Fix: " + .fix] | join("\n"))
 			' "${verdict_file}")"
