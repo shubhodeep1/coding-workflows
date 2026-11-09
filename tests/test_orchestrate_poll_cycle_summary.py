@@ -13,6 +13,7 @@ collects them (ci.yml was outside this issue's file grant).
 
 from __future__ import annotations
 
+import functools
 import re
 import subprocess
 import tempfile
@@ -35,10 +36,12 @@ SUMMARY_RE = re.compile(
 )
 
 
+@functools.lru_cache(maxsize=1)
 def _script() -> str:
 	return POLLER_SCRIPT.read_text(encoding="utf-8")
 
 
+@functools.lru_cache(maxsize=1)
 def _helper_block() -> str:
 	script = _script()
 	start = script.index(BLOCK_BEGIN)
