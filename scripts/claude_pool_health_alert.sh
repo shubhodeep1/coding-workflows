@@ -94,7 +94,9 @@ report="$(printf '%s' "${probes_json}" | PYTHONDONTWRITEBYTECODE=1 python3 "${sc
 # Waiting work recorded on the Claude capacity tracker (issue #7370).
 waiting_count=0
 waiting_text=""
-if [ -n "${CLAUDE_CAPACITY_WAIT_ITEMS:-}" ]; then
+# Empty Claude probes keep their pre-ChatGPT behaviour: no Claude
+# capacity-wait notice (it would have exited with no_probes before).
+if [ -n "${CLAUDE_CAPACITY_WAIT_ITEMS:-}" ] && [ "${claude_probes_empty}" != "true" ]; then
 	waiting_text="$(printf '%s' "${report}" | CLAUDE_CAPACITY_WAIT_ITEMS="${CLAUDE_CAPACITY_WAIT_ITEMS}" python3 -I -c '
 import json, os, re, sys
 try:
@@ -173,6 +175,14 @@ if [ -n "${waiting_text}" ]; then
 	text="${waiting_text}${text:+
 ${text}}"
 fi
+# Telegram rejects messages over 4096 characters, and a rejected send loses
+# the whole alert. Cut the text before the run link is added (the Claude part
+# comes first, so it survives) and keep the full text in the job log.
+if [ "${#text}" -gt 3700 ]; then
+	printf '::group::CLAUDE_POOL_HEALTH full alert\n%s\n::endgroup::\n' "${text//::/: :}"
+	text="${text:0:3700}
+… (truncated: the alert is longer than 3700 characters; see the run log)"
+fi
 if [ -n "${GITHUB_SERVER_URL:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "${GITHUB_RUN_ID:-}" ]; then
 	text="${text}
 Probed by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
@@ -193,6 +203,8 @@ pool_health_level="DEBUG"
 if { [ "${claude_send}" = "true" ] && { [ "${auth_failed}" -gt 0 ] || [ "${probe_failed}" -gt 0 ]; }; } || [ "${chatgpt_warning}" = "true" ]; then
 	pool_health_level="WARNING"
 fi
+# Backstop for the 4096-character Telegram limit (the level prefix is short).
+text="${text:0:3900}"
 message_id="$(tg_send_msg "${text}" "${pool_health_level}" 2>/dev/null)" || message_id=""
 if [ -n "${message_id}" ]; then
 	pool_health_log "${accounts}" "${gated}" "${auth_failed}" "${probe_failed}" sent

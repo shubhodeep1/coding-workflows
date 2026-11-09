@@ -50,7 +50,7 @@ def env(tmp_path: Path) -> dict:
 	curl = fake_bin / "curl"
 	curl.write_text(FAKE_CURL, encoding="utf-8")
 	curl.chmod(curl.stat().st_mode | stat.S_IXUSR)
-	values = {key: value for key, value in os.environ.items() if not key.startswith(("CLAUDE_", "TG_", "GITHUB_", "ALERT_"))}
+	values = {key: value for key, value in os.environ.items() if not key.startswith(("CLAUDE_", "CHATGPT_", "TG_", "GITHUB_", "ALERT_"))}
 	values.update({
 		"PATH": f"{fake_bin}:{os.environ['PATH']}",
 		"FAKE_CURL_LOG": str(tmp_path / "curl.log"),
@@ -250,6 +250,14 @@ def test_send_shows_an_unavailable_chatgpt_line(env: dict, extra: dict, line: st
 	text = _sent_text(env)
 	assert text.startswith("📊 Claude pool daily usage: 1 account(s), 1 usable.\n")
 	assert f"\n\n{line}\nProbed by " in text
+
+
+def test_send_without_probes_keeps_the_pool_reason_on_the_claude_headline(env: dict) -> None:
+	result = _run(env, "send", [], CLAUDE_POOL_REASON="not_probed", CHATGPT_POOL_STATUS="", CHATGPT_POOL_STATUS_REASON="broker_unavailable_503")
+	assert result.returncode == 0 and "outcome=sent" in result.stdout
+	text = _sent_text(env)
+	assert text.startswith("📊 Claude pool daily usage: no probe results (pool: not_probed).\n\nChatGPT accounts: unavailable (broker_unavailable_503).\n")
+	assert "(broker_unavailable_503) (pool:" not in text
 
 
 def test_unreadable_claude_probes_still_send_with_a_chatgpt_status(env: dict) -> None:

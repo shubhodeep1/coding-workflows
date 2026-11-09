@@ -90,7 +90,7 @@ daily_usage_send()
 	fi
 	type tg_send_report_msg >/dev/null 2>&1 || tg_send_report_msg() { :; }
 
-	local probes_json report_args=() report text counts message_id outcome err_file err_detail truncated=false chatgpt_stale_hours chatgpt_counts
+	local probes_json report_args=() report text counts message_id outcome err_file err_detail truncated=false chatgpt_stale_hours chatgpt_counts text_head
 	probes_json="${CLAUDE_POOL_PROBES:-}"
 	[ -n "${probes_json}" ] || probes_json="[]"
 	if [ -n "${CLAUDE_POOL_DAILY_USAGE_GATE:-}" ]; then
@@ -130,7 +130,10 @@ chatgpt_accounts=0 chatgpt_alerts=0"
 	counts="${counts%%$'\n'*}"
 	[ "${chatgpt_counts}" != "${counts}" ] || chatgpt_counts="chatgpt_accounts=0 chatgpt_alerts=0"
 	if [ "${probes_json}" = "[]" ] && [ -n "${CLAUDE_POOL_REASON:-}" ]; then
-		text="${text%.} (pool: ${CLAUDE_POOL_REASON})."
+		# The reason belongs to the Claude headline (the first line), not to the
+		# end of the text, which may hold the ChatGPT section.
+		text_head="${text%%$'\n'*}"
+		text="${text_head%.} (pool: ${CLAUDE_POOL_REASON}).${text#"${text_head}"}"
 	fi
 	[ "${err_file}" = /dev/null ] || rm -f "${err_file}"
 	text="📊 ${text}"

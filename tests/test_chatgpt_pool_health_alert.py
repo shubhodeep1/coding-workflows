@@ -152,12 +152,19 @@ def test_malformed_status_never_raises(raw: str) -> None:
 
 
 def test_bad_entries_are_dropped_and_the_list_is_capped() -> None:
-	entries = [_account("lower", outcome="auth_failed"), _account("BAD NAME", outcome="auth_failed"), _account("X" * 65)]
+	entries = [_account("lower", outcome="auth_failed"), _account("BAD NAME", outcome="auth_failed"), _account("TRAIL\n")]
 	entries += [_account(f"ACC_{index:03d}") for index in range(80)]
 	accounts, gate, error = claude_engine._chatgpt_status_parse(_status(*entries))
 	assert error is None and gate == 0.9
 	assert len(accounts) == claude_engine.CHATGPT_STATUS_MAX_ACCOUNTS
 	assert all(re.fullmatch(r"ACC_[0-9]{3}", entry["account"]) for entry in accounts)
+
+
+def test_long_broker_valid_names_are_kept() -> None:
+	"""The broker has no length cap on `[A-Z0-9_]+` names, so neither does the parser."""
+	name = "X" * 65
+	report = claude_engine.pool_health([], 0.9, now=NOW, chatgpt_status=_status(_account(name, outcome="auth_failed")))
+	assert report["chatgpt_alerts"] == [name]
 
 
 def test_unsafe_strings_are_never_rendered() -> None:
@@ -337,6 +344,25 @@ def test_shell_chatgpt_switch_off_is_claude_only(env: dict) -> None:
 def test_shell_skips_never_fail(env: dict, probes: list | None, status: str | None, extra: dict, expected: str) -> None:
 	result = _run(env, probes, status, **extra)
 	assert result.returncode == 0 and expected in result.stdout
+	assert not env["log"].exists()
+
+
+def test_shell_long_alert_is_truncated_and_still_sent(env: dict) -> None:
+	accounts = [_live_account(f"ACCOUNT_WITH_A_LONG_NAME_{index:03d}", outcome="auth_failed", hours_ago=30) for index in range(40)]
+	result = _run(env, [_claude_probe("ALPHA", 0.95, 0.1)], _status(*accounts))
+	assert result.returncode == 0, result.stderr
+	assert "alert=sent" in result.stdout and "chatgpt_alerts=40" in result.stdout
+	assert "::group::CLAUDE_POOL_HEALTH full alert" in result.stdout
+	text = _sent_text(env)
+	assert len(text) <= 4096
+	assert "Claude pool: 1 of 1" in text and "(truncated: the alert is longer than 3700 characters" in text
+
+
+def test_shell_empty_claude_probes_send_no_capacity_wait_notice(env: dict) -> None:
+	items = json.dumps({"count": 2, "items": [{"kind": "issue", "item": "5"}], "opened_at": "2026-11-01T00:00:00Z"})
+	result = _run(env, [], _status(_live_account("ONE")), CLAUDE_CAPACITY_WAIT_ITEMS=items)
+	assert result.returncode == 0, result.stderr
+	assert "alert=none waiting=0 chatgpt_accounts=1 chatgpt_alerts=0" in result.stdout
 	assert not env["log"].exists()
 
 

@@ -1039,7 +1039,9 @@ def _window_summary(probe: dict[str, Any], name: str, label: str, gate: float, n
 CHATGPT_STATUS_DEFAULT_GATE = 0.9  # mirrors the broker's DEFAULT_CHATGPT_GATE
 CHATGPT_STATUS_DEFAULT_STALE_HOURS = 12.0
 CHATGPT_STATUS_MAX_ACCOUNTS = 64
-CHATGPT_STATUS_NAME_RE = re.compile(r"^[A-Z0-9_]{1,64}$")
+# The broker's wire contract (`^[A-Z0-9_]+$`, no length cap); always fullmatch,
+# so a trailing newline never passes.
+CHATGPT_STATUS_NAME_RE = re.compile(r"^[A-Z0-9_]+$")
 CHATGPT_STATUS_CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
 CHATGPT_STATUS_REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 # Outcomes that are not a refresh failure: `ok`, and `quota_exhausted` (the
@@ -1059,7 +1061,7 @@ def _chatgpt_status_parse(raw: str | None) -> tuple[list[dict[str, Any]], float,
 
 	Empty input is ``([], default gate, None)``; JSON that is not an object
 	with an ``accounts`` list is ``([], default gate, "status_invalid")``.
-	Entries whose ``account`` is not ``[A-Z0-9_]{1,64}`` are dropped, at most
+	Entries whose ``account`` is not ``[A-Z0-9_]+`` are dropped, at most
 	CHATGPT_STATUS_MAX_ACCOUNTS are kept, sorted by name. A ``gate`` outside
 	(0, 1] is CHATGPT_STATUS_DEFAULT_GATE.
 	"""
@@ -1083,14 +1085,14 @@ def _chatgpt_status_parse(raw: str | None) -> tuple[list[dict[str, Any]], float,
 		if not isinstance(entry, dict):
 			continue
 		name = entry.get("account")
-		if not isinstance(name, str) or not CHATGPT_STATUS_NAME_RE.match(name) or name in seen:
+		if not isinstance(name, str) or not CHATGPT_STATUS_NAME_RE.fullmatch(name) or name in seen:
 			continue
 		seen.add(name)
 		usage = entry.get("usage") if isinstance(entry.get("usage"), dict) else {}
 		outcome = entry.get("last_outcome")
 		if outcome is not None:
 			# A value outside the safe character set is still a non-ok outcome.
-			outcome = outcome if isinstance(outcome, str) and CHATGPT_STATUS_CODE_RE.match(outcome) else "unknown"
+			outcome = outcome if isinstance(outcome, str) and CHATGPT_STATUS_CODE_RE.fullmatch(outcome) else "unknown"
 		reason = entry.get("reason")
 		accounts.append({
 			"account": name,
@@ -1099,7 +1101,7 @@ def _chatgpt_status_parse(raw: str | None) -> tuple[list[dict[str, Any]], float,
 			"five_hour": _chatgpt_status_number(usage.get("five_hour")),
 			"weekly": _chatgpt_status_number(usage.get("weekly")),
 			"usable": entry.get("usable") is True,
-			"reason": reason if isinstance(reason, str) and CHATGPT_STATUS_CODE_RE.match(reason) else None,
+			"reason": reason if isinstance(reason, str) and CHATGPT_STATUS_CODE_RE.fullmatch(reason) else None,
 		})
 	accounts.sort(key=lambda item: item["account"])
 	return accounts, gate, None
@@ -1376,7 +1378,7 @@ def pool_usage_report(
 		section = "\n".join([chatgpt_headline + ".", *chatgpt_lines])
 	elif not (chatgpt_status or "").strip() and (chatgpt_reason or "").strip():
 		reason = chatgpt_reason.strip()
-		section = f"ChatGPT accounts: unavailable ({reason if CHATGPT_STATUS_REASON_RE.match(reason) else 'unknown'})."
+		section = f"ChatGPT accounts: unavailable ({reason if CHATGPT_STATUS_REASON_RE.fullmatch(reason) else 'unknown'})."
 	if section:
 		text += "\n\n" + section
 	return {
