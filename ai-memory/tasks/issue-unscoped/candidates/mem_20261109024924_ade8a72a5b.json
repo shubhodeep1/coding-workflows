@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- (CI infrastructure, not mappable to PR diff):check-run copilot-pull-request-reviewer | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The only failed check-run on this PR head is the Copilot reviewer agent, which failed to start with `Prompt too big after adding system message` (`custom_instructions_too_large`, 422) because the repo's AGENTS.md/CLAUDE.md custom instructions exceed its prompt budget.\n  WHY: It is a repository-level instruction-size condition, not a defect in any hunk of this diff. The source labelled it SEVERITY: NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (CI infrastructure, not mappable to PR diff):check-run copilot-pull-request-reviewer on head SHA 2da9840e14443b08606fde850327b5cf717d2649 | severity=NIT | confidence=4\n  PROBLEM: The only failed check-run on this PR head is the Copilot reviewer agent failing to start because the repo's AGENTS.md/CLAUDE.md custom instructions exceed its prompt budget; the failure does not trace to any hunk in scripts/validate_process.sh, tests/test_validate_process_fixup_labels.py, or the changelog fragment, and no diff-side fix can resolve it.\n  WHY: The reviewer job exits 1 before analyzing the diff (\"Prompt too big after adding system message\"), so this PR gets no Copilot review; it is a repository-level instruction-size condition, not a code defect in this change.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0b79d4357d19de1359d59e902ff73f9b82ee2498cf919240c27aabcab7b41e8f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9091,
+    "run_id": "42549600771",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42549600771",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109024924_ade8a72a5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9091,
+    "run_id": "42549600771"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-09T02:49:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
