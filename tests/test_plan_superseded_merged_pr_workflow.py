@@ -417,7 +417,7 @@ def test_pr_not_open_plans_on_default_base(tmp_path):
 	assert "SKIP_PLAN" not in github_env
 	assert "PLAN_REROUTED_REF" not in github_env
 	assert "outcome=plan reason=merged_check_not_passed" in proc.stdout
-	assert "gate=none" in proc.stdout
+	assert "gate=none gate_rc=not_run" in proc.stdout
 	assert not any(call[:2] == ["issue", "close"] for call in calls)
 
 
@@ -427,19 +427,23 @@ def test_pr_not_open_plans_on_default_base(tmp_path):
 STUB_TRIAGE_GATE = r'''import json, os, sys
 with open(os.environ["STUB_GATE_LOG"], "a", encoding="utf-8") as handle:
 	handle.write(json.dumps(sys.argv[1:]) + "\n")
-print(json.dumps({"status": os.environ.get("STUB_GATE_STATUS", ""), "issue": 7185}))
+if os.environ.get("STUB_GATE_STDERR"):
+	sys.stderr.write(os.environ["STUB_GATE_STDERR"] + "\n")
+if os.environ.get("STUB_GATE_STATUS") != "__crash__":
+	print(json.dumps({"status": os.environ.get("STUB_GATE_STATUS", ""), "issue": 7185}))
 sys.exit(int(os.environ.get("STUB_GATE_RC", "0")))
 '''
 
 
-def _run_with_stub_gate(tmp_path, status, rc="0"):
+def _run_with_stub_gate(tmp_path, status, rc="0", stderr=""):
 	work = tmp_path / "work"
 	(work / ".codex-workflow-src" / "scripts").mkdir(parents=True)
 	(work / ".codex-workflow-src" / "scripts" / "check_triage_resolution.py").write_text(STUB_TRIAGE_GATE)
 	gate_log = tmp_path / "gate.log"
 	proc, calls, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
 		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main", "PLAN_SUPERSEDE_RESOLVED_REF": "main",
-			"STUB_GATE_LOG": str(gate_log), "STUB_GATE_STATUS": status, "STUB_GATE_RC": rc})
+			"STUB_GATE_LOG": str(gate_log), "STUB_GATE_STATUS": status, "STUB_GATE_RC": rc,
+			"STUB_GATE_STDERR": stderr})
 	gate_calls = [json.loads(line) for line in gate_log.read_text().splitlines()] if gate_log.exists() else []
 	return proc, calls, github_env, gate_calls
 
@@ -482,6 +486,17 @@ def test_merged_red_head_gate_error_plans(tmp_path):
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert "SKIP_PLAN" not in github_env
 	assert "outcome=plan reason=merged_check_not_passed gate=resolved gate_rc=1" in proc.stdout
+
+
+def test_merged_red_head_gate_crash_plans_and_keeps_stderr(tmp_path):
+	proc, _, github_env, _ = _run_with_stub_gate(tmp_path, "__crash__", rc="1",
+		stderr="CHECK_TRIAGE_RESOLVED issue=7185 outcome=error reason=api_failed ::set-output")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN" not in github_env
+	assert "outcome=plan reason=merged_check_not_passed gate=none gate_rc=1" in proc.stdout
+	out = proc.stdout + proc.stderr
+	assert "::warning::Check-triage resolution gate exited 1" in out
+	assert "| CHECK_TRIAGE_RESOLVED issue=7185 outcome=error reason=api_failed : :set-output" in out
 
 
 def test_step_passes_the_resolution_gate_switch():
