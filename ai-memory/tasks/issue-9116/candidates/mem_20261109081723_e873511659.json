@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Analysis findings: report delivery via PR, consumer coverage, collection checks, purge safety, findings checked first\",\"issues\":[{\"id\":\"p1-report-delivery-pr\",\"title\":\"Analysis findings hardening P1: deliver workflow log analysis report via PR (plan phase P1)\",\"priority\":1},{\"id\":\"p2-consumer-coverage\",\"title\":\"Analysis findings hardening P2: consumer repo coverage in workflow log collection (plan phase P2)\",\"priority\":2},{\"id\":\"p3-collection-checks\",\"title\":\"Analysis findings hardening P3: collection checks before analysis (plan phase P3)\",\"priority\":2},{\"id\":\"p4-purge-safety\",\"title\":\"Analysis findings hardening P4: age-based report purge safety (plan phase P4)\",\"priority\":3},{\"id\":\"p5-findings-checked-first\",\"title\":\"Analysis findings hardening P5: analysis checks prior findings first (plan phase P5)\",\"priority\":3},{\"id\":\"p6-apply-analysis-description\",\"title\":\"Analysis findings hardening P6: update apply-analysis project_description text (plan phase P6)\",\"priority\":2}],\"dependency_edges\":[{\"from\":\"p1-report-delivery-pr\",\"to\":\"p4-purge-safety\"},{\"from\":\"p1-report-delivery-pr\",\"to\":\"p2-consumer-coverage\"},{\"from\":\"p1-report-delivery-pr\",\"to\":\"p3-collection-checks\"},{\"from\":\"p1-report-delivery-pr\",\"to\":\"p6-apply-analysis-description\"},{\"from\":\"p2-consumer-coverage\",\"to\":\"p4-purge-safety\"},{\"from\":\"p6-apply-analysis-description\",\"to\":\"p4-purge-safety\"}]}",
+  "fingerprint": "3e729a8675aa3d13444f023ded2de7867a61aaa591cda8fdcf357e72aa9092cc",
+  "lineage": {
+    "issue_number": 9116,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42583815822",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42583815822",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261109081723_e873511659",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9116,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42583815822"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Analysis findings: report delivery via PR, consumer coverage, collection checks, purge safety, findings checked first' into 6 issues (tracking #9116)",
+  "timestamps": {
+    "created_at": "2026-11-09T08:17:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
