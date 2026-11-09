@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:9760 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new log prefix [superseded-check] is not registered in the agents.md log prefix registry.\n  WHY: It violates the contractual requirement for registered log prefixes, which can break downstream automated log analysis tools; the source labelled it SEVERITY: NIT, which is mapped to low here. Other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) rejected this because the prefix already exists at lines 9722 and 9733.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nHardening suggestion (not a finding): scripts/orchestrate_poll_process.sh, `git fetch --no-tags origin` call at lines 9758-9760 has no prompt suppression; suggested fix is to prefix it with `GIT_TERMINAL_PROMPT=0` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:9760 | severity=NIT | confidence=4\n  PROBLEM: The new log prefix [superseded-check] is not registered in the agents.md log prefix registry.\n  WHY: It violates the contractual requirement for registered log prefixes, which can break downstream automated log analysis tools that rely on the registry for log parsing and classification.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "24be4e10cac1008d4afdd26d82f6a68a0019d866b3e101b4c3b588ee34b2f3ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9122,
+    "run_id": "42717328583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42717328583",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109235332_0a78352ed9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9122,
+    "run_id": "42717328583"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-09T23:53:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
