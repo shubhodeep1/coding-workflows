@@ -3,9 +3,9 @@
 - Reference: #8427 (orchestrator project, closed completed 2026-11-07)   (+ PR #8430 squash 0480649; plan docs/plans/persistent-unattended-workflows-plan.md)
 - Deploy target: shubhodeep1/coding-workflows (consumers optional: each repo that wants a switch sets the same repo variable)
 - How it runs: inside the existing pipelines (clarify / plan / implement / review_autofix / orchestrate / orchestrate_poll cron / issue_pr_status on PR merge), each phase behind a default-off repo variable
-- Status: IN_PROGRESS
+- Status: LIVE
 - Last updated: 2026-11-09
-- Last note: Steps 1-13 done; all 11 PERSIST_* vars read `true`; next is Step 14 (verify LIVE)
+- Last note: LIVE; poll run 42586255223 (success) ran with all poller-read PERSIST_* switches `true`
 - Human-steps issue: https://github.com/shubhodeep1/coding-workflows/issues/6211 — key project-8427 (authoritative comment now 6729299210, posted 2026-11-09; all 11 lines already ticked by the promote cycle)
 
 ## Runbook
@@ -22,7 +22,7 @@
 11. [x] Set PERSIST_ORCH_REDECOMPOSE_ENABLED=true (orchestrate_poll.yml:61, default 'false') — covers project-8427 «P10 re-decompose remaining waves off (PERSIST_ORCH_REDECOMPOSE_ENABLED)» — done 2026-11-09: operator `gh variable list` shows `true`
 12. [x] Set PERSIST_EVIDENCE_BROKER_ENABLED=true (plan.yml:27, default 'false') — covers project-8427 «P11 plan evidence broker off (PERSIST_EVIDENCE_BROKER_ENABLED)» — done 2026-11-09: operator `gh variable list` shows `true`
 13. [x] Verify `@stable` carries PR #8430 (automatic daily promote cycle; needed only for consumer repos) — done 2026-11-09: tag `stable` = b996b678, contains 0480649
-14. [ ] Verify LIVE (all 11 variables read `true`; a pipeline run shows a gated step executing)
+14. [x] Verify LIVE (all 11 variables read `true`; a pipeline run shows a gated step executing) — done 2026-11-09: internal-orchestrate-poll run 42586255223 (started 08:28Z, after the last flip) succeeded; its log shows PERSIST_JOURNAL/POSTMERGE_VERIFY/BUDGET/ORCH_CONTEXT/ORCH_FAILURE_GROUPING/ORCH_WAVE_CHECK/ORCH_REDECOMPOSE_ENABLED: true, caps at defaults
 
 ## Notes
 - 2026-11-08: completeness verified. PR #8430 (0480649, 2026-11-07) is on main; all 11 `vars.PERSIST_*` read-sites present at origin/main 68ac90d.
@@ -32,3 +32,4 @@
 - 2026-11-09: Step 1: no PERSIST_* variable set; PREPUSH_TEST_GATE_MODE and ENABLE_CLEAN_WAVE_JUDGE_SKIP unset, so the P3 and P9 side conditions hold by default. Step 1 covers no human-steps line.
 - 2026-11-09: a newer project-8427 entry, comment 6729299210, arrived with all 11 P-lines `[x]` and the marker "Done: the `stable` tag (`b996b67`) includes the merge `0480649`; ticked by the promote cycle." Those ticks mean "code released", not "variable set": Step 1 showed no PERSIST_* variable set that day. Nothing left to tick; the older comment 6704272982 is left unchanged because the pipeline reads only the newest. The runbook still sets the remaining 10 variables.
 - 2026-11-09: at the operator's request, Steps 10-12 (P9-P11) ran as one batch. Operator `gh variable list` then showed all 11 PERSIST_* variables `true` (P6 confirmed at 08:10:38Z; last set 08:15:59Z).
+- 2026-11-09: scheduled poll runs after the flips showed `cancelled`. That is expected: the poll job's concurrency group keeps one pending run, so each newer pending run supersedes the last. P2/P3/P4/P11 (clarify, plan, implement, review_autofix) take effect on the next issue or PR through those stages; their variables read `true` in the operator's `gh variable list`.
