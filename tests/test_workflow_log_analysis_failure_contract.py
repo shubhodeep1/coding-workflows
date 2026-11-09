@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import tempfile
@@ -295,6 +296,33 @@ def test_label_helpers_retry_through_real_gh_retry() -> None:
 	assert (rc, calls) == (0, 2)
 
 
+# The report-delivery-via-PR cases live in
+# tests/test_workflow_log_analysis_report_pr.py and are collected here, since
+# CI already runs this file and ci.yml was outside that issue's file grant. A
+# name clash would hide a test, so it fails loudly.
+_REPORT_PR_CASE_NAMES: list[str] = []
+
+
+def _collect_report_pr_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"workflow_log_analysis_report_pr_cases",
+		Path(__file__).resolve().parent / "test_workflow_log_analysis_report_pr.py",
+	)
+	assert spec is not None and spec.loader is not None, "cannot load tests/test_workflow_log_analysis_report_pr.py"
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			_REPORT_PR_CASE_NAMES.append(case_name)
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert len(_REPORT_PR_CASE_NAMES) >= 10, f"only {len(_REPORT_PR_CASE_NAMES)} report PR cases collected"
+
+
+_collect_report_pr_cases()
+
+
 def main() -> int:
 	test_codex_retry_knobs_are_env_driven()
 	test_issue_context_failure_marker_and_label_contract_present()
@@ -306,6 +334,8 @@ def main() -> int:
 	test_failure_label_writes_route_through_gh_retry_with_fallback()
 	test_label_create_helper_does_not_retry_an_existing_label()
 	test_label_helpers_retry_through_real_gh_retry()
+	for case_name in _REPORT_PR_CASE_NAMES:
+		globals()[case_name]()
 	return 0
 
 
