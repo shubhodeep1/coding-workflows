@@ -5,9 +5,11 @@ scripts/review_autofix_step_checkout_pr_head_branch.sh (the body of the
 "Checkout PR head branch" step in review_autofix.yml) prints exactly one
 REVIEW_HEAD_CHECKOUT line per step run from its EXIT trap. The tests run the
 real step body against a real seed/source/split git layout (the harness of
-tests/test_review_autofix_merge_precheck.py), with a git wrapper on PATH that
-can fail `git fetch` with a configured stderr and a no-op `sleep` that records
-the backoff, so the retry policy is checked unchanged and no real waits run.
+tests/test_review_autofix_merge_precheck.py), with `git` and `sleep` shell
+functions (FAKE_FUNCTIONS) defined ahead of the step body, not executables on
+PATH. The `git` function can fail `git fetch` with a configured stderr and the
+`sleep` function records the backoff without waiting, so the retry policy is
+checked unchanged and no real waits run.
 """
 
 from __future__ import annotations
