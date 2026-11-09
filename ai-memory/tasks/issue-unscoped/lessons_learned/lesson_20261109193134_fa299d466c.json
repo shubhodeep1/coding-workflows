@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-09T19:31:34Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=AGENTS.md:1; cited_path=AGENTS.md; files_touched=.github/workflows/ci.yml, .github/workflows/review_autofix.yml, scripts/activation_verify.sh, scripts/collect_workflow_logs.py, scripts/orchestrate_poll_process.sh, scripts/propagate_consumer_secrets.sh, scripts/review_autofix_step_checkout_pr_head_branch.sh, scripts/review_merge_train.sh, scripts/stage_workflow_support.sh.",
+  "phase": "review_autofix",
+  "pr_number": 9107,
+  "record_id": "lesson_20261109193134_fa299d466c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md",
+    ".github/workflows/ci.yml",
+    ".github/workflows/review_autofix.yml",
+    "scripts/activation_verify.sh",
+    "scripts/collect_workflow_logs.py",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/propagate_consumer_secrets.sh",
+    "scripts/review_autofix_step_checkout_pr_head_branch.sh",
+    "scripts/review_merge_train.sh",
+    "scripts/stage_workflow_support.sh"
+  ]
+}
