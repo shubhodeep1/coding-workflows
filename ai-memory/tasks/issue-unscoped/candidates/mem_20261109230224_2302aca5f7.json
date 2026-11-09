@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/ftmc-739-superseded-ref-refresh.md:16-18 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Line 18 says \"The same file also adds `|| true` to the `blocker_stderr` cleanup pipeline in `_runtime_blocker_dispatch_eligible`\", but \"the same file\" refers to the test file named on line 16, while the change is in `scripts/orchestrate_poll_process.sh:26764`.\n  WHY: There is no runtime impact, but the changelog sends contributors to the wrong file. All four reviewers rated it NIT, which is mapped to low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/ftmc-739-superseded-ref-refresh.md:18 | severity=NIT | confidence=5\n  PROBLEM: \"The same file\" has the wrong antecedent. Line 16 names `tests/test_orchestrate_integration_ahead_by_gate.py`, but the `|| true` change is at `scripts/orchestrate_poll_process.sh:26764` in `_runtime_blocker_dispatch_eligible`.\n  WHY: There is no runtime failure, but the changelog points contributors at the test file when they look for where the `|| true` was added.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/ftmc-739-superseded-ref-refresh.md:16-18 | severity=NIT | confidence=5\n  PROBLEM: The changelog entry claims that tests/test_orchestrate_integration_ahead_by_gate.py adds the || true change to _runtime_blocker_dispatch_eligible.\n  WHY: There is no runtime failure, but it misleads contributors by directing them to the wrong file when they investigate the warning-handling change in scripts/orchestrate_poll_process.sh.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/ftmc-739-superseded-ref-refresh.md:18 | severity=NIT | confidence=5\n  PROBLEM: \"The same file\" refers to the test file named on line 16, but the `blocker_stderr` change is in `scripts/orchestrate_poll_process.sh:26764`.\n  WHY: No runtime behavior changes, but the changelog misdirects contributors investigating the warning-handling change to a test file that does not contain it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/ftmc-739-superseded-ref-refresh.md:18 | severity=NIT | confidence=5\n  PROBLEM: The antecedent of \"The same file\" is the paragraph on line 16, which is about `tests/test_orchestrate_integration_ahead_by_gate.py`. The `|| true` change is in `scripts/orchestrate_poll_process.sh:26764`, a file the sentence never names.\n  WHY: This is a documentation defect with no runtime failure. It misdirects contributors to a test file that does not implement the change. The reviewer suggests naming the script in the sentence.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5b47f7476bf172770618d0a6363d45e9ed951405d69dedd0954fb92e9fb41967",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9122,
+    "run_id": "42714598097",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42714598097",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109230224_2302aca5f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9122,
+    "run_id": "42714598097"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T23:02:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
