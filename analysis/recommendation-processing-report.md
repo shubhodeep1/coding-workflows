@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (138)
+## Processed source docs (139)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -143,6 +143,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-10-07-2.md`
 - `analysis/workflow-optimization-2026-10-07-3.md`
 - `analysis/workflow-optimization-2026-10-07-4.md`
+- `analysis/workflow-optimization-2026-10-08.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -2245,3 +2246,40 @@ Sibling work for this doc was tracked under Refs #9089. The squash-merge PR numb
 | Executive Summary / Per-Repo Breakdown / Metrics Appendix / Section 1 Python 3.11 parse note | informational | No action. The parse note concerns a local Python 3.11 parser; the workflow selects Python 3.12. |
 | Section 6 summary tables / Safety Tag Legend / Summary Counts / Implement-Stage Handoff | informational | Summaries of the rows above. |
 | Dead Calls (DEAD-API-###) | informational | The doc reports none. |
+
+### `analysis/workflow-optimization-2026-10-08.md`
+Source doc: `analysis/workflow-optimization-2026-10-08.md`
+Processed: 2026-11-09
+Source commit: `04ce31c95ce53a9b7918f52bb5fab23136c95745`
+
+Sibling work for this doc was tracked under Refs #9099. Applied rows cite the sibling PR numbers recorded in the orchestrator metadata (PR 9104, 9105, 9106, 9113, 9131, 9132 and 9133) and their changelog fragment. Each applied change was checked on the integration branch `orchestrator/project-9099`, which reaches the default branch as one unit. Line numbers below were re-checked against that tree.
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| Speed #1 / Reliability #2 (review checkout diagnostics) | applied | The step body moved to `scripts/review_autofix_step_checkout_pr_head_branch.sh` (PR 9106). Its header documents the `REVIEW_HEAD_CHECKOUT stage=<code> outcome=<...>` summary line (lines 15-17, PR 9131). Retry policy and the stale-head and push guards are unchanged. Fragments `changelog.d/wfopt-2026-10-08-review-checkout-diagnostics.md` and `agents.d/wfopt-2026-10-08-review-checkout-diagnostics.md`. |
+| Speed #2 / Orchestrator Health (poller wait/work split) | applied | `ORCH_POLL_CYCLE_SUMMARY` / `ORCH_POLL_PROJECT_TIMING` in `scripts/orchestrate_poll_process.sh`: helper block at lines 23-161, per-project emit at line 83, cycle emit at line 135 (PR 9113). Polling cadence is unchanged. Partly applied: the line reports wall time, sleep time, projects seen/processed and the terminal reason; separate API time and decision time are deferred, because they need `gh_retry` instrumentation outside this change. Fragments `changelog.d/wfopt-2026-10-08-poller-cycle-timing.md` and `agents.d/wfopt-2026-10-08-poller-cycle-timing.md`. |
+| Exec #4 / Top action #2 (successful-run baseline) | applied | Bounded success-sample reserve in `select_notable_runs_for_logs` (line 1315 of `scripts/collect_workflow_logs.py`), capped by `SUCCESS_SAMPLE_MAX_RESERVE_FRACTION = 0.1` (line 74) (PR 9132). Fragment `changelog.d/wfopt-2026-10-08-success-sample-reserve.md`. |
+| GH API audit #1 (merge-train counters) | applied | `file_list_fetches=`, `file_list_cache_hits=`, `active_listing_calls=` and `elapsed_ms=` appended to `MERGE_TRAIN_RELEASE_SUMMARY` in `scripts/review_merge_train.sh` (counter comment at line 224, emit at line 1529) (PR 9105). Partly applied: a page count for paginated file-list fetches and API time separate from total `elapsed_ms=` are deferred to a later additive field. Fragment `changelog.d/wfopt-2026-10-08-merge-train-release-counters.md`. |
+| SHELL-001 (`PROPAGATE_TARGETS` glob expansion) | applied | No-glob `read -r -d '' -a propagate_target_tokens` split at line 124 of `scripts/propagate_consumer_secrets.sh` (PR 9104). Registered-repository validation is retained. Fragment `changelog.d/wfopt-2026-10-08-propagate-targets-noglob.md`. |
+| CONSIST-001 (activation verdict / fix-issue writes) | applied | Marker-aware reconciliation in `scripts/activation_verify.sh`: contract note at lines 80-101, shared `activation_lookup_fix_issue` helper at line 390, verdict-comment marker check at lines 406-422 (PR 9133). Fragment `changelog.d/wfopt-2026-10-08-activation-write-reconcile.md`. |
+| Reliability #1 / Exec #2 (triage posting classification) | already-implemented | `.github/workflows/check_failure_triage.yml` emits `CHECK_TRIAGE op=post stage=<code>` (first at line 697), including `stage=create_failed ... http_class=` at line 787 (#9036). |
+| GH API audit #2 (`gh_retry` diagnostics) | already-implemented | `gh_retry()` (line 1204 of `scripts/gh_helpers.sh`) logs `_gh_cmd_log_summary` (line 861) plus an escaped `_gh_final_stderr_excerpt` (line 189). |
+| Reliability #4 / Cost #3 (Semble per-target fallback reasons) | already-implemented | `scripts/semble_helpers.sh` emits `SEMBLE_FALLBACK target= reason=` (lines 214, 221, 266, 290 and 304). |
+| BUG-001 (label PUT race) | already-implemented | `set_issue_phase_label_resilient` (line 227 of `scripts/label_helpers.sh`) does additive `-X POST` (lines 250, 277 and 287), then per-label `-X DELETE` (line 302). It never PUTs the full label set. |
+| BUG-002 (triage dedup listing failure) | already-implemented | `scripts/check_failure_triage.sh` exits with `reason=dedup_list_failed` (line 1083) instead of treating a failed listing as empty. |
+| BUG-003 (editor-summary duplicate POST) | already-implemented | `gh_retry` makes a single attempt for non-idempotent POST creates (`_gh_cmd_is_unsafe_post`, line 840 of `scripts/gh_helpers.sh`, #6634), so a lost response is not retried into a duplicate. The editor summary now lives in `scripts/review_autofix_step_post_editor_summary.sh`. |
+| BUG-004 (`_mt_upsert_comment` swallows failures) | already-implemented | `_mt_upsert_comment` (line 891 of `scripts/review_merge_train.sh`) returns the PATCH/POST status. |
+| SEC-001 (`gh_retry` prints raw `$*`) | already-implemented | `gh_retry` prints the sanitized `_gh_cmd_log_summary` and an escaped stderr excerpt, not raw arguments (same evidence as GH API audit #2). |
+| EXPR-001 (`Stage workflow support files` size) | already-implemented | The step (line 1445 of `.github/workflows/implement.yml`) passes its expressions through `env:`, so its `run:` body is expression-free. |
+| EXPR-002 (implement preflight block) | already-implemented | The cited interpolated index/scope-preflight block is no longer present in `.github/workflows/implement.yml`. |
+| DEBT-001 (`review_autofix.yml` size) | already-implemented | `wc -c .github/workflows/review_autofix.yml` measures 375,898 bytes on the integration branch (382,700 on the default-branch base), against the doc's 473,017 and the 480,000-byte CI guard. `.github/workflows/ci.yml` budget-watch files an `ai:ci-budget` issue at `CI_BUDGET_WORKFLOW_WARN_BYTES` 440,000 (line 3452). This project extracted one more step. |
+| API-001, API-002, BATCH-001, REUSE-001 | rejected | Tagged RISKY_SKIP by the source doc's own API consolidation section. |
+| MERGE-001 | rejected | Tagged NEEDS_VERIFICATION. Issue state can change between the two GraphQL reads, and combining them risks classification parity. |
+| DEAD-001 (`stall_recovery_action_is_terminal`) | rejected | Still defined at line 18635 of `scripts/orchestrate_poll_process.sh`. Removing it would remove an existing identifier, which the naming-immutability rule forbids without explicit instruction, and external sourced callers are not ruled out. |
+| DUP-001, DUP-002 | rejected | Modularization with cross-workflow staging and rollout risk and no defect. The inline fallbacks intentionally survive missing staged helpers. |
+| Speed #3 / Reliability #3 (CI first-failing-test logging) | rejected | The data gap was the absent log archive, not missing emission. It would edit the hot `ci.yml` without a demonstrated defect. |
+| Speed #4 (narrower sync checkout) | rejected | Medium-risk change to checkout semantics, based on one observed run. |
+| Cost #1, #2 and #4; Reliability #5; Prompt Cache & Memory System; AI Memory Health; `GH_API_AUDIT` summary; dispatch-decision logging; queue-time separation | rejected | Measurement-only proposals with no defect identified. They are broad, cross-workflow surfaces, or (Cost #4) a model-policy decision with no cost data. `AI_MEMORY_TELEMETRY` and `CONTEXT_BUDGET_WARN` are already emitted. |
+| Restoring the full-log archive | rejected | `.github/workflows/workflow-log-analysis.yml` already fails open with a warning when the `workflow-log-output` artifact is missing (comment at line 1031). Its absence is runtime artifact state, not a code defect. |
+| Executive Summary / Per-Repo Breakdown / Pipeline Flow Bottlenecks / Metrics Appendix | informational | No action beyond the rows above. |
+| Section 6 summary tables / Safety Tag Legend / Summary Counts / Implement-Stage Handoff; Dead Calls (DEAD-API-###) | informational | Summaries of the rows above; the doc reports no dead calls. |
