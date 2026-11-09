@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue deliver? The `CI` failure on PR #9107 comes from upstream jobs GitHub abandoned. The automatic re-run sweep (`scripts/ci_cancelled_rerun.py`) cannot recover it today: `lint` is the only `failure` job, the abandoned jobs show as `cancelled`, and the classifier returns `unverified`, logged as `runner_shutdown_unverified`.\nChoices:\n- A) No code change. Close this as environmental and re-run CI run 42673813893, or re-sync `orchestrator/project-9099`, outside the pipeline.\n- B) Add a new re-run class to `scripts/ci_cancelled_rerun.py` for runs where only the `lint` aggregate failed and every job its message names was `cancelled`/abandoned. Keep the existing once-per-head re-run cap. Add an off switch in the same style as `CI_CHECKOUT_FETCH_RERUN_ENABLED` (default `true`) and contract tests. Leave the `lint` gate in `.github/workflows/ci.yml` unchanged. (RECOMMENDED)\n- C) Do B, and also change the `lint` aggregate's error in `.github/workflows/ci.yml` so it says an upstream job was \"abandoned by GitHub, re-run\". It must still fail closed on any result other than `success`.\n**Note:** if you pick A, Q2 does not apply.\nQ2: If you pick B or C in Q1, how strict should the new class be about which `cancelled` upstream jobs count as abandoned? A job hit by `timeout-minutes` also ends `cancelled` and could hide a hung test.\nChoices:\n- A) Strict: count only upstream jobs that ran no steps (no step ended `success` or `failure`). This misses runners lost in the middle of a job.\n- B) Medium: count any `cancelled` upstream job whose failure annotations are only cancellation or lost-runner messages (for example `The operation was canceled.`). A job with a timeout (\"exceeded the maximum execution time\") or any other failure annotation counts as a real failure. (RECOMMENDED)\n- C) Loose: count any `cancelled` upstream job and rely only on the once-per-head re-run cap to limit repeats.\nSources:\n- [actions/runner #1546 \u2014 \"[Self-hosted] job abandoned\"](https://github.com/actions/runner/issues/1546)\n- [devantler-tech/actions #1098 \u2014 a GitHub-abandoned job fails the required check](https://github.com/devantler-tech/actions/issues/1098)\n- [devantler-tech/actions PR #1303 \u2014 report a GitHub-abandoned job as abandoned](https://github.com/devantler-tech/actions/pull/1303)\n- [AlexanderMattTurner/agent-glovebox PR #6167 \u2014 adjudicate an abandoned job result](https://github.com/AlexanderMattTurner/agent-glovebox/pull/6167)\n- [re-actors/alls-green #44 \u2014 report abandoned dependency jobs](https://github.com/re-actors/alls-green/issues/44)",
+  "fingerprint": "19f742a5efb39660837d9137d99bba3080cfa76231f1d35ad465e09772d777ec",
+  "lineage": {
+    "issue_number": 9146,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42676293879",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42676293879",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261109184708_0abb8e5940",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9146,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42676293879"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9146 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-09T18:47:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
