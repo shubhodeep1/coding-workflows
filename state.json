@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-09T10:34:03Z",
+  "tick_at": "2026-11-09T11:13:56Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -16,7 +16,7 @@
   "tracking_issues": [
     {
       "current_wave": 16,
-      "integration_ahead_by": "161",
+      "integration_ahead_by": "162",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -37,7 +37,7 @@
     },
     {
       "current_wave": 4,
-      "integration_ahead_by": "32",
+      "integration_ahead_by": "33",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -45,8 +45,8 @@
         "in_progress": 0,
         "merged": 1,
         "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 1,
+        "ready_to_merge": 1,
+        "review_blocked": 0,
         "skipped": 0
       },
       "number": 8969,
@@ -58,7 +58,7 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "7",
+      "integration_ahead_by": "8",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -79,13 +79,13 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "1",
+      "integration_ahead_by": "3",
       "issue_counts": {
         "closed": 0,
-        "done": 2,
+        "done": 1,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 0,
+        "merged": 1,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
