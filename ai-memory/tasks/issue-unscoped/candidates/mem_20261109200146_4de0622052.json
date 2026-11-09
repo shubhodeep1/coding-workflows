@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/propagate_consumer_secrets.sh:117-128 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The empty-target guard `[ -n \"${PROPAGATE_TARGETS// /}\" ]` strips only ASCII spaces, while the tokenizer uses `IFS=$' \\t\\n'`. A tab-only or newline-only `PROPAGATE_TARGETS` passes the guard, yields zero tokens, and leaves `TARGETS` empty instead of falling back to `REGISTRY`.\n  WHY: The script propagates secrets to zero repositories and exits 0. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT, and the others rated it MAJOR. The highest is used, and MAJOR is mapped to high.\n- scripts/orchestrate_poll_process.sh:153-157 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_orch_poll_cycle_on_exit` runs `rm -f \"${_orch_poll_cycle_exit_ledger}\"` in the EXIT trap. A path from a failed `mktemp` or a misconfiguration could behave unexpectedly.\n  WHY: Relying on an unchecked path in an EXIT trap during error cleanup is fragile. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"SHELL-001 (`PROPAGATE_TARGETS` glob expansion) \u2014 applied: No-glob `read -r -d '' -a propagate_target_tokens` split\" plus the changelog promise that \"the whitespace-separated semantics, the empty-input fallback to every registry entry and the slug and registry validation are unchanged\"\n  expected_change_site: scripts/propagate_consumer_secrets.sh around line 117 (the empty-target guard) and tests/test_propagate_consumer_secrets.py (test_whitespace_only_targets_fall_back_to_registry)\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The new guard strips only ASCII spaces, the test parametrizes only `\"\"` and `\"   \"`, and no diff hunk handles tab-only or newline-only input.\n- requirement: Implement the recommendations identified in `analysis/workflow-optimization-2026-10-08.md`\n  expected_change_site: scripts/orchestrate_poll_process.sh and scripts/review_merge_train.sh\n  confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: recommendation-processing-report.md marks API-001, API-002 and BATCH-001 as deferred or rejected, and separate API time and decision time instrumentation is deferred. The reviewer calls this a gap only if full instrumentation is expected.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/propagate_consumer_secrets.sh:117 | severity=NIT | confidence=4\n  PROBLEM: The guard strips only ASCII spaces, while the new split uses `IFS=$' \\t\\n'`. A tab-only or newline-only `PROPAGATE_TARGETS` yields an empty `TARGETS` instead of falling back to `REGISTRY`.\n  WHY: The input propagates to zero repositories. The behaviour was the same before the PR, and the reviewer calls the input contrived and would not block on it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/propagate_consumer_secrets.sh:123-125 | severity=MAJOR | confidence=4\n  PROBLEM: The guard `[ -n \"${PROPAGATE_TARGETS// /}\" ]` strips only ASCII spaces.\n  WHY: Tab-only or newline-only input passes the guard and tokenizes to an empty list. Secrets go to zero repositories with a success exit.\n- scripts/orchestrate_poll_process.sh:153-157 | severity=NIT | confidence=2\n  PROBLEM: The EXIT trap in `_orch_poll_cycle_on_exit` calls `rm -f \"${_orch_poll_cycle_exit_ledger}\"`, and the path could contain special characters or come from a failed `mktemp`.\n  WHY: Relying on an unchecked path in an EXIT trap during error cleanup is fragile.\n- TASK_GAP: Requirement: Implement the recommendations identified in `analysis/workflow-optimization-2026-10-08.md`.\n  Expected change site: `scripts/orchestrate_poll_process.sh` and `scripts/review_merge_train.sh`\n  Evidence of absence: recommendation-processing-report.md marks API-001, API-002 and BATCH-001 as deferred or rejected, and separate API time and decision time instrumentation is deferred. It is a gap only if full instrumentation is expected.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/propagate_consumer_secrets.sh:117 | severity=MAJOR | confidence=4\n  PROBLEM: The empty-target guard strips only ASCII spaces, while the `IFS=$' \\t\\n'` tokenizer splits on tabs and newlines. A tab-only or newline-only value passes the guard, tokenizes to an empty array, and leaves `TARGETS` empty.\n  WHY: The script exits 0 with `summary targets=0 set=0 skipped=0 failed=0`. The test parametrizes only `\"\"` and `\"   \"`, and the Copilot bot comments (entries 0 and 4) flagged the same defect.\n- scripts/propagate_consumer_secrets.sh:117-128 (tests/test_propagate_consumer_secrets.py:339-347) | severity=MAJOR | confidence=4\n  PROBLEM: The whitespace-only fallback path handles only ASCII spaces, and the tests have no tab-only or newline-only cases.\n  WHY: Tab-only or newline-only input silently propagates to zero targets with exit 0, and the test suite does not exercise it.\n- TASK_GAP: Requirement: \"SHELL-001 (`PROPAGATE_TARGETS` glob expansion) \u2014 applied: No-glob `read -r -d '' -a propagate_target_tokens` split\" plus the changelog promise that \"the whitespace-separated semantics, the empty-input fallback to every registry entry and the slug and registry validation are unchanged\".\n  Expected change site: `scripts/propagate_consumer_secrets.sh` around line 117 and `tests/test_propagate_consumer_secrets.py`\n  Evidence of absence: The guard strips only ASCII spaces, the test parametrizes only `\"\"` and `\"   \"`, and no hunk fixes the tab/newline case. Three autofix editor entries logged the finding as ignored on a \"sandbox-excluded\" claim, although the PR diff modifies the file.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/propagate_consumer_secrets.sh:117 (guard), 124 (tokenizer), 150-215, 217-221 | severity=MAJOR | confidence=5\n  PROBLEM: The guard strips only ASCII spaces, while the tokenizer at line 124 splits on `IFS=$' \\t\\n'`. A tab-only or newline-only value yields zero tokens and a blank `TARGETS`, so `targets_total=0`.\n  WHY: The run logs `summary targets=0 set=0 skipped=0 failed=0` and exits 0, so no consumer gets its secrets. This contradicts the changelog fragment changelog.d/wfopt-2026-10-08-propagate-targets-noglob.md, which says the empty-input fallback is unchanged.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c04b1cd55015e435cb4f7ba6277c3e30981079f68fe7d724c6f5c18950507cbb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9107,
+    "run_id": "42684962392",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42684962392",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109200146_4de0622052",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9107,
+    "run_id": "42684962392"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T20:01:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
