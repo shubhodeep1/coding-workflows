@@ -438,7 +438,7 @@ sys.exit(int(os.environ.get("STUB_GATE_RC", "0")))
 def _run_with_stub_gate(tmp_path, status, rc="0", stderr=""):
 	work = tmp_path / "work"
 	(work / ".codex-workflow-src" / "scripts").mkdir(parents=True)
-	(work / ".codex-workflow-src" / "scripts" / "check_triage_resolution.py").write_text(STUB_TRIAGE_GATE)
+	(work / ".codex-workflow-src" / "scripts" / "check_triage_resolution.py").write_text(STUB_TRIAGE_GATE, encoding="utf-8")
 	gate_log = tmp_path / "gate.log"
 	proc, calls, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
 		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main", "PLAN_SUPERSEDE_RESOLVED_REF": "main",
@@ -478,7 +478,7 @@ def test_merged_red_head_gate_close_failure_skips_planning(tmp_path):
 	proc, _, github_env, _ = _run_with_stub_gate(tmp_path, "write_failed", rc="3")
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert "SKIP_PLAN=true" in github_env
-	assert "outcome=skip reason=resolved_close_failed" in proc.stdout
+	assert "outcome=skip reason=resolved_close_failed gate=write_failed gate_rc=3" in proc.stdout
 
 
 def test_merged_red_head_gate_error_plans(tmp_path):
@@ -486,6 +486,8 @@ def test_merged_red_head_gate_error_plans(tmp_path):
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert "SKIP_PLAN" not in github_env
 	assert "outcome=plan reason=merged_check_not_passed gate=resolved gate_rc=1" in proc.stdout
+	# No stderr from the gate: the warning is still printed.
+	assert "::warning::Check-triage resolution gate exited 1" in proc.stdout + proc.stderr
 
 
 def test_merged_red_head_gate_crash_plans_and_keeps_stderr(tmp_path):

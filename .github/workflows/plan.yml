@@ -1434,11 +1434,13 @@ jobs:
                   triage_gate_json="$(python3 -I -B "${triage_gate}" gate --issue-json "${ISSUE_META_FILE}" \
                     --repo "${REPO_SLUG}" --issue-number "${ISSUE_NUMBER}" \
                     --default-branch "${PLAN_DEFAULT_BRANCH}" 2>"${triage_gate_err}")" || triage_gate_rc=$?
-                  if [ "${triage_gate_rc}" != "0" ] && [ "${triage_gate_rc}" != "3" ] && [ -s "${triage_gate_err}" ]; then
-                    # Keep the gate's diagnostics: last lines, printable ASCII,
-                    # workflow-command prefixes broken up.
+                  if [ "${triage_gate_rc}" != "0" ] && [ "${triage_gate_rc}" != "3" ]; then
                     echo "::warning::Check-triage resolution gate exited ${triage_gate_rc} for issue #${ISSUE_NUMBER}; planning as before."
-                    tail -n 10 "${triage_gate_err}" | tr -cd '[:print:]\n' | cut -c1-300 | sed 's/::/: :/g; s/^/| /'
+                    if [ -s "${triage_gate_err}" ]; then
+                      # Keep the gate's diagnostics: last lines, printable ASCII,
+                      # workflow-command prefixes broken up.
+                      tail -n 10 "${triage_gate_err}" | tr -cd '[:print:]\n' | cut -c1-300 | sed 's/::/: :/g; s/^/| /'
+                    fi
                   fi
                   [ "${triage_gate_err}" = "/dev/null" ] || rm -f "${triage_gate_err}"
                   triage_gate_status="$(printf '%s' "${triage_gate_json}" | python3 -I -B -c 'import json, sys
@@ -1451,13 +1453,13 @@ jobs:
                 if [ "${triage_gate_rc}" = "0" ] && { [ "${triage_gate_status}" = "resolved" ] || \
                   [ "${triage_gate_status}" = "already_resolved" ]; }; then
                   echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
-                  log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=resolved reason=default_branch_green gate=${triage_gate_status}"
+                  log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=resolved reason=default_branch_green gate=${triage_gate_status} gate_rc=${triage_gate_rc}"
                 elif [ "${triage_gate_rc}" = "3" ]; then
                   # Verified fixed, but the close write failed: never plan a
                   # fixed issue; stall recovery retries the close.
                   echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
                   echo "::warning::Check-triage issue #${ISSUE_NUMBER} is verified fixed on the default branch but could not be closed; skipping planning this run."
-                  log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=skip reason=resolved_close_failed"
+                  log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=skip reason=resolved_close_failed gate=${triage_gate_status:-none} gate_rc=${triage_gate_rc}"
                 else
                   log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=plan reason=merged_check_not_passed gate=${triage_gate_status:-none} gate_rc=${triage_gate_rc}"
                 fi
