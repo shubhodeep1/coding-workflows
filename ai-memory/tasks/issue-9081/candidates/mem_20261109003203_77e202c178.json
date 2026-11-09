@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue improve?\nChoices:\nA: The issue-to-PR pipeline workflows: clarify, plan or implement (`.github/workflows/ai-clarify.yml` and related)\nB: The review/autofix workflow (`.github/workflows/review_autofix.yml` and its `scripts/review_autofix_step_*.sh` helpers)\nC: The orchestrator: the poller, dispatch, judge and integration-sync\nD: Documentation (README, `docs/how-it-works.md`, agents.d fragments)\nE: Something else. Please name the file, workflow or feature in your `/answer` (RECOMMENDED)\nQ2: What kind of improvement do you want?\nChoices:\nA: Fix a specific bug or failure. Please link the failing run, log or PR in your `/answer` (RECOMMENDED)\nB: Reduce cost or token use, or GitHub API calls\nC: Improve speed or reliability, such as fewer retries or stalls\nD: Make it clearer: docs, log messages or prompts\nE: Add a new feature or behaviour. Please describe it in your `/answer`\nQ3: How should we judge that the change worked?\nChoices:\nA: A specific test, CI check or workflow run passes. Please name it in your `/answer` (RECOMMENDED)\nB: A measurable metric improves, such as run time, token count or failure rate. Please state the baseline and target\nC: Review of the PR is enough; no objective criterion is needed",
+  "fingerprint": "0c9df97bc805f5f6b33909177ab5e953bb02add21c7730f0030a803d6db48529",
+  "lineage": {
+    "issue_number": 9081,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42540318445",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42540318445",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261109003203_77e202c178",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9081,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42540318445"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #9081 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-09T00:32:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
