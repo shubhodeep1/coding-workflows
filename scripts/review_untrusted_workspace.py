@@ -76,6 +76,11 @@ DOCS_TWIN_DIR = "workflow-templates/.claude/docs"
 PAIRED_LIVE_COPIES = {
 	".claude/hooks/pr_merge_status_guard.py": "workflow-templates/.claude/hooks/pr_merge_status_guard.py",
 	".claude/hooks/prepush_affected_tests.py": "workflow-templates/.claude/hooks/prepush_affected_tests.py",
+	# The other live hooks with a byte-identical template twin (the parity test
+	# enforces it), so a conflict on them cannot park a PR the same way.
+	".claude/hooks/gh_api_write_guard.py": "workflow-templates/.claude/hooks/gh_api_write_guard.py",
+	".claude/hooks/pr_watch_guard.py": "workflow-templates/.claude/hooks/pr_watch_guard.py",
+	".claude/hooks/session-start.sh": "workflow-templates/.claude/hooks/session-start.sh",
 }
 _UNMERGED_MODE_RE = re.compile(r"[0-7]{6}")
 _UNMERGED_SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
