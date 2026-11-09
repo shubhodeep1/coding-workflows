@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which tree should the P1-vs-plan check run against, given that neither the plan doc nor P1's workflow and test changes exist on the default branch checked out here?\nChoices:\nA. Use the #9116 integration branch, the head of PR #9124, which should hold both the plan doc and the shipped P1. Compare against it and make the smallest fix there. If the plan doc still can't be read from that branch or via `git show isolated-base:...`, post a comment saying the check couldn't run and make no code change. (RECOMMENDED)\nB. Wait until PR #9115 and PR #9124 have merged into the default branch, then compare there. If either is still open when implementation starts, post a comment and make no code change.\nC. Use the default branch as it is now and treat P1 as missing, which means building P1 from scratch. **Note:** this goes beyond the issue's \"minimal changes to close any gap\" scope and would duplicate the work in PR #9124. Not advised.",
+  "fingerprint": "866bbcef69ca18dce1e4e08aaa7d3e4b37d2819976c3d2e2604bf92a65cef5e0",
+  "lineage": {
+    "issue_number": 9135,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42634249436",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42634249436",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261109143948_3bc8ff02a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9135,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42634249436"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9135 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-09T14:39:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
