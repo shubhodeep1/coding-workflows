@@ -3472,6 +3472,37 @@ def test_main_does_not_cache_etag_of_truncated_listing() -> None:
 	assert repos["owner/ok"]["runs_etag"] == 'W/"etag-owner/ok"'
 
 
+def test_main_refetches_legacy_partial_snapshot_on_304() -> None:
+	"""A cached snapshot at the run cap is refetched, not reused after a 304."""
+	snapshot = [collector._run_snapshot_for_cache(dict(_coverage_run(1), event="push"))]
+	cache = {"repositories": {"owner/legacy": {"runs_etag": 'W/"legacy"', "runs_snapshot": snapshot}}}
+	calls: list = []
+
+	def listing(repo: str, **kwargs):
+		calls.append(kwargs.get("etag"))
+		if kwargs.get("etag"):
+			return [], False, {"not_modified": True, "etag": 'W/"legacy"'}
+		return [_coverage_run(1)], True, {"not_modified": False, "etag": 'W/"fresh"'}
+
+	written: list[dict] = []
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-legacy-") as td:
+		report_file = Path(td) / "report.json"
+		with patch.object(collector, "_cache_read_context", return_value=(cache, None, None)), \
+			patch.object(collector, "_cache_write_context", side_effect=lambda **kw: written.append(kw["payload"]) or True), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main([
+				"--since", "2026-04-01T00:00:00Z", "--max-runs", "1", "--max-log-runs", "0",
+				"--repo", "owner/legacy", "--output", str(report_file),
+			])
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+	assert rc == 0
+	assert calls == ['W/"legacy"', None]
+	assert report["coverage"]["repositories_truncated"] == ["owner/legacy"]
+	assert written[-1]["repositories"]["owner/legacy"]["runs_etag"] is None
+
+
 def test_build_report_omits_coverage_when_not_supplied() -> None:
 	report = collector.build_report(["owner/repo"], [], [])
 	assert "coverage" not in report

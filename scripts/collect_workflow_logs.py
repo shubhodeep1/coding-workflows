@@ -2122,7 +2122,19 @@ def main(argv: list[str] | None = None) -> int:
                     # were added lack "event"; reusing them would mark every
                     # trusted run origin_unknown for as long as the ETag
                     # matches. Refetch once without the ETag instead.
-                    if cached_runs_snapshot and all("event" in item for item in cached_runs_snapshot):
+                    # P3: a snapshot that is big enough to have hit --max-runs
+                    # or the page limit may be a partial listing cached before
+                    # truncated ETags were dropped; a 304 carries no truncation
+                    # flags, so refetch it to recompute coverage.
+                    snapshot_cap = min(1000, args.per_page * args.max_pages)
+                    if args.max_runs > 0:
+                        snapshot_cap = min(snapshot_cap, args.max_runs)
+                    snapshot_may_be_partial = len(cached_runs_snapshot) >= snapshot_cap
+                    if (
+                        cached_runs_snapshot
+                        and not snapshot_may_be_partial
+                        and all("event" in item for item in cached_runs_snapshot)
+                    ):
                         runs = [dict(item) for item in cached_runs_snapshot]
                     else:
                         runs, capped, run_meta = list_runs_for_repo(
