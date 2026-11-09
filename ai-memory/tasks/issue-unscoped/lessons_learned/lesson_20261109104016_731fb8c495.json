@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-09T10:40:16Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=(external GitHub check; no repository file):n/a; cited_path=copilot-pull-request-reviewer (run 42588112888, job 129062752638); files_touched=agents.d/9112-heal-provenance-green-sandbox-excluded-run.md, changelog.d/9112-heal-provenance-green-sandbox-excluded-run.md, scripts/workflow_failure_heal.py, tests/test_workflow_failure_heal.py.",
+  "phase": "review_autofix",
+  "pr_number": 9119,
+  "record_id": "lesson_20261109104016_731fb8c495",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer (run 42588112888, job 129062752638)",
+    "(external GitHub check; no repository file)",
+    "agents.d/9112-heal-provenance-green-sandbox-excluded-run.md",
+    "changelog.d/9112-heal-provenance-green-sandbox-excluded-run.md",
+    "scripts/workflow_failure_heal.py",
+    "tests/test_workflow_failure_heal.py"
+  ]
+}
