@@ -7547,6 +7547,42 @@ def test_non_retryable_route_explains_sandbox_excluded_editor_stop() -> None:
 	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={SANDBOX_EXCLUDED_REASON} -->")
 
 
+def test_provenance_accepts_a_green_sandbox_excluded_run_bound_by_its_trusted_marker() -> None:
+	"""PR #9112 / intake run 42583232747: the #8321 marker run and the cap run both end
+	`success`, so the cap report was rejected as no_verified_runs and never diagnosed."""
+	cap_ref = _autofix_payload()["run_refs"][0]
+	payload = heal.validate_payload(_autofix_payload(
+		failure_reason="identical_failure_cap",
+		run_refs=[{**cap_ref, "run_id": "801", "url": f"https://github.com/{CONSUMER_REPO}/actions/runs/801"}, cap_ref],
+	))
+	marker_run = _provenance_run(801, path="ai-review.yml", conclusion="success", event="pull_request")
+	cap_run = _provenance_run(500, path="ai-review.yml", conclusion="success", pull_requests=[{"number": 4174}])
+
+	def check(comment: dict, run: dict = marker_run) -> dict:
+		return heal.verify_run_provenance(payload, runs={"801": run, "500": cap_run}, comments=[comment], trusted_login=NR_LOGIN, self_repo=SELF_REPO)
+
+	trusted = _sandbox_excluded_summary_comment(head=SHA_B, author=NR_LOGIN)
+	verdict = check(trusted)
+	assert verdict["status"] == "ok" and [ref["run_id"] for ref in verdict["run_refs"]] == ["801"]
+	assert verdict["rejections"] == [{"run_id": "500", "reason": "not_failed"}] and verdict["marker_head_run_ids"] == ["801"]
+	routed = heal.non_retryable_route(dict(payload, run_refs=verdict["run_refs"]), comments=[trusted], trusted_login=NR_LOGIN)
+	assert routed["route"] is True and routed["reason"] == SANDBOX_EXCLUDED_REASON
+	# Before the fix this was the outcome for every such report; it still is
+	# whenever the marker does not bind this run, head and reason.
+	retryable_marker = heal.render_failure_marker(SHA_B, "workflow_failure", FP_HEX, False, "801", None)
+	for comment, run in (
+		(_sandbox_excluded_summary_comment(head=SHA_B, author="attacker"), marker_run),
+		(_sandbox_excluded_summary_comment(head=SHA_A, author=NR_LOGIN), marker_run),
+		(_sandbox_excluded_summary_comment(head=SHA_B, run="802", author=NR_LOGIN), marker_run),
+		(dict(trusted, body=trusted["body"] + "\n\nquoted after the marker"), marker_run),
+		({"author_login": NR_LOGIN, "body": "AI review/autofix failed\n\n" + retryable_marker}, marker_run),
+		(trusted, dict(marker_run, conclusion="cancelled")),
+	):
+		assert check(comment, run)["reason"] == "no_verified_runs", comment
+	# The green-run exemption never relaxes the workflow-path check.
+	assert check(trusted, dict(marker_run, path=".github/workflows/evil.yml"))["rejections"][0] == {"run_id": "801", "reason": "unexpected_workflow_path"}
+
+
 def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None:
 	payload = _consumer_payload()
 	assert heal.skip_reason(payload, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, non_retryable_diagnosed=True) == "non_retryable_diagnosed"
