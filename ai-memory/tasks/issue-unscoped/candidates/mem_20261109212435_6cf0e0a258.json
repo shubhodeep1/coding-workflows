@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.85,
+  "details": "The workflow-analysis mode has corresponding files at `prompts/_templates/mode-workflow-analysis.txt` and `prompts/mode-workflow-analysis.txt`, and changes to its guidance have updated both. When changing this mode, check that the template and active prompt remain consistent and cover the change with the prompt-focused tests.",
+  "fingerprint": "e495bdec8b42b4585096974d2f992e4b37e20c67818552c2867a96728e33b5f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42701535633",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42701535633",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9127",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9136",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9137",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9139",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9146",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9131",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9140",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9141",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9142",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9147"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261109212435_6cf0e0a258",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep workflow-analysis prompts synchronized between the template and active prompt.",
+  "timestamps": {
+    "created_at": "2026-11-09T21:24:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
