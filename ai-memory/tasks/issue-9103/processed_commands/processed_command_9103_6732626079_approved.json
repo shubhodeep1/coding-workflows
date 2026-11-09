@@ -5,13 +5,24 @@
   "entry_id": "processed_command_9103_6732626079_approved",
   "issue_number": 9103,
   "metadata": {
+    "branch": "ai/issue-9103",
+    "changed_files": [
+      "changelog.d/wfopt-2026-10-08-propagate-targets-noglob.md",
+      "scripts/propagate_consumer_secrets.sh",
+      "tests/test_propagate_consumer_secrets.py"
+    ],
+    "issue_number": 9103,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9103",
+    "pr_number": 9104,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9104",
+    "run_attempt": "1",
+    "run_id": "42564744868",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42564744868"
   },
   "run_attempt": 1,
   "run_id": "42564744868",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-09T05:01:12Z",
+  "status": "completed",
+  "timestamp": "2026-11-09T05:09:47Z",
   "workflow": "implement"
 }
