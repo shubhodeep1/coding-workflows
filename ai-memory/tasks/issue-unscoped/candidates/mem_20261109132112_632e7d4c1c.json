@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow-log-analysis.yml:1908-1915 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The last run limited the Telegram WARNING condition to `pr_open`, so a report PR whose delivery is `pr_auto_merge` and that never lands stays at `DEBUG`; the default `ALERT_MSG_LEVEL=WARNING` in `scripts/tg_helpers.sh` filters that level out.\n  WHY: When required checks fail after `gh pr merge --auto` succeeds, the wait loop (1803-1814) times out and the report stays off the target branch, so deep-audit and api-redundancy are skipped (line 1929 gate); only a `::warning::` reaches the log (1824-1826) and no operator is paged. All three reviewers rated this MAJOR, mapped here to high. anthropic_claude-sonnet-5_5 looked at the same path in its reviewer notes and judged it an accepted trade-off under the \"WARNING and above mean a human must act\" rule, not a defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Follow the plan's P1 steps exactly\" (linked issue #9117, Phase P1 of docs/plans/analysis-findings-collection-hardening-plan.md)\n  expected_change_site: docs/plans/analysis-findings-collection-hardening-plan.md (plan source of truth) cross-checked against .github/workflows/workflow-log-analysis.yml\n  confidence=2\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: The plan file is not in this checkout (glob returns no files), so the PR cannot be checked step by step against the plan's own P1 list. Every P1 deliverable named in the issue body is in the PR diff and on disk: job-level permissions, an env-driven switch with a default, `--force-with-lease`, PR-number parsing, the merge wait, Telegram outcome handling, contract tests, preserved step identity, defaulted variables, API budget, size guard, auto-close lint, and changelog.d/agents.d fragments. Both reviewers call this a residual that was deferred earlier, not something the last run introduced.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/workflow-log-analysis.yml:lines 1908-1912 (Telegram step `ALERT_LEVEL` condition after the LAST RUN change) | severity=MAJOR | confidence=4\n  PROBLEM: The LAST RUN limited the Telegram `ALERT_LEVEL` gate to `pr_open`. If the `commit_report` wait loop expires and delivery is `pr_auto_merge`, the report is not on the target branch, yet the Telegram step stays at `DEBUG`.\n  WHY: The default `ALERT_MSG_LEVEL=WARNING` in `scripts/tg_helpers.sh` filters out the message, so the operator is not paged when a failing required check or another merge requirement blocks the auto-merge. Only a `::warning::` reaches the log. The cross-pollination consensus had flagged this path as MAJOR.\n- TASK_GAP\n  Requirement: \"Follow the plan's P1 steps exactly\" (linked issue #9117, referring to Phase P1 of `docs/plans/analysis-findings-collection-hardening-plan.md`)\n  Expected change site: docs/plans/analysis-findings-collection-hardening-plan.md (plan source of truth) cross-checked against `.github/workflows/workflow-log-analysis.yml`.\n  Evidence of absence: The plan file is not in this checkout, so the PR cannot be checked step by step against it. Every P1 deliverable named in the issue body is in the PR diff.\n  SEVERITY: NIT (residual, previously deferred) | ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/workflow-log-analysis.yml:1911-1914; the `pr_auto_merge` non-landed path at 1824-1825 | severity=MAJOR | confidence=4\n  PROBLEM: A report PR that is still unmerged after the wait stays at `DEBUG` when its delivery state is `pr_auto_merge`, and the default Telegram threshold `WARNING` filters out `DEBUG`.\n  WHY: If required checks fail, auto-merge stays pending, the report stays off the target branch, and the deep audits are skipped. The workflow only logs a warning and sends no Telegram alert.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/workflow-log-analysis.yml:lines 1911-1915 (Telegram step); the unlanded `pr_auto_merge` path ends at lines 1803-1814 | severity=MAJOR | confidence=3\n  PROBLEM: The WARNING condition now covers only `pr_open`, so a `pr_auto_merge` report PR that never lands stays at DEBUG. When required checks fail, GitHub cancels the auto-merge and the PR stays open, and deep-audit and api-redundancy are skipped (line 1929 gate). scripts/tg_helpers.sh lines 40 and 86 set the default `ALERT_MSG_LEVEL` to WARNING and drop DEBUG.\n  WHY: The wait loop (1803-1814) times out, `report_delivery` stays `pr_auto_merge`, and Telegram sends at DEBUG, so the operator gets nothing. Using git alone, the loop cannot tell checks still running from checks that failed. Suggested fix: send at WARNING inside the `report_delivery != pr_merged` block at lines 1824-1826, or record the residual risk as accepted in the changelog fragment.\n- TASK_GAP\n  Requirement: \"Follow the plan's P1 steps exactly\" (linked issue #9117, referring to docs/plans/analysis-findings-collection-hardening-plan.md Phase P1)\n  Expected change site: docs/plans/analysis-findings-collection-hardening-plan.md (plan source of truth) vs .github/workflows/workflow-log-analysis.yml (P1 delivery).\n  Evidence of absence: The plan file is not in this checkout (glob returns no files), so the plan's own steps cannot be compared. Every P1 requirement in the issue body is in the PR diff. Residual, deferred earlier.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2de651c8a6f6d67aba1c32c272ce7ecd4b086374057e35071dc3d28e7673e55f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9123,
+    "run_id": "42618020296",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42618020296",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109132112_632e7d4c1c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9123,
+    "run_id": "42618020296"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T13:21:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
