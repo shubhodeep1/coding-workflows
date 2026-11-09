@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:1520-1523 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The pre-existing comment at lines 1520-1521 says new fields are appended after base_filter=, but the new API-cost fields are appended after oldest_queued_age_secs=, so the two adjacent comments give different anchors.\n  WHY: There is no runtime impact, but the conflicting guidance could mislead a later edit to the summary format; all four reviewers rated it NIT (confidence 4-5), and it is recorded here as low.\n- (CI check-run on head 8b8fd4be, not a diff hunk):copilot-pull-request-reviewer check-run, job 128996693437 | severity=low | confidence=1\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The copilot-pull-request-reviewer check-run failed with a curl 504 while acquiring node in the Copilot runtime setup step.\n  WHY: It is an infrastructure-side failure that maps to no hunk in this PR, so a re-run is the only remedy; the reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_merge_train.sh:1520-1521 | severity=NIT | confidence=5\n  PROBLEM: The pre-existing comment \"New fields are appended after base_filter= so the existing prefix and first three fields stay byte-identical for current consumers.\" sits above the new comment at lines 1522-1523. The two comments give different anchors for where new fields go, and only the second matches the log line.\n  WHY: There is no runtime impact, but the conflicting comment could mislead a later edit to the summary format. The reviewer suggests rewording lines 1520-1521 to name the earlier batch.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_merge_train.sh:1520-1521 | severity=NIT | confidence=5\n  PROBLEM: The pre-existing comment above the `MERGE_TRAIN_RELEASE_SUMMARY` log call is stale. It says new fields are appended after base_filter=, but the new API-cost fields are appended after `oldest_queued_age_secs=` (per the new comment at 1522-1523 and the log line at 1526).\n  WHY: There is no runtime failure, but a future author extending the summary format could be misled about which fields stay byte-identical and insert a new field in the wrong place.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_merge_train.sh:1520-1523 | severity=NIT | confidence=4\n  PROBLEM: The comment says \"New fields are appended after base_filter=\", while the new API-cost fields are appended after oldest_queued_age_secs=. The first comment does not say it refers to the earlier per-reason fields.\n  WHY: Current output is correct, but the ambiguous field-order guidance could lead a future edit to insert fields after base_filter= and break consumers that rely on the existing order.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (CI check-run on head 8b8fd4be, not a diff hunk):copilot-pull-request-reviewer check-run, job 128996693437 | severity=NIT | confidence=1\n  PROBLEM: The only failed check-run failed with \"curl: (22) The requested URL returned error: 504\" while acquiring node in the Copilot runtime setup step. It does not map to any change in scripts/review_merge_train.sh, tests/test_review_merge_train.py, or the changelog fragment.\n  WHY: This is an infrastructure-side 504 from the Copilot runtime download URL, and a re-run is the only remedy.\n- scripts/review_merge_train.sh:1520-1521 | severity=NIT | confidence=4\n  PROBLEM: The pre-existing comment \"New fields are appended after base_filter= ...\" conflicts with the adjacent PR-added comment at lines 1522-1523 and with the log line at 1526, which appends the four new fields after oldest_queued_age_secs=. This is the same defect the Copilot review comment flagged.\n  WHY: Output and tests agree with the code, so there is no runtime failure. The conflicting field-order guidance could mislead a future edit, and the reviewer proposes rewording lines 1520-1521.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "27d31edb819c112dd610596e79abf1014c7fa9dd0e0f21c2a22ab241401b3cd4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9105,
+    "run_id": "42567350434",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42567350434",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109060345_d541f0e503",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9105,
+    "run_id": "42567350434"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T06:03:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
