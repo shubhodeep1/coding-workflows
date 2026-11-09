@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update the run ID in `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `orchestrator/project-9083` at `1e2ba5e33ca5bfc61e83fd18d312eba8dd4ce93b`. The integration branch matches, so planning continues.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n- None. This is a data-only edit. Line 2 changes from `decompose-run: 41445772297` to `decompose-run: 42539997994`. Line 1 stays `status: ok`, and the file ends with exactly one trailing newline after line 2.\n\n## Data structures affected\n- The plain-text smoke canary file. It currently reads `status: ok$` / `decompose-run: 41445772297$`: two lines, LF endings, one trailing newline.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Leave the advisory \"Expected files\" test modules untouched\n- Chosen: edit only `tests/e2e_smoke_canary.txt`.\n- Alternatives considered: also editing the 11 Python tests listed under Expected files.\n- Why: the issue's scope rule says to edit only this file. Those tests mention the filename, but a search of `tests/` and `scripts/` found nothing that pins the old run ID `41445772297`. The only other match is in `tests/e2e_smoke_canary_b.txt`, which is explicitly out of scope. The tests therefore need no update.\n\n## Security considerations\n- No trust boundaries, endpoints, external input, secrets or money paths are involved. The only abuse risk is scope creep into the sibling canary files, and the scope rule rules that out.\n\n## Potential risks or edge cases\n- Conflict: the issue's \"Expected files\" list includes 11 Python tests, but its scope rule says to edit only the canary file. The scope rule wins (see D1).\n- The file must keep LF endings, have exactly one trailing newline, and have no third line.\n- `tests/e2e_smoke_canary_b.txt` still contains the old run ID. That is intentional and must not be changed.\n\n## Testing considerations\n- `head -n1` should print `status: ok`.\n- `sed -n 2p` should print `decompose-run: 42539997994`.\n- `wc -l` should report 2.\n- `git diff --stat` should list only the canary file.\n- Optionally, run `pytest tests/test_review_apply_fixes_smoke_deterministic.py` as a sanity check.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue is a fully specified one-line replacement in a single file. No helper, pattern or new code is involved, so the edit stays within the scope the issue states. The complete option and the shortcut are the same thing, so the Boil the Lake check (\u00a76: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed) is satisfied.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "d86a4e7c5317906c02e8cb6b3b941d5111586b6e7c7d5253bd00af7ecf21af10",
+  "lineage": {
+    "issue_number": 9084,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42540803412",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42540803412",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9084"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261109003823_ffabd08f72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9084,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42540803412"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9084",
+  "timestamps": {
+    "created_at": "2026-11-09T00:38:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
