@@ -235,12 +235,14 @@ def test_dispatches_newest_unprocessed_doc_first_including_same_day_suffixes() -
 		"analysis/workflow-optimization-2026-10-09-2.md",
 	]
 	with tempfile.TemporaryDirectory() as tmp:
-		listed, _ = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
+		listed, listed_final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs)
 	assert listed.returncode == 0, listed.stderr
-	# -10 sorts after -5 (version sort, not string sort), and every same-day
-	# suffixed doc comes before that day's first (unsuffixed) doc.
+	assert not listed_final.get("dispatches")
+	# Version sort treats 10 as greater than 5 (string sort would not), so in
+	# reverse order -10 comes before -5, and every same-day suffixed doc comes
+	# before that day's first (unsuffixed) doc.
 	assert (
 		"APPLY_ANALYSIS_CANDIDATES count=5 docs="
 		"analysis/workflow-optimization-2026-10-21-10.md,"

@@ -26,8 +26,9 @@ problems in that chain.
 - **Findings are checked only after the work starts.** The orchestrator checks
   each finding against current code, but nothing makes that the first step.
 
-Newest-first selection in `scripts/apply_analysis_on_main.sh` already shipped
-in its own PR, so it is not part of this plan.
+Newest-first selection in `scripts/apply_analysis_on_main.sh` (`sort -rV`)
+ships in the same PR that adds this plan. It is a separate change and is not
+one of this plan's phases.
 
 ## Context
 
@@ -199,6 +200,11 @@ in its own PR, so it is not part of this plan.
   failure markers and alerts are unchanged. A report that is still invalid
   after the last attempt is not committed, but the P1 artifact still holds it.
   P2 therefore depends on P1 and must merge after it.
+- **Failed repos need P3.** The failed-repo exemption reads
+  `coverage.repositories_failed`, which only P3 writes. Without that key the
+  checker exempts nothing, so a report for a run where one repo could not be
+  read would fail the per-repo check and be held back. P2 therefore also
+  depends on P3 and must merge after it.
 - **Missing logs.** When the `workflow-log-output` download (already
   `continue-on-error`) is missing, the step logs
   `WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing` and adds a fixed line to the
@@ -312,16 +318,33 @@ validation paragraph becomes a required first step:
 > project is a single PR that deletes the source doc and appends its verdict
 > table to the processing report.
 
-The rest of the text (scope, report entry, never touch the state files) is
-unchanged. The marker comment does not change, so the loop guard and the
+The current paragraph also carries the repository guardrails ("never rename
+or remove existing identifiers without an alias; MongoDB changes ship their
+/db/contracts update; no standalone manual scripts, wire work into existing
+automation; never use auto-close keywords against ai:orchestrator-tracking
+issues"). The new text keeps that guardrail clause byte-for-byte, after the
+verdict step. The rest of the text (scope, report entry, never touch the
+state files) is unchanged. The marker comment does not change, so the loop guard and the
 poller's marker parser are not affected.
 
-P6 also bounds the marker search, because D5 keeps every unprocessed doc. In
-dispatch mode, `unprocessed_docs` stops after it has printed
-`APPLY_ANALYSIS_MAX_CANDIDATES` docs (default 3, enough for the
-deleted-on-tip fallback), so each run makes at most that many
-`doc_dispatched_before` searches plus one per skipped already-dispatched doc.
-List-only mode keeps the full scan.
+P6 also bounds the marker search, because D5 keeps every unprocessed doc.
+`unprocessed_docs` counts every `doc_dispatched_before` call, not only the
+docs it prints, and stops at whichever limit comes first:
+
+- `APPLY_ANALYSIS_MAX_CANDIDATES` printed docs (default 3, enough for the
+  deleted-on-tip fallback; it must stay at or above
+  `PROMOTE_CYCLE_MIN_DOCS`, default 2);
+- `APPLY_ANALYSIS_MAX_MARKER_SEARCHES` searches (default 6), so docs skipped
+  because they carry a dispatch marker also count.
+
+The bound applies in both modes. List-only mode (the promote cycle's daily
+pre-check in `scripts/promote_main_cycle.sh`) only compares its count with
+`PROMOTE_CYCLE_MIN_DOCS`, so a capped count is enough there. Each run
+therefore makes at most `APPLY_ANALYSIS_MAX_MARKER_SEARCHES` searches,
+whatever the backlog size. A failed lookup still fails closed as
+`guard_unavailable` (the loop guard must never dispatch a doc it could not
+check). The bound limits how many lookups can fail per run; it does not
+change that rule.
 
 ## Decisions
 
@@ -359,8 +382,8 @@ add a separate model call before dispatch.
 ### D7 — Phase split
 Six phases, each independently mergeable. P1 and P5 both edit "Commit and
 push report", and P4 and P2 both edit the analyze step. The merge train orders
-those edits. One phase depends on another: P2 needs P1's report artifact,
-so P2 merges after P1.
+those edits. Two orderings are required: P2 needs P1's report artifact and
+P3's `coverage.repositories_failed`, so P2 merges after both P1 and P3.
 
 ## §18.E Automation summary
 
@@ -395,10 +418,13 @@ so P2 merges after P1.
 Each phase is safe in production at merge:
 
 - New behaviour is on by default with a repo-variable switch, or is additive.
-- The system works whichever subset of phases has merged.
+- The system works whichever subset of phases has merged, as long as P2
+  merges after P1 and P3.
 - P1 alone fixes the delivery outage, so it should be merged first. P2 must
   merge after P1, because it withholds an invalid report from `main` and
-  relies on P1's artifact to keep it. No other phase depends on another.
+  relies on P1's artifact to keep it. P2 must also merge after P3, because
+  its failed-repo exemption reads `coverage.repositories_failed`. No other
+  phase depends on another.
 
 ## Implementation Steps
 
@@ -502,18 +528,27 @@ Each phase is safe in production at merge:
 ### P6
 1. Replace the validation paragraph of `project_description` in
    `scripts/apply_analysis_on_main.sh` with the text in the Approach. Keep the
-   first line, the scope paragraph, the source-doc lines and the marker
-   comment byte-for-byte.
+   first line, the guardrail clause, the scope paragraph, the source-doc
+   lines and the marker comment byte-for-byte.
 2. Extend `tests/test_apply_analysis_on_main.py`. The description must:
    - still start with `Apply analysis recommendations from <basename>\n`;
    - contain `before planning any implementation issue` and
      `If no finding is \`applied-candidate\``;
+   - still contain the guardrail clause (`never rename or remove existing
+     identifiers without an alias`, `/db/contracts`, `no standalone manual
+     scripts`, `never use auto-close keywords against
+     ai:orchestrator-tracking issues`);
    - keep the marker lines unchanged.
-3. In `unprocessed_docs`, when `APPLY_ANALYSIS_LIST_ONLY` is not `true`,
-   return 0 once `APPLY_ANALYSIS_MAX_CANDIDATES` (default 3, positive
-   integer, defaulted in the script) docs have been printed. Test that a
-   backlog of 10 unprocessed docs makes at most 3 searches in dispatch mode
-   and 10 in list-only mode.
+3. In `unprocessed_docs`, in both modes, return 0 once
+   `APPLY_ANALYSIS_MAX_CANDIDATES` docs have been printed (default 3) or
+   `APPLY_ANALYSIS_MAX_MARKER_SEARCHES` `doc_dispatched_before` calls have
+   been made (default 6), whichever comes first. Both are positive integers
+   defaulted in the script. Test that:
+   - a backlog of 10 unprocessed docs makes 3 searches in either mode;
+   - a backlog of 10 docs that all carry a dispatch marker makes 6 searches
+     and prints none;
+   - list-only mode still reports `count=2` or more when at least 2
+     unprocessed docs exist within the bound.
 4. Add a changelog fragment.
 
 ## Files & Modules
@@ -603,7 +638,8 @@ None.
   and also API calls: `unprocessed_docs` calls `doc_dispatched_before` (one
   `search/issues` call) for every doc not in the processing report, and one
   failed lookup makes the dispatch skip as `guard_unavailable`. P6 therefore
-  bounds the scan in dispatch mode (see P6).
+  bounds the number of searches in both modes (see P6). A failed lookup still
+  skips the run, by design.
 - **The section jobs fail after the report branch exists.** `publish-report`
   still opens the PR, and the PR body says which sections are missing.
 - **The P6 wording changes how the orchestrator decomposes a project.** Only
