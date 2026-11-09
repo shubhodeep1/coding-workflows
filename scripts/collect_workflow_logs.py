@@ -73,6 +73,9 @@ LOG_ARCHIVE_FETCH_RETRIES = 3
 LOG_ARCHIVE_FETCH_BACKOFF_SECONDS = 1.0
 MISSING_LOG_ARCHIVE_MARKER = "partial_data:missing_log_archive"
 DIAGNOSTIC_FAILURE_REASON_MAX_CHARS = 512
+# Bound for coverage.repositories_failed[].message (P3). The text is gh/API
+# error output, so it is sanitized and capped before it enters the report.
+COVERAGE_MESSAGE_MAX_CHARS = 300
 WORKFLOW_VALIDATION_ANNOTATIONS_STATUS = "unavailable_from_existing_payloads"
 RETRY_MARKERS = (
     "rate limit",
@@ -1225,6 +1228,7 @@ def build_report(
     errors: list[dict[str, str]],
     *,
     success_sample_rate: float = DEFAULT_SUCCESS_SAMPLE_RATE,
+    coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     durations = [int(item.get("duration_seconds", 0)) for item in runs]
     success_count = sum(1 for item in runs if (item.get("conclusion") or "").lower() == "success")
@@ -1240,7 +1244,7 @@ def build_report(
     avg_duration = float(sum(durations) / len(durations)) if durations else 0.0
     sampled_success_count = sum(1 for item in runs if item.get("_success_sampled"))
 
-    return {
+    report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": _format_iso8601(datetime.now(timezone.utc)),
         "scope": {
@@ -1264,6 +1268,11 @@ def build_report(
         },
         "errors": errors,
     }
+    # Additive (P3): collection coverage is present only when main() supplies
+    # it, so existing callers and readers see an unchanged report shape.
+    if coverage is not None:
+        report["coverage"] = coverage
+    return report
 
 
 def _sort_runs_by_created_desc(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2037,6 +2046,11 @@ def main(argv: list[str] | None = None) -> int:
     successful_repo_queries = 0
     log_archive_cache: dict[tuple[str, int], bytes | Exception] | None = {} if args.log_output_dir else None
     pat_budget_listing_incomplete = False
+    # Collection coverage (P3): failed repos (no run listing at all) and
+    # truncated repos (partial listing) stay disjoint.
+    coverage_failed: list[dict[str, str]] = []
+    coverage_truncated: list[str] = []
+    coverage_page_limit_reached = False
 
     for repo in repositories:
         repo_cache = cached_repositories.get(repo) if isinstance(cached_repositories, dict) else None
@@ -2057,6 +2071,7 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(cached_etag, str) or not cached_etag.strip():
             cached_etag = None
 
+        budget_repo_incomplete = False
         try:
             if pat_budget_day_utc is not None:
                 # The unfiltered created search can hit GitHub's 1,000-run
@@ -2075,9 +2090,14 @@ def main(argv: list[str] | None = None) -> int:
                             )
                         except Exception as exc:  # noqa: BLE001
                             pat_budget_listing_incomplete = True
+                            budget_repo_incomplete = True
                             errors.append({"repository": repo, "scope": "runs", "message": str(exc)})
                             continue
                         budget_listing_successes += 1
+                        if budget_capped or budget_meta.get("page_limit_reached"):
+                            budget_repo_incomplete = True
+                        if budget_meta.get("page_limit_reached"):
+                            coverage_page_limit_reached = True
                         pat_budget_listing_incomplete |= bool(budget_capped or budget_meta.get("page_limit_reached"))
                         for budget_run in budget_runs:
                             budget_runs_by_id[_to_int(budget_run.get("id"), 0)] = budget_run
@@ -2116,6 +2136,13 @@ def main(argv: list[str] | None = None) -> int:
                         )
             successful_repo_queries += 1
             pat_budget_listing_incomplete |= bool(capped or run_meta.get("page_limit_reached"))
+            if run_meta.get("page_limit_reached"):
+                coverage_page_limit_reached = True
+            repo_truncated = bool(capped or run_meta.get("page_limit_reached"))
+            if budget_repo_incomplete:
+                repo_truncated = True
+            if repo_truncated and repo not in coverage_truncated:
+                coverage_truncated.append(repo)
             if capped:
                 errors.append(
                     {
@@ -2131,6 +2158,12 @@ def main(argv: list[str] | None = None) -> int:
                     "repository": repo,
                     "scope": "runs",
                     "message": str(exc),
+                }
+            )
+            coverage_failed.append(
+                {
+                    "repository": repo,
+                    "message": _sanitize_diagnostic_text(str(exc))[:COVERAGE_MESSAGE_MAX_CHARS],
                 }
             )
             continue
@@ -2386,7 +2419,18 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     errors = _dedupe_errors(errors)
-    report = build_report(repositories, run_rows, errors, success_sample_rate=success_sample_rate)
+    report = build_report(
+        repositories,
+        run_rows,
+        errors,
+        success_sample_rate=success_sample_rate,
+        coverage={
+            "repositories_requested": list(dict.fromkeys(repositories)),
+            "repositories_failed": coverage_failed,
+            "repositories_truncated": coverage_truncated,
+            "page_limit_reached": coverage_page_limit_reached,
+        },
+    )
     _write_json_atomic(Path(args.output), report)
     if args.log_output_dir:
         _write_json_atomic(Path(args.log_output_dir) / "summary.json", report)

@@ -3333,6 +3333,124 @@ def test_root_failure_class_ignores_echoed_summary_and_untrusted_rows():
 # ---------------------------------------------------------------------------
 
 
+def _coverage_run(run_id: int) -> dict:
+	return {
+		"id": run_id,
+		"name": "AI Validate",
+		"path": ".github/workflows/validate.yml",
+		"status": "completed",
+		"conclusion": "success",
+		"event": "push",
+		"run_attempt": 1,
+		"created_at": "2026-04-10T12:00:00Z",
+		"run_started_at": "2026-04-10T12:00:30Z",
+		"updated_at": "2026-04-10T12:05:30Z",
+		"_workflow_family": "validate",
+	}
+
+
+def _run_collector_main_for_coverage(argv: list[str], listing) -> tuple[int, dict]:
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-test-") as td:
+		report_file = Path(td) / "report.json"
+		with patch.object(collector, "_cache_read_context", return_value=({"repositories": {}}, None, None)), \
+			patch.object(collector, "_cache_write_context", return_value=True), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main(argv + ["--output", str(report_file), "--max-log-runs", "0"])
+		return rc, json.loads(report_file.read_text(encoding="utf-8"))
+
+
+def test_main_reports_coverage_for_failed_and_truncated_repos() -> None:
+	raw_error = "HTTP 403 Forbidden\nsecret=abc " + ("x" * 600)
+
+	def listing(repo: str, **kwargs):
+		if repo == "owner/denied":
+			raise RuntimeError(raw_error)
+		if repo == "owner/capped":
+			return [_coverage_run(1)], True, {"not_modified": False, "etag": None}
+		if repo == "owner/paged":
+			return [_coverage_run(2)], False, {"not_modified": False, "etag": None, "page_limit_reached": True}
+		return [_coverage_run(3)], False, {"not_modified": False, "etag": None}
+
+	argv = ["--since", "2026-04-01T00:00:00Z", "--max-runs", "1"]
+	for repo in ("owner/denied", "owner/capped", "owner/paged", "owner/ok", "owner/capped"):
+		argv += ["--repo", repo]
+	rc, report = _run_collector_main_for_coverage(argv, listing)
+
+	assert rc == 0
+	coverage = report["coverage"]
+	assert coverage["repositories_requested"] == ["owner/denied", "owner/capped", "owner/paged", "owner/ok"]
+	assert [item["repository"] for item in coverage["repositories_failed"]] == ["owner/denied"]
+	message = coverage["repositories_failed"][0]["message"]
+	assert "\n" not in message and "=" not in message
+	assert len(message) <= collector.COVERAGE_MESSAGE_MAX_CHARS
+	assert message.startswith("HTTP 403 Forbidden secret:abc")
+	assert coverage["repositories_truncated"] == ["owner/capped", "owner/paged"]
+	assert coverage["page_limit_reached"] is True
+	# Existing errors[] entries keep the raw message and their scope.
+	run_errors = [item for item in report["errors"] if item.get("scope") == "runs"]
+	assert {"repository": "owner/denied", "scope": "runs", "message": raw_error} in run_errors
+	assert any(
+		item["repository"] == "owner/capped" and "max-runs=1" in item["message"] for item in run_errors
+	)
+	assert report["schema_version"] == collector.SCHEMA_VERSION
+
+
+def test_main_coverage_all_repos_failed_still_exits_1() -> None:
+	def listing(repo: str, **kwargs):
+		raise RuntimeError("HTTP 500")
+
+	rc, report = _run_collector_main_for_coverage(
+		["--since", "2026-04-01T00:00:00Z", "--repo", "owner/a", "--repo", "owner/b"], listing
+	)
+	assert rc == 1
+	assert report["coverage"] == {
+		"repositories_requested": ["owner/a", "owner/b"],
+		"repositories_failed": [
+			{"repository": "owner/a", "message": "HTTP 500"},
+			{"repository": "owner/b", "message": "HTTP 500"},
+		],
+		"repositories_truncated": [],
+		"page_limit_reached": False,
+	}
+
+
+def test_main_coverage_pat_budget_partial_listing_is_truncated_not_failed() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		budget_output = Path(td) / "daily.md"
+		first_file = next(iter(collector.PAT_BUDGET_WORKFLOWS))
+
+		def listing(repo: str, **kwargs):
+			if kwargs.get("workflow_file") == first_file:
+				raise RuntimeError("HTTP 502")
+			return [], False, {}
+
+		rc, report = _run_collector_main_for_coverage(
+			["--repo", "owner/repo", "--since", "2026-10-04T00:00:00Z",
+				"--pat-budget-day", "2026-10-05", "--pat-budget-output", str(budget_output)],
+			listing,
+		)
+	assert rc == 0
+	assert report["coverage"]["repositories_failed"] == []
+	assert report["coverage"]["repositories_truncated"] == ["owner/repo"]
+	assert report["coverage"]["page_limit_reached"] is False
+
+
+def test_build_report_omits_coverage_when_not_supplied() -> None:
+	report = collector.build_report(["owner/repo"], [], [])
+	assert "coverage" not in report
+	supplied = {
+		"repositories_requested": ["owner/repo"],
+		"repositories_failed": [],
+		"repositories_truncated": [],
+		"page_limit_reached": False,
+	}
+	with_coverage = collector.build_report(["owner/repo"], [], [], coverage=supplied)
+	assert with_coverage["coverage"] == supplied
+	assert set(with_coverage) - set(report) == {"coverage"}
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0

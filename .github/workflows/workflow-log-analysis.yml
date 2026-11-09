@@ -201,7 +201,45 @@ jobs:
             COLLECT_ARGS+=(--repo "${repo}")
           done
 
-          python3 scripts/collect_workflow_logs.py "${COLLECT_ARGS[@]}"
+          # P3: keep the collector's exit code, log coverage, then re-exit
+          # with the same code so the step result is unchanged.
+          collect_rc=0; python3 scripts/collect_workflow_logs.py "${COLLECT_ARGS[@]}" || collect_rc=$?
+
+          # --- collection coverage (P3) begin ---
+          # Diagnostics only and fail-open: no command here can change the
+          # step result. Only owner/repo names that pass the resolve_repos
+          # regex (anchored with \A..\z so a newline cannot smuggle a second
+          # line) and counts are printed; collector error text never is.
+          coverage_report="workflow_log_report.json"
+          coverage_repo_re='\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z'
+          if [ -f "${coverage_report}" ] && jq -e '(.coverage | type) == "object"' "${coverage_report}" >/dev/null 2>&1; then
+            coverage_repos="$(jq -r '[(.coverage.repositories_requested // []) | .[]? | strings] | length' "${coverage_report}" 2>/dev/null || true)"
+            [[ "${coverage_repos}" =~ ^[0-9]+$ ]] || coverage_repos=0
+            coverage_failed_csv="$(jq -r --arg re "${coverage_repo_re}" '[(.coverage.repositories_failed // []) | .[]? | objects | .repository | strings | select(test($re))] | unique | join(",")' "${coverage_report}" 2>/dev/null || true)"
+            coverage_truncated_csv="$(jq -r --arg re "${coverage_repo_re}" '[(.coverage.repositories_truncated // []) | .[]? | strings | select(test($re))] | unique | join(",")' "${coverage_report}" 2>/dev/null || true)"
+            coverage_failed_list=()
+            coverage_truncated_list=()
+            [ -n "${coverage_failed_csv}" ] && IFS=',' read -r -a coverage_failed_list <<< "${coverage_failed_csv}"
+            [ -n "${coverage_truncated_csv}" ] && IFS=',' read -r -a coverage_truncated_list <<< "${coverage_truncated_csv}"
+            echo "WORKFLOW_LOG_COLLECT_COVERAGE repos=${coverage_repos} failed=${#coverage_failed_list[@]} truncated=${#coverage_truncated_list[@]} failed_repos=${coverage_failed_csv} truncated_repos=${coverage_truncated_csv}"
+            for coverage_repo in "${coverage_failed_list[@]}"; do
+              echo "::error title=Workflow log collection::Could not read workflow runs for ${coverage_repo}; it is missing from this analysis."
+            done
+            for coverage_repo in "${coverage_truncated_list[@]}"; do
+              echo "::warning title=Workflow log collection::Run listing for ${coverage_repo} was truncated; this analysis covers only part of its runs."
+            done
+            {
+              echo "coverage_failed_count=${#coverage_failed_list[@]}"
+              echo "coverage_truncated_count=${#coverage_truncated_list[@]}"
+              echo "coverage_failed_repos=${coverage_failed_csv}"
+              echo "coverage_truncated_repos=${coverage_truncated_csv}"
+            } >> "${GITHUB_OUTPUT:-/dev/null}" || true
+          else
+            echo "::warning::workflow_log_report.json has no coverage object; collection coverage is unknown."
+          fi
+          # --- collection coverage (P3) end ---
+
+          exit "${collect_rc}"
 
       - name: Publish daily PAT consumer ranking
         if: ${{ github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' }}
@@ -232,6 +270,46 @@ jobs:
           path: ${{ steps.collect.outputs.log_output_dir }}
           if-no-files-found: warn
           retention-days: 7
+
+      # P3: one WARNING alert per run when collection had gaps. Separate step
+      # so TG_BOT_SECRET never shares a step with GH_PAT; skipped on the 06:00
+      # PAT-budget run, whose behaviour P3 leaves unchanged. ALERT_MSG_LEVEL
+      # (workflow env) still filters it, so SILENT holds it back.
+      - name: Alert on workflow log collection gaps
+        id: coverage_alert
+        if: ${{ always() && ((steps.collect.outputs.coverage_failed_count || '0') != '0' || (steps.collect.outputs.coverage_truncated_count || '0') != '0') && !(github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') }}
+        continue-on-error: true
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          WLA_COVERAGE_FAILED_COUNT: ${{ steps.collect.outputs.coverage_failed_count || '0' }}
+          WLA_COVERAGE_TRUNCATED_COUNT: ${{ steps.collect.outputs.coverage_truncated_count || '0' }}
+          WLA_COVERAGE_FAILED_REPOS: ${{ steps.collect.outputs.coverage_failed_repos || '' }}
+          WLA_COVERAGE_TRUNCATED_REPOS: ${{ steps.collect.outputs.coverage_truncated_repos || '' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "::warning::Telegram not configured (TG_BOT_SECRET or TG_ADMIN_CHAT_ID missing) — skipping collection gap alert."
+            exit 0
+          fi
+
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::scripts/tg_helpers.sh not found — skipping collection gap alert."
+            exit 0
+          fi
+
+          source scripts/tg_helpers.sh
+
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          MSG="Workflow log collection gaps for ${GITHUB_REPOSITORY}: failed=${WLA_COVERAGE_FAILED_COUNT} truncated=${WLA_COVERAGE_TRUNCATED_COUNT}"
+          MSG+=$'\n'
+          MSG+="Failed repos: ${WLA_COVERAGE_FAILED_REPOS:-none}"
+          MSG+=$'\n'
+          MSG+="Truncated repos: ${WLA_COVERAGE_TRUNCATED_REPOS:-none}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_msg "${MSG}" "WARNING" >/dev/null || echo "::warning::Collection gap alert could not be sent to Telegram."
 
   weekly-retro:
     needs: collect-logs
