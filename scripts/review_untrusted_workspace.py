@@ -69,8 +69,8 @@ COMMAND_TWIN_DIR = "workflow-templates/.claude/commands"
 # name whose twin exists in the verified workflow-support checkout (#8321).
 DOCS_TWIN_DIR = "workflow-templates/.claude/docs"
 # Live copies the resolver may sync from their workflow-templates twin
-# (issue #6595). The live path stays excluded from allowed(), snapshot and
-# transfer: only the runner writes it, byte-identical to the resolved template.
+# (issue #6595). check-paths refuses the live path, so only the runner writes
+# it during conflict resolution, byte-identical to the resolved template.
 # prepush_affected_tests.py: integration PR #8436 parked on a live/template
 # conflict with identical index stages (run 42360075171).
 PAIRED_LIVE_COPIES = {
@@ -714,7 +714,9 @@ def check_paths(host, paths_file, report_file=None):
 			continue
 		reason = "unsafe_file"
 		try:
-			if not allowed(name):
+			# A paired live hook is runner-written only, even one allowed()
+			# admits for the editor (gh_api_write_guard.py): refuse it here.
+			if name in PAIRED_LIVE_COPIES or not allowed(name):
 				reason = _path_rejection_reason(name)
 				raise LookupError("policy")
 			checked_path(host, name)

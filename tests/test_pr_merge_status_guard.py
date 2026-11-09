@@ -45,7 +45,11 @@ _WORKER_URL = f"https://api.cloudflare.com/client/v4/accounts/{_WORKER_ACCOUNT_I
 
 
 def _load_guard():
-	spec = importlib.util.spec_from_file_location("pr_merge_status_guard", GUARD_PATH)
+	# The review sandbox snapshot omits the live hook (allowed() refuses it), so
+	# import its byte-identical template twin there; the parity test below still
+	# fails when the live copy is missing in a full checkout.
+	source = GUARD_PATH if GUARD_PATH.is_file() else TEMPLATE_GUARD_PATH
+	spec = importlib.util.spec_from_file_location("pr_merge_status_guard", source)
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)

@@ -398,6 +398,20 @@ def test_divergent_template_conflict_stays_fail_closed(tmp_path):
 	assert "unsupported path" in check.stderr
 
 
+@pytest.mark.parametrize("hook_name", ["gh_api_write_guard.py", "pr_watch_guard.py", "session-start.sh"])
+def test_other_hook_divergent_template_conflict_stays_fail_closed(tmp_path, hook_name):
+	# gh_api_write_guard.py is admitted by allowed() for the editor; check-paths
+	# must still refuse its live copy when the pair cannot be formed.
+	live, template = f".claude/hooks/{hook_name}", f"workflow-templates/.claude/hooks/{hook_name}"
+	repo = _paired_conflict_repo(tmp_path, template_theirs="value = 9\n", live_hook=live, template_hook=template)
+	proc = _pair(tmp_path, repo)
+	assert proc.returncode == 0, proc.stderr
+	assert (tmp_path / "pairs").read_text() == ""
+	check = _workspace("check-paths", repo, tmp_path / "model_paths")
+	assert check.returncode == 1
+	assert f"REVIEW_RESOLVER_PATH_REJECTED reason=live_safety_hook path={live}\n" in check.stderr
+
+
 def test_paired_conflict_with_unrelated_excluded_path_is_still_refused(tmp_path):
 	repo = _paired_conflict_repo(tmp_path, extra=True)
 	assert _pair(tmp_path, repo).returncode == 0
