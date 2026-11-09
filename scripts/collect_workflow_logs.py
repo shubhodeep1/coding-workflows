@@ -2287,7 +2287,9 @@ def main(argv: list[str] | None = None) -> int:
         # A listing at or above the page-based cap would be refetched after
         # any 304, so its ETag would only add a wasted conditional request.
         # (A listing of --max-runs runs is already capped, so truncated.)
-        etag_unusable = repo_truncated or (pat_budget_day_utc is None and len(runs) >= page_snapshot_cap)
+        # A PAT-budget run stores only the instrumented-workflow subset and
+        # has no ETag of its own, so no ETag describes its snapshot.
+        etag_unusable = repo_truncated or pat_budget_day_utc is not None or len(runs) >= page_snapshot_cap
         repo_cache_updated = {
             "runs_etag": None
             if etag_unusable

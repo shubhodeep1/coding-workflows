@@ -3592,6 +3592,30 @@ def test_main_reuses_snapshot_on_304_with_single_page() -> None:
 	assert len(report["runs"]) == 2
 
 
+def test_main_pat_budget_run_does_not_keep_cached_etag() -> None:
+	"""A PAT-budget subset snapshot must never be stored next to a full-listing ETag."""
+	cache = {"repositories": {"owner/repo": {"runs_etag": 'W/"full"', "runs_snapshot": []}}}
+	written: list[dict] = []
+
+	def listing(repo: str, **kwargs):
+		return [], False, {}
+
+	with tempfile.TemporaryDirectory(prefix="collector-coverage-budget-etag-") as td:
+		with patch.object(collector, "_cache_read_context", return_value=(cache, None, None)), \
+			patch.object(collector, "_cache_write_context", side_effect=lambda **kw: written.append(kw["payload"]) or True), \
+			patch.object(collector, "list_runs_for_repo", side_effect=listing), \
+			patch.object(collector, "list_jobs_for_run", return_value=[]), \
+			patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("no archive")):
+			rc = collector.main([
+				"--repo", "owner/repo", "--since", "2026-10-04T00:00:00Z",
+				"--pat-budget-day", "2026-10-05", "--pat-budget-output", str(Path(td) / "daily.md"),
+				"--max-log-runs", "0", "--output", str(Path(td) / "report.json"),
+			])
+	assert rc == 0
+	assert written, "cache payload was not written"
+	assert written[-1]["repositories"]["owner/repo"]["runs_etag"] is None
+
+
 def test_build_report_omits_coverage_when_not_supplied() -> None:
 	report = collector.build_report(["owner/repo"], [], [])
 	assert "coverage" not in report
