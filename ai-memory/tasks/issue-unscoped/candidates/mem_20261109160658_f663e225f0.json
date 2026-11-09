@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/9126-triage-green-main-and-headers-grant.md:2 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The fragment says a non-zero gate exit other than 3 always prints a `::warning::`, but .github/workflows/plan.yml:1437 prints it only when the captured stderr file is non-empty (`[ -s \"${triage_gate_err}\" ]`).\n  WHY: A gate that exits non-zero with empty stderr produces no warning, so the documented log contract overstates the behaviour and hides the failure. Reviewers rated it NIT.\n- .github/workflows/plan.yml:1454-1460 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `resolved` outcome log at line 1454 omits `gate_rc=`, and the exit-3 `skip` log at line 1460 omits both `gate=` and `gate_rc=`. The agents.md:4444 registry line lists these fields without qualification.\n  WHY: Log parsers keyed on the registry see different field sets per outcome. This is a doc/behaviour inconsistency only, with no control-flow failure. Reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/9126-triage-green-main-and-headers-grant.md:2 | severity=low | confidence=4\n  PROBLEM: The fragment reads as an unconditional guarantee of a `::warning::` on a non-zero exit other than 3, but .github/workflows/plan.yml:1437 gates the warning on `[ -s \"${triage_gate_err}\" ]`.\n  WHY: When the gate exits non-zero with empty stderr, no warning is printed. The fragment should be softened rather than the workflow guard relaxed. Reviewer rated it NIT.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/9126-triage-green-main-and-headers-grant.md:2 (also .github/workflows/plan.yml:1437) | severity=low | confidence=5\n  PROBLEM: The fragment says every non-zero gate exit other than 3 prints a warning, but the workflow prints one only when the captured stderr file is non-empty.\n  WHY: A gate exit with no stderr omits the warning, contrary to the documented behaviour, which reduces failure visibility. Reviewer rated it NIT.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/9126-triage-green-main-and-headers-grant.md:2 | severity=low | confidence=5\n  PROBLEM: The fragment documents the warning as unconditional for any non-zero, non-3 gate exit, but .github/workflows/plan.yml:1437 prints it only when the captured stderr file is non-empty.\n  WHY: An operator may read the absence of a warning as a clean gate run, which masks a gate failure. The sentence was edited in the reviewed diff. Reviewer rated it NIT.\n- .github/workflows/plan.yml:1454 and 1460 | severity=low | confidence=4\n  PROBLEM: `outcome=resolved` at line 1454 has no `gate_rc=`, and `outcome=skip reason=resolved_close_failed` at line 1460 has no `gate=` or `gate_rc=`. The agents.md:4444 registry line lists these fields without qualification.\n  WHY: Log parsers keyed on the registry see different field sets per outcome. This is a doc/behaviour inconsistency only. Reviewer rated it NIT.\n- .github/workflows/plan.yml:1437 | severity=low | confidence=5\n  PROBLEM: HARDENING_SUGGESTION: the warning is suppressed when the gate exits unexpectedly with empty stderr, so the failure is invisible in workflow logs.\n  WHY: Suggested fix is to drop the `[ -s \"${triage_gate_err}\" ]` condition and print the `::warning::` unconditionally for non-0/non-3 exits, keeping the stderr tail conditional, or to align the fragment wording. About 2 lines changed. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ce4067b05eff8dd94d60cb8ac0c469a717f949c577a0b021d99270c4b32ed004",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9126,
+    "run_id": "42639541030",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42639541030",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109160658_f663e225f0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9126,
+    "run_id": "42639541030"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T16:06:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
