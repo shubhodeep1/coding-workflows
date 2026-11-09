@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-09T12:30:42Z",
+  "issue_number": 9117,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=tests/test_apply_analysis_on_main.py:n/a; cited_path=tests/test_apply_analysis_on_main.py, tests/test_workflow_file_size_limit.py; files_touched=.github/workflows/workflow-log-analysis.yml, README.md, agents.d/analysis-findings-p1-report-pr.md, changelog.d/analysis-findings-p1-report-pr.md, tests/test_ci_wires_every_test_file.py, tests/test_workflow_log_analysis_failure_contract.py, tests/test_workflow_log_analysis_report_pr.py.",
+  "phase": "review_autofix",
+  "pr_number": 9123,
+  "record_id": "lesson_20261109123042_6a5b4fc276",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_apply_analysis_on_main.py, tests/test_workflow_file_size_limit.py",
+    "tests/test_apply_analysis_on_main.py",
+    ".github/workflows/workflow-log-analysis.yml",
+    "README.md",
+    "agents.d/analysis-findings-p1-report-pr.md",
+    "changelog.d/analysis-findings-p1-report-pr.md",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_workflow_log_analysis_failure_contract.py",
+    "tests/test_workflow_log_analysis_report_pr.py"
+  ]
+}
