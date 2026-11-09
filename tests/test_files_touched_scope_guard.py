@@ -1489,6 +1489,13 @@ def test_extract_plan_file_paths_keeps_exact_files_from_the_files_section() -> N
 	# A letter-led extension still marks a file at any depth.
 	for good in ("scripts/a.sh", "src/mod.rs", "web/x.mp3"):
 		assert guard._plan_grant_path(good) == good, good
+	# Cloudflare Pages / Netlify config files are extensionless files, not
+	# directories (consumer fun-token-multi-chain #771).
+	for good in ("lobby-frontend/public/_headers", "public/_redirects", "_headers"):
+		assert guard._plan_grant_path(good) == good, good
+	assert guard.extract_plan_file_paths(
+		"## Files likely to change\n- `lobby-frontend/lib/chains.ts`\n- `lobby-frontend/public/_headers`\n") == [
+		"lobby-frontend/lib/chains.ts", "lobby-frontend/public/_headers"]
 
 
 def test_build_pipeline_plan_grant_body_appends_a_canonical_block() -> None:
