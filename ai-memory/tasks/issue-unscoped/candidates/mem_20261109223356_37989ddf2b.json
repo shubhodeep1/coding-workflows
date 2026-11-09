@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md / CLAUDE.md (repo custom instructions):copilot-pull-request-reviewer check run, head SHA 2e4ed037ab7860eaaa1a7c7fd3aad00dace2b9e6 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The third-party Copilot PR reviewer job aborts with `custom_instructions_too_large` (HTTP 422) because the combined AGENTS.md + CLAUDE.md instructions exceed its prompt budget.\n  WHY: The reviewer marked it SEVERITY: NIT and said the failure predates and is independent of this diff, which adds 12 lines to agents.md, so no diff hunk can fix it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md / CLAUDE.md (repo custom instructions):copilot-pull-request-reviewer check run, head SHA 2e4ed037ab7860eaaa1a7c7fd3aad00dace2b9e6 | severity=low (source: NIT) | confidence=3\n  PROBLEM: The third-party Copilot PR reviewer job aborts before producing any review because the repository's combined custom instructions (AGENTS.md + CLAUDE.md) exceed its prompt budget.\n  WHY: The external reviewer service rejects the request with statusCode 422, errorCode custom_instructions_too_large. The failure is independent of this diff, which is a mechanical fragment fold adding 12 lines to agents.md.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "75173417ecbdc5c2750ddc892cd884374b626f513ce4f212d0b403aa48772011",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9157,
+    "run_id": "42708832990",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42708832990",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109223356_37989ddf2b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9157,
+    "run_id": "42708832990"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-09T22:33:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
