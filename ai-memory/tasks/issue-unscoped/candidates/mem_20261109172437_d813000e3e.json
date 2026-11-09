@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:(no line range stated; CI check \"copilot-pull-request-reviewer\", run 42657237634, job 129298893665) | severity=high | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The PR's Copilot review check fails before reviewing anything because the repo-wide custom instruction payload (AGENTS.md + CLAUDE.md) exceeds Copilot's prompt limit (`custom_instructions_too_large`, 422).\n  WHY: The Copilot action aborts at prompt assembly with exit 1, so the check run concludes `failure` on every head of this PR regardless of the diff. The reviewer marked it SEVERITY: MAJOR, which is mapped here to high. It also noted that three prior editor passes had rejected it as outside this PR's fixable scope and that no diff hunk maps to it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/plan.yml:(no line range stated; CI check \"copilot-pull-request-reviewer\", run 42657237634, job 129298893665) | severity=MAJOR | confidence=3\n  PROBLEM: The PR's Copilot review check fails before reviewing anything because the repo-wide custom instruction payload (AGENTS.md + CLAUDE.md) exceeds Copilot's prompt limit.\n  WHY: The Copilot action aborts at prompt assembly with exit 1, so the check run concludes `failure` on every head of this PR regardless of the diff content. The reviewer said three prior editor passes had already rejected it as outside this PR's fixable scope, and that no diff hunk maps to it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2de64a497273cd169758e01550932d476b5b1cdbe3ca0cd06575fe52fbc3e214",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9126,
+    "run_id": "42657228083",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42657228083",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109172437_d813000e3e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9126,
+    "run_id": "42657228083"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-09T17:24:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
