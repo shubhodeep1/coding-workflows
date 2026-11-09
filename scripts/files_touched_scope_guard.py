@@ -77,6 +77,17 @@ Inputs:
                           other protected paths would be granted, carries
                           replannable: true (#8339); the poller re-plans
                           once. No grant is written for that check.
+                          --planning-root PATH (default empty) names the
+                          checkout of the planning ref: a nested
+                          extensionless file the plan lists (`bin/deploy`,
+                          `public/CNAME`) is granted exactly when it is a
+                          regular file there (not a symlink, inside PATH).
+                          One that is a directory, missing, or checked
+                          without PATH makes a pipeline plan grant hold with
+                          reason plan_path_not_grantable and replannable:
+                          true instead of granting without it (#9130).
+                          PLAN_GRANT_TREE_FILE_CHECK_ENABLED=false (default
+                          true) restores the earlier silent drop.
   --plan-auto-approval-gate --plan-file PATH --heal-scope-file PATH
                           --flag-enabled VALUE --issue-number NUMBER
                           Workflow-heal plans (#7444): approve only when every
@@ -828,12 +839,24 @@ _PLAN_GRANT_BARE_FILE_RE = re.compile(
 _PLAN_GRANT_FILE_SEGMENT_RE = re.compile(r"^(?:\.[A-Za-z0-9_-][A-Za-z0-9._-]*|[^.].*\.[A-Za-z][A-Za-z0-9]*)$")
 
 
-def _plan_grant_path(raw: str) -> str:
+def _plan_grant_path(raw: str, repo_root: str = "") -> str:
 	"""A plan token as an exact repo-relative file path, or "" when it is not one.
 
 	Directories, globs, absolute or parent paths, URLs and anything outside a
-	plain path alphabet are rejected: they can never be an exact grant.
+	plain path alphabet are rejected: they can never be an exact grant. With
+	``repo_root`` (issue #9130), a nested extensionless last segment is kept
+	when it is a regular file in that checkout (_plan_tree_regular_file).
 	"""
+	path = _plan_grant_shape_path(raw)
+	if not path and repo_root and plan_grant_tree_file_check_enabled():
+		candidate = _plan_grant_extensionless_candidate(raw)
+		if candidate and _plan_tree_regular_file(repo_root, candidate):
+			return candidate
+	return path
+
+
+def _plan_grant_shape_path(raw: str) -> str:
+	"""The path-shape rule of _plan_grant_path, with no tree check."""
 	# Only `*` is stripped: `_` is part of names such as `__init__.py`.
 	path = normalize_path(_plan_path_token(raw.strip().strip("*")))
 	if not path or len(path) > 512 or path.endswith("/") or path.startswith("/") or "//" in path:
@@ -853,7 +876,60 @@ def _plan_grant_path(raw: str) -> str:
 	return path
 
 
-def extract_plan_file_paths(plan_text: str) -> list[str]:
+# Issue #9130: a nested extensionless last segment (`bin/deploy`,
+# `public/CNAME`) may be a file or a directory. The plan grant keeps it only
+# when the planning checkout has it as a regular file; otherwise it is
+# "ungrantable" and a pipeline plan grant holds (replannable) instead of
+# silently leaving it out. A planned grant never widens to a directory.
+PLAN_PATH_NOT_GRANTABLE_REASON = "plan_path_not_grantable"
+
+
+def plan_grant_tree_file_check_enabled() -> bool:
+	"""PLAN_GRANT_TREE_FILE_CHECK_ENABLED, default true; false/0/no/off turns it off."""
+	return (os.environ.get("PLAN_GRANT_TREE_FILE_CHECK_ENABLED") or "true").strip().lower() not in {"false", "0", "no", "off"}
+
+
+def _plan_grant_extensionless_candidate(raw: str) -> str:
+	"""The normalized path when _plan_grant_path rejects ``raw`` only because its
+	nested last segment has no extension; "" otherwise."""
+	if _plan_grant_shape_path(raw):
+		return ""
+	path = normalize_path(_plan_path_token(raw.strip().strip("*")))
+	if not path or len(path) > 512 or path.endswith("/") or path.startswith("/") or "//" in path:
+		return ""
+	segments = path.split("/")
+	if len(segments) < 2:
+		return ""
+	if any(seg in {"", ".", ".."} or not _PLAN_GRANT_SEGMENT_RE.match(seg) for seg in segments):
+		return ""
+	if segments[0].startswith("-") or any(char in path for char in _GLOB_CHARS):
+		return ""
+	if any(seg.lower() == ".git" for seg in segments):
+		return ""
+	last = segments[-1]
+	if "." in last or _PLAN_GRANT_BARE_FILE_RE.match(last):
+		return ""
+	return path
+
+
+def _plan_tree_regular_file(repo_root: str, path: str) -> bool:
+	"""True only when ``path`` is a regular file inside ``repo_root``: not a
+	symlink, no symlinked parent, never outside the root. Errors are False."""
+	if not repo_root or not path:
+		return False
+	try:
+		root_real = os.path.realpath(repo_root)
+		if not os.path.isdir(root_real):
+			return False
+		full = os.path.join(root_real, *path.split("/"))
+		if not full.startswith(root_real + os.sep) or os.path.realpath(full) != full:
+			return False
+		return stat.S_ISREG(os.lstat(full).st_mode)
+	except (OSError, ValueError):
+		return False
+
+
+def extract_plan_file_paths(plan_text: str, repo_root: str = "") -> list[str]:
 	"""Exact file paths a plan's Files section lists (empty without a section).
 
 	Reads backticked spans, a bullet's first token when the bullet has no
@@ -861,11 +937,27 @@ def extract_plan_file_paths(plan_text: str) -> list[str]:
 	paths are kept (see _plan_grant_path); a listed directory or glob is
 	dropped here and still holds the plan through the protected-path check.
 	"""
+	return extract_plan_file_path_sets(plan_text, repo_root)[0]
+
+
+def extract_plan_file_path_sets(plan_text: str, repo_root: str = "") -> tuple[list[str], list[str]]:
+	"""(paths, ungrantable) for a plan's Files section (issue #9130).
+
+	``paths`` is extract_plan_file_paths's list, plus nested extensionless
+	files verified as regular files under ``repo_root``. ``ungrantable`` lists
+	the nested extensionless tokens that could not be verified (a directory, a
+	missing path, or no ``repo_root``); only backticked or protected-path
+	tokens count, so a prose bullet word never holds a plan. With
+	PLAN_GRANT_TREE_FILE_CHECK_ENABLED off both behave as before (empty list).
+	"""
 	section = _plan_files_section(plan_text or "")
 	if section is None:
-		return []
+		return [], []
+	tree_check = plan_grant_tree_file_check_enabled()
+	root = repo_root if tree_check and repo_root and os.path.isdir(repo_root) else ""
 	seen: set[str] = set()
 	paths: list[str] = []
+	ungrantable: list[str] = []
 	skip_indent: int | None = None
 	for line in section.splitlines():
 		# A planner metadata line and its prose continuation are skipped: the
@@ -883,20 +975,26 @@ def extract_plan_file_paths(plan_text: str) -> list[str]:
 				skip_indent = None
 			else:
 				continue
-		candidates = _PLAN_GRANT_BACKTICK_RE.findall(line)
+		candidates = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
 		# The bullet's first token counts even when the line also has
 		# backticked spans (`- README.md — use `parse()``): otherwise a
 		# non-path span would drop the listed file from the grant.
 		bullet = _PLAN_GRANT_BULLET_RE.match(line)
 		if bullet:
-			candidates.append(bullet.group(1))
-		candidates.extend(match.group(1) for match in _PLAN_PATH_TOKEN_RE.finditer(line))
-		for raw in candidates:
+			candidates.append((bullet.group(1), False))
+		candidates.extend((match.group(1), True) for match in _PLAN_PATH_TOKEN_RE.finditer(line))
+		for raw, strong in candidates:
 			path = _plan_grant_path(raw)
+			if not path and tree_check:
+				candidate = _plan_grant_extensionless_candidate(raw)
+				if candidate and root and _plan_tree_regular_file(root, candidate):
+					path = candidate
+				elif candidate and strong and candidate not in ungrantable:
+					ungrantable.append(candidate)
 			if path and path not in seen:
 				seen.add(path)
 				paths.append(path)
-	return paths
+	return paths, [path for path in ungrantable if path not in seen]
 
 
 def build_pipeline_plan_grant_body(body: str, plan_paths: list[str]) -> str:
@@ -955,7 +1053,8 @@ def _issue_on_heal_route(issue_body: str, labels: object) -> bool:
 
 
 def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: object = None,
-	issue_number: object = None, *, author_login: str = "", pipeline_login: str = "") -> list[str]:
+	issue_number: object = None, *, author_login: str = "", pipeline_login: str = "",
+	planning_root: str = "") -> list[str]:
 	"""Exact files in a plan's Files section that the issue's files_touched list misses.
 
 	Uses the implement guard's matcher (path_in_scope: lockfiles and agents.d
@@ -968,6 +1067,8 @@ def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: ob
 	the heal scope marker, not files_touched. ``author_login`` and
 	``pipeline_login`` turn on the auto-heal companion paths through
 	auto_heal_companions_allowed, as the implement guard does (#8956).
+	``planning_root`` also checks nested extensionless files that are regular
+	files in that checkout (issue #9130).
 	"""
 	if _issue_on_heal_route(issue_body, labels):
 		return []
@@ -975,7 +1076,7 @@ def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: ob
 	if not allowlist:
 		return []
 	companions = auto_heal_companions_allowed(issue_body, author_login, pipeline_login)
-	return [path for path in extract_plan_file_paths(plan_text)
+	return [path for path in extract_plan_file_paths(plan_text, planning_root)
 		if not path_in_scope(path, allowlist, own_fragment_issue=issue_number,
 			allow_auto_heal_companions=companions)]
 
@@ -990,7 +1091,7 @@ def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: ob
 # decision, the denied list or any grant, and never writes a grant body.
 def _plan_hold_replannable(plan_text: str, protected: list[str], denied: list[str], replan_grant: object, *,
 	flag_on: bool, allow_workflow_edits: str, issue_number: str, metadata: object,
-	check_files_touched: bool, pipeline_login: str = "") -> bool:
+	check_files_touched: bool, pipeline_login: str = "", planning_root: str = "") -> bool:
 	"""True when a path_not_granted hold would approve without its non-exact tokens."""
 	if not denied or not isinstance(metadata, dict):
 		return False
@@ -1007,12 +1108,13 @@ def _plan_hold_replannable(plan_text: str, protected: list[str], denied: list[st
 		return False
 	return not (check_files_touched and plan_files_outside_files_touched(plan_text, metadata.get("body") or "",
 		metadata.get("labels"), issue_number=issue_number or metadata.get("number"),
-		author_login=_issue_meta_author_login(metadata), pipeline_login=pipeline_login))
+		author_login=_issue_meta_author_login(metadata), pipeline_login=pipeline_login,
+		planning_root=planning_root))
 
 
 def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,
 	pipeline_login: str, allow_workflow_edits: str, issue_number: str, origin_repo: str = "",
-	grant_body_out: str = "") -> tuple[dict, int]:
+	grant_body_out: str = "", planning_root: str = "") -> tuple[dict, int]:
 	"""CLI body: returns (decision record, exit code). Errors always hold.
 
 	``origin_repo`` (owner/name) lets a pipeline-authored issue that names a
@@ -1028,6 +1130,11 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 
 	A ``path_not_granted`` hold held only by directory or glob tokens, which
 	would approve without them, adds ``replannable: true`` (#8339).
+
+	``planning_root`` is the planning checkout (issue #9130). A pipeline plan
+	grant that would approve while the plan lists a nested extensionless path
+	that is not a regular file there (or with no root) holds with reason
+	``plan_path_not_grantable`` and ``replannable: true``; no body is written.
 	"""
 	protected: list[str] = []
 	grant_proposed = False
@@ -1070,7 +1177,7 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 		if (grant_body_out and decision == PLAN_DECISION_HOLD and reason == "open_grant_not_exact"
 				and isinstance(grant, dict) and grant.get("open") is True
 				and grant.get("reason") == PIPELINE_AUTHOR_OPEN_REASON):
-			plan_paths = extract_plan_file_paths(plan_text)
+			plan_paths, ungrantable_plan_paths = extract_plan_file_path_sets(plan_text, planning_root)
 			if len(plan_paths) > PIPELINE_PLAN_GRANT_MAX_PATHS:
 				# The open grant hid the workflow-edits switch from the check
 				# above; a plan the implement guard would refuse anyway (for
@@ -1089,7 +1196,12 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 					fetch_origin if repo else None)
 				proposed = evaluate_plan_auto_approval(protected, proposed_grant, flag_enabled=flag_on,
 					allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
-				if proposed[0] == PLAN_DECISION_APPROVE:
+				if proposed[0] == PLAN_DECISION_APPROVE and ungrantable_plan_paths:
+					# Never approve a grant that omits a listed file (#9130);
+					# one re-plan follows (the poller's #8339 flow).
+					decision, reason, denied = PLAN_DECISION_HOLD, PLAN_PATH_NOT_GRANTABLE_REASON, ungrantable_plan_paths
+					replannable = True
+				elif proposed[0] == PLAN_DECISION_APPROVE:
 					with open(grant_body_out, "w", encoding="utf-8") as handle:
 						handle.write(proposed_body)
 					decision, reason, denied = PLAN_DECISION_APPROVE, PIPELINE_PLAN_GRANT_REASON, []
@@ -1117,12 +1229,13 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 			issue_author = _issue_meta_author_login(issue_meta)
 			outside = plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "",
 				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number"),
-				author_login=issue_author, pipeline_login=pipeline_login)
+				author_login=issue_author, pipeline_login=pipeline_login, planning_root=planning_root)
 			# The record key marks an approval that needed the rule: some plan
 			# path is in scope only because of the companion allowance.
 			companions_used = auto_heal_companions_allowed(issue_meta.get("body") or "", issue_author,
 				pipeline_login) and bool(plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "",
-				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number")))
+				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number"),
+				planning_root=planning_root))
 			if outside and not (isinstance(pipeline_login, str) and LOGIN_RE.fullmatch(pipeline_login)) \
 					and LOGIN_RE.fullmatch(issue_author) \
 					and _AUTO_HEAL_REMEDIATION_RE.search(issue_meta.get("body") or "") \
@@ -1146,7 +1259,8 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 				replannable = _plan_hold_replannable(plan_text, protected, denied, replan_grant,
 					flag_on=flag_on, allow_workflow_edits=allow_workflow_edits, issue_number=issue_number,
 					metadata=metadata, check_files_touched=(not replan_via_proposal and bool(issue_meta_file)
-						and plan_files_touched_gate_active()), pipeline_login=pipeline_login)
+						and plan_files_touched_gate_active()), pipeline_login=pipeline_login,
+					planning_root=planning_root)
 			except Exception:  # noqa: BLE001 - advisory only; the hold stands
 				replannable = False
 	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
@@ -1775,6 +1889,8 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--plan-auto-approval-gate", action="store_true")
 	parser.add_argument("--plan-file", default="")
 	parser.add_argument("--flag-enabled", default="true")
+	parser.add_argument("--planning-root", default="",
+		help="Checkout of the planning ref; nested extensionless plan files are granted when regular files there (#9130)")
 	parser.add_argument("--pipeline-grant-body-out", default="",
 		help="plan gate: write the proposed pipeline plan grant body here (Q108)")
 	parser.add_argument("--heal-scope-file", default="",
@@ -1817,7 +1933,7 @@ def main(argv: list[str] | None = None) -> int:
 	if args.plan_auto_approval_gate:
 		record, code = run_plan_auto_approval_gate(args.plan_file, args.flag_enabled, args.issue_meta_file,
 			args.pipeline_login, args.allow_workflow_edits, args.issue_number, args.origin_repo,
-			args.pipeline_grant_body_out)
+			args.pipeline_grant_body_out, args.planning_root)
 		sys.stdout.write(json.dumps(record) + "\n")
 		return code
 	if args.emit_automation_grant:

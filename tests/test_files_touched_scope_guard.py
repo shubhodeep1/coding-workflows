@@ -1499,16 +1499,20 @@ def test_build_pipeline_plan_grant_body_appends_a_canonical_block() -> None:
 	assert guard.extract_files_touched(body) == ["a/b.py", "tests/**", "changelog.d/*", "agents.d/*"]
 
 
-def _run_grant_cli(plan: str, meta: dict, flag: str = "true", allow_edits: str = "true") -> tuple[int, dict, str | None]:
+def _run_grant_cli(plan: str, meta: dict, flag: str = "true", allow_edits: str = "true", *,
+	planning_root: str | None = None, extra_env: dict | None = None) -> tuple[int, dict, str | None]:
 	with tempfile.TemporaryDirectory() as td:
 		tdp = Path(td)
 		(tdp / "plan.md").write_text(plan, encoding="utf-8")
 		(tdp / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
 		out = tdp / "grant_body.md"
+		root_args = ["--planning-root", planning_root] if planning_root is not None else []
+		env = {key: value for key, value in os.environ.items() if key != "PLAN_GRANT_TREE_FILE_CHECK_ENABLED"}
+		env.update(extra_env or {})
 		proc = subprocess.run([sys.executable, str(GUARD_SCRIPT), "--plan-auto-approval-gate",
 			"--plan-file", str(tdp / "plan.md"), "--flag-enabled", flag, "--pipeline-login", "pipeline[bot]",
 			"--allow-workflow-edits", allow_edits, "--issue-number", "42", "--issue-meta-file", str(tdp / "meta.json"),
-			"--pipeline-grant-body-out", str(out)], capture_output=True, text=True, check=False)
+			"--pipeline-grant-body-out", str(out), *root_args], capture_output=True, text=True, check=False, env=env)
 		body = out.read_text(encoding="utf-8") if out.exists() and out.stat().st_size else None
 		return proc.returncode, json.loads(proc.stdout), body
 
@@ -2164,6 +2168,106 @@ def test_implement_scope_callers_pass_auto_heal_identity() -> None:
 	assert text.count(export) == 1
 	check = 'if [[ "${pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?$ ]]; then'
 	assert text.index(check) < text.index(export) < text.index(check) + len(check) + 120
+
+
+# --- issue #9130: extensionless files in the pipeline plan grant ----------------
+
+_TREE_PLAN = """Implementation Plan
+
+## Files likely to change
+- `scripts/deploy_site.sh`
+- `public/CNAME`
+- `bin/deploy`
+- `README.md`
+"""
+
+
+def _planning_tree(root: Path) -> None:
+	(root / "public").mkdir()
+	(root / "public" / "CNAME").write_text("example.com\n", encoding="utf-8")
+	(root / "bin").mkdir()
+	(root / "bin" / "deploy").write_text("#!/bin/sh\n", encoding="utf-8")
+	(root / "docs" / "plans").mkdir(parents=True)
+	(root / ".git").mkdir()
+	(root / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+
+
+def test_plan_grant_keeps_extensionless_files_present_in_the_planning_root() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		_planning_tree(Path(td))
+		code, record, body = _run_grant_cli(_TREE_PLAN, _pipeline_meta(), planning_root=td)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		assert body is not None
+		entries = guard.extract_files_touched(body)
+		assert entries[:4] == ["scripts/deploy_site.sh", "public/CNAME", "bin/deploy", "README.md"], entries
+		assert "public/" not in entries and "bin/" not in entries
+		assert guard.extract_plan_file_path_sets(_TREE_PLAN, td) == (
+			["scripts/deploy_site.sh", "public/CNAME", "bin/deploy", "README.md"], [])
+
+
+def test_plan_grant_holds_replannable_for_a_directory_or_missing_path() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		_planning_tree(Path(td))
+		for listed in ("docs/plans", "bin/missing"):
+			plan = _TREE_PLAN + f"- `{listed}`\n"
+			code, record, body = _run_grant_cli(plan, _pipeline_meta(), planning_root=td)
+			assert code == 30 and record["decision"] == "hold", record
+			assert record["reason"] == guard.PLAN_PATH_NOT_GRANTABLE_REASON == "plan_path_not_grantable"
+			assert record["denied_paths"] == [listed] and record["replannable"] is True
+			assert body is None
+
+
+def test_plan_grant_without_planning_root_holds_instead_of_dropping() -> None:
+	code, record, body = _run_grant_cli(_TREE_PLAN, _pipeline_meta())
+	assert record["decision"] == "hold" and record["reason"] == "plan_path_not_grantable", record
+	assert record["denied_paths"] == ["public/CNAME", "bin/deploy"] and record["replannable"] is True
+	assert body is None
+	# An empty --planning-root behaves as no root.
+	assert _run_grant_cli(_TREE_PLAN, _pipeline_meta(), planning_root="")[1]["reason"] == "plan_path_not_grantable"
+
+
+def test_plan_grant_tree_check_switch_off_keeps_the_old_drop() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		_planning_tree(Path(td))
+		code, record, body = _run_grant_cli(_TREE_PLAN, _pipeline_meta(), planning_root=td,
+			extra_env={"PLAN_GRANT_TREE_FILE_CHECK_ENABLED": "false"})
+		assert code == 0 and record["reason"] == "pipeline_plan_grant" and "replannable" not in record, record
+		assert guard.extract_files_touched(body)[:2] == ["scripts/deploy_site.sh", "README.md"]
+
+
+def test_plan_tree_file_check_refuses_symlinks_escapes_and_git() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td) / "repo"
+		root.mkdir()
+		_planning_tree(root)
+		(Path(td) / "outside").write_text("secret\n", encoding="utf-8")
+		(root / "bin" / "link").symlink_to(root / "public" / "CNAME")
+		(root / "linkdir").symlink_to(root / "public")
+		(root / "bin" / "escape").symlink_to(Path(td) / "outside")
+		assert guard._plan_tree_regular_file(str(root), "bin/deploy") is True
+		for path in ("bin/link", "linkdir/CNAME", "bin/escape", "../outside", "docs/plans", "bin/missing"):
+			assert guard._plan_tree_regular_file(str(root), path) is False, path
+		assert guard._plan_grant_extensionless_candidate("`.git/config`") == ""
+		assert guard._plan_grant_path(".git/config", str(root)) == ""
+		for raw in ("bin/link", "linkdir/CNAME", "bin/escape"):
+			assert guard._plan_grant_path(raw, str(root)) == "", raw
+		assert guard._plan_grant_path("bin/deploy", str(root)) == "bin/deploy"
+		# Not candidates at all: root names, globs, parents, digit-led or .d suffixes.
+		for raw in ("CNAME", "bin/*", "a/../b", "scripts/v1.0", "src/conf.d", "bin/deploy.sh"):
+			assert guard._plan_grant_extensionless_candidate(raw) == "", raw
+
+
+def test_plan_grant_prose_bullet_words_never_hold() -> None:
+	plan = "## Files likely to change\n- `scripts/a.sh`\n- and/or the helper\n"
+	assert guard.extract_plan_file_path_sets(plan) == (["scripts/a.sh"], [])
+
+
+def test_plan_files_outside_files_touched_sees_tree_verified_files() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		_planning_tree(Path(td))
+		body = _body("scripts/deploy_site.sh", "public/CNAME", "README.md")
+		assert guard.plan_files_outside_files_touched(_TREE_PLAN, body, planning_root=td) == ["bin/deploy"]
+		assert guard.plan_files_outside_files_touched(_TREE_PLAN, body) == []
 
 
 def _run_all() -> int:
