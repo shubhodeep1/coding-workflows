@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-09T17:26:32Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/plan.yml:n/a; cited_path=AGENTS.md; files_touched=.github/workflows/plan.yml, README.md, agents.d/9126-triage-green-main-and-headers-grant.md, agents.md, changelog.d/9126-triage-green-main-and-headers-grant.md, scripts/files_touched_scope_guard.py, tests/test_files_touched_scope_guard.py, tests/test_plan_superseded_merged_pr_workflow.py.",
+  "phase": "review_autofix",
+  "pr_number": 9126,
+  "record_id": "lesson_20261109172632_b5ec1f4fba",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md",
+    ".github/workflows/plan.yml",
+    "README.md",
+    "agents.d/9126-triage-green-main-and-headers-grant.md",
+    "agents.md",
+    "changelog.d/9126-triage-green-main-and-headers-grant.md",
+    "scripts/files_touched_scope_guard.py",
+    "tests/test_files_touched_scope_guard.py",
+    "tests/test_plan_superseded_merged_pr_workflow.py"
+  ]
+}
