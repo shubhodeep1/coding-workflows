@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/analysis-findings-p1-report-pr.md:12 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog line 12 sentence \"If a required check on it then fails, the PR stays open and nobody gets a Telegram alert, only the run-log warning\" is only true at the default alert threshold, because the `pr_auto_merge` message is sent at `ALERT_LEVEL=\"DEBUG\"` (.github/workflows/workflow-log-analysis.yml:1910, only `pr_open` upgrades to WARNING at line 1914) and `ALERT_MSG_LEVEL` (.github/workflows/workflow-log-analysis.yml:49, default `WARNING`) can be lowered to DEBUG, in which case `_tg_should_send`/`tg_send_msg` (scripts/tg_helpers.sh:83-91 per minimax; scripts/tg_helpers.sh:82-90, 108-120 per openai) delivers it.\n  WHY: Operators running with `ALERT_MSG_LEVEL=DEBUG` read an alert-behaviour claim that does not match the workflow (a documentation-accuracy defect shipped to consumer repos via `@stable` sync, not a runtime defect); all three flagging reviewers rated it SEVERITY: NIT, mapped here to low, and anthropic_claude-sonnet-5_5 checked this finding and did not adopt it, arguing that no alert about the later check failure exists at any threshold because the only DEBUG message is the end-of-run \"Report PR:\" link, sent before any check fails.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/analysis-findings-p1-report-pr.md:line 12, sentence introduced in LAST RUN DIFF (\"If a required check on it then fails, the PR stays open and nobody gets a Telegram alert, only the run-log warning, so look for open `auto/workflow-log-analysis-report-*` pull requests when a report is missing.\") | severity=NIT | confidence=5\n  PROBLEM: The sentence claims \"nobody gets a Telegram alert\" without qualifying the alert threshold, but the pr_auto_merge message is sent at DEBUG level (`.github/workflows/workflow-log-analysis.yml:1910`, only `pr_open` upgrades to WARNING at line 1914), `ALERT_MSG_LEVEL` defaults to WARNING but can be lowered to DEBUG (line 49), and `_tg_should_send` in `scripts/tg_helpers.sh:83-91` sends any message that meets the threshold.\n  WHY: At `ALERT_MSG_LEVEL=DEBUG` (or `alert_msg_level=DEBUG` on manual dispatch) the message reaches Telegram, which contradicts the changelog, so operators who expect silence may miss it; the \"reported at DEBUG\" clause is accurate.\n- changelog.d/analysis-findings-p1-report-pr.md:line 12 (HARDENING_SUGGESTION, same finding as above)\n  PROBLEM: \"nobody gets a Telegram alert\" needs a threshold qualifier.\n  WHY: Suggested minimal fix: append \", at the default `ALERT_MSG_LEVEL=WARNING`\" after \"nobody gets a Telegram alert\"; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/analysis-findings-p1-report-pr.md:Line 12, \u201cnobody gets a Telegram alert\u201d | severity=NIT | confidence=5\n  PROBLEM: This claim is only true at the default alert threshold, because the workflow permits `ALERT_MSG_LEVEL=DEBUG` and `pr_auto_merge` notifications are sent at DEBUG (`.github/workflows/workflow-log-analysis.yml:1910-1914`).\n  WHY: With `ALERT_MSG_LEVEL=DEBUG` and Telegram configured, `tg_send_msg` sends the notification because DEBUG meets the threshold (`scripts/tg_helpers.sh:82-90, 108-120`).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/analysis-findings-p1-report-pr.md:Line 12 (sentence added by last run: \"If a required check on it then fails, the PR stays open and nobody gets a Telegram alert, only the run-log warning\"); cross-reference .github/workflows/workflow-log-analysis.yml:49 and 1910-1914 | severity=NIT | confidence=5\n  PROBLEM: The sentence says flatly that nobody gets a Telegram alert, but `ALERT_MSG_LEVEL` (default `WARNING`) can be set to DEBUG, the `pr_auto_merge` completion message is sent at `ALERT_LEVEL=\"DEBUG\"` (line 1910), and `tg_send_msg` then delivers that message, which already links the report PR.\n  WHY: Not a runtime defect: it is a documentation-accuracy defect in a changelog fragment that ships to consumer repos via the `@stable` sync, so operators running with `ALERT_MSG_LEVEL=DEBUG` get a claim that does not match their workflow.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2b498b9b0d84a41a6a2d712838c4d200e157c43646656e089ad17e45812ac35c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9123,
+    "run_id": "42625141050",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42625141050",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109135528_a20de870cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9123,
+    "run_id": "42625141050"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T13:55:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
