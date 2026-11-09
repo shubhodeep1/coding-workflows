@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-09T06:04:44Z",
+  "issue_number": 9101,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=(CI check-run on head 8b8fd4be, not a diff hunk):n/a; cited_path=copilot-pull-request-reviewer check-run (infrastructure, not a repository file); files_touched=changelog.d/wfopt-2026-10-08-merge-train-release-counters.md, scripts/review_merge_train.sh, tests/test_review_merge_train.py.",
+  "phase": "review_autofix",
+  "pr_number": 9105,
+  "record_id": "lesson_20261109060444_c2004ef4c8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer check-run (infrastructure, not a repository file)",
+    "(CI check-run on head 8b8fd4be, not a diff hunk)",
+    "changelog.d/wfopt-2026-10-08-merge-train-release-counters.md",
+    "scripts/review_merge_train.sh",
+    "tests/test_review_merge_train.py"
+  ]
+}
