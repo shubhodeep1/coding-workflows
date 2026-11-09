@@ -14,3 +14,5 @@ What this means for operators: a project that reports "Integration branch supers
 ### For contributors
 
 `tests/test_orchestrate_integration_ahead_by_gate.py` adds three cases that drive the extracted function against a local bare `origin`: a stale clone after the child PR lands on the integration branch (not superseded), a real supersede where the default branch already has the change (still superseded), and an unreachable `origin` (not confident).
+
+The same file also adds `|| true` to the `blocker_stderr` cleanup pipeline in `_runtime_blocker_dispatch_eligible`. That line only builds the text of a fail-open warning, so under `set -euo pipefail` a failing `tr | sed | cut` can no longer abort the poller there. Behaviour is otherwise unchanged.
