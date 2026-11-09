@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (137)
+## Processed source docs (138)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -142,6 +142,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-10-07.md`
 - `analysis/workflow-optimization-2026-10-07-2.md`
 - `analysis/workflow-optimization-2026-10-07-3.md`
+- `analysis/workflow-optimization-2026-10-07-4.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -2207,3 +2208,40 @@ Sibling work for this doc was tracked under Refs #9058. The squash-merge PR numb
 | AI Memory Health; GH API Call Audit (including the `GH_API_CALL` rollup); Prompt Cache & Memory System; Orchestrator Health; Pipeline Flow Bottlenecks | rejected | Instrumentation only, with no defect established. `GH_PAT_BUDGET` in `scripts/gh_helpers.sh` already reports per-job usage, the state-snapshot artifact and run-substate ledger record per-tick state, and `REVIEWER_PROMPT_COMPONENTS` in `scripts/review_run_reviewers.sh` carries `static_prefix_sha256`. |
 | Executive Summary / Per-Repo Breakdown / Metrics Appendix | informational | No action. |
 | Consolidation Candidates (MERGE-###) / Dead Calls (DEAD-API-###) | informational | The doc reports none. |
+
+### `analysis/workflow-optimization-2026-10-07-4.md`
+Source doc: `analysis/workflow-optimization-2026-10-07-4.md`
+Processed: 2026-11-09
+Source commit: `1e2ba5e33ca5bfc61e83fd18d312eba8dd4ce93b`
+
+Sibling work for this doc was tracked under Refs #9089. The squash-merge PR numbers are not visible on this ref (flattened history), so applied rows cite their changelog fragment instead of a guessed PR number.
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| BUG-003 (fix-up dedupe window), lookup part | applied | `scripts/validate_process.sh` sets `FIXUP_DEDUPE_LIST_LIMIT=1000` for the label-filtered lookup. It warns when the lookup fails, when the response cannot be parsed, and when the result fills the 1000-entry window (an older matching fix-up "may be outside the window"). It keeps the existing marker match and fail-open creation; fragment `changelog.d/wfopt-2026-10-07-4-validate-fixup-dedupe-window.md`. Refs #9089. |
+| BUG-003, serialization/lock part | rejected | Needs a cross-run lock. No duplicate fix-up has been observed, and fail-open creation is documented intent. |
+| BUG-001 (retried `gh issue create` in `check_failure_triage.yml`) | already-implemented | `gh_retry` makes one attempt for `issue create` (`_gh_cmd_is_unsafe_post` in `scripts/gh_helpers.sh`, #6634). |
+| BUG-002 (Telegram tracking GET-modify-PATCH), unchecked writes | already-implemented | `_tg_tracking_write` in `scripts/tg_helpers.sh` checks the HTTP status of every tracking write (#8898). Cleanup still collects the extra tracking comment created after a failed GET, because `_tg_snapshot_tracking_entries` snapshots every trusted marker comment. |
+| BUG-002, race / immutable-entry redesign | rejected | Changes the ordering of concurrent mutations, needs dedicated race fixtures, and one comment per message would multiply issue comments (earlier precedent). |
+| SEC-001 (`gh_retry` logs argv) | already-implemented | `_gh_cmd_log_summary` in `scripts/gh_helpers.sh` logs no flag values (#8095). |
+| SEC-002 (raw invalid-JSON preview) | already-implemented | `gh_api_json_to_file` in `scripts/gh_helpers.sh` logs only bytes, sha256 and parse category (#8095). |
+| SEC-003 (token in the `update_workflows.yml` clone URL) | already-implemented | `.github/workflows/update_workflows.yml` clones and fetches through `upstream_git` with the `UPSTREAM_CRED_HELPER` credential helper, so the remote URL carries no token (#8945). The "remove the temp checkout" part is rejected because later steps read `steps.fetch.outputs.upstream_dir`. |
+| DEBT-001 (label catalog parity) | already-implemented | `test_contract_labels_match_helper_color_and_description_catalogs` in `tests/test_ai_labels.py`. |
+| EXPR-001, EXPR-002 | already-implemented | Expressions go through step `env:`, and `tests/test_workflow_file_size_limit.py` enforces `GITHUB_RUN_EXPRESSION_LIMIT_CHARS = 21_000` (precedent from 2026-10-07-3). |
+| EXPR-003 (`review_autofix.yml` size) | rejected | `wc -c .github/workflows/review_autofix.yml` measures 382,700 bytes on this ref, against the doc's 473,017. Both are under the 480,000-byte guard that CI enforces. |
+| EXPR-004 (validate support-manifest heredoc) | rejected | Headroom only; no limit is breached. |
+| SHELL-001 (`${head:+-e "${head}"}` in `scripts/review_merge_train.sh`) | rejected | False positive. Bash keeps the inner double quotes, so the expansion yields exactly `-e` and the intact head value, with no splitting or globbing. |
+| SHELL-002 (raise ShellCheck severity) | rejected | `.github/workflows/ci.yml` runs `--severity=error`. Raising it is broad and would surface unrelated warnings (precedent). |
+| DEAD-001 (`_mt_own_files`) | rejected | The comment in `scripts/review_merge_train.sh` documents `_mt_own_files` as the printing form of the `_mt_own_files_into` contract. Removing it would break identifier immutability. |
+| API-001, API-002, API-003, BATCH-001, BATCH-002, REUSE-001 | rejected | The doc tags them RISKY_SKIP itself. |
+| BATCH-003, MERGE-001 | rejected | NEEDS_VERIFICATION with small savings (precedent). For MERGE-001, the closing-only case has already collapsed: `classify_orchestrator_issues_from_payload` in `.github/workflows/issue_pr_status.yml` classifies from the `closingIssuesReferences` response, and the second aliased-issue batch runs only for branch/body-derived numbers or a failed classification. |
+| DUP-001, DUP-002, DUP-003, DUP-004 | rejected | Refactor only (minimal-change rule). |
+| Speed 1 / Cost 1 (deduplicate identical reviews) | rejected | The doc rates the quality risk as high, and `REVIEW_AUTOFIX_RUN_SUMMARY_V1` (`scripts/review_autofix_step_iteration_summary.sh`) already records `resume_head_sha`. |
+| Speed 3 (merge-train release counts) | already-implemented | `MERGE_TRAIN_RELEASE_SUMMARY` in `scripts/review_merge_train.sh`. The extra endpoint and page counters are rejected as instrumentation only. |
+| Cost 2 / Cost 4 (usage availability, Semble query metrics) | already-implemented | `usage_available=` / `usage_missing_reason=` in `scripts/review_run_reviewers.sh`; `SEMBLE_QUERY` in `scripts/semble_helpers.sh`. |
+| Reliability 2 (triage stages) | already-implemented | `CHECK_TRIAGE op=post stage=` in `.github/workflows/check_failure_triage.yml`, and `reason=dedup_list_failed` in `scripts/check_failure_triage.sh`. |
+| Reliability 4 (Semble contract-test vs runtime fallbacks) | already-implemented | `scripts/cost_audit.py` counts `semble_contract_test_fallbacks` and `semble_runtime_fallbacks` separately. |
+| Speed 2 / Reliability 3; Speed 4; Cost 3; Cost 5; Reliability 1; Reliability 5; AI Memory Health; GH API Call Audit; Prompt Cache & Memory System; Orchestrator Health; Pipeline Flow Bottlenecks | rejected | Instrumentation or diagnostic only, with no defect established (precedent). |
+| Executive Summary / Per-Repo Breakdown / Metrics Appendix / Section 1 Python 3.11 parse note | informational | No action. The parse note concerns a local Python 3.11 parser; the workflow selects Python 3.12. |
+| Section 6 summary tables / Safety Tag Legend / Summary Counts / Implement-Stage Handoff | informational | Summaries of the rows above. |
+| Dead Calls (DEAD-API-###) | informational | The doc reports none. |
