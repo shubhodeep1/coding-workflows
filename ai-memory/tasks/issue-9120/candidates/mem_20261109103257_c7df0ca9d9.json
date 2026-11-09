@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9120,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9120\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9125\",\"pr_number\":9125,\"branch\":\"ai/issue-9120\",\"run_id\":\"42592658177\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42592658177\",\"changed_files\":[\".github/workflows/check_failure_triage.yml\",\".github/workflows/plan.yml\",\"README.md\",\"agents.d/9120-release-download-rerun.md\",\"changelog.d/9120-release-download-rerun.md\",\"scripts/check_failure_triage.sh\",\"tests/test_check_failure_triage_release_download_rerun.py\",\"tests/test_check_failure_triage_workflow_security.py\",\"tests/test_ci_wires_every_test_file.py\",\"tests/test_plan_clarify_blocked_output.py\"]}",
+  "fingerprint": "a98b9202f6c53f330cc63302cce9977e3317c79c0ad655ea939c9ab2b43a61d5",
+  "lineage": {
+    "issue_number": 9120,
+    "parent_ids": [],
+    "pr_number": 9125,
+    "run_id": "42592658177",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42592658177",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9125"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261109103257_c7df0ca9d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9120,
+    "level": "run",
+    "pr_number": 9125,
+    "run_id": "42592658177"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9120: https://github.com/shubhodeep1/coding-workflows/pull/9125",
+  "timestamps": {
+    "created_at": "2026-11-09T10:32:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
