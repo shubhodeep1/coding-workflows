@@ -20,6 +20,146 @@
 
 set -euo pipefail
 
+# --- ORCH_POLL_CYCLE_SUMMARY helpers (begin) ---
+# Per-cycle timing summary (analysis/workflow-optimization-2026-10-08.md,
+# Speed #2): the EXIT trap prints exactly one ORCH_POLL_CYCLE_SUMMARY line per
+# run, and the tracking loop prints one ORCH_POLL_PROJECT_TIMING line per
+# project processed. sleep_ms sums only the sleep sites in this file that call
+# "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" (gh_retry backoff in gh_helpers.sh is
+# not counted). Fail-open: no gh/API calls, no new or longer sleeps, the trap
+# never calls exit (bash keeps the original exit status) and every step runs
+# in an `|| true` context so errexit cannot abort it. Installed here, before
+# the first `exit`, so early sweep-only and failure exits are covered too.
+# Only a directly executed run (`bash scripts/orchestrate_poll_process.sh`)
+# reports; test harnesses that `source` the poller as a library get no trap,
+# no ledger file and no extra stdout lines.
+_orch_poll_cycle_now_ms()
+{
+	local _orch_poll_cycle_now_value=""
+	_orch_poll_cycle_now_value="$(date +%s%3N 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_now_value}" =~ ^[0-9]+$ ]]; then
+		printf '%s' "${_orch_poll_cycle_now_value}"
+		return 0
+	fi
+	_orch_poll_cycle_now_value="$(date +%s 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_now_value}" =~ ^[0-9]+$ ]]; then
+		printf '%s' "$(( _orch_poll_cycle_now_value * 1000 ))"
+	fi
+	return 0
+}
+
+# Same arguments and exit status as `sleep`: records the requested duration
+# in the run's sleep ledger, then runs the original sleep unchanged. The
+# ledger is a file so sleeps inside $(...) subshells are counted too; nothing
+# is written once the main shell has removed it.
+_orch_poll_cycle_sleep()
+{
+	local _orch_poll_cycle_sleep_ledger="${_ORCH_POLL_CYCLE_SLEEP_LEDGER:-}"
+	if [ -n "${_orch_poll_cycle_sleep_ledger}" ] && [ -f "${_orch_poll_cycle_sleep_ledger}" ]; then
+		if [[ "${1:-}" =~ ^[0-9]{1,9}$ ]]; then
+			printf '%s\n' "$(( 10#${1} * 1000 ))" 2>/dev/null >> "${_orch_poll_cycle_sleep_ledger}" || true
+		else
+			printf 'unknown\n' 2>/dev/null >> "${_orch_poll_cycle_sleep_ledger}" || true
+		fi
+	fi
+	sleep "$@"
+}
+
+_orch_poll_cycle_project_flush()
+{
+	local _orch_poll_cycle_flush_num="" _orch_poll_cycle_flush_now="" _orch_poll_cycle_flush_elapsed="unknown"
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ] || [ -z "${_ORCH_POLL_CYCLE_PROJECT_NUM:-}" ]; then
+		return 0
+	fi
+	_orch_poll_cycle_flush_num="${_ORCH_POLL_CYCLE_PROJECT_NUM}"
+	[[ "${_orch_poll_cycle_flush_num}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_flush_num="unknown"
+	_orch_poll_cycle_flush_now="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_flush_now}" =~ ^[0-9]+$ ]] && [[ "${_ORCH_POLL_CYCLE_PROJECT_START_MS:-}" =~ ^[0-9]+$ ]]; then
+		_orch_poll_cycle_flush_elapsed="$(( _orch_poll_cycle_flush_now - _ORCH_POLL_CYCLE_PROJECT_START_MS ))"
+	fi
+	# Clear first so a failed write can never print the same project twice.
+	_ORCH_POLL_CYCLE_PROJECT_NUM=""
+	_ORCH_POLL_CYCLE_PROJECT_START_MS=""
+	echo "ORCH_POLL_PROJECT_TIMING tracking_issue=${_orch_poll_cycle_flush_num} elapsed_ms=${_orch_poll_cycle_flush_elapsed}" 2>/dev/null || true
+	return 0
+}
+
+# Called at the top of each tracking-loop pass: prints the previous project's
+# timing line (so the loop's many `continue` paths need no edits), counts the
+# new project and starts its clock.
+_orch_poll_cycle_project_begin()
+{
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ]; then
+		return 0
+	fi
+	_orch_poll_cycle_project_flush || true
+	if [[ "${_ORCH_POLL_CYCLE_PROJECTS_PROCESSED:-}" =~ ^[0-9]+$ ]]; then
+		_ORCH_POLL_CYCLE_PROJECTS_PROCESSED="$(( _ORCH_POLL_CYCLE_PROJECTS_PROCESSED + 1 ))"
+	fi
+	_ORCH_POLL_CYCLE_PROJECT_NUM="${1:-unknown}"
+	_ORCH_POLL_CYCLE_PROJECT_START_MS="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+	return 0
+}
+
+_orch_poll_cycle_on_exit()
+{
+	local _orch_poll_cycle_exit_code="${1:-}" _orch_poll_cycle_exit_now="" _orch_poll_cycle_exit_elapsed="unknown"
+	local _orch_poll_cycle_exit_sleep="unknown" _orch_poll_cycle_exit_ledger="${_ORCH_POLL_CYCLE_SLEEP_LEDGER:-}"
+	local _orch_poll_cycle_exit_seen="${_ORCH_POLL_CYCLE_PROJECTS_SEEN:-unknown}" _orch_poll_cycle_exit_processed="${_ORCH_POLL_CYCLE_PROJECTS_PROCESSED:-unknown}"
+	local _orch_poll_cycle_exit_reason="completed"
+	# Subshells never emit; the main shell emits exactly once.
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ] || [ "${BASHPID:-$$}" != "$$" ] || [ "${_ORCH_POLL_CYCLE_EMITTED:-false}" = "true" ]; then
+		return 0
+	fi
+	_ORCH_POLL_CYCLE_EMITTED="true"
+	[[ "${_orch_poll_cycle_exit_code}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_code="unknown"
+	_orch_poll_cycle_project_flush || true
+	_orch_poll_cycle_exit_now="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_exit_now}" =~ ^[0-9]+$ ]] && [[ "${_ORCH_POLL_CYCLE_START_MS:-}" =~ ^[0-9]+$ ]]; then
+		_orch_poll_cycle_exit_elapsed="$(( _orch_poll_cycle_exit_now - _ORCH_POLL_CYCLE_START_MS ))"
+	fi
+	if [ -n "${_orch_poll_cycle_exit_ledger}" ] && [ -f "${_orch_poll_cycle_exit_ledger}" ] && [ -r "${_orch_poll_cycle_exit_ledger}" ]; then
+		_orch_poll_cycle_exit_sleep="$(awk 'BEGIN { total = 0; bad = 0 } /^[0-9]+$/ { total += $0; next } { bad = 1 } END { if (bad) print "unknown"; else printf "%.0f\n", total }' "${_orch_poll_cycle_exit_ledger}" 2>/dev/null || true)"
+		[[ "${_orch_poll_cycle_exit_sleep}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_sleep="unknown"
+	fi
+	if [ -n "${_orch_poll_cycle_exit_ledger}" ]; then
+		rm -f "${_orch_poll_cycle_exit_ledger}" 2>/dev/null || true
+	fi
+	[[ "${_orch_poll_cycle_exit_seen}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_seen="unknown"
+	[[ "${_orch_poll_cycle_exit_processed}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_processed="unknown"
+	if [ "${_orch_poll_cycle_exit_code}" != "0" ]; then
+		_orch_poll_cycle_exit_reason="error"
+	elif [ "${_orch_poll_cycle_exit_seen}" = "0" ]; then
+		_orch_poll_cycle_exit_reason="no_projects"
+	fi
+	echo "ORCH_POLL_CYCLE_SUMMARY elapsed_ms=${_orch_poll_cycle_exit_elapsed} projects_seen=${_orch_poll_cycle_exit_seen} projects_processed=${_orch_poll_cycle_exit_processed} sleep_ms=${_orch_poll_cycle_exit_sleep} exit_code=${_orch_poll_cycle_exit_code} terminal_reason=${_orch_poll_cycle_exit_reason}" 2>/dev/null || true
+	return 0
+}
+
+_orch_poll_cycle_install_exit_trap()
+{
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" = "true" ]; then
+		trap '_orch_poll_cycle_on_exit "$?" || true' EXIT
+	fi
+}
+
+_ORCH_POLL_CYCLE_START_MS="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+_ORCH_POLL_CYCLE_PROJECTS_SEEN="unknown"
+_ORCH_POLL_CYCLE_PROJECTS_PROCESSED="unknown"
+_ORCH_POLL_CYCLE_PROJECT_NUM=""
+_ORCH_POLL_CYCLE_PROJECT_START_MS=""
+_ORCH_POLL_CYCLE_EMITTED="false"
+_ORCH_POLL_CYCLE_ENABLED="false"
+_ORCH_POLL_CYCLE_SLEEP_LEDGER=""
+_ORCH_POLL_CYCLE_SLEEP_CMD="sleep"
+if [ "${BASH_SOURCE[0]:-}" = "${0:-}" ]; then
+	_ORCH_POLL_CYCLE_ENABLED="true"
+	_ORCH_POLL_CYCLE_SLEEP_LEDGER="$(mktemp "${TMPDIR:-/tmp}/orch_poll_cycle_sleep.XXXXXX" 2>/dev/null || true)"
+	_ORCH_POLL_CYCLE_SLEEP_CMD="_orch_poll_cycle_sleep"
+fi
+_orch_poll_cycle_install_exit_trap || true
+# --- ORCH_POLL_CYCLE_SUMMARY helpers (end) ---
+
 # ---------------------------------------------------------------
 # Helper: Telegram (tracked via tg_helpers.sh)
 # ---------------------------------------------------------------
@@ -2146,7 +2286,7 @@ _record_merge_conflict_telemetry()
 		fi
 		if git rev-parse --verify --quiet "refs/remotes/origin/${branch}" >/dev/null 2>&1; then
 			if ! git worktree add --quiet -B "${branch}" "${wt}" "refs/remotes/origin/${branch}" 2>/dev/null; then
-				sleep 1
+				"${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
 				continue
 			fi
 			worktree_registry_register "$(basename -- "${wt}")" "${wt}" "${branch}" "project-${project}" "orchestrate-poll"
@@ -2180,7 +2320,7 @@ _record_merge_conflict_telemetry()
 		fi
 		if [ "${push_rc}" -eq 2 ] && [ "${attempt}" -lt 3 ]; then
 			# Push race; sleep briefly and retry with fresh fetch.
-			sleep 1
+			"${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
 			continue
 		fi
 		return 0
@@ -8796,7 +8936,7 @@ security_pass_exhaustion_judge() {
     fi
     echo "::warning::Security-pass exhaustion judge attempt ${attempt} for tracking issue #${TRACKING_NUM} returned no usable verdict (every remaining finding needs exactly one valid decision, and fail cannot be mixed with non-fail actions)."
     if [ -z "${MOCK_SECURITY_PASS_JUDGE_JSON:-}" ]; then
-      sleep $(( 8 * attempt ))
+      "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" $(( 8 * attempt ))
     fi
   done
   if [ "${judge_success}" != "true" ]; then
@@ -11786,14 +11926,14 @@ _refresh_integration_resolver_tooling() {
         "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
         2>/dev/null; then
       echo "::warning::${log_prefix} git fetch failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
-      [ "${attempt}" -lt 3 ] && sleep 1 && continue
+      [ "${attempt}" -lt 3 ] && "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1 && continue
       return 0
     fi
 
 	if ! git worktree add --quiet --detach "${wt}" \
 	     "refs/remotes/origin/${integration_branch}" 2>/dev/null; then
 	  echo "::warning::${log_prefix} git worktree add failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
-	  [ "${attempt}" -lt 3 ] && sleep 1 && continue
+	  [ "${attempt}" -lt 3 ] && "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1 && continue
 	  return 0
 	fi
 	worktree_registry_register "$(basename -- "${wt}")" "${wt}" "refs/remotes/origin/${integration_branch}" "tracking-${TRACKING_NUM:-0}" "orchestrate-poll"
@@ -12035,7 +12175,7 @@ _refresh_integration_resolver_tooling() {
         # Push race (non-fast-forward).  Refetch and retry; matches
         # the pattern in _record_merge_conflict_telemetry.
         if [ "${attempt}" -lt 3 ]; then
-          sleep 1
+          "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
           continue
         fi
         echo "::warning::${log_prefix} push race exhausted; proceeding to dispatch with current tip."
@@ -21535,7 +21675,7 @@ invoke_stall_judge() {
         judge_success="true"
         break
       fi
-      sleep $(( 8 * attempt ))
+      "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" $(( 8 * attempt ))
     done
   fi
 
@@ -24858,7 +24998,7 @@ PY
               break
             fi
             if [ "${_std_attempt}" -lt 4 ]; then
-              sleep "${_std_backoff_sleeps[${_std_attempt}]}"
+              "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" "${_std_backoff_sleeps[${_std_attempt}]}"
             fi
           done
         fi
@@ -27029,6 +27169,7 @@ else
   TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 fi
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+if [[ "${COUNT}" =~ ^[0-9]+$ ]]; then _ORCH_POLL_CYCLE_PROJECTS_SEEN="${COUNT}"; _ORCH_POLL_CYCLE_PROJECTS_PROCESSED=0; fi || true
 FEATURE_SWEEP_DONE="false"
 # Smoke-gate fixture projects in this tick; tg_notify stays silent for them
 # whatever TRACKING_NUM currently names (Q42: A).
@@ -27048,6 +27189,7 @@ write_state_snapshot_actions_runs_export || true
 
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
+  _orch_poll_cycle_project_begin "${TRACKING_NUM}" || true
   TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
   unset FORCE_MERGE_LABEL_EVENT_JSON_CACHE
   unset _INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE
@@ -31034,7 +31176,7 @@ ${FOLLOWUP_BLOCK_REASON}"
             break
           fi
           if [ "${attempt}" -lt 2 ]; then
-            sleep 10
+            "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 10
           fi
         done
       fi
@@ -33254,7 +33396,7 @@ ${PR_DIFF}
     fi
     judge_silent_rounds=$((judge_silent_rounds + 1))
     if [ "${attempt}" -lt "${max_attempts}" ]; then
-      sleep $(( 10 * attempt + RANDOM % 10 ))
+      "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" $(( 10 * attempt + RANDOM % 10 ))
     fi
   done
 
@@ -33831,7 +33973,7 @@ The next poll tick will re-run the gate against the cleaned state. If an underly
 
             _gate_fp_file=""
             _gate_log_file=""
-            trap 'rm -f "${_gate_fp_file:-}" "${_gate_log_file:-}" 2>/dev/null || true' EXIT
+            trap '_orch_poll_cycle_exit_rc=$?; rm -f "${_gate_fp_file:-}" "${_gate_log_file:-}" 2>/dev/null || true; _orch_poll_cycle_on_exit "${_orch_poll_cycle_exit_rc}" || true' EXIT
             _gate_fp_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_fp.XXXXXX")"
             _gate_log_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_log.XXXXXX")"
             jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${_gate_fp_file}"
@@ -33857,6 +33999,7 @@ The next poll tick will re-run the gate against the cleaned state. If an underly
             fi
             rm -f "${_gate_fp_file}" "${_gate_log_file}" 2>/dev/null || true
             trap - EXIT
+            _orch_poll_cycle_install_exit_trap || true
           else
             echo "::warning::Wave-dispatch gate: could not resolve a fresh verification ref for integration branch '${_gate_integration_branch}'; gate fails open and dispatch proceeds."
           fi
@@ -34007,6 +34150,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       ;;
   esac
 done
+_orch_poll_cycle_project_flush || true
 
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   run_standalone_stall_recovery
