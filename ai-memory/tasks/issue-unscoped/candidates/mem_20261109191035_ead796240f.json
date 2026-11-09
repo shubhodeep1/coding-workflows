@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- analysis/recommendation-processing-report.md:2262 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The \"GH API audit #1 (merge-train counters)\" row cites \"emit at line 1527\" for the MERGE_TRAIN_RELEASE_SUMMARY emit, but the `_mt_log` call is at scripts/review_merge_train.sh:1529 (line 1527 is the release_elapsed_ms computation).\n  WHY: No runtime impact, but the stale citation contradicts the report's claim that line numbers were re-checked. All reviewers rated it NIT.\n- scripts/propagate_consumer_secrets.sh:126 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The guard `[ -n \"${PROPAGATE_TARGETS// /}\" ]` strips only spaces, so a tab- or newline-only PROPAGATE_TARGETS passes the check and TARGETS is built from an empty list instead of falling back to REGISTRY.\n  WHY: Whitespace-only input other than spaces skips the intended REGISTRY fallback (rated NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- analysis/recommendation-processing-report.md:row \"GH API audit #1 (merge-train counters)\", text \"counter comment at line 224, emit at line 1527\" | severity=NIT | confidence=4\n  PROBLEM: The cited emit line is stale. The MERGE_TRAIN_RELEASE_SUMMARY `_mt_log` call is at scripts/review_merge_train.sh:1529. Line 1527 is the release_elapsed_ms computation. The counter comment at line 224 is correct.\n  WHY: Nothing breaks, but a reader following the citation lands on the wrong line.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- analysis/recommendation-processing-report.md:2262 | severity=NIT | confidence=4\n  PROBLEM: Incorrect citation of the log emission line. The report claims \"emit at line 1527\" but the actual `_mt_log` emission is at line 1529.\n  WHY: No runtime failure.\n- scripts/propagate_consumer_secrets.sh:126 | severity=NIT | confidence=3\n  PROBLEM: The guard `[ -n \"${PROPAGATE_TARGETS// /}\" ]` is an incorrect empty check.\n  WHY: It only removes spaces. A tab- or newline-only PROPAGATE_TARGETS evaluates true, so TARGETS is computed from an empty list instead of falling back to REGISTRY.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- analysis/recommendation-processing-report.md:2262 | severity=NIT | confidence=5\n  PROBLEM: The report claims the MERGE_TRAIN_RELEASE_SUMMARY emit is at line 1527 of scripts/review_merge_train.sh, but the actual emit is at line 1529. Line 1527 is the release_elapsed_ms computation.\n  WHY: No runtime failure. The report says its line numbers were re-checked, and the row was touched by the last run, so a reader following the citation lands on the wrong line.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- analysis/recommendation-processing-report.md:2262; scripts/review_merge_train.sh:1527-1529 | severity=NIT | confidence=4\n  PROBLEM: The report says the MERGE_TRAIN_RELEASE_SUMMARY emit is at line 1527, but line 1527 computes elapsed time and the emit is at line 1529.\n  WHY: Runtime behavior is unaffected, but the citation misleads readers and the claim that line numbers were re-checked is inaccurate.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- analysis/recommendation-processing-report.md:2262 | severity=NIT | confidence=4\n  PROBLEM: The row's evidence cite \"emit at line 1527\" is off by two. The emit is at scripts/review_merge_train.sh:1529, and line 1527 is the release_elapsed_ms computation. The last run rewrote this row but left the stale citation.\n  WHY: No runtime failure, but the cite weakens the report's evidence trail.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4cc9a6823aaba10573f95b1899f86699443923db04318c2bdee698ed928687e7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9107,
+    "run_id": "42677699601",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42677699601",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109191035_ead796240f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9107,
+    "run_id": "42677699601"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T19:10:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
