@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:1414-1468 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: When the gate resolves the issue and SKIP_PLAN=true is set, the `ai:planning` label added earlier in the job is not removed, so the closed issue keeps both `ai:closed` and `ai:planning`, unlike the sibling superseded close path at 1352-1356.\n  WHY: This leaves inconsistent persistent label state. All three reviewers rated it NIT, and runtime impact is contained because `ai:closed` outranks `ai:planning` and polls query OPEN issues only.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:1414-1468 | severity=NIT | confidence=4\n  PROBLEM: When the gate resolves the check-triage issue and sets `SKIP_PLAN=true`, the existing `ai:planning` label is not removed.\n  WHY: The issue is closed but still carries an active phase label, which deviates from the existing \"Close superseded CI-repair issue\" path that removes `ai:planning`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:1453-1465 (cf. 1352-1356; scripts/check_triage_resolution.py:1031-1039, 1045-1052) | severity=NIT | confidence=4\n  PROBLEM: The new `merged_check_not_passed` gate-resolved path sets `SKIP_PLAN=true` and relies on the gate to close the issue, but never removes `ai:planning`. The gate only adds `ai:closed` and sets state=closed.\n  WHY: A closed issue carries both `ai:closed` and `ai:planning`. This diverges from the superseded path's label hygiene, though there is no downstream planning loop.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/plan.yml:1453-1456 (cf. 1352-1358; scripts/check_triage_resolution.py:1044-1053) | severity=NIT | confidence=3\n  PROBLEM: When the gate resolves the issue, the branch sets SKIP_PLAN and lets the gate close it, but nothing removes the `ai:planning` label added at plan.yml:1029-1037. The superseded close path removes `ai:planning`, `ai:clarification` and `ai:awaiting-approval`.\n  WHY: The closed issue carries both an active phase label and a terminal label. The impact is contained (`determine_phase` ranks `ai:closed` above `ai:planning`, and polls query OPEN issues only), so this is a label-contract inconsistency and not a dispatch failure.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6e46f8340ec39e9f644edc6cf97550435c442cc64f6d5e1d2bc015ab60ec5135",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9126,
+    "run_id": "42665843914",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42665843914",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109175633_f375ed21d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9126,
+    "run_id": "42665843914"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T17:56:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
