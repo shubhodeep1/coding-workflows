@@ -25581,16 +25581,20 @@ def test_wave_dispatch_gate_invokes_verifier_against_integration_ref():
 	assert "verifier exited ${_gate_exit} (unexpected)" in script, (
 		"wave-dispatch gate warning must surface unexpected verifier exit codes while preserving fail-open dispatch"
 	)
-	assert "trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT" in script, (
-		"wave-dispatch gate must protect temp-file cleanup with an EXIT trap"
+	assert "trap '_orch_poll_cycle_exit_rc=$?; rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true; _orch_poll_cycle_on_exit \"${_orch_poll_cycle_exit_rc}\" || true' EXIT" in script, (
+		"wave-dispatch gate must protect temp-file cleanup with an EXIT trap chained to the "
+		"ORCH_POLL_CYCLE_SUMMARY exit handler"
 	)
 	assert script.index(
-		"trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT"
+		"trap '_orch_poll_cycle_exit_rc=$?; rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true; _orch_poll_cycle_on_exit \"${_orch_poll_cycle_exit_rc}\" || true' EXIT"
 	) < script.index('_gate_fp_file="$(mktemp'), (
 		"wave-dispatch gate must register cleanup before allocating temp files"
 	)
 	assert 'trap - EXIT' in script, (
 		"wave-dispatch gate must clear its temporary EXIT trap after explicit cleanup"
+	)
+	assert "            trap - EXIT\n            _orch_poll_cycle_install_exit_trap || true\n" in script, (
+		"wave-dispatch gate must reinstall the ORCH_POLL_CYCLE_SUMMARY EXIT trap right after clearing its own"
 	)
 	# Failure-path side effects: stall cycle bump, tracking comment,
 	# telegram alert.
