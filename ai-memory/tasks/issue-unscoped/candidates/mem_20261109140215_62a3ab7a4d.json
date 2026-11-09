@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:1429 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The variable `triage_gate_rc` is initialized to the string `\"not_run\"` but is compared with string equality against `\"0\"` and `\"3\"`, which is brittle for what is conceptually a numeric exit code.\n  WHY: The reviewer says it is not a current failure, but a future numeric comparison without string conversion would fail. The source rated it NIT, which is mapped to low.\n- agents.md:4444 | severity=high | confidence=3\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large` while building instructions from AGENTS.md and CLAUDE.md, and the expanded `PLAN_SUPERSEDED_MERGED_PR` registry entry adds to those instructions.\n  WHY: The reviewer exits before reviewing, which leaves the check failed on this head. Severity differs between reviewers: openai_gpt-6-luna said MAJOR, which is mapped to high, and z-ai_glm-5_3-flash said NIT. z-ai_glm-5_3-flash argued this is a repo-level instruction-size problem and that the PR only adds roughly one longer registry line. The highest severity is used.\n- (check-run signal, not a diff file) pre-push test gate report in PR comment entry[7] | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate classifies 10 failing test files as caused by this change, but a static read shows no code path connecting the diff to them.\n  WHY: The classification looks like the gate attributing any failing selected test file to the PR. The editor should confirm against the merge-base. The source rated it NIT, which is mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:1429 | severity=NIT | confidence=4\n  PROBLEM: The variable `triage_gate_rc` is initialized to the string `\"not_run\"` but is compared with string equality against `\"0\"` and `\"3\"`, which is brittle for what is conceptually a numeric exit code.\n  WHY: This is not a failure today. A future change that introduces numeric comparisons without string conversion would fail.\n- Task completeness: the reviewer reported no task gaps. It concluded the implementation of `triage_gate_rc` 0 and 3 handling appears complete against the stated requirement.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:4444 (expanded `PLAN_SUPERSEDED_MERGED_PR` registry entry) | severity=MAJOR | confidence=3\n  PROBLEM: The `copilot-pull-request-reviewer` check failed on this PR head with `custom_instructions_too_large` while building instructions from `AGENTS.md` and `CLAUDE.md`, and this PR expands the registry entry included in those instructions.\n  WHY: The reviewer exits before performing its review, leaving the check failed on this head.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (check-run signal, not a diff file) copilot-pull-request-reviewer, head 0735649f, run 42623553233/job/129181470342; related hunk: agents.md:4444 | severity=NIT | confidence=3\n  PROBLEM: The Copilot reviewer job aborts with `Prompt too big after adding system message` (HTTP 422, errorCode `custom_instructions_too_large`) while building custom instructions from AGENTS.md and CLAUDE.md. The PR lengthens the registry line in agents.md and adds an agents.d fragment, but the failure occurs before any diff is reviewed, and agents.d is not loaded as custom instructions.\n  WHY: This is a repo-level instruction-size problem, not a defect in any hunk of this PR.\n- (pre-push gate signal, not a diff file) pre-push test gate report in PR comment entry[7]; gate summary lists pr_caused=10 across tests/test_ai_labels.py, tests/test_ai_labels_retired.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_no_session_automation.py, tests/test_operator_step_issue.py, tests/test_orchestrate_lib.py, tests/test_persist_orchestrator.py, tests/test_pr_merge_status_guard.py, tests/test_workflow_checkout_integration_ref_audit.py | severity=NIT | confidence=2\n  PROBLEM: The gate classifies these 10 failures as caused by this change, but a static read shows no runtime code path connecting the diff (plan.yml `merged_check_not_passed` branch, `_PLAN_GRANT_BARE_FILE_RE` in scripts/files_touched_scope_guard.py:827-829, and test additions in two test files) to any of the failing test files. The prior editor run found 2 of them fail identically on the merge-base in this sandbox.\n  WHY: This cannot be shown from the code. The classification looks like the gate attributing any failing selected test file to the PR, so the editor should confirm against the merge-base.\n- Hardening suggestion (HARDENING_RISK_SCORE: 1): .github/workflows/plan.yml:1437-1443 (stderr warning block inside the `merged_check_not_passed` gate call). Captured gate stderr is printed only for exit codes other than 0 and 3, so on exit 3 the reason the close failed is lost from the log. When `mktemp` fails, the fallback sends stderr to /dev/null. Suggested fix: drop the `!= \"3\"` exclusion and use `mktemp \"${RUNNER_TEMP:-/tmp}/gate-err.XXXXXXXX\"` before falling back to /dev/null (about 3 lines).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "53cb214904d64b3b20de74313058066d2d0cbdef6c32bf91c483f3e23658fa57",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9126,
+    "run_id": "42623532788",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42623532788",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109140215_62a3ab7a4d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9126,
+    "run_id": "42623532788"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T14:02:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
