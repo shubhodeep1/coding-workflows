@@ -3783,7 +3783,9 @@ for line in lines[start + 1:]:
     block.append(line.rstrip())
 patterns = (
     (r"^- Tracking issue: #(\d+)$", "- Tracking issue: #{}"),
-    (r"^- Integration branch: `([A-Za-z0-9._/-]+)`$", "- Integration branch: `{}`"),
+    # Wave issues carry the branch bare ("- Integration branch: orchestrator/project-N");
+    # security-pass fix issues carry it in backticks. Accept both, emit backticks.
+    (r"^- Integration branch: (`?)([A-Za-z0-9._/-]+)\1$", "- Integration branch: `{}`"),
     (r"^- Local ID: `([A-Za-z0-9_.:-]+)`$", "- Local ID: `{}`"),
     (r"^- Priority: (\d+)$", "- Priority: {}"),
     (r"^- Managed by: (AI Orchestrator)$", "- Managed by: {}"),
@@ -3791,7 +3793,7 @@ patterns = (
 for pattern, template in patterns:
     match = next((re.fullmatch(pattern, line) for line in block if re.fullmatch(pattern, line)), None)
     if match:
-        print(template.format(match.group(1)))
+        print(template.format(match.group(match.lastindex)))
 ' 2>/dev/null || echo "")"
       fi
       RB_REISSUE_ORCH_METADATA_LINES=""

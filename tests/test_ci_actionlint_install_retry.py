@@ -9,7 +9,11 @@ bounded number of times. These tests pin that the step:
   2. bounds each attempt (`--max-time`, `--connect-timeout`);
   3. still fails on HTTP errors (`-sSLf`);
   4. still verifies the sha256 checksum after the download;
-  5. keeps the version and checksum pinned.
+  5. keeps the version and checksum pinned;
+  6. waits a fixed `--retry-delay` (10-60s) inside a bounded
+     `--retry-max-time` window that is long enough for every retry when
+     attempts fail fast. CI run 42465389350 hit HTTP 504 again and used up
+     the old 1s/2s/4s exponential backoff in about 7 seconds.
 
 Run directly: `python3 tests/test_ci_actionlint_install_retry.py`.
 """
@@ -85,6 +89,25 @@ class ActionlintInstallRetryContract(unittest.TestCase):
 		self.assertRegex(value, r"^\d+$")
 		self.assertGreaterEqual(int(value), 1)
 		self.assertLessEqual(int(value), 5)
+
+	def test_curl_uses_fixed_retry_delay(self) -> None:
+		value = self._flag_value("--retry-delay")
+		self.assertRegex(value, r"^\d+$")
+		# `--retry-delay 0` restores the short exponential backoff that
+		# gave up after about 7 seconds in CI run 42465389350.
+		self.assertGreaterEqual(int(value), 10)
+		self.assertLessEqual(int(value), 60)
+
+	def test_curl_has_bounded_retry_window(self) -> None:
+		value = self._flag_value("--retry-max-time")
+		self.assertRegex(value, r"^\d+$")
+		self.assertGreater(int(value), 0)
+		self.assertLessEqual(int(value), 600)
+		# The window must not cut off fast-failing retries before all of
+		# them have waited their delay.
+		retries = int(self._flag_value("--retry"))
+		delay = int(self._flag_value("--retry-delay"))
+		self.assertGreaterEqual(int(value), retries * delay)
 
 	def test_curl_has_bounded_max_time(self) -> None:
 		value = self._flag_value("--max-time")
