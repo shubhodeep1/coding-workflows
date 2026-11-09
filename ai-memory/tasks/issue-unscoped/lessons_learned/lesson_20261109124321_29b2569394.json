@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-09T12:43:21Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 007 as out-of-scope; anchor=(external check copilot-pull-request-reviewer, run 42613939601; no repository file):1; cited_path=external check run copilot-pull-request-reviewer (no file); files_touched=README.md, changelog.d/apply-analysis-newest-first.md, docs/plans/analysis-findings-collection-hardening-plan.md, scripts/apply_analysis_on_main.sh, tests/test_apply_analysis_on_main.py.",
+  "phase": "review_autofix",
+  "pr_number": 9115,
+  "record_id": "lesson_20261109124321_29b2569394",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "external check run copilot-pull-request-reviewer (no file)",
+    "(external check copilot-pull-request-reviewer, run 42613939601; no repository file)",
+    "README.md",
+    "changelog.d/apply-analysis-newest-first.md",
+    "docs/plans/analysis-findings-collection-hardening-plan.md",
+    "scripts/apply_analysis_on_main.sh",
+    "tests/test_apply_analysis_on_main.py"
+  ]
+}
