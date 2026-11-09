@@ -5,14 +5,14 @@
 - How it runs: inside the existing pipelines (clarify / plan / implement / review_autofix / orchestrate / orchestrate_poll cron / issue_pr_status on PR merge), each phase behind a default-off repo variable
 - Status: IN_PROGRESS
 - Last updated: 2026-11-09
-- Last note: Steps 1-3 and 13 done; next is Step 4 (set PERSIST_REPAIR_LOOP_ENABLED=true)
+- Last note: Steps 1-4 and 13 done; next is Step 5 (set PERSIST_EVIDENCE_PACK_ENABLED=true)
 - Human-steps issue: https://github.com/shubhodeep1/coding-workflows/issues/6211 — key project-8427 (authoritative comment now 6729299210, posted 2026-11-09; all 11 lines already ticked by the promote cycle)
 
 ## Runbook
 1. [x] Read current repo variables (PERSIST_*, PREPUSH_TEST_GATE_MODE, ENABLE_CLEAN_WAVE_JUDGE_SKIP) — done 2026-11-09: operator `gh variable list` shows none set
 2. [x] Set PERSIST_JOURNAL_ENABLED=true (implement.yml:21, default 'false') — covers project-8427 «P1 attempt journal off (PERSIST_JOURNAL_ENABLED)» — done 2026-11-09: operator `gh variable get` returns `true`
 3. [x] Set PERSIST_ACCEPTANCE_ENABLED=true (plan.yml:22, default 'false') — covers project-8427 «P2 plan acceptance / done-checks off (PERSIST_ACCEPTANCE_ENABLED)» — done 2026-11-09: operator `gh variable get` returns `true`
-4. [ ] Set PERSIST_REPAIR_LOOP_ENABLED=true (implement.yml:25, default 'false') — covers project-8427 «P3 multi-turn repair loop off (PERSIST_REPAIR_LOOP_ENABLED)»
+4. [x] Set PERSIST_REPAIR_LOOP_ENABLED=true (implement.yml:25, default 'false') — covers project-8427 «P3 multi-turn repair loop off (PERSIST_REPAIR_LOOP_ENABLED)» — done 2026-11-09: operator `gh variable get` returns `true`
 5. [ ] Set PERSIST_EVIDENCE_PACK_ENABLED=true (clarify.yml:23, default 'false') — covers project-8427 «P4 evidence pack off (PERSIST_EVIDENCE_PACK_ENABLED)»
 6. [ ] Set PERSIST_POSTMERGE_VERIFY_ENABLED=true (issue_pr_status.yml:53, default 'false') — covers project-8427 «P5 post-merge verification off (PERSIST_POSTMERGE_VERIFY_ENABLED)»
 7. [ ] Set PERSIST_BUDGET_ENABLED=true (orchestrate_poll.yml:47, default 'false') — covers project-8427 «P6 budget and progress governor off (PERSIST_BUDGET_ENABLED)»
