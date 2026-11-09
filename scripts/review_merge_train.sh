@@ -1517,8 +1517,9 @@ _mt_release() {
 		# Clock skew: a future-dated PR reports 0, never a negative age.
 		[ "${release_oldest_age}" -ge 0 ] || release_oldest_age=0
 	fi
-	# New fields are appended after base_filter= so the existing prefix and
-	# first three fields stay byte-identical for current consumers.
+	# Fields are only ever appended, never reordered or renamed: the per-reason
+	# fields (overlap= through oldest_queued_age_secs=) were appended after
+	# base_filter= so the prefix and first three fields stay byte-identical.
 	# The API-cost fields (file_list_fetches= through elapsed_ms=) are appended
 	# last, after oldest_queued_age_secs=; they add no calls.
 	release_elapsed_ms=$(( $(_mt_now_ms) - release_start_ms ))
