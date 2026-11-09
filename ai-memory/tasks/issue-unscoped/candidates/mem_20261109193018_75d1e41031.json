@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/propagate_consumer_secrets.sh:117-125 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The emptiness guard `if [ -n \"${PROPAGATE_TARGETS// /}\" ]; then` strips only spaces, so a tab-only or newline-only value enters the tokenizer branch and yields zero targets, and the registry fallback never runs.\n  WHY: Propagation is silently skipped (`summary targets=0 set=0 skipped=0 failed=0`, exit 0), which contradicts the documented empty-input fallback. Severity disagreement: sonnet-5_5 rated it NIT, minimax listed it as a hardening suggestion (risk score 3), and the others rated it MAJOR. The highest rating is used. The reviewers say it is not a regression versus the old unquoted expansion.\n- .github/workflows/repo CI (check-run `copilot-pull-request-reviewer`, run 42681099117):n/a | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The check-run fails with HTTP 422 `custom_instructions_too_large` after building instructions from `AGENTS.md`/`CLAUDE.md`.\n  WHY: It is an external tool limit on instruction size, not caused by any changed hunk, and no fix exists within this PR's scope.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/propagate_consumer_secrets.sh:~117 | severity=low (source: NIT) | confidence=3\n  PROBLEM: The guard strips only spaces, so a tabs-only or newlines-only value yields zero tokens and an empty `TARGETS`, and the `REGISTRY` fallback never runs.\n  WHY: Propagation is skipped silently with `summary targets=0 set=0 skipped=0 failed=0` and exit 0. The old unquoted `printf '%s\\n' ${PROPAGATE_TARGETS}` behaved the same way. `test_whitespace_only_targets_fall_back_to_registry` covers only \"\" and \"   \". Suggested fix: `[[ \"${PROPAGATE_TARGETS}\" =~ [^[:space:]] ]]`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/propagate_consumer_secrets.sh:117 | severity=high (source: MAJOR) | confidence=4\n  PROBLEM: The emptiness check for `PROPAGATE_TARGETS` strips only literal spaces and ignores tabs and newlines.\n  WHY: Whitespace-only input other than spaces passes the guard and is tokenized instead of falling back to `REGISTRY`, so no secrets are propagated and the run looks green.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/propagate_consumer_secrets.sh:117 | HARDENING_SUGGESTION | HARDENING_RISK_SCORE=3\n  PROBLEM: The guard `if [ -n \"${PROPAGATE_TARGETS// /}\" ]; then` strips only spaces. A value of `\"\\t\"` or `\"\\n\"` tokenizes to an empty array and gives `TARGETS=\"\"`, so the `else TARGETS=\"${REGISTRY}\"` fallback never runs.\n  WHY: The run is silently green (`summary targets=0 set=0 skipped=0 failed=0`, exit 0) and contradicts the changelog fragment's claim that the registry fallback is unchanged. The reviewer calls it pre-existing, not a regression. Suggested fix: `if [[ \"${PROPAGATE_TARGETS}\" =~ [^[:space:]] ]]; then`, plus `$'\\t'` and `$'\\n'` sub-tests in tests/test_propagate_consumer_secrets.py.\n- No other findings. The last-run diff, which edits the citation in analysis/recommendation-processing-report.md:2262 from line 1527 to 1529, was verified correct.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/propagate_consumer_secrets.sh:117,123-125 | severity=high (source: MAJOR) | confidence=5\n  PROBLEM: The empty-target check removes only spaces, so a tab-only or newline-only `PROPAGATE_TARGETS` tokenizes to no targets instead of falling back to the registry.\n  WHY: A `workflow_dispatch` with whitespace-only targets is documented to target every registry entry. Instead the script processes no repositories, reports `summary targets=0 set=0 skipped=0 failed=0`, and exits successfully.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/propagate_consumer_secrets.sh:117,123-125,215 | severity=high (source: MAJOR) | confidence=4\n  PROBLEM: The emptiness guard strips only spaces. A tabs-only or newlines-only value gives a zero-element array at line 124 and an empty `TARGETS` at line 125, so the `done <<< \"${TARGETS}\"` loop at line 215 iterates zero targets and the registry fallback never runs.\n  WHY: The run ends with `summary targets=0 set=0 skipped=0 failed=0` and exit 0, so consumer secrets go unset with no failure signal. This contradicts the changelog fragment `changelog.d/wfopt-2026-10-08-propagate-targets-noglob.md`, and `test_whitespace_only_targets_fall_back_to_registry` (tests/test_propagate_consumer_secrets.py:339-347) covers only `\"\"` and `\"   \"`. The reviewer says it is not a regression versus the pre-PR unquoted expansion. Suggested fix: `if [[ \"${PROPAGATE_TARGETS}\" =~ [^[:space:]] ]]; then`, plus `$'\\t'` and `$'\\n'` test cases.\n- .github/workflows/repo CI (check-run `copilot-pull-request-reviewer`, run 42681099117) | severity=low (source: NIT) | confidence=4\n  PROBLEM: The check-run fails with HTTP 422 `custom_instructions_too_large` (\"Prompt too big after adding system message\") after building instructions from `AGENTS.md`/`CLAUDE.md`, neither of which is in `pr_changed_files.txt`.\n  WHY: It is an external tool limit on repository instruction size, not a defect in any changed hunk. It is recorded so it is not dropped, and the editor should keep ignoring it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "670bc4f7f6a8f2aef7bb3d4500ce7c8669801dec4d6a990d0be7c5c7471e8e08",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9107,
+    "run_id": "42681081903",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42681081903",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109193018_75d1e41031",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9107,
+    "run_id": "42681081903"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T19:30:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
