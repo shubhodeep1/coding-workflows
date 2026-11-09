@@ -361,8 +361,12 @@ return code 2 keeps meaning `guard_unavailable`. So:
   before the cap stopped the scan;
 - `APPLY_ANALYSIS_CANDIDATE_CAP` and the per-doc marker-skip warnings go to
   stderr, which both callers let through to the job log;
-- a capped scan returns a new code, 3. Return 0 still means a complete scan
-  and 2 still means a failed lookup.
+- return codes: 0 means the scan ended normally, either because every
+  candidate was examined or because the candidate cap was reached (that is
+  the expected stop, not a capped scan); 3, a new code, means only that the
+  marker cap stopped the scan with at least one candidate still unexamined;
+  2 still means a failed lookup. Command substitution keeps the function's
+  exit status, so the callers' existing `docs_rc=$?` line reads it.
 
 The callers handle return code 3 as follows:
 
@@ -388,8 +392,11 @@ D5 intends: record each abandoned doc in the processing report (which also
 makes it eligible for the P5 purge), or raise
 `APPLY_ANALYSIS_MAX_MARKER_SEARCHES`.
 
-At the defaults a run makes at most 3 + 20 = 23 `search/issues` calls, plus
-one comments read for each doc whose search matched. Hitting the search rate
+At the defaults a run makes at most 3 + 20 = 23 `search/issues` calls. Each
+search returns up to 20 tracking issues (`per_page=20`), and
+`doc_dispatched_before` makes one comments read per returned issue until one
+has a trusted marker, so a run makes up to 20 comments reads per searched doc
+(460 at the defaults). Hitting the search rate
 limit mid-scan fails that lookup, and the run skips as `guard_unavailable`,
 the existing fail-closed outcome.
 
@@ -592,14 +599,15 @@ Each phase is safe in production at merge:
      scripts`, `never use auto-close keywords against
      ai:orchestrator-tracking issues`);
    - keep the marker lines unchanged.
-3. In `unprocessed_docs`, in both modes, return 0 once the effective
+3. In `unprocessed_docs`, in both modes, stop the scan once the effective
    candidate cap of docs has been printed (`APPLY_ANALYSIS_MAX_CANDIDATES`,
    default 3, raised to `PROMOTE_CYCLE_MIN_DOCS` when that is larger) or
    `APPLY_ANALYSIS_MAX_MARKER_SEARCHES` docs (default 20) have been skipped
    for a dispatch marker, whichever comes first. Both are positive integers
-   defaulted in the script. Keep stdout to doc paths only, send the cap log
-   to stderr, and return 3 when the marker cap stopped the scan with at least
-   one candidate unexamined (see the Approach). Update both callers: list-only
+   defaulted in the script. Keep stdout to doc paths only and send the cap
+   log to stderr. Return 0 when the candidate cap stopped the scan or every
+   candidate was examined, and return 3 only when the marker cap stopped the
+   scan with at least one candidate unexamined (see the Approach). Update both callers: list-only
    mode treats 3 as success and appends `capped_behind_markers=true`;
    dispatch mode dispatches the printed docs, or logs
    `reason=scan_capped_behind_markers` when none was printed. Make
