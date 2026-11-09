@@ -9749,6 +9749,19 @@ evaluate_sync_superseded_by_main() {
 
   SYNC_SUPERSEDED_AFFECTED_PATHS_JSON="$(printf '%s\n' "${affected_paths[@]}" | jq -Rsc 'split("\n") | map(select(length > 0)) | unique')"
 
+  # Refresh both refs before comparing them. The job-start fetch can predate
+  # the child-PR states read above from the API: a PR that merged in between
+  # counts as terminal while the stale integration ref still equals the
+  # default branch, so the path diff below reads as clean and the final
+  # merge is skipped for good (fun-token-multi-chain project #739, PR #741).
+  if ! git fetch --no-tags origin \
+    "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" \
+    "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+    SYNC_SUPERSEDED_CONFIDENT="false"
+    echo "  [superseded-check] Unable to refresh ${default_branch}/${integration_branch} refs; not marking superseded." >&2
+    return 0
+  fi
+
   if ! default_ref="$(resolve_branch_analysis_ref "${default_branch}")"; then
     SYNC_SUPERSEDED_CONFIDENT="false"
     return 0
