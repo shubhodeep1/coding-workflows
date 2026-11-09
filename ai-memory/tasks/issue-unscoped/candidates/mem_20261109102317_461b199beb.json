@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The analysis document (quoted in the issue Context) asks to log per-cycle \"API time\" and \"decision time\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh`, the `ORCH_POLL_CYCLE_SUMMARY` output and its tests\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The summary and `SUMMARY_RE` contain no API-time or decision-time field, and elapsed_ms is not split into them. Severity was NIT for google_gemini-3_1-flash-lite and MAJOR for openai_gpt-6-luna. Three other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) explicitly rejected this gap, because the issue's \"Required change\" fixes the exact field set and the Constraints forbid new gh/API calls.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Log per-cycle \"API time\" and \"decision time\" as requested in the analysis document.\n  Expected change site: `scripts/orchestrate_poll_process.sh`, the `ORCH_POLL_CYCLE_SUMMARY` output and its tests.\n  Evidence of absence: The summary emits `elapsed_ms`, `projects_seen`, `projects_processed`, `sleep_ms`, `exit_code`, and `terminal_reason`, but does not split `elapsed_ms` into \"API time\" and \"decision time\". The issue's \"Required change\" field list matches the implementation, but the analysis document in the Context requested these additional fields.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: The linked issue says the analysis asks to log per-cycle \"API time.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`, the `ORCH_POLL_CYCLE_SUMMARY` output and its tests.\n  Evidence of absence: The summary and `SUMMARY_RE` contain no API-time field or measurement.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: The linked issue says the analysis asks to log per-cycle \"decision time.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`, the `ORCH_POLL_CYCLE_SUMMARY` output and its tests.\n  Evidence of absence: The summary and `SUMMARY_RE` contain no decision-time field or measurement. Total elapsed time does not distinguish decision time from other work.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "146b1aaa86190a280b0912c29c7c65225b8599c08f71f7d0fc3d7db6abfed8cf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9113,
+    "run_id": "42595409981",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42595409981",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109102317_461b199beb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9113,
+    "run_id": "42595409981"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T10:23:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
