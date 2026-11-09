@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: B\n\nRATIONALE:\nQ1: I confirmed the gap in `scripts/ci_cancelled_rerun.py` `classify_runner_shutdown` (lines 330-404). When `lint` is the only `failure` job, the code adds nothing to `shutdown_ids`. The aggregate loop (lines 394-402) accepts the `cancelled` jobs that `lint` names, but line 403 still returns `\"unverified\"`, which is logged as `runner_shutdown_unverified` (lines 517/525). So the sweep can never re-run this case today. Option A is out because it needs someone to close the issue and re-run CI by hand, which goes against the automation-bias rule (\u00a720) and the pipeline-capability rule. Option C would also edit the `lint` gate in `.github/workflows/ci.yml`, but the triage itself says that gate is working as designed and should stay unchanged. B is the narrowest change that recovers this case automatically.\nQ2: The medium rule matches how the script already treats shutdowns. At lines 361-363 a job counts only if every failure annotation is `RUNNER_SHUTDOWN_PREFIX` or `SHUTDOWN_COMPANION_MESSAGE` (\"The operation was canceled.\"). That rule catches runners lost partway through a job, which strict misses, and it still treats a `timeout-minutes` cancellation as a real failure, which loose would not.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1 / Q2 (letter decisions, binding constraints for the planner):\n  strategy: derive_from_repo\n  inputs:\n    - scripts/ci_cancelled_rerun.py (`classify_runner_shutdown` lines 330-404, `failure_annotations` line 311, `RUNNER_SHUTDOWN_PREFIX` line 45, `SHUTDOWN_COMPANION_MESSAGE` line 81, `MAX_FAILED_JOBS_CLASSIFIED = 10` line 83, env parsing around lines 113 and 554)\n    - .github/workflows/review_autofix_sweep.yml line 603 (where `CI_CHECKOUT_FETCH_RERUN_ENABLED` is wired with `vars.... || 'true'`)\n    - tests/test_ci_cancelled_rerun.py (the existing contract tests)\n    - README.md variables table (the row for `CI_CHECKOUT_FETCH_RERUN_ENABLED`, line 152)\n  steps:\n    - Add a new class to `classify_runner_shutdown`, for example the return value `\"abandoned\"`, plus a keyword parameter that defaults to enabled. It applies only when all of these hold:\n      - the only `failure` job is `CI_AGGREGATE_JOB_NAME` (`lint`);\n      - the aggregate's annotations pass the existing checks at lines 382-393;\n      - every non-skipped, non-success job that the aggregate message names is `cancelled`;\n      - each of those `cancelled` jobs passes the Q2 medium test.\n    - Q2 medium test: read the job's failure annotations with the existing `failure_annotations` helper. The job counts as abandoned only if every annotation is `RUNNER_SHUTDOWN_PREFIX` or exactly `SHUTDOWN_COMPANION_MESSAGE`; no annotations also counts. Any other annotation, including the timeout text \"has exceeded the maximum execution time\", returns `\"genuine\"`. Do not log annotation text; follow the existing rule at line 343.\n    - Fail closed on the API budget. Count these extra annotation reads against `MAX_FAILED_JOBS_CLASSIFIED`. If the named `cancelled` jobs plus the failed jobs exceed that cap, return `\"unverified\"`. If annotations can't be read (`annotations_unreadable`), return `\"unverified\"`. Update the docstring's \"No extra API reads\" line to describe the new bounded reads.\n    - Route the new class through the same re-run path and the same once-per-head re-run cap as `checkout_fetch`. Emit a distinct decision reason so the logs can tell it apart.\n    - Add the off switch env var `CI_ABANDONED_JOB_RERUN_ENABLED`. The name is not used anywhere in the repo yet. Default it to `true` in the script itself (\u00a78), parse it like `CI_CHECKOUT_FETCH_RERUN_ENABLED` (warn on a bad value, keep the default), and when it is `false` keep today's `\"unverified\"` outcome.\n    - Wire it in `.github/workflows/review_autofix_sweep.yml` next to line 603: `CI_ABANDONED_JOB_RERUN_ENABLED: ${{ vars.CI_ABANDONED_JOB_RERUN_ENABLED || 'true' }}`. Add a README variables-table row.\n    - Add contract tests in tests/test_ci_cancelled_rerun.py:\n      - only `lint` failed and the named jobs are `cancelled` with only cancel/shutdown annotations or none: classified as abandoned and re-run;\n      - a named `cancelled` job has a timeout annotation: `\"genuine\"`;\n      - a named `cancelled` job has any other annotation: `\"genuine\"`;\n      - switch set to `false`: `\"unverified\"`;\n      - too many `cancelled` jobs for the cap: `\"unverified\"`;\n      - a second abandoned run on the same head: blocked by the once-per-head cap.\n    - Do not change the `lint` aggregate job in `.github/workflows/ci.yml`. Leave the Copilot `custom_instructions_too_large` problem out of scope.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: n/a\n  reversibility: Set the repo variable `CI_ABANDONED_JOB_RERUN_ENABLED=false` to get today's behaviour back (`runner_shutdown_unverified`, no re-run). The change only adds code, so reverting it is safe.",
+  "fingerprint": "a727c3520d49165691f0248ca4087aae0f683e8cadab30510a866e38c010f932",
+  "lineage": {
+    "issue_number": 9146,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42677041101",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42677041101",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9146"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261109185233_0df2c1c289",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9146,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42677041101"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9146",
+  "timestamps": {
+    "created_at": "2026-11-09T18:52:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
