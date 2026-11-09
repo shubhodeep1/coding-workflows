@@ -6,9 +6,10 @@
 # workflow file over 512,000 bytes). The step sources this file in its own
 # shell, so the step's name: and env: stay in the workflow; edit those there.
 # GitHub does not substitute workflow expressions in a sourced script, so the
-# step passes github.repository in as REVIEW_HEAD_CHECKOUT_REPOSITORY; it
-# defaults to the runner's GITHUB_REPOSITORY when unset (an empty value fails
-# closed: the head repo is treated as a fork and CAN_PUSH=false).
+# step passes github.repository in as REVIEW_HEAD_CHECKOUT_REPOSITORY. An unset
+# or empty value falls back to the runner's GITHUB_REPOSITORY; only when both
+# are empty does the guard fail closed (head repo treated as a fork,
+# CAN_PUSH=false).
 set -euo pipefail
 
 HEAD_REF="$(jq -r '.headRefName' "${PR_META_FILE}")"
