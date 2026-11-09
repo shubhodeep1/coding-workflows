@@ -45,7 +45,12 @@ if [ "$1 $2" = "pr list" ]; then
 fi
 if [ "$1 $2" = "pr merge" ]; then
   case " $* " in
-    *" --auto "*) exit "${FAKE_GH_AUTO_RC:-0}" ;;
+    *" --auto "*)
+      # Simulate auto-merge landing the report right away.
+      if [ -n "${FAKE_GH_AUTO_LANDS:-}" ]; then
+        git push -q origin HEAD:refs/heads/main
+      fi
+      exit "${FAKE_GH_AUTO_RC:-0}" ;;
   esac
   exit "${FAKE_GH_MERGE_RC:-0}"
 fi
@@ -161,6 +166,8 @@ class _Sandbox:
 				"GH_TOKEN": "x",
 				"WLA_ANALYZE_REPORT_FILE": report_file,
 				"FAKE_GH_LOG": str(self.gh_log),
+				"WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES": "0",
+				"WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_POLL_SECS": "1",
 				"PYTHONDONTWRITEBYTECODE": "1",
 			}
 		)
@@ -233,6 +240,74 @@ def test_report_pr_auto_merge_when_direct_merge_refused() -> None:
 		assert out["report_branch"] == PR_BRANCH
 		assert out["committed"] == "true"
 		assert len(_delivery_lines(proc)) == 1
+
+
+def test_report_pr_auto_merge_wait_sees_the_report_land() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		box.write_report()
+		proc = box.run(FAKE_GH_MERGE_RC="1", FAKE_GH_AUTO_LANDS="1", WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES="1")
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert box.origin_has("refs/heads/main", REPORT)
+		# The run branch is deleted once the report is on the target branch.
+		assert box.origin_ref(f"refs/heads/{PR_BRANCH}") == ""
+		out = box.outputs()
+		assert out["delivery"] == "pr_merged"
+		assert out["report_branch"] == "main"
+		assert "not on main yet" not in proc.stdout
+		assert _delivery_lines(proc) == [
+			f"WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY mode=pr outcome=pr_merged pr=42 base=main file={REPORT}"
+		]
+
+
+def test_report_pr_auto_merge_not_landed_warns_about_skipped_audits() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		box.write_report()
+		proc = box.run(FAKE_GH_MERGE_RC="1")
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert "deep-audit and api-redundancy are skipped" in proc.stdout
+		assert box.outputs()["delivery"] == "pr_auto_merge"
+
+
+def test_report_pr_renames_when_a_pending_report_pr_holds_the_path() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		# An earlier run's report still waits in its PR branch, not on main.
+		other = Path(raw) / "other"
+		_git(Path(raw), "clone", "-q", box.origin.as_uri(), str(other), env=box.git_env)
+		(other / REPORT).write_text("# earlier run\n", encoding="utf-8")
+		_git(other, "add", "-A", env=box.git_env)
+		_git(other, "commit", "-q", "-m", "earlier report", env=box.git_env)
+		_git(other, "push", "-q", "origin", "HEAD:refs/heads/auto/workflow-log-analysis-report-100-1", env=box.git_env)
+		box.write_report()
+		proc = box.run()
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		renamed = "analysis/workflow-optimization-2026-11-09-2.md"
+		assert box.outputs()["report_file"] == renamed
+		assert f"({renamed})" in box.gh_calls()[0]
+
+
+def test_report_pr_unrecognized_switch_value_warns_and_uses_pr() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		box.write_report()
+		proc = box.run(WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR="flase")
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert "::warning::WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR has an unrecognized value" in proc.stdout
+		assert "flase" not in proc.stdout
+		assert box.outputs()["delivery"] == "pr_merged"
+
+
+def test_report_pr_number_parsed_from_enterprise_url() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		box.write_report()
+		proc = box.run(FAKE_GH_CREATE_OUT="https://ghe.example.com/o/r/pull/314")
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		out = box.outputs()
+		assert out["report_pr_number"] == "314"
+		assert out["report_pr_url"] == "https://ghe.example.com/o/r/pull/314"
 
 
 def test_report_pr_stays_open_when_both_merges_refused() -> None:
@@ -395,11 +470,23 @@ def test_report_pr_static_contract() -> None:
 	assert "WLA_REPORT_PR_URL: ${{ steps.commit_report.outputs.report_pr_url || '' }}" in wf
 	assert "WLA_REPORT_DELIVERY: ${{ steps.commit_report.outputs.delivery || '' }}" in wf
 	assert 'MSG+="Report PR: ${WLA_REPORT_PR_URL}"' in wf
+	# A failed delivery is reported as a failure, not with a dead blob link.
+	assert "WLA_COMMIT_OUTCOME: ${{ steps.commit_report.outcome || '' }}" in wf
+	assert '[ "${WLA_COMMIT_OUTCOME:-}" = "failure" ]' in wf
+	assert "WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES || '10' }}" in step
+	# The run-branch push is leased, never a bare --force.
+	assert "git push --force origin" not in step
+	assert '--force-with-lease="refs/heads/${REPORT_PR_BRANCH}:${report_last_pushed_sha}"' in step
 
 
 def main() -> int:
 	test_report_pr_default_mode_opens_and_merges_pr()
 	test_report_pr_auto_merge_when_direct_merge_refused()
+	test_report_pr_auto_merge_wait_sees_the_report_land()
+	test_report_pr_auto_merge_not_landed_warns_about_skipped_audits()
+	test_report_pr_renames_when_a_pending_report_pr_holds_the_path()
+	test_report_pr_unrecognized_switch_value_warns_and_uses_pr()
+	test_report_pr_number_parsed_from_enterprise_url()
 	test_report_pr_stays_open_when_both_merges_refused()
 	test_report_pr_create_failure_fails_the_step()
 	test_report_pr_already_exists_looks_up_the_open_pr()
