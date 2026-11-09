@@ -398,7 +398,8 @@ if [ "${is_self_repo}" = "true" ]; then
     ''|true) self_repo_github_ai_enabled="true" ;;
     false) ;;
     *)
-      echo "::warning::IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED='${self_repo_github_ai_flag_raw}' is not true/false; self-repo .github/ai additions disabled."
+      self_repo_github_ai_flag_safe="$(printf '%s' "${self_repo_github_ai_flag_raw}" | tr -cd '[:print:]' | sed 's/::/: :/g' | cut -c1-64 || true)"
+      echo "::warning::IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED='${self_repo_github_ai_flag_safe}' is not true/false; self-repo .github/ai additions disabled."
       ;;
   esac
   if [ "${self_repo_github_ai_enabled}" = "true" ]; then
