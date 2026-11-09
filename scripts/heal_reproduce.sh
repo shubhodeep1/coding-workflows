@@ -14,7 +14,7 @@
 #                     (--sha SHA | --worktree DIR) [--repo DIR] [--remote NAME]
 #
 #   --tests-file  one `path[::name]` per line (blank lines and `#` comments
-#                 skipped), the --tests-file list of
+#                 skipped), passed as the --tests-only list of
 #                 scripts/prepush_test_gate_run.sh. Callers write it from the
 #                 `pairs` and `files` of extract_failing_tests
 #                 (scripts/workflow_failure_heal.py). Regular file, no
@@ -33,7 +33,7 @@
 # add the detached worktree; build the sandbox image
 # (codex_isolated_exec.sh image); prepare dependencies
 # (codex_isolated_exec.sh prepare --deps, fail-open); run
-# prepush_test_gate_run.sh --tests-file, which runs the list on the tested
+# prepush_test_gate_run.sh --tests-only, which runs the list on the tested
 # tree and re-runs its failures on the merge-base; map the gate result.
 #
 # Output (--out, written atomically), schema heal_repro.v1:
@@ -531,7 +531,7 @@ heal_repro_inner()
 	minutes=$(( (heal_repro_inner_deadline - now - 180) / 60 ))
 	[ "${minutes}" -ge 1 ] || minutes=1
 	local gate_args=(--worktree "${tree}" --module "${module}" --image "${image}" --base "${passing}"
-		--out-dir "${root}/gate" --timeout-minutes "${minutes}" --tests-file "${root}/tests.txt")
+		--out-dir "${root}/gate" --timeout-minutes "${minutes}" --tests-only "${root}/tests.txt")
 	if [ -n "${prep}" ] && [ -d "${prep}/venv/bin" ]; then
 		gate_args+=(--venv "${prep}/venv")
 	fi
