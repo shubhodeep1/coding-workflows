@@ -43,29 +43,33 @@ SUMMARY_RE = re.compile(
 )
 REAL_GIT = shutil.which("git")
 
-GIT_WRAPPER = """#!/usr/bin/env bash
-# Test git wrapper: fails `git fetch` FAKE_GIT_FETCH_FAILURES times with the
-# stderr in FAKE_GIT_FETCH_STDERR_FILE, fails FAKE_GIT_FAIL_SUBCMD, and
-# otherwise delegates to the real git.
-if [ "${1:-}" = "fetch" ] && [ -n "${FAKE_GIT_FETCH_COUNTER:-}" ]; then
-  failed=0
-  [ -f "${FAKE_GIT_FETCH_COUNTER}" ] && failed="$(cat "${FAKE_GIT_FETCH_COUNTER}")"
-  if [ "${failed}" -lt "${FAKE_GIT_FETCH_FAILURES:-0}" ]; then
-    echo "$((failed + 1))" > "${FAKE_GIT_FETCH_COUNTER}"
-    cat "${FAKE_GIT_FETCH_STDERR_FILE}" >&2
-    exit 128
+# The fakes are shell functions defined ahead of the step body, not
+# executables on PATH: the pre-push gate container mounts the temp dir noexec,
+# so PATH shims under tmp_path were skipped and the real git/sleep ran.
+#
+# git: fails `git fetch` FAKE_GIT_FETCH_FAILURES times with the stderr in
+# FAKE_GIT_FETCH_STDERR_FILE, fails FAKE_GIT_FAIL_SUBCMD, and otherwise
+# delegates to the real git. sleep: records the backoff, never waits.
+FAKE_FUNCTIONS = """git() {
+  if [ "${1:-}" = "fetch" ] && [ -n "${FAKE_GIT_FETCH_COUNTER:-}" ]; then
+    local fake_git_failed=0
+    if [ -f "${FAKE_GIT_FETCH_COUNTER}" ]; then fake_git_failed="$(cat "${FAKE_GIT_FETCH_COUNTER}")"; fi
+    if [ "${fake_git_failed}" -lt "${FAKE_GIT_FETCH_FAILURES:-0}" ]; then
+      echo "$((fake_git_failed + 1))" > "${FAKE_GIT_FETCH_COUNTER}"
+      cat "${FAKE_GIT_FETCH_STDERR_FILE}" >&2
+      return 128
+    fi
   fi
-fi
-if [ -n "${FAKE_GIT_FAIL_SUBCMD:-}" ] && [ "${1:-}" = "${FAKE_GIT_FAIL_SUBCMD}" ]; then
-  echo "fake git: ${FAKE_GIT_FAIL_SUBCMD} failed" >&2
-  exit 1
-fi
-exec "${REAL_GIT_BIN}" "$@"
-"""
-
-SLEEP_STUB = """#!/usr/bin/env bash
-echo "$*" >> "${FAKE_SLEEP_LOG}"
-exit 0
+  if [ -n "${FAKE_GIT_FAIL_SUBCMD:-}" ] && [ "${1:-}" = "${FAKE_GIT_FAIL_SUBCMD}" ]; then
+    echo "fake git: ${FAKE_GIT_FAIL_SUBCMD} failed" >&2
+    return 1
+  fi
+  command "${REAL_GIT_BIN}" "$@"
+}
+sleep() {
+  echo "$*" >> "${FAKE_SLEEP_LOG}"
+  return 0
+}
 """
 
 
@@ -76,7 +80,6 @@ class Layout:
 		self.source = root / "source"
 		self.split = root / "split"
 		self.runner_temp = root / "runner_temp"
-		self.bin = root / "bin"
 		self.github_env = root / "github_env"
 		self.metadata = root / "meta.json"
 		self.payload = root / "payload.json"
@@ -108,18 +111,12 @@ class Layout:
 		(support / "git_ref_health_check.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
 		self.support = support
 		self.runner_temp.mkdir()
-		self.bin.mkdir()
-		for name, text in (("git", GIT_WRAPPER), ("sleep", SLEEP_STUB)):
-			path = self.bin / name
-			path.write_text(text)
-			path.chmod(0o755)
 		self.metadata.write_text(json.dumps({"headRefName": "review/head", "headRepoFullName": "o/r"}))
 		self.payload.write_text(json.dumps({"head": {"sha": self.reviewed_sha}}))
 
 	def env(self, **overrides: str) -> dict[str, str]:
 		env = {
 			**os.environ,
-			"PATH": f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}",
 			"REAL_GIT_BIN": REAL_GIT,
 			"GIT_DIR": str(self.source / ".git"), "GIT_WORK_TREE": str(self.split),
 			"PR_NUMBER": "42", "GITHUB_WORKSPACE": str(self.source), "WORKSPACE_PATH": str(self.split),
@@ -137,9 +134,9 @@ class Layout:
 		self.github_env.write_text("")
 		if sourced:
 			# Mirrors the workflow step: GitHub's bash -eo pipefail shell sources the script file.
-			cmd = ["bash", "-c", 'set -eo pipefail; source "$1"', "_", str(SCRIPT_PATH)]
+			cmd = ["bash", "-c", FAKE_FUNCTIONS + 'set -eo pipefail; source "$1"', "_", str(SCRIPT_PATH)]
 		else:
-			cmd = ["bash", "-c", review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")]
+			cmd = ["bash", "-c", FAKE_FUNCTIONS + review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")]
 		return subprocess.run(cmd, cwd=self.split, env=self.env(**overrides), capture_output=True, text=True)
 
 
@@ -147,6 +144,8 @@ class Layout:
 def layout(tmp_path: Path) -> Layout:
 	if REAL_GIT is None:
 		pytest.skip("git is not available")
+	if shutil.which("jq") is None:
+		pytest.skip("jq is not available")
 	built = Layout(tmp_path)
 	built.build()
 	return built
