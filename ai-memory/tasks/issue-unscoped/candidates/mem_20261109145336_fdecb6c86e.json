@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/9126-triage-green-main-and-headers-grant.md:2-3 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The fragment documents the log value as `gate_rc=<n>` but the workflow now emits the sentinel `gate_rc=not_run` when the gate is skipped.\n  WHY: Operators reading the fragment, or agents.md after folding, will not know `gate_rc` can be the non-numeric `not_run`. All four reviewers rated it NIT. Line cited as 3 by three reviewers and 2 by two reviewers.\n- agents.md:4444 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large`, and the updated `PLAN_SUPERSEDED_MERGED_PR` registry entry is part of the custom instructions loaded from this PR head.\n  WHY: The reviewer exits before producing a review, leaving the check red. Severity disagreement: openai_gpt-6-luna said MAJOR and z-ai_glm-5_3-flash said NIT, so the highest (MAJOR, mapped to high) is used. The log does not show that this line alone crossed the limit. z-ai_glm-5_3-flash cited `.github/workflows/plan.yml` and said earlier autofix cycles classified this as a repo-level size condition not fixable in this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.d/9126-triage-green-main-and-headers-grant.md:3 | severity=NIT | confidence=4\n  PROBLEM: The fragment documentation is stale; it claims the log outputs a numeric `gate_rc=<n>`, but the implementation now uses a sentinel `gate_rc=not_run` when the gate is skipped.\n  WHY: Not a functional failure, but misleading for operators using the logs for diagnostics.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/9126-triage-green-main-and-headers-grant.md:3 | severity=NIT | confidence=4\n  PROBLEM: The fragment is stale relative to the workflow code. plan.yml:1429 initializes `triage_gate_rc=\"not_run\"` and plan.yml:1462 logs `gate_rc=${triage_gate_rc}`, so a skipped gate emits `gate=none gate_rc=not_run`. The fragment says `gate_rc=<n>` and never mentions the `not_run` sentinel.\n  WHY: No runtime failure. Operators consulting agents.md or the fragment will not know `gate_rc` can be the literal string `not_run`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/9126-triage-green-main-and-headers-grant.md:2 | severity=NIT | confidence=4\n  PROBLEM: This documents the gate return value as `<n>`, but the workflow now emits `gate_rc=not_run` when the gate is skipped.\n  WHY: Operators using this fragment to interpret `PLAN_SUPERSEDED_MERGED_PR` logs are not told about the new skipped-gate value.\n- agents.md:4444 | severity=MAJOR | confidence=4\n  PROBLEM: The `copilot-pull-request-reviewer` check fails while constructing its prompt with `custom_instructions_too_large`. The updated registry entry is included in the custom instructions loaded from this PR head.\n  WHY: The reviewer exits before producing a review, leaving this check failed on the PR. The run log establishes the combined custom-instruction size failure, though it does not establish that this line alone crossed the limit.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/9126-triage-green-main-and-headers-grant.md:2 | severity=NIT | confidence=4\n  PROBLEM: This sentence is stale after the last autofix run changed plan.yml:1429 to initialize `triage_gate_rc=\"not_run\"` and plan.yml:1462 to log `gate_rc=${triage_gate_rc}`. When the gate is skipped, the log emits the non-numeric sentinel `gate_rc=not_run`, which `<n>` no longer describes.\n  WHY: No runtime failure. The fragment is the operator-facing description of the `PLAN_SUPERSEDED_MERGED_PR` log contract, so an operator grepping for `gate_rc=<number>` will misread a skipped-gate tick (`gate=none gate_rc=not_run`) as an anomalous numeric value.\n- .github/workflows/plan.yml | severity=NIT | confidence=3\n  PROBLEM: The Copilot review check (`copilot-pull-request-reviewer`, failure on head 0735649, errorCode `custom_instructions_too_large`, statusCode 422) fails before producing a review because AGENTS.md plus CLAUDE.md exceed its prompt limit. This PR's agents.md registry-line edit (agents.md:4444) marginally grows one of those inputs.\n  WHY: The check exits 1 (\"Prompt too big after adding system message\") on every run of this PR head. Earlier autofix cycles classified this as a repo-level instruction-size condition not fixable inside this PR. It is re-listed because the failure is still present on the current head and cannot be verified as pre-existing on main from this checkout.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cf21b5ac35fa7ae5af1e9ea7a4d06dafaca03954f3356466797cba36701f7b79",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9126,
+    "run_id": "42633022780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42633022780",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109145336_fdecb6c86e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9126,
+    "run_id": "42633022780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T14:53:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
