@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply analysis recommendations from workflow-optimization-2026-10-08.md\",\"issues\":[{\"id\":\"extract-review-checkout-step\",\"title\":\"review_autofix: move 'Checkout PR head branch' step body into scripts/review_autofix_step_checkout_pr_head_branch.sh (verbatim)\",\"priority\":2},{\"id\":\"review-checkout-diagnostics\",\"title\":\"review checkout: emit one structured REVIEW_HEAD_CHECKOUT summary (stage, duration_ms, fetch_attempts, git_exit_class, head_match, outcome)\",\"priority\":3},{\"id\":\"collector-success-sample-reserve\",\"title\":\"collect_workflow_logs: reserve bounded slots for sampled successful runs so the success baseline is never starved\",\"priority\":3},{\"id\":\"merge-train-release-counters\",\"title\":\"merge train: append file-list fetch / cache-hit / active-listing / elapsed_ms counters to MERGE_TRAIN_RELEASE_SUMMARY\",\"priority\":4},{\"id\":\"poller-cycle-timing-summary\",\"title\":\"orchestrate poller: emit one ORCH_POLL_CYCLE_SUMMARY timing line per run (logging only, no cadence change)\",\"priority\":4},{\"id\":\"propagate-targets-noglob\",\"title\":\"propagate_consumer_secrets: split PROPAGATE_TARGETS without pathname glob expansion (SHELL-001)\",\"priority\":5},{\"id\":\"activation-verdict-write-reconcile\",\"title\":\"activation_verify: marker-aware reconciliation for the verdict comment and fix-issue writes (CONSIST-001)\",\"priority\":5},{\"id\":\"report-and-delete-source-doc\",\"title\":\"Close out workflow-optimization-2026-10-08.md: append per-recommendation verdicts to the processing report and delete the source doc\",\"priority\":9}],\"dependency_edges\":[{\"from\":\"extract-review-checkout-step\",\"to\":\"review-checkout-diagnostics\"},{\"from\":\"review-checkout-diagnostics\",\"to\":\"report-and-delete-source-doc\"},{\"from\":\"extract-review-checkout-step\",\"to\":\"report-and-delete-source-doc\"},{\"from\":\"collector-success-sample-reserve\",\"to\":\"report-and-delete-source-doc\"},{\"from\":\"merge-train-release-counters\",\"to\":\"report-and-delete-source-doc\"},{\"from\":\"poller-cycle-timing-summary\",\"to\":\"report-and-delete-source-doc\"},{\"from\":\"propagate-targets-noglob\",\"to\":\"report-and-delete-source-doc\"},{\"from\":\"activation-verdict-write-reconcile\",\"to\":\"report-and-delete-source-doc\"},{\"from\":\"extract-review-checkout-step\",\"to\":\"collector-success-sample-reserve\"},{\"from\":\"merge-train-release-counters\",\"to\":\"activation-verdict-write-reconcile\"},{\"from\":\"poller-cycle-timing-summary\",\"to\":\"activation-verdict-write-reconcile\"}]}",
+  "fingerprint": "538bc48d2834f2a518a4b586455631566026ba9c7584f0ceddd0fce684780a46",
+  "lineage": {
+    "issue_number": 9099,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42562473906",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42562473906",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261109044345_c9d6d418dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9099,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42562473906"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply analysis recommendations from workflow-optimization-2026-10-08.md' into 8 issues (tracking #9099)",
+  "timestamps": {
+    "created_at": "2026-11-09T04:43:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
