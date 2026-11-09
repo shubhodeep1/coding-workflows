@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: replace the stale run ID in `tests/e2e_smoke_canary_b.txt`\n\nPlanning ref: `orchestrator/project-9083` at `1e2ba5e33ca5bfc61e83fd18d312eba8dd4ce93b` (integration branch mismatch: false).\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\nNone. This is a data-only change. Replace line 2 of `tests/e2e_smoke_canary_b.txt`, which now reads `decompose-run: 41445772297`, with `decompose-run: 42539997994`. Keep line 1 (`status: ok`) as it is, and end the file with a single trailing newline after line 2. The file then has exactly two lines and no third line is added.\n\n## Data structures affected\nOnly the two-line text fixture `tests/e2e_smoke_canary_b.txt`.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Do not edit the advisory test file\n- Chosen: leave `tests/test_review_conflict_resolve_smoke_deterministic.py` unchanged.\n- Alternatives considered: updating that test as the decomposition's \"Expected files\" list suggests.\n- Why: the test mentions the canary only in a comment on line 80 and checks neither its content nor the run ID. The issue also says to edit only the canary file, so changing the test would break that scope rule.\n\n## Security considerations\nNo trust boundary, endpoint, money surface or external input is touched. The only content is a fixed, public run ID with no secrets.\n\n## Potential risks or edge cases\n- The current file has LF endings and a trailing newline. The edit must not add a second trailing newline or CRLF endings, or `wc -l` will not report 2.\n- Conflict: the issue's \"Expected files\" list names the test file, but the issue's own scope rule forbids editing it. The plan follows the scope rule (see D1).\n\n## Testing considerations\nCheck each acceptance criterion:\n- `head -n1 tests/e2e_smoke_canary_b.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary_b.txt` prints `decompose-run: 42539997994`.\n- `wc -l tests/e2e_smoke_canary_b.txt` reports 2.\n- `git diff --stat` lists only the canary file.\n\nOptionally, `pytest tests/test_review_conflict_resolve_smoke_deterministic.py` should still pass, since the change does not affect it.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue fully specifies a one-line replacement in one existing fixture. No helper or new code is needed, and the scope should not grow beyond what the issue asks for.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "078fe558e1d4cf9d17a6dfd4e04696a0324574c00fc203d81f80e53112e2d239",
+  "lineage": {
+    "issue_number": 9085,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42540800781",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42540800781",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9085"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261109003838_9bd87f4518",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9085,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42540800781"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9085",
+  "timestamps": {
+    "created_at": "2026-11-09T00:38:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
