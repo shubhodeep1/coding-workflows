@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- external check `copilot-pull-request-reviewer` (run 42708883684, head 2e4ed037):not mappable | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The external Copilot reviewer fails with HTTP 422 `custom_instructions_too_large` before reviewing the diff.\n  WHY: The failure comes from the size of the instruction files, not from this diff, which adds only about 12 lines to agents.md; both reviewers rated it NIT and said it is out of scope for a forward-merge.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- external check `copilot-pull-request-reviewer`:not mappable | severity=NIT | confidence=5\n  PROBLEM: The external check fails with HTTP 422 `custom_instructions_too_large` before it reviews anything and cannot be mapped to a code site in this diff.\n  WHY: This PR adds only about 12 lines to `agents.md`, and reducing the instruction files is outside the scope of a forward-merge.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- external check `copilot-pull-request-reviewer` (run 42708883684, head 2e4ed037):not mappable | severity=NIT | confidence=5\n  PROBLEM: The external Copilot reviewer aborts server-side with HTTP 422 `custom_instructions_too_large` (AGENTS.md + CLAUDE.md together exceed its prompt limit) before reviewing the diff.\n  WHY: The 422 is returned during prompt assembly inside the Copilot integration. The PR adds only ~12 lines of folded text to agents.md, so no edit to this diff can resolve the file-size condition.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5d82618e71d78b72ae6603ff76a0270df5a81ccef9641c5e87f9a590c4b6f345",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9157,
+    "run_id": "42708830547",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42708830547",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109224919_fbdf8d1a08",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9157,
+    "run_id": "42708830547"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T22:49:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
