@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-09T04:28:41Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=copilot-pull-request-reviewer (external check-run, not a repository file):1-1; cited_path=copilot-pull-request-reviewer external check-run (custom_instructions_too_large); files_touched=analysis/recommendation-processing-report.md, analysis/workflow-optimization-2026-10-07-4.md, changelog.d/wfopt-2026-10-07-4-validate-fixup-dedupe-window.md, scripts/validate_process.sh, tests/test_validate_process_fixup_labels.py.",
+  "phase": "review_autofix",
+  "pr_number": 9094,
+  "record_id": "lesson_20261109042841_47487c5f9f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer external check-run (custom_instructions_too_large)",
+    "copilot-pull-request-reviewer (external check-run, not a repository file)",
+    "analysis/recommendation-processing-report.md",
+    "analysis/workflow-optimization-2026-10-07-4.md",
+    "changelog.d/wfopt-2026-10-07-4-validate-fixup-dedupe-window.md",
+    "scripts/validate_process.sh",
+    "tests/test_validate_process_fixup_labels.py"
+  ]
+}
