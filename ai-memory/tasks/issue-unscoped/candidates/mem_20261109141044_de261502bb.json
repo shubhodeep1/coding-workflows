@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_checkout_head_diagnostics.py:7-10 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The module docstring still describes a git wrapper on PATH and a no-op `sleep`, but the harness now uses `git()` and `sleep()` shell functions in `FAKE_FUNCTIONS` (about lines 46-73).\n  WHY: It does not fail at runtime, but it misleads maintainers and could lead them to reintroduce PATH shims that are skipped under noexec temp mounts. All five reviewers rated it NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update tests/inventory_parity.py as part of the expected files change.\n  expected_change_site: tests/inventory_parity.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff contains no update to tests/inventory_parity.py, which was listed as an expected file to update. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash reported no task gaps and said all deliverables are present.\n- requirement: Update tests/test_ci_wires_every_test_file.py as part of the expected files change.\n  expected_change_site: tests/test_ci_wires_every_test_file.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff contains no update to tests/test_ci_wires_every_test_file.py, which was listed as an expected file to update.\n- requirement: Update docs/INVENTORY.md as part of the expected files change.\n  expected_change_site: docs/INVENTORY.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff contains no update to docs/INVENTORY.md, which was listed as an expected file to update.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_checkout_head_diagnostics.py:7-10 | severity=NIT | confidence=5\n  PROBLEM: The module docstring describes the removed PATH-shim design. The comment above `FAKE_FUNCTIONS` (about lines 46-53) contradicts it.\n  WHY: Nothing fails at runtime, but the docstring misleads maintainers and could lead them to reintroduce PATH shims that do not run under noexec temp mounts.\n- TASK COMPLETENESS / INTENT GAPS: none. The reviewer found all deliverables present and did not map the `copilot-pull-request-reviewer` `custom_instructions_too_large` signal to any hunk.\n- HARDENING_SUGGESTIONS: reword the docstring at lines 7-10 to describe the `git` and `sleep` shell functions in `FAKE_FUNCTIONS` (about 3 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_checkout_head_diagnostics.py:7-10 | severity=NIT | confidence=5\n  PROBLEM: The module docstring says the tests use a git wrapper on PATH and a no-op `sleep`.\n  WHY: It does not fail at runtime, but it contradicts the `FAKE_FUNCTIONS` shell-function harness (lines 48-73) and misleads maintainers.\n- TASK_GAP: Requirement: Update tests/inventory_parity.py as part of the expected files change. | Expected change site: tests/inventory_parity.py | Evidence of absence: The PR diff contains no update to tests/inventory_parity.py. | SEVERITY: BLOCKER | ISSUE_CONFIDENCE: 4\n- TASK_GAP: Requirement: Update tests/test_ci_wires_every_test_file.py as part of the expected files change. | Expected change site: tests/test_ci_wires_every_test_file.py | Evidence of absence: The PR diff contains no update to tests/test_ci_wires_every_test_file.py. | SEVERITY: BLOCKER | ISSUE_CONFIDENCE: 4\n- TASK_GAP: Requirement: Update docs/INVENTORY.md as part of the expected files change. | Expected change site: docs/INVENTORY.md | Evidence of absence: The PR diff contains no update to docs/INVENTORY.md. | SEVERITY: BLOCKER | ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_checkout_head_diagnostics.py:7-10 | severity=NIT | confidence=5\n  PROBLEM: The module docstring still describes the abandoned PATH-shim harness. The comment at lines 46-48 and `FAKE_FUNCTIONS` (lines 46-73) show the fakes are now shell functions.\n  WHY: Test execution is unaffected, but a maintainer could rebuild the PATH harness and hit the same noexec failure the comment already explains.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_checkout_head_diagnostics.py:7-10 | severity=NIT | confidence=5\n  PROBLEM: The module docstring says the tests use a git wrapper on PATH and a no-op `sleep`, but the harness now defines shell functions in `FAKE_FUNCTIONS` (lines 46-73).\n  WHY: The description misleads maintainers, and restoring PATH shims would not work in the noexec temp environment.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_checkout_head_diagnostics.py:8-9 | severity=NIT | confidence=5\n  PROBLEM: The docstring still says \"with a git wrapper on PATH that can fail `git fetch` with a configured stderr and a no-op `sleep`\", while the comment at lines 46-52 and `FAKE_FUNCTIONS` at line 53 show shell functions.\n  WHY: The last run's edit replaced the shims without updating these lines. There is no runtime failure, but it misleads maintainers.\n- Verification notes: the `FAKE_FUNCTIONS` harness (tests/test_review_checkout_head_diagnostics.py:53-73) is mechanically sound and introduces no runtime defect. The `copilot-pull-request-reviewer` `custom_instructions_too_large` failure is not traceable to any diff hunk. All deliverables are present, with no task gaps. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0ddb27856de80437e30cc4bc4c82fa8e27525392528a24b19bcb5c43cae00b89",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9131,
+    "run_id": "42628438975",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42628438975",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109141044_de261502bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9131,
+    "run_id": "42628438975"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-09T14:10:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
