@@ -60,8 +60,7 @@ def _load_guard():
 	# The review sandbox snapshot omits the live hook (allowed() refuses it), so
 	# import its byte-identical template twin there; the parity test below still
 	# fails when the live copy is missing in a full checkout.
-	source = GUARD_PATH if GUARD_PATH.is_file() else TEMPLATE_GUARD_PATH
-	spec = importlib.util.spec_from_file_location("pr_merge_status_guard", source)
+	spec = importlib.util.spec_from_file_location("pr_merge_status_guard", RUNNABLE_GUARD_PATH)
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
