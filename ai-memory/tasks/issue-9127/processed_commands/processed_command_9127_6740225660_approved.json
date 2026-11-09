@@ -5,13 +5,26 @@
   "entry_id": "processed_command_9127_6740225660_approved",
   "issue_number": 9127,
   "metadata": {
+    "branch": "ai/issue-9127",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "agents.d/wfopt-2026-10-08-review-checkout-diagnostics.md",
+      "changelog.d/wfopt-2026-10-08-review-checkout-diagnostics.md",
+      "scripts/review_autofix_step_checkout_pr_head_branch.sh",
+      "tests/test_review_checkout_head_diagnostics.py"
+    ],
+    "issue_number": 9127,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9127",
+    "pr_number": 9131,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9131",
+    "run_attempt": "1",
+    "run_id": "42618496695",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42618496695"
   },
   "run_attempt": 1,
   "run_id": "42618496695",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-09T12:46:17Z",
+  "status": "completed",
+  "timestamp": "2026-11-09T12:59:52Z",
   "workflow": "implement"
 }
