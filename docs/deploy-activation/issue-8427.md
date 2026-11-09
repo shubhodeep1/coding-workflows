@@ -5,7 +5,7 @@
 - How it runs: inside the existing pipelines (clarify / plan / implement / review_autofix / orchestrate / orchestrate_poll cron / issue_pr_status on PR merge), each phase behind a default-off repo variable
 - Status: IN_PROGRESS
 - Last updated: 2026-11-09
-- Last note: Steps 1-6 and 13 done; next is Step 7 (set PERSIST_BUDGET_ENABLED=true)
+- Last note: Steps 1-7 and 13 done; next is Step 8 (set PERSIST_ORCH_CONTEXT_ENABLED=true)
 - Human-steps issue: https://github.com/shubhodeep1/coding-workflows/issues/6211 — key project-8427 (authoritative comment now 6729299210, posted 2026-11-09; all 11 lines already ticked by the promote cycle)
 
 ## Runbook
@@ -15,7 +15,7 @@
 4. [x] Set PERSIST_REPAIR_LOOP_ENABLED=true (implement.yml:25, default 'false') — covers project-8427 «P3 multi-turn repair loop off (PERSIST_REPAIR_LOOP_ENABLED)» — done 2026-11-09: operator `gh variable get` returns `true`
 5. [x] Set PERSIST_EVIDENCE_PACK_ENABLED=true (clarify.yml:23, default 'false') — covers project-8427 «P4 evidence pack off (PERSIST_EVIDENCE_PACK_ENABLED)» — done 2026-11-09: operator `gh variable get` returns `true`
 6. [x] Set PERSIST_POSTMERGE_VERIFY_ENABLED=true (issue_pr_status.yml:53, default 'false') — covers project-8427 «P5 post-merge verification off (PERSIST_POSTMERGE_VERIFY_ENABLED)» — done 2026-11-09: operator `gh variable get` returns `true`
-7. [ ] Set PERSIST_BUDGET_ENABLED=true (orchestrate_poll.yml:47, default 'false') — covers project-8427 «P6 budget and progress governor off (PERSIST_BUDGET_ENABLED)»
+7. [x] Set PERSIST_BUDGET_ENABLED=true (orchestrate_poll.yml:47, default 'false') — covers project-8427 «P6 budget and progress governor off (PERSIST_BUDGET_ENABLED)» — done 2026-11-09: operator said `done` (no output; session proxy cannot read vars, re-checked in Step 14)
 8. [ ] Set PERSIST_ORCH_CONTEXT_ENABLED=true (orchestrate.yml:73, default 'false') — covers project-8427 «P7 orchestrator context off (PERSIST_ORCH_CONTEXT_ENABLED)»
 9. [ ] Set PERSIST_ORCH_FAILURE_GROUPING_ENABLED=true (orchestrate_poll.yml:54, default 'false') — covers project-8427 «P8 repeated-failure grouping off (PERSIST_ORCH_FAILURE_GROUPING_ENABLED)»
 10. [ ] Set PERSIST_ORCH_WAVE_CHECK_ENABLED=true (orchestrate_poll.yml:58, default 'false') — covers project-8427 «P9 between-wave CI check off (PERSIST_ORCH_WAVE_CHECK_ENABLED)»
