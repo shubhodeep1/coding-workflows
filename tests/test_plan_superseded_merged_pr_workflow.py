@@ -417,7 +417,76 @@ def test_pr_not_open_plans_on_default_base(tmp_path):
 	assert "SKIP_PLAN" not in github_env
 	assert "PLAN_REROUTED_REF" not in github_env
 	assert "outcome=plan reason=merged_check_not_passed" in proc.stdout
+	assert "gate=none" in proc.stdout
 	assert not any(call[:2] == ["issue", "close"] for call in calls)
+
+
+# Stand-in for scripts/check_triage_resolution.py: records its argv and prints
+# the verdict the test asks for, so the wiring is tested without the gate's
+# own API reads (tests/test_check_triage_resolution.py covers those).
+STUB_TRIAGE_GATE = r'''import json, os, sys
+with open(os.environ["STUB_GATE_LOG"], "a", encoding="utf-8") as handle:
+	handle.write(json.dumps(sys.argv[1:]) + "\n")
+print(json.dumps({"status": os.environ.get("STUB_GATE_STATUS", ""), "issue": 7185}))
+sys.exit(int(os.environ.get("STUB_GATE_RC", "0")))
+'''
+
+
+def _run_with_stub_gate(tmp_path, status, rc="0"):
+	work = tmp_path / "work"
+	(work / ".codex-workflow-src" / "scripts").mkdir(parents=True)
+	(work / ".codex-workflow-src" / "scripts" / "check_triage_resolution.py").write_text(STUB_TRIAGE_GATE)
+	gate_log = tmp_path / "gate.log"
+	proc, calls, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
+		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main", "PLAN_SUPERSEDE_RESOLVED_REF": "main",
+			"STUB_GATE_LOG": str(gate_log), "STUB_GATE_STATUS": status, "STUB_GATE_RC": rc})
+	gate_calls = [json.loads(line) for line in gate_log.read_text().splitlines()] if gate_log.exists() else []
+	return proc, calls, github_env, gate_calls
+
+
+@pytest.mark.parametrize("status", ["resolved", "already_resolved"])
+def test_merged_red_head_green_default_branch_skips_planning(tmp_path, status):
+	# Consumer fun-token-multi-chain #765: the PR merged with the check red on
+	# its final head, main ran it green afterwards, and planning still ran.
+	proc, calls, github_env, gate_calls = _run_with_stub_gate(tmp_path, status)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert f"outcome=resolved reason=default_branch_green gate={status}" in proc.stdout
+	assert len(gate_calls) == 1
+	args = gate_calls[0]
+	assert args[0] == "gate"
+	assert args[args.index("--repo") + 1] == REPO and args[args.index("--issue-number") + 1] == "7185"
+	assert args[args.index("--default-branch") + 1] == "main"
+	assert "--dry-run" not in args
+	# The gate itself writes the evidence comment and the close.
+	assert not any(call[:2] == ["issue", "close"] for call in calls)
+
+
+def test_merged_red_head_unverified_gate_still_plans(tmp_path):
+	proc, _, github_env, gate_calls = _run_with_stub_gate(tmp_path, "unverified")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN" not in github_env
+	assert "outcome=plan reason=merged_check_not_passed gate=unverified gate_rc=0" in proc.stdout
+	assert len(gate_calls) == 1
+
+
+def test_merged_red_head_gate_close_failure_skips_planning(tmp_path):
+	proc, _, github_env, _ = _run_with_stub_gate(tmp_path, "write_failed", rc="3")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert "outcome=skip reason=resolved_close_failed" in proc.stdout
+
+
+def test_merged_red_head_gate_error_plans(tmp_path):
+	proc, _, github_env, _ = _run_with_stub_gate(tmp_path, "resolved", rc="1")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN" not in github_env
+	assert "outcome=plan reason=merged_check_not_passed gate=resolved gate_rc=1" in proc.stdout
+
+
+def test_step_passes_the_resolution_gate_switch():
+	block = "\n".join(_step_block(STEP_NAME))
+	assert "CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}" in block
 
 
 def _assert_plan_blocked_handoff(calls, pr="6976"):
