@@ -1453,6 +1453,10 @@ jobs:
                 if [ "${triage_gate_rc}" = "0" ] && { [ "${triage_gate_status}" = "resolved" ] || \
                   [ "${triage_gate_status}" = "already_resolved" ]; }; then
                   echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+                  # The gate adds ai:closed but leaves this job's ai:planning;
+                  # drop it like the superseded close path (best effort).
+                  gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO_SLUG}" \
+                    --remove-label 'ai:planning' >/dev/null 2>&1 || true
                   log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=resolved reason=default_branch_green gate=${triage_gate_status} gate_rc=${triage_gate_rc}"
                 elif [ "${triage_gate_rc}" = "3" ]; then
                   # Verified fixed, but the close write failed: never plan a

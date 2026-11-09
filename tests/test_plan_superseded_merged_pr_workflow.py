@@ -464,6 +464,9 @@ def test_merged_red_head_green_default_branch_skips_planning(tmp_path, status):
 	assert "--dry-run" not in args
 	# The gate itself writes the evidence comment and the close.
 	assert not any(call[:2] == ["issue", "close"] for call in calls)
+	# The step drops the ai:planning label this job added.
+	edit = next(call for call in calls if call[:2] == ["issue", "edit"])
+	assert edit[edit.index("--remove-label") + 1] == "ai:planning"
 
 
 def test_merged_red_head_unverified_gate_still_plans(tmp_path):
