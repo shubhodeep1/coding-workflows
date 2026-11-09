@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-11-09T18:15:01Z",
+  "issue_number": 9136,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=AGENTS.md:1-1; cited_path=AGENTS.md; files_touched=.github/workflows/workflow-log-analysis.yml, agents.d/analysis-findings-p3-collection-checks.md, changelog.d/analysis-findings-p3-collection-checks.md, prompts/_templates/mode-workflow-analysis.txt, prompts/mode-workflow-analysis.txt, scripts/analyze_workflow_logs.py, scripts/collect_workflow_logs.py, tests/test_analyze_workflow_logs.py, tests/test_collect_workflow_logs.py, tests/test_workflow_log_analysis_failure_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 9142,
+  "record_id": "lesson_20261109181501_c0be0fd4bd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md",
+    ".github/workflows/workflow-log-analysis.yml",
+    "agents.d/analysis-findings-p3-collection-checks.md",
+    "changelog.d/analysis-findings-p3-collection-checks.md",
+    "prompts/_templates/mode-workflow-analysis.txt",
+    "prompts/mode-workflow-analysis.txt",
+    "scripts/analyze_workflow_logs.py",
+    "scripts/collect_workflow_logs.py",
+    "tests/test_analyze_workflow_logs.py",
+    "tests/test_collect_workflow_logs.py",
+    "tests/test_workflow_log_analysis_failure_contract.py"
+  ]
+}
