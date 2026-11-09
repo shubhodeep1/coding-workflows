@@ -467,6 +467,21 @@ def test_merged_red_head_green_default_branch_skips_planning(tmp_path, status):
 	# The step drops the ai:planning label this job added.
 	edit = next(call for call in calls if call[:2] == ["issue", "edit"])
 	assert edit[edit.index("--remove-label") + 1] == "ai:planning"
+	assert f"gate={status} gate_rc=0 label=applied" in proc.stdout
+
+
+def test_merged_red_head_green_label_failure_is_reported(tmp_path):
+	work = tmp_path / "work"
+	(work / ".codex-workflow-src" / "scripts").mkdir(parents=True)
+	(work / ".codex-workflow-src" / "scripts" / "check_triage_resolution.py").write_text(STUB_TRIAGE_GATE, encoding="utf-8")
+	proc, _, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
+		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main", "PLAN_SUPERSEDE_RESOLVED_REF": "main",
+			"STUB_GATE_LOG": str(tmp_path / "gate.log"), "STUB_GATE_STATUS": "resolved", "STUB_GATE_RC": "0",
+			"FAKE_EDIT_FAIL": "1"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert "outcome=resolved reason=default_branch_green gate=resolved gate_rc=0 label=failed" in proc.stdout
+	assert "::warning::Check-triage issue #7185 was closed but ai:planning could not be removed." in proc.stdout + proc.stderr
 
 
 def test_merged_red_head_unverified_gate_still_plans(tmp_path):
