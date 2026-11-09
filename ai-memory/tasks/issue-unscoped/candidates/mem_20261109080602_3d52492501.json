@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:37,63-64 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The fallback expression `GUARD_PATH if GUARD_PATH.is_file() else TEMPLATE_GUARD_PATH` is duplicated at two sites (RUNNABLE_GUARD_PATH and inside _load_guard()) with no shared definition.\n  WHY: A future change to one site would silently leave the other inconsistent (source reported severity NIT).\n- tests/test_pr_merge_status_guard.py:46-49,2469-2473 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When REVIEW_SANDBOX_SNAPSHOT is True, test_template_copies_are_identical returns early and checks only file presence, not byte-identity of the template twins.\n  WHY: A sandbox CI run cannot catch drift between the template and the live copy (source reported severity NIT).\n- tests/test_pr_merge_status_guard.py:50,3048 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: In sandbox mode RUNNABLE_GUARD_PATH and LIVE_OR_SANDBOX_SETTINGS_PATH resolve to the template paths, so several parametrized cases run the same target twice.\n  WHY: This doubles sandbox wall-time without adding coverage (source reported severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"All existing pairing guards still apply: identical index stages, template admitted to the sandbox, no symlinks, no conflict markers before mirroring, and an exact registry match in mirror-live-copies.\"\n  expected_change_site: scripts/review_untrusted_workspace.py: mirror-live-copies logic (paired_live_copies / mirror_live_copies)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR adds the hooks (gh_api_write_guard.py, pr_watch_guard.py, session-start.sh) to PAIRED_LIVE_COPIES, but mirror-live-copies does not appear to be modified to validate them, assuming it is not already generic. minimax_minimax-m3 and z-ai_glm-5_3-flash checked the unchanged code and called this a false positive, because all five guards are present at lines 841, 843, 846-847, 868 and 871-872.\n- requirement: Cross-pollinated from google_gemini-3_1-flash-lite: \"allowed() configuration may be overridden for gh_api_write_guard.py.\"\n  expected_change_site: scripts/review_untrusted_workspace.py check_paths at lines 717-720\n  confidence=2\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: minimax_minimax-m3 reports no gap. The changelog and the inline comment at lines 717-718 document the check-paths hardening as intentional, and the editor's allowed() still admits the file (source reported severity NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: \"All existing pairing guards still apply: identical index stages, template admitted to the sandbox, no symlinks, no conflict markers before mirroring, and an exact registry match in mirror-live-copies.\"\n  Expected change site: scripts/review_untrusted_workspace.py: mirror-live-copies logic\n  Evidence of absence: The PR adds the hooks (gh_api_write_guard.py, pr_watch_guard.py, session-start.sh) to PAIRED_LIVE_COPIES, but the implementation of mirror-live-copies, which is responsible for enforcing the pairing guard requirements (identical index stages and registry matches), does not appear to be modified to include these new hooks in its validation logic, assuming it is not already generic.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_pr_merge_status_guard.py:37,63-64 | severity=NIT | confidence=3\n  PROBLEM: The fallback expression `GUARD_PATH if GUARD_PATH.is_file() else TEMPLATE_GUARD_PATH` is duplicated at two sites with no shared definition.\n  WHY: A future change to the rule at one site would silently leave the other inconsistent.\n- tests/test_pr_merge_status_guard.py:46-49,2469-2473 | severity=NIT | confidence=3\n  PROBLEM: When REVIEW_SANDBOX_SNAPSHOT is True, test_template_copies_are_identical short-circuits without checking that the template twins are byte-identical to each other or to anything else.\n  WHY: A sandbox CI run cannot catch a divergence between the template and what would be the live copy.\n- tests/test_pr_merge_status_guard.py:3048,50 | severity=NIT | confidence=2\n  PROBLEM: In sandbox mode several parametrized cases become duplicates, running the same target file twice under the same id.\n  WHY: This doubles wall-time without adding coverage.\n- TASK_GAP: Requirement: PR Description states \"All existing pairing guards still apply: identical index stages, template admitted to the sandbox, no symlinks, no conflict markers before mirroring, and an exact registry match in mirror-live-copies.\"\n  Expected change site: scripts/review_untrusted_workspace.py paired_live_copies and mirror_live_copies\n  Evidence of absence: All five guards are present in the unchanged existing code (lines 841, 843, 846-847, 868, 871-872). The PR description is accurate; no code gap exists. The cross-pollinated TASK_GAP from google_gemini-3_1-flash-lite is a false positive.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- TASK_GAP: Requirement: Cross-pollinated from google_gemini-3_1-flash-lite: \"allowed() configuration may be overridden for gh_api_write_guard.py.\"\n  Expected change site: scripts/review_untrusted_workspace.py check_paths at lines 717-720\n  Evidence of absence: The PR documents in changelog.d/9108-pair-remaining-hook-live-copies.md and in the inline comment at lines 717-718 that the check-paths hardening is intentional. This is the contract the PR ships, not a defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- HARDENING_SUGGESTIONS: tests/test_pr_merge_status_guard.py lines 37 and 63: compute the source path once (`RUNNABLE_GUARD_PATH = GUARD_PATH if GUARD_PATH.is_file() else TEMPLATE_GUARD_PATH`) and use `str(RUNNABLE_GUARD_PATH)` in `_load_guard()` (about 2 lines changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a5acf59ec8b9b06e29c905931f0cef835112e708f6443984992e68c2030c39d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9108,
+    "run_id": "42580772486",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42580772486",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261109080602_3d52492501",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9108,
+    "run_id": "42580772486"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-09T08:06:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
