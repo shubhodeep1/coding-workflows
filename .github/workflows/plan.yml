@@ -2227,7 +2227,7 @@ jobs:
             DEP_WAIT_NUMBER=""
             DEP_WAIT_HELPER="${SUPPORT_SCRIPTS_DIR:-}/dependency_wait_resume.py"
             if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${DEP_WAIT_HELPER}" ] && [ ! -L "${DEP_WAIT_HELPER}" ]; then
-              DEP_WAIT_JSON="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${DEP_WAIT_HELPER}" parse-waiting --output-file "${CODEX_OUTPUT_PARSE_FILE}" --repo "${GITHUB_REPOSITORY}" --issue-number "${ISSUE_NUMBER:-}" --phase plan)" || DEP_WAIT_JSON='{"status":"error"}'
+              DEP_WAIT_JSON="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${DEP_WAIT_HELPER}" parse-waiting --output-file "${CODEX_OUTPUT_PARSE_FILE}" --repo "${GITHUB_REPOSITORY}" --issue-number "${ISSUE_NUMBER:-}" --phase plan --ignore-fences)" || DEP_WAIT_JSON='{"status":"error"}'
               DEP_WAIT_STATUS="$(printf '%s' "${DEP_WAIT_JSON}" | jq -r '.status // "error"' 2>/dev/null)" || DEP_WAIT_STATUS="error"
             else
               echo "::warning::DEPENDENCY_WAIT_PARK op=parse outcome=skip reason=helper_missing; the WAITING: line takes the BLOCKED path."
@@ -2450,7 +2450,7 @@ jobs:
             gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
           fi
 
-                    # Stuck-states P8a-2 (Refs #8291): park a validated WAITING: answer in
+          # Stuck-states P8a-2 (Refs #8291): park a validated WAITING: answer in
           # ai:waiting-on-dependency with the trusted AI_DEPENDENCY_WAIT_V1
           # marker the poller's "Resume dependency waits" scan reads. Any park
           # status but `parked` falls through to the unchanged ai:blocked path.
