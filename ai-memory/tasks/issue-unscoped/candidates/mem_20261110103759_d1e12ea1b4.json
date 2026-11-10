@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/persist_postmerge_verify.py:PHASE_LABELS tuple | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PHASE_LABELS tuple is missing the ai:waiting-on-dependency label, which was introduced to other parts of the system in this PR.\n  WHY: tests/test_persist_postmerge_verify.py::test_phase_labels_mirror_label_helpers_and_label_is_registered fails because the mirrored list does not match _AI_PHASE_LABELS in scripts/label_helpers.sh. The reviewer rated it BLOCKER, which is mapped to high here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add the new label ai:waiting-on-dependency to the mirrored PHASE_LABELS tuple in scripts/persist_postmerge_verify.py, in the same order as _AI_PHASE_LABELS in scripts/label_helpers.sh.\n  expected_change_site: scripts/persist_postmerge_verify.py (PHASE_LABELS)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: scripts/persist_postmerge_verify.py is not in the PR diff, and the patch has no changes to PHASE_LABELS, although CI triage identifies it as a root cause for the tests-hooks-and-orchestrator failure.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/persist_postmerge_verify.py:PHASE_LABELS tuple | severity=BLOCKER | confidence=5\n  PROBLEM: The PHASE_LABELS tuple is missing the ai:waiting-on-dependency label, which was introduced to other parts of the system in this PR.\n  WHY: tests/test_persist_postmerge_verify.py::test_phase_labels_mirror_label_helpers_and_label_is_registered fails because the mirrored list does not match _AI_PHASE_LABELS in scripts/label_helpers.sh.\n- TASK_GAP:\n  Requirement: Add the new label ai:waiting-on-dependency to the mirrored PHASE_LABELS tuple in scripts/persist_postmerge_verify.py, in the same order as _AI_PHASE_LABELS in scripts/label_helpers.sh.\n  Expected change site: scripts/persist_postmerge_verify.py\n  Evidence of absence: The file scripts/persist_postmerge_verify.py is not included in the PR diff, and no changes to PHASE_LABELS are present in the provided patch, despite the automated CI failure triage identifying it as a root cause for the tests-hooks-and-orchestrator failure.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===",
+  "fingerprint": "715da9cd3519b0c11b21c23e29756e1ccc3359d730ab3e3a1b9d2e9b6c3a7507",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9182,
+    "run_id": "42797513441",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42797513441",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110103759_d1e12ea1b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9182,
+    "run_id": "42797513441"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T10:37:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
