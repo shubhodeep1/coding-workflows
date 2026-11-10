@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-10T02:55:38Z",
+  "tick_at": "2026-11-10T03:13:23Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,12 +11,12 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 5
+    "tracking_issues": 4
   },
   "tracking_issues": [
     {
       "current_wave": 16,
-      "integration_ahead_by": "168",
+      "integration_ahead_by": "169",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -37,7 +37,7 @@
     },
     {
       "current_wave": 4,
-      "integration_ahead_by": "39",
+      "integration_ahead_by": "40",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -58,7 +58,7 @@
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "12",
+      "integration_ahead_by": "13",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -79,12 +79,12 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "0",
+      "integration_ahead_by": "1",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 2,
         "implementation_failed": 0,
-        "in_progress": 1,
+        "in_progress": 0,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -97,27 +97,6 @@
       "title": "[Orchestrator] Run CI-failure re-issues on the branch that holds the failing code, and give the implement sandbox a Solidity compiler",
       "total_waves": 1,
       "wave_complete": false
-    },
-    {
-      "current_wave": 1,
-      "integration_ahead_by": "0",
-      "issue_counts": {
-        "closed": 1,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 9173,
-      "project_complete": true,
-      "status": "failed",
-      "title": "[E2E Smoke Test] Review-Blocked Simulation (run 42730467671)",
-      "total_waves": 1,
-      "wave_complete": true
     }
   ]
 }
