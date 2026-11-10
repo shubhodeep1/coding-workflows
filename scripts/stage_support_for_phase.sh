@@ -102,11 +102,13 @@ case "${stage_support_phase}" in
 		# gh_helpers.sh sources emit_event.sh from its own directory first.
 		# clarify_blocked_verify.sh (stuck-states P9b) is optional: a support
 		# ref older than it must not stop clarify; Run Codex skips the retry.
+		# dependency_wait_resume.py (stuck-states P8a-2) parses and parks
+		# WAITING: answers; without it a WAITING: line takes the BLOCKED path.
 		# The persistence helpers (attempt journal #8428 P1, evidence pack
 		# #8427 P4) are optional, as in the legacy step: their PERSIST_*
 		# switches default off.
 		stage_support_optional_scripts=(
-			emit_event.sh clarify_blocked_verify.sh
+			emit_event.sh clarify_blocked_verify.sh dependency_wait_resume.py
 			attempt_journal.py gh_api_retry.py evidence_pack.py targeted_file_context.py
 		)
 		stage_support_data_files=(clarify_sandbox/Dockerfile)
@@ -136,10 +138,12 @@ case "${stage_support_phase}" in
 			clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh
 		)
 		# gh_helpers.sh sources emit_event.sh from its own directory first.
+		# dependency_wait_resume.py (stuck-states P8a-2) is optional, as for
+		# clarify: without it a WAITING: plan answer takes the BLOCKED path.
 		# The persistence helpers (#8428 P1, #8427 P2/P4/P11) are optional,
 		# as in the legacy step: their PERSIST_* switches default off.
 		stage_support_optional_scripts=(
-			emit_event.sh
+			emit_event.sh dependency_wait_resume.py
 			acceptance_check.py targeted_file_context.py evidence_pack.py evidence_broker.py
 			attempt_journal.py gh_api_retry.py
 		)

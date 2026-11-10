@@ -1673,6 +1673,7 @@ jobs:
              docs are found; without a web tool, or if the docs are genuinely
              unavailable, follow point 5 and ask a clarification question instead of
              inventing details.
+          10. Sequencing wait: when the only blocker is another pull request that has not merged, an upstream change not yet in the `shubhodeep1/coding-workflows` `@stable` release, or another issue in this repository that must be finished first, emit exactly one line `WAITING: pr=<owner>/<repo>#<N>`, `WAITING: release=shubhodeep1/coding-workflows@stable contains=shubhodeep1/coding-workflows#<N>` or `WAITING: issue=<owner>/<repo>#<N>` instead of `BLOCKED:`. `pr` names this repository or `shubhodeep1/coding-workflows`; `issue` names this repository and never this issue.
 
           ANSWER COMPATIBILITY (MANDATORY — prevents wasted planning runs):
           - When designing multiple-choice questions, check whether any combinations of
@@ -1714,6 +1715,9 @@ jobs:
 
           Or, for blocked handoff:
           BLOCKED: <short reason>
+
+          Or, for a sequencing wait (point 10):
+          WAITING: <target>
           PROMPT
 
           # Build prompt: static context + instructions + dynamic issue context,
@@ -1960,6 +1964,8 @@ jobs:
                   if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
                   next if $in_code;
                   if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { $blocked = 1; exit; }
+                  # Stuck-states P8a-2: a WAITING: line is terminal too (parsed as blocked).
+                  if (/^\s*WAITING:\s*\S/i) { $blocked = 1; exit; }
                   $status = 1 if /^\s*(?:#+\s*)?(?:\*\*)?STATUS:(?:\*\*)?\s*(?:\*\*)?(?:CLEAR|NEEDS_CLARIFICATION)\b/i;
                   $qs = 1 if $q_hdr && /^\s*(?:>\s*)*\*?\*?Q[0-9]+/;
                   $q_hdr = 1 if /QUESTIONS:/i;
@@ -2057,7 +2063,7 @@ jobs:
               fi
             fi
             if [ -n "${CODEX_OUTPUT_FILE:-}" ] && [ -f "${CODEX_OUTPUT_FILE}" ]; then
-              STATUS="$(grep -oiE 'STATUS:\s*(CLEAR|NEEDS_CLARIFICATION)|^\s*BLOCKED:\s*.+$' "${CODEX_OUTPUT_FILE}" | head -1 || echo "unknown")"
+              STATUS="$(grep -oiE 'STATUS:\s*(CLEAR|NEEDS_CLARIFICATION)|^\s*BLOCKED:\s*.+$|^\s*WAITING:\s*.+$' "${CODEX_OUTPUT_FILE}" | head -1 || echo "unknown")"
               echo "| Result | ${STATUS} |"
               # Count questions if clarification was needed
               if echo "${STATUS}" | grep -qi 'NEEDS_CLARIFICATION'; then
@@ -2071,13 +2077,76 @@ jobs:
       - name: Parse Codex output
         id: parse_codex
         if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true'))
+        env:
+          DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}
         run: |
           set -euo pipefail
+          # Stuck-states P8a-2 (Refs #8291): a WAITING: line is a sequencing wait
+          # on another PR, an upstream @stable release or a same-repo issue. It
+          # is a sub-case of blocked=true, so every gate keyed on `blocked`
+          # still holds: the blocked handler parks the issue in
+          # ai:waiting-on-dependency when the bundle dependency_wait_resume.py
+          # validates the target, and takes today's ai:blocked path otherwise.
+          # Without the bundle helper (older support ref, legacy staging) the
+          # line takes the BLOCKED path too, so a WAITING-only answer never
+          # reads as clear. Fences skip it, as for BLOCKED.
+          DEP_WAIT_RAW="$(perl -ne '
+            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
+            next if $in_code;
+            if (/^\s*WAITING:\s*(.*\S)\s*$/i) { print $1; exit; }
+          ' "${CODEX_OUTPUT_FILE}")"
+          DEP_WAIT_STATUS=""
+          DEP_WAIT_TARGET=""
+          if [ -n "${DEP_WAIT_RAW}" ]; then
+            DEP_WAIT_STATUS="unparsed"
+            DEP_WAIT_JSON=""
+            DEP_WAIT_KIND=""
+            DEP_WAIT_REPO=""
+            DEP_WAIT_NUMBER=""
+            DEP_WAIT_HELPER="${SUPPORT_SCRIPTS_DIR:-}/dependency_wait_resume.py"
+            if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${DEP_WAIT_HELPER}" ] && [ ! -L "${DEP_WAIT_HELPER}" ]; then
+              DEP_WAIT_JSON="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${DEP_WAIT_HELPER}" parse-waiting --output-file "${CODEX_OUTPUT_FILE}" --repo "${GITHUB_REPOSITORY}" --issue-number "${ISSUE_NUMBER:-}" --phase clarify)" || DEP_WAIT_JSON='{"status":"error"}'
+              DEP_WAIT_STATUS="$(printf '%s' "${DEP_WAIT_JSON}" | jq -r '.status // "error"' 2>/dev/null)" || DEP_WAIT_STATUS="error"
+            else
+              echo "::warning::DEPENDENCY_WAIT_PARK op=parse outcome=skip reason=helper_missing; the WAITING: line takes the BLOCKED path."
+            fi
+            if [ "${DEP_WAIT_STATUS}" = "waiting" ]; then
+              DEP_WAIT_KIND="$(printf '%s' "${DEP_WAIT_JSON}" | jq -r '.kind // ""' 2>/dev/null)" || DEP_WAIT_KIND=""
+              DEP_WAIT_REPO="$(printf '%s' "${DEP_WAIT_JSON}" | jq -r '.repo // ""' 2>/dev/null)" || DEP_WAIT_REPO=""
+              DEP_WAIT_NUMBER="$(printf '%s' "${DEP_WAIT_JSON}" | jq -r '.number // ""' 2>/dev/null)" || DEP_WAIT_NUMBER=""
+              DEP_WAIT_TARGET="$(printf '%s' "${DEP_WAIT_JSON}" | jq -r '.target // ""' 2>/dev/null)" || DEP_WAIT_TARGET=""
+              # Single-line GITHUB_OUTPUT values: re-check the helper's tokens.
+              if ! [[ "${DEP_WAIT_KIND}" =~ ^(pr|release|issue)$ && "${DEP_WAIT_REPO}" =~ ^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$ \
+                && "${DEP_WAIT_NUMBER}" =~ ^[1-9][0-9]{0,9}$ && "${DEP_WAIT_TARGET}" =~ ^[A-Za-z0-9_.:/#@-]{1,300}$ ]]; then
+                DEP_WAIT_STATUS="error"
+              fi
+            fi
+            if [ "${DEP_WAIT_STATUS}" = "waiting" ]; then
+              {
+                echo "waiting=true"
+                echo "waiting_kind=${DEP_WAIT_KIND}"
+                echo "waiting_repo=${DEP_WAIT_REPO}"
+                echo "waiting_number=${DEP_WAIT_NUMBER}"
+              } >> "$GITHUB_OUTPUT"
+            else
+              echo "waiting=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "waiting=false" >> "$GITHUB_OUTPUT"
+          fi
           BLOCKED_REASON="$(perl -ne '
             if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
             next if $in_code;
             if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { print $1; exit; }
           ' "${CODEX_OUTPUT_FILE}")"
+
+          # Stuck-states P8a-2: a valid WAITING: line wins over BLOCKED:; any
+          # other WAITING: line keeps the BLOCKED reason, or becomes the reason.
+          if [ "${DEP_WAIT_STATUS}" = "waiting" ]; then
+            BLOCKED_REASON="WAITING: ${DEP_WAIT_TARGET}"
+          elif [ -n "${DEP_WAIT_RAW}" ] && [ -z "${BLOCKED_REASON}" ]; then
+            BLOCKED_REASON="WAITING: $(printf '%s' "${DEP_WAIT_RAW}" | tr -d '[:cntrl:]' | cut -c1-300)"
+          fi
 
           if [ -n "${BLOCKED_REASON}" ]; then
             BLOCKED_REASON_OUTPUT_DELIM="BLOCKED_REASON_OUTPUT_${GITHUB_RUN_ID:-0}_${GITHUB_RUN_ATTEMPT:-0}_$$"
@@ -2140,12 +2209,52 @@ jobs:
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           BLOCKED_REASON: ${{ steps.parse_codex.outputs.blocked_reason }}
+          WAITING_PARSED: ${{ steps.parse_codex.outputs.waiting }}
+          WAITING_KIND: ${{ steps.parse_codex.outputs.waiting_kind }}
+          WAITING_REPO: ${{ steps.parse_codex.outputs.waiting_repo }}
+          WAITING_NUMBER: ${{ steps.parse_codex.outputs.waiting_number }}
+          DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}
+          DEPENDENCY_WAIT_ESCALATE_DAYS: ${{ vars.DEPENDENCY_WAIT_ESCALATE_DAYS || '7' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           source "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh"
+
+          # Stuck-states P8a-2 (Refs #8291): park a validated WAITING: answer in
+          # ai:waiting-on-dependency with the trusted AI_DEPENDENCY_WAIT_V1
+          # marker the poller's "Resume dependency waits" scan reads. Any park
+          # status but `parked` falls through to the unchanged ai:blocked path.
+          if [ "${WAITING_PARSED:-false}" = "true" ]; then
+            DEP_WAIT_PARK_STATUS="helper_missing"
+            DEP_WAIT_PARK_TARGET="-"
+            DEP_WAIT_PARK_HELPER="${SUPPORT_SCRIPTS_DIR:-}/dependency_wait_resume.py"
+            DEP_WAIT_PARK_RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${DEP_WAIT_PARK_HELPER}" ] && [ ! -L "${DEP_WAIT_PARK_HELPER}" ]; then
+              ensure_label_exists "ai:waiting-on-dependency" "${{ github.repository }}" || true
+              DEP_WAIT_PARK_JSON="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${DEP_WAIT_PARK_HELPER}" park --repo "${{ github.repository }}" \
+                --issue-number "${ISSUE_NUMBER}" --kind "${WAITING_KIND:-}" --target-repo "${WAITING_REPO:-}" --number "${WAITING_NUMBER:-}" \
+                --phase clarify --run-url "${DEP_WAIT_PARK_RUN_URL}")" || DEP_WAIT_PARK_JSON='{"status":"error"}'
+              DEP_WAIT_PARK_STATUS="$(printf '%s' "${DEP_WAIT_PARK_JSON}" | jq -r '.status // "error"' 2>/dev/null | tr -cd 'a-z_')" || DEP_WAIT_PARK_STATUS="error"
+              DEP_WAIT_PARK_TARGET="$(printf '%s' "${DEP_WAIT_PARK_JSON}" | jq -r '.target // "-"' 2>/dev/null | tr -cd 'A-Za-z0-9_.:/#@-')" || DEP_WAIT_PARK_TARGET="-"
+            fi
+            if [ "${DEP_WAIT_PARK_STATUS}" = "parked" ]; then
+              gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+                --remove-label 'ai:clarification' \
+                --remove-label 'ai:planning' \
+                --remove-label 'ai:awaiting-approval' \
+                --remove-label 'ai:blocked' >/dev/null 2>&1 || true
+              DEP_WAIT_PARK_MSG="Clarification waiting on dependency for issue #${ISSUE_NUMBER}: ${DEP_WAIT_PARK_TARGET}"
+              DEP_WAIT_PARK_MSG+=$'\n'
+              DEP_WAIT_PARK_MSG+="Issue: ${ISSUE_URL:-}"
+              DEP_WAIT_PARK_MSG+=$'\n'
+              DEP_WAIT_PARK_MSG+="Run: ${DEP_WAIT_PARK_RUN_URL}"
+              tg_send_tracked "${ISSUE_NUMBER}" "${DEP_WAIT_PARK_MSG}" "CRITICAL"
+              exit 0
+            fi
+            BLOCKED_REASON="${BLOCKED_REASON} (dependency wait not parked: ${DEP_WAIT_PARK_STATUS:-error})"
+          fi
 
           ensure_label_exists "ai:blocked" "${{ github.repository }}"
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \

@@ -575,6 +575,203 @@ def test_targets_query_inlines_only_validated_values() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Stuck-states P8a-2: parse-waiting and park (clarify / plan)
+# ---------------------------------------------------------------------------
+
+UPSTREAM = "shubhodeep1/coding-workflows"
+
+
+@pytest.mark.parametrize(
+	("text", "kind", "repo", "number"),
+	(
+		("STATUS: CLEAR\nWAITING: pr=owner/repo#7\n", "pr", REPO, 7),
+		("waiting: `pr=shubhodeep1/coding-workflows#3968`", "pr", UPSTREAM, 3968),
+		(f"WAITING: release={UPSTREAM}@stable contains={UPSTREAM}#4566", "release", UPSTREAM, 4566),
+		("  WAITING:   issue=owner/repo#3  ", "issue", REPO, 3),
+	),
+)
+def test_parse_waiting_accepts_the_three_kinds(text: str, kind: str, repo: str, number: int) -> None:
+	result = dwr.parse_waiting(text, REPO, 5, NOW)
+	assert result["status"] == "waiting"
+	assert (result["kind"], result["repo"], result["number"]) == (kind, repo, number)
+	assert result["target"] == dwr.target_label({"kind": kind, "repo": repo, "number": number})
+
+
+@pytest.mark.parametrize(
+	("text", "reason"),
+	(
+		("WAITING: pr=other/repo#7", "target_not_allowed"),
+		("WAITING: issue=shubhodeep1/coding-workflows#7", "target_not_allowed"),
+		("WAITING: release=shubhodeep1/coding-workflows@stable contains=owner/repo#7", "target_not_allowed"),
+		("WAITING: release=other/repo@stable contains=shubhodeep1/coding-workflows#7", "release_not_upstream"),
+		("WAITING: release=shubhodeep1/coding-workflows@main contains=shubhodeep1/coding-workflows#7", "release_not_upstream"),
+		("WAITING: issue=owner/repo#5", "self_reference"),
+		("WAITING: pr=owner/repo#5", "self_reference"),
+		("WAITING: pr=owner/repo#0", "grammar"),
+		("WAITING: pr=owner/repo#12345678901", "grammar"),
+		("WAITING: pr=owner/repo#7 because reasons", "grammar"),
+		("WAITING: the other PR", "grammar"),
+	),
+)
+def test_parse_waiting_rejects_bad_targets(text: str, reason: str) -> None:
+	result = dwr.parse_waiting(text, REPO, 5, NOW)
+	assert result["status"] == "invalid" and result["reason"] == reason
+
+
+def test_parse_waiting_none_fenced_disabled_and_line_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+	assert dwr.parse_waiting("STATUS: CLEAR\nBLOCKED: x\n", REPO, 5, NOW) == {"status": "none"}
+	assert dwr.parse_waiting("```\nWAITING: pr=owner/repo#7\n```\nSTATUS: CLEAR\n", REPO, 5, NOW) == {"status": "none"}
+	assert dwr.parse_waiting("```\nWAITING: pr=owner/repo#7\n", REPO, 5, NOW, ignore_fences=True)["status"] == "waiting"
+	result = dwr.parse_waiting("WAITING: " + "x\x07" * 400, REPO, 5, NOW)
+	assert result["status"] == "invalid" and "\x07" not in result["line"] and len(result["line"]) == 300
+	monkeypatch.setenv("DEPENDENCY_WAIT_RESUME_ENABLED", "false")
+	assert dwr.parse_waiting("WAITING: pr=owner/repo#7", REPO, 5, NOW)["status"] == "disabled"
+
+
+def _park(gh: FakeGitHub, kind: str = "pr", target_repo: str = REPO, number: int = 7, run_url: str = "https://github.com/owner/repo/actions/runs/1") -> str:
+	if 10 not in gh.issues:
+		gh.add_issue(10, {"ai:planning"})
+	return dwr.park(gh, REPO, 10, kind, target_repo, number, "plan", run_url, NOW)
+
+
+def test_park_open_target_posts_marker_then_adds_wait_label() -> None:
+	gh = FakeGitHub()
+	gh.targets[(REPO, 7)] = _pr()
+	assert _park(gh) == "parked"
+	assert len(gh.posted) == 1 and gh.label_ops == [("add", 10, dwr.WAIT_LABEL)]
+	body = gh.posted[0][1]
+	assert body.startswith("Waiting on dependency: pr=owner/repo#7\n")
+	assert "Run: https://github.com/owner/repo/actions/runs/1" in body
+	assert "replace `ai:waiting-on-dependency` with `ai:blocked`" in body
+	payload = json.loads(dwr.WAIT_MARKER_RE.search(body).group(1))
+	assert payload == {"kind": "pr", "repo": REPO, "number": 7, "since": "2026-11-05T12:00:00Z"}
+	assert gh.target_queries == 1 and gh.compare_calls == []
+
+
+def test_park_marker_round_trips_through_the_scan(capsys: pytest.CaptureFixture) -> None:
+	gh = FakeGitHub()
+	gh.targets[(REPO, 7)] = _pr()
+	assert _park(gh) == "parked"
+	issue = dwr.IssueSnapshot(gh._node(10))
+	found = dwr.newest_trusted_wait(issue.comments, LOGIN, REPO, 10, NOW)
+	assert found is not None and found[1] is not None and found[1]["source"] == ""
+	out = _scan(gh, capsys)
+	assert "DEPENDENCY_WAIT_RESUME issue=10 target=pr:owner/repo#7 outcome=waiting" in out
+	gh.targets[(REPO, 7)] = _pr("MERGED", True, SHA)
+	out = _scan(gh, capsys)
+	assert "outcome=resumed" in out and gh.posted[-1][1].startswith("/answer [auto-answered-by-poller]")
+
+
+def test_park_release_line_and_bad_run_url_is_dropped() -> None:
+	gh = FakeGitHub()
+	gh.targets[(UPSTREAM, 4566)] = _pr("MERGED", True, SHA)
+	gh.compares[SHA] = "behind"
+	assert _park(gh, "release", UPSTREAM, 4566, run_url="javascript:alert(1)") == "parked"
+	body = gh.posted[0][1]
+	assert body.startswith(f"Waiting on dependency: release={UPSTREAM}@stable contains={UPSTREAM}#4566\n")
+	assert "Run:" not in body and gh.compare_calls == [SHA]
+
+
+@pytest.mark.parametrize(
+	("kind", "node", "compare"),
+	(
+		("pr", _pr("MERGED", True, SHA), None),
+		("pr", _pr("CLOSED"), None),
+		("issue", _issue("CLOSED", ("ai:merged",)), None),
+		("release", _pr("MERGED", True, SHA), "ahead"),
+	),
+)
+def test_park_already_resolved_writes_nothing(kind: str, node: dict, compare: str | None) -> None:
+	gh = FakeGitHub()
+	target_repo = UPSTREAM if kind == "release" else REPO
+	gh.targets[(target_repo, 7)] = node
+	if compare:
+		gh.compares[SHA] = compare
+	assert _park(gh, kind, target_repo, 7) == "already_resolved"
+	assert gh.posted == [] and gh.label_ops == []
+
+
+def test_park_invalid_or_unreadable_target_writes_nothing() -> None:
+	gh = FakeGitHub()
+	gh.targets[(REPO, 7)] = _issue()
+	assert _park(gh, "pr") == "invalid_target"
+	gh.targets[(REPO, 7)] = None
+	assert _park(gh, "pr") == "read_failed"
+	gh.target_errors.add((REPO, 7))
+	assert _park(gh, "pr") == "read_failed"
+	gh.graphql_fail = True
+	assert _park(gh, "pr") == "read_failed"
+	gh.targets[(UPSTREAM, 7)] = _pr("MERGED", True, SHA)
+	gh.graphql_fail = False
+	assert _park(gh, "release", UPSTREAM, 7) == "read_failed"  # compare unreadable
+	assert gh.posted == [] and gh.label_ops == []
+
+
+def test_park_comment_first_then_label(monkeypatch: pytest.MonkeyPatch) -> None:
+	gh = FakeGitHub()
+	gh.targets[(REPO, 7)] = _pr()
+	gh.comment_fail = True
+	assert _park(gh) == "comment_failed"
+	assert gh.label_ops == []
+	gh.comment_fail = False
+	monkeypatch.setattr(gh, "add_labels", lambda number, labels: False)
+	assert _park(gh) == "label_failed"
+	assert len(gh.posted) == 1
+
+
+def test_park_disabled_and_invalid_args_make_no_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+	gh = FakeGitHub()
+	gh.add_issue(10, set())
+	assert dwr.park(gh, REPO, 10, "pr", "other/repo", 7, "plan", "", NOW) == "invalid_args"
+	assert dwr.park(gh, REPO, 10, "issue", REPO, 10, "plan", "", NOW) == "invalid_args"
+	assert dwr.park(gh, REPO, 10, "pr", REPO, 7, "implement", "", NOW) == "invalid_args"
+	monkeypatch.setenv("DEPENDENCY_WAIT_RESUME_ENABLED", "off")
+	assert dwr.park(gh, REPO, 10, "pr", REPO, 7, "plan", "", NOW) == "disabled"
+	assert gh.calls == 0
+
+
+def test_cli_prints_one_json_line_and_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+	output = tmp_path / "out.txt"
+	output.write_text("WAITING: pr=shubhodeep1/coding-workflows#3968\n", encoding="utf-8")
+	assert dwr.main(["parse-waiting", "--output-file", str(output), "--repo", REPO, "--issue-number", "5", "--phase", "plan"]) == 0
+	captured = capsys.readouterr()
+	assert len(captured.out.splitlines()) == 1
+	assert json.loads(captured.out)["target"] == "pr:shubhodeep1/coding-workflows#3968"
+	assert "DEPENDENCY_WAIT_PARK op=parse issue=5 target=pr:shubhodeep1/coding-workflows#3968 phase=plan outcome=waiting" in captured.err
+	for argv in (
+		["parse-waiting", "--output-file", str(tmp_path / "missing.txt"), "--repo", REPO, "--issue-number", "5"],
+		["parse-waiting", "--output-file", str(output), "--repo", "bad repo", "--issue-number", "5"],
+		["parse-waiting", "--repo", REPO],
+		["park", "--repo", REPO],
+	):
+		assert dwr.main(argv) == 0
+		assert json.loads(capsys.readouterr().out)["status"] == "error"
+
+	def _boom(_repo: str):
+		raise RuntimeError("kaboom")
+
+	park_argv = ["park", "--repo", REPO, "--issue-number", "5", "--kind", "pr", "--target-repo", REPO, "--number", "7", "--phase", "clarify"]
+	assert dwr.main(park_argv, github_factory=_boom) == 0
+	captured = capsys.readouterr()
+	assert json.loads(captured.out) == {"status": "error"} and "detail=RuntimeError" in captured.err
+	gh = FakeGitHub()
+	gh.add_issue(5, {"ai:clarification"})
+	gh.targets[(REPO, 7)] = _pr()
+	assert dwr.main(park_argv + ["--run-url", "https://example.invalid/run"], github_factory=lambda _repo: gh) == 0
+	assert json.loads(capsys.readouterr().out) == {"status": "parked", "target": "pr:owner/repo#7"}
+	assert dwr.main(["park", "--repo", REPO, "--issue-number", "5", "--kind", "pr", "--target-repo", REPO, "--number", "x7", "--phase", "plan"], github_factory=_boom) == 0
+	assert json.loads(capsys.readouterr().out)["status"] == "invalid_args"
+	gh = FakeGitHub()
+	gh.add_issue(5, {"ai:clarification"})
+	gh.targets[(REPO, 7)] = _pr()
+	gh.add_labels = lambda number, labels: False
+	assert dwr.main(park_argv, github_factory=lambda _repo: gh) == 0
+	captured = capsys.readouterr()
+	assert json.loads(captured.out) == {"status": "label_failed", "target": "pr:owner/repo#7"}
+	assert "outcome=label_failed detail=marker_posted" in captured.err and len(gh.posted) == 1
+
+
+# ---------------------------------------------------------------------------
 # Stuck-states P8d: generic `Depends on: #N` seeding (Refs #8291)
 # ---------------------------------------------------------------------------
 

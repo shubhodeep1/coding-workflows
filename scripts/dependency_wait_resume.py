@@ -36,6 +36,13 @@ Batching contract (§14):
 - **Writes.** At most one idempotent ``/answer`` or ``/reclarify`` comment per
   resolved dependent (deduplicated by ``AI_DEPENDENCY_WAIT_RESUMED_V1``), and
   one comment plus one label change per escalation, seed or switch-off move.
+- **Park (stuck-states P8a-2).** ``parse-waiting`` reads one agent output
+  file and makes no API call. ``park`` (clarify and plan, after a validated
+  ``WAITING:`` line) makes one aliased GraphQL target read, at most one REST
+  ``compare`` (a merged release PR only), one marker comment and one label
+  write. Both print exactly one JSON line on stdout, log one
+  ``DEPENDENCY_WAIT_PARK op=parse|park issue=<n> target=<t> phase=<p> outcome=<o>``
+  line on stderr and always exit 0; ``{"status":"error"}`` on any failure.
 - **Output.** One ``DEPENDENCY_WAIT_RESUME issue=<n> target=<t> outcome=<o>``
   line per issue acted on, plus one ``DEPENDENCY_WAIT_RESUME op=scan ...``
   summary line.
@@ -104,6 +111,21 @@ MAX_COMMENT_PAGES = 10
 MAX_EVENT_PAGES = 10
 DEFAULT_ESCALATE_DAYS = 7
 LOG_PREFIX = "DEPENDENCY_WAIT_RESUME"
+PARK_LOG_PREFIX = "DEPENDENCY_WAIT_PARK"
+PARK_PHASES = ("clarify", "plan")
+WAITING_LINE_RE = re.compile(r"^\s*WAITING:\s*(.*\S)\s*$", re.IGNORECASE)
+WAITING_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+_WAITING_REPO = r"([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100})"
+_WAITING_NUMBER = r"([1-9][0-9]{0,9})"
+WAITING_PR_RE = re.compile(r"^pr=" + _WAITING_REPO + "#" + _WAITING_NUMBER + r"$", re.IGNORECASE)
+WAITING_ISSUE_RE = re.compile(r"^issue=" + _WAITING_REPO + "#" + _WAITING_NUMBER + r"$", re.IGNORECASE)
+WAITING_RELEASE_RE = re.compile(
+	r"^release=" + _WAITING_REPO + r"@([A-Za-z0-9_.-]{1,100})\s+contains=" + _WAITING_REPO + "#" + _WAITING_NUMBER + r"$",
+	re.IGNORECASE,
+)
+WAITING_LINE_LIMIT = 300
+WAITING_OUTPUT_LIMIT = 4 * 1024 * 1024
+RUN_URL_RE = re.compile(r"^https://\S{1,300}$")
 
 _ISSUE_FIELDS = (
 	"number body labels(first: 50) { nodes { name } } "
@@ -706,6 +728,169 @@ def switch_off(gh: Any, issue: IssueSnapshot, repo: str, login: str, now: dt.dat
 
 
 # ---------------------------------------------------------------------------
+# Park (stuck-states P8a-2): clarify and plan turn a WAITING: line into a wait
+# ---------------------------------------------------------------------------
+
+
+def _park_log(op: str, issue: Any, target: str, phase: str, outcome: str, detail: str = "") -> None:
+	"""stderr, so stdout carries only the one JSON result line."""
+	line = f"{PARK_LOG_PREFIX} op={op} issue={_token(issue, 12)} target={_token(target)} phase={_token(phase, 16)} outcome={outcome}"
+	if detail:
+		line += f" detail={_token(detail, 80)}"
+	print(line, file=sys.stderr, flush=True)
+
+
+def _clean_waiting_line(value: str) -> str:
+	return re.sub(r"[\x00-\x1f\x7f]", "", value)[:WAITING_LINE_LIMIT]
+
+
+def first_waiting_line(text: str, ignore_fences: bool = False) -> str | None:
+	"""Value of the first ``WAITING:`` line outside ```/~~~ fences (clarify's BLOCKED toggle).
+
+	``ignore_fences`` matches plan's scan, whose input already has closed
+	fences removed and whose BLOCKED scan does not skip fenced lines.
+	"""
+	in_code = False
+	for line in text.splitlines():
+		if not ignore_fences and WAITING_FENCE_RE.match(line):
+			in_code = not in_code
+			continue
+		if in_code:
+			continue
+		match = WAITING_LINE_RE.match(line)
+		if match:
+			return match.group(1)
+	return None
+
+
+def _is_self_target(kind: str, target_repo: str, number: int, repo: str, issue_number: int) -> bool:
+	return kind in ("pr", "issue") and target_repo.lower() == repo.lower() and number == issue_number
+
+
+def parse_waiting(text: str, repo: str, issue_number: int, now: dt.datetime | None = None, ignore_fences: bool = False) -> dict[str, Any]:
+	"""none | disabled | invalid | waiting, for the first unfenced WAITING: line.
+
+	The target is validated with the scan's own ``_validate_wait`` so the
+	writer (park) and the reader (scan) cannot disagree on what is valid.
+	"""
+	now = now or _now()
+	raw = first_waiting_line(text, ignore_fences)
+	if raw is None:
+		return {"status": "none"}
+	line = _clean_waiting_line(raw)
+	if not _resume_enabled():
+		return {"status": "disabled", "line": line}
+	value = raw.strip()
+	if len(value) >= 2 and value.startswith("`") and value.endswith("`"):
+		value = value[1:-1].strip()
+	pr_match = WAITING_PR_RE.match(value)
+	issue_match = WAITING_ISSUE_RE.match(value)
+	if pr_match:
+		kind, target_repo, number = "pr", pr_match.group(1), int(pr_match.group(2))
+	elif issue_match:
+		kind, target_repo, number = "issue", issue_match.group(1), int(issue_match.group(2))
+	else:
+		release = WAITING_RELEASE_RE.match(value)
+		if not release:
+			return {"status": "invalid", "reason": "grammar", "line": line}
+		if release.group(1).lower() != UPSTREAM_REPO or release.group(2) != UPSTREAM_RELEASE_REF:
+			return {"status": "invalid", "reason": "release_not_upstream", "line": line}
+		kind, target_repo, number = "release", release.group(3), int(release.group(4))
+	if _is_self_target(kind, target_repo, number, repo, issue_number):
+		return {"status": "invalid", "reason": "self_reference", "line": line}
+	wait = _validate_wait({"kind": kind, "repo": target_repo, "number": number, "since": _iso(now)}, repo, issue_number, now)
+	if wait is None:
+		return {"status": "invalid", "reason": "target_not_allowed", "line": line}
+	return {"status": "waiting", "kind": kind, "repo": wait["repo"], "number": number, "target": target_label(wait), "line": line}
+
+
+def park_target_line(wait: dict[str, Any]) -> str:
+	if wait["kind"] == "release":
+		return f"release={UPSTREAM_REPO}@{UPSTREAM_RELEASE_REF} contains={wait['repo']}#{wait['number']}"
+	return f"{wait['kind']}={wait['repo']}#{wait['number']}"
+
+
+def park(gh: Any, repo: str, issue_number: int, kind: str, target_repo: str, number: int, phase: str, run_url: str = "", now: dt.datetime | None = None) -> str:
+	"""parked | disabled | invalid_args | already_resolved | invalid_target | read_failed | comment_failed | label_failed.
+
+	The marker comment posts before the label, so the wait label never sits
+	on an issue without the trusted marker the scan needs.
+	"""
+	now = now or _now()
+	if not _resume_enabled():
+		return "disabled"
+	if phase not in PARK_PHASES or isinstance(issue_number, bool) or not isinstance(issue_number, int) or issue_number <= 0:
+		return "invalid_args"
+	if not isinstance(target_repo, str) or not isinstance(kind, str) or _is_self_target(kind, target_repo, number, repo, issue_number):
+		return "invalid_args"
+	since = _iso(now)
+	wait = _validate_wait({"kind": kind, "repo": target_repo, "number": number, "since": since}, repo, issue_number, now)
+	if wait is None:
+		return "invalid_args"
+	nodes = fetch_targets(gh, [(wait["repo"], wait["number"])])
+	days = _escalate_days()
+	release_cache: dict[str, bool | None] = {}
+	decision = decide(wait, nodes.get((wait["repo"], wait["number"])), lambda sha: release_contains(gh, sha, release_cache), now, days)
+	if decision in ("resume_answer", "resume_reclarify"):
+		return "already_resolved"
+	if decision in ("invalid_marker", "invalid_escalate"):
+		return "invalid_target"
+	if decision not in ("waiting", "escalate"):
+		return "read_failed"
+	payload = {"kind": wait["kind"], "repo": wait["repo"], "number": wait["number"], "since": since}
+	lines = [
+		f"Waiting on dependency: {park_target_line(wait)}",
+		"",
+		f"The {phase} agent found that this issue has to wait for the dependency above, so it is parked in "
+		f"`{WAIT_LABEL}` instead of `{BLOCKED_LABEL}`. The poller replies `/answer` once the dependency lands, "
+		f"or `/reclarify` if it closes without merging, and asks for a person after {days} day(s) "
+		f"(`DEPENDENCY_WAIT_ESCALATE_DAYS`). To resume sooner, replace `{WAIT_LABEL}` with `{BLOCKED_LABEL}` "
+		f"and then reply `/answer`.",
+	]
+	if isinstance(run_url, str) and RUN_URL_RE.match(run_url):
+		lines.extend(["", f"Run: {run_url}"])
+	lines.append(f"<!-- {WAIT_MARKER_TOKEN} {json.dumps(payload, separators=(',', ':'))} -->")
+	if not gh.comment(issue_number, "\n".join(lines)):
+		return "comment_failed"
+	if not gh.add_labels(issue_number, [WAIT_LABEL]):
+		return "label_failed"
+	return "parked"
+
+
+def _parse_waiting_command(args: argparse.Namespace) -> dict[str, Any]:
+	phase = args.phase or "-"
+	if not REPO_RE.match(args.repo or "") or not re.fullmatch(r"[1-9][0-9]{0,9}", args.issue_number or ""):
+		_park_log("parse", args.issue_number or "-", "-", phase, "error", "invalid_arguments")
+		return {"status": "error"}
+	try:
+		with open(args.output_file, "r", encoding="utf-8", errors="replace") as handle:
+			text = handle.read(WAITING_OUTPUT_LIMIT)
+	except OSError:
+		_park_log("parse", args.issue_number, "-", phase, "error", "output_unreadable")
+		return {"status": "error"}
+	result = parse_waiting(text, args.repo, int(args.issue_number), ignore_fences=bool(args.ignore_fences))
+	if result["status"] != "none":
+		_park_log("parse", args.issue_number, result.get("target", "-"), phase, result["status"], result.get("reason", ""))
+	return result
+
+
+def _park_command(args: argparse.Namespace, github_factory: Callable[[str], Any]) -> dict[str, Any]:
+	target = "-"
+	if not REPO_RE.match(args.repo or "") or not re.fullmatch(r"[1-9][0-9]{0,9}", args.issue_number or "") \
+		or not re.fullmatch(r"[1-9][0-9]{0,9}", args.number or "") or not REPO_RE.match(args.target_repo or ""):
+		_park_log("park", args.issue_number or "-", target, args.phase, "invalid_args")
+		return {"status": "invalid_args", "target": target}
+	number = int(args.number)
+	if args.kind in WAIT_KINDS:
+		target = target_label({"kind": args.kind, "repo": args.target_repo, "number": number})
+	status = park(github_factory(args.repo), args.repo, int(args.issue_number), args.kind, args.target_repo, number, args.phase, args.run_url or "")
+	# label_failed means the trusted marker comment already posted: say so, so an
+	# operator can spot a marker stranded on an issue that went to ai:blocked.
+	_park_log("park", args.issue_number, target, args.phase, status, "marker_posted" if status == "label_failed" else "")
+	return {"status": status, "target": target}
+
+
+# ---------------------------------------------------------------------------
 # Scan
 # ---------------------------------------------------------------------------
 
@@ -812,10 +997,42 @@ def main(argv: list[str] | None = None, github_factory: Callable[[str], Any] = G
 	sub = parser.add_subparsers(dest="command", required=True)
 	scan_parser = sub.add_parser("scan")
 	scan_parser.add_argument("--repo", required=True)
+	parse_parser = sub.add_parser("parse-waiting")
+	parse_parser.add_argument("--output-file", required=True)
+	parse_parser.add_argument("--repo", required=True)
+	parse_parser.add_argument("--issue-number", required=True)
+	parse_parser.add_argument("--phase", choices=PARK_PHASES, default=None)
+	parse_parser.add_argument("--ignore-fences", action="store_true")
+	park_parser = sub.add_parser("park")
+	park_parser.add_argument("--repo", required=True)
+	park_parser.add_argument("--issue-number", required=True)
+	park_parser.add_argument("--kind", required=True, choices=WAIT_KINDS)
+	park_parser.add_argument("--target-repo", required=True)
+	park_parser.add_argument("--number", required=True)
+	park_parser.add_argument("--phase", required=True, choices=PARK_PHASES)
+	park_parser.add_argument("--run-url", default="")
+	argv_list = list(sys.argv[1:] if argv is None else argv)
+	json_command = bool(argv_list) and argv_list[0] in ("parse-waiting", "park")
 	try:
-		args = parser.parse_args(argv)
+		args = parser.parse_args(argv_list)
 	except SystemExit:
+		if json_command:
+			# One JSON line on stdout is the contract the workflows parse.
+			print(json.dumps({"status": "error"}), flush=True)
+			_park_log("parse" if argv_list[0] == "parse-waiting" else "park", "-", "-", "-", "error", "bad_arguments")
+			return 0
 		print(f"{LOG_PREFIX} op=scan outcome=skip reason=bad_arguments", flush=True)
+		return 0
+	if args.command in ("parse-waiting", "park"):
+		try:
+			if args.command == "parse-waiting":
+				result = _parse_waiting_command(args)
+			else:
+				result = _park_command(args, github_factory)
+		except Exception as exc:  # noqa: BLE001 - fail-open: the caller takes the BLOCKED path
+			_park_log("parse" if args.command == "parse-waiting" else "park", "-", "-", "-", "error", type(exc).__name__)
+			result = {"status": "error"}
+		print(json.dumps(result, separators=(",", ":")), flush=True)
 		return 0
 	if not REPO_RE.match(args.repo or ""):
 		print(f"{LOG_PREFIX} op=scan outcome=skip reason=invalid_repo", flush=True)
