@@ -742,6 +742,9 @@ def test_operator_step_writer_preserves_newer_same_key_comments(monkeypatch: pyt
 		if args[1] == "repos/o/r/issues/5/comments":
 			comments.append({"id": len(comments) + 100, "user": {"login": BOT}, "body": args[-1][5:]})
 			return json.dumps(comments[-1])
+		if args == ["api", "repos/o/r/issues/5"]:
+			# upsert's post-write close-race check (stuck-states P10).
+			return json.dumps({**tracker, "state": "open"})
 		raise AssertionError(f"unexpected API call: {args}")
 
 	monkeypatch.setattr(writer, "_gh", fake_gh)

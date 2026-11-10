@@ -30,6 +30,7 @@ Classify every gap:
 - `code`: the gate is a file in this repository the pipeline can change (a missing or mis-wired workflow, a wrong input, secret or permission name, an impossible `if:`, a missing documentation, contract or registry entry).
 - `operator`: the gate is a repository setting or an action only a person can perform (set a variable, add a secret, flip a default, start something). Give the exact steps. When the code can be finished so it stays safely off until the operator acts, say so in `dormant_until`.
 - Never list promoting `main`, tagging `stable`, or the consumer sync (`AI Update Workflows` / daily wrapper sync) as a gap of either kind; the pipeline performs them.
+- A gap whose only remaining condition is that the merge reaches the `@stable` release (and, from there, consumers) is not an `operator` step. If you report it at all, emit it as `code` with `dormant_until: "@stable contains <merge commit sha>"`. The script records it as a release wait that needs no fix and no person. Secrets, repository settings and external accounts stay `operator`.
 
 Do not edit files, commit, push, dispatch workflows or call the GitHub API. Do not report defects unrelated to activation.
 

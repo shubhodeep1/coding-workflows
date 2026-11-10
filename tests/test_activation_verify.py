@@ -740,6 +740,70 @@ def test_prompt_never_classifies_release_or_consumer_sync_as_operator_steps() ->
 		assert '"verdict": "LIVE" | "DORMANT",' in text and '"kind": "code" | "operator",' in text, prompt
 
 
+def test_prompt_records_a_release_wait_instead_of_an_operator_step() -> None:
+	sentence = ("A gap whose only remaining condition is that the merge reaches the `@stable` release (and, from there, consumers) "
+		"is not an `operator` step. If you report it at all, emit it as `code` with "
+		"`dormant_until: \"@stable contains <merge commit sha>\"`. The script records it as a release wait that needs no fix "
+		"and no person. Secrets, repository settings and external accounts stay `operator`.")
+	for prompt in (ROOT / "prompts" / "mode-activation-verify.txt", ROOT / "prompts" / "_templates" / "mode-activation-verify.txt"):
+		assert sentence in prompt.read_text(encoding="utf-8"), prompt
+
+
+RELEASE_SHA = "d" * 40
+
+
+def test_release_wait_gap_files_no_fix_issue_and_no_operator_step(tmp_path: Path) -> None:
+	verdict = {
+		"verdict": "DORMANT",
+		"trigger": "workflow_call from consumer wrappers",
+		"summary": "The template change reaches consumers with the next release.",
+		"gaps": [
+			{"kind": "operator", "title": "Wait for the stable release", "evidence": "workflow-templates/x.yml:1",
+				"fix": "Tag stable", "dormant_until": f"@stable contains {RELEASE_SHA}"},
+			{"kind": "code", "title": "Consumers pick it up on sync", "evidence": "workflow-templates/x.yml:2",
+				"fix": "Nothing", "dormant_until": f"@stable contains {RELEASE_SHA[:12]}.", "open_pr": 77},
+		],
+	}
+	result, state = _verify(tmp_path, verdict, open_prs=[{"number": 77, "title": "t", "head": {"ref": "h", "repo": {"full_name": "o/r"}},
+		"user": {"login": "github-actions[bot]"}, "body": "b"}])
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert state["created"] == []  # No fix issue and no operator-step tracker.
+	assert not any(comment["body"].startswith("<!-- ai:operator-step:entry") for comment in state["comments"])
+	assert not any(call[:1] == ["api"] and any(arg.startswith("search/issues") for arg in call) for call in state["calls"])
+	assert "op=release_waits count=2 outcome=left_to_release" in result.stdout
+	assert "op=in_flight_gaps" not in result.stdout
+	assert "verdict=DORMANT code_gaps=2 operator_gaps=0 outcome=posted" in result.stdout
+	body = state["comments"][-1]["body"]
+	assert "- [code] Wait for the stable release (ships with the next @stable release; nothing to do)" in body
+	assert "- [code] Consumers pick it up on sync (ships with the next @stable release; nothing to do)" in body
+	assert body.endswith("<!-- ai:activation:v1 verdict=DORMANT source=pr-42 -->")
+	# A normal code gap next to a release wait still opens the fix issue, without the release wait.
+	mixed = {**verdict, "gaps": [verdict["gaps"][0], DORMANT["gaps"][0]]}
+	(tmp_path / "mixed").mkdir()
+	result, state = _verify(tmp_path / "mixed", mixed)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert [created["title"] for created in state["created"]] == ["Activation gaps after PR #42"]
+	assert "README lacks the new variable" in state["created"][0]["body"]
+	assert "Wait for the stable release" not in state["created"][0]["body"]
+	assert "op=release_waits count=1 outcome=left_to_release" in result.stdout
+
+
+def test_normaliser_marks_release_waits_only_for_the_exact_condition(tmp_path: Path) -> None:
+	raw = tmp_path / "raw.json"
+	gaps = [
+		{"kind": "operator", "title": "a", "dormant_until": f"@stable contains {RELEASE_SHA}"},
+		{"kind": "operator", "title": "b", "dormant_until": "NIGHTLY_REPORT_ENABLED"},
+		{"kind": "operator", "title": "c", "dormant_until": f"@stable contains {RELEASE_SHA} and the secret is set"},
+		{"kind": "code", "title": "d", "dormant_until": ""},
+	]
+	raw.write_text(json.dumps({"verdict": "DORMANT", "summary": "s", "gaps": gaps}), encoding="utf-8")
+	out = subprocess.run(["bash", "-c", f'source "{VERIFY}"; activation_normalise_verdict "$1"', "_", str(raw)],
+		capture_output=True, text=True, check=True, env=dict(os.environ, SUPPORT_DIR=str(ROOT), RUNTIME_DIR=str(tmp_path / "rt"))).stdout
+	normalised = json.loads(out)["gaps"]
+	assert [(gap["kind"], gap["release_wait"]) for gap in normalised] == [
+		("code", True), ("operator", False), ("operator", False), ("code", False)]
+
+
 def test_operator_entry_records_the_merge_commit(tmp_path: Path) -> None:
 	merge_sha = "c" * 40
 	result, state = _verify(tmp_path, DORMANT, env_extra={"MERGE_SHA": merge_sha})

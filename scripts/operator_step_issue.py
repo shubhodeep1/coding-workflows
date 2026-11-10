@@ -56,6 +56,42 @@ Tick API budget (CLAUDE.md §15): at most one identity read (none with
 comment write per ticked key. No per-entry reads and no compare calls: the
 ancestor check is local git.
 
+Resolving entries on every poller tick (stuck-states P10, Refs #8291):
+
+  operator_step_issue.py resolve --repo OWNER/REPO [--trusted-login LOGIN]
+
+The poller (.github/workflows/orchestrate_poll.yml, step "Resolve operator
+steps") runs it on every tick. It uses tick's recorded condition: for each
+key, the newest entry comment by the pipeline login that still has a `- [ ]`
+box, carries the source-sha line and has no done marker. It reads the commit
+`stable` points at once, then compares `<source>...<stable commit>` (at most
+10 per run, oldest entry first; the rest are `compare_cap` and wait for the
+next tick). Only `ahead` or `identical` ticks the entry, with the same
+superseding comment tick appends; anything else, and any failed call, leaves
+it open. When no trusted entry and no legacy body section has an unticked box
+left, and the tracker has at least one entry, it re-reads the comments (a new
+entry since the first read defers the close), closes the tracker as
+completed, and re-reads once more: a new unticked entry, or a failed re-read,
+reopens it. After posting a new entry, `upsert` reads the tracker's state and
+reopens it when `resolve` closed it in between. Output is one JSON line:
+`enabled`, `issue`, `stable`, `ticked`, `skipped` (`{reason: count}`),
+`unticked`, `closed`, `reopened`. Logs on stderr: `OPERATOR_STEP_RESOLVE key=
+outcome=ticked|not_contained|compare_failed|compare_cap|stable_unavailable|no_source_sha
+status=` per entry and `OPERATOR_STEP_RESOLVE issue= outcome=closed|open|
+close_deferred|reopened|skip unticked= reason=` once per run. Kill switch
+`OPERATOR_STEP_AUTO_RESOLVE_ENABLED` (default `true`): `false` makes resolve
+a no-op with no API call and turns off upsert's reopen check. The needs-human
+digest is never touched.
+
+Resolve API budget (CLAUDE.md §15): one tracker listing (the only call when no
+tracker is open), at most one identity read (none with --trusted-login), one
+paginated comment read; with candidates, one `commits/stable` read, at most
+10 compares and one comment POST per ticked key; when closing, one re-read,
+one PATCH, one more re-read and at most one reopening PATCH. `upsert` adds one
+issue read per posted entry and one PATCH only when the tracker is closed.
+The poller's caches hold tracking and managed issues, and the issue listing
+carries no comments, so none of them can answer these questions.
+
 Output is one JSON line: `issue`, `url`, `created`, `entries`. Exit 0 on
 success, 1 on bad arguments, 2 when a GitHub call failed.
 
@@ -395,6 +431,11 @@ def upsert(repo: str, key: str, source: str, steps: list[dict], source_sha: str 
 		}
 		if (matches[-1]["body"] if matches else legacy.get(key, "")).replace("\r\n", "\n").rstrip() != entry:
 			_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={entry}"])
+			# Close race with `resolve` (stuck-states P10): when the poller closed
+			# the tracker after this run listed it, reopen it so the new entry is
+			# never lost in a closed issue. Off with the resolve kill switch.
+			if resolve_enabled():
+				_reopen_if_closed(repo, number)
 		# Never patch the oldest comment with a proposal from a stale listing:
 		# a later writer's higher-id comment would otherwise be lost.
 		return {
@@ -442,7 +483,7 @@ def _is_ancestor(repo_dir: str, source_sha: str, stable_sha: str) -> str:
 	return "unknown_commit"
 
 
-def _render_ticked(body: str, stable_sha: str, source_sha: str) -> str:
+def _render_ticked(body: str, stable_sha: str, source_sha: str, actor: str = "the promote cycle") -> str:
 	lines = [
 		"- [x]" + line[len("- [ ]"):] if line.startswith("- [ ]") else line
 		for line in body.replace("\r\n", "\n").rstrip().split("\n")
@@ -450,7 +491,7 @@ def _render_ticked(body: str, stable_sha: str, source_sha: str) -> str:
 	lines += [
 		"",
 		f"<!-- ai:operator-step:done stable={stable_sha} -->",
-		f"Done: the `stable` tag (`{stable_sha[:7]}`) includes the merge `{source_sha[:7]}`; ticked by the promote cycle.",
+		f"Done: the `stable` tag (`{stable_sha[:7]}`) includes the merge `{source_sha[:7]}`; ticked by {actor}.",
 	]
 	return "\n".join(lines)
 
@@ -495,6 +536,198 @@ def tick(repo: str, stable_sha: str, repo_dir: str = ".", trusted_login: str | N
 		else:
 			result["skipped"][outcome] = result["skipped"].get(outcome, 0) + 1
 		print(f"OPERATOR_STEP_TICK key={key} outcome={outcome} stable={stable_sha[:7]}", file=sys.stderr)
+	return result
+
+
+# --- auto-resolve on every poller tick (stuck-states P10, Refs #8291) ---------
+
+RESOLVE_MAX_COMPARES = 10
+RESOLVE_STABLE_REF = "stable"
+RESOLVE_CONTAINED = ("ahead", "identical")
+RESOLVE_NOT_CONTAINED = ("behind", "diverged")
+# Top-level step lines only: render_entry indents every instruction line by two
+# spaces, so model text can never forge an unticked box.
+UNTICKED_RE = re.compile(r"^- \[ \] ")
+
+
+def resolve_enabled() -> bool:
+	return os.environ.get("OPERATOR_STEP_AUTO_RESOLVE_ENABLED", "true").strip().lower() != "false"
+
+
+def _unticked_count(body: str) -> int:
+	return sum(1 for line in str(body or "").replace("\r\n", "\n").split("\n") if UNTICKED_RE.match(line))
+
+
+def _resolve_log(**fields: object) -> None:
+	print("OPERATOR_STEP_RESOLVE " + " ".join(f"{name}={value}" for name, value in fields.items()), file=sys.stderr)
+
+
+def _reopen_if_closed(repo: str, number: int) -> bool:
+	"""Reopen tracker `number` when it is closed; True when it was reopened."""
+	# CLAUDE.md §14 audit: the tracker listing upsert used is filtered to open
+	# issues and was taken before this entry's POST, so it cannot show a close
+	# that `resolve` made since; one issue read after the write is required.
+	raw = _gh(["api", f"repos/{repo}/issues/{number}"])
+	try:
+		issue = json.loads(raw or "{}")
+	except ValueError as exc:
+		raise ApiError(f"unreadable operator-step tracker: {exc}") from exc
+	if not isinstance(issue, dict):
+		raise ApiError("unreadable operator-step tracker: expected an object")
+	if issue.get("state") != "closed":
+		return False
+	_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open"])
+	_resolve_log(issue=number, outcome="reopened", unticked="unknown", reason="entry_after_close")
+	return True
+
+
+def _stable_commit(repo: str) -> str | None:
+	"""The commit `stable` points at (an annotated tag is peeled), or None."""
+	try:
+		sha = _gh(["api", f"repos/{repo}/commits/{RESOLVE_STABLE_REF}", "--jq", ".sha"]).strip()
+	except ApiError:
+		return None
+	return sha if SHA_RE.match(sha) else None
+
+
+def _compare_status(repo: str, source_sha: str, stable_sha: str) -> tuple[str, str]:
+	"""(contained | not_contained | compare_failed, raw status or `none`).
+
+	Only `ahead` and `identical` mean the stable commit contains the source
+	commit; every other answer, and every failed call, fails closed.
+	"""
+	if not SHA_RE.match(source_sha) or not SHA_RE.match(stable_sha):
+		return "compare_failed", "none"
+	try:
+		status = _gh(["api", f"repos/{repo}/compare/{source_sha}...{stable_sha}?per_page=1", "--jq", ".status"]).strip()
+	except ApiError:
+		return "compare_failed", "none"
+	if status in RESOLVE_CONTAINED:
+		return "contained", status
+	if status in RESOLVE_NOT_CONTAINED:
+		return "not_contained", status
+	return "compare_failed", re.sub(r"[^a-z_]", "_", status.lower())[:20] or "none"
+
+
+def _normalised_body(comment: dict) -> str:
+	return str(comment.get("body") or "").replace("\r\n", "\n").rstrip()
+
+
+def _newer_entry_comments(latest: dict[str, dict], seen_max: int, posted: set[str]) -> list[dict]:
+	"""Trusted entry comments newer than the first read that this run did not post."""
+	return [
+		comment for comment in latest.values()
+		if comment["id"] > seen_max and _normalised_body(comment) not in posted
+	]
+
+
+def resolve(repo: str, trusted_login: str | None = None) -> dict:
+	if not REPO_RE.match(repo):
+		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
+	result: dict = {"enabled": True, "issue": None, "stable": None, "ticked": [], "skipped": {},
+		"unticked": 0, "closed": False, "reopened": False}
+	if not resolve_enabled():
+		result["enabled"] = False
+		_resolve_log(issue="none", outcome="skip", unticked=0, reason="disabled")
+		return result
+	# CLAUDE.md §14 audit: the poller's tick caches hold tracking and managed
+	# issues, never ai:operator-step, and tick runs nightly in another workflow,
+	# so this one listing is new. It is the only call on a tick with no tracker.
+	listing = _gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"])
+	try:
+		issues = json.loads(listing or "[]")
+	except ValueError as exc:
+		raise ApiError(f"unreadable issue list: {exc}") from exc
+	trackers = find_issues(issues)
+	if not trackers:
+		_resolve_log(issue="none", outcome="skip", unticked=0, reason="no_tracker")
+		return result
+	tracker = trackers[0]
+	number = tracker.get("number")
+	if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+		raise ApiError("unreadable issue list: operator-step tracker has no issue number")
+	result["issue"] = number
+	login = (trusted_login or "").strip() or _gh(["api", "user", "--jq", ".login"]).strip()
+	if not login:
+		raise ApiError("operator-step resolve identity is unavailable")
+	# The listing carries no comments: one paginated read is required.
+	latest = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+	seen_max = max((comment["id"] for comment in latest.values()), default=0)
+	bodies = {key: _normalised_body(comment) for key, comment in latest.items()}
+
+	pending: list[tuple[int, str, str]] = []
+	for key, body in bodies.items():
+		lines = [line.strip() for line in body.split("\n")]
+		if any(DONE_RE.match(line) for line in lines) or _unticked_count(body) == 0:
+			continue
+		source_match = SOURCE_SHA_RE.match(lines[1]) if len(lines) > 1 else None
+		if not source_match:
+			result["skipped"]["no_source_sha"] = result["skipped"].get("no_source_sha", 0) + 1
+			_resolve_log(key=key, outcome="no_source_sha", status="none")
+			continue
+		pending.append((latest[key]["id"], key, source_match.group(1)))
+	# Oldest entry first, so a backlog drains in merge order across ticks.
+	pending.sort()
+
+	posted: set[str] = set()
+	if pending:
+		stable_sha = _stable_commit(repo)
+		result["stable"] = stable_sha
+		compares = 0
+		for _comment_id, key, source_sha in pending:
+			status = "none"
+			if stable_sha is None:
+				outcome = "stable_unavailable"
+			elif compares >= RESOLVE_MAX_COMPARES:
+				outcome = "compare_cap"
+			else:
+				compares += 1
+				outcome, status = _compare_status(repo, source_sha, stable_sha)
+			if outcome == "contained":
+				ticked_body = _render_ticked(bodies[key], stable_sha, source_sha, actor="the poller")
+				_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={ticked_body}"])
+				bodies[key] = ticked_body
+				posted.add(ticked_body.rstrip())
+				result["ticked"].append(key)
+				outcome = "ticked"
+			else:
+				result["skipped"][outcome] = result["skipped"].get(outcome, 0) + 1
+			_resolve_log(key=key, outcome=outcome, status=status)
+
+	# Legacy body sections count only for keys that have no trusted comment;
+	# comments by any other login count as nothing (the same rule as tick).
+	legacy = [(key, text) for key, text in parse_entries(str(tracker.get("body") or "")) if key not in bodies]
+	unticked = sum(_unticked_count(body) for body in bodies.values()) + sum(_unticked_count(text) for _, text in legacy)
+	entries = len(set(bodies) | {key for key, _ in legacy})
+	result["unticked"] = unticked
+	if unticked > 0 or entries == 0:
+		_resolve_log(issue=number, outcome="open", unticked=unticked, reason="unticked" if unticked else "no_entries")
+		return result
+	# Re-read before closing: an entry posted since the first read defers the close.
+	reread = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+	if _newer_entry_comments(reread, seen_max, posted):
+		_resolve_log(issue=number, outcome="close_deferred", unticked=unticked, reason="new_entry")
+		return result
+	_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=closed", "-f", "state_reason=completed"])
+	result["closed"] = True
+	# Re-read after closing: an entry that landed between the re-read and the
+	# close reopens the tracker. A failed re-read reopens it too (fail closed);
+	# the next tick closes it again when nothing is left.
+	try:
+		after = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+	except ApiError:
+		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open"])
+		result["closed"] = False
+		result["reopened"] = True
+		_resolve_log(issue=number, outcome="reopened", unticked=unticked, reason="recheck_failed")
+		raise
+	if any(_unticked_count(_normalised_body(comment)) for comment in _newer_entry_comments(after, seen_max, posted)):
+		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open"])
+		result["closed"] = False
+		result["reopened"] = True
+		_resolve_log(issue=number, outcome="reopened", unticked=unticked, reason="entry_after_close")
+		return result
+	_resolve_log(issue=number, outcome="closed", unticked=unticked, reason="all_ticked")
 	return result
 
 
@@ -969,6 +1202,9 @@ def main(argv: list[str] | None = None) -> int:
 	tick_cmd.add_argument("--stable-sha", required=True)
 	tick_cmd.add_argument("--repo-dir", default=".")
 	tick_cmd.add_argument("--trusted-login", default="")
+	resolve_cmd = sub.add_parser("resolve")
+	resolve_cmd.add_argument("--repo", required=True)
+	resolve_cmd.add_argument("--trusted-login", default="")
 	digest_cmd = sub.add_parser("needs-human")
 	digest_sub = digest_cmd.add_subparsers(dest="digest_command", required=True)
 	park_cmd = digest_sub.add_parser("park")
@@ -1005,6 +1241,8 @@ def main(argv: list[str] | None = None) -> int:
 			result = needs_human_alert_confirm(args.repo, args.item, args.parking, args.comment_id, args.message_id)
 		elif args.command == "needs-human" and args.digest_command == "prune":
 			result = needs_human_prune(args.repo, args.trusted_login or None)
+		elif args.command == "resolve":
+			result = resolve(args.repo, args.trusted_login or None)
 		elif args.command == "tick":
 			result = tick(args.repo, args.stable_sha, args.repo_dir, args.trusted_login or None)
 		else:

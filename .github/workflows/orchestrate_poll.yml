@@ -1838,6 +1838,26 @@ jobs:
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
 
+      # Operator-step auto-resolve (stuck-states P10, Refs #8291): tick
+      # ai:operator-step entries whose merge commit `stable` now contains
+      # (compare status ahead or identical only) and close the tracker once no
+      # unticked box is left. Runs on every tick; one listing when no tracker
+      # is open. OPERATOR_STEP_AUTO_RESOLVE_ENABLED=false turns it off.
+      - name: Resolve operator steps
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          OPERATOR_STEP_AUTO_RESOLVE_ENABLED: ${{ vars.OPERATOR_STEP_AUTO_RESOLVE_ENABLED || 'true' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          if [ ! -f scripts/operator_step_issue.py ] || ! grep -q 'def resolve(' scripts/operator_step_issue.py; then
+            echo '::warning::Operator-step resolve support is not staged.'
+            exit 0
+          fi
+          python3 scripts/operator_step_issue.py resolve --repo "${GITHUB_REPOSITORY}" \
+            || echo "::warning::Operator-step resolve failed; the next tick retries."
+
       # Daily consumer health check (scripts/consumer_health_check.sh), this
       # repository only. The cache entry keyed on the UTC date records that
       # today's check succeeded, so later ticks skip it without an API call;

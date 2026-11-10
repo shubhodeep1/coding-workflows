@@ -95,6 +95,11 @@
 # request, but go into no fix issue, so the pipeline never plans a duplicate
 # of work that is already under review. When every code gap is tagged, no fix
 # issue is searched for or opened.
+# Release waits (stuck-states P10, Refs #8291): a gap whose dormant_until is
+# `@stable contains <sha>` only waits for the next release. The normaliser
+# keeps it as a `code` gap with release_wait true (even when the model said
+# `operator`); it is shown in the verdict comment and goes into neither the
+# fix issue nor the ai:operator-step issue. Log: op=release_waits.
 # POSTs are single-attempt: retrying after a lost response can duplicate writes.
 # The one exception is the verdict comment, which is retried once, and only
 # after a successful listing shows no trusted comment ending in its marker
@@ -165,13 +170,21 @@ if not isinstance(match.get("gaps"), list) or len(match["gaps"]) > 20:
 for gap in match["gaps"]:
 	if not isinstance(gap, dict) or gap.get("kind") not in ("code", "operator"):
 		sys.exit(1)
+	dormant_until = clean(gap.get("dormant_until"), 200)
+	# Release wait (stuck-states P10): a gap whose only condition is that the
+	# merge reaches `@stable` needs no fix and no person, whatever kind the
+	# model gave it. It is kept as `code` and never opens a fix issue or an
+	# operator step.
+	release_wait = bool(re.fullmatch(r"@stable contains [0-9a-f]{7,40}\.?", dormant_until))
+	kind = "code" if release_wait else gap["kind"]
 	gaps.append({
-		"kind": gap["kind"],
+		"kind": kind,
 		"title": clean(gap.get("title"), 200) or "Activation gap",
 		"evidence": clean(gap.get("evidence"), 600),
 		"fix": clean(gap.get("fix"), 1500),
-		"dormant_until": clean(gap.get("dormant_until"), 200),
-		"open_pr": gap.get("open_pr") if gap["kind"] == "code" and type(gap.get("open_pr")) is int and gap.get("open_pr") in open_pr_numbers else None,
+		"dormant_until": dormant_until,
+		"open_pr": gap.get("open_pr") if kind == "code" and not release_wait and type(gap.get("open_pr")) is int and gap.get("open_pr") in open_pr_numbers else None,
+		"release_wait": release_wait,
 	})
 print(json.dumps({
 	"verdict": match["verdict"],
@@ -430,7 +443,7 @@ activation_main()
 	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file activation_model_rc=0
 	local activation_fix_lookup_rc activation_fix_recheck_rc activation_verdict_posted activation_expected_marker activation_verdict_recheck_rc
 	local activation_symlinks_context activation_context_tmp activation_open_prs_context
-	local activation_issue_gaps activation_in_flight_prs
+	local activation_issue_gaps activation_in_flight_prs activation_release_waits
 	local verdict code_gaps operator_gaps model reasoning comment_body fix_body steps_file tg_level item_label
 	local activation_files_json activation_files_response activation_fix_lookup_ok
 	local activation_engine_labels="" activation_sync_label=""
@@ -647,12 +660,17 @@ activation_main()
 	code_gaps="$(jq '[.gaps[] | select(.kind == "code")] | length' "${verdict_file}")"
 	operator_gaps="$(jq '[.gaps[] | select(.kind == "operator")] | length' "${verdict_file}")"
 
-	# Code gaps tagged `open_pr` are left to that open pull request: they are
-	# reported in the verdict comment but go into no fix issue.
-	activation_issue_gaps="$(jq '[.gaps[] | select(.kind == "code" and .open_pr == null)] | length' "${verdict_file}")"
+	# Code gaps tagged `open_pr` are left to that open pull request, and release
+	# waits (`dormant_until: "@stable contains <sha>"`) to the next release: both
+	# are reported in the verdict comment but go into no fix issue.
+	activation_issue_gaps="$(jq '[.gaps[] | select(.kind == "code" and .open_pr == null and .release_wait != true)] | length' "${verdict_file}")"
+	activation_release_waits="$(jq '[.gaps[] | select(.release_wait == true)] | length' "${verdict_file}")"
 	activation_in_flight_prs="$(jq -r '[.gaps[] | select(.kind == "code" and .open_pr != null) | .open_pr] | unique | map(tostring) | join(",")' "${verdict_file}")"
 	if [ -n "${activation_in_flight_prs}" ]; then
-		activation_log "mode=${mode} item=${item} op=in_flight_gaps count=$((code_gaps - activation_issue_gaps)) prs=${activation_in_flight_prs} outcome=left_to_open_prs"
+		activation_log "mode=${mode} item=${item} op=in_flight_gaps count=$((code_gaps - activation_issue_gaps - activation_release_waits)) prs=${activation_in_flight_prs} outcome=left_to_open_prs"
+	fi
+	if [ "${activation_release_waits}" -gt 0 ]; then
+		activation_log "mode=${mode} item=${item} op=release_waits count=${activation_release_waits} outcome=left_to_release"
 	fi
 
 	activation_fix_lookup_ok="true"
@@ -674,7 +692,7 @@ activation_main()
 				"<!-- ai:activation-fix:v1 source=" + $key + " -->\n"
 				+ "## Activation gaps\n\nActivation verification of " + $source_label
 				+ " found these gaps that code in this repository can close. Close each one with the smallest change; do not change unrelated behaviour.\n\n"
-				+ ([.gaps[] | select(.kind == "code" and .open_pr == null) | "- **" + .title + "**\n  Evidence: " + .evidence + "\n  Fix: " + .fix] | join("\n"))
+				+ ([.gaps[] | select(.kind == "code" and .open_pr == null and .release_wait != true) | "- **" + .title + "**\n  Evidence: " + .evidence + "\n  Fix: " + .fix] | join("\n"))
 			' "${verdict_file}")"
 			activation_fix_recheck_rc=0
 			if ! gh api "repos/${REPOSITORY}/issues" -f title="Activation gaps after ${item_label}" -f body="${fix_body}" >/dev/null 2>&1; then
@@ -728,7 +746,7 @@ activation_main()
 	comment_body="$(jq -r --arg key "${key}" --argjson lookup_ok "${activation_fix_lookup_ok}" '
 		"## Activation: " + .verdict + "\n\nSummary: " + .summary + "\n\n"
 		+ (if .trigger != "" then "Trigger: " + .trigger + "\n\n" else "" end)
-		+ (if (.gaps | length) > 0 then "Gaps:\n" + ([.gaps[] | "- [" + .kind + "] " + .title + (if .open_pr != null then " (fix in progress in open PR #" + (.open_pr | tostring) + ")" else "" end)] | join("\n")) + "\n\n" else "" end)
+		+ (if (.gaps | length) > 0 then "Gaps:\n" + ([.gaps[] | "- [" + .kind + "] " + .title + (if .release_wait == true then " (ships with the next @stable release; nothing to do)" elif .open_pr != null then " (fix in progress in open PR #" + (.open_pr | tostring) + ")" else "" end)] | join("\n")) + "\n\n" else "" end)
 		+ (if $lookup_ok then "<!-- ai:activation:v1 verdict=" + .verdict + " source=" + $key + " -->" else "Code-gap follow-up is pending: the GitHub fix-issue lookup failed. The activation verdict is not finalized; retry verification.\n\n<!-- ai:activation:v1 partial=true source=" + $key + " -->" end)
 	' "${verdict_file}")"
 	activation_verdict_posted="false"
