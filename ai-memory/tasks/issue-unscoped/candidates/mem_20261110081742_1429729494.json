@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:8 | severity=high | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate names `ruff` as the only \"failure caused by this change\", yet no ruff finding is shown on any line this PR adds; the strongest candidate is the apparently unused module-level `import http.client` (F401) at line 8, which existed before the PR. Its only other reference, `broker_module.http.client` at line 10388, does not use the local binding.\n  WHY: The pre-push gate stays red and the PR cannot converge until someone reproduces `ruff --select E,F --ignore E501` on the head SHA and either finds the regressed finding or shows the gate is blaming a pre-existing finding (the source rated this MAJOR).\n- .github/workflows/copilot-pull-request-reviewer (check-run on head SHA 3fda7b8a):failed[0].log_tail | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The copilot reviewer action stops with `Error: Prompt too big after adding system message` (`errorCode: custom_instructions_too_large`, statusCode 422) because the repo's custom instructions (AGENTS.md/CLAUDE.md) are larger than its prompt budget.\n  WHY: The check-run fails on every PR whose custom instructions exceed the limit, whatever the change; this PR's diff did not cause it and its editor pass cannot fix it (the source rated this NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cThe value false turns it off.\u201d\n  expected_change_site: `.github/workflows/review_autofix.yml`, environment mapping for the step that prepares the review sandbox.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The preparation step's environment mapping at lines 3643-3650 does not pass `REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED` to the helper, and the changelog confirms a repository variable alone does not reach it, so operators cannot turn this admission off through repository configuration in the review-autofix workflow.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cThe value false turns it off.\u201d\n  Expected change site: `.github/workflows/review_autofix.yml`, environment mapping for the step that prepares the review sandbox.\n  Evidence of absence: The preparation step\u2019s environment mapping at lines 3643-3650 does not pass `REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED` to the helper. The changelog confirms that a repository variable alone does not reach it. Therefore, operators cannot turn off this admission through repository configuration in the review-autofix workflow.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_autofix_review_pipeline_contract.py:line 8 (`import http.client`); only other reference at line 10388 is `broker_module.http.client`, which does not consume the local binding | severity=MAJOR | confidence=3\n  PROBLEM: The pre-push gate names `ruff` as the only \"failure caused by this change\", but no ruff finding has been shown on a line the PR adds. The strongest candidate is this apparently unused module-level import (F401), which predates the PR, so the gate's caused-by-change attribution cannot be reproduced from the code alone.\n  WHY: The pre-push gate stays red and the PR cannot converge until the editor reproduces `ruff --select E,F --ignore E501` on the head SHA and identifies the finding that regressed against the merge-base, or proves the gate baseline is blaming a pre-existing finding.\n- .github/workflows/copilot-pull-request-reviewer (check-run on head SHA 3fda7b8a):failed[0].log_tail \u2014 `Error: Prompt too big after adding system message` (`errorCode: custom_instructions_too_large`, statusCode 422) | severity=NIT | confidence=5\n  PROBLEM: The copilot reviewer action stops because the repo's custom instructions (AGENTS.md/CLAUDE.md) exceed its prompt budget; this PR's diff did not cause it and this PR's editor pass cannot fix it.\n  WHY: The check-run fails on every PR whose custom instructions exceed the limit, whatever the change under review.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f11f76e5c7c4d4955c852cf0f3e3aaeb0e562b69465024d066663af62b95b453",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9180,
+    "run_id": "42776825337",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42776825337",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110081742_1429729494",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9180,
+    "run_id": "42776825337"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T08:17:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
