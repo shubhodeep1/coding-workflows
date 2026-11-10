@@ -10191,12 +10191,15 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 		return done("keep", "runs_unavailable")
 	window: list[tuple[datetime, dict[str, Any]]] = []
 	for run in runs["workflow_runs"]:
+		# A malformed entry could hide a failed run: keep the issue (fail open).
 		if not isinstance(run, dict):
-			continue
+			return done("keep", "runs_unavailable")
+		created = _heal_stale_parse_time(run.get("created_at"))
+		if created is None:
+			return done("keep", "runs_unavailable")
 		if run.get("event") != "push" or run.get("status") != "completed" or run.get("head_branch") != branch:
 			continue
-		created = _heal_stale_parse_time(run.get("created_at"))
-		if created is None or created <= anchor:
+		if created <= anchor:
 			continue
 		window.append((created, run))
 	window.sort(key=lambda item: item[0])

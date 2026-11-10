@@ -10152,6 +10152,13 @@ def test_heal_stale_keeps_with_too_few_or_failed_runs() -> None:
 	old["workflow_runs"][2]["event"] = "pull_request"
 	result = _stale_decide(runs=old)
 	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 2
+	# A malformed entry could hide a failed run: the issue is kept.
+	bad = _stale_runs(5)
+	bad["workflow_runs"].append("garbage")
+	assert _stale_decide(runs=bad)["reason"] == "runs_unavailable"
+	bad = _stale_runs(5)
+	bad["workflow_runs"][1]["created_at"] = "yesterday"
+	assert _stale_decide(runs=bad)["reason"] == "runs_unavailable"
 
 
 def test_heal_stale_occurrence_comment_moves_the_anchor_only_when_trusted() -> None:

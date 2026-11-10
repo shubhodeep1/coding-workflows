@@ -2901,6 +2901,11 @@ if ! [[ "${HEAL_STALE_GREEN_RUNS}" =~ ^[0-9]{1,6}$ ]] || [ "$(( 10#${HEAL_STALE_
   HEAL_STALE_GREEN_RUNS="5"
 fi
 HEAL_STALE_GREEN_RUNS="$(( 10#${HEAL_STALE_GREEN_RUNS} ))"
+# One runs read returns at most 100 runs (green runs + 10), so cap at 90.
+if [ "${HEAL_STALE_GREEN_RUNS}" -gt 90 ]; then
+  echo "::warning::HEAL_STALE_GREEN_RUNS above 90 cannot be met; using 90"
+  HEAL_STALE_GREEN_RUNS="90"
+fi
 HEAL_STALE_MIN_AGE_HOURS="${HEAL_STALE_MIN_AGE_HOURS:-24}"
 if ! [[ "${HEAL_STALE_MIN_AGE_HOURS}" =~ ^[0-9]{1,6}$ ]]; then
   echo "::warning::HEAL_STALE_MIN_AGE_HOURS must be a non-negative integer; defaulting to 24"
@@ -19117,8 +19122,7 @@ _heal_stale_close_check()
   local details_map_json="$2"
   local comments_json="$3"
   local login="$4"
-  # <phase> is accepted for the caller's context; the log line omits it.
-  local phase="$5"
+  # $5 (<phase>) is accepted for the caller's context; the log line omits it.
   local flag_norm="" heal_py="" outcome="kept" reason="" green_runs="0"
   local stale_issue_file="" stale_comments_file="" stale_runs_file="" stale_linked_file="" stale_run_file=""
   local target_json="" src_repo="" workflow_base="" stale_branch="" fb_repo="" fb_run=""
@@ -19217,10 +19221,12 @@ _heal_stale_close_check()
     else
       per_page=$(( HEAL_STALE_GREEN_RUNS + 10 ))
       [ "${per_page}" -le 100 ] || per_page=100
+      # A non-object run entry fails the projection, so the runs read as
+      # unavailable (fail open) instead of being dropped.
       runs_json="$(gh_retry gh api -X GET "repos/${src_repo}/actions/workflows/${workflow_base}/runs" \
         -f branch="${stale_branch}" -f event=push -f status=completed -F per_page="${per_page}" 2>/dev/null \
         | jq -c 'select(type == "object" and ((.workflow_runs | type) == "array"))
-          | {workflow_runs: [.workflow_runs[] | select(type == "object")
+          | {workflow_runs: [.workflow_runs[]
               | {id, html_url, head_sha, head_branch, event, status, conclusion, created_at}]}' 2>/dev/null)" || runs_json=""
       [ -n "${runs_json}" ] || runs_json="null"
       HEAL_STALE_RUNS_CACHE_JSON="$(printf '%s' "${HEAL_STALE_RUNS_CACHE_JSON:-{\}}" \
@@ -19231,9 +19237,17 @@ _heal_stale_close_check()
       reason="runs_unavailable"; break
     fi
     printf '%s' "${runs_json}" > "${stale_runs_file}"
-    # Linked PR: batched details map first, then the managed linked-PR cache;
-    # no entry in either keeps the issue (linked_pr_unknown). No new call.
-    if printf '%s' "${details_map_json:-{\}}" | jq -e --arg n "${issue_num}" '.[$n] | has("linked_pr")' >/dev/null 2>&1; then
+    # Linked PR: an open ai/issue-<n> PR from the details map wins (it can be
+    # linked with `Refs`, which linked_pr omits); then the batched details map
+    # linked_pr, then the managed linked-PR cache; no entry in either keeps
+    # the issue (linked_pr_unknown). An unreadable timeline keeps it too.
+    # No new call.
+    if printf '%s' "${details_map_json:-{\}}" | jq -e --arg n "${issue_num}" '.[$n].open_issue_branch_pr == "unknown"' >/dev/null 2>&1; then
+      :
+    elif printf '%s' "${details_map_json:-{\}}" | jq -e --arg n "${issue_num}" '.[$n].open_issue_branch_pr | type == "object"' >/dev/null 2>&1; then
+      printf '%s' "${details_map_json}" | jq -c --arg n "${issue_num}" '.[$n].open_issue_branch_pr' > "${stale_linked_file}" 2>/dev/null \
+        && linked_args=(--linked-pr-json "${stale_linked_file}")
+    elif printf '%s' "${details_map_json:-{\}}" | jq -e --arg n "${issue_num}" '.[$n] | has("linked_pr")' >/dev/null 2>&1; then
       printf '%s' "${details_map_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr' > "${stale_linked_file}" 2>/dev/null \
         && linked_args=(--linked-pr-json "${stale_linked_file}")
     elif printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE:-{\}}" | jq -e --arg n "${issue_num}" 'type == "object" and has($n)' >/dev/null 2>&1; then
@@ -19270,7 +19284,7 @@ _heal_stale_close_check()
     fi
     outcome="closed"
     anchor="$(printf '%s' "${decide_json}" | jq -r '.anchor // "" | strings' 2>/dev/null | tr -cd '0-9TZ:-' | cut -c1-25)" || anchor=""
-    tg_notify_issue "${issue_num}" "Heal issue closed: ${workflow_base} green on ${stale_branch} for ${green_runs//[!0-9]/} push runs since ${anchor:-unknown}." "INFO" || true
+    tg_notify_issue "${issue_num}" "Heal issue closed: ${workflow_base} green on ${stale_branch} for ${green_runs//[!0-9]/} push runs since ${anchor:-unknown}." "DEBUG" || true
     break
   done
   rm -f "${stale_issue_file}" "${stale_comments_file}" "${stale_runs_file}" "${stale_linked_file}" "${stale_run_file}" 2>/dev/null || true
@@ -22352,6 +22366,19 @@ _fetch_candidate_issue_details_graphql() {
               author_association: (.authorAssociation // ""),
               user: {login: (.author.login // "")}
             }],
+            # Issue #8808: an open same-repo PR whose head is ai/issue-<n>,
+            # whatever its link keyword (`Refs` links never set
+            # willCloseTarget). "unknown" when the timeline was not returned.
+            open_issue_branch_pr: (
+              (.value.number | tostring) as $num
+              | if ((.value.timelineItems.nodes? | type) == "array") then
+                  ([ .value.timelineItems.nodes[]? | (.source // null)
+                     | select(type == "object" and .__typename == "PullRequest")
+                     | select((.repository.nameWithOwner // "") == $repo)
+                     | select(.state == "OPEN" and (.headRefName // "") == ("ai/issue-" + $num))
+                     | {number: .number, state: .state, head_ref: .headRefName} ] | first // null)
+                else "unknown" end
+            ),
             linked_pr: (
               [
                 (.value.timelineItems.nodes // [])[]?

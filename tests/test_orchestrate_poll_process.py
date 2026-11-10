@@ -31329,10 +31329,6 @@ def test_persist_orch_revise_option_block_is_shown_only_when_a_revise_can_run():
 			assert py == [], case_id
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 # --------------------------------------------------------------------------
 # Stale auto-close of held run-sourced heal issues (issue #8808)
 # --------------------------------------------------------------------------
@@ -31368,7 +31364,8 @@ def _heal_stale_comments(extra: list | None = None) -> list:
 	return [plan, hold, *(extra or []), _standalone_awaiting_approval_state_comment()]
 
 
-def _heal_stale_tick(comments: list | None = None, env: dict | None = None, runs: list | None = None) -> dict:
+def _heal_stale_tick(comments: list | None = None, env: dict | None = None, runs: list | None = None,
+		store_extra: dict | None = None) -> dict:
 	return _run_poller(
 		state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval", "ai:workflow-heal"]},
@@ -31377,7 +31374,7 @@ def _heal_stale_tick(comments: list | None = None, env: dict | None = None, runs
 		mock_gh_issue_list_label_filter=True,
 		env_overrides=env or {},
 		mock_store_extra={"workflow_runs_by_file": {"ci.yml": runs if runs is not None else _heal_stale_runs(5)},
-			"issue_created_at": {"501": "2026-01-01T00:00:00Z"}},
+			"issue_created_at": {"501": "2026-01-01T00:00:00Z"}, **(store_extra or {})},
 	)
 
 
@@ -31445,6 +31442,34 @@ def test_standalone_heal_stale_close_keeps_with_too_few_green_runs() -> None:
 	assert _heal_stale_markers(result) == [], log
 
 
+def test_standalone_heal_stale_close_keeps_with_open_refs_linked_issue_branch_pr() -> None:
+	# A `Refs`-linked open ai/issue-<n> PR never sets willCloseTarget, so
+	# linked_pr is null; the open-head check still keeps the issue.
+	result = _heal_stale_tick(store_extra={"issue_linked_prs": {"501": [8801]},
+		"prs": [{"number": 8801, "state": "open", "merged": False, "willCloseTarget": False,
+			"headRefName": "ai/issue-501", "baseRefName": "main", "mergeable": True, "mergeable_state": "clean"}]})
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=open_pr" in log
+	assert result.get("issue_state_patch_calls", []) == []
+	assert _heal_stale_markers(result) == [], log
+
+
+def test_standalone_heal_stale_close_keeps_on_malformed_run_entry() -> None:
+	runs = _heal_stale_runs(5)
+	runs.append({**runs[0], "id": 9200, "created_at": "not-a-date"})
+	result = _heal_stale_tick(runs=runs)
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=runs_unavailable" in log
+	assert result.get("issue_state_patch_calls", []) == []
+
+
+def test_standalone_heal_stale_close_caps_green_runs_at_ninety() -> None:
+	result = _heal_stale_tick(env={"HEAL_STALE_GREEN_RUNS": "150"})
+	log = result["stdout"] + result["stderr"]
+	assert "::warning::HEAL_STALE_GREEN_RUNS above 90 cannot be met; using 90" in log
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=too_few_green_runs green_runs=5" in log
+
+
 def test_heal_stale_close_wiring() -> None:
 	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'HEAL_STALE_AUTO_CLOSE_ENABLED="${HEAL_STALE_AUTO_CLOSE_ENABLED:-true}"' in poller
@@ -31485,3 +31510,7 @@ def test_no_automation_reopens_closed_heal_issues() -> None:
 		text = (REPO_ROOT / relative).read_text(encoding="utf-8")
 		assert "reopen" not in text.lower(), relative
 		assert not re.search(r"PATCH[^\n]*state=open|state=open[^\n]*PATCH", text), relative
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
