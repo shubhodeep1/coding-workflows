@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/resolve_integration_ref.sh:567-577 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When the `retarget_merged_base.sh` helper is missing (`! -f \"${SCRIPT_DIR}/retarget_merged_base.sh\"`), `resolve_ci_reissue_base_branch` logs `branch_lookup_failed`, the same outcome it logs when the helper fails to resolve a branch that does exist.\n  WHY: The operator logs can mislead, so an operator might try to recreate a branch that was not missing and only caused a lookup error (no severity stated by the reviewer).\n- scripts/resolve_integration_ref.sh:514-531 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_ci_reissue_branch_state` creates the temporary files `out_file` and `err_file` with `mktemp` but does not guarantee their cleanup on every failure path, for example when creating `err_file` itself fails (line 518).\n  WHY: Temporary files can build up in `/tmp` in high-volume environments (no severity stated by the reviewer).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- NOTE: The new test at tests/test_resolve_integration_ref_ci_triage.py:398-406 has a unique name and does exercise the pinned switch. The harness at scripts/resolve_integration_ref.sh lines 739-761 does not override RETARGET_MERGED_BASE_ENABLED, and the inline prefix at line 595 overrides it for the helper call. If the pin were removed, the resolver would return exit 3 and the test would fail.\n- NOTE: The failed copilot-pull-request-reviewer check (HTTP 422 custom_instructions_too_large) comes from the third-party reviewer's own prompt size and is not a defect in this PR. HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/resolve_integration_ref.sh:function `resolve_ci_reissue_base_branch`, lines 567-577 | confidence=3\n  PROBLEM: When the `retarget_merged_base.sh` helper is missing (`! -f \"${SCRIPT_DIR}/retarget_merged_base.sh\"`), the resolver logs `branch_lookup_failed` but does not tell this apart from a helper failure to resolve a branch that actually existed, so the operator logs can be misleading.\n  WHY: An operator might try to recreate a branch that was not missing but only caused a lookup error.\n- scripts/resolve_integration_ref.sh:function `_ci_reissue_branch_state`, lines 514-531 | confidence=3\n  PROBLEM: `_ci_reissue_branch_state` creates the temporary files `out_file` and `err_file` with `mktemp` but does not guarantee their cleanup on every failure path, in particular when creating `err_file` itself fails (line 518).\n  WHY: Temporary files can build up in `/tmp` in high-volume environments.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING: tests/test_resolve_integration_ref_ci_triage.py:test_reissue_helper_switch_is_pinned_against_caller_value (around line 396-406)\n  ISSUE: The test only asserts exit code 0 and \"self-test passed\" in stdout, so it would still pass if a future refactor made the helper return \"main\" for the wrong reason.\n  FIX: Assert that \"outcome=skipped reason=base_branch_merged_into_default\" appears in stderr. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1.\n- NOTE: The test correctly guards the regression. Without the prefix at scripts/resolve_integration_ref.sh:561-569, the case arm at line 605-609 refuses with branch_missing (exit 3). Using `subprocess.run` directly instead of `_run_case` is justified. The change introduces no new ruff or shellcheck findings.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- NOTE: HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- NOTE: The new test at tests/test_resolve_integration_ref_ci_triage.py:395-405 checks the pin at scripts/resolve_integration_ref.sh:595 and passes through the harness at resolve_integration_ref.sh:739-761. Its mocks cover resolve_integration_ref.sh:900-914 and it mirrors the pattern at tests/test_resolve_integration_ref_ci_triage.py:245-260. The test catches the regression whether the resolver ends in branch_missing or branch_lookup_failed (rc 3).\n- NOTE: The copilot-pull-request-reviewer HTTP 422 failure is not a defect in the diff. There are no linked-issue task gaps: both deliverables in the PR description are implemented. HARDENING_SUGGESTIONS: NONE (HARDENING_RISK_SCORE: 0).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a67e9421e7ddc653275f5d70d1bcde64f12c83610084b987a6f8ca65f6777fa1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "42806060361",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42806060361",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110114230_6896d6a602",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "42806060361"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T11:42:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
