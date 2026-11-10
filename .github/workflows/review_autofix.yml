@@ -2780,6 +2780,11 @@ jobs:
             fi
             if [ -n "${review_static_agents_mode_lc}" ] && [ "${review_static_agents_mode_lc}" != index ]; then
               review_static_agents_reason=mode_inline
+              if [ "${review_static_agents_mode_lc}" != inline ]; then
+                # Never print the value; a typo must not look like a rollback.
+                echo "::warning::STATIC_CONTEXT_AGENTS_MODE has an invalid value; inlining agents.md." >&2
+                review_static_agents_reason=mode_invalid
+              fi
               return 1
             fi
             if ! grep -qxF '# supports: REVIEW_SANDBOX_STATIC_CONTEXT_AGENTS' "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" 2>/dev/null \
