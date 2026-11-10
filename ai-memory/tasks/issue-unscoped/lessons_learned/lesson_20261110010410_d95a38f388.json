@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-10T01:04:10Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=(external CI surface, no code hunk):n/a; cited_path=copilot-pull-request-reviewer check run 42726623964 (instruction payload: repo-wide AGENTS.md and CLAUDE.md); files_touched=changelog.d/ftmc-739-superseded-ref-refresh.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrate_integration_ahead_by_gate.py.",
+  "phase": "review_autofix",
+  "pr_number": 9158,
+  "record_id": "lesson_20261110010410_d95a38f388",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer check run 42726623964 (instruction payload: repo-wide AGENTS.md and CLAUDE.md)",
+    "(external CI surface, no code hunk)",
+    "changelog.d/ftmc-739-superseded-ref-refresh.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrate_integration_ahead_by_gate.py"
+  ]
+}
