@@ -2305,6 +2305,10 @@ if args[0] == 'api':
 							},
 						})
 				issue_payload['timelineItems'] = {'nodes': timeline_nodes}
+				# Issue #8808: opt-in truncated timeline (more than the last 50
+				# cross-references).
+				if str(issue_num) in {str(n) for n in store.get('issue_timeline_truncated', [])}:
+					issue_payload['timelineItems']['pageInfo'] = {'hasPreviousPage': True}
 			repo[f'i{alias_num}'] = issue_payload
 		print(json.dumps({'data': {'repository': repo}}))
 		sys.exit(0)
@@ -3225,7 +3229,8 @@ if args[0] == 'api':
 			else:
 				print(json.dumps(result))
 			sys.exit(0)
-		result = {'workflow_runs': runs, 'total_count': len(runs)}
+		# Issue #8808: opt-in total_count above the page (a busy branch).
+		result = {'workflow_runs': runs, 'total_count': len(runs) + int(store.get('workflow_runs_total_count_extra', 0) or 0)}
 		if jq:
 			import subprocess as _sp
 			p = _sp.run(['jq', '-r', jq], input=json.dumps(result), capture_output=True, text=True)
@@ -31470,6 +31475,42 @@ def test_standalone_heal_stale_close_caps_green_runs_at_ninety() -> None:
 	log = result["stdout"] + result["stderr"]
 	assert "::warning::HEAL_STALE_GREEN_RUNS above 90 cannot be met; using 90" in log
 	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=too_few_green_runs green_runs=5" in log
+
+
+def test_standalone_heal_stale_close_busy_branch_page_cut_short_still_closes() -> None:
+	# #8352: the newest page is all after the anchor and total_count is far
+	# larger; the green page alone is enough.
+	result = _heal_stale_tick(store_extra={"workflow_runs_total_count_extra": 400})
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=closed reason=workflow_green green_runs=5" in log
+	assert result.get("issue_state_patch_calls", []) == [
+		{"issue": 501, "state": "closed", "state_reason": "completed"}], log
+
+
+def test_standalone_heal_stale_close_failed_patch_posts_marker_once_and_retries_only_the_close() -> None:
+	first = _heal_stale_tick(store_extra={"fail_issue_state_patch_for": [501]})
+	log = first["stdout"] + first["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=close_failed green_runs=5" in log
+	markers = _heal_stale_markers(first)
+	assert len(markers) == 1, log
+	posted = {"body": markers[0], "user": {"login": _PLAN_GATE_LOGIN}, "author_association": "NONE",
+		"created_at": "2026-03-01T00:00:00Z"}
+	second = _heal_stale_tick(comments=_heal_stale_comments([posted]))
+	log = second["stdout"] + second["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=closed reason=workflow_green" in log
+	assert _heal_stale_markers(second) == markers, log
+	assert second.get("issue_state_patch_calls", []) == [
+		{"issue": 501, "state": "closed", "state_reason": "completed"}], log
+
+
+def test_standalone_heal_stale_close_keeps_when_the_timeline_is_truncated() -> None:
+	# More than the last 50 cross-references: an older ai/issue-<n> PR could
+	# be past the window, so the linked PR is unknown and the issue is kept.
+	result = _heal_stale_tick(store_extra={"issue_timeline_truncated": [501]})
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=linked_pr_unknown" in log
+	assert result.get("issue_state_patch_calls", []) == []
+	assert _heal_stale_markers(result) == [], log
 
 
 def test_heal_stale_close_wiring() -> None:

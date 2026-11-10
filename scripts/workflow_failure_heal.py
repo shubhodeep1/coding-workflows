@@ -10114,8 +10114,8 @@ def render_heal_stale_close_comment(*, issue: int, workflow: str, branch: str, g
 	return "\n".join([
 		"**Automatically closed: the failing workflow is green again.**",
 		"",
-		f"`{workflow}` has concluded `success` on all {green_runs} completed push runs on `{branch}` created after "
-		f"`{anchor}` (the later of this issue's creation and its newest occurrence report).",
+		f"`{workflow}` has concluded `success` on each of the {green_runs} newest completed push runs on `{branch}` "
+		f"created after `{anchor}` (the later of this issue's creation and its newest occurrence report).",
 		"",
 		run_line("First green run", first_green),
 		run_line("Newest green run", newest_green),
@@ -10206,13 +10206,17 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 		if created <= anchor:
 			continue
 		window.append((created, run))
-	# One page is read. It shows every run since the anchor only when it
-	# reaches back to the anchor or holds every run the API counted;
-	# otherwise an older failure could sit past the page (keep the issue).
+	# One page (the newest HEAL_STALE_GREEN_RUNS+10 runs) is read. A page that
+	# neither reaches back to the anchor nor holds every run the API counted
+	# is cut short, so it is enough only when it alone already holds
+	# green_runs runs after the anchor (all of which must be green below).
+	# Gating on full coverage would keep any long-held issue on a busy
+	# branch forever; a failure that comes back posts a trusted occurrence
+	# comment, which moves the anchor past it.
 	total_count = runs.get("total_count")
 	page_complete = isinstance(total_count, int) and not isinstance(total_count, bool) \
 		and total_count <= len(runs["workflow_runs"])
-	if not reaches_anchor and not page_complete:
+	if not reaches_anchor and not page_complete and len(window) < green_runs:
 		return done("keep", "runs_window_incomplete")
 	window.sort(key=lambda item: item[0])
 	if any(run.get("conclusion") != "success" for _, run in window):

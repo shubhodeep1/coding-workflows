@@ -10161,15 +10161,26 @@ def test_heal_stale_keeps_with_too_few_or_failed_runs() -> None:
 	assert _stale_decide(runs=bad)["reason"] == "runs_unavailable"
 
 
-def test_heal_stale_keeps_when_the_runs_page_may_not_reach_the_anchor() -> None:
-	# One page is read: more runs than the page holds and none at or before
-	# the anchor means an older failure could be missed.
+def test_heal_stale_runs_page_cut_short_closes_only_with_enough_green_runs() -> None:
+	# One page is read. A long-held issue on a busy branch (#8352) has a page
+	# that is all after the anchor and a far larger total_count: it closes
+	# once the page alone holds green_runs green runs after the anchor.
 	cut = _stale_runs(5)
 	cut["total_count"] = 40
-	assert _stale_decide(runs=cut)["reason"] == "runs_window_incomplete"
+	assert _stale_decide(runs=cut)["decision"] == "close"
 	missing = _stale_runs(5)
 	del missing["total_count"]
-	assert _stale_decide(runs=missing)["reason"] == "runs_window_incomplete"
+	assert _stale_decide(runs=missing)["decision"] == "close"
+	# A failure on the page still keeps it.
+	failed = _stale_runs(15)
+	failed["total_count"] = 400
+	failed["workflow_runs"][7]["conclusion"] = "failure"
+	assert _stale_decide(runs=failed)["reason"] == "run_not_green"
+	# A cut-short page with too few runs after the anchor keeps it.
+	short = _stale_runs(5)
+	short["total_count"] = 40
+	short["workflow_runs"][0]["head_branch"] = "stable"
+	assert _stale_decide(runs=short)["reason"] == "runs_window_incomplete"
 	# A run at or before the anchor on the page proves the window is covered.
 	reaching = _stale_runs(6)
 	reaching["total_count"] = 40

@@ -22301,6 +22301,7 @@ _fetch_candidate_issue_details_graphql() {
           labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
+            pageInfo { hasPreviousPage }
             nodes {
               ... on CrossReferencedEvent {
                 willCloseTarget
@@ -22368,15 +22369,19 @@ _fetch_candidate_issue_details_graphql() {
             }],
             # Issue #8808: an open same-repo PR whose head is ai/issue-<n>,
             # whatever its link keyword (`Refs` links never set
-            # willCloseTarget). "unknown" when the timeline was not returned.
+            # willCloseTarget). "unknown" when the timeline was not returned,
+            # or when it holds more than the last 50 cross-references and none
+            # of them matched (an older fix PR could be past the window).
             open_issue_branch_pr: (
               (.value.number | tostring) as $num
+              | (.value.timelineItems.pageInfo.hasPreviousPage? == true) as $timeline_truncated
               | if ((.value.timelineItems.nodes? | type) == "array") then
                   ([ .value.timelineItems.nodes[]? | (.source // null)
                      | select(type == "object" and .__typename == "PullRequest")
                      | select((.repository.nameWithOwner // "") == $repo)
                      | select(.state == "OPEN" and (.headRefName // "") == ("ai/issue-" + $num))
                      | {number: .number, state: .state, head_ref: .headRefName} ] | first // null)
+                  | if . == null and $timeline_truncated then "unknown" else . end
                 else "unknown" end
             ),
             linked_pr: (
