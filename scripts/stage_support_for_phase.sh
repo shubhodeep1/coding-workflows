@@ -138,6 +138,8 @@ case "${stage_support_phase}" in
 			clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh
 		)
 		# gh_helpers.sh sources emit_event.sh from its own directory first.
+		# run_plan_codex.sh runs the evidence pack and broker (#8427 P4/P11)
+		# from its own directory; optional, as its -f guards skip them.
 		# dependency_wait_resume.py (stuck-states P8a-2) is optional, as for
 		# clarify: without it a WAITING: plan answer takes the BLOCKED path.
 		# The persistence helpers (#8428 P1, #8427 P2/P4/P11) are optional,
