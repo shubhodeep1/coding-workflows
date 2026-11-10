@@ -3135,12 +3135,15 @@ def _today_utc() -> str:
 
 def test_release_sends_queue_age_note_once_for_an_old_queued_pr(tmp_path: Path) -> None:
 	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	# The slot starts at the setup hour, so the date read here is the slot's
+	# start date even if midnight passes before the script runs.
+	today = _today_utc()
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
 	assert result.returncode == 0, result.stderr
 	assert "MERGE_TRAIN_RELEASED" not in result.stdout
 	assert re.search(r"MERGE_TRAIN_STALL_ALERT pr=4077 age_secs=\d+ queued=1 outcome=sent", result.stdout)
 	assert "gh api -X POST repos/acme/consumer/issues/4077/comments" in log_text
-	assert f"<!-- merge-train:stalled alert_date={_today_utc()} -->" in log_text
+	assert f"<!-- merge-train:stalled alert_date={today} -->" in log_text
 	assert "runs_incomplete=1" in log_text
 	sent = tg_log.read_text(encoding="utf-8")
 	assert sent.count("sendMessage") == 1
@@ -3150,7 +3153,7 @@ def test_release_sends_queue_age_note_once_for_an_old_queued_pr(tmp_path: Path) 
 	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=0" in result.stdout
 
 	# Second tick the same day: today's note exists, nothing is sent again.
-	(fixtures / "comments_4077.json").write_text(json.dumps([_stall_note(900, _today_utc())]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_stall_note(900, today)]), encoding="utf-8")
 	log.write_text("", encoding="utf-8")
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
 	assert "outcome=already_alerted" in result.stdout
