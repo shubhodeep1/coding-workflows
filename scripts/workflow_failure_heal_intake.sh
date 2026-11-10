@@ -4305,6 +4305,13 @@ _open_issue()
 	rm -f "${title_file}" "${body_file}"
 	local compose_payload_file
 	compose_payload_file="$(_compose_payload_file)" || compose_payload_file="${PAYLOAD_FILE}"
+	# Issue #8808: a run-sourced issue names its failing workflow file (the
+	# verified run's `.path`, no API call) for the poller's stale auto-close.
+	# compose-issue drops an invalid path; any error composes as before.
+	local heal_workflow_path=""
+	if [ "${SOURCE_KIND}" = "workflow_run" ]; then
+		heal_workflow_path="$(_heal_slurp_verified_runs '[.[] | .path | strings | select(. != "")] | first // ""' | jq -r '. // ""' 2>/dev/null)" || heal_workflow_path=""
+	fi
 	# Evidence pack (P1): passed only when it is on and has text, so a
 	# switch-off body is byte-identical. compose-issue validates it with the body.
 	local -a evidence_pack_args=()
@@ -4349,6 +4356,7 @@ _open_issue()
 		--target-branch "${target_branch}" \
 		--integration-branch "${integration_branch}" \
 		--scope-marker-file "${scope_marker_file}" \
+		--workflow-path "${heal_workflow_path}" \
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \
