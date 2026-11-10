@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9171,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9171\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9176\",\"pr_number\":9176,\"branch\":\"ai/issue-9171\",\"run_id\":\"42740953443\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/42740953443\",\"changed_files\":[\".github/workflows/implement.yml\",\"README.md\",\"agents.d/sandbox-solc-versions.md\",\"changelog.d/sandbox-solc-versions.md\",\"scripts/codex_isolated_exec.sh\",\"tests/test_codex_isolated_exec.py\"]}",
+  "fingerprint": "cde93ea9de49f51861419427148621c861d7f5589139e967b71bcff2db17aa79",
+  "lineage": {
+    "issue_number": 9171,
+    "parent_ids": [],
+    "pr_number": 9176,
+    "run_id": "42740953443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42740953443",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9176"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261110025702_df13cf214b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9171,
+    "level": "run",
+    "pr_number": 9176,
+    "run_id": "42740953443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9171: https://github.com/shubhodeep1/coding-workflows/pull/9176",
+  "timestamps": {
+    "created_at": "2026-11-10T02:57:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
