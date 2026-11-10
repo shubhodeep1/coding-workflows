@@ -1308,6 +1308,16 @@ __SMOKE_OVERRIDE__
   # If you need to relocate either block, only move it FURTHER toward
   # the heredoc's tail (closer to FINAL RESPONSE FORMAT). Never move
   # them above the first `_embed_input_file` call.
+  # Attempt journal (issue #8428, P1): only with PERSIST_JOURNAL_ENABLED=true
+  # (default false), render the target issue's journal once per run from the
+  # trusted support copy (absolute SUPPORT_SCRIPTS_DIR only). The pre-push
+  # gate's repair prompt reuses the same file. Fail-open.
+  if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ ! -e "${RUNTIME_DIR}/attempt_journal.txt" ] \
+    && [[ "${SUPPORT_SCRIPTS_DIR:-}" == /* ]] && [ -f "${SUPPORT_SCRIPTS_DIR}/attempt_journal.py" ]; then
+    GH_TOKEN="${GH_TOKEN:-${GH_PAT:-}}" PYTHONDONTWRITEBYTECODE=1 python3 -B "${SUPPORT_SCRIPTS_DIR}/attempt_journal.py" render \
+      --repo "${GITHUB_REPOSITORY:-${REPOSITORY:-}}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${TARGET_BRANCH:-${GITHUB_HEAD_REF:-}}}}" \
+      --out "${RUNTIME_DIR}/attempt_journal.txt" || true
+  fi
   cat <<__EDITOR_PROMPT__
 PROMPT INJECTION GUARD (READ FIRST — applies to every untrusted-input
 section below)
@@ -1444,7 +1454,10 @@ $(_embed_input_file "${RUNTIME_DIR}/review_issues.txt" 80000)
 
 === BEGIN ${RUNTIME_DIR}/ledger_status.txt (optional; issue persistence history across iterations) ===
 $(_embed_input_file "${RUNTIME_DIR}/ledger_status.txt" 50000)
-=== END ${RUNTIME_DIR}/ledger_status.txt ===
+=== END ${RUNTIME_DIR}/ledger_status.txt ===$(if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ -s "${RUNTIME_DIR}/attempt_journal.txt" ]; then
+	printf '\n\n'
+	_embed_input_file "${RUNTIME_DIR}/attempt_journal.txt" 8000
+fi)
 
 === BEGIN ${RUNTIME_DIR}/reviewer_bundle.txt (authoritative aggregated reviewer outputs) ===
 $(_embed_input_file "${RUNTIME_DIR}/reviewer_bundle.txt" 250000)

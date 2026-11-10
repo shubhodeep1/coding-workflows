@@ -286,30 +286,30 @@ def _write(repo, name, text, mode=0o644):
 	path.chmod(mode)
 
 
-def _paired_conflict_repo(tmp_path, template_theirs="value = 2\n", extra=False):
+def _paired_conflict_repo(tmp_path, template_theirs="value = 2\n", extra=False, live_hook=LIVE_HOOK, template_hook=TEMPLATE_HOOK):
 	repo = tmp_path / "repo"
 	repo.mkdir()
 	_git(repo, "init", "-q", "-b", "main")
-	for name in (LIVE_HOOK, TEMPLATE_HOOK):
+	for name in (live_hook, template_hook):
 		_write(repo, name, "value = 0\n", 0o755)
 	if extra:
 		_write(repo, ".ai/x.txt", "0\n")
 	_git(repo, "add", "-A")
 	_git(repo, "commit", "-qm", "base")
 	_git(repo, "checkout", "-qb", "feature")
-	_write(repo, LIVE_HOOK, "value = 2\n", 0o755)
-	_write(repo, TEMPLATE_HOOK, template_theirs, 0o755)
+	_write(repo, live_hook, "value = 2\n", 0o755)
+	_write(repo, template_hook, template_theirs, 0o755)
 	if extra:
 		_write(repo, ".ai/x.txt", "2\n")
 	_git(repo, "commit", "-qam", "feature")
 	_git(repo, "checkout", "-q", "main")
-	for name in (LIVE_HOOK, TEMPLATE_HOOK):
+	for name in (live_hook, template_hook):
 		_write(repo, name, "value = 1\n", 0o755)
 	if extra:
 		_write(repo, ".ai/x.txt", "1\n")
 	_git(repo, "commit", "-qam", "main")
 	assert _git(repo, "merge", "-q", "feature").returncode != 0
-	conflicted = [LIVE_HOOK, TEMPLATE_HOOK] + ([".ai/x.txt"] if extra else [])
+	conflicted = [live_hook, template_hook] + ([".ai/x.txt"] if extra else [])
 	(tmp_path / "conflicted").write_text("".join(f"{n}\n" for n in conflicted), encoding="utf-8")
 	(tmp_path / "unmerged.z").write_bytes(_git(repo, "ls-files", "-u", "-z").stdout)
 	return repo
@@ -334,6 +334,58 @@ def test_paired_conflict_moves_live_hook_out_of_model_paths(tmp_path):
 	assert _workspace("check-paths", repo, tmp_path / "model_paths").returncode == 0
 
 
+# Integration PR #8436 (run 42360075171): the live pre-push gate hook and its
+# template conflicted with identical stages next to ordinary paths, and the
+# unpaired live copy failed the resolver closed with sandbox_path_host_only.
+PREPUSH_LIVE_HOOK = ".claude/hooks/prepush_affected_tests.py"
+PREPUSH_TEMPLATE_HOOK = "workflow-templates/.claude/hooks/prepush_affected_tests.py"
+
+
+def test_prepush_gate_hook_conflict_is_paired_and_mirrored(tmp_path):
+	repo = _paired_conflict_repo(tmp_path, live_hook=PREPUSH_LIVE_HOOK, template_hook=PREPUSH_TEMPLATE_HOOK)
+	proc = _pair(tmp_path, repo)
+	assert proc.returncode == 0, proc.stderr
+	assert (tmp_path / "pairs").read_text() == f"{PREPUSH_LIVE_HOOK}\t{PREPUSH_TEMPLATE_HOOK}\n"
+	assert (tmp_path / "model_paths").read_text() == f"{PREPUSH_TEMPLATE_HOOK}\n"
+	assert _workspace("check-paths", repo, tmp_path / "model_paths").returncode == 0
+	_write(repo, PREPUSH_TEMPLATE_HOOK, "value = 3\n", 0o755)
+	mirror = _workspace("mirror-live-copies", repo, tmp_path / "pairs")
+	assert mirror.returncode == 0, mirror.stderr
+	assert (repo / PREPUSH_LIVE_HOOK).read_bytes() == (repo / PREPUSH_TEMPLATE_HOOK).read_bytes()
+
+
+@pytest.mark.parametrize("hook_name", ["gh_api_write_guard.py", "pr_watch_guard.py", "session-start.sh"])
+def test_other_hook_twin_conflicts_are_paired_and_mirrored(tmp_path, hook_name):
+	live, template = f".claude/hooks/{hook_name}", f"workflow-templates/.claude/hooks/{hook_name}"
+	repo = _paired_conflict_repo(tmp_path, live_hook=live, template_hook=template)
+	proc = _pair(tmp_path, repo)
+	assert proc.returncode == 0, proc.stderr
+	assert (tmp_path / "pairs").read_text() == f"{live}\t{template}\n"
+	assert (tmp_path / "model_paths").read_text() == f"{template}\n"
+	assert _workspace("check-paths", repo, tmp_path / "model_paths").returncode == 0
+	_write(repo, template, "value = 3\n", 0o755)
+	mirror = _workspace("mirror-live-copies", repo, tmp_path / "pairs")
+	assert mirror.returncode == 0, mirror.stderr
+	assert (repo / live).read_bytes() == (repo / template).read_bytes()
+
+
+def test_every_live_hook_with_a_template_twin_is_paired():
+	# An unpaired live hook fails every conflict on it closed with
+	# sandbox_path_host_only (PR #8436), so a new hook twin must be listed.
+	sys.path.insert(0, str(WORKSPACE.parent))
+	try:
+		import review_untrusted_workspace as workspace
+	finally:
+		sys.path.remove(str(WORKSPACE.parent))
+	twins = {
+		f".claude/hooks/{path.name}": f"workflow-templates/.claude/hooks/{path.name}"
+		for path in sorted((ROOT / "workflow-templates/.claude/hooks").iterdir())
+		if path.is_file() and (ROOT / ".claude/hooks" / path.name).is_file()
+	}
+	assert twins
+	assert {live: workspace.PAIRED_LIVE_COPIES.get(live) for live in twins} == twins
+
+
 def test_divergent_template_conflict_stays_fail_closed(tmp_path):
 	repo = _paired_conflict_repo(tmp_path, template_theirs="value = 9\n")
 	proc = _pair(tmp_path, repo)
@@ -344,6 +396,20 @@ def test_divergent_template_conflict_stays_fail_closed(tmp_path):
 	assert check.returncode == 1
 	assert f"REVIEW_RESOLVER_PATH_REJECTED reason=live_safety_hook path={LIVE_HOOK}\n" in check.stderr
 	assert "unsupported path" in check.stderr
+
+
+@pytest.mark.parametrize("hook_name", ["gh_api_write_guard.py", "pr_watch_guard.py", "session-start.sh"])
+def test_other_hook_divergent_template_conflict_stays_fail_closed(tmp_path, hook_name):
+	# gh_api_write_guard.py is admitted by allowed() for the editor; check-paths
+	# must still refuse its live copy when the pair cannot be formed.
+	live, template = f".claude/hooks/{hook_name}", f"workflow-templates/.claude/hooks/{hook_name}"
+	repo = _paired_conflict_repo(tmp_path, template_theirs="value = 9\n", live_hook=live, template_hook=template)
+	proc = _pair(tmp_path, repo)
+	assert proc.returncode == 0, proc.stderr
+	assert (tmp_path / "pairs").read_text() == ""
+	check = _workspace("check-paths", repo, tmp_path / "model_paths")
+	assert check.returncode == 1
+	assert f"REVIEW_RESOLVER_PATH_REJECTED reason=live_safety_hook path={live}\n" in check.stderr
 
 
 def test_paired_conflict_with_unrelated_excluded_path_is_still_refused(tmp_path):

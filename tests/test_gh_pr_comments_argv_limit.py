@@ -469,8 +469,14 @@ def test_graphql_failure_fallback_propagates_incomplete_signal(tmp_path: Path) -
 
 
 def test_incomplete_prefix_registered_in_fragment() -> None:
-	fragment = FRAGMENT.read_text(encoding="utf-8")
-	assert fragment.startswith('<!-- agents: section="Stable log prefixes (contractual)" -->')
+	# The release fold moves the fragment into agents.md and deletes it, so
+	# read the rendered agents text (agents.md plus any pending fragments).
+	import sys
+
+	sys.path.insert(0, str(Path(__file__).resolve().parent))
+	from agents_doc import agents_text
+
+	fragment = agents_text()
 	assert "LOG_PREFIX.name=PR_COMMENTS_CONTEXT_INCOMPLETE" in fragment
 	assert "- `PR_COMMENTS_CONTEXT_INCOMPLETE`" in fragment
 	assert "::warning::PR_COMMENTS_CONTEXT_INCOMPLETE helper=gh_pr_with_all_comments" in GH_HELPERS.read_text(encoding="utf-8")

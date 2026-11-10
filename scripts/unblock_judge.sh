@@ -108,6 +108,11 @@
 # A `heal_report` op (harness routing): one actions/runs listing and one
 # repository_dispatch to shubhodeep1/coding-workflows; a `hold_request` op:
 # one comment on the tracking issue.
+# CONSIST-001: the identity, item, item re-check, item comments and cited-run
+# reads go through gh_retry, so after a transient error (5xx, connection
+# reset) one of them may be attempted up to GH_RETRY_MAX_ATTEMPTS times in
+# total, with capped rate-limit waits. Permanent errors and every write still
+# make one attempt.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
 #      UNBLOCK_JUDGE item= op=hold hold= ref= outcome=held|holding|met|expired|skip reason=
 #      UNBLOCK_JUDGE item= op=reissue outcome=superseded pr= head=
@@ -140,6 +145,18 @@ if [ -f "${SUPPORT_DIR}/scripts/label_helpers.sh" ]; then
 	# shellcheck source=/dev/null
 	source "${SUPPORT_DIR}/scripts/label_helpers.sh"
 fi
+# CONSIST-001: retry transient GitHub errors (5xx, connection reset) on the
+# judge's read-only GETs the same way the poller paths do. gh_retry wraps only
+# the comments, identity, item-metadata, item re-check and cited-run reads;
+# writes (comment POSTs, label POST/DELETE, PATCH, issue creation, dispatches)
+# stay single-attempt on purpose. gh_helpers.sh has a load guard, so this is a
+# no-op when label_helpers.sh already sourced it. A missing or unsourceable
+# helper falls back to a pass-through, which runs each read exactly as before.
+if [ -f "${SUPPORT_DIR}/scripts/gh_helpers.sh" ]; then
+	# shellcheck source=/dev/null
+	source "${SUPPORT_DIR}/scripts/gh_helpers.sh" >/dev/null 2>&1 || true
+fi
+type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 unblock_log()
 {
@@ -164,7 +181,7 @@ unblock_now()
 unblock_fetch_comments()
 {
 	local number="$1" out="$2"
-	if ! gh api --paginate "repos/${REPOSITORY}/issues/${number}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' > "${out}" 2>/dev/null; then
+	if ! gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${number}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' > "${out}" 2>/dev/null; then
 		echo '[]' > "${out}"
 		return 1
 	fi
@@ -1653,12 +1670,12 @@ unblock_main()
 		return 0
 	fi
 	now="$(unblock_now)"
-	UNBLOCK_LOGIN="$(gh api user --jq '.login' 2>/dev/null || true)"
+	UNBLOCK_LOGIN="$(gh_retry gh api user --jq '.login' 2>/dev/null || true)"
 	if ! [[ "${UNBLOCK_LOGIN}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
 		unblock_log "item=${ITEM} outcome=skip reason=login_unavailable"
 		return 0
 	fi
-	if ! gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item.json" 2>/dev/null \
+	if ! gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item.json" 2>/dev/null \
 		|| ! jq -e '.number' "${RUNTIME_DIR}/item.json" >/dev/null 2>&1; then
 		unblock_log "item=${ITEM} outcome=skip reason=item_unreadable"
 		return 0
@@ -2318,7 +2335,7 @@ ${invalid_marker}" >/dev/null 2>&1 || invalid_record_rc=$?
 		# state: the item must still be open and still carry the same stop.
 		# Comment text never decides this. Any read failure fails closed.
 		local recheck_stop_json recheck_stop
-		if ! gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item_recheck.json" 2>/dev/null \
+		if ! gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item_recheck.json" 2>/dev/null \
 			|| ! jq -e '.number' "${RUNTIME_DIR}/item_recheck.json" >/dev/null 2>&1; then
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_recheck_unavailable"
 			return 0
@@ -2421,6 +2438,7 @@ ${marker_line}" >/dev/null 2>&1; then
 unblock_select_run_log()
 {
 	local candidate_id run_json checked=0 unreadable="false" reason="run_unbound"
+	local log_failed="false" download_file="${RUNTIME_DIR}/run_log_download.txt"
 	local -a candidates=()
 	: > "${RUNTIME_DIR}/run_log_tail.txt"
 	mapfile -t candidates < <(jq -r --arg login "${UNBLOCK_LOGIN}" '
@@ -2438,7 +2456,7 @@ unblock_select_run_log()
 		checked=$((checked + 1))
 		# The existing item, comment, PR and check-runs reads contain no run
 		# repository/branch metadata; this bounded read is needed to bind the ID.
-		if ! run_json="$(gh api "repos/${REPOSITORY}/actions/runs/${candidate_id}" 2>/dev/null)"; then
+		if ! run_json="$(gh_retry gh api "repos/${REPOSITORY}/actions/runs/${candidate_id}" 2>/dev/null)"; then
 			unreadable="true"
 			continue
 		fi
@@ -2464,11 +2482,32 @@ unblock_select_run_log()
 			' <<< "${run_json}" >/dev/null 2>&1; then
 			continue
 		fi
-		gh run view "${candidate_id}" -R "${REPOSITORY}" --log-failed 2>/dev/null | tail -n 400 | tail -c 120000 > "${RUNTIME_DIR}/run_log_tail.txt" || true
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} op=run_log outcome=attached run=${candidate_id}"
-		return 0
+		# gh's own exit status decides the outcome: the download goes to a
+		# job-private temp file (never to stdout/stderr) and only a successful,
+		# non-empty download is bounded into run_log_tail.txt and reported as
+		# attached. A failed or empty download is discarded and the next bound
+		# candidate is tried (still within the 3-candidate cap).
+		# The bounding write is part of the test too, so a failed write (for
+		# example a full runtime filesystem) is never reported as attached.
+		if gh run view "${candidate_id}" -R "${REPOSITORY}" --log-failed > "${download_file}" 2>/dev/null && [ -s "${download_file}" ] \
+				&& tail -n 400 "${download_file}" | tail -c 120000 > "${RUNTIME_DIR}/run_log_tail.txt"; then
+			rm -f "${download_file}"
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} op=run_log outcome=attached run=${candidate_id}"
+			return 0
+		fi
+		: > "${RUNTIME_DIR}/run_log_tail.txt"
+		rm -f "${download_file}"
+		log_failed="true"
+		continue
 	done
-	[ "${unreadable}" = "false" ] || reason="run_unreadable"
+	# Reason precedence: log_unavailable (at least one candidate was bound but
+	# no download produced output) > run_unreadable (a metadata read failed or
+	# was not an object) > run_unbound (default: no candidate was bound).
+	if [ "${log_failed}" = "true" ]; then
+		reason="log_unavailable"
+	elif [ "${unreadable}" = "true" ]; then
+		reason="run_unreadable"
+	fi
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} op=run_log outcome=omitted reason=${reason} candidates=${checked}"
 }
 
@@ -2524,6 +2563,23 @@ unblock_ask_model()
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=skip reason=context_failed"
 		return 1
 	}
+	# Attempt journal (issue #8428, P1): only with PERSIST_JOURNAL_ENABLED=true
+	# (default false) is `attempt_journal` added, so the context is
+	# byte-identical with the switch off. Rendered from the comments already
+	# read (item_comments.json) and trusted only from UNBLOCK_LOGIN: no API call.
+	if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ -f "${SUPPORT_DIR}/scripts/attempt_journal.py" ]; then
+		: > "${RUNTIME_DIR}/attempt_journal.txt"
+		PYTHONDONTWRITEBYTECODE=1 python3 -B "${SUPPORT_DIR}/scripts/attempt_journal.py" render \
+			--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}" \
+			--max-bytes 4096 --out "${RUNTIME_DIR}/attempt_journal.txt" || true
+		if jq --rawfile journal "${RUNTIME_DIR}/attempt_journal.txt" \
+			'. + {attempt_journal: (if $journal == "" then null else $journal end)}' \
+			"${RUNTIME_DIR}/judge_context.json" > "${RUNTIME_DIR}/judge_context.json.tmp" 2>/dev/null; then
+			mv -f "${RUNTIME_DIR}/judge_context.json.tmp" "${RUNTIME_DIR}/judge_context.json"
+		else
+			rm -f "${RUNTIME_DIR}/judge_context.json.tmp"
+		fi
+	fi
 	{
 		bash "${SUPPORT_DIR}/scripts/render_prompt.sh" "${SUPPORT_DIR}/prompts/mode-judge-unblock.txt" 2>/dev/null \
 			|| cat "${SUPPORT_DIR}/prompts/mode-judge-unblock.txt"

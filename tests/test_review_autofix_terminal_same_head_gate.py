@@ -19,6 +19,7 @@ These tests pin:
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -332,3 +333,27 @@ def test_parser_sanitises_values_for_log_lines() -> None:
 	decision = _run_parser([{"id": 11, "created_at": "2026-09-12T15:55:33Z", "body": body}], HEAD)
 	assert decision["terminal"] == "true"
 	assert decision["resume_state"] == "noprogressrm-rfHOME"
+
+
+# The clean same-head skip cases (issue #8952) live in
+# tests/test_review_autofix_clean_same_head_gate.py and are collected here,
+# since CI already runs this file and ci.yml was outside that issue's file
+# grant. A name clash would hide a test, so it fails loudly.
+def _collect_clean_same_head_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"review_autofix_clean_same_head_gate_cases",
+		Path(__file__).resolve().parent / "test_review_autofix_clean_same_head_gate.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 15, f"only {collected} clean same-head cases collected"
+
+
+_collect_clean_same_head_cases()
