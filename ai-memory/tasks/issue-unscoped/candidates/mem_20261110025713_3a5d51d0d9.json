@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:1473-1479 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The slot-start date arithmetic in `_mt_release_stall_alert` (offset `(hour - slot + 24) % 24`) has no test for a non-zero offset or a slot that crosses midnight, because every test sets the slot hour to the current hour (offset 0) or to current+5 (offset 19, `outside_slot`).\n  WHY: A regression in the offset arithmetic would pass every test and bring back duplicate Telegram sends across midnight. Severity is NIT in all three sources. anthropic_claude-sonnet-5_5 judged the code itself correct.\n- scripts/review_merge_train.sh:1473-1478 | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Hardening suggestion: `stall_now_epoch` and `stall_now_hour` come from two separate `date` calls, so an hour or midnight boundary between them skews the offset by one hour.\n  WHY: Deriving the hour from the epoch with `date -u -d \"@${stall_now_epoch}\" +%H` makes both values come from one clock read (1 line changed, HARDENING_RISK_SCORE 1). Only openai_gpt-6-luna stated a severity (NIT); the other three gave none.\n- scripts/review_merge_train.sh:1475-1479 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The README.md \"Queue-age warning\" paragraph, agents.d/merge-train-stale-untitled-run.md and changelog.d/merge-train-stale-untitled-run.md still describe a per-day key (no note \"for today\", `alert_date=YYYY-MM-DD` written \"each day\"). The code now keys on the slot-start date.\n  WHY: The docs mislead an operator debugging `outcome=already_alerted` whose PR comment carries yesterday's date. There is no runtime failure (NIT).\n- tests/test_smoke_alert_silencing_contract.py:EXPECTED_STEP_DECLARATIONS[\"orchestrate_poll.yml\"] | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The `* 12` pin update matches the new `ALERT_MSG_LEVEL` declaration. The reviewer found no defect.\n  WHY: The pin resolves the earlier CI failure (NIT, informational).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_merge_train.sh:`_mt_release_stall_alert` stall_today line | severity=NIT | confidence=3\n  PROBLEM: The new slot-start date arithmetic has no defect. It fails open to the `outside_slot` path when `date -d` is unavailable. Tests only exercise offset 0, so the non-zero offset and the midnight crossing are untested.\n  WHY: The code does not fail at runtime.\n- tests/test_smoke_alert_silencing_contract.py:EXPECTED_STEP_DECLARATIONS[\"orchestrate_poll.yml\"] | severity=NIT | confidence=1\n  PROBLEM: The `* 12` pin update matches the new `ALERT_MSG_LEVEL` declaration. No defect.\n  WHY: It resolves the earlier CI failure.\n- HARDENING: scripts/review_merge_train.sh `_mt_release_stall_alert`, `stall_now_epoch` and `stall_now_hour` assignments. The values come from separate `date` calls, so an hour boundary in between gives an off-by-one offset. Fix: derive the hour from the epoch (1 line). HARDENING_RISK_SCORE: 1.\n- Security / trust boundary: none. `MERGE_TRAIN_TG_HELPERS` is sourced only after the script checks it is non-empty, not a symlink and a regular file.\n- Task completeness: none. The `copilot-pull-request-reviewer` check failure (`custom_instructions_too_large`, 422) is external and not fixable in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- HARDENING: scripts/review_merge_train.sh `_mt_release_stall_alert`, lines 1473-1474. `stall_now_epoch` and `stall_now_hour` come from two separate `date` calls. Fix: `stall_now_hour=\"$(date -u -d \"@${stall_now_epoch}\" +%H)\"` (1 line). HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_merge_train.sh:~1474-1479 | severity=NIT | confidence=3\n  PROBLEM: The slot-based date key `((10#${stall_now_hour} - stall_slot_hour + 24) % 24) * 3600` has no test for the midnight-crossing case. `_stall_alert_setup` always sets the slot hour to the current hour, so the offset is 0.\n  WHY: A regression in the offset arithmetic would pass `bash -n` and every test, and would bring back duplicate Telegram sends across midnight.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- HARDENING: scripts/review_merge_train.sh lines 1473-1478 | severity=NIT. The UTC epoch and hour are read by separate `date` calls. If midnight passes between them while the slot starts at 00:00 UTC, the note can be keyed to the previous date, and a later poll in the same slot can send a duplicate warning. Fix: derive the hour from `stall_now_epoch` (1 line). HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_merge_train.sh:1475-1479 | severity=NIT | confidence=4\n  PROBLEM: The key changed from the current UTC date to the slot-start date, but README.md, agents.d/merge-train-stale-untitled-run.md and changelog.d/merge-train-stale-untitled-run.md still describe a per-day key.\n  WHY: The docs mislead an operator debugging `outcome=already_alerted`. There is no runtime failure.\n- tests/test_review_merge_train.py:3116,3182 | severity=NIT | confidence=4\n  PROBLEM: Only slot-hour offsets 0 (send) and 19 (`outside_slot`) are tested. No test covers a send with offset 1 or 2, i.e. a slot that crosses midnight.\n  WHY: A regression to the pre-fix current-date key would pass all 219 tests and bring back the double send.\n- HARDENING: scripts/review_merge_train.sh lines 1473-1474. `stall_now_epoch` and `stall_now_hour` come from two separate `date -u` calls. An hour boundary between them gives an off-by-one offset, so one send could be spurious or missed. Fix: `stall_now_hour=\"$(date -u -d \"@${stall_now_epoch}\" +%H 2>/dev/null)\"` (1 line). HARDENING_RISK_SCORE: 1.\n- Security: none. Task completeness: none. All PR deliverables are present.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "41be5d3d1201a5c485fabaa266539647bcf55e92d41a701856bea54fb4937f29",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9172,
+    "run_id": "42743427289",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42743427289",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110025713_3a5d51d0d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9172,
+    "run_id": "42743427289"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-10T02:57:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
