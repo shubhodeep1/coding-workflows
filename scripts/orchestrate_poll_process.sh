@@ -22377,7 +22377,7 @@ _fetch_candidate_issue_details_graphql() {
               | (.value.timelineItems.pageInfo.hasPreviousPage? == true) as $timeline_truncated
               | if ((.value.timelineItems.nodes? | type) == "array") then
                   ([ .value.timelineItems.nodes[]? | (.source // null)
-                     | select(type == "object" and .__typename == "PullRequest")
+                     | select(type == "object") | select(.__typename == "PullRequest")
                      | select((.repository.nameWithOwner // "") == $repo)
                      | select(.state == "OPEN" and (.headRefName // "") == ("ai/issue-" + $num))
                      | {number: .number, state: .state, head_ref: .headRefName} ] | first // null)
