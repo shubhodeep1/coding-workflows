@@ -18,6 +18,7 @@ stubbed ``sleep``.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import re
 import subprocess
@@ -310,3 +311,29 @@ def test_poller_final_merge_error_decode_inverts_gh_retry_escape(tmp_path: Path)
 		# %0D decodes to a newline too, as in the refusal path.
 		"a\nb% literal %0A\nc\n"
 	)
+
+
+# ---------------------------------------------------------------------------
+# SEC-002 poller half (#8944): tests/test_poller_tracking_comments_dump_redaction.py
+# runs in CI through this file (ci.yml is outside that issue's file grant).
+# ---------------------------------------------------------------------------
+
+
+def _collect_poller_tracking_comments_dump_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"poller_tracking_comments_dump_redaction_cases",
+		Path(__file__).resolve().parent / "test_poller_tracking_comments_dump_redaction.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 5, f"only {collected} poller tracking-comments dump cases collected"
+
+
+_collect_poller_tracking_comments_dump_cases()

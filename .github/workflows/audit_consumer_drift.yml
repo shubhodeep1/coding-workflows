@@ -180,14 +180,39 @@ jobs:
           drift_results = [item for item in results if item.get("outcome") == "drift"]
           error_results = [item for item in results if item.get("outcome") == "error"]
           repairs = summary.get("repairs", [])
+          # An open sync pull request younger than the repair's stale limit
+          # (3 days) already fixes a consumer's drift, so that drift needs no
+          # one: it stays at DEBUG. A stale one (pr_stale true, or missing in an
+          # older summary) is stuck and raises the alert.
+          def covered_by_sync_pull_request(repair: dict) -> bool:
+              return (
+                  repair.get("outcome") == "skipped"
+                  and repair.get("reason") == "sync_pull_request_open"
+                  and repair.get("pr_stale") is False
+              )
+
+          covered_repairs = [repair for repair in repairs if covered_by_sync_pull_request(repair)]
+          covered_repositories = {repair.get("repository") for repair in covered_repairs}
+          alert_drift_results = [item for item in drift_results if item.get("repository") not in covered_repositories]
           # A repository the audit reports as "match" can still differ in exact
           # bytes (the integrity check compares bytes), so a restore pull request
           # or a failed repair for it must raise the level too.
           actionable_repairs = [
               repair for repair in repairs
-              if not (repair.get("outcome") == "skipped" and repair.get("reason") in ("sync_pull_request_open", "no_exact_drift"))
+              if not covered_by_sync_pull_request(repair)
+              and not (repair.get("outcome") == "skipped" and repair.get("reason") == "no_exact_drift")
           ]
-          level = "WARNING" if drift_results or error_results or actionable_repairs else "DEBUG"
+          level = "WARNING" if alert_drift_results or error_results or actionable_repairs else "DEBUG"
+
+          def repair_pull_request_note(repair: dict) -> str:
+              if repair.get("reason") != "sync_pull_request_open":
+                  return ""
+              if repair.get("pr_stale") is False:
+                  return " update pull request open, fixes this drift when merged"
+              if repair.get("pr_for_release") is False:
+                  return " update pull request built for another release; close it or wait for one for the current release"
+              opened = repair.get("pr_created_at") or "unknown date"
+              return f" update pull request stuck, open since {opened}; merge or close it"
 
           lines = [
               "## Consumer Drift Audit",
@@ -225,7 +250,7 @@ jobs:
                   files = ", ".join(repair.get("files") or []) or "-"
                   lines.append(
                       f"- `{repair.get('repository', 'unknown')}` — {repair.get('outcome', 'unknown')}"
-                      f" ({repair.get('reason', '')}){pr}: {files}"
+                      f" ({repair.get('reason', '')}){pr}: {files}{repair_pull_request_note(repair)}"
                   )
 
           if error_results:
@@ -238,7 +263,24 @@ jobs:
           summary_md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
           telegram_lines = []
-          if level == "DEBUG":
+          if level == "DEBUG" and covered_repairs:
+              telegram_lines.extend(
+                  [
+                      "Consumer wrapper drift is covered by open update pull requests; nothing to do.",
+                      (
+                          f"Processed={totals.get('processed', 0)} "
+                          f"Match={totals.get('match', 0)} Drift={totals.get('drift', 0)} Error={totals.get('error', 0)}"
+                      ),
+                      "Registry: .github/ai/consumer_repos.json",
+                  ]
+                  + [
+                      f"- {repair.get('repository', 'unknown')}: update PR #{repair.get('pr_number')}"
+                      for repair in covered_repairs
+                  ]
+                  + [f"Run: {run_url}"]
+              )
+              telegram_body = "\n".join(telegram_lines)
+          elif level == "DEBUG":
               telegram_lines.extend(
                   [
                       "All consumer wrappers match the checked-out workflow templates.",
@@ -264,7 +306,9 @@ jobs:
                   ]
               )
               blocks = []
-              for result in drift_results:
+              # Drift an open, fresh update pull request covers is left out:
+              # its repair line below says it is handled.
+              for result in alert_drift_results:
                   repo = result.get("repository", "unknown")
                   for item in result.get("drift_items", []):
                       block_lines = [
@@ -281,7 +325,7 @@ jobs:
                   blocks.append(f"- {repo}: {result.get('error', 'error')} ({detail})")
               for repair in repairs:
                   pr = f" PR #{repair.get('pr_number')}" if repair.get("pr_number") else ""
-                  blocks.append(f"- restore {repair.get('repository', 'unknown')}: {repair.get('outcome', 'unknown')} ({repair.get('reason', '')}){pr}")
+                  blocks.append(f"- restore {repair.get('repository', 'unknown')}: {repair.get('outcome', 'unknown')} ({repair.get('reason', '')}){pr}{repair_pull_request_note(repair)}")
               telegram_body = append_capped(blocks, telegram_lines + [f"Run: {run_url}"])
 
           telegram_body_path.write_text(telegram_body + "\n", encoding="utf-8")

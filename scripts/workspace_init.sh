@@ -108,7 +108,7 @@ resolve_workspace_fingerprint()
 	fi
 
 	if [ -n "${source_path}" ] && [ -d "${source_path}" ]; then
-		fingerprint="$(git -C "${source_path}" rev-parse HEAD^{tree} 2>/dev/null || true)"
+		fingerprint="$(git -C "${source_path}" rev-parse "HEAD^{tree}" 2>/dev/null || true)"
 		if [ -n "${fingerprint}" ]; then
 			printf '%s\n' "${fingerprint}"
 			return 0

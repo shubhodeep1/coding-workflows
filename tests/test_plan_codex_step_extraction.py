@@ -46,10 +46,13 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # 17_142 -> 17_308 bytes); with #8335 the prompt is 270 lines, 17_996 bytes.
 # Stuck-states P8a-2 (Refs #8291) added the one-line `WAITING:` sequencing-wait
 # rule beside the BLOCKED rule (270 -> 271 lines, 17_996 -> 18_734 bytes).
+# Consumer tele-funtoken-msg-scoring #5101 reworded rule 10 so the Scope-mode
+# lines stay out of the Files section (270 lines, 17_996 -> 18_031 bytes).
+# Merging both keeps the two changes (271 lines, 18_769 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"f1e4231d30283e1e4d7d897db56a2f483a4e72a131aeece35491ca2433150c49"
+	"2cf0762fe4ee095fca0eed68e8135ef5f8fe19ef20003689f57142dbb76c01e2"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 18_734
+PRE_EXTRACTION_PROMPT_BYTES = 18_769
 PRE_EXTRACTION_PROMPT_LINES = 271
 
 

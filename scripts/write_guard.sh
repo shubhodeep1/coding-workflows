@@ -106,8 +106,8 @@ write_guard_check()
 		return 0
 	fi
 	write_guard_config_log_path="${write_guard_config_path}"
-	if [ -n "${write_guard_root_dir}" ] && [ "${write_guard_config_log_path#${write_guard_root_dir}/}" != "${write_guard_config_log_path}" ]; then
-		write_guard_config_log_path="${write_guard_config_log_path#${write_guard_root_dir}/}"
+	if [ -n "${write_guard_root_dir}" ] && [ "${write_guard_config_log_path#"${write_guard_root_dir}"/}" != "${write_guard_config_log_path}" ]; then
+		write_guard_config_log_path="${write_guard_config_log_path#"${write_guard_root_dir}"/}"
 	fi
 
 	write_guard_result_file="$(mktemp "${TMPDIR:-/tmp}/write-guard-result.XXXXXX")"

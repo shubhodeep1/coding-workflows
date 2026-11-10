@@ -68,6 +68,19 @@ from typing import Any, Callable
 WAIT_LABEL = "ai:waiting-on-dependency"
 BLOCKED_LABEL = "ai:blocked"
 NEEDS_HUMAN_LABEL = "ai:needs-human"
+# Human-latch labels that stop dependency-wait seeding (stuck-states P8d).
+# Mirrors workflow_failure_heal.HUMAN_NEEDED_LABELS and covers
+# orchestrate_lib.STALL_RECOVERY_LATCH_LABELS. Copied, not imported: the helper
+# runs as ``python3 -I`` without sibling imports. A parity test keeps them aligned.
+SEED_HUMAN_LATCH_LABELS: frozenset[str] = frozenset((
+	NEEDS_HUMAN_LABEL,
+	"ai:check-triage-escalated",
+	"ai:destructive-blocked",
+	"ai:scope-blocked",
+	"ai:harness-broken",
+	"ai:resolver-escalated",
+	"ai:security-pass-failed",
+))
 MERGED_LABEL = "ai:merged"
 SECURITY_LABEL = "ai:security"
 ORCHESTRATOR_MANAGED_LABEL = "ai:orchestrator-managed"
@@ -621,7 +634,8 @@ def seed_candidate(node: dict[str, Any]) -> tuple[IssueSnapshot, int] | None:
 	issue = IssueSnapshot(node)
 	if not issue.number or WAIT_LABEL in issue.labels:
 		return None
-	if issue.labels & {SECURITY_LABEL, NEEDS_HUMAN_LABEL, ORCHESTRATOR_MANAGED_LABEL} or SECURITY_FINDING_MARKER in issue.body:
+	# Any human latch holds the issue: nothing is written until a person removes it.
+	if issue.labels & ({SECURITY_LABEL, ORCHESTRATOR_MANAGED_LABEL} | SEED_HUMAN_LATCH_LABELS) or SECURITY_FINDING_MARKER in issue.body:
 		return None
 	lines = GENERIC_DEPENDS_LINE_RE.findall(issue.body)
 	matches = GENERIC_DEPENDS_RE.findall(issue.body)

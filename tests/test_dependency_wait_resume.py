@@ -760,3 +760,116 @@ def test_cli_prints_one_json_line_and_exits_zero(tmp_path: Path, capsys: pytest.
 	assert json.loads(capsys.readouterr().out) == {"status": "parked", "target": "pr:owner/repo#7"}
 	assert dwr.main(["park", "--repo", REPO, "--issue-number", "5", "--kind", "pr", "--target-repo", REPO, "--number", "x7", "--phase", "plan"], github_factory=_boom) == 0
 	assert json.loads(capsys.readouterr().out)["status"] == "invalid_args"
+
+
+# ---------------------------------------------------------------------------
+# Stuck-states P8d: generic `Depends on: #N` seeding (Refs #8291)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("latch", sorted(dwr.SEED_HUMAN_LATCH_LABELS))
+def test_seed_skips_every_human_latch_label(latch: str) -> None:
+	gh = FakeGitHub()
+	gh.add_issue(20, {dwr.BLOCKED_LABEL, latch}, body="Depends on: #4")
+	_scan(gh)
+	assert gh.posted == [] and gh.label_ops == []
+	assert gh.calls == 1
+	# Once a person removes the latch, the next tick seeds exactly once.
+	gh.issues[20]["labels"].discard(latch)
+	_scan(gh)
+	assert [n for n, _ in gh.posted] == [20]
+	assert gh.issues[20]["labels"] == {dwr.WAIT_LABEL}
+	_scan(gh)
+	assert len(gh.posted) == 1
+
+
+def test_seed_human_latch_labels_cover_repo_latch_sets() -> None:
+	import orchestrate_lib
+	import workflow_failure_heal
+
+	assert dwr.SEED_HUMAN_LATCH_LABELS == set(workflow_failure_heal.HUMAN_NEEDED_LABELS)
+	assert set(orchestrate_lib.STALL_RECOVERY_LATCH_LABELS) <= dwr.SEED_HUMAN_LATCH_LABELS
+	assert dwr.NEEDS_HUMAN_LABEL in dwr.SEED_HUMAN_LATCH_LABELS
+
+
+def test_seed_once_across_ticks_and_no_target_read_on_seed_tick(capsys: pytest.CaptureFixture) -> None:
+	gh = FakeGitHub()
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, body="Depends on: #4")
+	gh.targets[(REPO, 4)] = _issue("OPEN")
+	out = _scan(gh, capsys)
+	assert gh.target_queries == 0
+	assert "seeded=1" in out and len(gh.posted) == 1
+	assert gh.issues[20]["labels"] == {dwr.WAIT_LABEL}
+	out = _scan(gh, capsys)
+	assert len(gh.posted) == 1
+	assert "seeded=0" in out and "outcome=waiting" in out
+	assert gh.target_queries == 1
+
+
+@pytest.mark.parametrize(
+	"body",
+	(
+		"Depends on: #0",
+		"Depends on: #-4",
+		"Depends on: #4abc",
+		"Depends on: other/repo#4",
+		"Depends on: #4, #5",
+		"Depends on: #12345678901",
+		"Depends on: #4\nDepends on: #4",
+		"Depends on PR: #4",
+		"Depends on: #20",
+	),
+)
+def test_seed_rejects_invalid_dependency_numbers(body: str) -> None:
+	gh = FakeGitHub()
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, body=body)
+	_scan(gh)
+	assert gh.posted == [] and gh.label_ops == []
+	assert gh.calls == 1
+
+
+@pytest.mark.parametrize("case", ("graphql_error", "null", "missing", "is_pr"))
+def test_seeded_wait_with_unreadable_target_never_resumes(case: str, capsys: pytest.CaptureFixture) -> None:
+	gh = FakeGitHub()
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, body="Depends on: #4")
+	_scan(gh)
+	assert len(gh.posted) == 1
+	if case == "graphql_error":
+		gh.target_errors.add((REPO, 4))
+	elif case == "null":
+		gh.targets[(REPO, 4)] = None
+	elif case == "is_pr":
+		gh.targets[(REPO, 4)] = _pr("MERGED", True, SHA)
+	out = _scan(gh, capsys)
+	assert len(gh.posted) == 1
+	assert gh.issues[20]["labels"] == {dwr.WAIT_LABEL}
+	expected = "invalid_marker" if case == "is_pr" else "read_failed"
+	assert f"issue=20 target=issue:{REPO}#4 outcome={expected}" in out
+
+
+def test_seeded_wait_resumes_once_when_target_closes_merged() -> None:
+	gh = FakeGitHub()
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, body="Depends on: #4")
+	_scan(gh)
+	gh.targets[(REPO, 4)] = _issue("CLOSED", (dwr.MERGED_LABEL,))
+	_scan(gh)
+	assert len(gh.posted) == 2 and gh.posted[1][1].startswith("/answer [auto-answered-by-poller]")
+	_scan(gh)
+	assert len(gh.posted) == 2
+
+
+def test_seeded_targets_share_one_batched_read() -> None:
+	gh = FakeGitHub()
+	gh.add_issue(20, {dwr.BLOCKED_LABEL}, body="Depends on: #4")
+	gh.add_issue(21, {dwr.BLOCKED_LABEL}, body="Depends on: #5")
+	gh.add_issue(22, {dwr.BLOCKED_LABEL}, body="Depends on: #4")
+	gh.targets[(REPO, 4)] = _issue("OPEN")
+	gh.targets[(REPO, 5)] = _issue("OPEN")
+	_scan(gh)
+	assert [n for n, _ in gh.posted] == [20, 21, 22]
+	gh.calls = 0
+	_scan(gh)
+	assert gh.target_queries == 1
+	assert gh.calls == 2
+	assert gh.comment_reads == []
+	assert len(gh.posted) == 3

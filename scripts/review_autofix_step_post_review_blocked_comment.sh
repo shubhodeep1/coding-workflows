@@ -56,6 +56,10 @@ case "${JUDGE_SKIP_REASON:-}" in
     BODY_HEADING="AI review/autofix — judge could not read the PR head"
     BODY_DETAIL="The review-blocked judge could not read the live PR head SHA and refused its fix or close-and-reissue action rather than act on an unverified head. This is usually transient; stall recovery will re-fire the judge."
     ;;
+  comments_context_incomplete)
+    BODY_HEADING="AI review/autofix — judge deferred: PR comments could not be fully read"
+    BODY_DETAIL="The review-blocked judge could not fully read this PR's comments (an API read failed), so it withheld every merge-enabling outcome rather than act on context that may be missing review findings. This is usually transient; the next judge cycle decides again. No action is required unless this repeats."
+    ;;
   sync_merge_failed)
     BODY_HEADING="AI review/autofix — judge approved merge but \`gh pr merge\` failed"
     BODY_DETAIL="The review-blocked judge approved this PR and all check-runs had settled, but the synchronous \`gh pr merge\` call failed (\`--squash\`, or \`--merge\` for \`auto/forward-merge-stable-*\` PRs, which must keep a merge commit). Typical causes: branch-protection rules, a merge queue requirement, missing permissions on the GH token, GitHub returning 422, or a concurrent push that changed HEAD. Stall recovery will re-fire the judge; the operator may need to merge manually if the underlying cause is permission/policy."

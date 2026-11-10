@@ -14,6 +14,7 @@ import contextlib
 import importlib.util
 import io
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -313,6 +314,180 @@ def test_main_errors_when_failure_status_cannot_be_posted():
 			"1/1 sub-issues on #2734 still unchecked: outstanding work",
 			"https://github.com/owner/repo/issues/2734",
 		)]
+		assert "::error::[integration-pr-readiness] failed to post readiness commit status" in stderr.getvalue()
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_fails_closed_when_tracking_label_missing():
+	# BUG-002 (analysis/workflow-optimization-2026-10-06.md): a missing
+	# tracking label on an orchestrator/project-N head must not turn the
+	# required readiness status green.
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or True
+		mod._fetch_issue = lambda repo, n: {"labels": ["enhancement"], "body": "- [ ] outstanding work\n"}
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "orchestrator/project-2734",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			rc = mod.main()
+		assert rc == 0
+		assert len(posted) == 1, posted
+		state, description, target_url = posted[0]
+		assert state == "failure"
+		assert target_url == "https://github.com/owner/repo/issues/2734"
+		assert "not labeled ai:orchestrator-tracking" in description
+		assert mod.OVERRIDE_LABEL in description
+		assert "does not apply" not in description
+		assert len(description) <= 140, len(description)
+		assert "::error::[integration-pr-readiness] issue #2734 is not labeled ai:orchestrator-tracking" in stderr.getvalue()
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_fails_closed_when_tracking_labels_file_lacks_tracking_label():
+	# Poller input shape: --tracking-body-file + --tracking-labels-file
+	# with a non-tracking label re-reads the labels once, then fails
+	# closed when the live labels still lack the tracking label.
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		with tempfile.TemporaryDirectory() as tmp:
+			body_file = Path(tmp) / "body.md"
+			body_file.write_text("- [x] shipped A\n", encoding="utf-8")
+			labels_file = Path(tmp) / "labels.txt"
+			labels_file.write_text("enhancement\n", encoding="utf-8")
+			mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or True
+			fetch_calls: list[int] = []
+			mod._fetch_issue = lambda repo, n: fetch_calls.append(n) or {"labels": ["enhancement"], "body": "- [x] shipped A\n"}
+			sys.argv = [
+				"check_integration_pr_readiness.py",
+				"--head-ref", "orchestrator/project-2734",
+				"--head-sha", "deadbeef",
+				"--repo", "owner/repo",
+				"--tracking-body-file", str(body_file),
+				"--tracking-labels-file", str(labels_file),
+			]
+			stderr = io.StringIO()
+			with contextlib.redirect_stderr(stderr):
+				rc = mod.main()
+		assert rc == 0
+		# The file labels lack the tracking label, so they are re-read once.
+		assert fetch_calls == [2734], fetch_calls
+		assert len(posted) == 1, posted
+		assert posted[0][0] == "failure"
+		assert "not labeled ai:orchestrator-tracking" in posted[0][1]
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_rereads_labels_when_labels_file_snapshot_is_stale():
+	# A non-empty but stale --tracking-labels-file must not post a false
+	# failure when the live issue still carries the tracking label.
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		with tempfile.TemporaryDirectory() as tmp:
+			body_file = Path(tmp) / "body.md"
+			body_file.write_text("- [x] shipped A\n", encoding="utf-8")
+			labels_file = Path(tmp) / "labels.txt"
+			labels_file.write_text("ai:integration-backpressure\n", encoding="utf-8")
+			mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or True
+			mod._fetch_issue = lambda repo, n: {"labels": [mod.TRACKING_LABEL, "ai:integration-backpressure"], "body": "- [x] shipped A\n"}
+			sys.argv = [
+				"check_integration_pr_readiness.py",
+				"--head-ref", "orchestrator/project-2734",
+				"--head-sha", "deadbeef",
+				"--repo", "owner/repo",
+				"--tracking-body-file", str(body_file),
+				"--tracking-labels-file", str(labels_file),
+			]
+			rc = mod.main()
+		assert rc == 0
+		assert len(posted) == 1, posted
+		assert posted[0][0] == "success"
+		assert "not labeled" not in posted[0][1]
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_posts_success_with_override_when_tracking_label_missing():
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		with tempfile.TemporaryDirectory() as tmp:
+			pr_labels_file = Path(tmp) / "pr_labels.txt"
+			pr_labels_file.write_text(f"{mod.OVERRIDE_LABEL}\n", encoding="utf-8")
+			mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or True
+			mod._fetch_issue = lambda repo, n: {"labels": ["enhancement"], "body": "- [ ] outstanding work\n"}
+			sys.argv = [
+				"check_integration_pr_readiness.py",
+				"--head-ref", "orchestrator/project-2734",
+				"--head-sha", "deadbeef",
+				"--repo", "owner/repo",
+				"--pr-labels-file", str(pr_labels_file),
+			]
+			rc = mod.main()
+		assert rc == 0
+		assert len(posted) == 1, posted
+		state, description, target_url = posted[0]
+		assert state == "success"
+		assert mod.OVERRIDE_LABEL in description
+		assert "#2734" in description
+		assert target_url == "https://github.com/owner/repo/issues/2734"
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_errors_when_missing_tracking_label_failure_post_fails():
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or False
+		mod._fetch_issue = lambda repo, n: {"labels": ["enhancement"], "body": "- [ ] outstanding work\n"}
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "orchestrator/project-2734",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			rc = mod.main()
+		assert rc == 1
+		assert len(posted) == 1, posted
+		assert posted[0][0] == "failure"
 		assert "::error::[integration-pr-readiness] failed to post readiness commit status" in stderr.getvalue()
 	finally:
 		sys.argv = old_argv

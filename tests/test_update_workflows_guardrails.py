@@ -10,7 +10,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from workflow_wrapper_refs import pin_reusable_workflow_refs, validate_release_sha
+from workflow_wrapper_refs import pin_reusable_workflow_refs, validate_release_sha  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
@@ -426,6 +426,39 @@ def test_seed_commands_require_immutable_wrapper_rendering() -> None:
 		assert "refreshes an existing copy to the current release pin" in command_text
 
 
+def _fetch_step_run() -> str:
+	# Text slice rather than a YAML parse so this file keeps running without
+	# PyYAML: the fetch step body ends where the next step begins.
+	wf = _workflow_text()
+	marker = "\n        id: fetch\n"
+	assert wf.count(marker) == 1, "fetch step not found exactly once"
+	start = wf.index(marker)
+	end = wf.find("\n      - name:", start)
+	assert end > start, "fetch step has no following step"
+	return wf[start:end]
+
+
+def test_fetch_step_keeps_gh_pat_out_of_clone_url() -> None:
+	"""SEC-001: GH_PAT never lands in the upstream clone argv or .git/config."""
+	assert "x-access-token:${GH_TOKEN}@" not in _workflow_text()
+	run = _fetch_step_run()
+	assert "credential.helper=${UPSTREAM_CRED_HELPER}" in run
+	assert "credential.helper= " in run
+	assert "upstream_git clone --depth 1 --no-checkout" in run
+	assert '"https://github.com/${TEMPLATES_REPO}.git"' in run
+	assert "@github.com" not in run
+	assert 'upstream_git fetch --force --no-tags --depth 1 origin "${TEMPLATES_REF}"' in run
+	assert 'upstream_git checkout --detach "${UPSTREAM_SHA}"' in run
+	assert 'upstream_git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}"' in run
+	assert not re.search(r"(?m)^\s*git (?:clone|fetch|checkout|sparse-checkout)\b", run)
+
+
+def test_upstream_ls_remote_calls_use_credential_helper() -> None:
+	wf = _workflow_text()
+	assert not re.search(r'(?m)^\s*(?:(?:if !|&&) )?(?:[A-Za-z_]+="\$\()?git -C [^\n]*ls-remote', wf)
+	assert len(re.findall(r'upstream_git -C "\$\{[A-Z_]+\}" ls-remote --tags origin', wf)) == 3
+
+
 def main() -> int:
 	test_profile_manifests_match_contracts()
 	test_install_profile_docs_and_agents_contracts()
@@ -444,6 +477,8 @@ def main() -> int:
 	test_ai_review_template_pins_only_the_sweep_support_checkout()
 	test_other_templates_render_unchanged_by_support_pin()
 	test_seed_commands_require_immutable_wrapper_rendering()
+	test_fetch_step_keeps_gh_pat_out_of_clone_url()
+	test_upstream_ls_remote_calls_use_credential_helper()
 	return 0
 
 

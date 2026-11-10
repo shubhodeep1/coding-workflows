@@ -764,6 +764,16 @@ jobs:
 
           ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
           ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
+          # SEC-002 (wfopt-2026-10-03-2): the title is attacker-influenced. A CR/LF
+          # in it would make the text after the line break a new GITHUB_ENV
+          # assignment. Titles are single-line by meaning, so replace CR/LF with
+          # spaces and keep the single-line NAME=value write (Telegram MSG and
+          # --issue-title consumers expect one line). Never log the title itself.
+          ISSUE_TITLE_SINGLE_LINE="$(printf '%s' "${ISSUE_TITLE}" | tr '\r\n' '  ')"
+          if [ "${ISSUE_TITLE_SINGLE_LINE}" != "${ISSUE_TITLE}" ]; then
+            echo "::warning::ISSUE_TITLE_NEWLINE_STRIPPED issue=${ISSUE_NUMBER}"
+            ISSUE_TITLE="${ISSUE_TITLE_SINGLE_LINE}"
+          fi
           echo "ISSUE_TITLE=${ISSUE_TITLE}" >> "$GITHUB_ENV"
 
           # Extract tracking issue number from orchestrator metadata
@@ -781,6 +791,8 @@ jobs:
 
           # Save context for prompt assembly
           printf '%s' "${ISSUE_BODY}" > "${RUNTIME_DIR}/issue_body.txt"
+          # P1 step 6: label names for heal detection, from the same payload (no new API call).
+          printf '%s' "${ISSUE_META}" | jq -c '[.labels[]? | (.name? // .) | strings]' > "${RUNTIME_DIR}/issue_labels.json" 2>/dev/null || echo '[]' > "${RUNTIME_DIR}/issue_labels.json"
           printf '%s' "${TRACKING_BODY}" > "${RUNTIME_DIR}/tracking_body.txt"
           printf '%s' "${CLARIFICATION_COMMENT}" > "${RUNTIME_DIR}/clarification_comment.txt"
 
@@ -892,6 +904,7 @@ jobs:
         run: |
           set -euo pipefail
           : > "${RUNTIME_DIR}/github_facts.txt"
+          : > "${RUNTIME_DIR}/heal_evidence_pack.txt"
           if [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_github_facts.py" ]; then
             echo "::notice::clarify_github_facts.py not staged; continuing without GitHub facts."
             exit 0
@@ -900,12 +913,19 @@ jobs:
           if [ -f .github/ai/consumer_repos.json ]; then
             CONSUMER_REPOS_ARGS=(--consumer-repos-file .github/ai/consumer_repos.json)
           fi
+          # P1 step 6: a heal issue's `## Evidence pack`, read from the body
+          # already fetched (no API call). Only when the staged script knows it.
+          HEAL_PACK_ARGS=()
+          if grep -q -- '--heal-evidence-pack-output' "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_github_facts.py"; then
+            HEAL_PACK_ARGS=(--issue-body-file "${RUNTIME_DIR}/issue_body.txt" --issue-labels-file "${RUNTIME_DIR}/issue_labels.json" --heal-evidence-pack-output "${RUNTIME_DIR}/heal_evidence_pack.txt")
+          fi
           python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_github_facts.py" \
             --repo "${{ github.repository }}" \
             --issue-number "${ISSUE_NUMBER}" \
             --text-file "${RUNTIME_DIR}/issue_body.txt" \
             --text-file "${RUNTIME_DIR}/clarification_comment.txt" \
             "${CONSUMER_REPOS_ARGS[@]}" \
+            "${HEAL_PACK_ARGS[@]}" \
             --output "${RUNTIME_DIR}/github_facts.txt" \
             || echo "::warning::GitHub facts fetch failed (fail-open); continuing without them."
 
@@ -1145,6 +1165,11 @@ jobs:
               echo
               echo "=== GITHUB FACTS ==="
               cat "${RUNTIME_DIR}/github_facts.txt"
+            fi
+            if [ -s "${RUNTIME_DIR}/heal_evidence_pack.txt" ]; then
+              echo
+              echo "=== HEAL EVIDENCE PACK (UNTRUSTED) ==="
+              cat "${RUNTIME_DIR}/heal_evidence_pack.txt"
             fi
           } > "${CODEX_PROMPT_FILE}"
 

@@ -277,10 +277,41 @@ resolve_ledger_substate_helper() {
 
 LEDGER_SUBSTATE_HELPER="$(resolve_ledger_substate_helper || true)"
 
+# Attempt journal (issue #8428, P1): one `resolver` entry per resolver
+# attempt end, only with PERSIST_JOURNAL_ENABLED=true (default false). The
+# helper comes only from the trusted support copy. Fail-open.
+_resolver_attempt_journal_append() {
+  local substate="$1" attempt_number="$2" helper="" candidate outcome=fail
+  [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] || return 0
+  for candidate in "${SUPPORT_SCRIPTS_DIR:-}/attempt_journal.py" \
+    "${GITHUB_WORKSPACE:-.}/.codex-workflow-src/scripts/attempt_journal.py"; do
+    if [[ "${candidate}" == /* ]] && [ -f "${candidate}" ] && [ ! -L "${candidate}" ]; then
+      helper="${candidate}"
+      break
+    fi
+  done
+  if [ -z "${helper}" ]; then
+    echo "PERSIST journal outcome=skipped reason=helper_absent stage=resolver" >&2
+    return 0
+  fi
+  [ "${substate}" != "Succeeded" ] || outcome=ok
+  GH_TOKEN="${GH_TOKEN:-${GH_PAT:-}}" PYTHONDONTWRITEBYTECODE=1 python3 -B "${helper}" append \
+    --repo "${GITHUB_REPOSITORY:-}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${TARGET_BRANCH:-${GITHUB_HEAD_REF:-}}}}" \
+    --stage resolver --outcome "${outcome}" --approach inherit \
+    --attempt "${GITHUB_RUN_ATTEMPT:-1}.${attempt_number}" || true
+  return 0
+}
+
 emit_conflict_resolver_substate() {
   local event_or_substate="$1"
   local attempt_number="$2"
   local args=()
+
+  case "${event_or_substate}" in
+    Succeeded|Failed|TimedOut|Stalled)
+      _resolver_attempt_journal_append "${event_or_substate}" "${attempt_number}" || true
+      ;;
+  esac
 
   [ -f "${LEDGER_SUBSTATE_HELPER:-}" ] || return 0
 
@@ -380,6 +411,102 @@ _dispatch_integration_judge_now() {
     --run-id "${GITHUB_RUN_ID:-}" || echo "::warning::Immediate orchestrator-poll dispatch helper failed; cron tick will pick up the integration-sync stall within 5 min."
 }
 
+# RESOLVER_TERMINAL record (wfopt-2026-10-07-2, Reliability 1): one stable
+# stdout line per resolver EXIT trap naming why the resolver exited. State is
+# in-process only: no new env vars (CLAUDE.md section 8), no GitHub API calls,
+# no GITHUB_ENV writes. Every printed field is an integer or an enum token;
+# paths, branches, URLs, model output and credentials never reach the line.
+# Exit sites set RESOLVER_TERMINAL_EXIT_CLASS right before their `exit`;
+# rc 0 always records `ok`.
+RESOLVER_TERMINAL_EXIT_CLASS="other"
+RESOLVER_TERMINAL_ATTEMPTS=0
+RESOLVER_TERMINAL_ATTEMPT_MS=()
+_resolver_terminal_attempt_open_ms=""
+
+# Millisecond wall clock (pattern: _memory_epoch_ms in memory_helpers.sh).
+# Always returns 0; prints 0 when no clock is usable.
+_resolver_terminal_now_ms() {
+  local _rt_ms _rt_s
+  _rt_ms="$(date +%s%3N 2>/dev/null || true)"
+  if [[ "${_rt_ms}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${_rt_ms}"
+    return 0
+  fi
+  _rt_s="$(date +%s 2>/dev/null || true)"
+  if [[ "${_rt_s}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$(( _rt_s * 1000 ))"
+    return 0
+  fi
+  printf '0\n'
+  return 0
+}
+
+# Closes the open attempt timer (idempotent: no-op when none is open).
+_resolver_terminal_attempt_end() {
+  local _rt_now _rt_elapsed
+  [ -n "${_resolver_terminal_attempt_open_ms:-}" ] || return 0
+  _rt_now="$(_resolver_terminal_now_ms)"
+  _rt_elapsed=0
+  if [[ "${_rt_now}" =~ ^[0-9]+$ ]] && [[ "${_resolver_terminal_attempt_open_ms}" =~ ^[0-9]+$ ]]; then
+    _rt_elapsed=$(( _rt_now - _resolver_terminal_attempt_open_ms ))
+    [ "${_rt_elapsed}" -ge 0 ] || _rt_elapsed=0
+  fi
+  RESOLVER_TERMINAL_ATTEMPT_MS+=("${_rt_elapsed}")
+  _resolver_terminal_attempt_open_ms=""
+  return 0
+}
+
+# Opens a new attempt timer (closing any timer a path forgot to close).
+# Clears the per-attempt counts so an attempt that exits before soft
+# validation records fp_violations=0 markers=unknown, not stale values.
+_resolver_terminal_attempt_begin() {
+  _resolver_terminal_attempt_end || true
+  _fp_count=""
+  _marker_count=""
+  RESOLVER_TERMINAL_ATTEMPTS=$((RESOLVER_TERMINAL_ATTEMPTS + 1))
+  _resolver_terminal_attempt_open_ms="$(_resolver_terminal_now_ms)"
+  return 0
+}
+
+# Prints exactly one RESOLVER_TERMINAL line. Always invoked in a subshell
+# from _resolver_exit_trap so a failure here cannot change the trap's rc or
+# skip the integration-judge dispatch.
+_resolver_terminal_emit_record() {
+  trap - EXIT
+  set +e +u
+  local _rt_rc="$1" _rt_run_id _rt_run_attempt _rt_pr _rt_attempts _rt_ms _rt_entry _rt_class _rt_fp _rt_markers
+  [[ "${_rt_rc}" =~ ^[0-9]+$ ]] || _rt_rc=1
+  _resolver_terminal_attempt_end || true
+  _rt_run_id="${GITHUB_RUN_ID:-}"
+  [[ "${_rt_run_id}" =~ ^[0-9]+$ ]] || _rt_run_id="none"
+  _rt_run_attempt="${GITHUB_RUN_ATTEMPT:-}"
+  [[ "${_rt_run_attempt}" =~ ^[0-9]+$ ]] || _rt_run_attempt="none"
+  _rt_pr="${PR_NUMBER:-}"
+  [[ "${_rt_pr}" =~ ^[0-9]+$ ]] || _rt_pr="none"
+  _rt_attempts="${RESOLVER_TERMINAL_ATTEMPTS:-0}"
+  [[ "${_rt_attempts}" =~ ^[0-9]+$ ]] || _rt_attempts=0
+  _rt_ms=""
+  for _rt_entry in "${RESOLVER_TERMINAL_ATTEMPT_MS[@]}"; do
+    [[ "${_rt_entry}" =~ ^[0-9]+$ ]] || continue
+    _rt_ms="${_rt_ms:+${_rt_ms},}${_rt_entry}"
+  done
+  [ -n "${_rt_ms}" ] || _rt_ms="none"
+  if [ "${_rt_rc}" -eq 0 ]; then
+    _rt_class="ok"
+  else
+    case "${RESOLVER_TERMINAL_EXIT_CLASS:-}" in
+      timeout|no_progress|markers|fingerprint|scope|commit|other) _rt_class="${RESOLVER_TERMINAL_EXIT_CLASS}" ;;
+      *) _rt_class="other" ;;
+    esac
+  fi
+  _rt_fp="${_fp_count:-}"
+  [[ "${_rt_fp}" =~ ^[0-9]+$ ]] || _rt_fp=0
+  _rt_markers="${_marker_count:-}"
+  [[ "${_rt_markers}" =~ ^[0-9]+$ ]] || _rt_markers="unknown"
+  printf 'RESOLVER_TERMINAL run_id=%s run_attempt=%s pr=%s attempts=%s attempt_ms=%s exit_class=%s rc=%s fp_violations=%s markers=%s\n' \
+    "${_rt_run_id}" "${_rt_run_attempt}" "${_rt_pr}" "${_rt_attempts}" "${_rt_ms}" "${_rt_class}" "${_rt_rc}" "${_rt_fp}" "${_rt_markers}"
+}
+
 # EXIT trap — fires the dispatch on any non-zero exit from this
 # script (resolver loop exhaustion, no-progress, allowlist guard,
 # check_resolver_diff failure).  Idempotent (function early-returns
@@ -388,6 +515,7 @@ _dispatch_integration_judge_now() {
 # succeeded in deciding no commit was needed.
 _resolver_exit_trap() {
   local _rc=$?
+  ( _resolver_terminal_emit_record "${_rc}" ) 2>/dev/null || true
   if [ "${_rc}" -ne 0 ]; then
     _dispatch_integration_judge_now || true
   fi
@@ -989,6 +1117,19 @@ _resolver_prepush_test_gate()
     echo "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=mode_off" >&2
     return 0
   fi
+  # Repair loop (issue #8427, P3): only with PERSIST_REPAIR_LOOP_ENABLED=true
+  # (default false). The 1..5 turn cap (default 3) comes from the gate step's
+  # persist-config, so the clamp lives in one place. With the switch off the
+  # gate argv, the single repair and every output are unchanged.
+  local gate_persist_on=false gate_max_turns=1 gate_turn=0 gate_cur=1 gate_stop="" gate_last=""
+  local gate_eff=0 gate_prev_eff="" gate_pr_n=0 gate_acc_on=false gate_acc_in="" gate_acc_count=0
+  local gate_acc_state=none gate_acc_extra=0 gate_accept_args=()
+  if [ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" = true ]; then
+    read -r gate_persist_on gate_max_turns < <(bash "${gate_step}" persist-config 2>/dev/null) || true
+    if [ "${gate_persist_on}" != true ] || ! [[ "${gate_max_turns}" =~ ^[1-5]$ ]]; then
+      gate_persist_on=false gate_max_turns=1
+    fi
+  fi
   # Step budget: the resolver step has `timeout-minutes: 170` and SECONDS
   # counts from this script's start. Keep 20 minutes for the commit and the
   # EXIT-trap dispatch, and skip any gate stage that would not finish before
@@ -1008,6 +1149,34 @@ _resolver_prepush_test_gate()
     return 0
   fi
   mkdir -p "${gate_dir}" 2>/dev/null || return 0
+  # Done-check (repair loop only), obtained here in this token-bearing step and
+  # never inside the credential-free gate: reuse the review step's
+  # prepush_gate/acceptance.json (0 API calls), else one fetch-plan (at most one
+  # comments read plus the cached identity read; fail-open, always writes --out).
+  # Only tests.txt / baseline_fail.txt reach the gate container.
+  if [ "${gate_persist_on}" = true ]; then
+    if [ -f "${RUNTIME_DIR}/prepush_gate/acceptance.json" ] && [ ! -L "${RUNTIME_DIR}/prepush_gate/acceptance.json" ]; then
+      gate_acc_in="${RUNTIME_DIR}/prepush_gate/acceptance.json"
+    elif [ -f "${gate_support}/acceptance_check.py" ] && [ ! -L "${gate_support}/acceptance_check.py" ] \
+      && [ $(( gate_budget_end - SECONDS )) -ge $(( gate_wall + 630 + 120 )) ]; then
+      rm -f -- "${gate_dir}/acceptance.json"
+      GH_TOKEN="${GH_TOKEN:-${GH_PAT:-}}" PYTHONDONTWRITEBYTECODE=1 timeout --kill-after=10s 120 python3 -I -B "${gate_support}/acceptance_check.py" fetch-plan \
+        --repo "${GITHUB_REPOSITORY:-}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${TARGET_BRANCH:-${GITHUB_HEAD_REF:-}}}}" \
+        --out "${gate_dir}/acceptance.json" >/dev/null || true
+      if [ -f "${gate_dir}/acceptance.json" ] && [ ! -L "${gate_dir}/acceptance.json" ]; then
+        gate_acc_in="${gate_dir}/acceptance.json"
+      fi
+    fi
+    if [ -n "${gate_acc_in}" ]; then
+      rm -f -- "${gate_dir}/tests.txt" "${gate_dir}/baseline_fail.txt"
+      gate_acc_count="$(bash "${gate_step}" acceptance-files "${gate_acc_in}" "${gate_dir}")" || gate_acc_count=0
+      if [[ "${gate_acc_count}" =~ ^[0-9]+$ ]] && [ "${gate_acc_count}" -gt 0 ] && [ -s "${gate_dir}/tests.txt" ]; then
+        gate_acc_on=true
+        gate_accept_args=(--tests-file "${gate_dir}/tests.txt")
+        [ ! -s "${gate_dir}/baseline_fail.txt" ] || gate_accept_args+=(--expect-baseline-fail-file "${gate_dir}/baseline_fail.txt")
+      fi
+    fi
+  fi
   gate_base="$(git rev-parse HEAD 2>/dev/null || true)"
   # A full prepare also builds the dependency venv with pytest, without which
   # pytest suites are only ever "unverified". It stays inside the 630 s
@@ -1037,12 +1206,52 @@ _resolver_prepush_test_gate()
     gate_venv_args+=(--node-modules "${gate_root}/source/node_modules")
   fi
   bash "${gate_step}" gate --phase resolver --worktree "${PWD}" --base "${gate_base}" --image "${gate_image}" \
-    --image-reason resolver_image_unavailable ${gate_venv_args[@]+"${gate_venv_args[@]}"} --out "${gate_dir}/run1" > "${gate_dir}/run1.status" || true
+    --image-reason resolver_image_unavailable ${gate_venv_args[@]+"${gate_venv_args[@]}"} ${gate_accept_args[@]+"${gate_accept_args[@]}"} \
+    --out "${gate_dir}/run1" > "${gate_dir}/run1.status" || true
   read -r gate_status gate_pr gate_inh < "${gate_dir}/run1.status" || true
-  if [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ] \
-    && [ $(( gate_budget_end - SECONDS )) -lt $(( gate_attempt_secs + gate_wall + 630 )) ]; then
-    gate_repair="skipped (step time budget)"
-  elif [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ]; then
+  # Switch off: one pass (run1, at most one repair, run2). Switch on: the same
+  # order as review_prepush_test_gate_persist_loop; repair while
+  # pr_caused + extra_unmet is above zero, strictly drops after the first turn,
+  # stays under the turn cap and one attempt plus one gate run fits the budget.
+  # Each turn's revert point is its own `git write-tree`, so earlier staged
+  # repairs survive a reverted later turn. Runs top out at run6 (cap 5).
+  while :; do
+    if [ "${gate_persist_on}" = true ]; then
+      gate_acc_state=none gate_acc_extra=0
+      if [ "${gate_acc_on}" = true ]; then
+        read -r gate_acc_state gate_acc_extra < <(bash "${gate_step}" acceptance-score "${gate_acc_in}" "${gate_dir}/run${gate_cur}/result.json") || true
+        case "${gate_acc_state}" in met|unmet|not_run|none) ;; *) gate_acc_state=none ;; esac
+        [[ "${gate_acc_extra}" =~ ^[0-9]{1,6}$ ]] || gate_acc_extra=0
+      fi
+      gate_pr_n="${gate_pr:-0}"
+      [[ "${gate_pr_n}" =~ ^[0-9]{1,6}$ ]] || gate_pr_n=0
+      gate_eff=$(( 10#${gate_pr_n} + 10#${gate_acc_extra} ))
+      if [ "${gate_mode}" != repair ]; then
+        gate_stop=report_mode
+        [ "${gate_eff}" -le 0 ] || gate_last="not run (report mode)"
+      elif [ "${gate_eff}" -le 0 ]; then
+        gate_stop=clean
+        [ "${gate_acc_state}" != met ] || gate_stop=met
+      elif [ -n "${gate_prev_eff}" ] && [ "${gate_eff}" -ge "${gate_prev_eff}" ]; then
+        gate_stop=no_progress
+      elif [ "${gate_turn}" -ge "${gate_max_turns}" ]; then
+        gate_stop=max_turns
+      elif [ $(( gate_budget_end - SECONDS )) -lt $(( gate_attempt_secs + gate_wall + 630 )) ]; then
+        echo "PREPUSH_TEST_GATE phase=resolver outcome=repair_skipped reason=step_budget" >&2
+        gate_stop=budget gate_last="skipped (step time budget)"
+      fi
+      [ -z "${gate_stop}" ] || break
+    elif [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ] \
+      && [ $(( gate_budget_end - SECONDS )) -lt $(( gate_attempt_secs + gate_wall + 630 )) ]; then
+      gate_repair="skipped (step time budget)"
+      break
+    elif ! { [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ]; }; then
+      if [ "${gate_status}" = fail ] && [ "${gate_mode}" = report ]; then
+        gate_repair="not run (report mode)"
+      fi
+      break
+    fi
+    gate_check_args=() gate_rc=0
     gate_allow="${gate_dir}/allow.txt"
     gate_prompt="${gate_dir}/repair-prompt.txt"
     gate_touched="${gate_dir}/repair-touched.txt"
@@ -1050,10 +1259,13 @@ _resolver_prepush_test_gate()
     # The conflicted set, not the whole merge diff: base-side files the merge
     # brought in must stay outside the repair's extra allowed paths.
     sed '/^$/d' "${CONFLICTED_PATHS_FILE:-/nonexistent}" > "${gate_dir}/changed.txt" 2>/dev/null || : > "${gate_dir}/changed.txt"
-    bash "${gate_step}" allow-list "${PWD}" "${gate_dir}/changed.txt" "${gate_dir}/run1/result.json" "${gate_allow}" 2>/dev/null || : > "${gate_allow}"
+    bash "${gate_step}" allow-list "${PWD}" "${gate_dir}/changed.txt" "${gate_dir}/run${gate_cur}/result.json" "${gate_allow}" 2>/dev/null || : > "${gate_allow}"
     # The complete merge index (the resolution) is the repair's revert point.
     gate_index_tree="$(git write-tree 2>/dev/null || true)"
-    if [ -n "${gate_index_tree}" ] && [ -s "${gate_allow}" ] && bash "${gate_step}" repair-prompt "${gate_dir}/run1/result.json" "${gate_prompt}" "${gate_allow}" 2>/dev/null; then
+    # PREPUSH_TEST_GATE_PROMPT_DONE_CHECK=true only with a done-check (repair
+    # loop on): its unmet targets join the prompt inside the UNTRUSTED fence.
+    if [ -n "${gate_index_tree}" ] && [ -s "${gate_allow}" ] && PREPUSH_TEST_GATE_PROMPT_DONE_CHECK="${gate_acc_on}" \
+      bash "${gate_step}" repair-prompt "${gate_dir}/run${gate_cur}/result.json" "${gate_prompt}" "${gate_allow}" 2>/dev/null; then
       printf '\nThis tree is a completed merge resolution. Fix only the failures above, only in allow-list files; keep every conflict resolution as it is.\n' >> "${gate_prompt}"
       git ls-files --others --exclude-standard 2>/dev/null | sort -u > "${gate_pre_untracked}"
       local _effective_prompt_file="${gate_prompt}" tmp_output
@@ -1120,19 +1332,39 @@ _resolver_prepush_test_gate()
         gate_path="${gate_repair#*(}"
         echo "PREPUSH_TEST_GATE phase=resolver outcome=repair_reverted reason=$(printf '%s' "${gate_path%)}" | tr -dc 'a-z_0-9')" >&2
       fi
+      if [ "${gate_persist_on}" = true ] && [ "${gate_repair}" != ran ]; then
+        # A repair that is not plain `ran` (reverted, skipped, no edits) ends the loop.
+        gate_last="${gate_repair}"
+        case "${gate_repair}" in reverted*) gate_stop=reverted ;; *) gate_stop=skipped ;; esac
+        break
+      fi
+      [ "${gate_persist_on}" != true ] || gate_turn=$((gate_turn + 1))
       if [ "${gate_repair}" = ran ] && [ $(( gate_budget_end - SECONDS )) -lt "${gate_wall}" ]; then
         gate_repair="ran (re-run skipped: step time budget)"
+        gate_last="re-run skipped: step time budget" gate_stop=budget
       fi
       if [ "${gate_repair}" = ran ]; then
+        gate_prev_eff="${gate_eff}"
+        gate_cur=$((gate_cur + 1))
         bash "${gate_step}" gate --phase resolver --worktree "${PWD}" --base "${gate_base}" --image "${gate_image}" \
-          --image-reason resolver_image_unavailable ${gate_venv_args[@]+"${gate_venv_args[@]}"} --out "${gate_dir}/run2" > "${gate_dir}/run2.status" || true
-        read -r gate_status gate_pr gate_inh < "${gate_dir}/run2.status" || true
+          --image-reason resolver_image_unavailable ${gate_venv_args[@]+"${gate_venv_args[@]}"} ${gate_accept_args[@]+"${gate_accept_args[@]}"} \
+          --out "${gate_dir}/run${gate_cur}" > "${gate_dir}/run${gate_cur}.status" || true
+        read -r gate_status gate_pr gate_inh < "${gate_dir}/run${gate_cur}.status" || true
       fi
     else
       gate_repair="skipped (no index tree, allow-list or repair prompt)"
+      gate_last="${gate_repair}" gate_stop=skipped
     fi
-  elif [ "${gate_status}" = fail ] && [ "${gate_mode}" = report ]; then
-    gate_repair="not run (report mode)"
+    [ "${gate_persist_on}" = true ] && [ -z "${gate_stop}" ] || break
+  done
+  if [ "${gate_persist_on}" = true ]; then
+    if [ "${gate_turn}" -gt 0 ]; then
+      gate_repair="ran x${gate_turn}"
+      [ -z "${gate_last}" ] || gate_repair="${gate_repair}; ${gate_last}"
+    elif [ -n "${gate_last}" ]; then
+      gate_repair="${gate_last}"
+    fi
+    echo "PERSIST repair_loop outcome=${gate_status:-unverified} turns=${gate_turn} stop=${gate_stop} acceptance=${gate_acc_state}" >&2
   fi
   if [ -n "${gate_root}" ]; then
     REVIEW_SANDBOX_ROOT="${gate_root}" bash "${gate_sandbox_sh}" cleanup >/dev/null 2>&1 || true
@@ -1696,6 +1928,8 @@ _resolver_test_repair_main()
 
 if [ -n "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then
   # No integration-judge dispatch and no retry-state writes in this mode.
+  # No RESOLVER_TERMINAL record either: the EXIT trap is never installed when
+  # RESOLVER_TEST_REPAIR_RESULT_FILE is set, so `trap - EXIT` is a no-op here.
   trap - EXIT
   _resolver_test_repair_main
   exit 0
@@ -1997,7 +2231,7 @@ PY
 }
 
 if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-  _resolver_attempt_state capture || exit 1
+  _resolver_attempt_state capture || { RESOLVER_TERMINAL_EXIT_CLASS="scope"; exit 1; }
 fi
 
 _capture_fingerprints_baseline()
@@ -3460,6 +3694,7 @@ resolver_conflict_path_report="${RUNTIME_DIR}/resolver_conflict_path_report.txt"
 rm -f -- "${resolver_conflict_path_report}"
 if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${RESOLVER_MODEL_PATHS_FILE}" "${resolver_conflict_path_report}" >/dev/null 2>"${RESOLVER_CHECK_PATHS_STDERR_FILE}"; then
   _resolver_report_rejected_path
+  RESOLVER_TERMINAL_EXIT_CLASS="scope"
   _resolver_fail_closed_for_conflict_paths "${resolver_conflict_path_report}"
 fi
 
@@ -3526,6 +3761,7 @@ _resolver_sandbox_opencode_attempt()
 resolver_commit_engine="codex"
 attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
+  _resolver_terminal_attempt_begin || true
   emit_conflict_resolver_substate "PreparingWorkspace" "${attempt}"
   # On retries: restore the working tree to its post-merge-replay
   # state (so retries don't compound the previous attempt's bad
@@ -3535,6 +3771,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if [ "${attempt}" -gt 1 ]; then
     if ! _restore_attempt_base; then
       echo "::error::Resolver retry-base restoration could not be verified; refusing another model attempt."
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
     _build_retry_prompt "$((attempt - 1))" \
@@ -3636,6 +3873,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
     if ! _resolver_scope_state capture; then
       echo "::error::Cannot capture resolver attempt baseline; refusing to invoke model."
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
   fi
@@ -3689,6 +3927,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         _resolver_fail_closed sandbox_prepare_failed
       elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${RESOLVER_MODEL_PATHS_FILE}" "${RUNTIME_DIR}/resolver_conflict_path_report.txt" 2>"${RESOLVER_CHECK_PATHS_STDERR_FILE}"; then
         _resolver_report_rejected_path
+        RESOLVER_TERMINAL_EXIT_CLASS="scope"
         _resolver_fail_closed_for_conflict_paths "${RUNTIME_DIR}/resolver_conflict_path_report.txt"
       fi
       rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
@@ -3745,6 +3984,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     _resolver_scope_state check || _scope_rc=$?
     if [ "${_scope_rc}" -ne 0 ] && [ "${_scope_rc}" -ne 1 ]; then
       echo "::error::Resolver attempt scope cannot be verified; refusing to retry or commit."
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
     if [ "${_scope_rc}" -eq 1 ]; then
@@ -3752,20 +3992,24 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       sed 's/^/ - /' "${RESOLVER_SCOPE_VIOLATIONS_FILE}"
       if ! _resolver_scope_state restore || ! _resolver_scope_state verify; then
         echo "::error::Resolver attempt scope restore could not be verified; refusing to retry or commit."
+        RESOLVER_TERMINAL_EXIT_CLASS="scope"
         exit 1
       fi
       echo "Resolver attempt scope drift discarded; pre-attempt tree and merge index verified."
       if [ "${_codex_exit}" -eq 78 ]; then
+        RESOLVER_TERMINAL_EXIT_CLASS="scope"
         exit 78
       fi
       rm -f "${tmp_output}"
       emit_conflict_resolver_substate "Failed" "${attempt}"
       if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
         echo "::error::Conflict resolver exhausted ${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} attempts with out-of-scope edits; refusing to commit."
+        RESOLVER_TERMINAL_EXIT_CLASS="scope"
         exit 1
       fi
       _prev_attempt_failure_kind="scope"
       attempt=$((attempt + 1))
+      _resolver_terminal_attempt_end || true
       sleep 2
       continue
     fi
@@ -3773,6 +4017,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if [ "${_codex_exit}" -eq 78 ]; then
     echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation."
     emit_conflict_resolver_substate "Failed" "${attempt}"
+    RESOLVER_TERMINAL_EXIT_CLASS="scope"
     exit 78
   fi
   # Check the attempt-relative tree even when the agent exited non-zero.
@@ -3783,6 +4028,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     _resolver_attempt_state check || _scope_status=$?
     if [ "${_scope_status}" -eq 2 ]; then
       echo "::error::Resolver attempt state cannot be trusted; refusing to commit or retry."
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
     if [ "${_scope_status}" -ne 0 ]; then
@@ -3791,9 +4037,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       emit_conflict_resolver_substate "Failed" "${attempt}"
       if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
         echo "::error::Conflict resolver exhausted ${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} attempts with out-of-conflict edits; refusing [ai-merge-resolve] commit."
+        RESOLVER_TERMINAL_EXIT_CLASS="scope"
         exit 1
       fi
       attempt=$((attempt + 1))
+      _resolver_terminal_attempt_end || true
       sleep 2
       continue
     fi
@@ -3906,9 +4154,15 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       else
         echo "Conflict resolver failed after retries (final attempt: OpenCode non-zero exit ${_codex_exit})."
       fi
+      if [ "${_prev_attempt_failure_kind}" = "timeout" ] || [ "${_prev_attempt_failure_kind}" = "stall_guard" ]; then
+        RESOLVER_TERMINAL_EXIT_CLASS="timeout"
+      else
+        RESOLVER_TERMINAL_EXIT_CLASS="other"
+      fi
       exit 1
     fi
     attempt=$((attempt + 1))
+    _resolver_terminal_attempt_end || true
     sleep 2
     continue
   fi
@@ -4017,6 +4271,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     sort -- "${RESOLVER_FP_VIOLATIONS_PREV_FILE}" > "${_np_prev}" || true
     if cmp -s "${_np_cur}" "${_np_prev}"; then
       echo "::warning::Conflict resolver no-progress detected: attempt ${attempt} produced the same ${_fp_count} fingerprint violation(s) as attempt $((attempt - 1)). Escalating to orchestrator integration judge instead of continuing the retry loop."
+      RESOLVER_TERMINAL_EXIT_CLASS="no_progress"
       attempt="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}"
     else
       # Count-not-decreasing fallback: even if the violation text
@@ -4030,6 +4285,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       _fp_count_prev="${_fp_count_prev:-0}"
       if [ "${_fp_count}" -ge "${_fp_count_prev}" ]; then
         echo "::warning::Conflict resolver no-progress detected: attempt ${attempt} produced ${_fp_count} fingerprint violation(s), not fewer than the ${_fp_count_prev} from attempt $((attempt - 1)). Escalating to orchestrator integration judge instead of continuing the retry loop."
+        RESOLVER_TERMINAL_EXIT_CLASS="no_progress"
         attempt="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}"
       fi
     fi
@@ -4070,12 +4326,14 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       if [ "${_final_fp_exit}" -eq 1 ]; then
         echo "::error::Aborting [ai-merge-resolve] commit: integration fingerprint verification rejected the resolver output."
         echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+        [ "${RESOLVER_TERMINAL_EXIT_CLASS}" = "no_progress" ] || RESOLVER_TERMINAL_EXIT_CLASS="fingerprint"
         exit 1
       fi
     fi
     if [ "${_marker_count}" -gt 0 ]; then
       echo "::error::Conflict resolver exhausted ${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} attempts; ${_marker_count} file(s) still contain unresolved Git conflict markers. Aborting [ai-merge-resolve] commit."
       echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+      [ "${RESOLVER_TERMINAL_EXIT_CLASS}" = "no_progress" ] || RESOLVER_TERMINAL_EXIT_CLASS="markers"
       exit 1
     fi
     # Any other soft-failure class falls through to a generic
@@ -4083,6 +4341,13 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     # the next poll tick.
     echo "::error::Conflict resolver exhausted ${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} attempts with soft-validation failures that could not be auto-recovered."
     echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+    if [ "${RESOLVER_TERMINAL_EXIT_CLASS}" != "no_progress" ]; then
+      if [[ "${_fp_count:-0}" =~ ^[0-9]+$ ]] && [ "${_fp_count:-0}" -gt 0 ]; then
+        RESOLVER_TERMINAL_EXIT_CLASS="fingerprint"
+      else
+        RESOLVER_TERMINAL_EXIT_CLASS="other"
+      fi
+    fi
     exit 1
   fi
   # Snapshot this attempt's fingerprint violations so the next
@@ -4092,8 +4357,10 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     cp -a "${RESOLVER_FP_VIOLATIONS_FILE}" "${RESOLVER_FP_VIOLATIONS_PREV_FILE}" || true
   fi
   attempt=$((attempt + 1))
+  _resolver_terminal_attempt_end || true
   sleep 2
 done
+_resolver_terminal_attempt_end || true
 
 # Remove root-level workflow-generated artifacts so they are never
 # committed to caller repos.  Skip when running on coding-workflows
@@ -4258,6 +4525,7 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
         fi
         echo "Workflow files touched by resolver but NOT in allowlist:"
         sed 's/^/ - /' "${WORKFLOW_VIOLATIONS_FILE}" || true
+        RESOLVER_TERMINAL_EXIT_CLASS="scope"
         exit 1
       fi
     else
@@ -4285,6 +4553,7 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
       echo "::error::Conflicted-paths snapshot missing; refusing to create [ai-merge-resolve] commit without resolver validation."
       echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
       rm -f "${RESOLVER_TOUCHED_FILE}"
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
 
@@ -4292,6 +4561,7 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
       echo "::error::check_resolver_diff.sh is missing or not executable; refusing to create [ai-merge-resolve] commit without resolver validation."
       echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
       rm -f "${RESOLVER_TOUCHED_FILE}"
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
 
@@ -4302,8 +4572,12 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
       echo "::error::Conflict resolver output failed validation; skipping [ai-merge-resolve] commit."
       echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
       rm -f "${RESOLVER_TOUCHED_FILE}"
+      RESOLVER_TERMINAL_EXIT_CLASS="scope"
       exit 1
     fi
+    # Staging/commit failures from here on (including an implicit set -e
+    # failure of `git commit`) record exit_class=commit; exit 0 records ok.
+    RESOLVER_TERMINAL_EXIT_CLASS="commit"
 
     # Stage the editor's conflict resolutions on top of the
     # existing merge index.  Crucially, we KEEP .git/MERGE_HEAD
@@ -4354,6 +4628,8 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
     done < "${RESOLVER_TOUCHED_FILE}"
     rm -f "${RESOLVER_TOUCHED_FILE}"
   else
+    # Consumer-repo staging/commit failures record exit_class=commit.
+    RESOLVER_TERMINAL_EXIT_CLASS="commit"
     # Build per-file exclusions from scripts/.gitignore when present.
     # If it is absent, keep exclusions empty so consumer-owned scripts/
     # changes are still staged.
@@ -4462,6 +4738,8 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
       fi
     fi
   done
+  # The commit landed, so a later failure is not a commit failure.
+  RESOLVER_TERMINAL_EXIT_CLASS="other"
   git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
   # NOTE: push deferred to final "Push all pending commits" step.
   echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
