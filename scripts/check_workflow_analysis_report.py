@@ -225,23 +225,14 @@ def run_check(report_path: str, collect_report_path: str, min_bytes: int) -> int
 		required = _valid_repo_names(scope.get("repositories") if isinstance(scope, dict) else None)
 		exempt_all, exempt_source = _exempt_from_collect_report(payload)
 		exempt_lower = {name.lower() for name in exempt_all}
-		runs = payload.get("runs")
-		if isinstance(runs, list):
-			# A scoped repository with no run in the window has no per-repo data
-			# for the model to write about, so it does not need a subsection.
-			seen = {
-				item["repository"].lower()
-				for item in runs
-				if isinstance(item, dict) and isinstance(item.get("repository"), str)
-			}
-			exempt_lower |= {name.lower() for name in required if name.lower() not in seen}
 		subheadings = _per_repo_subheadings(unfenced) or []
 		for repo in required:
 			if repo.lower() in exempt_lower:
 				exempt_repos.append(repo)
 				continue
-			# Bounded match so "owner/app-two" never covers "owner/app".
-			pattern = re.compile(r"(?<![A-Za-z0-9._/-])" + re.escape(repo.lower()) + r"(?![A-Za-z0-9._-])")
+			# Bounded match so "owner/app-two" never covers "owner/app"; a
+			# host-path heading ("github.com/owner/app") still counts.
+			pattern = re.compile(r"(?<![A-Za-z0-9._-])" + re.escape(repo.lower()) + r"(?![A-Za-z0-9._-])")
 			if not any(pattern.search(heading) for heading in subheadings):
 				missing_repos.append(repo)
 

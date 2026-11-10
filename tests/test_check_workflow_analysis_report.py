@@ -225,17 +225,21 @@ def test_negative_min_bytes_is_usage_error(tmp_path: Path) -> None:
 	assert proc.returncode == 2
 
 
-def test_repo_with_no_runs_in_window_is_exempt(tmp_path: Path) -> None:
+def test_repo_with_no_runs_in_window_still_needs_a_subsection(tmp_path: Path) -> None:
+	# Only failed repositories are exempt (plan P2); a quiet one is not.
 	report = _report(repos=(REPO_A,))
 	collect = _collect()
 	collect["runs"] = [{"repository": REPO_A, "conclusion": "success"}]
 	proc, _ = _run(tmp_path, report, collect)
-	assert proc.returncode == 0, proc.stdout
-	assert _check_line(proc.stdout) == _expected("ok", 0, "none", report, exempt_repos=REPO_B)
-	collect["runs"].append({"repository": REPO_B, "conclusion": "failure"})
-	proc, _ = _run(tmp_path, report, collect)
 	assert proc.returncode == 1
 	assert _check_line(proc.stdout) == _expected("invalid", 0, REPO_B, report)
+
+
+def test_host_path_repo_heading_counts(tmp_path: Path) -> None:
+	report = _report(repos=(f"github.com/{REPO_A}", f"https://github.com/{REPO_B}"))
+	proc, _ = _run(tmp_path, report, _collect())
+	assert proc.returncode == 0, proc.stdout
+	assert _check_line(proc.stdout) == _expected("ok", 0, "none", report)
 
 
 def test_prefix_sharing_repo_does_not_cover_another(tmp_path: Path) -> None:

@@ -1382,9 +1382,13 @@ jobs:
             if ! RUN_LOGS_DIR="$(realpath -e -- "${RUN_LOGS_DIR}" 2>/dev/null)"; then
               echo "::warning::workflow-log-output path could not be resolved; using analysis_context.json only."
               RUN_LOGS_DIR=""
+              wla_logs_missing="true"
+              echo "WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing"
             elif ! [[ "${RUN_LOGS_DIR}" =~ ^/[A-Za-z0-9._@+/-]+$ ]] || [[ "${RUN_LOGS_DIR}" == *,* ]] || [[ "${RUN_LOGS_DIR}" == *"/../"* ]] || [[ "${RUN_LOGS_DIR}" == *"/.." ]]; then
               echo "::warning::workflow-log-output path is unsafe for the sandbox mount; using analysis_context.json only."
               RUN_LOGS_DIR=""
+              wla_logs_missing="true"
+              echo "WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing"
             else
               # Keep a bounded copy below the isolation helper's 256 MiB include limit.
               if wla_run_logs_result="$(python3 -I -B scripts/stage_workflow_log_bundle.py "${RUN_LOGS_DIR}" "${RUNNER_TEMP}/workflow-log-output-bounded" "$((200*1024*1024))")" \
@@ -1401,10 +1405,14 @@ jobs:
                 else
                   echo "::warning::workflow-log-output staged path is unsafe; using analysis_context.json only."
                   RUN_LOGS_DIR=""
+                  wla_logs_missing="true"
+                  echo "WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing"
                 fi
               else
                 echo "::warning::workflow-log-output staging failed; using analysis_context.json only."
                 RUN_LOGS_DIR=""
+                wla_logs_missing="true"
+                echo "WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing"
               fi
             fi
           fi
