@@ -2496,7 +2496,7 @@ def test_validate_decomposition_rejects_empty_path_in_files_touched():
 def test_validate_decomposition_caps_files_touched_length():
 	data = _make_decomposition(issues=[
 		{"id": "a", "title": "T", "body": "b", "priority": 1,
-		 "files_touched": [f"f{i}.py" for i in range(51)]},
+			"files_touched": [f"f{i}.py" for i in range(51)]},
 	])
 	try:
 		orchestrate_lib.validate_decomposition(data)
@@ -3285,6 +3285,11 @@ def test_unrouted_ignores_unblock_judge_status_notes():
 	# fun-token-multi-chain#821: the judge's unmarked "belongs in the harness"
 	# note, posted a second after its verdict comment, was flagged twice.
 	import unblock_actions
+	# Every opening must still appear in the note text unblock_actions posts,
+	# so a reworded note fails here instead of paging the operator again.
+	source = Path(unblock_actions.__file__).read_text(encoding="utf-8").lower()
+	for prefix in orchestrate_lib._UNROUTED_PIPELINE_PREFIXES:
+		assert prefix in source, prefix
 	verdict = _unrouted_comment(2, "## Unblock judge: `operator_step` (round 1)\n\n<!-- ai:unblock:v1 item=7 -->", 20)
 	for index, call in enumerate((
 		lambda: unblock_actions._harness_ops(
@@ -3310,6 +3315,9 @@ def test_unrouted_ignores_unblock_judge_status_notes():
 	note = _unrouted_comment(5, "The unblock judge found this work belongs in `o/r` (the shared workflow harness).", 30)
 	assert _unrouted(_unrouted_issue([answer, note])) == [
 		{"issue": 7, "comment_id": 4, "reason": "no_command", "age_minutes": 40}]
+	# A human reply that opens with the bare "stays open" words still counts.
+	for index, body in enumerate(("This security finding stays open until B lands.", "This pull request stays open; use B.")):
+		assert _unrouted(_unrouted_issue([_unrouted_comment(8 + index, body, 20)]))[0]["comment_id"] == 8 + index
 	# A human who merely mentions the judge is still a human reply.
 	plain = _unrouted_comment(6, "I think the unblock judge found this work belongs in the harness; use B.", 20)
 	assert _unrouted(_unrouted_issue([plain]))[0]["comment_id"] == 6
@@ -3709,7 +3717,7 @@ def test_render_expected_files_section_has_no_allowlist():
 		staged_file.write_text("scripts/a.py\n", encoding="utf-8")
 		guard = subprocess.run(
 			[sys.executable, str(REPO_ROOT / "scripts" / "files_touched_scope_guard.py"),
-			 "--issue-body-file", str(body_file), "--staged-file", str(staged_file)],
+				"--issue-body-file", str(body_file), "--staged-file", str(staged_file)],
 			capture_output=True, text=True, check=False,
 		)
 		assert guard.returncode == 10, (guard.returncode, guard.stdout, guard.stderr)

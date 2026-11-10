@@ -4078,8 +4078,12 @@ _UNROUTED_PIPELINE_PREFIXES = (
 	"the unblock judge has no verdicts left",
 	"next attempt, per the unblock judge:",
 	"unblock judge could not act on",
-	"this security finding stays open",
-	"this pull request stays open",
+	# The bare "this ... stays open" openings are common prose, so these keep
+	# the judge-specific words that follow them.
+	"this security finding stays open: its finding marker",
+	"this security finding stays open; it is tracked here until",
+	"this security finding stays open and blocked: the unblock judge",
+	"this pull request stays open: its linked issue's security finding marker",
 	"superseded: owning pr #",
 )
 

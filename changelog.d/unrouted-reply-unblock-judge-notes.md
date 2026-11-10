@@ -5,7 +5,7 @@ The unblock judge posts some status notes without an HTML marker, under the owne
 
 | The numbers that matter | Value |
 | --- | --- |
-| Note openings now recognised | 7 (all from `scripts/unblock_actions.py`) |
+| Note openings now recognised | 9 (all from `scripts/unblock_actions.py`) |
 | False warnings on fun-token-multi-chain#821 | 2 (rounds 1 and 2) |
 | New env vars or log prefixes | 0 |
 
@@ -13,4 +13,4 @@ What this means for operators: a `Blocked issue #N has an unrouted reply (no_com
 
 ### For contributors
 
-The openings live in `_UNROUTED_PIPELINE_PREFIXES`. A new unmarked comment in `scripts/unblock_actions.py` needs either an `<!-- ai:... -->` marker or an entry there. `test_unrouted_ignores_unblock_judge_status_notes` in `tests/test_orchestrate_lib.py` builds the harness note from `_harness_ops` itself, so a reworded note fails the test.
+The openings live in `_UNROUTED_PIPELINE_PREFIXES`. A new unmarked comment in `scripts/unblock_actions.py` needs either an `<!-- ai:... -->` marker or an entry there. `test_unrouted_ignores_unblock_judge_status_notes` in `tests/test_orchestrate_lib.py` builds the harness note from `_harness_ops` itself and checks that every opening still appears in `scripts/unblock_actions.py`, so a reworded note fails the test. The "stays open" openings keep the judge-specific words after them, so a person's reply that starts with "This security finding stays open" still counts as a reply.
