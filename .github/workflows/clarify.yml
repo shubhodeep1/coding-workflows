@@ -2397,7 +2397,7 @@ jobs:
           elif [ "${QUESTIONS_OUTCOME}" = success ] || [ "${CLARIFY_BLOCKED}" = true ]; then
             outcome=blocked
           fi
-          python3 -B scripts/attempt_journal.py append --repo "${GITHUB_REPOSITORY}" --issue "${ISSUE_NUMBER}" \
+          python3 -B "${SUPPORT_SCRIPTS_DIR:-scripts}/attempt_journal.py" append --repo "${GITHUB_REPOSITORY}" --issue "${ISSUE_NUMBER}" \
             --stage clarify --outcome "${outcome}" --approach inherit || true
 
       - name: Telegram clarification notification

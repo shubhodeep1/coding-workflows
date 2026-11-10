@@ -547,7 +547,7 @@ def test_attempt_journal_switch_defaults_off_in_every_workflow() -> None:
 
 def test_attempt_journal_readers_append_after_dynamic_context_and_are_gated() -> None:
 	plan = (REPO_ROOT / "scripts" / "run_plan_codex.sh").read_text(encoding="utf-8")
-	read = plan.index('python3 -B scripts/attempt_journal.py render')
+	read = plan.index('python3 -B "${RUN_PLAN_CODEX_SUPPORT_DIR}/attempt_journal.py" render')
 	assert plan.index('cat "${PLANNING_CONTEXT_FILE}"') < read < plan.index('if [ "${HEAL_ROUTE:-false}" = true ]; then')
 	assert plan.rfind('if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ]', 0, read) > plan.index('cat "${PLANNING_CONTEXT_FILE}"')
 	implement = (WORKFLOW_DIR / "implement.yml").read_text(encoding="utf-8")
@@ -621,13 +621,13 @@ def _run_journal_block(block: str, persist: str | None, journal: bool = True) ->
 	prompt.write_text(PROMPT_FIXTURE, encoding="utf-8")
 	if journal:
 		(runtime / "attempt_journal.txt").write_text(JOURNAL_FIXTURE, encoding="utf-8")
-	# A stub helper in the cwd so the plan block's `-f scripts/attempt_journal.py`
-	# check passes; it would rewrite the journal if the block ever ran it.
+	# A stub helper (also the plan block's RUN_PLAN_CODEX_SUPPORT_DIR) so its
+	# `-f .../attempt_journal.py` check passes; it would rewrite the journal if the block ever ran it.
 	(root / "scripts").mkdir()
 	(root / "scripts" / "attempt_journal.py").write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
 	env = {k: v for k, v in os.environ.items() if not k.startswith(("PERSIST_", "GITHUB_"))}
 	env.update({"RUNTIME_DIR": str(runtime), "CODEX_PROMPT_FILE": str(prompt), "ISSUE_NUMBER": "5",
-		"PYTHONDONTWRITEBYTECODE": "1"})
+		"PYTHONDONTWRITEBYTECODE": "1", "RUN_PLAN_CODEX_SUPPORT_DIR": str(root / "scripts")})
 	if persist is not None:
 		env["PERSIST_JOURNAL_ENABLED"] = persist
 	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], cwd=root, env=env,
@@ -1082,7 +1082,7 @@ def test_evidence_broker_hash_reaches_the_plan_journal_only_with_the_switch() ->
 	gate = 'if [ "${PERSIST_EVIDENCE_BROKER_ENABLED:-false}" = true ] && [ -s "${RUNTIME_DIR}/evidence_broker_hash.txt" ]; then'
 	assert run.count(gate) == 1
 	assert 'acceptance_args+=(--evidence-hash-file "${RUNTIME_DIR}/evidence_broker_hash.txt")' in run[run.index(gate):]
-	assert run.index(gate) < run.index("scripts/attempt_journal.py append")
+	assert run.index(gate) < run.index('scripts}/attempt_journal.py" append')
 
 
 if __name__ == "__main__":
