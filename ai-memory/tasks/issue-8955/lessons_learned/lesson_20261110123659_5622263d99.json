@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-10T12:36:59Z",
+  "issue_number": 8955,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/:1-1; cited_path=AGENTS.md / CLAUDE.md (copilot-pull-request-reviewer custom instructions; external check-run 42814437610); files_touched=.github/workflows/issue_pr_status.yml, agents.d/8955-check-triage-close-on-pr-branch-merge.md, changelog.d/8955-check-triage-close-on-pr-branch-merge.md, scripts/orchestrate_lib.py, scripts/orchestrate_poll_process.sh, tests/test_issue_pr_status_payload_fallback_contract.py, tests/test_orchestrate_lib.py, tests/test_orchestrate_poll_process.py.",
+  "phase": "review_autofix",
+  "pr_number": 8968,
+  "record_id": "lesson_20261110123659_5622263d99",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md / CLAUDE.md (copilot-pull-request-reviewer custom instructions; external check-run 42814437610)",
+    ".github/workflows/",
+    ".github/workflows/issue_pr_status.yml",
+    "agents.d/8955-check-triage-close-on-pr-branch-merge.md",
+    "changelog.d/8955-check-triage-close-on-pr-branch-merge.md",
+    "scripts/orchestrate_lib.py",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_issue_pr_status_payload_fallback_contract.py",
+    "tests/test_orchestrate_lib.py",
+    "tests/test_orchestrate_poll_process.py"
+  ]
+}
