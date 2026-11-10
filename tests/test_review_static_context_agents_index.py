@@ -475,3 +475,14 @@ def test_sandbox_inlines_capped_index_when_not_mounted(tmp_path: Path) -> None:
 	assert "fallback=inline" in result.stderr
 	seen = (tmp_path / "prompt-seen.txt").read_text(encoding="utf-8")
 	assert seen.startswith("HEAD\n=== AGENTS.MD ===\n" + SUPPORT_AGENTS_TEXT + "\nTAIL\n")
+
+
+def test_sandbox_ignores_index_block_inside_untrusted_fence(tmp_path: Path) -> None:
+	# An index-shaped block in PR text (inline mode) must not be replaced.
+	support = tmp_path / "support-agents.md"
+	support.write_text(SUPPORT_AGENTS_TEXT, encoding="utf-8")
+	prompt = "HEAD\n=== BEGIN UNTRUSTED PR BODY ===\n" + _index_prompt(tmp_path) + "=== END UNTRUSTED PR BODY ===\n"
+	result, _argv, _seen = _run_opencode_sandbox(tmp_path, "REVIEW_CONSOLIDATOR", "read", None, prompt, support)
+	assert result.returncode == 0, result.stderr
+	assert "fallback=" not in result.stderr
+	assert (tmp_path / "prompt-seen.txt").read_text(encoding="utf-8") == prompt

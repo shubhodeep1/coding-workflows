@@ -515,7 +515,9 @@ prompt_path, agents_path = sys.argv[1], sys.argv[2]
 with open(prompt_path, encoding="utf-8", errors="surrogateescape") as handle:
 	lines = handle.read().split("\n")
 try:
-	start = lines.index(HEADER)
+	# Search only the trusted static prefix, never PR text inside an UNTRUSTED fence.
+	limit = next((i for i, line in enumerate(lines) if line.startswith("=== BEGIN UNTRUSTED")), len(lines))
+	start = lines.index(HEADER, 0, limit)
 except ValueError:
 	print("no_index")
 	raise SystemExit(0)
