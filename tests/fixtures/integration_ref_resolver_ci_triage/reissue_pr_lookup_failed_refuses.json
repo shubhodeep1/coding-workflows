@@ -1,0 +1,20 @@
+{
+  "name": "reissue_pr_lookup_failed_refuses",
+  "env": {
+    "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true"
+  },
+  "issues": {
+    "101": {
+      "body": "<!-- check-failure-triage:pr=6786 -->\nRe-issued by the unblock judge from #7.\n\nFix the failing check.\n",
+      "labels": [],
+      "author_association": "OWNER",
+      "user": {
+        "login": "owner"
+      }
+    }
+  },
+  "branch_exists": {},
+  "expected_stdout": "",
+  "expected_exit_code": 3,
+  "expected_error_reason": "pr_lookup_failed"
+}
