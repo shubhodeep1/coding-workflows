@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of coding-workflows should this issue change?\nChoices:\nA. The issue \u2192 PR pipeline phases: clarify, plan, implement or review/autofix workflows and their prompts (RECOMMENDED)\nB. The orchestrator: orchestrate / orchestrate_poll, integration-sync, waves and labels\nC. The AI memory subsystem (`scripts/ai_memory.py`, `scripts/memory_helpers.sh`, the `ai-memory` branch)\nD. How consumer repos are onboarded and kept up to date (update-workflows, seed-repo, wrapper pins)\nE. Documentation only (README.md, `docs/how-it-works.md`, agents.md fragments)\nF. Other: reply with the workflow or script path\nQ2: What kind of improvement do you want?\nChoices:\nA. Fix a specific bug or failure you have seen: reply with the run URL, log excerpt or steps to reproduce (RECOMMENDED)\nB. Lower cost or runtime: fewer tokens, fewer GitHub API calls, faster runs\nC. Make it more reliable: fewer stalls, retries or self-heal gaps\nD. Add a new feature or behaviour: reply with a short description\nE. Clearer docs, logs or messages only, with no change in behaviour\nQ3: How will we know the work is done?\nChoices:\nA. You will give a concrete pass/fail condition in your `/answer` (for example \"run X no longer fails with Y\") (RECOMMENDED)\nB. Focused contract tests that pin the new behaviour pass in CI\nC. The planner proposes the criteria and you confirm them when approving the plan",
+  "fingerprint": "518dcec4deeda452b6a6b69c3a995be6b4e407aa132fb8062652ce523954f6f4",
+  "lineage": {
+    "issue_number": 9160,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42730894613",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42730894613",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261110005049_5222d3e989",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9160,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42730894613"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9160 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-10T00:50:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
