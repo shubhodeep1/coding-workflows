@@ -5,13 +5,32 @@
   "entry_id": "processed_command_9170_6756884259_approved",
   "issue_number": 9170,
   "metadata": {
+    "branch": "ai/issue-9170",
+    "changed_files": [
+      "agents.d/ci-reissue-merged-pr-base-branch-routing.md",
+      "changelog.d/ci-reissue-merged-pr-base-branch-routing.md",
+      "scripts/resolve_integration_ref.sh",
+      "tests/fixtures/integration_ref_resolver_ci_triage/reissue_closed_unmerged_pr_keeps_default.json",
+      "tests/fixtures/integration_ref_resolver_ci_triage/reissue_lone_pr_marker_without_label_skips.json",
+      "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_base_branch_missing_refuses.json",
+      "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_cross_repository_refuses.json",
+      "tests/fixtures/integration_ref_resolver_ci_triage/reissue_merged_pr_routes_to_base_branch.json",
+      "tests/fixtures/integration_ref_resolver_ci_triage/reissue_pr_lookup_failed_refuses.json",
+      "tests/test_gh_api_retry.py",
+      "tests/test_resolve_integration_ref_ci_triage.py"
+    ],
+    "issue_number": 9170,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9170",
+    "pr_number": 9175,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9175",
+    "run_attempt": "1",
+    "run_id": "42740261517",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42740261517"
   },
   "run_attempt": 1,
   "run_id": "42740261517",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-10T02:06:59Z",
+  "status": "completed",
+  "timestamp": "2026-11-10T02:38:36Z",
   "workflow": "implement"
 }
