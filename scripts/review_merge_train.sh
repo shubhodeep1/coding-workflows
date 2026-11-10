@@ -1455,7 +1455,7 @@ _mt_release_stall_alert()
 {
 	local stall_pr="$1" stall_age_secs="$2" stall_examined="$3" stall_detail="$4"
 	local stall_hours="${MERGE_TRAIN_STALL_ALERT_HOURS:-24}" stall_slot_hour="${MERGE_TRAIN_STALL_ALERT_HOUR_UTC:-1}"
-	local stall_now_hour="" stall_today="" stall_rows="" stall_row="" stall_comment_id="" stall_comment_created="" stall_last_date=""
+	local stall_now_epoch="" stall_now_hour="" stall_today="" stall_rows="" stall_row="" stall_comment_id="" stall_comment_created="" stall_last_date=""
 	local stall_body="" stall_msg="" stall_msg_id="" stall_age_hours=0 stall_filter="" stall_outcome=""
 	if ! [[ "${stall_hours}" =~ ^[0-9]{1,4}$ ]]; then
 		_mt_warn "merge-train release: MERGE_TRAIN_STALL_ALERT_HOURS is not a whole number of hours; using 24."
@@ -1470,8 +1470,13 @@ _mt_release_stall_alert()
 		stall_slot_hour=1
 	fi
 	stall_slot_hour=$((10#${stall_slot_hour}))
+	stall_now_epoch="$(date -u +%s 2>/dev/null)" || stall_now_epoch=""
 	stall_now_hour="$(date -u +%H 2>/dev/null)" || stall_now_hour=""
-	stall_today="$(date -u +%Y-%m-%d 2>/dev/null)" || stall_today=""
+	# The note is keyed by the UTC date the slot started, so a slot that
+	# crosses midnight (start hour 22 or 23) still sends only once.
+	if [[ "${stall_now_epoch}" =~ ^[0-9]+$ && "${stall_now_hour}" =~ ^[0-9]{2}$ ]]; then
+		stall_today="$(date -u -d "@$((stall_now_epoch - ((10#${stall_now_hour} - stall_slot_hour + 24) % 24) * 3600))" +%Y-%m-%d 2>/dev/null)" || stall_today=""
+	fi
 	if ! [[ "${stall_now_hour}" =~ ^[0-9]{2}$ && "${stall_today}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
 		|| [ "$(( (10#${stall_now_hour} - stall_slot_hour + 24) % 24 ))" -ge 3 ]; then
 		stall_outcome="outside_slot"
