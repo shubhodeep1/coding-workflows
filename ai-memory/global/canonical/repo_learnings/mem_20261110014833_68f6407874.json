@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Merged changes to workflow automation and scripts repeatedly include dedicated tests for the affected behavior. Some CI changes also update `tests/test_ci_wires_every_test_file.py`, so check whether new test files need explicit CI wiring.",
+  "fingerprint": "041291afbefd9d9b41d49e5eb41dab05c3205ff2fe490c589152a1cb5f6eeae6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42737601241",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42737601241",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9136",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9137",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9139",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9143",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9146",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9140",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9141",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9142",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9145",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9147"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261110014833_68f6407874",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Add focused tests alongside workflow or script behavior changes.",
+  "timestamps": {
+    "created_at": "2026-11-10T01:48:33Z",
+    "promoted_at": "2026-11-10T01:49:10Z",
+    "superseded_at": null
+  }
+}
