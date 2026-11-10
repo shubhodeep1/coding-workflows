@@ -1,0 +1,30 @@
+{
+  "discovered_at": "2026-11-10T08:25:02Z",
+  "issue_number": 8880,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=scripts/ai_labels.py:34-41; cited_path=scripts/ai_labels.py, README.md lines 109-114, agents.d/stuck-states-p11a-retired-label-drain.md, agents.d/stuck-states-p3a-fingerprint-markers.md; files_touched=.github/workflows/clarify.yml, .github/workflows/plan.yml, README.md, agents.d/stuck-states-p8a2-waiting-parse.md, changelog.d/stuck-states-p8a2-waiting-parse.md, docs/plans/confine-human-steps-to-activation-plan.md, prompts/_templates/mode-clarify.txt, prompts/_templates/mode-plan.txt, prompts/mode-clarify.txt, prompts/mode-plan.txt, scripts/dependency_wait_resume.py, scripts/run_plan_codex.sh, scripts/stage_support_for_phase.sh, tests/test_dependency_wait_resume.py, tests/test_plan_clarify_blocked_output.py, tests/test_plan_codex_step_extraction.py.",
+  "phase": "review_autofix",
+  "pr_number": 8883,
+  "record_id": "lesson_20261110082502_fabf1e9362",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ai_labels.py, README.md lines 109-114, agents.d/stuck-states-p11a-retired-label-drain.md, agents.d/stuck-states-p3a-fingerprint-markers.md",
+    "scripts/ai_labels.py",
+    ".github/workflows/clarify.yml",
+    ".github/workflows/plan.yml",
+    "README.md",
+    "agents.d/stuck-states-p8a2-waiting-parse.md",
+    "changelog.d/stuck-states-p8a2-waiting-parse.md",
+    "docs/plans/confine-human-steps-to-activation-plan.md",
+    "prompts/_templates/mode-clarify.txt",
+    "prompts/_templates/mode-plan.txt",
+    "prompts/mode-clarify.txt",
+    "prompts/mode-plan.txt",
+    "scripts/dependency_wait_resume.py",
+    "scripts/run_plan_codex.sh",
+    "scripts/stage_support_for_phase.sh",
+    "tests/test_dependency_wait_resume.py",
+    "tests/test_plan_clarify_blocked_output.py",
+    "tests/test_plan_codex_step_extraction.py"
+  ]
+}

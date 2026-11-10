@@ -1,0 +1,24 @@
+{
+  "discovered_at": "2026-11-10T08:25:02Z",
+  "issue_number": 8880,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=scripts/ai_labels.py:1315-1319; cited_path=scripts/ai_labels.py; files_touched=.github/workflows/clarify.yml, .github/workflows/plan.yml, README.md, scripts/dependency_wait_resume.py, scripts/run_plan_codex.sh, scripts/stage_support_for_phase.sh, prompts/*, tests/*, agents.d/stuck-states-p8a2-waiting-parse.md, changelog.d/stuck-states-p8a2-waiting-parse.md, docs/plans/confine-human-steps-to-activation-plan.md.",
+  "phase": "review_autofix",
+  "pr_number": 8883,
+  "record_id": "lesson_20261110082502_5da321afe6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ai_labels.py",
+    ".github/workflows/clarify.yml",
+    ".github/workflows/plan.yml",
+    "README.md",
+    "scripts/dependency_wait_resume.py",
+    "scripts/run_plan_codex.sh",
+    "scripts/stage_support_for_phase.sh",
+    "prompts/*",
+    "tests/*",
+    "agents.d/stuck-states-p8a2-waiting-parse.md",
+    "changelog.d/stuck-states-p8a2-waiting-parse.md",
+    "docs/plans/confine-human-steps-to-activation-plan.md"
+  ]
+}
