@@ -462,3 +462,16 @@ def test_sandbox_fallback_warning_names_the_real_cause(tmp_path: Path) -> None:
 	assert "fallback=failed" in result.stderr
 	assert "inline replacement failed" in result.stderr
 	assert "no trusted inline copy" not in result.stderr
+
+
+def test_sandbox_inlines_capped_index_when_not_mounted(tmp_path: Path) -> None:
+	# A capped index ends with a "... (" line; it must still be replaced.
+	support = tmp_path / "support-agents.md"
+	support.write_text(SUPPORT_AGENTS_TEXT, encoding="utf-8")
+	prompt = _index_prompt(tmp_path).replace("- L6: Support section two\n", "- L6: Support section two\n... (3 more headings)\n")
+	assert "... (3 more headings)" in prompt
+	result, _argv, _seen = _run_opencode_sandbox(tmp_path, "REVIEW_CONSOLIDATOR", "read", None, prompt, support)
+	assert result.returncode == 0, result.stderr
+	assert "fallback=inline" in result.stderr
+	seen = (tmp_path / "prompt-seen.txt").read_text(encoding="utf-8")
+	assert seen.startswith("HEAD\n=== AGENTS.MD ===\n" + SUPPORT_AGENTS_TEXT + "\nTAIL\n")

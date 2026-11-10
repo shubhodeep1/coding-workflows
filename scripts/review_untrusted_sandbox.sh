@@ -525,6 +525,9 @@ while index < len(lines) and index <= start + 4 and not lines[index].startswith(
 	index += 1
 while index < len(lines) and lines[index].startswith("- L"):
 	index += 1
+# Cap or truncation lines the index builder may append (build_static_context.sh).
+while index < len(lines) and lines[index].startswith("... ("):
+	index += 1
 if not (index + 2 < len(lines) and lines[index] == "" and lines[index + 1].startswith(PR_DATA) and lines[index + 2] == ""):
 	# Header found but the block shape is unexpected: log it, never stay silent.
 	print("unmatched")

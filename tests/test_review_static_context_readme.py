@@ -350,6 +350,7 @@ def _collect_review_agents_index_cases() -> None:
 		"review_static_context_agents_index_cases",
 		Path(__file__).resolve().parent / "test_review_static_context_agents_index.py",
 	)
+	assert spec is not None and spec.loader is not None, "test_review_static_context_agents_index.py not loadable"
 	cases = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(cases)
 	collected = 0
