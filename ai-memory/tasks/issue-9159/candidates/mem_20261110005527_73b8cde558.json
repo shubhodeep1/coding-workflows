@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Planning ref context\n- `git rev-parse HEAD`: 9420ed34b9474a852f544423ce5bd1d47b9b4d24\n- Branch: `main`\n- `Integration branch mismatch: unknown`. It is not `true`, so the plan goes ahead.\n\n## Summary\n`tests/e2e_smoke_canary.txt` already exists. Today it holds exactly two LF-terminated lines: `status: ok` and `decompose-run: 41445772297`. This change replaces that content with exactly the three lines the issue specifies, each ending in LF. No other file changes.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_e2e_editor_smoke_canary.py\nACCEPTANCE: post-merge none: data-only canary file change; no post-merge workflow depends on this content\n\n## Functions or modules to implement\n- No code. Overwrite `tests/e2e_smoke_canary.txt` so its bytes are exactly:\n  `status: ok\\nrun_id: alt-42730467671\\nupdated-by: ai-pipeline\\n`\n  - This is three lines, each ending in a single LF. There is no CRLF, no BOM, no trailing whitespace and no extra blank line.\n  - The `decompose-run: 41445772297` line is removed.\n\n## Data structures affected\n- None.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 End the last line with a newline\n- Chosen: end the file with a single LF after `updated-by: ai-pipeline`.\n- Alternatives considered: leave out the final newline.\n- Why: the file ends with a trailing LF today, and every earlier canary update kept that convention.\n\n### D2 \u2014 Replace the whole file instead of editing a line\n- Chosen: overwrite the entire file content.\n- Alternatives considered: append `run_id` and `updated-by` while keeping `decompose-run`.\n- Why: the issue requires the file to be \"exactly these three lines\".\n\n## Security considerations\n- No trust boundaries, endpoints, credentials or external input are involved. The change is a static text fixture.\n- Abuse cases: none. The content is fixed by the issue and holds no secrets.\n\n## Potential risks or edge cases\n- Possible conflict: open PRs #8786, #8368 and #8304 also touch this file, so whichever merges later may need to resolve a conflict. This PR does not need to coordinate with them.\n- `tests/test_e2e_editor_smoke_canary.py` compares a fetched canary only when the Phase 4b environment variables are set, and it needs a numeric run ID. The value `alt-42730467671` is not numeric, so this run is not that harness. In ordinary CI the test skips and is unaffected.\n- The editor must not write CRLF line endings or a stray blank line at the end.\n\n## Testing considerations\n- Verify the bytes directly: `printf 'status: ok\\nrun_id: alt-42730467671\\nupdated-by: ai-pipeline\\n' | cmp - tests/e2e_smoke_canary.txt` should exit 0.\n- `git diff --stat` should show exactly one changed file.\n- `pytest tests/test_e2e_editor_smoke_canary.py` should skip and not fail.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a one-file content replacement and forbids touching any other file, so the scope stays exactly as stated. There is no shorter or more complete variant to weigh: the complete change is the minimal one.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"data-only canary file change; no post-merge workflow depends on this content\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_e2e_editor_smoke_canary.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "9702c4f47d78ba3b968194e02f3210530dff052a0424903028ebba0ba1e67c07",
+  "lineage": {
+    "issue_number": 9159,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42731335729",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42731335729",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9159"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261110005527_73b8cde558",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9159,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42731335729"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9159",
+  "timestamps": {
+    "created_at": "2026-11-10T00:55:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
