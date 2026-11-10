@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add `ai:waiting-on-dependency` to `PHASE_LABELS` in `scripts/persist_postmerge_verify.py`, between `ai:blocked` and `ai:review-blocked`.\n  expected_change_site: `scripts/persist_postmerge_verify.py`, `PHASE_LABELS`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR diff and last-run diff have no hunk for `scripts/persist_postmerge_verify.py`, but line 106 already has the label in the requested position, so runtime parity is satisfied (severity NIT; provenance only). anthropic_claude-sonnet-5_5 gave confidence 1 and noted it was raised only for consistency.\n- requirement: Replace the bare helper paths in `scripts/run_plan_codex.sh` with `\"${RUN_PLAN_CODEX_SUPPORT_DIR}/<name>\"`, keeping the `-f` and `! -L` guards and `python3 -B`.\n  expected_change_site: `scripts/run_plan_codex.sh`\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: None. The reviewer states this is done (severity NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: Add `ai:waiting-on-dependency` to `PHASE_LABELS` in `scripts/persist_postmerge_verify.py`, between `ai:blocked` and `ai:review-blocked`.\nExpected change site: `scripts/persist_postmerge_verify.py`, `PHASE_LABELS`.\nEvidence of absence: The PR diff has no hunk for this file, but line 106 already has `\"ai:blocked\", \"ai:waiting-on-dependency\", \"ai:review-blocked\"`. The requirement is met in the checkout and this is not a runtime gap.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 1\n\nTASK_GAP:\nRequirement: Replace the bare helper paths in `scripts/run_plan_codex.sh` with `\"${RUN_PLAN_CODEX_SUPPORT_DIR}/<name>\"`, keeping the `-f` and `! -L` guards and `python3 -B`.\nExpected change site: `scripts/run_plan_codex.sh`.\nEvidence of absence: None. This is done.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: Add `ai:waiting-on-dependency` to `PHASE_LABELS` in `scripts/persist_postmerge_verify.py`, between `ai:blocked` and `ai:review-blocked`.\nExpected change site: `scripts/persist_postmerge_verify.py`, `PHASE_LABELS` tuple\nEvidence of absence: Neither the PR diff nor the LAST RUN DIFF includes a hunk for this file. The label is present at line 106 in the current checkout, so runtime parity with `scripts/label_helpers.sh:159` is satisfied.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: Add `ai:waiting-on-dependency` to `PHASE_LABELS` in `scripts/persist_postmerge_verify.py`, between `ai:blocked` and `ai:review-blocked`.\nExpected change site: `scripts/persist_postmerge_verify.py`, `PHASE_LABELS`.\nEvidence of absence: Neither the PR diff nor the last-run diff contains a change to that file or symbol. The current checkout already has the label in the requested position, so runtime parity is satisfied.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP 1:\nRequirement: \"In `scripts/persist_postmerge_verify.py`, insert `\"ai:waiting-on-dependency\"` into `PHASE_LABELS` between `\"ai:blocked\"` and `\"ai:review-blocked\"`, so the tuple matches `scripts/label_helpers.sh:159` exactly.\" (linked issue #8974, suggested fix 1)\nExpected change site: `scripts/persist_postmerge_verify.py`, `PHASE_LABELS` (should have been a hunk in this PR's diff).\nEvidence of absence: Neither the PR diff nor the last-run diff contains any hunk for `scripts/persist_postmerge_verify.py`. Runtime parity is satisfied on the PR head: the label is already present at `scripts/persist_postmerge_verify.py:106`. The gap is provenance only.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "75aaceae99b90f73f1f12ab817d746d236a4a20bf255e0b075411a6c85c0c8b3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8986,
+    "run_id": "42820147946",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42820147946",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110132106_4abb248edb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8986,
+    "run_id": "42820147946"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-10T13:21:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
