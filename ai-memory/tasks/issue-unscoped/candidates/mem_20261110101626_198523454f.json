@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:env mappings for the sandbox steps (grep confirms the flag name appears nowhere in review_autofix.yml) | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The helper reads `REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED` only from its own environment, and the workflow does not export it, so a repository variable cannot turn off the switch in the production review-autofix path.\n  WHY: Setting the repo variable has no effect, and only a workflow `env:` export can turn admission off. The failure mode is benign (stuck-on, default-on). Source severity was NIT, and the reviewer said it is not a defect in the changed code. The same concern appears as a task gap from openai_gpt-6-luna.\n- .github/workflows/implement.yml:n/a (orchestrate-poll (1) check failure) | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The orchestrate-poll (1) check fails with \"Integration fingerprint verification FAILED ... must_contain pattern missing from '.github/workflows/implement.yml' ... issue #1059 (PR #1066)\".\n  WHY: This PR does not touch that file, so the failure cannot be mapped to this diff. Every TEST_CASE_EVENT passes. Source severity was NIT.\n- AGENTS.md / CLAUDE.md:n/a (`lint` aggregate and copilot-pull-request-reviewer check failures) | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: `lint` (aggregate) fails only because it requires `orchestrate-poll`. copilot-pull-request-reviewer fails with `custom_instructions_too_large` (422) because of the size of AGENTS.md/CLAUDE.md.\n  WHY: This PR touches neither file, so the failures cannot be fixed within this diff. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Gate only this new admission behind the env var REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED\" as an off switch that turns admission off when set to false.\n  expected_change_site: `.github/workflows/review_autofix.yml`, in the environment mapping for the sandbox preparation step.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The workflow's environment mapping at lines 3643\u20133650 does not pass this variable. The step launches `review_untrusted_sandbox.sh prepare` at lines 3660\u20133671 without making it available. The changelog confirms that a repository variable alone does not reach the helper. Source severity was MAJOR. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash explicitly dispute this gap: the workflow is outside the issue's `files_touched` grant, the issue says \"Change no other rule\", the helper defaults the switch per \u00a78, and the changelog documents that the switch is not forwarded.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- Notes, not findings: the reviewer verified scripts/review_untrusted_workspace.py main(), lines 995-1001. The snapshot stderr reaches the log (scripts/review_untrusted_sandbox.sh:105), and the transfer at lines 653 and 861 sends stderr to a reason file. The other callers (scripts/heal_isolated_implement.sh:86, scripts/prepush_test_gate_run.sh:235) are unharmed. The tests are correct.\n- The reviewer declined the pass-1 gap about forwarding the switch from `.github/workflows/review_autofix.yml` as out of scope.\n- The pre-push `ruff` failure cannot be tied to a specific line. The `orchestrate-poll (1)` and copilot failures are unrelated to the four changed files.\n- HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- Notes, not findings: the reviewer judged the `chatgpt_pool_config_admitted()` call at `scripts/review_untrusted_workspace.py:996` and the `mock.patch.dict(os.environ)` hardening at `tests/test_review_autofix_review_pipeline_contract.py:9309-9313` correct, and said the new test `test_review_isolation_snapshot_logs_unrecognised_chatgpt_pool_flag` exercises the snapshot path faithfully.\n- The reviewer rejected the workflow-forwarding TASK_GAP as out of scope.\n- The inherited CI failures (`orchestrate-poll (1)`, copilot `custom_instructions_too_large`, aggregate lint) are unrelated to this PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cGate only this new admission behind the env var REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED\u201d as an off switch that turns admission off when set to false.\n  Expected change site: `.github/workflows/review_autofix.yml`, in the environment mapping for the sandbox preparation step.\n  Evidence of absence: The workflow's environment mapping at lines 3643\u20133650 does not pass this variable, and the step launches `review_untrusted_sandbox.sh prepare` at lines 3660\u20133671 without making it available. The changelog confirms that a repository variable alone does not reach the helper, so the normal review-autofix workflow cannot use the requested switch to disable admission.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/review_autofix.yml:env mappings for the sandbox steps (grep confirms the flag name appears nowhere in review_autofix.yml) | severity=NIT | confidence=4\n  PROBLEM: `REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED` is read only from the helper's own environment, and the workflow does not export it, so a repository variable cannot exercise the off switch in the production review-autofix path. The reviewer said this is not a defect in the changed code.\n  WHY: Setting the repo variable has no effect; only a workflow `env:` export can turn admission off. The failure mode is benign (stuck-on, default-on). The helper defaults the switch per \u00a78 (incident #4174), and forwarding it from the workflow is the post-merge wiring step.\n- .github/workflows/implement.yml:n/a (orchestrate-poll (1)) | severity=NIT | confidence=2\n  PROBLEM: \"Integration fingerprint verification FAILED ... must_contain pattern missing from '.github/workflows/implement.yml' ... issue #1059 (PR #1066)\".\n  WHY: This PR does not touch that file. Every TEST_CASE_EVENT passes.\n- AGENTS.md/CLAUDE.md:n/a (`lint` aggregate, copilot-pull-request-reviewer) | severity=NIT | confidence=3\n  PROBLEM: `lint` fails only because it needs `orchestrate-poll`. Copilot fails with `custom_instructions_too_large` (422).\n  WHY: This PR touches neither file, so the failures cannot be fixed within this diff.\n- TASK COMPLETENESS: NONE. The reviewer deferred the pass-1 workflow-forwarding TASK_GAP because the workflow is outside the issue's `files_touched` grant and the issue says \"Change no other rule\".\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "11cf13ce44f1a36b588e5da944f5620eca3ae4b66f1cda220fe7fb24cd0c1e39",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9180,
+    "run_id": "42791923250",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42791923250",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110101626_198523454f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9180,
+    "run_id": "42791923250"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T10:16:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
