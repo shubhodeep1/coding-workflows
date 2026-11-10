@@ -10927,6 +10927,7 @@ maybe_auto_resume_final_merge_exhausted() {
 	local resume_now_utc=""
 	local resume_labels_json=""
 	local resume_label_park=""
+	local resume_needs_human_kept="false"
 
 	if [ "${FINAL_MERGE_AUTO_RESUME_ENABLED:-true}" != "true" ]; then
 		echo "${log_prefix} outcome=skip reason=disabled"
@@ -10945,6 +10946,15 @@ maybe_auto_resume_final_merge_exhausted() {
 	IFS=$'\x1f' read -r failure_kind merge_status resume_final_pr resume_integration_branch validated_sha <<< "${state_fields}"
 	if [ "${failure_kind}" != "final_merge_exhausted" ] || [ "${merge_status}" != "failed" ]; then
 		echo "${log_prefix} outcome=skip reason=not_final_merge_exhausted"
+		return 1
+	fi
+	# A comprehensive release cycle the exhaustion path already ended (its
+	# `failed` callback released the freeze tag and removed
+	# ai:comprehensive-test-pending) is never merged automatically: the
+	# promotion gate and the verifying-run dispatch key off that label, so a
+	# resumed merge would skip both. Fail closed and leave it to a person.
+	if jq -e '(.comprehensive_release_callback // null) | type == "object" and .handled == true' "${STATE_FILE}" >/dev/null 2>&1; then
+		echo "${log_prefix} outcome=skip reason=not_final_merge_exhausted detail=comprehensive_cycle"
 		return 1
 	fi
 	# A validation or security-pass failure label means a person or another
@@ -11030,7 +11040,14 @@ maybe_auto_resume_final_merge_exhausted() {
 
 	# Persist the per-head guard before any label change or merge attempt
 	# (D4), so a crash mid-resume can never loop retries on this head.
+	# STATE_FILE is rebuilt from the state comment every tick, so the guard is
+	# durable only once post_state_comment succeeds: publish it here, and on a
+	# failed publish restore the parked state and skip (nothing changed yet).
 	resume_now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	if ! cp "${STATE_FILE}" "${STATE_FILE}.famr_bak" 2>/dev/null; then
+		echo "${log_prefix} outcome=skip reason=lookup_failed detail=state_write"
+		return 1
+	fi
 	if ! { jq --arg sha "${resume_head_sha}" --arg now_utc "${resume_now_utc}" '
 			.status = "validating"
 			| .final_merge_status = "pending"
@@ -11039,11 +11056,18 @@ maybe_auto_resume_final_merge_exhausted() {
 			| .final_merge_auto_resumed_head_shas = (((if (.final_merge_auto_resumed_head_shas | type) == "array" then .final_merge_auto_resumed_head_shas else [] end) - [$sha] + [$sha]) | .[-20:])
 			| .final_merge_auto_resumed_at_utc = $now_utc
 		' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
-		rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+		rm -f "${STATE_FILE}.tmp" "${STATE_FILE}.famr_bak" 2>/dev/null || true
 		echo "::warning::Could not persist the final-merge auto-resume state for project #${TRACKING_NUM}; leaving it parked this tick."
 		echo "${log_prefix} outcome=skip reason=lookup_failed detail=state_write"
 		return 1
 	fi
+	if ! post_state_comment; then
+		mv "${STATE_FILE}.famr_bak" "${STATE_FILE}" 2>/dev/null || true
+		echo "::warning::Could not publish the final-merge auto-resume state for project #${TRACKING_NUM}; leaving it parked this tick."
+		echo "${log_prefix} outcome=skip reason=lookup_failed detail=state_write"
+		return 1
+	fi
+	rm -f "${STATE_FILE}.famr_bak" 2>/dev/null || true
 	PROJECT_STATUS="validating"
 
 	# ai:validated replaces ai:blocked (same phase-label group).
@@ -11051,20 +11075,22 @@ maybe_auto_resume_final_merge_exhausted() {
 	if printf '%s' "${TRACKING_LABELS:-[]}" | jq -e 'type == "array" and any(.[]; . == "ai:needs-human")' >/dev/null 2>&1; then
 		if ! gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:needs-human" >/dev/null 2>&1; then
 			echo "::warning::Could not remove ai:needs-human from project #${TRACKING_NUM} after the final-merge auto-resume."
+			resume_needs_human_kept="true"
 		fi
 	fi
 	resume_labels_json="$(get_issue_labels_json "${TRACKING_NUM}")"
 	if printf '%s' "${resume_labels_json}" | jq -e 'type == "array" and index("ai:validated") != null' >/dev/null 2>&1; then
 		TRACKING_LABELS="$(printf '%s' "${resume_labels_json}" | jq -c '.')"
 	else
-		TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c 'map(select(. != "ai:blocked" and . != "ai:needs-human")) + ["ai:validated"] | unique' 2>/dev/null || echo '["ai:validated"]')"
+		# Keep ai:needs-human in the local view when its removal failed, so the
+		# in-memory labels match the issue.
+		TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c --arg keep_nh "${resume_needs_human_kept}" 'map(select(. != "ai:blocked" and ($keep_nh == "true" or . != "ai:needs-human"))) + ["ai:validated"] | unique' 2>/dev/null || echo '["ai:validated"]')"
 	fi
 
-	post_state_comment || true
 	post_tracking_comment "<!-- final-merge-auto-resume:${resume_head_sha} -->
 ## 🔁 Final integration merge retried automatically
 
-This project was parked after the final integration merge ran out of attempts. Final PR #${resume_final_pr} is now open, mergeable (\`clean\`) and its required checks pass on head \`${resume_head_sha}\`, the head runtime validation passed on, so the poller retries the merge once for this head through the normal final-merge gates. If it fails again the project parks as before, and no further automatic retry runs until the PR head changes. Set \`FINAL_MERGE_AUTO_RESUME_ENABLED=false\` to keep exhausted projects parked." || true
+This project was parked after the final integration merge ran out of attempts. Final PR #${resume_final_pr} is now open, mergeable (\`clean\`) and its required checks pass on head \`${resume_head_sha}\`, the head runtime validation passed on, so the poller retries the merge once for this head through the normal final-merge gates. If it fails again the project parks as before, and no further automatic retry runs on this head. A new PR head is retried automatically only once runtime validation has passed on it (for example after \`/judge_resume\`); until then the project stays parked for a person. Set \`FINAL_MERGE_AUTO_RESUME_ENABLED=false\` to keep exhausted projects parked." || true
 	tg_notify "Project #${TRACKING_NUM}: final PR #${resume_final_pr} is green and clean; final integration merge retried automatically (head ${resume_head_sha})." "DEBUG" || true
 	echo "${log_prefix} outcome=resumed final_pr=${resume_final_pr} head_sha=${resume_head_sha}"
 

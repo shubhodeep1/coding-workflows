@@ -28322,6 +28322,34 @@ def test_final_merge_auto_resume_runs_once_per_head_sha():
 	_famr_assert_skipped(result, f"already_resumed_on_head head_sha={_FAMR_HEAD}", resumed_heads=[_FAMR_HEAD])
 
 
+def test_final_merge_auto_resume_new_head_after_repark_needs_a_validation_pass():
+	# After a re-park the PR head moves. The new head is not merged until
+	# runtime validation has passed on it (plan decision D3) ...
+	new_head = "cd" * 20
+	reparked = _famr_state(final_merge_auto_resumed_head_shas=[_FAMR_HEAD])
+	result = _famr_run(state=reparked, pr=_famr_pr(headSha=new_head))
+	_famr_assert_skipped(result, "validation_stale detail=head_mismatch", resumed_heads=[_FAMR_HEAD])
+	# ... and once it has, the new head gets its own single automatic retry.
+	revalidated = _famr_state(final_merge_auto_resumed_head_shas=[_FAMR_HEAD], validation_last_passed_sha=new_head)
+	result = _famr_run(state=revalidated, pr=_famr_pr(headSha=new_head))
+	assert (
+		f"FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=resumed final_pr={_FAMR_PR} head_sha={new_head}"
+		in _famr_output(result)
+	), _famr_output(result)[-4000:]
+	assert result["latest_state"]["final_merge_auto_resumed_head_shas"] == [_FAMR_HEAD, new_head]
+
+
+def test_final_merge_auto_resume_skips_ended_comprehensive_cycle():
+	# The exhaustion-time `failed` callback already ended the comprehensive
+	# cycle (freeze tag released, ai:comprehensive-test-pending removed), so a
+	# resumed merge would bypass the promotion gate and the verifying run.
+	state = _famr_state(
+		comprehensive_release_callback={"handled": True, "status": "failed", "handled_at": "2026-10-26T10:00:00Z"}
+	)
+	result = _famr_run(state=state)
+	_famr_assert_skipped(result, "not_final_merge_exhausted detail=comprehensive_cycle", pr_read=False)
+
+
 def test_final_merge_auto_resume_refailed_merge_counts_attempts_then_reparks_once_per_head():
 	pr = _famr_pr(merge_error="Required status check is failing")
 	first = _famr_run(pr=pr)
