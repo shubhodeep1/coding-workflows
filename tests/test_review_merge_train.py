@@ -3135,9 +3135,11 @@ def _today_utc() -> str:
 
 def test_release_sends_queue_age_note_once_for_an_old_queued_pr(tmp_path: Path) -> None:
 	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
-	# The slot starts at the setup hour, so the date read here is the slot's
-	# start date even if midnight passes before the script runs.
-	today = _today_utc()
+	# One clock read gives both the slot hour and its start date, so they
+	# agree even if UTC midnight passes between setup and this point.
+	slot_start = datetime.now(timezone.utc)
+	env["MERGE_TRAIN_STALL_ALERT_HOUR_UTC"] = str(slot_start.hour)
+	today = slot_start.strftime("%Y-%m-%d")
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
 	assert result.returncode == 0, result.stderr
 	assert "MERGE_TRAIN_RELEASED" not in result.stdout
