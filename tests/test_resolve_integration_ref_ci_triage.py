@@ -269,7 +269,11 @@ REISSUE_FIXTURES = {
 	"reissue_lone_pr_marker_without_label_skips": (0, None, ""),
 	"reissue_closed_unmerged_pr_keeps_default": (0, None, ""),
 	"reissue_merged_pr_routes_to_base_branch": (0, None, "orchestrator/project-768"),
+	# The deleted base branch's own lookup worked and found no merge into the
+	# default branch (an abandoned branch).
 	"reissue_merged_pr_base_branch_missing_refuses": (3, "branch_missing", ""),
+	# The helper's closed-PR lookup failed: not an abandoned branch.
+	"reissue_merged_pr_base_branch_lookup_failed_refuses": (3, "branch_lookup_failed", ""),
 	# The deleted base branch was itself merged into the default branch
 	# (finalize uses --delete-branch): keep the default branch.
 	"reissue_merged_pr_base_branch_merged_into_default_keeps_default": (0, None, ""),

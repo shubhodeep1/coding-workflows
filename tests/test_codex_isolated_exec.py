@@ -1002,6 +1002,14 @@ def test_solc_install_rejects_untrusted_listing_and_inputs(tmp_path, monkeypatch
 	assert not hardhat.exists() and not bin_dir.exists()
 
 
+def test_solc_install_refuses_off_host_redirect(tmp_path, monkeypatch):
+	module, _hardhat, _bin_dir = _load_solc_installer(tmp_path, monkeypatch)
+	with pytest.raises(ValueError):
+		module.AllowedHostRedirect().redirect_request(None, None, 302, "Found", {}, "https://evil.example/solc")
+	with pytest.raises(ValueError):
+		module.AllowedHostRedirect().redirect_request(None, None, 302, "Found", {}, "http://binaries.soliditylang.org/x")
+
+
 @pytest.mark.parametrize("value", [",,,", " , ,"])
 def test_separator_only_solc_versions_warn_and_build_without_solc(tmp_path, value):
 	default, _ = _image_context(tmp_path, "codex", None, "default")

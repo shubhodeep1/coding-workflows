@@ -534,7 +534,7 @@ _ci_reissue_branch_state() {
 # default branch.
 resolve_ci_reissue_base_branch() {
 	local pr="$1"
-	local pr_json pr_rc classified verdict ref default_branch branch_state target
+	local pr_json pr_rc classified verdict ref default_branch branch_state target helper_err helper_state
 	pr_rc=0
 	pr_json="$(ci_triage_gh_get "repos/${REPO}/pulls/${pr}" 2>/dev/null)" || pr_rc=$?
 	if [ "${pr_rc}" -eq 75 ]; then
@@ -582,13 +582,30 @@ resolve_ci_reissue_base_branch() {
 			# branch to the base its own merged PR went into; keep the default
 			# branch only when that is where the code went. Anything else
 			# (helper absent, lookup failed, abandoned branch) still refuses.
+			# The helper's switches are pinned so every workflow gets the same
+			# answer whatever RETARGET_MERGED_BASE_ENABLED the caller exports.
+			# A missing helper, a failed lookup (the helper logs
+			# reason=lookup_failed and fails open) or no output refuses as
+			# branch_lookup_failed; branch_missing means the lookup worked and
+			# found no merge into the default branch (an abandoned branch).
 			target=""
-			if [ -n "${default_branch}" ] && [ -f "${SCRIPT_DIR}/retarget_merged_base.sh" ]; then
-				target="$(bash "${SCRIPT_DIR}/retarget_merged_base.sh" resolve "${REPO}" "${ref}" "${default_branch}")" || target=""
+			helper_err=""
+			helper_state="lookup_failed"
+			if [ -n "${default_branch}" ] && [ -f "${SCRIPT_DIR}/retarget_merged_base.sh" ] && helper_err="$(mktemp)"; then
+				target="$(RETARGET_MERGED_BASE_ENABLED=true RETARGET_MERGED_BASE_MAX_HOPS=3 bash "${SCRIPT_DIR}/retarget_merged_base.sh" resolve "${REPO}" "${ref}" "${default_branch}" 2>"${helper_err}")" || target=""
+				cat "${helper_err}" >&2 || true
+				if [ -n "${target}" ] && ! grep -q 'reason=lookup_failed' "${helper_err}"; then
+					helper_state="ok"
+				fi
+				rm -f "${helper_err}"
 			fi
-			if [ -n "${target}" ] && [ "${target}" = "${default_branch}" ]; then
+			if [ "${helper_state}" = ok ] && [ "${target}" = "${default_branch}" ]; then
 				echo "::notice::CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=skipped reason=base_branch_merged_into_default branch=${ref}" >&2
 				return 0
+			fi
+			if [ "${helper_state}" != ok ]; then
+				ci_triage_refuse "branch_lookup_failed" "${pr}"
+				return "${CI_TRIAGE_REFUSED_RC}"
 			fi
 			ci_triage_refuse "branch_missing" "${pr}"
 			return "${CI_TRIAGE_REFUSED_RC}"
@@ -859,11 +876,16 @@ def main() -> int:
 		# the already-shaped `{number, base, head_sha}` the --jq would print.
 		from urllib.parse import parse_qs, urlsplit
 		head = parse_qs(urlsplit(endpoint).query).get("head", [""])[0]
-		merged = fixture.get("merged_pulls_by_head", {}).get(head.split(":", 1)[-1])
-		if merged is None:
+		# A head listed with null is a lookup that worked and found no merged
+		# PR (the --jq prints nothing); an unlisted head fails the lookup.
+		merged_map = fixture.get("merged_pulls_by_head", {})
+		head_key = head.split(":", 1)[-1]
+		if head_key not in merged_map:
 			print(f"unsupported endpoint: {endpoint}", file=sys.stderr)
 			return 2
-		print(json.dumps(merged))
+		merged = merged_map[head_key]
+		if merged is not None:
+			print(json.dumps(merged))
 		return 0
 
 	if endpoint.startswith("repos/") and "/pulls/" in endpoint:

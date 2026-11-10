@@ -33,6 +33,9 @@
       }
     }
   },
+  "merged_pulls_by_head": {
+    "orchestrator/project-768": null
+  },
   "branch_exists": {},
   "expected_stdout": "",
   "expected_exit_code": 3,
