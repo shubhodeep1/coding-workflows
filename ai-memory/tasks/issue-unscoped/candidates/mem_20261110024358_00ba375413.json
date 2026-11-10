@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows (third-party check surface, not a diff hunk):n/a | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot PR-review check `copilot-pull-request-reviewer` fails with `custom_instructions_too_large` (422, \"Prompt too big after adding system message\") because the repo's AGENTS.md/CLAUDE.md instructions exceed Copilot's prompt budget.\n  WHY: No hunk in this PR touches any instruction file, workflow or script, so the PR cannot cause or fix it. The reviewer rated it NIT, which is mapped to low here. Two other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) saw the same failure and explicitly declined to report it as a defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows (third-party check surface, not a diff hunk) | severity=NIT | confidence=2\n  PROBLEM: The Copilot PR-review check fails because the repo's AGENTS.md/CLAUDE.md custom instructions exceed the Copilot prompt budget (failed check-run `copilot-pull-request-reviewer` on head ad0b0adf8cf038f6d6e21c9d253a856523846516, `errorCode: custom_instructions_too_large`, `statusCode: 422`).\n  WHY: No hunk in this PR (analysis/validation-selftest-status.json lines 2 and 4 only) touches any instruction file, workflow or script, so no change in this PR can fix it. The fix belongs in a separate change that shrinks AGENTS.md/CLAUDE.md for the Copilot surface.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fbff6702e1fad6079ab924794614de295c9b94c16a9eb09e269a8f6a3c0a189b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9174,
+    "run_id": "42742905592",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42742905592",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110024358_00ba375413",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9174,
+    "run_id": "42742905592"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T02:43:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
