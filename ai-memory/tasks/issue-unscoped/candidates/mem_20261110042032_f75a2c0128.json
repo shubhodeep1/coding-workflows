@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_merge_train.py:3161-3177 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: test_release_queue_age_note_is_keyed_by_the_slot_start_date sets the slot hour two hours before Python's clock read, while the script reads its own clock later, so an hour rollover between the two reads makes the offset 3 and yields outcome=outside_slot instead of sent (or already_alerted).\n  WHY: The test is flaky near a UTC hour boundary and needs no code defect to trigger; all reviewers rated it NIT. Using timedelta(hours=1) leaves a full hour of margin.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_merge_train.py:3161-3177 | severity=NIT | confidence=4\n  PROBLEM: `slot_start = datetime.now(timezone.utc) - timedelta(hours=2)` leaves no margin; an hour rollover between the Python read and the script read puts the offset at 3, giving outside_slot and failing the `outcome=sent` or `outcome=already_alerted` asserts.\n  WHY: Rare flaky failure with no code change needed to trigger. timedelta(hours=1) gives a full hour of margin and still crosses midnight in the 00:xx-00:59 UTC window.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_merge_train.py:3165-3172 | severity=NIT | confidence=4\n  PROBLEM: The test uses two separate clock reads (Python `datetime.now(timezone.utc)` and the script's `date -u +%s` via `_run`), so it is susceptible to boundary crossings between them.\n  WHY: If the UTC hour changes between the two reads, the script can return outcome=outside_slot when sent is expected, or use an incorrect alert_date.\n- TASK_GAP (reported as \"no gap found\"): Requirement: \"On poll ticks only, `_mt_release_stall_alert` sends one Telegram `WARNING` a day while the oldest still-queued PR has been open `MERGE_TRAIN_STALL_ALERT_HOURS` (default 24) or more.\" | Expected change site: `scripts/review_merge_train.sh` within `_mt_release_stall_alert` logic | Evidence of absence: the reviewer concluded the once-a-day requirement is met by keying on alert_date, so no gap was found. | severity=NIT | ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_merge_train.py:3161-3177 | severity=NIT | confidence=4\n  PROBLEM: The test passes `slot_start.hour` (Python now minus 2h) as MERGE_TRAIN_STALL_ALERT_HOUR_UTC, then the script reads its own clock; if a UTC hour boundary is crossed in between, the offset becomes 3 and the script logs outcome=outside_slot instead of sent.\n  WHY: This reintroduces on the harness side the two-clock-reads race that the script-side fix at scripts/review_merge_train.sh lines 1471-1477 removed. The sibling test test_release_sends_queue_age_note_once_for_an_old_queued_pr uses now.hour and is not flaky; a 1-hour offset would also suffice.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_merge_train.py:3166-3169 | severity=NIT | confidence=4\n  PROBLEM: The test sets the alert slot to the hour two hours before its initial clock read, then runs the script using its own later clock read.\n  WHY: If a UTC hour boundary is crossed before the script evaluates the slot, the offset becomes three hours and the script returns outside_slot while the test expects sent.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_merge_train.py:3161-3177 | severity=NIT | confidence=4\n  PROBLEM: The slot hour is computed from Python's clock at line 3166 (`slot_start = datetime.now(timezone.utc) - timedelta(hours=2)`), but the script reads its own clock later (scripts/review_merge_train.sh lines 1473 and 1477) and treats an offset of 3 or more as outside_slot (line 1485); an hour boundary between the reads makes the `outcome=sent` assert (line 3171) or the `already_alerted` assert (line 3176) fail.\n  WHY: A CI run straddling a UTC hour boundary fails this test non-deterministically. A timedelta(hours=1) offset leaves a full hour of slack.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cbd5fe8378e89cba3dab987afef4f6c82647244d12020d7c606996ec73f01c3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9172,
+    "run_id": "42751488925",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42751488925",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110042032_f75a2c0128",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9172,
+    "run_id": "42751488925"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-10T04:20:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
