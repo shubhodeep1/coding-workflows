@@ -10068,6 +10068,22 @@ evaluate_sync_superseded_by_main() {
 
   SYNC_SUPERSEDED_AFFECTED_PATHS_JSON="$(printf '%s\n' "${affected_paths[@]}" | jq -Rsc 'split("\n") | map(select(length > 0)) | unique')"
 
+  # Refresh both refs before comparing them. The job-start fetch can predate
+  # the child-PR states read above from the API: a PR that merged in between
+  # counts as terminal while the stale integration ref still equals the
+  # default branch, so the path diff below reads as clean and the final
+  # merge is skipped for good (fun-token-multi-chain project #739, PR #741).
+  local superseded_fetch_err=""
+  if ! superseded_fetch_err="$(git fetch --no-tags origin \
+    "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" \
+    "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" 2>&1 >/dev/null)"; then
+    SYNC_SUPERSEDED_CONFIDENT="false"
+    # One line of git's error, URL credentials and workflow-command prefixes removed.
+    superseded_fetch_err="$(printf '%s\n' "${superseded_fetch_err}" | grep -v '^[[:space:]]*$' | tail -n 1 | sed -E 's#://[^/@[:space:]]*@#://***@#g; s/::/: :/g' | cut -c1-300 || true)"
+    echo "  [superseded-check] Unable to refresh ${default_branch}/${integration_branch} refs (${superseded_fetch_err:-no error output}); not marking superseded." >&2
+    return 0
+  fi
+
   if ! default_ref="$(resolve_branch_analysis_ref "${default_branch}")"; then
     SYNC_SUPERSEDED_CONFIDENT="false"
     return 0
@@ -27064,7 +27080,7 @@ _runtime_blocker_dispatch_eligible()
 		--state-file "${STATE_FILE}" \
 		--local-id "${local_id}" \
 		--candidate-details-json "${candidate_truth_json}" 2>"${blocker_err_file}")"; then
-			blocker_stderr="$(tr '\n' ' ' < "${blocker_err_file}" | sed 's/[[:space:]]\+/ /g' | cut -c1-300)"
+			blocker_stderr="$(tr '\n' ' ' < "${blocker_err_file}" | sed 's/[[:space:]]\+/ /g' | cut -c1-300 || true)"
 		rm -f "${blocker_err_file}"
 		echo "::warning::[runtime-blocker] blocker_check.py failed for ${local_id}; failing open.${blocker_stderr:+ stderr=${blocker_stderr}}"
 		return 0
