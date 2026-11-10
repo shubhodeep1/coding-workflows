@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-11-10T12:54:45Z",
+  "issue_number": 9183,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=agents.d/analysis-findings-p1-report-pr.md:6; cited_path=agents.d/analysis-findings-p1-report-pr.md; files_touched=.github/workflows/ci.yml, .github/workflows/test-and-mark-stable.yml, .github/workflows/workflow-log-analysis.yml, README.md, agents.d/analysis-findings-p4-purge-safety.md, changelog.d/analysis-findings-p4-purge-safety.md, tests/test_workflow_log_analysis_purge_safety.py, tests/test_workflow_log_analysis_report_pr.py, tests/test_workflow_log_analysis_since_last_report.py, tests/test_workflow_untrusted_input_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 9185,
+  "record_id": "lesson_20261110125445_6f15589aa5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.d/analysis-findings-p1-report-pr.md",
+    ".github/workflows/ci.yml",
+    ".github/workflows/test-and-mark-stable.yml",
+    ".github/workflows/workflow-log-analysis.yml",
+    "README.md",
+    "agents.d/analysis-findings-p4-purge-safety.md",
+    "changelog.d/analysis-findings-p4-purge-safety.md",
+    "tests/test_workflow_log_analysis_purge_safety.py",
+    "tests/test_workflow_log_analysis_report_pr.py",
+    "tests/test_workflow_log_analysis_since_last_report.py",
+    "tests/test_workflow_untrusted_input_contract.py"
+  ]
+}
