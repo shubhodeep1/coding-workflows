@@ -40,6 +40,7 @@ REFUSAL_REASONS = {
 	"issue_parse_failed",
 	"issue_json_invalid",
 	"branch_lookup_failed",
+	"base_ref_invalid",
 }
 
 
@@ -271,6 +272,7 @@ REISSUE_FIXTURES = {
 	"reissue_merged_pr_base_branch_missing_refuses": (3, "branch_missing", ""),
 	"reissue_merged_pr_cross_repository_refuses": (3, "pr_cross_repository", ""),
 	"reissue_pr_lookup_failed_refuses": (3, "pr_lookup_failed", ""),
+	"reissue_merged_pr_base_ref_invalid_refuses": (3, "base_ref_invalid", ""),
 }
 REISSUE_LINE_TWO = re.compile(r"Re-issued by the unblock judge from #[1-9][0-9]*\.")
 ROUTED_LOG_LITERAL = 'echo "CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=routed branch=${ref}" >&2'
@@ -357,7 +359,9 @@ REISSUE_EDGE_CASES = {
 
 @pytest.mark.parametrize("case", sorted(REISSUE_EDGE_CASES))
 def test_reissue_edge_cases(tmp_path: Path, case: str) -> None:
-	# Temporary fixtures stay out of FIXTURE_DIR so REFUSAL_REASONS is unchanged.
+	# Edge cases run from tmp_path; the committed fixture
+	# reissue_merged_pr_base_ref_invalid_refuses.json keeps base_ref_invalid in
+	# REFUSAL_REASONS and the full --self-test.
 	data = _reissue_fixture(case, **REISSUE_EDGE_CASES[case])
 	if case == "routing_flag_off_keeps_default":
 		data["env"]["CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED"] = "false"
