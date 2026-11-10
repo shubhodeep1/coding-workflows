@@ -1471,7 +1471,11 @@ _mt_release_stall_alert()
 	fi
 	stall_slot_hour=$((10#${stall_slot_hour}))
 	stall_now_epoch="$(date -u +%s 2>/dev/null)" || stall_now_epoch=""
-	stall_now_hour="$(date -u +%H 2>/dev/null)" || stall_now_hour=""
+	# One clock read: the hour comes from the same epoch, so an hour or
+	# midnight boundary between two date calls cannot skew the slot offset.
+	if [[ "${stall_now_epoch}" =~ ^[0-9]+$ ]]; then
+		stall_now_hour="$(date -u -d "@${stall_now_epoch}" +%H 2>/dev/null)" || stall_now_hour=""
+	fi
 	# The note is keyed by the UTC date the slot started, so a slot that
 	# crosses midnight (start hour 22 or 23) still sends only once.
 	if [[ "${stall_now_epoch}" =~ ^[0-9]+$ && "${stall_now_hour}" =~ ^[0-9]{2}$ ]]; then

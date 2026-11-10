@@ -3158,6 +3158,25 @@ def test_release_sends_queue_age_note_once_for_an_old_queued_pr(tmp_path: Path) 
 	assert tg_log.read_text(encoding="utf-8").count("sendMessage") == 1
 
 
+def test_release_queue_age_note_is_keyed_by_the_slot_start_date(tmp_path: Path) -> None:
+	"""A slot that started two hours ago keys the note by the slot's start
+	date (the previous UTC date when the slot crossed midnight), and a second
+	tick in the same slot is already alerted."""
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	slot_start = datetime.now(timezone.utc) - timedelta(hours=2)
+	env["MERGE_TRAIN_STALL_ALERT_HOUR_UTC"] = str(slot_start.hour)
+	expected_date = slot_start.strftime("%Y-%m-%d")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=sent" in result.stdout
+	assert f"<!-- merge-train:stalled alert_date={expected_date} -->" in log_text
+	(fixtures / "comments_4077.json").write_text(json.dumps([_stall_note(903, expected_date)]), encoding="utf-8")
+	log.write_text("", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert "outcome=already_alerted" in result.stdout
+	assert tg_log.read_text(encoding="utf-8").count("sendMessage") == 1
+
+
 def test_release_queue_age_note_updates_yesterdays_comment(tmp_path: Path) -> None:
 	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
 	(fixtures / "comments_4077.json").write_text(json.dumps([_stall_note(901, "2026-01-01")]), encoding="utf-8")
@@ -3191,7 +3210,7 @@ def test_release_queue_age_note_skips_without_any_api_call(tmp_path: Path, overr
 	env.update(overrides)
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
 	assert result.returncode == 0, result.stderr
-	assert f"MERGE_TRAIN_STALL_ALERT pr=4077" in result.stdout and f"outcome={outcome}" in result.stdout
+	assert "MERGE_TRAIN_STALL_ALERT pr=4077" in result.stdout and f"outcome={outcome}" in result.stdout
 	assert "issues/4077/comments" not in log_text
 	assert not tg_log.exists()
 

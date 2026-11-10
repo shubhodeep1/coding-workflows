@@ -3522,9 +3522,11 @@ that pass's `released`, `overlap`, `active_review` and `runs_incomplete`
 counts. It reports the age, not a diagnosis: a PR can wait that long behind an
 older PR that needs a person. It is sent only in the 3-hour UTC slot starting
 at `MERGE_TRAIN_STALL_ALERT_HOUR_UTC` and only when that PR has no note for
-today: a comment by the pipeline account whose first line is
+the current slot: a comment by the pipeline account whose first line is
 `<!-- merge-train:stalled alert_date=YYYY-MM-DD -->`, written before Telegram
-is called and updated in place each day. `orchestrate_poll.yml` passes the
+is called and updated in place once per slot. `alert_date` is the UTC date on
+which the slot started, so a slot that starts at 22:00 or 23:00 UTC and
+crosses midnight keeps the previous day's date and still sends only once. `orchestrate_poll.yml` passes the
 Telegram settings and `MERGE_TRAIN_TG_HELPERS`, the path of `tg_helpers.sh`
 in the trusted support checkout. Each tick logs
 `MERGE_TRAIN_STALL_ALERT pr=<n> age_secs=<n> queued=<n> outcome=<sent|not_delivered|already_alerted|outside_slot|telegram_unavailable|telegram_unconfigured|below_alert_level|marker_unavailable|marker_write_failed>`.
