@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_merge_train.py:3143-3153 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: test_release_sends_queue_age_note_once_for_an_old_queued_pr re-reads `_today_utc()` after the script run (3143) and when writing the second-tick fixture (3153), so a UTC midnight crossing makes the date disagree with the script's stamped alert_date.\n  WHY: The test fails intermittently around midnight UTC with no product defect; compute the date once and reuse it. Both reviewers rated it NIT. Anthropic also notes line 3193 is unaffected.\n- scripts/review_merge_train.sh:1705 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_mt_release` calls `_mt_warn` without redirecting output to stderr.\n  WHY: This is inconsistent with other `_mt_warn` calls that redirect and makes stdout noisier for consumers expecting only structured MERGE_TRAIN_* lines.\n- scripts/review_merge_train.sh:1483 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script uses GNU-specific `date -d` for epoch-to-hour/date conversion.\n  WHY: On BSD/busybox `date`, `-d` fails, `stall_now_hour` and `stall_today` are unset, and the function silently takes the `outside_slot` path, masking genuine stall alerts (source severity MAJOR). Other reviewers judged it a non-defect or a NIT because the runner is Linux and the path is fail-open.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_merge_train.py:3143-3153 | severity=NIT | confidence=4\n  PROBLEM: test_release_sends_queue_age_note_once_for_an_old_queued_pr re-reads `_today_utc()` after `_run(...)` (3143) and when writing the second-tick fixture (3153). Line 3193 in test_release_queue_age_note_ignores_a_note_from_another_author has the same call, but it only builds a fixture and ends with a POST, so it is not affected.\n  WHY: At a UTC midnight crossing the test's date differs from the script's slot-start alert_date. The assertion at 3143 fails, or the second tick sends again instead of logging `already_alerted`. The window is a few seconds a day.\n- HARDENING_SUGGESTIONS: set the slot hour to a fixed value (for example `datetime.now(timezone.utc) - timedelta(hours=1)`) and compute `expected_date` once, as in test_release_queue_age_note_is_keyed_by_the_slot_start_date (about 4 lines). The Copilot comments on GNU `date -d` and on the `_mt_warn` stderr redirect were not raised, nor was the optional `jq` spawn comment.\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_merge_train.sh:1705 | severity=NIT | confidence=4\n  PROBLEM: The function `_mt_release` calls `_mt_warn` without redirecting output to stderr.\n  WHY: Inconsistent logging makes stdout noisier for consumers expecting only structured `MERGE_TRAIN_*` lines, and it is inconsistent with other `_mt_warn` calls that redirect to stderr.\n- scripts/review_merge_train.sh:1483 | severity=MAJOR | confidence=4\n  PROBLEM: The script uses `date -d` for epoch-to-hour/date conversion, which is GNU-specific.\n  WHY: On BSD/busybox-like `date`, `-d` fails, `stall_now_hour` and `stall_today` are unset, and the function silently takes the `outside_slot` path, masking genuine stall alerts.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_merge_train.py:3143-3153 | severity=NIT | confidence=4\n  PROBLEM: The test calls `_today_utc()` after the first release subprocess (3143) and again when writing the second-tick fixture (3153), so a UTC midnight crossing makes the date disagree with the script's stamped alert_date. The second tick then sends again, which breaks `assert \"outcome=already_alerted\"` at line 3156 and the sendMessage count assertion at 3157-3158.\n  WHY: A CI run straddling 00:00 UTC fails intermittently with no product defect. This is the same flake class fixed in the sibling test (3161-3177). The fix is to compute `today = _today_utc()` once before the first `_run(...)` and reuse it at 3143 and 3153.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c3d24549621a4d64a33a2111d413a24b7ca3217e73b6be665f464acb82c44bb7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9172,
+    "run_id": "42755493654",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42755493654",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110054709_e283cd1b90",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9172,
+    "run_id": "42755493654"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-10T05:47:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
