@@ -621,6 +621,7 @@ def test_parse_waiting_rejects_bad_targets(text: str, reason: str) -> None:
 def test_parse_waiting_none_fenced_disabled_and_line_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
 	assert dwr.parse_waiting("STATUS: CLEAR\nBLOCKED: x\n", REPO, 5, NOW) == {"status": "none"}
 	assert dwr.parse_waiting("```\nWAITING: pr=owner/repo#7\n```\nSTATUS: CLEAR\n", REPO, 5, NOW) == {"status": "none"}
+	assert dwr.parse_waiting("```\nWAITING: pr=owner/repo#7\n", REPO, 5, NOW, ignore_fences=True)["status"] == "waiting"
 	result = dwr.parse_waiting("WAITING: " + "x\x07" * 400, REPO, 5, NOW)
 	assert result["status"] == "invalid" and "\x07" not in result["line"] and len(result["line"]) == 300
 	monkeypatch.setenv("DEPENDENCY_WAIT_RESUME_ENABLED", "false")

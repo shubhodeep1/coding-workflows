@@ -744,11 +744,15 @@ def _clean_waiting_line(value: str) -> str:
 	return re.sub(r"[\x00-\x1f\x7f]", "", value)[:WAITING_LINE_LIMIT]
 
 
-def first_waiting_line(text: str) -> str | None:
-	"""Value of the first ``WAITING:`` line outside ```/~~~ fences (clarify's BLOCKED toggle)."""
+def first_waiting_line(text: str, ignore_fences: bool = False) -> str | None:
+	"""Value of the first ``WAITING:`` line outside ```/~~~ fences (clarify's BLOCKED toggle).
+
+	``ignore_fences`` matches plan's scan, whose input already has closed
+	fences removed and whose BLOCKED scan does not skip fenced lines.
+	"""
 	in_code = False
 	for line in text.splitlines():
-		if WAITING_FENCE_RE.match(line):
+		if not ignore_fences and WAITING_FENCE_RE.match(line):
 			in_code = not in_code
 			continue
 		if in_code:
@@ -763,14 +767,14 @@ def _is_self_target(kind: str, target_repo: str, number: int, repo: str, issue_n
 	return kind in ("pr", "issue") and target_repo.lower() == repo.lower() and number == issue_number
 
 
-def parse_waiting(text: str, repo: str, issue_number: int, now: dt.datetime | None = None) -> dict[str, Any]:
+def parse_waiting(text: str, repo: str, issue_number: int, now: dt.datetime | None = None, ignore_fences: bool = False) -> dict[str, Any]:
 	"""none | disabled | invalid | waiting, for the first unfenced WAITING: line.
 
 	The target is validated with the scan's own ``_validate_wait`` so the
 	writer (park) and the reader (scan) cannot disagree on what is valid.
 	"""
 	now = now or _now()
-	raw = first_waiting_line(text)
+	raw = first_waiting_line(text, ignore_fences)
 	if raw is None:
 		return {"status": "none"}
 	line = _clean_waiting_line(raw)
@@ -864,7 +868,7 @@ def _parse_waiting_command(args: argparse.Namespace) -> dict[str, Any]:
 	except OSError:
 		_park_log("parse", args.issue_number, "-", phase, "error", "output_unreadable")
 		return {"status": "error"}
-	result = parse_waiting(text, args.repo, int(args.issue_number))
+	result = parse_waiting(text, args.repo, int(args.issue_number), ignore_fences=bool(args.ignore_fences))
 	if result["status"] != "none":
 		_park_log("parse", args.issue_number, result.get("target", "-"), phase, result["status"], result.get("reason", ""))
 	return result
@@ -996,6 +1000,7 @@ def main(argv: list[str] | None = None, github_factory: Callable[[str], Any] = G
 	parse_parser.add_argument("--repo", required=True)
 	parse_parser.add_argument("--issue-number", required=True)
 	parse_parser.add_argument("--phase", choices=PARK_PHASES, default=None)
+	parse_parser.add_argument("--ignore-fences", action="store_true")
 	park_parser = sub.add_parser("park")
 	park_parser.add_argument("--repo", required=True)
 	park_parser.add_argument("--issue-number", required=True)
