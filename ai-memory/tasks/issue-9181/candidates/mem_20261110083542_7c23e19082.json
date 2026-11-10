@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: This triage issue exists to get the failing `CI` check on PR #8883 passing. Option A leaves `orchestrate-poll` red and just starts another triage generation for the same PR and check. Option C needs a comparison against the \"default branch\", but PR #8883's base is `orchestrator/project-8291`, so that comparison doesn't define what this PR caused. The failures B targets can be found in the repo: the implementer runs `tests/test_workflow_untrusted_input_contract.py` on the PR branch and fixes each `FAILED` line at its source. For example, `_run_evidence_block` at lines 814-836 does not set `RUN_PLAN_CODEX_SUPPORT_DIR` in its env. Separately, the assertion at line 811 requires a `for f in gh_helpers.sh ... evidence_pack.py ...; do` loop in `implement.yml`; that loop needs checking against the loop at `implement.yml:1599`, which does not start with `gh_helpers.sh`. B also covers the issue's own step 3: re-run `tests/test_orchestrate_lib.py`, `tests/test_ai_labels.py`, `tests/test_operator_step_issue.py` and `tests/test_orchestrate_poll_process.py`, and add `ai:waiting-on-dependency` wherever a mirrored label list is out of date. Hard limits: never weaken or delete an assertion, never remove the label from `scripts/label_helpers.sh`, and leave the external `copilot-pull-request-reviewer` failure alone. Any change to workflow YAML must leave `tests/test_workflow_file_size_limit.py` passing (the 480,000-byte guard).",
+  "fingerprint": "0604c4eca21a01a72d7eaee8b108b515d44716da887bbf30fa9430778b2bbd95",
+  "lineage": {
+    "issue_number": 9181,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42783086583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42783086583",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9181"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261110083542_7c23e19082",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9181,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42783086583"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9181",
+  "timestamps": {
+    "created_at": "2026-11-10T08:35:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
