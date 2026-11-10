@@ -393,3 +393,14 @@ def test_reissue_verdict_is_routed_through_the_triage_parser() -> None:
 	assert "resolve_ci_reissue_base_branch() {" in text
 	assert 'print("refuse base_ref_invalid")' in text
 	assert 'resolve_ci_reissue_base_branch "${pr}"' in text
+
+
+def test_reissue_helper_switch_is_pinned_against_caller_value() -> None:
+	# The resolver pins RETARGET_MERGED_BASE_ENABLED=true on the helper call,
+	# so a caller exporting false (implement.yml) agrees with plan.yml.
+	fixture = FIXTURE_DIR / "reissue_merged_pr_base_branch_merged_into_default_keeps_default.json"
+	env = {**os.environ, "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true", "RETARGET_MERGED_BASE_ENABLED": "false"}
+	result = subprocess.run(["bash", str(RESOLVER), "--self-test-case", str(fixture)],
+		cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=120, check=False)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "self-test passed" in result.stdout
