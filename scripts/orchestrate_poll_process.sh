@@ -5418,6 +5418,7 @@ close_merged_issues_sweep() {
   local _sweep_base_log _sweep_declared_log _sweep_non_target_note
   local _sweep_triage_branch _sweep_triage_parsed _sweep_target_ok
   local _sweep_triage_rc _sweep_cand_head_repo _sweep_cand_head_ref _sweep_cand_bound
+  local _sweep_triage_fetch_failed
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -5483,6 +5484,7 @@ close_merged_issues_sweep() {
     _sweep_declared_parsed=false
     _sweep_triage_branch=""
     _sweep_triage_parsed=false
+    _sweep_triage_fetch_failed=false
 
     merged_pr_num=""
     sweep_pr_fetch_failed=false
@@ -5528,9 +5530,16 @@ close_merged_issues_sweep() {
               # Transient marker-PR read failure: defer like a failed candidate
               # fetch, and do not log this candidate as rejected=non_target_base.
               sweep_pr_fetch_failed=true
+              _sweep_triage_fetch_failed=true
               echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=check_triage_pr_fetch_failed"
               continue
             fi
+          fi
+          if [ "${_sweep_cand_bound}" = "true" ] && [ "${_sweep_triage_fetch_failed}" = "true" ]; then
+            # A later bound candidate of the same issue: the marker PR read
+            # already failed this tick, so the triage rule was not checked.
+            echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=check_triage_pr_fetch_failed"
+            continue
           fi
           if [ "${_sweep_cand_bound}" = "true" ] && [ -n "${_sweep_triage_branch}" ] \
               && _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}" "${_sweep_triage_branch}"; then
@@ -21401,6 +21410,8 @@ _close_sweep_check_triage_branch() {
   [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
   printf '%s' "${labels_json:-[]}" | jq -e '[.[]? | if type == "object" then (.name // "") else . end] | index("ai:check-triage") != null' >/dev/null 2>&1 || return 1
   [ -f scripts/orchestrate_lib.py ] || return 1
+  # Main shell (no subshell) keeps the per-tick memo; a failed `user` read may
+  # raise the shared once-per-tick identity alert and then fails closed below.
   unblock_trusted_login >/dev/null
   _triage_login="${UNBLOCK_TRUSTED_LOGIN}"
   [ -n "${_triage_login}" ] || return 1

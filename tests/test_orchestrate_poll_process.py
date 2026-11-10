@@ -19163,6 +19163,28 @@ def test_close_merged_sweep_check_triage_marker_fetch_failure_defers():
 	assert "candidate_pr=971 rejected=non_target_base" not in result["stdout"]
 
 
+def test_close_merged_sweep_check_triage_marker_fetch_failure_tags_later_bound_candidates():
+	second_fix = _triage_fix_pr(number=972)
+	second_fix["headRefName"] = "ai/issue-10-retry"
+	second_fix["headRefFromApi"] = "ai/issue-10-retry"
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:check-triage", "ai:merged"]},
+		issue_bodies={10: _triage_issue_body()},
+		issue_authors={10: {"login": _TRIAGE_PIPELINE_LOGIN, "association": "NONE"}},
+		issue_linked_prs={10: [971, 972]},
+		prs=[_triage_fix_pr(), second_fix],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), result["stdout"]
+	assert result["stdout"].count("triage_marker_pr=970 rejected=check_triage_pr_fetch_failed") == 1, result["stdout"]
+	for pr in (971, 972):
+		assert f"origin=merged_label candidate_pr={pr} rejected=check_triage_pr_fetch_failed" in result["stdout"], result["stdout"]
+	assert "rejected=non_target_base" not in result["stdout"], result["stdout"]
+
+
 def test_close_merged_sweep_pending_check_triage_issue_is_silent():
 	result = _run_triage_sweep(["ai:check-triage", "ai:implementing"], linked=False)
 	assert 10 not in result.get("closed_issues", [])
