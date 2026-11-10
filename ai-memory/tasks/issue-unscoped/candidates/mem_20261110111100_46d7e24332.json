@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/dependency_wait_resume.py:820-826 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `parse_waiting` sends the `WAITING:` line to `_clean_waiting_line` and the regex matchers (such as `WAITING_PR_RE`) before cutting it to `WAITING_LINE_LIMIT`; `_clean_waiting_line` truncates only later.\n  WHY: A very long line would go through regex matchers that are not built for long strings, which could cause ReDoS or heavy CPU use while parsing. The source gave severity NIT, mapped here to low, the lowest allowed value.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement sequencing wait parking for clarify and plan stages (P8a-2).\n  expected_change_site: All workflow files and scripts referenced in the plan.\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer stated: \"The PR diff implements the functionality and updates the documentation. No gap found.\" (The reviewer named no missing deliverable and gave severity NIT.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/dependency_wait_resume.py:820-826 (in `parse_waiting`) | severity=NIT | confidence=3\n  PROBLEM: `parse_waiting` parses the `WAITING:` line without restricting the line length to `WAITING_LINE_LIMIT` before passing it to `_clean_waiting_line` and the regex matchers, although `_clean_waiting_line` itself does truncate to `WAITING_LINE_LIMIT` later.\n  WHY: An extremely long line would be processed by the regex matchers (like `WAITING_PR_RE`), which are not optimized for very long strings, potentially causing ReDoS or excessive CPU usage during the parsing phase.\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: Implement sequencing wait parking for clarify and plan stages (P8a-2).\n  Expected change site: All workflow files and scripts referenced in the plan.\n  Evidence of absence: The PR diff implements the functionality and updates the documentation. No gap found.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "309e8dca8a0f46560ccd72c2e11d5147df777ab8c74a1bbee18874d13951a9be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8883,
+    "run_id": "42801483332",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42801483332",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110111100_46d7e24332",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8883,
+    "run_id": "42801483332"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T11:11:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
