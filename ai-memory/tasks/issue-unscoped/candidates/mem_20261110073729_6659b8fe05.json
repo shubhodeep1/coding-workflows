@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CHANGELOG.md:4527-4547 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The merge resolution put the superseded-ref entry between the consumer-drift-audit entry (line 4495) and its \"### For contributors\" tail, leaving two consecutive \"### For contributors\" headings (4539 and 4545) with the `repairs`/`pr_created_at`/`pr_stale`/`pr_for_release` note at 4545-4547 under the wrong feature.\n  WHY: This is a documentation-attribution defect, not a runtime failure, and readers and section-aware changelog tooling will credit the note to the superseded-ref change. All reviewers rated it NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- CHANGELOG.md:4539-4547 | severity=NIT | confidence=4\n  PROBLEM: The superseded-ref entry starting at line 4527 ends with two consecutive \"### For contributors\" sections (4539 and 4545), and the second one, about the `repairs` summary JSON fields, belongs to the drift-audit entry at line 4495.\n  WHY: Documentation only. Readers and section-aware tooling will credit the note to the wrong change. A fix would move lines 4545-4547 to just after line 4505.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CHANGELOG.md:4527-4547 | severity=NIT | confidence=4\n  PROBLEM: The merge resolution inserted the superseded-ref entry before an orphaned \"### For contributors\" tail (4545-4547) that belongs to the consumer-drift-audit entry at line 4495, leaving two consecutive \"### For contributors\" sections (4539 and 4545).\n  WHY: This is a documentation-attribution defect, not a runtime failure. Readers and section-aware tooling will misattribute the repairs/pr_created_at note to the superseded-ref entry.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- CHANGELOG.md:4527-4547 | severity=NIT | confidence=4\n  PROBLEM: The orphaned tail at lines 4545-4547 (about `repairs`, `pr_created_at`, `pr_stale`, `pr_for_release`) belongs to the consumer-drift-audit entry starting at line 4495, not to the superseded-ref entry starting at line 4527. The merge resolution inserted the folded `changelog.d/ftmc-739-superseded-ref-refresh.md` content between that entry's lead paragraph (line 4497) and its tail, which left two consecutive `### For contributors` sections at lines 4539 and 4545.\n  WHY: Not a runtime defect. It is a documentation-attribution defect from a misordered fold, and human readers and section-aware tooling will attribute the note to the wrong entry.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- CHANGELOG.md:4545-4547 | severity=NIT | confidence=4\n  PROBLEM: This \"For contributors\" note describes the consumer drift audit's `repairs` summary fields, but it appears after the superseded-ref entry's contributor notes, separate from the consumer drift audit entry at lines 4495-4505.\n  WHY: No runtime behavior fails. The changelog misattributes the consumer drift audit details to the superseded-ref entry.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CHANGELOG.md:4545-4547 (cf. entries at 4495-4505 and 4539-4543) | severity=NIT | confidence=4\n  PROBLEM: The merge-resolution commit (efc3496) inserted the superseded-ref entry (4527-4543) between the consumer-drift-audit entry (4495) and its own \"### For contributors\" tail. The tail (4545-4547) describes the drift-audit summary JSON but now sits as the contributor section of the superseded-ref entry, and lines 4539 and 4545 are two consecutive \"### For contributors\" headings.\n  WHY: Not a runtime failure, but section-aware changelog tooling and readers attribute the note to the wrong feature. The drift-audit entry is left with no contributor section, and the deleted fragment `changelog.d/ftmc-739-superseded-ref-refresh.md` can no longer be re-folded.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "80fbb2a2571783f0de63d470e2118362e57783c70d015457540af51d06c5d5b6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9158,
+    "run_id": "42772870139",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42772870139",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110073729_6659b8fe05",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9158,
+    "run_id": "42772870139"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-10T07:37:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
