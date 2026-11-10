@@ -382,6 +382,9 @@ _conflict_prepare_guard_hook_template_merge()
   if [ "${ghm_any_resolved}" = "true" ]; then
     return 0
   fi
+  # Each refusal already logged its reason above; this line tells an operator
+  # that every listed pair was refused and the resolver's fail-closed path follows.
+  echo "Guard-hook template merge: no pair resolved"
   return 1
 }
 
