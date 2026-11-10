@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_lib.py:4084,4118-4119,4184-4188 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `_UNROUTED_PIPELINE_PREFIXES` entry \"this security finding stays open; it is tracked here until\" (and the prefix matching in `_is_unrouted_non_human_body`) also classifies a trusted human reply that starts with that phrase as non-human, so no unrouted-reply warning is emitted.\n  WHY: The `startswith` check cannot tell a human from the unblock judge's note at scripts/unblock_actions.py:1184. Severity is NIT for all reviewers. Confidence ranges from 2 to 5, and the realistic trigger is narrow because a person would have to copy the exact phrase.\n- tests/test_orchestrate_lib.py:2499,3720 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The autofix commit reindented continuation lines in `test_validate_decomposition_caps_files_touched_length` and `test_render_expected_files_section_has_no_allowlist`, which have nothing to do with the fix.\n  WHY: The whitespace-only change adds diff churn and breaks the minimal-change rule (\u00a79). It has no runtime effect.\n- tests/test_orchestrate_lib.py:(pre-push gate failures) | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate blames this change for four failing tests (`test_resolve_integration_ref_parity_for_fixtures`, `test_resolve_integration_ref_child_missing_tracking_present_fallback`, `test_resolve_integration_ref_shell_self_test`, `test_label_contract_matches_helper_catalog_and_phase_priority`), but they sit outside the PR's hunks. The `copilot-pull-request-reviewer` check also failed with `custom_instructions_too_large`.\n  WHY: No hunk in the diff reproduces either failure, so the reviewer treats them as inherited or external. Severity is NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_lib.py:~4118 (`_UNROUTED_PIPELINE_PREFIXES`, entry \"this security finding stays open; it is tracked here until\") | severity=low | confidence=2\n  PROBLEM: A trusted human who starts a reply with exactly that sentence is classified as non-human, so no unrouted-reply warning is sent.\n  WHY: The prefix is long and judge-specific, so a real person would have to copy that exact phrase. The reviewer found no realistic trigger.\n- tests/test_orchestrate_lib.py:2499,3720 | severity=low | confidence=3\n  PROBLEM: The autofix commit changed the continuation-line indentation of two unrelated test lines, from tabs plus one alignment space to extra tabs.\n  WHY: This adds unrelated diff lines against the minimal-change rule (\u00a79). It has no runtime effect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_lib.py:(`_UNROUTED_PIPELINE_PREFIXES` and `_is_unrouted_non_human_body`) | severity=low | confidence=5\n  PROBLEM: The prefix matching is overly broad: a trusted human comment starting with one of the exact phrases (e.g. \"This security finding stays open; it is tracked here until...\") is classified as non-human automation and ignored.\n  WHY: The swallowed reply can trigger a later \"Blocked issue #N has an unrouted reply\" warning when the human meant to resume the pipeline.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_lib.py:4084,4118-4119,4184-4188 | severity=low | confidence=4\n  PROBLEM: The prefix \"this security finding stays open; it is tracked here until\" also matches a human comment beginning with those words, not just the unblock judge's note at scripts/unblock_actions.py:1184.\n  WHY: Such a human reply is excluded from the candidate comments, and if it is the only reply after the block, no unrouted-reply warning is emitted. The tests cover shorter \"stays open\" openings but not this exact prefix.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_lib.py:4084 (used at 4118-4119 and 4187) | severity=low | confidence=4\n  PROBLEM: The prefix excludes any trusted `User` comment that opens with that phrase, not only the unblock judge's note at `scripts/unblock_actions.py:1184`. A human reply that is the only one after `ai:blocked` gets no unrouted-reply warning.\n  WHY: `classify_unrouted_blocked_issues` skips the comment at `scripts/orchestrate_lib.py:4184-4190`, so the operator is never paged. The window is narrow, and the reviewer suggests a narrower match.\n- tests/test_orchestrate_lib.py:2499,3720 | severity=low | confidence=4\n  PROBLEM: The last autofix run reindented two unrelated lines (tab plus space continuation to pure tabs), adding churn that neither the PR description nor the editor summary accounts for.\n  WHY: No runtime failure. It breaks the minimal-change rule and enlarges the reviewed diff.\n- tests/test_orchestrate_lib.py:(pre-push gate on head 45e9c6f) | severity=low | confidence=2\n  PROBLEM: The gate attributes four failing tests (`test_resolve_integration_ref_parity_for_fixtures`, `test_resolve_integration_ref_child_missing_tracking_present_fallback`, `test_resolve_integration_ref_shell_self_test`, `test_label_contract_matches_helper_catalog_and_phase_priority`) to this change, though they lie outside the PR's hunks. The `copilot-pull-request-reviewer` check also failed with `custom_instructions_too_large`.\n  WHY: The editor verified the tests fail identically with the PR edits stashed, so no defect path in the diff reproduces either failure.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "54ab34d50167b6326a2170a6145e368861eace3400ef1ad9a750fcce08b16eb5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9167,
+    "run_id": "42743809249",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42743809249",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110030428_695d2166f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9167,
+    "run_id": "42743809249"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-10T03:04:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
