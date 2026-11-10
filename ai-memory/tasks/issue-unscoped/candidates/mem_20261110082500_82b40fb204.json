@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:531 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The Python heredoc in `review_static_agents_inline_fallback` reads the prompt and agents files for inlining but does not handle an `OSError` or `UnicodeDecodeError` raised during the read.\n  WHY: A failed read crashes the heredoc with a non-zero exit, so the fallback ends as `fallback=failed`; that result is caught and logged, but the crash is avoidable given the exception handling used elsewhere (the source rated this MAJOR).\n- scripts/review_untrusted_sandbox.sh:471 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The mount validation checks that the file is a regular file, but it does not check for a hardlink or confirm that the `realpath` stays inside `${RUNTIME_DIR}/static-context`.\n  WHY: An attacker who can influence `${RUNTIME_DIR}/static-context/agents.rendered.md` could hardlink it to a sensitive host file, and the sandbox would then mount that host file read-only (the source rated this MAJOR).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The repository's fragment contract tests (e.g., tests/test_changelog_fragment_contract.py) must pass for all new fragment files.\"\n  expected_change_site: tests/test_changelog_fragment_contract.py or the associated .gitattributes rules\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR's pre-push test gate lists tests/test_changelog_fragment_contract.py under \"Failures caused by this change\", which suggests the new changelog and agents fragment files do not satisfy the fragment contract. The source rated this BLOCKER. Two other reviewers, anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash, reported this claim as refuted: the failing assertions only check `.gitattributes`, `changelog.d/.gitkeep`, `scripts/assemble_changelog.py` and CLAUDE.md \u00a720, and this PR touches none of them; the latest pre-push gates on the current head report 0 failures caused by this change.\n- requirement: \"changelog.d/<issue>-review-agents-index.md (\u00a720, `changed`), with the measured before/after prefix bytes from a real run.\"\n  expected_change_site: `changelog.d/8954-review-agents-index.md`\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The fragment says its byte counts were \"Measured locally with this repository's files\" and points to the logs to check on a live run, so it does not give measurements from a real workflow run. The source rated this NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_untrusted_sandbox.sh:531 | severity=MAJOR | confidence=4\n  PROBLEM: The Python script parsing the prompt to inline the trusted agents.md text can raise an `OSError` or `UnicodeDecodeError` when opening or reading the prompt or agents file, but these exceptions are not explicitly handled inside the heredoc.\n  WHY: If reading fails, the script crashes and `review_static_agents_inline_fallback` fails (the heredoc exits non-zero), giving `fallback=failed`; this is caught and logged, but the crash itself is unnecessary given the exception handling elsewhere.\n- scripts/review_untrusted_sandbox.sh:471 | severity=MAJOR | confidence=3\n  PROBLEM: The mount validation checks if the file is a regular file, but it does not check if the file is a hardlink or if the `realpath` is contained within the allowed directory `${RUNTIME_DIR}/static-context`.\n  WHY: An attacker who can influence `${RUNTIME_DIR}/static-context/agents.rendered.md` could point it to sensitive host files via a hardlink, causing the sandbox to mount arbitrary host files read-only.\n- TASK_GAP | severity=BLOCKER | confidence=5\n  Requirement: \"The repository's fragment contract tests (e.g., tests/test_changelog_fragment_contract.py) must pass for all new fragment files.\"\n  Expected change site: tests/test_changelog_fragment_contract.py or the associated .gitattributes rules.\n  Evidence of absence: The PR pre-push test gate explicitly lists tests/test_changelog_fragment_contract.py under \"Failures caused by this change\", indicating the fragment contract is not satisfied for the new changelog/agents fragment files.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: \"changelog.d/<issue>-review-agents-index.md (\u00a720, `changed`), with the measured before/after prefix bytes from a real run.\"\n  Expected change site: `changelog.d/8954-review-agents-index.md`\n  Evidence of absence: The fragment says the byte counts were \"Measured locally with this repository's files\" and points to logs to check on a live run; it does not provide measurements from a real workflow run as required.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "85d3063ccebada538e9bdc37ab6a85aad6e1a3fed89228d538098ad3b27d5542",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8959,
+    "run_id": "42778436106",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42778436106",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110082500_82b40fb204",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8959,
+    "run_id": "42778436106"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T08:25:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
