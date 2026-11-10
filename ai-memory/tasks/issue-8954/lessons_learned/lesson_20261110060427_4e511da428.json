@@ -1,0 +1,24 @@
+{
+  "discovered_at": "2026-11-10T06:04:27Z",
+  "issue_number": 8954,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=.gitattributes:1-3; cited_path=.gitattributes; files_touched=.github/workflows/review_autofix.yml, README.md, agents.d/8954-review-agents-index.md, changelog.d/8954-review-agents-index.md, scripts/build_static_context.sh, scripts/review_untrusted_sandbox.sh, scripts/stage_workflow_support.sh, tests/test_ci_wires_every_test_file.py, tests/test_review_static_context_agents_index.py, tests/test_review_static_context_readme.py, tests/test_static_context_symlink_guard.py.",
+  "phase": "review_autofix",
+  "pr_number": 8959,
+  "record_id": "lesson_20261110060427_4e511da428",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".gitattributes",
+    ".github/workflows/review_autofix.yml",
+    "README.md",
+    "agents.d/8954-review-agents-index.md",
+    "changelog.d/8954-review-agents-index.md",
+    "scripts/build_static_context.sh",
+    "scripts/review_untrusted_sandbox.sh",
+    "scripts/stage_workflow_support.sh",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_review_static_context_agents_index.py",
+    "tests/test_review_static_context_readme.py",
+    "tests/test_static_context_symlink_guard.py"
+  ]
+}
