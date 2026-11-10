@@ -108,6 +108,11 @@
 # A `heal_report` op (harness routing): one actions/runs listing and one
 # repository_dispatch to shubhodeep1/coding-workflows; a `hold_request` op:
 # one comment on the tracking issue.
+# CONSIST-001: the identity, item, item re-check, item comments and cited-run
+# reads go through gh_retry, so after a transient error (5xx, connection
+# reset) one of them may be attempted up to GH_RETRY_MAX_ATTEMPTS times in
+# total, with capped rate-limit waits. Permanent errors and every write still
+# make one attempt.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
 #      UNBLOCK_JUDGE item= op=hold hold= ref= outcome=held|holding|met|expired|skip reason=
 #      UNBLOCK_JUDGE item= op=reissue outcome=superseded pr= head=
@@ -140,6 +145,18 @@ if [ -f "${SUPPORT_DIR}/scripts/label_helpers.sh" ]; then
 	# shellcheck source=/dev/null
 	source "${SUPPORT_DIR}/scripts/label_helpers.sh"
 fi
+# CONSIST-001: retry transient GitHub errors (5xx, connection reset) on the
+# judge's read-only GETs the same way the poller paths do. gh_retry wraps only
+# the comments, identity, item-metadata, item re-check and cited-run reads;
+# writes (comment POSTs, label POST/DELETE, PATCH, issue creation, dispatches)
+# stay single-attempt on purpose. gh_helpers.sh has a load guard, so this is a
+# no-op when label_helpers.sh already sourced it. A missing or unsourceable
+# helper falls back to a pass-through, which runs each read exactly as before.
+if [ -f "${SUPPORT_DIR}/scripts/gh_helpers.sh" ]; then
+	# shellcheck source=/dev/null
+	source "${SUPPORT_DIR}/scripts/gh_helpers.sh" >/dev/null 2>&1 || true
+fi
+type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 unblock_log()
 {
@@ -164,7 +181,7 @@ unblock_now()
 unblock_fetch_comments()
 {
 	local number="$1" out="$2"
-	if ! gh api --paginate "repos/${REPOSITORY}/issues/${number}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' > "${out}" 2>/dev/null; then
+	if ! gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${number}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' > "${out}" 2>/dev/null; then
 		echo '[]' > "${out}"
 		return 1
 	fi
@@ -1707,12 +1724,12 @@ unblock_main()
 		return 0
 	fi
 	now="$(unblock_now)"
-	UNBLOCK_LOGIN="$(gh api user --jq '.login' 2>/dev/null || true)"
+	UNBLOCK_LOGIN="$(gh_retry gh api user --jq '.login' 2>/dev/null || true)"
 	if ! [[ "${UNBLOCK_LOGIN}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
 		unblock_log "item=${ITEM} outcome=skip reason=login_unavailable"
 		return 0
 	fi
-	if ! gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item.json" 2>/dev/null \
+	if ! gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item.json" 2>/dev/null \
 		|| ! jq -e '.number' "${RUNTIME_DIR}/item.json" >/dev/null 2>&1; then
 		unblock_log "item=${ITEM} outcome=skip reason=item_unreadable"
 		return 0
@@ -2372,7 +2389,7 @@ ${invalid_marker}" >/dev/null 2>&1 || invalid_record_rc=$?
 		# state: the item must still be open and still carry the same stop.
 		# Comment text never decides this. Any read failure fails closed.
 		local recheck_stop_json recheck_stop
-		if ! gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item_recheck.json" 2>/dev/null \
+		if ! gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item_recheck.json" 2>/dev/null \
 			|| ! jq -e '.number' "${RUNTIME_DIR}/item_recheck.json" >/dev/null 2>&1; then
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_recheck_unavailable"
 			return 0
@@ -2493,7 +2510,7 @@ unblock_select_run_log()
 		checked=$((checked + 1))
 		# The existing item, comment, PR and check-runs reads contain no run
 		# repository/branch metadata; this bounded read is needed to bind the ID.
-		if ! run_json="$(gh api "repos/${REPOSITORY}/actions/runs/${candidate_id}" 2>/dev/null)"; then
+		if ! run_json="$(gh_retry gh api "repos/${REPOSITORY}/actions/runs/${candidate_id}" 2>/dev/null)"; then
 			unreadable="true"
 			continue
 		fi

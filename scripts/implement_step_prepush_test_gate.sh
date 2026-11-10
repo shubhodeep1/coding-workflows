@@ -563,6 +563,7 @@ implement_prepush_test_gate_narrow_allow_list()
 		cp -f "${extras}" "${denied}"
 	elif [ "${ENFORCE_FILES_TOUCHED:-true}" = "true" ] && [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" != "true" ]; then
 		PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${guard}" --issue-body-file "${ISSUE_BODY_FILE:-/dev/null}" --issue-number "${ISSUE_NUMBER:-}" \
+			--issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${IMPLEMENT_SCOPE_PIPELINE_LOGIN:-}" \
 			--staged-file "${extras}" --allowlist-out "${entries}" > "${denied}" 2>/dev/null || rc=$?
 		case "${rc}" in 0) : > "${denied}" ;; 10|20) ;; *) cp -f "${extras}" "${denied}" ;; esac
 	fi

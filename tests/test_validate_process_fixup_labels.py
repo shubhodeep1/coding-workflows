@@ -99,7 +99,14 @@ if args[:2] == ["issue", "create"]:
 if args[:2] == ["issue", "list"]:
 	state.setdefault("issue_list_args", []).append(args)
 	response = state.get("issue_list_response", [])
+	list_exit_code = int(state.get("issue_list_exit_code", 0) or 0)
 	save()
+	if list_exit_code:
+		print("mock gh: issue list failed", file=sys.stderr)
+		sys.exit(list_exit_code)
+	if "issue_list_raw_stdout" in state:
+		print(state["issue_list_raw_stdout"])
+		sys.exit(0)
 	print(json.dumps(response))
 	sys.exit(0)
 
@@ -572,6 +579,118 @@ def test_validate_needs_fixes_creates_when_no_dedupe_and_tracker_open() -> None:
 
 		created_json = json.loads(created_json_file.read_text(encoding="utf-8"))
 		assert created_json == [1201], f"expected new issue number, got: {created_json}"
+
+
+def _dedupe_window_preload(**extra: object) -> dict:
+	preload: dict = {
+		"issue_list_response": [],
+		"api_responses": {
+			"repos/owner/repo/issues/1043": {"state": "open"},
+		},
+	}
+	preload.update(extra)
+	return preload
+
+
+def test_validate_needs_fixes_dedupe_list_uses_1000_limit() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_validate_fixup_limit_") as td:
+		proc, gh_state_file, _labels_file, created_json_file = _run_needs_fixes_harness(
+			Path(td), _dedupe_window_preload()
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		list_args = state.get("issue_list_args", [])
+		assert len(list_args) == 1, f"expected one dedupe list call, got: {list_args}"
+		args = list_args[0]
+		limit_idx = args.index("--limit")
+		assert args[limit_idx + 1] == "1000", f"expected --limit 1000, got: {args}"
+		assert "200" not in args, f"stale 200 bound still present: {args}"
+		assert args[args.index("--state") + 1] == "open"
+		assert args[args.index("--label") + 1] == "ai:orchestrator-managed"
+		assert args[args.index("--json") + 1] == "number,body"
+
+		output = proc.stdout + proc.stderr
+		assert "dedupe lookup failed" not in output
+		assert "could not be parsed" not in output
+		assert "outside the window" not in output
+
+		created_json = json.loads(created_json_file.read_text(encoding="utf-8"))
+		assert created_json == [1201], f"expected new issue number, got: {created_json}"
+
+
+def test_validate_needs_fixes_dedupe_lookup_failure_fails_open() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_validate_fixup_lookup_fail_") as td:
+		proc, gh_state_file, _labels_file, created_json_file = _run_needs_fixes_harness(
+			Path(td), _dedupe_window_preload(issue_list_exit_code=1)
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		assert len(state.get("issue_create_args", [])) == 1, (
+			f"expected fail-open create on lookup failure, got: {state.get('issue_create_args')}"
+		)
+		created_json = json.loads(created_json_file.read_text(encoding="utf-8"))
+		assert created_json == [1201], f"expected new issue number, got: {created_json}"
+
+		output = proc.stdout + proc.stderr
+		assert "::warning::Fix-up dedupe lookup failed for tracker #1043 (cycle 2)" in output
+		assert "could not be parsed" not in output
+		assert "outside the window" not in output
+
+
+def test_validate_needs_fixes_dedupe_unparsable_response_fails_open() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_validate_fixup_unparsable_") as td:
+		proc, gh_state_file, _labels_file, created_json_file = _run_needs_fixes_harness(
+			Path(td), _dedupe_window_preload(issue_list_raw_stdout="not-json{")
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		assert len(state.get("issue_create_args", [])) == 1, (
+			f"expected fail-open create on unparsable response, got: {state.get('issue_create_args')}"
+		)
+		created_json = json.loads(created_json_file.read_text(encoding="utf-8"))
+		assert created_json == [1201], f"expected new issue number, got: {created_json}"
+
+		output = proc.stdout + proc.stderr
+		assert "::warning::Fix-up dedupe response could not be parsed for tracker #1043 (cycle 2)" in output
+		assert "dedupe lookup failed" not in output
+		assert "outside the window" not in output
+		assert "not-json{" not in output
+
+
+def test_validate_needs_fixes_dedupe_full_window_warns() -> None:
+	entries = [
+		{
+			"number": 5000 + i,
+			"body": f"- Local ID: `other-{i}` - Tracking issue: #1043",
+		}
+		for i in range(1000)
+	]
+	with tempfile.TemporaryDirectory(prefix="test_validate_fixup_full_window_") as td:
+		proc, gh_state_file, _labels_file, created_json_file = _run_needs_fixes_harness(
+			Path(td), _dedupe_window_preload(issue_list_response=entries)
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		assert len(state.get("issue_create_args", [])) == 1, (
+			f"expected create when full window has no match, got: {state.get('issue_create_args')}"
+		)
+		created_json = json.loads(created_json_file.read_text(encoding="utf-8"))
+		assert created_json == [1201], f"expected new issue number, got: {created_json}"
+
+		output = proc.stdout + proc.stderr
+		assert (
+			"::warning::Fix-up dedupe lookup returned 1000 issues (limit 1000); "
+			"an older matching fix-up may be outside the window; proceeding."
+		) in output
+		assert "dedupe lookup failed" not in output
+		assert "could not be parsed" not in output
+		# Log hygiene: no issue body text may leak into the log.
+		assert "other-0" not in output
+		assert "other-999" not in output
 
 
 def main() -> int:

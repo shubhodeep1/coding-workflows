@@ -80,6 +80,9 @@ done
 # Per-phase lists. Required scripts are the names the phase's legacy copy
 # loop installed (kept between the support-scripts-legacy markers of its
 # workflow), so the kill switch and the bundle stage the same set.
+# Optional host Python helpers are copied to --host-python-dir only when the
+# bundle holds them (a support ref older than the helper skips it).
+stage_support_optional_host_python_scripts=()
 case "${stage_support_phase}" in
 	clarify)
 		stage_support_required_scripts=(
@@ -100,11 +103,24 @@ case "${stage_support_phase}" in
 		# gh_helpers.sh sources emit_event.sh from its own directory first.
 		# clarify_blocked_verify.sh (stuck-states P9b) is optional: a support
 		# ref older than it must not stop clarify; Run Codex skips the retry.
-		stage_support_optional_scripts=(emit_event.sh clarify_blocked_verify.sh)
+		# dependency_wait_resume.py (stuck-states P8a-2) parses and parks
+		# WAITING: answers; without it a WAITING: line takes the BLOCKED path.
+		# The persistence helpers (attempt journal #8428 P1, evidence pack
+		# #8427 P4) are optional, as in the legacy step: their PERSIST_*
+		# switches default off.
+		stage_support_optional_scripts=(
+			emit_event.sh clarify_blocked_verify.sh dependency_wait_resume.py
+			attempt_journal.py gh_api_retry.py evidence_pack.py targeted_file_context.py
+		)
 		stage_support_data_files=(clarify_sandbox/Dockerfile)
 		stage_support_host_python_scripts=(
 			pr_dependency.py load_workflow_overlay.py security_dependency.py
 			check_triage_resolution.py workflow_failure_heal.py
+		)
+		# Build evidence pack runs evidence_pack.py from the host Python dir,
+		# next to the modules it imports.
+		stage_support_optional_host_python_scripts=(
+			evidence_pack.py targeted_file_context.py attempt_journal.py gh_api_retry.py
 		)
 		# clarify_isolated_run.sh takes its sandbox Dockerfile, broker, config
 		# writer and catalog from this directory instead of the checkout.
@@ -126,7 +142,15 @@ case "${stage_support_phase}" in
 		# gh_helpers.sh sources emit_event.sh from its own directory first.
 		# run_plan_codex.sh runs the evidence pack and broker (#8427 P4/P11)
 		# from its own directory; optional, as its -f guards skip them.
-		stage_support_optional_scripts=(emit_event.sh evidence_pack.py evidence_broker.py)
+		# dependency_wait_resume.py (stuck-states P8a-2) is optional, as for
+		# clarify: without it a WAITING: plan answer takes the BLOCKED path.
+		# The done-check helpers (#8427 P2) are optional, as in the legacy
+		# step: their PERSIST_* switch defaults off. The attempt-journal
+		# helpers (#8428 P1) are required above.
+		stage_support_optional_scripts=(
+			emit_event.sh dependency_wait_resume.py
+			acceptance_check.py targeted_file_context.py evidence_pack.py evidence_broker.py
+		)
 		# clarify_isolated_run.sh (called by run_plan_codex.sh for PLAN) reads
 		# the Claude settings template and the sandbox Dockerfile from its own
 		# directory or CLARIFY_ISOLATION_SUPPORT_DIR.
@@ -173,13 +197,15 @@ case "${stage_support_phase}" in
 			lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py
 		)
 		# The optional groups implement.yml's legacy step installs fail-open
-		# (Serena, events mirror, transcript archive, Semble); the scope guard
+		# (Serena, events mirror, transcript archive, Semble, the PERSIST_*
+		# persistence helpers); the scope guard
 		# is required above, as in the legacy main loop. gh_helpers.sh sources
 		# emit_event.sh from its own directory first.
 		stage_support_optional_scripts=(
 			setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py
 			emit_event.sh emit_event.py transcript_archive.sh install_semble.sh build_semble_wrapper.sh
 			semble_helpers.sh
+			attempt_journal.py acceptance_check.py evidence_pack.py gh_api_retry.py
 		)
 		# claude_engine.py reads the Claude settings template from its own
 		# directory; the legacy step fails without it. The Serena template and
@@ -310,6 +336,10 @@ done
 if [ -n "${stage_support_host_python_dir}" ]; then
 	mkdir -p -- "${stage_support_host_python_dir}"
 	for stage_support_file in "${stage_support_host_python_scripts[@]}"; do
+		install -m 0755 "${stage_support_scripts}/${stage_support_file}" "${stage_support_host_python_dir}/${stage_support_file}"
+	done
+	for stage_support_file in "${stage_support_optional_host_python_scripts[@]}"; do
+		[ -f "${stage_support_scripts}/${stage_support_file}" ] || continue
 		install -m 0755 "${stage_support_scripts}/${stage_support_file}" "${stage_support_host_python_dir}/${stage_support_file}"
 	done
 fi

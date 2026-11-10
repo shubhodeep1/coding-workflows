@@ -547,7 +547,7 @@ def test_attempt_journal_switch_defaults_off_in_every_workflow() -> None:
 
 def test_attempt_journal_readers_append_after_dynamic_context_and_are_gated() -> None:
 	plan = (REPO_ROOT / "scripts" / "run_plan_codex.sh").read_text(encoding="utf-8")
-	read = plan.index('python3 -B scripts/attempt_journal.py render')
+	read = plan.index('python3 -B "${RUN_PLAN_CODEX_SUPPORT_DIR}/attempt_journal.py" render')
 	assert plan.index('cat "${PLANNING_CONTEXT_FILE}"') < read < plan.index('if [ "${HEAL_ROUTE:-false}" = true ]; then')
 	assert plan.rfind('if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ]', 0, read) > plan.index('cat "${PLANNING_CONTEXT_FILE}"')
 	implement = (WORKFLOW_DIR / "implement.yml").read_text(encoding="utf-8")
@@ -576,6 +576,19 @@ def test_attempt_journal_blocks_are_fenced_and_forgery_safe() -> None:
 		assert "head -c 4096" in gate
 
 
+IMPLEMENT_OPTIONAL_PERSIST_LOOP = r"(?m)^\s+for f in attempt_journal\.py acceptance_check\.py evidence_pack\.py gh_api_retry\.py; do$"
+
+
+def _stage_support_optional_list(phase: str) -> list[str]:
+	"""stage_support_optional_scripts of one phase case in scripts/stage_support_for_phase.sh."""
+	text = (REPO_ROOT / "scripts" / "stage_support_for_phase.sh").read_text(encoding="utf-8")
+	block = re.search(r"^\t" + re.escape(phase) + r"\)\n(.*?)^\t\t;;", text, re.M | re.S)
+	assert block, f"stage_support_for_phase.sh has no {phase} case"
+	match = re.search(r"stage_support_optional_scripts=\((.*?)\)", block.group(1), re.S)
+	assert match, f"{phase} case defines no stage_support_optional_scripts"
+	return match.group(1).split()
+
+
 def test_attempt_journal_writers_are_gated_and_fail_open() -> None:
 	for name, step in (("clarify.yml", "Record attempt journal entry (clarify)"), ("plan.yml", "Record attempt journal entry (plan)"),
 			("implement.yml", "Record attempt journal entry (implement)")):
@@ -589,9 +602,22 @@ def test_attempt_journal_writers_are_gated_and_fail_open() -> None:
 			# Fast-path routes never reach the model, so they record no attempt.
 			assert "steps.clarify_route.outputs.skip_codex != 'true'" in block.split("\n", 1)[0]
 			assert '[ "${CLARIFY_BLOCKED}" = true ]' in run_body
-	for name in ("clarify.yml", "plan.yml", "implement.yml", "orchestrate_poll.yml"):
+	# clarify, plan and implement stage the persistence helpers in a dedicated
+	# fail-open optional loop (the required loop must equal
+	# stage_support_required_scripts in scripts/stage_support_for_phase.sh);
+	# the unified staging path lists them as optional scripts too.
+	for name in ("clarify.yml", "plan.yml"):
 		text = (WORKFLOW_DIR / name).read_text(encoding="utf-8")
-		assert re.search(r"(?m)^\s+for f in gh_helpers\.sh .*\battempt_journal\.py\b.*; do$", text), name
+		assert re.search(r"(?m)^\s+for f in attempt_journal\.py gh_api_retry\.py; do$", text), name
+		assert "Optional attempt-journal helper ${f} unavailable" in text, name
+	implement_text = (WORKFLOW_DIR / "implement.yml").read_text(encoding="utf-8")
+	assert re.search(IMPLEMENT_OPTIONAL_PERSIST_LOOP, implement_text)
+	assert "Optional persistence helper ${f} is unavailable" in implement_text
+	for phase in ("clarify", "plan", "implement"):
+		optional = _stage_support_optional_list(phase)
+		assert "attempt_journal.py" in optional and "gh_api_retry.py" in optional, phase
+	orchestrate_poll_text = (WORKFLOW_DIR / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert re.search(r"(?m)^\s+for f in gh_helpers\.sh .*\battempt_journal\.py\b.*; do$", orchestrate_poll_text), "orchestrate_poll.yml"
 	stage = (REPO_ROOT / "scripts" / "stage_workflow_support.sh").read_text(encoding="utf-8")
 	assert re.search(r'(?m)^REQUIRED_BOOTSTRAP_SCRIPTS="[^"]*\battempt_journal\.py\b', stage)
 	commit = (REPO_ROOT / "scripts" / "review_commit_changes.sh").read_text(encoding="utf-8")
@@ -621,13 +647,13 @@ def _run_journal_block(block: str, persist: str | None, journal: bool = True) ->
 	prompt.write_text(PROMPT_FIXTURE, encoding="utf-8")
 	if journal:
 		(runtime / "attempt_journal.txt").write_text(JOURNAL_FIXTURE, encoding="utf-8")
-	# A stub helper in the cwd so the plan block's `-f scripts/attempt_journal.py`
-	# check passes; it would rewrite the journal if the block ever ran it.
+	# A stub helper (also the plan block's RUN_PLAN_CODEX_SUPPORT_DIR) so its
+	# `-f .../attempt_journal.py` check passes; it would rewrite the journal if the block ever ran it.
 	(root / "scripts").mkdir()
 	(root / "scripts" / "attempt_journal.py").write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
 	env = {k: v for k, v in os.environ.items() if not k.startswith(("PERSIST_", "GITHUB_"))}
 	env.update({"RUNTIME_DIR": str(runtime), "CODEX_PROMPT_FILE": str(prompt), "ISSUE_NUMBER": "5",
-		"PYTHONDONTWRITEBYTECODE": "1"})
+		"PYTHONDONTWRITEBYTECODE": "1", "RUN_PLAN_CODEX_SUPPORT_DIR": str(root / "scripts")})
 	if persist is not None:
 		env["PERSIST_JOURNAL_ENABLED"] = persist
 	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], cwd=root, env=env,
@@ -808,7 +834,8 @@ def test_evidence_pack_build_steps_are_gated_fail_open_and_host_side() -> None:
 	assert re.search(r"(?m)^\s+for f in evidence_pack\.py targeted_file_context\.py; do$", clarify_text)
 	assert "Optional evidence-pack helper ${f} unavailable" in plan_text and "Optional evidence-pack helper ${f} unavailable" in clarify_text
 	implement_text = (WORKFLOW_DIR / "implement.yml").read_text(encoding="utf-8")
-	assert re.search(r"(?m)^\s+for f in gh_helpers\.sh .*\bevidence_pack\.py\b.*; do$", implement_text)
+	assert re.search(IMPLEMENT_OPTIONAL_PERSIST_LOOP, implement_text)
+	assert "evidence_pack.py" in _stage_support_optional_list("implement")
 
 
 def _run_evidence_block(block: str, persist: str | None, pack: bool = True) -> bytes:
@@ -827,7 +854,7 @@ def _run_evidence_block(block: str, persist: str | None, pack: bool = True) -> b
 			(runtime / "evidence_pack.txt").write_text(EVIDENCE_FIXTURE, encoding="utf-8")
 		env = {k: v for k, v in os.environ.items() if not k.startswith(("PERSIST_", "GITHUB_"))}
 		env.update({"RUNTIME_DIR": str(runtime), "CODEX_PROMPT_FILE": str(prompt), "PLANNING_CONTEXT_FILE": str(root / "ctx.txt"),
-			"PYTHONDONTWRITEBYTECODE": "1"})
+			"PYTHONDONTWRITEBYTECODE": "1", "RUN_PLAN_CODEX_SUPPORT_DIR": str(root / "scripts")})
 		if persist is not None:
 			env["PERSIST_EVIDENCE_PACK_ENABLED"] = persist
 		proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], cwd=root, env=env,
@@ -1082,7 +1109,7 @@ def test_evidence_broker_hash_reaches_the_plan_journal_only_with_the_switch() ->
 	gate = 'if [ "${PERSIST_EVIDENCE_BROKER_ENABLED:-false}" = true ] && [ -s "${RUNTIME_DIR}/evidence_broker_hash.txt" ]; then'
 	assert run.count(gate) == 1
 	assert 'acceptance_args+=(--evidence-hash-file "${RUNTIME_DIR}/evidence_broker_hash.txt")' in run[run.index(gate):]
-	assert run.index(gate) < run.index("scripts/attempt_journal.py append")
+	assert run.index(gate) < run.index('scripts}/attempt_journal.py" append')
 
 
 if __name__ == "__main__":

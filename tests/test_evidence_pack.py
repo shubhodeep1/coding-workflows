@@ -414,7 +414,8 @@ def _run_plan_block(tmp_path, comments_text):
 	prompt.write_text("P\n", encoding="utf-8")
 	env = _clean_env()
 	env.update({"PERSIST_EVIDENCE_PACK_ENABLED": "true", "RUNTIME_DIR": str(runtime), "CODEX_PROMPT_FILE": str(prompt),
-		"PLANNING_CONTEXT_FILE": str(tmp_path / "ctx.txt"), "ISSUE_COMMENTS_FILE": str(comments), "PYTHONDONTWRITEBYTECODE": "1"})
+		"PLANNING_CONTEXT_FILE": str(tmp_path / "ctx.txt"), "ISSUE_COMMENTS_FILE": str(comments), "PYTHONDONTWRITEBYTECODE": "1",
+		"RUN_PLAN_CODEX_SUPPORT_DIR": str(root / "scripts")})
 	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + _plan_evidence_block()], cwd=root, env=env,
 		capture_output=True, text=True, timeout=60)
 	assert proc.returncode == 0, proc.stderr

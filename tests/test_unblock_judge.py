@@ -1389,6 +1389,11 @@ if method == "POST" and endpoint.endswith("/comments"):
 		claim_id = 3000 + len([c for c in state["comments"] if c.get("id")])
 		state["comments"].append({"endpoint": endpoint, "body": f.get("body", ""), "id": claim_id})
 		done(json.dumps({"id": claim_id, "created_at": "2026-10-04T12:00:00Z"}))
+	# CONSIST-001: a transient-looking failure on the item's verdict comment.
+	if os.environ.get("FAKE_GH_FAIL_RECORD_502") and endpoint == "repos/o/r/issues/7/comments" and "verdict=" in f.get("body", ""):
+		json.dump(state, open(state_path, "w"))
+		print("gh: Bad Gateway (HTTP 502)", file=sys.stderr)
+		sys.exit(1)
 	state["comments"].append({"endpoint": endpoint, "body": f.get("body", "")})
 	done("{}")
 if method == "POST" and endpoint.endswith("/labels"):
@@ -1518,6 +1523,13 @@ if endpoint.startswith("repos/o/r/pulls/"):
 		"user": {"login": os.environ.get("FAKE_GH_PR_AUTHOR", "alice")},
 		"author_association": os.environ.get("FAKE_GH_PR_ASSOC", "MEMBER")}))
 if method == "GET" and endpoint == "repos/o/r/issues/7" and not jq:
+	# CONSIST-001: fail the first N item reads with a chosen stderr; failed
+	# attempts do not count as item_issue_reads, so re-check logic is unchanged.
+	if state.get("item_read_failures", 0) < int(os.environ.get("FAKE_GH_ITEM_READ_FAILURES", "0") or "0"):
+		state["item_read_failures"] = state.get("item_read_failures", 0) + 1
+		json.dump(state, open(state_path, "w"))
+		print(os.environ.get("FAKE_GH_ITEM_READ_STDERR", ""), file=sys.stderr)
+		sys.exit(1)
 	state["item_issue_reads"] = state.get("item_issue_reads", 0) + 1
 	if state["item_issue_reads"] > 1:
 		if os.environ.get("FAKE_GH_FAIL_ITEM_RECHECK"):
@@ -1556,6 +1568,9 @@ def _judge(tmp_path: Path, item: dict, comments: list | None = None, verdict: di
 	for name in ("UNBLOCK_JUDGE_ENABLED", "TG_BOT_SECRET", "GH_TOKEN", "NEEDS_HUMAN_DIGEST_ENABLED", "UNBLOCK_MAX_ROUNDS_PER_ITEM"):
 		env.pop(name, None)
 	env.update(REPOSITORY="o/r", ITEM="7", SUPPORT_DIR=str(ROOT), RUNTIME_DIR=str(tmp_path / "rt"), MOCK_UNBLOCK_JUDGE_NOW="2026-10-04T12:00:00Z")
+	# CONSIST-001: one gh_retry attempt by default keeps the fake's failure
+	# knobs single-shot (call counts, no backoff sleeps); retry tests raise it.
+	env["GH_RETRY_MAX_ATTEMPTS"] = "1"
 	if verdict is not None:
 		env["MOCK_UNBLOCK_JUDGE_JSON"] = verdict if isinstance(verdict, str) else json.dumps(verdict)
 	env.update(env_extra)
@@ -1597,6 +1612,63 @@ def test_unblock_model_timeout_uses_safe_default_for_invalid_input(tmp_path: Pat
 	assert timeout_file.read_text(encoding="utf-8").strip() == expected
 	assert ("outcome=timeout_fallback" in result.stdout) == (configured != expected)
 	assert any("verdict=retry_budget" in comment["body"] for comment in state["comments"])
+
+
+def _item_reads(state: dict) -> list[list[str]]:
+	return [call for call in state["calls"] if call[:1] == ["api"] and "repos/o/r/issues/7" in call and "-X" not in call and "-f" not in call and "--jq" not in call]
+
+
+def test_transient_item_read_failure_is_retried_and_the_judge_proceeds(tmp_path: Path) -> None:
+	"""CONSIST-001: an HTTP 502 on the item-metadata read is retried, not skipped."""
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		GH_RETRY_MAX_ATTEMPTS="3", FAKE_GH_ITEM_READ_FAILURES="1", FAKE_GH_ITEM_READ_STDERR="HTTP 502: Bad Gateway")
+	assert result.returncode == 0, result.stderr
+	assert "reason=item_unreadable" not in result.stdout
+	assert state.get("item_read_failures") == 1
+	first_two = [call for call in state["calls"] if call != ["api", "user", "--jq", ".login"]][:2]
+	assert first_two == [["api", "repos/o/r/issues/7"], ["api", "repos/o/r/issues/7"]]
+	assert any("verdict=retry_budget" in comment["body"] for comment in state["comments"])
+
+
+def test_permanent_item_read_failure_keeps_the_item_unreadable_skip(tmp_path: Path) -> None:
+	"""CONSIST-001: an HTTP 404 is not retried; the skip path and message are unchanged."""
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		GH_RETRY_MAX_ATTEMPTS="3", FAKE_GH_ITEM_READ_FAILURES="99", FAKE_GH_ITEM_READ_STDERR="gh: Not Found (HTTP 404)")
+	assert result.returncode == 0, result.stderr
+	assert "UNBLOCK_JUDGE item=7 outcome=skip reason=item_unreadable" in result.stdout
+	assert len(_item_reads(state)) == 1
+	assert not state["comments"]
+
+
+def test_comment_post_stays_single_attempt_on_a_transient_error(tmp_path: Path) -> None:
+	"""CONSIST-001: writes are never wrapped in gh_retry, so a 502 on a comment POST is tried once."""
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		GH_RETRY_MAX_ATTEMPTS="3", FAKE_GH_FAIL_RECORD_502="1")
+	assert result.returncode == 0, result.stderr
+	record_posts = [call for call in state["calls"] if "repos/o/r/issues/7/comments" in call
+		and any(arg.startswith("body=") and "verdict=retry_budget" in arg for arg in call)]
+	assert len(record_posts) == 1
+	assert not any("verdict=retry_budget" in comment["body"] for comment in state["comments"])
+
+
+def test_only_the_listed_reads_are_wrapped_in_gh_retry() -> None:
+	"""CONSIST-001: the helper source, the pass-through fallback and the five wrapped reads."""
+	text = JUDGE.read_text(encoding="utf-8")
+	assert 'if [ -f "${SUPPORT_DIR}/scripts/gh_helpers.sh" ]; then' in text
+	assert 'source "${SUPPORT_DIR}/scripts/gh_helpers.sh" >/dev/null 2>&1 || true' in text
+	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' in text
+	for read in (
+		'gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${number}/comments?per_page=100" 2>/dev/null | jq -s \'add // []\'',
+		'gh_retry gh api user --jq \'.login\'',
+		'gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item.json"',
+		'gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item_recheck.json"',
+		'gh_retry gh api "repos/${REPOSITORY}/actions/runs/${candidate_id}"',
+	):
+		assert text.count(read) == 1, read
+	for line in text.splitlines():
+		if "gh_retry" in line:
+			for write in ("-X POST", "-X PATCH", "-X DELETE", "/dispatches", "-f body="):
+				assert write not in line, line
 
 
 def _run_metadata(run_id: int, **changes) -> dict:

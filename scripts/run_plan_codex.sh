@@ -193,6 +193,7 @@ Rules:
   on the current ref are NOT external inputs — they are codebase state the
   plan can address; note them under "Risks and edge cases" as a conflict (per
   the CONFLICT DETECTION rule above) and continue planning.
+- Sequencing wait: when the only blocker is another pull request that has not merged, an upstream change not yet in the `shubhodeep1/coding-workflows` `@stable` release, or another issue in this repository that must be finished first, emit exactly one line `WAITING: pr=<owner>/<repo>#<N>`, `WAITING: release=shubhodeep1/coding-workflows@stable contains=shubhodeep1/coding-workflows#<N>` or `WAITING: issue=<owner>/<repo>#<N>` instead of `BLOCKED:`. `pr` names this repository or `shubhodeep1/coding-workflows`; `issue` names this repository and never this issue. Emit no plan with it, and end with `STATUS: NOT_CLEAR`. When an open pull request already delivers this issue's work itself, follow the open-pull-request rule below instead.
 - Implement only writes repository files and opens one pull request; it
   cannot post comments, close issues, or check or wait for another pull
   request, so never plan such steps. When another open, unmerged pull
