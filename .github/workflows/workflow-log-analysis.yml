@@ -1846,24 +1846,46 @@ jobs:
             # apply. --match-head-commit refuses a head anyone pushed after
             # this run's own push.
             report_head_sha="$(git rev-parse HEAD)"
+            report_merge_requested=""
             if gh pr merge "${report_pr_number}" --squash --match-head-commit "${report_head_sha}"; then
-              report_delivery="pr_merged"
-              report_branch="${TARGET_BRANCH}"
-              # Fail-open cleanup. Not gh --delete-branch, which switches the
-              # local checkout mid-job.
-              if ! git push origin --delete "${REPORT_PR_BRANCH}"; then
-                echo "::warning::Could not delete merged report branch ${REPORT_PR_BRANCH}; delete it by hand."
+              # A merge queue can accept the PR (exit 0) without merging it
+              # yet, so the landing check below decides pr_merged.
+              report_merge_requested="direct"
+            else
+              # Auto-merge can land hours later, after the purge guard's
+              # answer is stale (#7022): an apply-analysis project dispatched
+              # meanwhile could read a doc this PR deletes. Drop the purge
+              # deletions from the PR before arming auto-merge; the next run
+              # purges again with a fresh guard.
+              report_purge_drop_ok=1
+              report_purged_paths="$(git diff --name-only --diff-filter=D HEAD~1 HEAD -- 'analysis/workflow-optimization-*.md' 2>/dev/null)" || report_purge_drop_ok=0
+              if [ "${report_purge_drop_ok}" -eq 1 ] && [ -n "${report_purged_paths}" ]; then
+                if printf '%s\n' "${report_purged_paths}" | xargs -d '\n' git checkout HEAD~1 -- \
+                   && git commit --amend -q -m "chore: add workflow log analysis report" \
+                   && git push --force-with-lease="refs/heads/${REPORT_PR_BRANCH}:${report_last_pushed_sha}" origin "HEAD:refs/heads/${REPORT_PR_BRANCH}"; then
+                  report_last_pushed_sha="$(git rev-parse HEAD)"
+                  report_head_sha="${report_last_pushed_sha}"
+                  echo "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending count=$(printf '%s\n' "${report_purged_paths}" | wc -l | tr -d ' ')"
+                else
+                  report_purge_drop_ok=0
+                fi
               fi
-            elif gh pr merge "${report_pr_number}" --auto --squash --match-head-commit "${report_head_sha}"; then
+              if [ "${report_purge_drop_ok}" -eq 1 ] \
+                 && gh pr merge "${report_pr_number}" --auto --squash --match-head-commit "${report_head_sha}"; then
+                report_merge_requested="auto"
+              elif [ "${report_purge_drop_ok}" -ne 1 ]; then
+                echo "::warning::Could not remove the purge deletions from report PR ${report_pr_url:-#${report_pr_number}}; not arming auto-merge so a stale purge cannot land later."
+              fi
+            fi
+            if [ -n "${report_merge_requested}" ]; then
               report_delivery="pr_auto_merge"
-              # Required checks usually block the direct merge, so wait a
-              # bounded time for auto-merge to land the report: deep-audit,
-              # api-redundancy and callers that read the newest report from
-              # the branch after this run need it there. Git only (fetch +
-              # cat-file), no GitHub API call. 0 disables the wait. The
-              # deadline is also clamped to 55 minutes after the job started
-              # (WLA_JOB_START_EPOCH), so a slow analysis cannot push the
-              # wait past the job's 60-minute timeout.
+              # Wait a bounded time for the report to reach the branch:
+              # deep-audit, api-redundancy and callers that read the newest
+              # report from the branch after this run need it there. Git only
+              # (fetch + cat-file), no GitHub API call. 0 still checks once.
+              # The deadline is also clamped to 55 minutes after the job
+              # started (WLA_JOB_START_EPOCH), so a slow analysis cannot push
+              # the wait past the job's 60-minute timeout.
               wla_wait_minutes="${WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES:-10}"
               if [[ ! "${wla_wait_minutes}" =~ ^(0|[1-9]|1[0-9]|20)$ ]]; then
                 echo "::warning::WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES must be an integer from 0 to 20; using 10."
@@ -1890,6 +1912,10 @@ jobs:
                 fi
                 sleep "${wla_poll_secs}"
               done
+              # Fail-open cleanup, only once the report is on the branch
+              # (deleting a queued PR's head would close it). Not gh
+              # --delete-branch, which switches the local checkout mid-job;
+              # the ls-remote check skips a branch GitHub already deleted.
               if [ "${report_delivery}" = "pr_merged" ] \
                  && git ls-remote --exit-code --heads origin "${REPORT_PR_BRANCH}" >/dev/null 2>&1 \
                  && ! git push origin --delete "${REPORT_PR_BRANCH}"; then
@@ -1923,6 +1949,7 @@ jobs:
           WLA_REPORT_DELIVERY: ${{ steps.commit_report.outputs.delivery || '' }}
           WLA_COMMIT_OUTCOME: ${{ steps.commit_report.outcome || '' }}
           WLA_REPORT_VIA_PR: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR || 'true' }}
+          WLA_TG_REPORT_FILE: ${{ steps.commit_report.outputs.report_file || steps.analyze.outputs.report_file || '' }}
         run: |
           set -euo pipefail
 
@@ -1942,7 +1969,9 @@ jobs:
           # commit_report may rename REPORT_FILE on a concurrent-write
           # collision; use its output when present so the Telegram link
           # points at the file that was actually pushed.
-          REPORT_FILE="${{ steps.commit_report.outputs.report_file || steps.analyze.outputs.report_file || '' }}"
+          # Read through env (WLA_TG_REPORT_FILE) so the LLM-run analyze
+          # output never reaches the shell as code.
+          REPORT_FILE="${WLA_TG_REPORT_FILE:-}"
           REPORT_URL=""
           if [ -n "${REPORT_FILE}" ]; then
             REPORT_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/${REPORT_FILE}"
