@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- (external CI surface, no code hunk):check run 42726623964, job 129533789813, `copilot-pull-request-reviewer` | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The copilot-pull-request-reviewer check failed with `custom_instructions_too_large` (422) before producing any review, and it maps to no hunk in this PR.\n  WHY: The reviewer states it is not a code defect in this change and was already adjudicated not-fixable-in-this-PR. Source severity was NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (external CI surface, no code hunk):check run 42726623964, job 129533789813, `copilot-pull-request-reviewer` | severity=NIT | confidence=5\n  PROBLEM: The check failed with `custom_instructions_too_large` (422) before producing any review. It maps to no hunk in this PR: the instruction payload is the repo-wide AGENTS.md plus CLAUDE.md, neither of which this PR modifies.\n  WHY: Not a code defect in this change; the prior editor run already adjudicated it not-fixable-in-this-PR. It is surfaced only because the failed check-run could not be mapped to the diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b4ffb7ccd6909c64ad206317f446a946919e9b516c79811550dfacf1c3fcd588",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9158,
+    "run_id": "42726602657",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42726602657",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110010244_7ac4acbafe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9158,
+    "run_id": "42726602657"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T01:02:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
