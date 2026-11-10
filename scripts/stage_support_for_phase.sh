@@ -87,7 +87,6 @@ case "${stage_support_phase}" in
 	clarify)
 		stage_support_required_scripts=(
 			gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh
-			attempt_journal.py gh_api_retry.py
 			assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh
 			label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py
 			memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py
@@ -129,8 +128,7 @@ case "${stage_support_phase}" in
 	plan)
 		stage_support_required_scripts=(
 			gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py partial_delivery.py
-			assemble_prompt.sh render_prompt.py attempt_journal.py gh_api_retry.py
-			load_workflow_overlay.py tg_helpers.sh label_helpers.sh
+			assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh
 			memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py
 			openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh
 			build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh
@@ -144,12 +142,12 @@ case "${stage_support_phase}" in
 		# from its own directory; optional, as its -f guards skip them.
 		# dependency_wait_resume.py (stuck-states P8a-2) is optional, as for
 		# clarify: without it a WAITING: plan answer takes the BLOCKED path.
-		# The done-check helpers (#8427 P2) are optional, as in the legacy
-		# step: their PERSIST_* switch defaults off. The attempt-journal
-		# helpers (#8428 P1) are required above.
+		# The persistence helpers (#8428 P1, #8427 P2/P4/P11) are optional,
+		# as in the legacy step: their PERSIST_* switches default off.
 		stage_support_optional_scripts=(
 			emit_event.sh dependency_wait_resume.py
 			acceptance_check.py targeted_file_context.py evidence_pack.py evidence_broker.py
+			attempt_journal.py gh_api_retry.py
 		)
 		# clarify_isolated_run.sh (called by run_plan_codex.sh for PLAN) reads
 		# the Claude settings template and the sandbox Dockerfile from its own
@@ -180,8 +178,7 @@ case "${stage_support_phase}" in
 		;;
 	implement)
 		stage_support_required_scripts=(
-			gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh
-			attempt_journal.py acceptance_check.py evidence_pack.py gh_api_retry.py assemble_prompt.sh
+			gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh
 			render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh
 			label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py
 			openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh
