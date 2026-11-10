@@ -111,6 +111,9 @@ case "${stage_support_phase}" in
 			emit_event.sh clarify_blocked_verify.sh dependency_wait_resume.py
 			attempt_journal.py gh_api_retry.py evidence_pack.py targeted_file_context.py
 		)
+		# History: P9b (#8873) shipped this list as
+		# stage_support_optional_scripts=(emit_event.sh clarify_blocked_verify.sh);
+		# P8a-2 and the persistence helpers extended it above.
 		stage_support_data_files=(clarify_sandbox/Dockerfile)
 		stage_support_host_python_scripts=(
 			pr_dependency.py load_workflow_overlay.py security_dependency.py
