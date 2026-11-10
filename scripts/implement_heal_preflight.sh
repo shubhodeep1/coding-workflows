@@ -8,6 +8,9 @@ issue_json="${ISSUE_META_FILE:?}"
 # Extra key=value log fields set by the support-ref check (expected/actual
 # ref and SHA). Only script-validated values are ever placed here.
 refuse_context=""
+# Extra markdown appended to the refusal comment after the marker. Empty for
+# every reason except repro_not_fixed, so existing comments are unchanged.
+refuse_body_extra=""
 
 refuse()
 {
@@ -31,7 +34,7 @@ refuse()
 		echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason} outcome=skip_flag_failed" >&2
 		exit 1
 	fi
-	if ! gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "Workflow heal scope verification failed (${detail_text}); implementation was refused. <!-- ai:workflow-heal-scope-unverified:v1 reason=${reason}${detail_field} -->" >/dev/null; then
+	if ! gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "Workflow heal scope verification failed (${detail_text}); implementation was refused. <!-- ai:workflow-heal-scope-unverified:v1 reason=${reason}${detail_field} -->${refuse_body_extra}" >/dev/null; then
 		echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason} outcome=comment_failed" >&2
 		exit 1
 	fi
@@ -46,6 +49,59 @@ refuse()
 
 if [ "${1:-}" = refuse ] && [ "${2:-}" = out_of_heal_scope ]; then
 	refuse out_of_heal_scope
+fi
+# Heal reproduction check (Refs #8434, P2 step 8): heal_isolated_implement.sh
+# exits 43 when a [repro-required] heal's tests do not fail at the failing SHA
+# and pass on the edited tree; implement.yml maps that to this refusal. The
+# result file (heal_implement_repro.v1) is trusted runner temp written by that
+# script, but its test ids come from the model-written plan: every value is
+# reduced to a fixed token, a 40-hex SHA or an escaped, truncated test id.
+if [ "${1:-}" = refuse ] && [ "${2:-}" = repro_not_fixed ]; then
+	repro_result_file="${HEAL_REPRO_RESULT_FILE:-${RUNNER_TEMP:-/tmp}/heal-repro-result-${GITHUB_RUN_ID:-local}.json}"
+	repro_detail=result_unavailable
+	repro_rendered=""
+	if [ -f "${repro_result_file}" ] && [ ! -L "${repro_result_file}" ]; then
+		repro_rendered="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+import json, re, sys
+try:
+	with open(sys.argv[1], encoding="utf-8") as handle:
+		data = json.load(handle)
+except (OSError, ValueError):
+	sys.exit(1)
+if not isinstance(data, dict) or data.get("schema") != "heal_implement_repro.v1":
+	sys.exit(1)
+outcome = data.get("outcome")
+if outcome not in ("not_fixed", "unverified"):
+	sys.exit(1)
+def tok(value):
+	text = re.sub(r"[^a-z0-9_]", "", value if isinstance(value, str) else "")[:64]
+	return text or "unknown"
+def tid(value):
+	text = value if isinstance(value, str) else ""
+	text = re.sub(r"[`<>@|\x00-\x1f\x7f\u200b-\u200f\u2028\u2029\ufeff]", "", text)[:200]
+	return text or "(empty)"
+sha = data.get("failing_sha")
+sha = sha if isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha) else "unknown"
+tests = [t for t in data.get("tests") or [] if isinstance(t, dict)] if isinstance(data.get("tests"), list) else []
+lines = [outcome, "", "", "**Heal reproduction check**", "",
+	"- Outcome: `%s`" % outcome, "- Reason: `%s`" % tok(data.get("reason")), "- Failing SHA: `%s`" % sha]
+for item in tests[:20]:
+	lines.append("- `%s` - at failing SHA: %s; on edited tree: %s" % (tid(item.get("test")), tok(item.get("at_failing_sha")), tok(item.get("on_edited_tree"))))
+if len(tests) > 20:
+	lines.append("- ... and %d more" % (len(tests) - 20))
+print("\n".join(lines))
+' "${repro_result_file}" 2>/dev/null)" || repro_rendered=""
+	fi
+	case "${repro_rendered%%$'\n'*}" in
+		not_fixed|unverified)
+			repro_detail="${repro_rendered%%$'\n'*}"
+			refuse_body_extra="${repro_rendered#*$'\n'}"
+			;;
+		*)
+			refuse_body_extra=$'\n\n**Heal reproduction check**\n\n- Outcome: `result_unavailable`'
+			;;
+	esac
+	refuse repro_not_fixed "${repro_detail}"
 fi
 echo 'HEAL_ROUTE=false' >> "${GITHUB_ENV:?}"
 # The checkout-context step empties ISSUE_META_FILE when its metadata fetch
