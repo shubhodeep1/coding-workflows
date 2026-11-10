@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -2848,3 +2849,152 @@ def test_gate_skips_non_object_and_null_filename_entries(tmp_path: Path, own_pat
 		assert "MERGE_TRAIN_GATE pr=4077 base=main result=unblocked action=continue" in result.stdout
 		assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
 	assert log_text.count("pulls/4075/files") == 1
+
+
+# SHELL-001 (Refs #8975): MERGE_TRAIN_DISPATCH_WORKFLOWS is split on default
+# IFS without pathname expansion; order and first-success stop are unchanged.
+def _dispatch_lines(log_text: str) -> list[str]:
+	return [line for line in log_text.splitlines() if line.startswith("gh workflow run ")]
+
+
+def test_release_dispatch_list_glob_is_not_expanded(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(tmp_path / "x.yml").write_text("", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="*.yml")
+	assert result.returncode == 0, result.stderr
+	assert "gh workflow run *.yml --repo acme/consumer -f pr_number=4077" in log_text
+	assert "gh workflow run x.yml" not in log_text
+	assert "MERGE_TRAIN_DISPATCHED pr=4077 workflow=*.yml ref=default head=ai/issue-4064" in result.stdout
+
+
+def test_release_default_dispatch_list_order_unchanged(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "dispatch_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	workflows = [line.split()[3] for line in _dispatch_lines(log_text)]
+	assert workflows == ["ai-review.yml", "internal-review.yml", "review_autofix.yml"]
+	assert " dispatch_failed=1 " in result.stdout
+
+
+def test_release_newline_separated_dispatch_list_is_split(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "dispatch_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="first.yml\nsecond.yml\tthird.yml\n")
+	assert result.returncode == 0, result.stderr
+	workflows = [line.split()[3] for line in _dispatch_lines(log_text)]
+	assert workflows == ["first.yml", "second.yml", "third.yml"]
+
+
+def test_release_whitespace_only_dispatch_list_dispatches_nothing(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="  \n ")
+	assert result.returncode == 0, result.stderr
+	assert _dispatch_lines(log_text) == []
+	assert "could not be dispatched" in result.stdout
+	assert " dispatch_failed=1 " in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# MERGE_TRAIN_RELEASE_SUMMARY API-cost fields (analysis/workflow-optimization-
+# 2026-10-08.md, GH API Call Audit #1). Appended after oldest_queued_age_secs=.
+# ---------------------------------------------------------------------------
+_MT_API_COST_FIELDS = ["file_list_fetches", "file_list_cache_hits", "active_listing_calls", "elapsed_ms"]
+
+
+def _release_summary_fields(stdout: str) -> tuple[str, dict[str, str]]:
+	summary = [line for line in stdout.splitlines() if line.startswith("MERGE_TRAIN_RELEASE_SUMMARY ")]
+	assert len(summary) == 1, stdout
+	return summary[0], dict(item.split("=", 1) for item in summary[0].split()[1:])
+
+
+def test_release_summary_appends_api_cost_fields(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"]),
+		_pr(4085, "ai/issue-4069", base="orchestrator/project-9", labels=["ai:merge-queued"]),
+		_pr(4090, "ai/issue-4073"),
+	]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(97)]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4081, ["backend/promo_email_sender.py", "db/contracts/promo_email_jobs.yml"])
+	_write_files(fixtures, 4085, ["twap_router.py"])
+	_write_files(fixtures, 4090, ["backend/promo_email_sender.py"])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	line, fields = _release_summary_fields(result.stdout)
+	# Existing prefix and fields stay byte-identical, in the same order.
+	assert line.startswith(
+		"MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=1 base_filter=main overlap=1 active_review=0"
+		" runs_incomplete=0 files_unavailable=0 blockers_unavailable=0 marker_unavailable=0"
+		" claim_skipped=0 dispatch_failed=0 oldest_queued_age_secs=none "
+	), line
+	# The four new fields close the line, in this order.
+	assert [token.split("=", 1)[0] for token in line.split()[-4:]] == _MT_API_COST_FIELDS
+	for key in _MT_API_COST_FIELDS:
+		assert re.fullmatch(r"[0-9]+", fields[key]), (key, fields[key])
+	assert fields["active_listing_calls"] == "1"
+
+
+def test_release_counts_shared_blocker_file_list_once(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064"),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"]),
+		_pr(4090, "ai/issue-4073", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4081, ["backend/promo_email_sender.py", "db/contracts/promo_email_jobs.yml"])
+	_write_files(fixtures, 4090, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	_line, fields = _release_summary_fields(result.stdout)
+	assert log_text.count("pulls/4077/files") == 1
+	assert int(fields["file_list_cache_hits"]) >= 1
+	# 4081 (own), 4077 (4081's blocker), 4090 (own) are fetched; 4090's pass
+	# reuses 4077 and 4081 from the cache.
+	assert fields["file_list_fetches"] == "3"
+	assert fields["file_list_cache_hits"] == "2"
+	assert int(fields["file_list_fetches"]) == sum(log_text.count(f"pulls/{n}/files") for n in (4077, 4081, 4090))
+
+
+def test_release_active_listing_calls_zero_or_one(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4085, "ai/issue-4069", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/a.py"])
+	_write_files(fixtures, 4085, ["backend/b.py"])
+	result, calls, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	_line, fields = _release_summary_fields(result.stdout)
+	assert fields["examined"] == "2"
+	assert fields["active_listing_calls"] == "1"
+	assert re.fullmatch(r"[0-9]+", fields["elapsed_ms"])
+	assert "actions/runs" in calls
+
+	other_tmp = tmp_path / "other-base"
+	other_tmp.mkdir()
+	bin_dir, fixtures, log = _install_fake_gh(other_tmp)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4085, "ai/issue-4069", base="orchestrator/project-9", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4085, ["twap_router.py"])
+	result, calls, _env = _run("release", other_tmp, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	_line, fields = _release_summary_fields(result.stdout)
+	assert fields["examined"] == "0"
+	assert fields["active_listing_calls"] == "0"
+	assert fields["file_list_fetches"] == "0"
+	assert fields["file_list_cache_hits"] == "0"
+	assert re.fullmatch(r"[0-9]+", fields["elapsed_ms"])
+	assert "actions/runs" not in calls

@@ -221,12 +221,21 @@ MT_EVAL_SOURCE=""
 #
 # API budget: one paginated `GET /pulls/{n}/files` per distinct PR per run.
 declare -A _MT_FILES_CACHE=()
+# API-cost counters for MERGE_TRAIN_RELEASE_SUMMARY only (file_list_fetches=,
+# file_list_cache_hits=); _mt_release resets them at the start of each pass.
+# A fetch counts once per logical lookup (gh_retry retries are not counted
+# separately) and is counted even when the call fails. They never feed back
+# into any decision.
+_MT_FILE_LIST_FETCHES=0
+_MT_FILE_LIST_CACHE_HITS=0
 _mt_pr_files_into() {
 	local __mt_files_dest="$1" __mt_files_pr="$2" __mt_files_out=""
 	if [ -n "${_MT_FILES_CACHE[${__mt_files_pr}]+x}" ]; then
+		_MT_FILE_LIST_CACHE_HITS=$((_MT_FILE_LIST_CACHE_HITS + 1))
 		printf -v "${__mt_files_dest}" '%s' "${_MT_FILES_CACHE[${__mt_files_pr}]}"
 		return 0
 	fi
+	_MT_FILE_LIST_FETCHES=$((_MT_FILE_LIST_FETCHES + 1))
 	if ! __mt_files_out="$(gh_retry gh api --paginate "repos/${MT_REPO}/pulls/${__mt_files_pr}/files?per_page=100" --jq '.[] | select(type == "object") | (.filename | select(type == "string" and length > 0)), (.previous_filename | select(type == "string" and length > 0))' 2>/dev/null)"; then
 		return 1
 	fi
@@ -1333,7 +1342,15 @@ _mt_dispatch_review() {
 		_mt_warn "merge-train release: invalid PR number '${pr}' for head ${head}; not dispatching."
 		return 1
 	fi
-	for wf in ${MERGE_TRAIN_DISPATCH_WORKFLOWS:-ai-review.yml internal-review.yml review_autofix.yml}; do
+	# SHELL-001: an unquoted expansion of the list also glob-expanded items
+	# such as `*.yml` against the working directory. `read -a` splits on the
+	# default IFS (spaces, tabs, newlines; -d '' keeps every line) and never
+	# does pathname expansion, so global `set -f` is not needed. `|| true`:
+	# read -d '' returns 1 at end of input under set -e.
+	local -a mt_dispatch_workflow_list=()
+	IFS=$' \t\n' read -r -d '' -a mt_dispatch_workflow_list \
+		<<< "${MERGE_TRAIN_DISPATCH_WORKFLOWS:-ai-review.yml internal-review.yml review_autofix.yml}" || true
+	for wf in "${mt_dispatch_workflow_list[@]}"; do
 		if gh_retry gh workflow run "${wf}" --repo "${MT_REPO}" \
 			-f pr_number="${pr}" -f allow_workflow_edits="${allow_edits}" >/dev/null 2>&1; then
 			_mt_log "MERGE_TRAIN_DISPATCHED pr=${pr} workflow=${wf} ref=default head=${head}"
@@ -1341,6 +1358,22 @@ _mt_dispatch_review() {
 		fi
 	done
 	return 1
+}
+
+# Epoch milliseconds for elapsed_ms= in MERGE_TRAIN_RELEASE_SUMMARY. GNU date
+# supports %3N; BSD/busybox date may print a literal "3N" or nothing, so any
+# non-integer result falls back to whole seconds * 1000. No API calls.
+_mt_now_ms()
+{
+	local __mt_now_ms_val
+	__mt_now_ms_val="$(date +%s%3N 2>/dev/null || true)"
+	if [[ "${__mt_now_ms_val}" =~ ^[0-9]{13,}$ ]]; then
+		printf '%s\n' "${__mt_now_ms_val}"
+	else
+		__mt_now_ms_val="$(date -u +%s 2>/dev/null || true)"
+		[[ "${__mt_now_ms_val}" =~ ^[0-9]+$ ]] || __mt_now_ms_val=0
+		printf '%s\n' "$(( __mt_now_ms_val * 1000 ))"
+	fi
 }
 
 _mt_release() {
@@ -1360,6 +1393,12 @@ _mt_release() {
 	local release_count_claim_skipped=0 release_count_dispatch_failed=0
 	local release_created_at="" release_created_epoch="" release_oldest_created_epoch="" release_oldest_age="none"
 	local release_now_epoch
+	# API-cost counters (analysis/workflow-optimization-2026-10-08.md, GH API
+	# Call Audit #1): reset per pass; they add no calls and change no decision.
+	local release_start_ms release_elapsed_ms=0 release_active_listing_calls=0
+	release_start_ms="$(_mt_now_ms)"
+	_MT_FILE_LIST_FETCHES=0
+	_MT_FILE_LIST_CACHE_HITS=0
 	release_now_epoch="$(date -u +%s)"
 	MT_EVAL_SOURCE="release"
 	if ! prs_json="$(_mt_list_open_prs "")"; then
@@ -1388,6 +1427,8 @@ _mt_release() {
 			fi
 		fi
 		if [ -z "${release_runs_listing_state}" ]; then
+			# Counted here, not inside the listing: it runs in $(...).
+			release_active_listing_calls=$((release_active_listing_calls + 1))
 			if inflight_review_branches="$(_mt_inflight_review_branches)"; then
 				release_runs_listing_state="complete"
 			else
@@ -1478,9 +1519,14 @@ _mt_release() {
 		# Clock skew: a future-dated PR reports 0, never a negative age.
 		[ "${release_oldest_age}" -ge 0 ] || release_oldest_age=0
 	fi
-	# New fields are appended after base_filter= so the existing prefix and
-	# first three fields stay byte-identical for current consumers.
-	_mt_log "MERGE_TRAIN_RELEASE_SUMMARY examined=${examined} released=${released} base_filter=${base_filter:-*} overlap=${release_count_overlap} active_review=${release_count_active_review} runs_incomplete=${release_count_runs_incomplete} files_unavailable=${release_count_files_unavailable} blockers_unavailable=${release_count_blockers_unavailable} marker_unavailable=${release_count_marker_unavailable} claim_skipped=${release_count_claim_skipped} dispatch_failed=${release_count_dispatch_failed} oldest_queued_age_secs=${release_oldest_age}"
+	# Fields are only ever appended, never reordered or renamed: the per-reason
+	# fields (overlap= through oldest_queued_age_secs=) were appended after
+	# base_filter= so the prefix and first three fields stay byte-identical.
+	# The API-cost fields (file_list_fetches= through elapsed_ms=) are appended
+	# last, after oldest_queued_age_secs=; they add no calls.
+	release_elapsed_ms=$(( $(_mt_now_ms) - release_start_ms ))
+	[ "${release_elapsed_ms}" -ge 0 ] || release_elapsed_ms=0
+	_mt_log "MERGE_TRAIN_RELEASE_SUMMARY examined=${examined} released=${released} base_filter=${base_filter:-*} overlap=${release_count_overlap} active_review=${release_count_active_review} runs_incomplete=${release_count_runs_incomplete} files_unavailable=${release_count_files_unavailable} blockers_unavailable=${release_count_blockers_unavailable} marker_unavailable=${release_count_marker_unavailable} claim_skipped=${release_count_claim_skipped} dispatch_failed=${release_count_dispatch_failed} oldest_queued_age_secs=${release_oldest_age} file_list_fetches=${_MT_FILE_LIST_FETCHES} file_list_cache_hits=${_MT_FILE_LIST_CACHE_HITS} active_listing_calls=${release_active_listing_calls} elapsed_ms=${release_elapsed_ms}"
 	return 0
 }
 

@@ -20,6 +20,146 @@
 
 set -euo pipefail
 
+# --- ORCH_POLL_CYCLE_SUMMARY helpers (begin) ---
+# Per-cycle timing summary (analysis/workflow-optimization-2026-10-08.md,
+# Speed #2): the EXIT trap prints exactly one ORCH_POLL_CYCLE_SUMMARY line per
+# run, and the tracking loop prints one ORCH_POLL_PROJECT_TIMING line per
+# project processed. sleep_ms sums only the sleep sites in this file that call
+# "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" (gh_retry backoff in gh_helpers.sh is
+# not counted). Fail-open: no gh/API calls, no new or longer sleeps, the trap
+# never calls exit (bash keeps the original exit status) and every step runs
+# in an `|| true` context so errexit cannot abort it. Installed here, before
+# the first `exit`, so early sweep-only and failure exits are covered too.
+# Only a directly executed run (`bash scripts/orchestrate_poll_process.sh`)
+# reports; test harnesses that `source` the poller as a library get no trap,
+# no ledger file and no extra stdout lines.
+_orch_poll_cycle_now_ms()
+{
+	local _orch_poll_cycle_now_value=""
+	_orch_poll_cycle_now_value="$(date +%s%3N 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_now_value}" =~ ^[0-9]{13,}$ ]]; then
+		printf '%s' "${_orch_poll_cycle_now_value}"
+		return 0
+	fi
+	_orch_poll_cycle_now_value="$(date +%s 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_now_value}" =~ ^[0-9]+$ ]]; then
+		printf '%s' "$(( _orch_poll_cycle_now_value * 1000 ))"
+	fi
+	return 0
+}
+
+# Same arguments and exit status as `sleep`: records the requested duration
+# in the run's sleep ledger, then runs the original sleep unchanged. The
+# ledger is a file so sleeps inside $(...) subshells are counted too; nothing
+# is written once the main shell has removed it.
+_orch_poll_cycle_sleep()
+{
+	local _orch_poll_cycle_sleep_ledger="${_ORCH_POLL_CYCLE_SLEEP_LEDGER:-}"
+	if [ -n "${_orch_poll_cycle_sleep_ledger}" ] && [ -f "${_orch_poll_cycle_sleep_ledger}" ]; then
+		if [[ "${1:-}" =~ ^[0-9]{1,9}$ ]]; then
+			printf '%s\n' "$(( 10#${1} * 1000 ))" 2>/dev/null >> "${_orch_poll_cycle_sleep_ledger}" || true
+		else
+			printf 'unknown\n' 2>/dev/null >> "${_orch_poll_cycle_sleep_ledger}" || true
+		fi
+	fi
+	sleep "$@"
+}
+
+_orch_poll_cycle_project_flush()
+{
+	local _orch_poll_cycle_flush_num="" _orch_poll_cycle_flush_now="" _orch_poll_cycle_flush_elapsed="unknown"
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ] || [ -z "${_ORCH_POLL_CYCLE_PROJECT_NUM:-}" ]; then
+		return 0
+	fi
+	_orch_poll_cycle_flush_num="${_ORCH_POLL_CYCLE_PROJECT_NUM}"
+	[[ "${_orch_poll_cycle_flush_num}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_flush_num="unknown"
+	_orch_poll_cycle_flush_now="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_flush_now}" =~ ^[0-9]+$ ]] && [[ "${_ORCH_POLL_CYCLE_PROJECT_START_MS:-}" =~ ^[0-9]+$ ]]; then
+		_orch_poll_cycle_flush_elapsed="$(( _orch_poll_cycle_flush_now - _ORCH_POLL_CYCLE_PROJECT_START_MS ))"
+	fi
+	# Clear first so a failed write can never print the same project twice.
+	_ORCH_POLL_CYCLE_PROJECT_NUM=""
+	_ORCH_POLL_CYCLE_PROJECT_START_MS=""
+	echo "ORCH_POLL_PROJECT_TIMING tracking_issue=${_orch_poll_cycle_flush_num} elapsed_ms=${_orch_poll_cycle_flush_elapsed}" 2>/dev/null || true
+	return 0
+}
+
+# Called at the top of each tracking-loop pass: prints the previous project's
+# timing line (so the loop's many `continue` paths need no edits), counts the
+# new project and starts its clock.
+_orch_poll_cycle_project_begin()
+{
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ]; then
+		return 0
+	fi
+	_orch_poll_cycle_project_flush || true
+	if [[ "${_ORCH_POLL_CYCLE_PROJECTS_PROCESSED:-}" =~ ^[0-9]+$ ]]; then
+		_ORCH_POLL_CYCLE_PROJECTS_PROCESSED="$(( _ORCH_POLL_CYCLE_PROJECTS_PROCESSED + 1 ))"
+	fi
+	_ORCH_POLL_CYCLE_PROJECT_NUM="${1:-unknown}"
+	_ORCH_POLL_CYCLE_PROJECT_START_MS="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+	return 0
+}
+
+_orch_poll_cycle_on_exit()
+{
+	local _orch_poll_cycle_exit_code="${1:-}" _orch_poll_cycle_exit_now="" _orch_poll_cycle_exit_elapsed="unknown"
+	local _orch_poll_cycle_exit_sleep="unknown" _orch_poll_cycle_exit_ledger="${_ORCH_POLL_CYCLE_SLEEP_LEDGER:-}"
+	local _orch_poll_cycle_exit_seen="${_ORCH_POLL_CYCLE_PROJECTS_SEEN:-unknown}" _orch_poll_cycle_exit_processed="${_ORCH_POLL_CYCLE_PROJECTS_PROCESSED:-unknown}"
+	local _orch_poll_cycle_exit_reason="completed"
+	# Subshells never emit; the main shell emits exactly once.
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ] || [ "${BASHPID:-$$}" != "$$" ] || [ "${_ORCH_POLL_CYCLE_EMITTED:-false}" = "true" ]; then
+		return 0
+	fi
+	_ORCH_POLL_CYCLE_EMITTED="true"
+	[[ "${_orch_poll_cycle_exit_code}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_code="unknown"
+	_orch_poll_cycle_project_flush || true
+	_orch_poll_cycle_exit_now="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_exit_now}" =~ ^[0-9]+$ ]] && [[ "${_ORCH_POLL_CYCLE_START_MS:-}" =~ ^[0-9]+$ ]]; then
+		_orch_poll_cycle_exit_elapsed="$(( _orch_poll_cycle_exit_now - _ORCH_POLL_CYCLE_START_MS ))"
+	fi
+	if [ -n "${_orch_poll_cycle_exit_ledger}" ] && [ -f "${_orch_poll_cycle_exit_ledger}" ] && [ -r "${_orch_poll_cycle_exit_ledger}" ]; then
+		_orch_poll_cycle_exit_sleep="$(awk 'BEGIN { total = 0; bad = 0 } /^[0-9]+$/ { total += $0; next } { bad = 1 } END { if (bad) print "unknown"; else printf "%.0f\n", total }' "${_orch_poll_cycle_exit_ledger}" 2>/dev/null || true)"
+		[[ "${_orch_poll_cycle_exit_sleep}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_sleep="unknown"
+	fi
+	if [ -n "${_orch_poll_cycle_exit_ledger}" ]; then
+		rm -f "${_orch_poll_cycle_exit_ledger}" 2>/dev/null || true
+	fi
+	[[ "${_orch_poll_cycle_exit_seen}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_seen="unknown"
+	[[ "${_orch_poll_cycle_exit_processed}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_processed="unknown"
+	if [ "${_orch_poll_cycle_exit_code}" != "0" ]; then
+		_orch_poll_cycle_exit_reason="error"
+	elif [ "${_orch_poll_cycle_exit_seen}" = "0" ]; then
+		_orch_poll_cycle_exit_reason="no_projects"
+	fi
+	echo "ORCH_POLL_CYCLE_SUMMARY elapsed_ms=${_orch_poll_cycle_exit_elapsed} projects_seen=${_orch_poll_cycle_exit_seen} projects_processed=${_orch_poll_cycle_exit_processed} sleep_ms=${_orch_poll_cycle_exit_sleep} exit_code=${_orch_poll_cycle_exit_code} terminal_reason=${_orch_poll_cycle_exit_reason}" 2>/dev/null || true
+	return 0
+}
+
+_orch_poll_cycle_install_exit_trap()
+{
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" = "true" ]; then
+		trap '_orch_poll_cycle_on_exit "$?" || true' EXIT
+	fi
+}
+
+_ORCH_POLL_CYCLE_START_MS="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+_ORCH_POLL_CYCLE_PROJECTS_SEEN="unknown"
+_ORCH_POLL_CYCLE_PROJECTS_PROCESSED="unknown"
+_ORCH_POLL_CYCLE_PROJECT_NUM=""
+_ORCH_POLL_CYCLE_PROJECT_START_MS=""
+_ORCH_POLL_CYCLE_EMITTED="false"
+_ORCH_POLL_CYCLE_ENABLED="false"
+_ORCH_POLL_CYCLE_SLEEP_LEDGER=""
+_ORCH_POLL_CYCLE_SLEEP_CMD="sleep"
+if [ "${BASH_SOURCE[0]:-}" = "${0:-}" ]; then
+	_ORCH_POLL_CYCLE_ENABLED="true"
+	_ORCH_POLL_CYCLE_SLEEP_LEDGER="$(mktemp "${TMPDIR:-/tmp}/orch_poll_cycle_sleep.XXXXXX" 2>/dev/null || true)"
+	_ORCH_POLL_CYCLE_SLEEP_CMD="_orch_poll_cycle_sleep"
+fi
+_orch_poll_cycle_install_exit_trap || true
+# --- ORCH_POLL_CYCLE_SUMMARY helpers (end) ---
+
 # ---------------------------------------------------------------
 # Helper: Telegram (tracked via tg_helpers.sh)
 # ---------------------------------------------------------------
@@ -2146,7 +2286,7 @@ _record_merge_conflict_telemetry()
 		fi
 		if git rev-parse --verify --quiet "refs/remotes/origin/${branch}" >/dev/null 2>&1; then
 			if ! git worktree add --quiet -B "${branch}" "${wt}" "refs/remotes/origin/${branch}" 2>/dev/null; then
-				sleep 1
+				"${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
 				continue
 			fi
 			worktree_registry_register "$(basename -- "${wt}")" "${wt}" "${branch}" "project-${project}" "orchestrate-poll"
@@ -2180,7 +2320,7 @@ _record_merge_conflict_telemetry()
 		fi
 		if [ "${push_rc}" -eq 2 ] && [ "${attempt}" -lt 3 ]; then
 			# Push race; sleep briefly and retry with fresh fetch.
-			sleep 1
+			"${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
 			continue
 		fi
 		return 0
@@ -7157,6 +7297,185 @@ resolve_security_pass_fix_successor() {
   return 1
 }
 
+# resolve_review_blocked_reissue_successor <closed_issue_num>
+#
+# Find the replacement issue that the review pipeline's review-blocked
+# judge (scripts/review_rb_judge.sh, `close_and_reissue`) opened for a
+# wave issue it closed.
+#
+# Why this exists: the poller's own review-blocked judge re-points wave
+# state when it reissues, but the review_autofix judge only writes body
+# markers.  Nothing mapped its reissue into wave state, so the closed
+# predecessor read as closed-without-merge and the wave judge opened a
+# second redo for the same work.  Project #8969: #8970 was reissued as
+# #8994 at 13:23Z on 2026-11-07, the poller marked #8970 closed at 13:31Z,
+# and the wave judge opened duplicate #8995 at 13:34Z.  Both PRs (#9003,
+# #9005) built Phase 1; #9003 merged and #9005 was left conflicting.
+#
+# Match rules (all required), read from the closed issue's REST timeline
+# `cross-referenced` events (the reissue body names `#<closed>`, so the
+# reference is recorded there):
+#   - the source is an issue (not a PR) in this repository, numbered
+#     above the closed issue;
+#   - it carries `ai:orchestrator-managed` (only collaborators and the
+#     pipeline can label, so forged body markers alone are not enough);
+#   - its body has the exact lines `- Tracking issue: #<TRACKING_NUM>` and
+#     `- Type: review-blocked-reissue`, and a line starting
+#     `- Replaces: #<closed>` followed by a space or end of line.
+# The highest matching number wins.  A reissue of a reissue is followed on
+# a later tick, once the adopted successor itself reads as closed.
+#
+# API cost (§15): one paginated REST `GET issues/<n>/timeline`, issued only
+# for a current-wave issue that is closed with no merged implementation PR.
+# The per-tick timeline read in the reconcile loop goes through
+# gh_issue_timeline_with_cross_refs, whose GraphQL shape keeps only the
+# number of an Issue source (no body, labels or state), so it cannot
+# identify a reissue.  Once adopted, the predecessor leaves the wave and
+# is never read again.
+#
+# Args:
+#   closed_issue_num — the closed wave issue number recorded in state
+# Stdout:
+#   on a match, one compact JSON object:
+#   {"number": <n>, "state": "open"|"closed", "labels": [<name>, ...]}
+# Returns:
+#   0 — successor found (JSON on stdout)
+#   1 — lookup succeeded and no successor exists
+#   2 — lookup inconclusive (API or parse failure); callers keep state as
+#       it is and retry next tick (fail open)
+resolve_review_blocked_reissue_successor() {
+  local closed_issue_num="$1"
+  local rb_reissue_timeline_file rb_reissue_successor_json
+
+  [[ "${closed_issue_num}" =~ ^[0-9]+$ ]] || return 2
+  [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]] || return 2
+
+  rb_reissue_timeline_file="${RUNTIME_DIR}/rb_reissue_timeline_${TRACKING_NUM}_${closed_issue_num}.json"
+  rm -f "${rb_reissue_timeline_file}"
+  if ! gh_retry_to_file "${rb_reissue_timeline_file}" gh api --paginate \
+    "repos/${GITHUB_REPOSITORY}/issues/${closed_issue_num}/timeline?per_page=100"; then
+    rm -f "${rb_reissue_timeline_file}"
+    return 2
+  fi
+  if [ ! -s "${rb_reissue_timeline_file}" ]; then
+    rm -f "${rb_reissue_timeline_file}"
+    return 2
+  fi
+  if ! rb_reissue_successor_json="$(jq -sc \
+    --arg tracking_marker "- Tracking issue: #${TRACKING_NUM}" \
+    --arg type_marker "- Type: review-blocked-reissue" \
+    --arg replaces_prefix "- Replaces: #${closed_issue_num}" \
+    --arg repo_suffix "/repos/${GITHUB_REPOSITORY}" \
+    --argjson closed_issue "${closed_issue_num}" '
+      def body_lines: (.body // "") | split("\n") | map(rtrimstr("\r"));
+      if length == 0 or (all(.[]; type == "array") | not) then
+        error("timeline pagination output must contain JSON arrays")
+      else
+        [
+          .[][]
+          | select(.event == "cross-referenced")
+          | .source.issue
+          | select(type == "object")
+          | select(.pull_request == null)
+          | select((.number | type) == "number" and .number > $closed_issue)
+          | select(((.repository_url // "") | ascii_downcase | endswith($repo_suffix | ascii_downcase)))
+          | select(any((.labels // [])[]; (.name? // .) == "ai:orchestrator-managed"))
+          | . as $issue
+          | ($issue | body_lines) as $lines
+          | select(($lines | index($tracking_marker)) != null)
+          | select(($lines | index($type_marker)) != null)
+          | select(any($lines[]; . == $replaces_prefix or startswith($replaces_prefix + " ")))
+          | {
+              number: $issue.number,
+              state: (if $issue.state == "closed" then "closed" else "open" end),
+              labels: [($issue.labels // [])[] | (.name? // .) | select(type == "string")]
+            }
+        ]
+        | max_by(.number) // empty
+      end
+    ' "${rb_reissue_timeline_file}" 2>/dev/null)"; then
+    rm -f "${rb_reissue_timeline_file}"
+    return 2
+  fi
+  rm -f "${rb_reissue_timeline_file}"
+  if [ -n "${rb_reissue_successor_json}" ]; then
+    printf '%s\n' "${rb_reissue_successor_json}"
+    return 0
+  fi
+  return 1
+}
+
+# adopt_review_blocked_reissue_successor <closed_issue_num> <successor_num>
+#
+# Re-point the current-wave entry of a closed issue at its review-blocked
+# reissue, the same writes the poller's own close_and_reissue arm makes:
+# `.issue_number_map[<local_id>]` and the wave entry's `github_issue`, with
+# status reset to `pending` so this tick's check-wave-status reads the
+# successor's labels.  Writes STATE_FILE only; the caller persists it.
+#
+# Returns 1 when no non-terminal-merged entry in the current wave holds
+# <closed_issue_num>, and 3 when <successor_num> is already tracked by any
+# wave entry or issue_number_map value (no double mapping).  An
+# `orphan-rb-<successor>` entry the orphan sweep injected into the current
+# wave does not count as tracked: adoption removes it, so the successor keeps the original local id.
+# Returns 2 on a state read/write failure.
+adopt_review_blocked_reissue_successor() {
+  local closed_issue_num="$1"
+  local successor_num="$2"
+  local rb_reissue_local_id
+
+  [[ "${closed_issue_num}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${successor_num}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${WAVE_IDX:-}" =~ ^[0-9]+$ ]] || return 2
+
+  if ! rb_reissue_local_id="$(jq -r \
+    --argjson wi "${WAVE_IDX}" \
+    --argjson closed_issue "${closed_issue_num}" \
+    --argjson successor "${successor_num}" '
+      if (
+        [(.waves // []) | to_entries[] | .key as $k | .value.issues[]?
+          | select(($k == $wi and .id == ("orphan-rb-" + ($successor | tostring))) | not)
+          | .github_issue | tostring] | index($successor | tostring)
+      ) != null then "__rb_reissue_already_tracked__"
+      elif (
+        [(.issue_number_map // {}) | to_entries[] | .value | tostring] | index($successor | tostring)
+      ) != null then "__rb_reissue_already_tracked__"
+      else
+        [.waves[$wi].issues[]?
+          | select((.github_issue | tostring) == ($closed_issue | tostring))
+          | select((.status // "") != "merged" and (.status // "") != "skipped")
+          | .id
+          | select(type == "string" and length > 0)
+        ] | first // empty
+      end
+    ' "${STATE_FILE}" 2>/dev/null)"; then
+    return 2
+  fi
+  [ -n "${rb_reissue_local_id}" ] || return 1
+  [ "${rb_reissue_local_id}" != "__rb_reissue_already_tracked__" ] || return 3
+
+  if ! jq --arg lid "${rb_reissue_local_id}" \
+    --argjson wi "${WAVE_IDX}" \
+    --argjson successor "${successor_num}" \
+    --argjson now "$(date +%s)" '
+      .waves[$wi].issues |= map(select(.id != ("orphan-rb-" + ($successor | tostring))))
+      | .issue_number_map[$lid] = $successor
+      | (.waves[$wi].issues[] | select(.id == $lid)) |= (
+          .github_issue = $successor
+          | .status = "pending"
+          | .last_seen_phase = ""
+          | .status_since_ts = $now
+          | .stall_recovery_count = 0
+        )
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
+    rm -f "${STATE_FILE}.tmp"
+    return 2
+  fi
+  mv "${STATE_FILE}.tmp" "${STATE_FILE}" || return 2
+  printf '%s\n' "${rb_reissue_local_id}"
+  return 0
+}
+
 security_pass_closed_fix_failure() {
   local issue_number="$1"
 
@@ -8617,7 +8936,7 @@ security_pass_exhaustion_judge() {
     fi
     echo "::warning::Security-pass exhaustion judge attempt ${attempt} for tracking issue #${TRACKING_NUM} returned no usable verdict (every remaining finding needs exactly one valid decision, and fail cannot be mixed with non-fail actions)."
     if [ -z "${MOCK_SECURITY_PASS_JUDGE_JSON:-}" ]; then
-      sleep $(( 8 * attempt ))
+      "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" $(( 8 * attempt ))
     fi
   done
   if [ "${judge_success}" != "true" ]; then
@@ -9876,8 +10195,8 @@ create_judge_fixup_issues_from_verdict() {
             if [ -n "${EXISTING_NUM}" ]; then
               EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
               if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
-                jq --arg fix_id "${FIX_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-                  '.issue_number_map[$fix_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $existing_num, "status": "pending"}]' \
+                jq --arg fix_id "${FIX_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" --argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)" \
+                  '.issue_number_map[$fix_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $existing_num, "status": "pending"} + (if $pja then {"persist_judge_added": true} else {} end)]' \
                   "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
                 echo "  ${FIX_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate fix-up."
                 continue
@@ -9912,8 +10231,8 @@ create_judge_fixup_issues_from_verdict() {
           FIX_URL_CLEAN="$(printf '%s\n' "${FIX_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
           FIX_NEW_NUM="$(basename "${FIX_URL_CLEAN%%[?#]*}")"
           if [[ "${FIX_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
-            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-              '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"}]' \
+            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" --argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)" \
+              '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"} + (if $pja then {"persist_judge_added": true} else {} end)]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
             record_orchestrator_lesson_event "$(lesson_event_json_for_judge_fixup "${FIX_TITLE}" "${FIX_NEW_NUM}" "$((JUDGE_CYCLE + 1))" "${fix_issue}")"
           fi
@@ -11607,14 +11926,14 @@ _refresh_integration_resolver_tooling() {
         "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
         2>/dev/null; then
       echo "::warning::${log_prefix} git fetch failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
-      [ "${attempt}" -lt 3 ] && sleep 1 && continue
+      [ "${attempt}" -lt 3 ] && "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1 && continue
       return 0
     fi
 
 	if ! git worktree add --quiet --detach "${wt}" \
 	     "refs/remotes/origin/${integration_branch}" 2>/dev/null; then
 	  echo "::warning::${log_prefix} git worktree add failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
-	  [ "${attempt}" -lt 3 ] && sleep 1 && continue
+	  [ "${attempt}" -lt 3 ] && "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1 && continue
 	  return 0
 	fi
 	worktree_registry_register "$(basename -- "${wt}")" "${wt}" "refs/remotes/origin/${integration_branch}" "tracking-${TRACKING_NUM:-0}" "orchestrate-poll"
@@ -11856,7 +12175,7 @@ _refresh_integration_resolver_tooling() {
         # Push race (non-fast-forward).  Refetch and retry; matches
         # the pattern in _record_merge_conflict_telemetry.
         if [ "${attempt}" -lt 3 ]; then
-          sleep 1
+          "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
           continue
         fi
         echo "::warning::${log_prefix} push race exhausted; proceeding to dispatch with current tip."
@@ -16741,11 +17060,9 @@ The latest validation run reported \`raw_status=harness_error\`, so the orchestr
   # the outcome, so skip the recovery budget and go straight to
   # terminal failure with a clear note.
   local _deterministic_class=""
-  if printf '%s' "${reason}" | grep -qE 'AI_VALIDATION_FAILURE_CLASS:deterministic_[a-z_]+'; then
-    _deterministic_class="$(printf '%s' "${reason}" \
-      | grep -oE 'AI_VALIDATION_FAILURE_CLASS:deterministic_[a-z_]+' \
-      | head -n 1 \
-      | sed 's/^AI_VALIDATION_FAILURE_CLASS://')"
+  local _deterministic_marker_re='AI_VALIDATION_FAILURE_CLASS:(deterministic_[a-z_]+)'
+  if [[ "${reason}" =~ ${_deterministic_marker_re} ]]; then
+    _deterministic_class="${BASH_REMATCH[1]}"
     echo "Validation failed deterministically (class=${_deterministic_class}); skipping recovery budget (current=${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS})."
     jq --arg reason "${reason}" --arg dclass "${_deterministic_class}" --arg raw_status "${validation_raw_status}" \
       '.status = "failed" |
@@ -20016,6 +20333,1004 @@ The judge will evaluate this gap when the wave completes and decide whether to r
   return 0
 }
 
+# persist_journal_stall_context ISSUE COMMENTS_ISSUE COMMENTS_JSON OUT
+# (issue #8428, P1; caller checks PERSIST_JOURNAL_ENABLED). Writes the
+# rendered attempt journal (<= 4 KiB, empty when absent) to OUT and sets
+# PERSIST_JOURNAL_LAST_KEY. Comments come only from data this tick already
+# holds: COMMENTS_JSON when it is ISSUE's own thread, else the per-tick
+# _current_wave_details_json / _candidate_details_json caches (REST shape).
+# The pipeline login is resolved at most once per tick
+# (PERSIST_JOURNAL_LOGIN_CACHE; section 14: the only identity read, shared by
+# every judged item); an unknown login trusts no journal. Always returns 0.
+PERSIST_JOURNAL_LOGIN_CACHE="${PERSIST_JOURNAL_LOGIN_CACHE:-}"
+persist_journal_stall_context() {
+  local issue="$1" comments_issue="$2" comments_json="$3" out="$4" comments_file cached=""
+  PERSIST_JOURNAL_LAST_KEY=""
+  : > "${out}" 2>/dev/null || return 0
+  comments_file="${out}.comments.json"
+  : > "${comments_file}"
+  if [ "${comments_issue}" = "${issue}" ]; then
+    printf '%s' "${comments_json}" > "${comments_file}"
+  else
+    for cached in "${_current_wave_details_json:-}" "${_candidate_details_json:-}"; do
+      [ -n "${cached}" ] || continue
+      if printf '%s' "${cached}" | jq -ce --arg n "${issue}" '.[$n].comments | arrays' > "${comments_file}" 2>/dev/null; then
+        break
+      fi
+      : > "${comments_file}"
+    done
+  fi
+  if [ ! -s "${comments_file}" ]; then
+    echo "PERSIST journal outcome=skipped reason=comments_absent issue=${issue}" >&2
+    rm -f "${comments_file}"
+    return 0
+  fi
+  if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE}" ]; then
+    PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login 2>/dev/null)" || PERSIST_JOURNAL_LOGIN_CACHE=""
+    [[ "${PERSIST_JOURNAL_LOGIN_CACHE}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || PERSIST_JOURNAL_LOGIN_CACHE=""
+  fi
+  if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE}" ]; then
+    echo "PERSIST journal outcome=skipped reason=identity_unavailable issue=${issue}" >&2
+    rm -f "${comments_file}"
+    return 0
+  fi
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/attempt_journal.py render --comments-file "${comments_file}" \
+    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" --max-bytes 4096 --out "${out}" || true
+  PERSIST_JOURNAL_LAST_KEY="$(PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/attempt_journal.py latest-key \
+    --comments-file "${comments_file}" --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" 2>/dev/null)" || PERSIST_JOURNAL_LAST_KEY=""
+  rm -f "${comments_file}"
+  return 0
+}
+
+# run_persist_postmerge_verify (issue #8427, P5; check after merge). The
+# helper reads PERSIST_POSTMERGE_VERIFY_ENABLED (default false) itself: off,
+# it only removes leftover ai:verify-pending labels whose window has passed.
+# On, it grades up to PERSIST_POSTMERGE_MAX_PER_TICK armed issues against the
+# first completed post-merge run (this tick's _load_actions_runs_cached blob
+# first, then one workflow-runs read) and reopens a failed one in
+# ai:planning. For each reopened issue this posts the same bare `/answer`
+# comment as the standalone retrigger_plan branch, honouring the phase caps;
+# a capped issue stays open in ai:planning for standalone stall recovery.
+# Always returns 0.
+run_persist_postmerge_verify() {
+  local ppv_helper="scripts/persist_postmerge_verify.py" ppv_base ppv_runs ppv_out ppv_issue ppv_rc
+  if [ ! -f "${ppv_helper}" ]; then
+    echo "PERSIST postmerge outcome=skipped reason=helper_absent" >&2
+    return 0
+  fi
+  ppv_base="${RUNTIME_DIR:-/tmp}"
+  [ -d "${ppv_base}" ] || ppv_base="/tmp"
+  ppv_runs="${ppv_base}/persist_postmerge_runs.json"
+  ppv_out="${ppv_base}/persist_postmerge_out.json"
+  # Switch off, the helper only cleans up expired labels and never reads runs.
+  if _is_truthy "${PERSIST_POSTMERGE_VERIFY_ENABLED:-false}"; then
+    _load_actions_runs_cached > "${ppv_runs}" 2>/dev/null || printf '%s' '{"workflow_runs":[]}' > "${ppv_runs}"
+  else
+    printf '%s' '{"workflow_runs":[]}' > "${ppv_runs}"
+  fi
+  : > "${ppv_out}"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B "${ppv_helper}" check --repo "${GITHUB_REPOSITORY:-}" \
+    --runs-file "${ppv_runs}" --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE:-}" --out "${ppv_out}" || true
+  while IFS= read -r ppv_issue; do
+    [[ "${ppv_issue}" =~ ^[1-9][0-9]*$ ]] || continue
+    if ! phase_cap_can_dispatch "ai:planning" retrigger_plan "${ppv_issue}"; then
+      echo "PERSIST postmerge outcome=deferred reason=phase_capped issue=${ppv_issue}" >&2
+      continue
+    fi
+    ppv_rc=0
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ppv_issue}/comments" -f body="$(cat <<'PERSIST_POSTMERGE_EOF'
+/answer
+
+_Check after merge: the post-merge check failed. Re-triggering plan generation._
+PERSIST_POSTMERGE_EOF
+)" >/dev/null 2>&1 || ppv_rc=$?
+    if [ "${ppv_rc}" -eq 0 ]; then
+      phase_cap_note_dispatch "ai:planning"
+      tg_notify_issue "${ppv_issue}" "Check after merge failed: reopened the issue and re-triggered planning." "DEBUG"
+      echo "PERSIST postmerge outcome=recurred reason=replan_dispatched issue=${ppv_issue}" >&2
+    else
+      echo "PERSIST postmerge outcome=error reason=answer_post_failed issue=${ppv_issue}" >&2
+    fi
+  done < <(jq -r '.replan[]? | select(type == "number") | tostring' "${ppv_out}" 2>/dev/null || true)
+  rm -f "${ppv_runs}" "${ppv_out}"
+  return 0
+}
+
+# persist_budget_govern_issue ISSUE COMMENTS_JSON LABELS_JSON PRIOR_BASIS SCOPE
+# (issue #8427, P6; callers check PERSIST_BUDGET_ENABLED and that
+# scripts/persist_budget.py exists). SCOPE is `standalone` or `managed`.
+# Runs scripts/persist_budget.py decide over the issue's attempt journal and
+# acts on the decision:
+#   replan    move the issue to ai:planning when it carries none of
+#             ai:planning / ai:clarification / ai:blocked (plan.yml skips
+#             `/answer` otherwise), then post the bare retrigger_plan
+#             `/answer` comment, honouring phase_cap_can_dispatch
+#   escalate  add ai:needs-human and post one `## Persistence budget reached`
+#             comment (the unblock scan picks the label up)
+# then journals `stage=governor` (P1 gates it on PERSIST_JOURNAL_ENABLED).
+# Sets PERSIST_BUDGET_LAST_ACTION (replan / escalate only when the write
+# landed) and PERSIST_BUDGET_LAST_BASIS; the caller stores the basis so one
+# journal state is decided once. At most PERSIST_BUDGET_TICK_CAP (5) acting
+# decisions per tick. API budget (section 14): comments come from the
+# caller's cache (one paginated read only when it is empty or may be cut off
+# at 100); the pipeline login is the tick's shared PERSIST_JOURNAL_LOGIN_CACHE
+# (one identity read per tick, shared with persist_journal_stall_context);
+# writes: replan 1 label edit (only when needed) + 1 comment, escalate 1
+# label edit + 1 comment, plus the journal append. Always returns 0.
+PERSIST_BUDGET_TICK_DECISIONS="${PERSIST_BUDGET_TICK_DECISIONS:-0}"
+PERSIST_BUDGET_TICK_CAP=5
+PERSIST_BUDGET_LAST_ACTION=""
+PERSIST_BUDGET_LAST_BASIS=""
+persist_budget_govern_issue() {
+  local pbg_issue="$1" pbg_comments="${2:-}" pbg_labels="${3:-[]}" pbg_prior="${4:-}" pbg_scope="${5:-standalone}"
+  local pbg_base pbg_comments_file pbg_out pbg_note pbg_action pbg_reason pbg_basis pbg_summary pbg_body
+  local pbg_rc pbg_journal_outcome pbg_lead pbg_label pbg_edit_args
+  PERSIST_BUDGET_LAST_ACTION=""
+  PERSIST_BUDGET_LAST_BASIS=""
+  [[ "${pbg_issue}" =~ ^[1-9][0-9]*$ ]] || return 0
+  [[ "${PERSIST_BUDGET_TICK_DECISIONS}" =~ ^[0-9]+$ ]] || PERSIST_BUDGET_TICK_DECISIONS=0
+  if [ "${PERSIST_BUDGET_TICK_DECISIONS}" -ge "${PERSIST_BUDGET_TICK_CAP}" ]; then
+    echo "PERSIST governor outcome=deferred reason=tick_cap issue=${pbg_issue}" >&2
+    return 0
+  fi
+  if issue_has_active_workflow "${pbg_issue}"; then
+    echo "PERSIST governor outcome=skipped reason=active_workflow issue=${pbg_issue}" >&2
+    return 0
+  fi
+  { [ -n "${pbg_labels}" ] && printf '%s' "${pbg_labels}" | jq -e 'type == "array"' >/dev/null 2>&1; } || pbg_labels='[]'
+  # The poller's GraphQL caches hold the newest 100 comments; the journal
+  # comment is created early and edited in place, so a full window may hide it.
+  # An empty string means the caller had no comment cache; an authoritative
+  # empty array `[]` is used as-is (no journal, no API call).
+  if [ -z "${pbg_comments}" ] || ! printf '%s' "${pbg_comments}" | jq -e 'type == "array" and length < 100' >/dev/null 2>&1; then
+    if ! pbg_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${pbg_issue}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+      || [ -z "${pbg_comments}" ] || ! printf '%s' "${pbg_comments}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      echo "PERSIST governor outcome=skipped reason=comments_unavailable issue=${pbg_issue}" >&2
+      return 0
+    fi
+  fi
+  if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE:-}" ]; then
+    PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login 2>/dev/null)" || PERSIST_JOURNAL_LOGIN_CACHE=""
+    [[ "${PERSIST_JOURNAL_LOGIN_CACHE}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || PERSIST_JOURNAL_LOGIN_CACHE=""
+  fi
+  if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE}" ]; then
+    echo "PERSIST governor outcome=skipped reason=identity_unavailable issue=${pbg_issue}" >&2
+    return 0
+  fi
+  pbg_base="${RUNTIME_DIR:-/tmp}"
+  [ -d "${pbg_base}" ] || pbg_base="/tmp"
+  pbg_comments_file="${pbg_base}/persist_budget_comments.${pbg_issue}.json"
+  pbg_out="${pbg_base}/persist_budget_decision.${pbg_issue}.json"
+  pbg_note="${pbg_base}/persist_budget_note.${pbg_issue}.txt"
+  printf '%s' "${pbg_comments}" > "${pbg_comments_file}" 2>/dev/null || {
+    echo "PERSIST governor outcome=error reason=scratch_unwritable issue=${pbg_issue}" >&2
+    return 0
+  }
+  : > "${pbg_out}" 2>/dev/null || true
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_budget.py decide --comments-file "${pbg_comments_file}" \
+    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" --labels "${pbg_labels}" --out "${pbg_out}" || true
+  pbg_action="$(jq -r '.action // ""' "${pbg_out}" 2>/dev/null || true)"
+  pbg_reason="$(jq -j '.reason // ""' "${pbg_out}" 2>/dev/null | tr -c 'A-Za-z0-9_.:-' '_' | cut -c1-60 || true)"
+  pbg_basis="$(jq -r '.basis // ""' "${pbg_out}" 2>/dev/null | tr -d '\n' || true)"
+  pbg_summary="$(jq -r '.summary // ""' "${pbg_out}" 2>/dev/null | tr -d '<>@#\r' | tr '\n' ' ' | cut -c1-1500 || true)"
+  rm -f "${pbg_out}"
+  case "${pbg_action}" in
+    continue|ignore|replan|escalate) ;;
+    *)
+      echo "PERSIST governor outcome=error reason=decide_failed issue=${pbg_issue}" >&2
+      rm -f "${pbg_comments_file}"
+      return 0
+      ;;
+  esac
+  PERSIST_BUDGET_LAST_BASIS="${pbg_basis}"
+  if [ "${pbg_action}" = "continue" ] || [ "${pbg_action}" = "ignore" ]; then
+    # Plan P6 "Done when": no journal logs as skipped.
+    [ "${pbg_reason}" = "journal_absent" ] && pbg_action="skipped"
+    echo "PERSIST governor outcome=${pbg_action} reason=${pbg_reason} issue=${pbg_issue}" >&2
+    rm -f "${pbg_comments_file}"
+    return 0
+  fi
+  # State flag (plan P6 "state flag"): this journal state was already
+  # re-planned. Only re-plans store it, so a later escalation (max_hours
+  # after a re-plan that never ran) still acts.
+  if [ "${pbg_action}" = "replan" ] && [ -n "${pbg_basis}" ] && [ "${pbg_basis}" = "${pbg_prior}" ]; then
+    echo "PERSIST governor outcome=skipped reason=already_decided issue=${pbg_issue}" >&2
+    rm -f "${pbg_comments_file}"
+    return 0
+  fi
+  pbg_lead="Persistence budget"
+  [ "${pbg_scope}" = "managed" ] && pbg_lead="Orchestrator persistence budget"
+  pbg_rc=0
+  if [ "${pbg_action}" = "replan" ]; then
+    if ! phase_cap_can_dispatch "ai:planning" retrigger_plan "${pbg_issue}"; then
+      echo "PERSIST governor outcome=deferred reason=phase_capped issue=${pbg_issue}" >&2
+      rm -f "${pbg_comments_file}"
+      return 0
+    fi
+    # plan.yml handles `/answer` only in ai:planning, ai:clarification or
+    # ai:blocked, so a later-phase issue is moved back to ai:planning first.
+    if ! printf '%s' "${pbg_labels}" | jq -e 'any(.[]; (if type == "object" then .name else . end) | IN("ai:planning", "ai:clarification", "ai:blocked"))' >/dev/null 2>&1; then
+      pbg_edit_args=(--add-label "ai:planning")
+      while IFS= read -r pbg_label; do
+        [ -n "${pbg_label}" ] && pbg_edit_args+=(--remove-label "${pbg_label}")
+      done < <(printf '%s' "${pbg_labels}" | jq -r '.[] | (if type == "object" then .name else . end) | strings | select(IN("ai:awaiting-approval", "ai:implementing", "ai:done", "ai:ready-to-merge", "ai:review-blocked"))' 2>/dev/null || true)
+      gh_retry gh issue edit "${pbg_issue}" --repo "${GITHUB_REPOSITORY}" "${pbg_edit_args[@]}" >/dev/null 2>&1 || pbg_rc=$?
+      if [ "${pbg_rc}" -ne 0 ]; then
+        echo "PERSIST governor outcome=error reason=planning_label_failed issue=${pbg_issue}" >&2
+        rm -f "${pbg_comments_file}"
+        return 0
+      fi
+    fi
+    pbg_body="$(printf '/answer\n\n_%s: %s. Re-triggering plan generation._\n\n%s\n' "${pbg_lead}" "${pbg_reason}" "${pbg_summary}")"
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pbg_issue}/comments" -f body="${pbg_body}" >/dev/null 2>&1 || pbg_rc=$?
+    if [ "${pbg_rc}" -ne 0 ]; then
+      echo "PERSIST governor outcome=error reason=answer_post_failed issue=${pbg_issue}" >&2
+      rm -f "${pbg_comments_file}"
+      return 0
+    fi
+    phase_cap_note_dispatch "ai:planning"
+    tg_notify_issue "${pbg_issue}" "${pbg_lead}: ${pbg_reason}; re-triggered planning." "DEBUG"
+    pbg_journal_outcome="ok"
+  else
+    gh_retry gh issue edit "${pbg_issue}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || pbg_rc=$?
+    if [ "${pbg_rc}" -ne 0 ]; then
+      echo "PERSIST governor outcome=error reason=label_failed issue=${pbg_issue}" >&2
+      rm -f "${pbg_comments_file}"
+      return 0
+    fi
+    pbg_body="$(printf '## Persistence budget reached\n\n%s: %s. The issue is labelled `ai:needs-human`; unattended work stops until a person decides.\n\n%s\n' "${pbg_lead}" "${pbg_reason}" "${pbg_summary}")"
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pbg_issue}/comments" -f body="${pbg_body}" >/dev/null 2>&1; then
+      # The label landed, so the escalation stands; later ticks ignore the
+      # issue (ai:needs-human), so the reason goes out once on Telegram instead.
+      echo "PERSIST governor outcome=error reason=comment_post_failed issue=${pbg_issue}" >&2
+      tg_notify_issue "${pbg_issue}" "${pbg_lead} reached (${pbg_reason}); labelled ai:needs-human, but the explanation comment could not be posted." "WARNING"
+    fi
+    pbg_journal_outcome="blocked"
+  fi
+  PERSIST_BUDGET_TICK_DECISIONS=$((PERSIST_BUDGET_TICK_DECISIONS + 1))
+  PERSIST_BUDGET_LAST_ACTION="${pbg_action}"
+  if [ -f scripts/attempt_journal.py ]; then
+    printf 'governor %s reason=%s' "${pbg_action}" "${pbg_reason}" > "${pbg_note}" 2>/dev/null || true
+    PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/attempt_journal.py append --repo "${GITHUB_REPOSITORY}" \
+      --issue "${pbg_issue}" --stage governor --outcome "${pbg_journal_outcome}" --approach inherit \
+      --comments-file "${pbg_comments_file}" --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" \
+      --note-file "${pbg_note}" || true
+  fi
+  rm -f "${pbg_comments_file}" "${pbg_note}"
+  echo "PERSIST governor outcome=${pbg_action} reason=${pbg_reason} issue=${pbg_issue}" >&2
+  return 0
+}
+
+# persist_orch_since_note WAVE_NUM [DETAILS_JSON] (issue #8427, P7).
+# Prints the `## Since this plan was decomposed` section for a wave WAVE_NUM
+# (1-based) issue body, rendered by scripts/persist_orchestrator.py since-note
+# from STATE_FILE only: merged items of earlier waves with their
+# persist_merged_pr and files_touched, judge-added items, and the newest
+# journal step of items whose comments are in DETAILS_JSON (the tick's
+# _current_wave_details_json cache). API budget (section 14): zero calls; the
+# pipeline login is the tick's shared PERSIST_JOURNAL_LOGIN_CACHE and no
+# identity read is made here (an empty login omits the journal lines).
+# Prints nothing, and starts no Python, unless PERSIST_ORCH_CONTEXT_ENABLED is
+# true and the helper is staged. Always returns 0.
+persist_orch_since_note() {
+  local pos_wave="${1:-}" pos_details="${2:-}" pos_base pos_details_file="" pos_out
+  [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] || return 0
+  [ -f scripts/persist_orchestrator.py ] || return 0
+  [[ "${pos_wave}" =~ ^[1-9][0-9]*$ ]] || return 0
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  pos_base="${RUNNER_TEMP:-/tmp}"
+  [ -d "${pos_base}" ] || pos_base="/tmp"
+  pos_out="$(mktemp "${pos_base}/persist_orch_since.XXXXXX" 2>/dev/null)" || return 0
+  if [ -n "${pos_details}" ] && printf '%s' "${pos_details}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    pos_details_file="$(mktemp "${pos_base}/persist_orch_details.XXXXXX" 2>/dev/null)" || pos_details_file=""
+    if [ -n "${pos_details_file}" ]; then
+      printf '%s' "${pos_details}" > "${pos_details_file}" 2>/dev/null || { rm -f "${pos_details_file}"; pos_details_file=""; }
+    fi
+  fi
+  local pos_args=(since-note --state-file "${STATE_FILE}" --current-wave "${pos_wave}"
+    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE:-}" --out "${pos_out}")
+  [ -n "${pos_details_file}" ] && pos_args+=(--details-file "${pos_details_file}")
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py "${pos_args[@]}" < /dev/null || true
+  [ -s "${pos_out}" ] && cat "${pos_out}" 2>/dev/null || true
+  rm -f "${pos_out}" ${pos_details_file:+"${pos_details_file}"}
+  return 0
+}
+
+# persist_orch_judge_added_json (issue #8427, P7): "true" when
+# PERSIST_ORCH_CONTEXT_ENABLED is on, else "false". The wave-judge additions
+# record persist_judge_added only then, so the since-note can tell judge-added
+# items from decomposed ones; with the switch off the state is unchanged.
+persist_orch_judge_added_json() {
+  if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ]; then echo true; else echo false; fi
+}
+
+# persist_orch_record_merged_pr WAVE_IDX ISSUE PR (issue #8427, P7): record
+# persist_merged_pr on a prior-wave entry the backward scan found merged (the
+# current-wave persist loop only covers .waves[WAVE_IDX]). Acts only with
+# PERSIST_ORCH_CONTEXT_ENABLED exactly "true" (the same rule as the workflow
+# gates and scripts/persist_orchestrator.py), only when the field is still
+# absent, and makes no API call. Always returns 0.
+persist_orch_record_merged_pr() {
+  local porm_wi="${1:-}" porm_issue="${2:-}" porm_pr="${3:-}"
+  [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] || return 0
+  [[ "${porm_wi}" =~ ^[0-9]+$ ]] && [[ "${porm_issue}" =~ ^[0-9]+$ ]] || return 0
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  if jq -e --argjson wi "${porm_wi}" --arg inum "${porm_issue}" \
+    'any(.waves[$wi].issues[]; (.github_issue | tostring) == $inum and has("persist_merged_pr"))' "${STATE_FILE}" >/dev/null 2>&1; then
+    return 0
+  fi
+  # Only a merged entry gets the field (a failed status write leaves none).
+  jq -e --argjson wi "${porm_wi}" --arg inum "${porm_issue}" \
+    'any(.waves[$wi].issues[]; (.github_issue | tostring) == $inum and .status == "merged")' "${STATE_FILE}" >/dev/null 2>&1 || return 0
+  if ! [[ "${porm_pr}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "PERSIST orch_context outcome=skipped reason=pr_unknown issue=${porm_issue}" >&2
+    return 0
+  fi
+  if jq --argjson wi "${porm_wi}" --arg inum "${porm_issue}" --arg pr "${porm_pr}" \
+    '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum and .status == "merged")).persist_merged_pr = ($pr|tonumber)' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    echo "PERSIST orch_context outcome=recorded issue=${porm_issue} pr=${porm_pr}" >&2
+  else
+    rm -f "${STATE_FILE}.tmp"
+    echo "PERSIST orch_context outcome=error reason=state_write_failed issue=${porm_issue}" >&2
+  fi
+  return 0
+}
+
+# persist_orch_group_failures (issue #8427, P8; grouping repeated failures).
+# The managed loop calls it in the not-stuck branch for .waves[WAVE_IDX]
+# after initialising PERSIST_ORCH_GROUP_STATE_CHANGED=false,
+# PERSIST_ORCH_GROUPED_ISSUES_JSON='{}' and PERSIST_ORCH_GROUP_DIAG_JSON='{}'.
+# Switch PERSIST_ORCH_FAILURE_GROUPING_ENABLED (exactly "true"; default
+# false, also defaulted in scripts/persist_orchestrator.py and
+# orchestrate_poll.yml). Off: starts no Python; one jq check removes leftover
+# grouped_under / persist_group_released_key fields from every wave (no write,
+# no log line when there are none). On: runs persist_orchestrator.py group
+# over STATE_FILE and the tick's _current_wave_details_json cache (written to
+# a scratch file, never argv), applies the decision to STATE_FILE in one jq
+# write (grouped_under = {owner, key, since}; since is kept while owner and key
+# stay the same), and only after that write lands posts one
+# `## Paused: same failure as another project item` comment
+# (AI_PERSIST_GROUPED_V1 key=<k> owner=<n>; skipped when the cached comments
+# already hold that marker from the pipeline login, posted no earlier than the
+# episode time newest_failure_ts: the later start of the item's and its owner's
+# newest run of same-key failures) per newly grouped item. Then exports the
+# tick-local maps PERSIST_ORCH_GROUPED_ISSUES_JSON ({member: owner}; the caller
+# hides members from check-stalls and the P6 governor) and
+# PERSIST_ORCH_GROUP_DIAG_JSON ({owner: [{issue, id, title, key}]}; title is
+# issue-author text labelled "UNTRUSTED_DATA: "; read by
+# invoke_stall_judge). A missing helper output, or a failed state write,
+# leaves the state as it was and pauses nothing. API budget (section 14): zero
+# reads (comments come from the GraphQL details cache), at most one identity
+# read shared through PERSIST_JOURNAL_LOGIN_CACHE, and one comment write per
+# newly grouped item. Always returns 0.
+persist_orch_group_failures() {
+  local pog_base pog_details pog_out pog_now pog_max pog_tmp pog_issue pog_owner pog_key pog_reason pog_body pog_ts
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  if [ "${PERSIST_ORCH_FAILURE_GROUPING_ENABLED:-false}" != "true" ]; then
+    jq -e 'any(.waves[]?.issues[]?; type == "object" and (has("grouped_under") or has("persist_group_released_key")))' \
+      "${STATE_FILE}" >/dev/null 2>&1 || return 0
+    if jq '(.waves[]?.issues[]? | select(type == "object")) |= del(.grouped_under, .persist_group_released_key)' \
+      "${STATE_FILE}" > "${STATE_FILE}.persist_group.tmp" 2>/dev/null && mv "${STATE_FILE}.persist_group.tmp" "${STATE_FILE}"; then
+      PERSIST_ORCH_GROUP_STATE_CHANGED=true
+      echo "PERSIST orch_group outcome=released reason=switch_off" >&2
+    else
+      rm -f "${STATE_FILE}.persist_group.tmp"
+      echo "PERSIST orch_group outcome=error reason=state_write_failed" >&2
+    fi
+    return 0
+  fi
+  [[ "${WAVE_IDX:-}" =~ ^[0-9]+$ ]] || return 0
+  if [ ! -f scripts/persist_orchestrator.py ]; then
+    echo "PERSIST orch_group outcome=skipped reason=helper_absent" >&2
+    return 0
+  fi
+  if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE:-}" ]; then
+    PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login 2>/dev/null)" || PERSIST_JOURNAL_LOGIN_CACHE=""
+    [[ "${PERSIST_JOURNAL_LOGIN_CACHE}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || PERSIST_JOURNAL_LOGIN_CACHE=""
+  fi
+  if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE}" ]; then
+    echo "PERSIST orch_group outcome=skipped reason=identity_unavailable" >&2
+    return 0
+  fi
+  pog_max="${PERSIST_ORCH_GROUP_MAX_HOURS:-12}"
+  [[ "${pog_max}" =~ ^[1-9][0-9]*$ ]] || pog_max=12
+  pog_base="${RUNTIME_DIR:-/tmp}"
+  [ -d "${pog_base}" ] || pog_base="/tmp"
+  pog_tmp="${STATE_FILE}.persist_group.tmp"
+  # Private scratch files (mktemp), so overlapping runs never share them.
+  pog_details="$(mktemp "${pog_base}/persist_orch_group_details.XXXXXX" 2>/dev/null)" || pog_details=""
+  pog_out="$(mktemp "${pog_base}/persist_orch_group_out.XXXXXX" 2>/dev/null)" || pog_out=""
+  if [ -z "${pog_details}" ] || [ -z "${pog_out}" ] \
+    || ! printf '%s' "${_current_wave_details_json:-}" > "${pog_details}" 2>/dev/null; then
+    rm -f "${pog_details}" "${pog_out}"
+    echo "PERSIST orch_group outcome=error reason=scratch_unwritable" >&2
+    return 0
+  fi
+  jq -e 'type == "object"' "${pog_details}" >/dev/null 2>&1 || printf '{}' > "${pog_details}"
+  pog_now="$(date -u +%s)"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py group --state-file "${STATE_FILE}" \
+    --journals-json "${pog_details}" --now "${pog_now}" --wave-index "${WAVE_IDX}" \
+    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" --out "${pog_out}" < /dev/null || true
+  if [ ! -s "${pog_out}" ] || ! jq -e 'type == "object" and (.groups | type) == "array"' "${pog_out}" >/dev/null 2>&1; then
+    # The helper logged why (switch, helper_absent, state_unreadable, ...).
+    rm -f "${pog_out}" "${pog_details}"
+    return 0
+  fi
+  if ! jq --argjson wi "${WAVE_IDX}" --argjson now "${pog_now}" --slurpfile g "${pog_out}" '
+    def ints: [.[]? | select(type == "number" and . > 0 and . == floor)];
+    def hex12: type == "string" and test("^[0-9a-f]{12}$");
+    ($g[0]) as $o
+    | ([$o.groups[]? | select((.owner | type) == "number" and (.owner > 0) and (.key | hex12))
+        | .owner as $ow | .key as $k | (.members | ints)[] | {key: tostring, value: {owner: $ow, key: $k}}] | from_entries) as $set
+    | ($o.release | ints | map(tostring)) as $rel
+    | ([$o.release_cooldown[]? | select((.issue | type) == "number" and (.key | hex12)) | {key: (.issue | tostring), value: .key}] | from_entries) as $cool
+    | ($o.clear_cooldown | ints | map(tostring)) as $clr
+    | .waves[$wi].issues |= map(
+        if type != "object" or .github_issue == null then .
+        else (.github_issue | tostring) as $n
+        | (if ($n | IN($rel[])) then del(.grouped_under) else . end)
+        | (if $set[$n] != null then
+            .grouped_under = (if (.grouped_under | type) == "object" and .grouped_under.owner == $set[$n].owner
+              and .grouped_under.key == $set[$n].key and ((.grouped_under.since | type) == "number")
+              then .grouped_under else {owner: $set[$n].owner, key: $set[$n].key, since: $now} end)
+          else . end)
+        | (if $cool[$n] != null then .persist_group_released_key = $cool[$n]
+          elif ($n | IN($clr[])) then del(.persist_group_released_key) else . end)
+        end)' "${STATE_FILE}" > "${pog_tmp}" 2>/dev/null || [ ! -s "${pog_tmp}" ]; then
+    rm -f "${pog_tmp}" "${pog_out}" "${pog_details}"
+    echo "PERSIST orch_group outcome=error reason=state_write_failed" >&2
+    return 0
+  fi
+  if jq -e --slurpfile a "${pog_tmp}" '. == $a[0]' "${STATE_FILE}" >/dev/null 2>&1; then
+    rm -f "${pog_tmp}"
+  elif mv "${pog_tmp}" "${STATE_FILE}" 2>/dev/null; then
+    PERSIST_ORCH_GROUP_STATE_CHANGED=true
+  else
+    rm -f "${pog_tmp}" "${pog_out}" "${pog_details}"
+    echo "PERSIST orch_group outcome=error reason=state_write_failed" >&2
+    return 0
+  fi
+  while IFS=$'\t' read -r pog_issue pog_reason; do
+    [[ "${pog_issue}" =~ ^[1-9][0-9]*$ ]] || continue
+    echo "PERSIST orch_group outcome=released issue=${pog_issue} reason=${pog_reason}" >&2
+  done < <(jq -r '(.release_reasons // {}) as $r | .release[]? | select(type == "number" and . > 0)
+    | [tostring, (($r[tostring] // "unknown") | tostring | gsub("[^A-Za-z0-9_.-]"; "_") | .[0:40])] | @tsv' "${pog_out}" 2>/dev/null || true)
+  PERSIST_ORCH_GROUPED_ISSUES_JSON="$(jq -c --argjson wi "${WAVE_IDX}" '[.waves[$wi].issues[]?
+    | select(type == "object" and (.grouped_under | type) == "object" and (.github_issue | type) == "number")
+    | select((.grouped_under.owner | type) == "number")
+    | {key: (.github_issue | tostring), value: .grouped_under.owner}] | from_entries' "${STATE_FILE}" 2>/dev/null)" \
+    || PERSIST_ORCH_GROUPED_ISSUES_JSON='{}'
+  [ -n "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" ] || PERSIST_ORCH_GROUPED_ISSUES_JSON='{}'
+  # Titles come from the details cache (issue-author text): control characters,
+  # comment delimiters, "#" and "@" are stripped, runs of "=" are broken up so a
+  # title cannot imitate a prompt section header, the length is capped at 120,
+  # and a non-empty title is labelled "UNTRUSTED_DATA: " so the stall judge (and
+  # its semble query) reads it as data, not instructions.
+  PERSIST_ORCH_GROUP_DIAG_JSON="$(jq -c --argjson wi "${WAVE_IDX}" --slurpfile d "${pog_details}" '($d[0] // {}) as $cache
+    | [.waves[$wi].issues[]?
+    | select(type == "object" and (.grouped_under | type) == "object" and (.github_issue | type) == "number")
+    | select((.grouped_under.owner | type) == "number")
+    | {owner: (.grouped_under.owner | tostring),
+       item: {issue: .github_issue, id: ((.id // "item") | tostring | gsub("[^A-Za-z0-9._-]"; "_") | .[0:40]),
+              title: (($cache[.github_issue | tostring].title? // "") | tostring
+                | gsub("\\p{Cc}|\\p{Zl}|\\p{Zp}"; " ") | gsub("<!--|-->"; "") | gsub("={3,}"; "= = =") | gsub("[#@]"; "") | .[0:120]
+                | if . == "" then . else "UNTRUSTED_DATA: " + . end),
+              key: ((.grouped_under.key // "") | tostring | gsub("[^0-9a-f]"; "") | .[0:12])}}]
+    | group_by(.owner) | map({key: .[0].owner, value: map(.item)}) | from_entries' "${STATE_FILE}" 2>/dev/null)" \
+    || PERSIST_ORCH_GROUP_DIAG_JSON='{}'
+  [ -n "${PERSIST_ORCH_GROUP_DIAG_JSON}" ] || PERSIST_ORCH_GROUP_DIAG_JSON='{}'
+  while IFS=$'\t' read -r pog_issue pog_owner pog_key pog_ts; do
+    [[ "${pog_issue}" =~ ^[1-9][0-9]*$ ]] && [[ "${pog_owner}" =~ ^[1-9][0-9]*$ ]] && [[ "${pog_key}" =~ ^[0-9a-f]{12}$ ]] || continue
+    [[ "${pog_ts:-}" =~ ^[0-9]+$ ]] || pog_ts=0
+    echo "PERSIST orch_group outcome=grouped issue=${pog_issue} owner=${pog_owner}" >&2
+    # The grouping state reaches the tracking issue only later in the tick
+    # (post_state_comment), so a cached pipeline comment with the same marker
+    # (key and owner), posted no earlier than the episode time (newest_failure_ts),
+    # means this pause episode was already announced: skip the post. A marker
+    # from an earlier episode (older than the failure that regrouped the item)
+    # does not count.
+    if jq -e --arg n "${pog_issue}" --arg login "${PERSIST_JOURNAL_LOGIN_CACHE}" \
+      --arg m "<!-- AI_PERSIST_GROUPED_V1 key=${pog_key} owner=${pog_owner} " --argjson ts "${pog_ts}" \
+      'any((.[$n].comments? // [])[]?; type == "object" and ((.user.login? // "") == $login) and ((.body // "") | tostring | contains($m))
+        and (((.created_at // "") | tostring | (try fromdateiso8601 catch -1)) >= $ts))' \
+      "${pog_details}" >/dev/null 2>&1; then
+      continue
+    fi
+    pog_body="$(printf '## Paused: same failure as another project item\n\nThe newest failure of this item has the same failure key (`%s`) as issue %s. Stall recovery and re-triggers are paused until that item'"'"'s failure changes, its pull request merges, or %s hours pass.\n\n<!-- AI_PERSIST_GROUPED_V1 key=%s owner=%s -->\n' \
+      "${pog_key}" "${pog_owner}" "${pog_max}" "${pog_key}" "${pog_owner}")"
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pog_issue}/comments" -f body="${pog_body}" >/dev/null 2>&1; then
+      # Not retried: the item stays paused, and the pause is still bounded by
+      # PERSIST_ORCH_GROUP_MAX_HOURS.
+      echo "PERSIST orch_group outcome=error reason=comment_failed issue=${pog_issue}" >&2
+    fi
+  done < <(jq -r --argjson wi "${WAVE_IDX}" --slurpfile g "${pog_out}" '
+    [$g[0].new[]? | select(type == "number" and . > 0) | tostring] as $new
+    | .waves[$wi].issues[]?
+    | select(type == "object" and (.grouped_under | type) == "object" and ((.github_issue | tostring) | IN($new[])))
+    | [(.github_issue | tostring), (.grouped_under.owner | tostring), (.grouped_under.key | tostring),
+       (($g[0].newest_failure_ts? // {})[.github_issue | tostring] // 0 | tostring)] | @tsv' "${STATE_FILE}" 2>/dev/null || true)
+  rm -f "${pog_out}" "${pog_details}"
+  return 0
+}
+
+# _persist_orch_wave_check_clear REASON (issue #8427, P9). Removes the
+# top-level wave_check_wait_since field from STATE_FILE when it is present and
+# posts the state, so a wait from one wave boundary never carries over to a
+# later one. One jq check and nothing else when the field is absent.
+_persist_orch_wave_check_clear() {
+  local pwcc_reason="$1"
+  jq -e 'type == "object" and (has("wave_check_wait_since") or has("wave_check_wait_head") or has("wave_check_judged") or has("wave_check_judged_at"))' "${STATE_FILE}" >/dev/null 2>&1 || return 0
+  if jq 'del(.wave_check_wait_since, .wave_check_wait_head, .wave_check_judged, .wave_check_judged_at)' "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+    && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
+    && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
+    echo "PERSIST wave_check outcome=cleared reason=${pwcc_reason}" >&2
+    post_state_comment || true
+  else
+    rm -f "${STATE_FILE}.persist_wave_check.tmp"
+    echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
+  fi
+  return 0
+}
+
+# _persist_orch_wave_check_unjudge REASON (issue #8427, P9). Called on the wave
+# judge's no-verdict exits (checkout failure, isolation unavailable, judge run
+# failed, unparseable output). When this tick's judge run came from the
+# between-waves check (PERSIST_ORCH_WAVE_CHECK_BLOCK set), removes the
+# wave_check_judged / wave_check_judged_at marker written before the judge ran,
+# so the next tick invokes the judge again instead of holding as
+# judged_recently. The wait fields are kept. No-op otherwise.
+_persist_orch_wave_check_unjudge() {
+  local pwcu_reason="$1"
+  [ -n "${PERSIST_ORCH_WAVE_CHECK_BLOCK:-}" ] || return 0
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  jq -e 'type == "object" and (has("wave_check_judged") or has("wave_check_judged_at"))' "${STATE_FILE}" >/dev/null 2>&1 || return 0
+  if jq 'del(.wave_check_judged, .wave_check_judged_at)' "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+    && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
+    && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
+    echo "PERSIST wave_check outcome=unjudged reason=${pwcu_reason}" >&2
+    post_state_comment || true
+  else
+    rm -f "${STATE_FILE}.persist_wave_check.tmp"
+    echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
+  fi
+  return 0
+}
+
+# _persist_orch_wave_check_stamp HEAD_SHA [SINCE] (issue #8427, P9). Writes
+# wave_check_wait_since (SINCE when given, else now, starting the wait clock)
+# and wave_check_wait_head (the head last seen at the boundary; empty when no
+# head was known) and posts the state. Returns 1 when the state could not be
+# written.
+_persist_orch_wave_check_stamp() {
+  local pwcs_head="$1"
+  local pwcs_since="${2:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  if jq --arg t "${pwcs_since}" --arg h "${pwcs_head}" '.wave_check_wait_since = $t | .wave_check_wait_head = $h' \
+      "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+    && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
+    && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
+    post_state_comment || true
+    return 0
+  fi
+  rm -f "${STATE_FILE}.persist_wave_check.tmp"
+  echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
+  return 1
+}
+
+# persist_orch_wave_check (issue #8427, P9; check between waves). Called in the
+# managed loop immediately before the clean-wave skip (SKIP_JUDGE_FOR_CLEAN_WAVE)
+# after initialising PERSIST_ORCH_WAVE_CHECK_BLOCK="" and
+# PERSIST_ORCH_WAVE_CHECK_HOLD=false; never in a subshell, it sets them.
+# Switch PERSIST_ORCH_WAVE_CHECK_ENABLED (exactly "true"; default false, also
+# defaulted in scripts/persist_orchestrator.py and orchestrate_poll.yml).
+# Off: starts no Python and makes no API call; one jq check removes a leftover
+# wave_check_wait_since field (then posts the state). On, and only when every
+# clean-wave skip condition holds: reads the head SHA of the pending
+# final_merge_pr that the external-finalize block captured this tick
+# (PERSIST_ORCH_WAVE_CHECK_HEAD_SHA, no extra read), reads one page of its
+# check runs and classifies them with persist_orchestrator.py wave-check
+# against the final-merge gate's required names (ORCH_FINAL_MERGE_REQUIRED_CHECKS;
+# the branch-protection lookup is not repeated here). The first tick that
+# reaches a boundary only records wave_check_wait_since / wave_check_wait_head
+# and holds: the head was read before this tick's sub-issue merges (or the
+# final PR was created this tick), so the next tick reads the current head.
+# A head that moved during a hold keeps the wait clock (the wait is bounded per
+# boundary, not per head) and only the recorded head is updated.
+# green: the skip proceeds. pending / no_checks: records wave_check_wait_since
+# once (post_state_comment) and sets PERSIST_ORCH_WAVE_CHECK_HOLD=true (the
+# caller continues to the next project). red, or pending after
+# PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES (default 90): reads at most one
+# Actions job log tail, renders the fenced UNTRUSTED WAVE CHECK block into
+# PERSIST_ORCH_WAVE_CHECK_BLOCK and sets INVOKE_JUDGE_FOR_STUCK=true so the
+# existing wave-judge path runs. No final PR, no head SHA, unreadable checks,
+# no checks after the wait, or a helper failure: today's skip (fail open).
+# green / red / timeout append a wave_check entry to the tracking issue's
+# attempt journal (the helper's own PERSIST_JOURNAL_ENABLED gate applies).
+# API budget (section 14): at most two reads (check runs + one job log), plus
+# the identity read shared through PERSIST_JOURNAL_LOGIN_CACHE. The journal
+# append is a separate comment write by attempt_journal.py under its own
+# PERSIST_JOURNAL_ENABLED gate and is not counted here. Always returns 0.
+persist_orch_wave_check() {
+  local pwc_pr pwc_status pwc_sha pwc_base pwc_runs pwc_out pwc_log pwc_block pwc_details pwc_comments pwc_note
+  local pwc_wait pwc_wait_head pwc_outcome pwc_job pwc_waited pwc_max pwc_failing pwc_valid pwc_truncated pwc_journal
+  local pwc_head_moved=false pwc_ci_name="none"
+  local pwc_judged_key pwc_judged_prev pwc_judged_at pwc_now pwc_since_keep
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  if [ "${PERSIST_ORCH_WAVE_CHECK_ENABLED:-false}" != "true" ]; then
+    _persist_orch_wave_check_clear switch_off
+    return 0
+  fi
+  if [ "${ENABLE_CLEAN_WAVE_JUDGE_SKIP:-}" != "true" ] \
+    || [ "${INVOKE_JUDGE_FOR_STUCK:-}" = "true" ] \
+    || [ "${WAVE_COMPLETE:-}" != "true" ] \
+    || [ "${ANY_FAILED:-}" = "true" ] \
+    || [ "${PROJECT_COMPLETE:-}" = "true" ] \
+    || ! [[ "${CURRENT_WAVE:-}" =~ ^[0-9]+$ ]] || ! [[ "${TOTAL_WAVES:-}" =~ ^[0-9]+$ ]] \
+    || [ "${CURRENT_WAVE}" -ge "${TOTAL_WAVES}" ]; then
+    _persist_orch_wave_check_clear stale
+    return 0
+  fi
+  pwc_pr="$(jq -r 'if (.final_merge_pr | type) == "number" then (.final_merge_pr | tostring) else (.final_merge_pr // "" | tostring) end' "${STATE_FILE}" 2>/dev/null || true)"
+  pwc_status="$(jq -r '.final_merge_status // "pending" | tostring' "${STATE_FILE}" 2>/dev/null || true)"
+  if ! [[ "${pwc_pr}" =~ ^[1-9][0-9]*$ ]] || [ "${pwc_status}" != "pending" ]; then
+    echo "PERSIST wave_check outcome=skipped reason=no_final_pr" >&2
+    _persist_orch_wave_check_clear no_final_pr
+    return 0
+  fi
+  pwc_wait="$(jq -r '.wave_check_wait_since // "" | if type == "string" then . else "" end' "${STATE_FILE}" 2>/dev/null || true)"
+  [[ "${pwc_wait}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || pwc_wait=""
+  pwc_wait_head="$(jq -r '.wave_check_wait_head // "" | if type == "string" then . else "" end' "${STATE_FILE}" 2>/dev/null || true)"
+  pwc_sha="${PERSIST_ORCH_WAVE_CHECK_HEAD_SHA:-}"
+  if ! [[ "${pwc_sha}" =~ ^[0-9a-f]{40}$ ]] || [ "${PERSIST_ORCH_WAVE_CHECK_HEAD_PR:-}" != "${pwc_pr}" ]; then
+    # First tick at the boundary (for example the final PR was recorded this
+    # tick, after the external-finalize read): hold once so the next tick
+    # reads its head. Later ticks without a head fail open, as before.
+    if [ -z "${pwc_wait}" ] && _persist_orch_wave_check_stamp ""; then
+      echo "PERSIST wave_check outcome=pending reason=head_sha_unavailable pr=${pwc_pr}" >&2
+      PERSIST_ORCH_WAVE_CHECK_HOLD=true
+      return 0
+    fi
+    echo "PERSIST wave_check outcome=skipped reason=head_sha_unavailable pr=${pwc_pr}" >&2
+    _persist_orch_wave_check_clear head_sha_unavailable
+    return 0
+  fi
+  if [ ! -f scripts/persist_orchestrator.py ]; then
+    echo "PERSIST wave_check outcome=skipped reason=helper_absent" >&2
+    _persist_orch_wave_check_clear helper_absent
+    return 0
+  fi
+  if [ -z "${pwc_wait}" ]; then
+    # First tick at this boundary: the head was read before this tick's
+    # sub-issue merges, so hold once and classify the next tick's head. When
+    # the stamp cannot be written, classify this head instead (no endless hold).
+    if _persist_orch_wave_check_stamp "${pwc_sha}"; then
+      echo "PERSIST wave_check outcome=pending reason=boundary_first_seen pr=${pwc_pr}" >&2
+      PERSIST_ORCH_WAVE_CHECK_HOLD=true
+      return 0
+    fi
+  elif [ "${pwc_wait_head}" != "${pwc_sha}" ]; then
+    # The head moved during the hold. The wait clock is kept, so a head that
+    # keeps moving cannot hold the boundary past the maximum wait; the new head
+    # is recorded only by a branch that writes state anyway (one write a tick).
+    pwc_head_moved=true
+  fi
+  # The CI check name whose cancelled runs a newer same-name run from another
+  # workflow must not hide (the rule of PR_CHECKS_JQ_SUPERSEDE_DEFS).
+  if declare -F _pr_auto_merge_required_ci_check_name >/dev/null 2>&1; then
+    pwc_ci_name="$(_pr_auto_merge_required_ci_check_name 2>/dev/null || echo none)"
+  fi
+  pwc_base="${RUNTIME_DIR:-/tmp}"
+  [ -d "${pwc_base}" ] || pwc_base="/tmp"
+  # Private scratch files (mktemp), so overlapping runs never share them.
+  pwc_runs="$(mktemp "${pwc_base}/persist_wave_check_runs.XXXXXX" 2>/dev/null)" || pwc_runs=""
+  pwc_out="$(mktemp "${pwc_base}/persist_wave_check_out.XXXXXX" 2>/dev/null)" || pwc_out=""
+  if [ -z "${pwc_runs}" ] || [ -z "${pwc_out}" ]; then
+    rm -f "${pwc_runs}" "${pwc_out}"
+    echo "PERSIST wave_check outcome=error reason=scratch_unwritable" >&2
+    _persist_orch_wave_check_clear scratch_unwritable
+    return 0
+  fi
+  # API read 1 of at most 2: one page, no --paginate. A failure leaves the
+  # file empty and the helper reports unavailable.
+  gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${pwc_sha}/check-runs?per_page=100" > "${pwc_runs}" 2>/dev/null || : > "${pwc_runs}"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py wave-check --check-runs-file "${pwc_runs}" \
+    --now "$(date -u +%s)" --wait-since="${pwc_wait}" \
+    --required-names="${ORCH_FINAL_MERGE_REQUIRED_CHECKS-${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:-*}}" \
+    --ci-check-name="${pwc_ci_name:-none}" \
+    --out "${pwc_out}" < /dev/null || true
+  rm -f "${pwc_runs}"
+  pwc_outcome="$(jq -r 'if type == "object" and .schema == "wave_check.v1" then (.outcome // "" | tostring) else "" end' "${pwc_out}" 2>/dev/null || true)"
+  case "${pwc_outcome}" in
+    green|pending|no_checks|red|timeout|no_checks_timeout|unavailable) ;;
+    *)
+      rm -f "${pwc_out}"
+      echo "PERSIST wave_check outcome=skipped reason=helper_failed pr=${pwc_pr}" >&2
+      _persist_orch_wave_check_clear helper_failed
+      return 0
+      ;;
+  esac
+  pwc_waited="$(jq -r '.waited_minutes // 0 | if type == "number" then floor else 0 end' "${pwc_out}" 2>/dev/null || echo 0)"
+  pwc_max="$(jq -r '.max_wait_minutes // 0 | if type == "number" then floor else 0 end' "${pwc_out}" 2>/dev/null || echo 0)"
+  pwc_failing="$(jq -r '.failing | if type == "array" then length else 0 end' "${pwc_out}" 2>/dev/null || echo 0)"
+  pwc_valid="$(jq -r 'if .wait_since_valid == true then "true" else "false" end' "${pwc_out}" 2>/dev/null || echo false)"
+  pwc_truncated="$(jq -r 'if .truncated == true then 1 else 0 end' "${pwc_out}" 2>/dev/null || echo 0)"
+  pwc_job="$(jq -r '.log_job_id // "" | tostring' "${pwc_out}" 2>/dev/null || true)"
+  [[ "${pwc_waited}" =~ ^[0-9]+$ ]] || pwc_waited=0
+  [[ "${pwc_max}" =~ ^[0-9]+$ ]] || pwc_max=0
+  [[ "${pwc_failing}" =~ ^[0-9]+$ ]] || pwc_failing=0
+  [[ "${pwc_truncated}" =~ ^[01]$ ]] || pwc_truncated=0
+  pwc_journal=""
+  # A red / timeout head already sent to the judge holds instead of invoking
+  # it again on every tick: the same head and outcome reach the judge at most
+  # once per PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES (the final-PR phase
+  # bypasses the judge-cycle cap, so nothing else bounds it). A head move, a
+  # new outcome, or the wait fields' stale clear (wave advanced or fix-ups
+  # added) lets the judge run again.
+  pwc_judged_key=""
+  pwc_now="$(date -u +%s)"
+  if [ "${pwc_outcome}" = "red" ] || [ "${pwc_outcome}" = "timeout" ]; then
+    pwc_judged_key="${pwc_sha}:${pwc_outcome}"
+    pwc_judged_prev="$(jq -r '.wave_check_judged // "" | if type == "string" then . else "" end' "${STATE_FILE}" 2>/dev/null || true)"
+    pwc_judged_at="$(jq -r '.wave_check_judged_at // 0 | if type == "number" then floor else 0 end' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    [[ "${pwc_judged_at}" =~ ^[0-9]+$ ]] || pwc_judged_at=0
+    if [ "${pwc_judged_prev}" = "${pwc_judged_key}" ] && [ "${pwc_judged_at}" -gt 0 ] \
+      && [ "${pwc_judged_at}" -le "${pwc_now}" ] && [ $((pwc_now - pwc_judged_at)) -lt $((pwc_max * 60)) ]; then
+      pwc_outcome="judged_hold"
+    fi
+  fi
+  case "${pwc_outcome}" in
+    judged_hold)
+      echo "PERSIST wave_check outcome=pending reason=judged_recently pr=${pwc_pr} waited=${pwc_waited} max=${pwc_max}" >&2
+      PERSIST_ORCH_WAVE_CHECK_HOLD=true
+      ;;
+    green)
+      echo "PERSIST wave_check outcome=green reason=checks_passed pr=${pwc_pr} truncated=${pwc_truncated}" >&2
+      _persist_orch_wave_check_clear green
+      pwc_journal="ok"
+      ;;
+    pending|no_checks)
+      if [ "${pwc_valid}" != "true" ]; then
+        _persist_orch_wave_check_stamp "${pwc_sha}" || true
+      elif [ "${pwc_head_moved}" = "true" ]; then
+        _persist_orch_wave_check_stamp "${pwc_sha}" "${pwc_wait}" || true
+      fi
+      if [ "${pwc_outcome}" = "pending" ]; then
+        echo "PERSIST wave_check outcome=pending reason=checks_pending pr=${pwc_pr} waited=${pwc_waited} max=${pwc_max}" >&2
+      else
+        echo "PERSIST wave_check outcome=pending reason=no_checks pr=${pwc_pr} waited=${pwc_waited} max=${pwc_max}" >&2
+      fi
+      PERSIST_ORCH_WAVE_CHECK_HOLD=true
+      ;;
+    red|timeout)
+      if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE:-}" ]; then
+        PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login 2>/dev/null)" || PERSIST_JOURNAL_LOGIN_CACHE=""
+        [[ "${PERSIST_JOURNAL_LOGIN_CACHE}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || PERSIST_JOURNAL_LOGIN_CACHE=""
+      fi
+      pwc_log=""
+      if [[ "${pwc_job}" =~ ^[1-9][0-9]*$ ]]; then
+        pwc_log="$(mktemp "${pwc_base}/persist_wave_check_log.XXXXXX" 2>/dev/null)" || pwc_log=""
+        if [ -n "${pwc_log}" ]; then
+          # API read 2 of at most 2: the failing Actions job's log; only its
+          # last 8192 bytes reach the helper and the log never reaches stdout.
+          { gh_retry gh api --allow-escape-sequences "repos/${GITHUB_REPOSITORY}/actions/jobs/${pwc_job}/logs" 2>/dev/null || true; } | tail -c 8192 > "${pwc_log}" 2>/dev/null || : > "${pwc_log}"
+        fi
+      fi
+      pwc_details="$(mktemp "${pwc_base}/persist_wave_check_details.XXXXXX" 2>/dev/null)" || pwc_details=""
+      pwc_block="$(mktemp "${pwc_base}/persist_wave_check_block.XXXXXX" 2>/dev/null)" || pwc_block=""
+      if [ -n "${pwc_details}" ] && [ -n "${pwc_block}" ]; then
+        printf '%s' "${_current_wave_details_json:-}" > "${pwc_details}" 2>/dev/null || : > "${pwc_details}"
+        jq -e 'type == "object"' "${pwc_details}" >/dev/null 2>&1 || printf '{}' > "${pwc_details}"
+        if [ -n "${pwc_log}" ] && [ -s "${pwc_log}" ]; then
+          PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py wave-check-block --result-file "${pwc_out}" \
+            --log-file "${pwc_log}" --state-file "${STATE_FILE}" --wave-index "${WAVE_IDX:-0}" --journals-json "${pwc_details}" \
+            --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE:-}" --out "${pwc_block}" < /dev/null || true
+        else
+          PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py wave-check-block --result-file "${pwc_out}" \
+            --state-file "${STATE_FILE}" --wave-index "${WAVE_IDX:-0}" --journals-json "${pwc_details}" \
+            --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE:-}" --out "${pwc_block}" < /dev/null || true
+        fi
+        PERSIST_ORCH_WAVE_CHECK_BLOCK="$(cat "${pwc_block}" 2>/dev/null || true)"
+      fi
+      rm -f "${pwc_log}" "${pwc_details}" "${pwc_block}"
+      if [ -z "${PERSIST_ORCH_WAVE_CHECK_BLOCK}" ]; then
+        # Helper failed to render: the judge still learns why it was invoked.
+        PERSIST_ORCH_WAVE_CHECK_BLOCK="$(printf '=== BEGIN UNTRUSTED WAVE CHECK ===\nUNTRUSTED_DATA: outcome: %s (details unavailable)\n=== END UNTRUSTED WAVE CHECK ===' "${pwc_outcome}")"
+      fi
+      INVOKE_JUDGE_FOR_STUCK=true
+      if [ "${pwc_outcome}" = "red" ]; then
+        echo "PERSIST wave_check outcome=red reason=checks_failed pr=${pwc_pr} failing=${pwc_failing} truncated=${pwc_truncated}" >&2
+      else
+        echo "PERSIST wave_check outcome=timeout reason=checks_pending pr=${pwc_pr} failing=${pwc_failing} waited=${pwc_waited} max=${pwc_max}" >&2
+      fi
+      # The wait fields stay, so the next tick classifies this head again
+      # instead of taking the boundary_first_seen hold; wave_check_judged
+      # records this head and outcome so the judged_hold above bounds repeat
+      # judge runs. The stale clear (also run on incomplete-wave ticks) removes
+      # them once the judge advances the wave or adds fix-ups.
+      pwc_since_keep="${pwc_wait}"
+      [ "${pwc_valid}" = "true" ] || pwc_since_keep="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      if jq --arg t "${pwc_since_keep}" --arg h "${pwc_sha}" --arg k "${pwc_judged_key}" --argjson n "${pwc_now}" \
+          '.wave_check_wait_since = $t | .wave_check_wait_head = $h | .wave_check_judged = $k | .wave_check_judged_at = $n' \
+          "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+        && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
+        && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
+        post_state_comment || true
+      else
+        rm -f "${STATE_FILE}.persist_wave_check.tmp"
+        echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
+      fi
+      pwc_journal="fail"
+      ;;
+    no_checks_timeout)
+      echo "PERSIST wave_check outcome=skipped reason=no_checks pr=${pwc_pr} waited=${pwc_waited} max=${pwc_max}" >&2
+      _persist_orch_wave_check_clear no_checks
+      ;;
+    unavailable)
+      echo "PERSIST wave_check outcome=skipped reason=checks_unavailable pr=${pwc_pr}" >&2
+      _persist_orch_wave_check_clear checks_unavailable
+      ;;
+  esac
+  if [ -n "${pwc_journal}" ] && [ -f scripts/attempt_journal.py ]; then
+    if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE:-}" ]; then
+      PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login 2>/dev/null)" || PERSIST_JOURNAL_LOGIN_CACHE=""
+      [[ "${PERSIST_JOURNAL_LOGIN_CACHE}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || PERSIST_JOURNAL_LOGIN_CACHE=""
+    fi
+    if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE}" ] || [ "${COMMENTS_FETCH_OK:-false}" != "true" ] \
+      || [ "${COMMENTS_FOR_TRACKING_NUM:-}" != "${TRACKING_NUM:-}" ] || ! [[ "${TRACKING_NUM:-}" =~ ^[1-9][0-9]*$ ]]; then
+      # The tick's tracking comments are the only journal read (no extra call).
+      echo "PERSIST wave_check outcome=skipped reason=journal_unavailable pr=${pwc_pr}" >&2
+    else
+      pwc_comments="$(mktemp "${pwc_base}/persist_wave_check_comments.XXXXXX" 2>/dev/null)" || pwc_comments=""
+      pwc_note="$(mktemp "${pwc_base}/persist_wave_check_note.XXXXXX" 2>/dev/null)" || pwc_note=""
+      if [ -n "${pwc_comments}" ] && [ -n "${pwc_note}" ] \
+        && printf '%s' "${COMMENTS:-[]}" > "${pwc_comments}" 2>/dev/null \
+        && printf 'wave %s pr=%s outcome=%s' "${CURRENT_WAVE}" "${pwc_pr}" "${pwc_outcome}" > "${pwc_note}" 2>/dev/null; then
+        PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/attempt_journal.py append --repo "${GITHUB_REPOSITORY}" \
+          --issue "${TRACKING_NUM}" --stage wave_check --outcome "${pwc_journal}" --approach inherit \
+          --comments-file "${pwc_comments}" --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" \
+          --note-file "${pwc_note}" < /dev/null || true
+      fi
+      rm -f "${pwc_comments}" "${pwc_note}"
+    fi
+  fi
+  rm -f "${pwc_out}"
+  return 0
+}
+
+# persist_orch_revise_option_block (issue #8427, P10; re-decompose remaining
+# waves). Prints prompts/mode-judge-revise-option.txt (the optional
+# revise_remaining / revise_reason judge output fields) for the wave-judge
+# prompt, only when PERSIST_ORCH_REDECOMPOSE_ENABLED is exactly "true", the
+# fragment and scripts/persist_orchestrator.py are staged, CURRENT_WAVE <
+# TOTAL_WAVES and the state's redecompose_count is below
+# PERSIST_ORCH_MAX_REDECOMPOSE (default 2). Otherwise prints nothing and
+# starts no Python, so the judge prompt is byte-identical with the switch off.
+persist_orch_revise_option_block() {
+  local porb_max porb_count
+  [ "${PERSIST_ORCH_REDECOMPOSE_ENABLED:-false}" = "true" ] || return 0
+  [ -f prompts/mode-judge-revise-option.txt ] && [ -f scripts/persist_orchestrator.py ] || return 0
+  [[ "${CURRENT_WAVE:-}" =~ ^[1-9][0-9]*$ ]] && [[ "${TOTAL_WAVES:-}" =~ ^[1-9][0-9]*$ ]] || return 0
+  [ "${CURRENT_WAVE}" -lt "${TOTAL_WAVES}" ] || return 0
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  porb_max="${PERSIST_ORCH_MAX_REDECOMPOSE:-2}"
+  [[ "${porb_max}" =~ ^[1-9][0-9]*$ ]] || porb_max=2
+  porb_count="$(jq -r '.redecompose_count // 0 | if type == "number" and . >= 0 then floor else 0 end' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${porb_count}" =~ ^[0-9]+$ ]] || porb_count=0
+  [ "${porb_count}" -lt "${porb_max}" ] || return 0
+  echo
+  cat prompts/mode-judge-revise-option.txt 2>/dev/null || true
+  return 0
+}
+
+# persist_orch_redecompose (issue #8427, P10). Called in the wave judge's
+# in_progress arm immediately before "Advance to next wave", only on the branch
+# where the judge added no current-wave issues. Acts only when
+# PERSIST_ORCH_REDECOMPOSE_ENABLED is exactly "true", JUDGE_JSON has
+# revise_remaining == true, CURRENT_WAVE < TOTAL_WAVES and the helper and
+# prompts/mode-orchestrate-revise.txt are staged. Flow: persist_orchestrator.py
+# revise-input renders the fenced UNTRUSTED blocks from STATE_FILE, the tick's
+# _current_wave_details_json cache and revise_reason (zero API calls); one
+# sandboxed WAVE_JUDGE run through the poller judge runner (no retries, no host fallback;
+# rc 77 skips) writes the revised pending_issue_defs; revise-validate checks it
+# and only then writes the new state, which replaces STATE_FILE, and the
+# tracking comment, posted once. The next wave's deferred creation reads the
+# revised defs, and the arm's post_state_comment persists the state. API
+# budget (section 14): one comment per successful revise. Any failure leaves
+# STATE_FILE untouched and the wave advances on the old defs. Always returns 0.
+persist_orch_redecompose() {
+  local prd_base prd_reason prd_details="" prd_tail prd_prompt prd_out prd_state prd_comment prd_rc=0 prd_total prd_render_rc=0
+  [ "${PERSIST_ORCH_REDECOMPOSE_ENABLED:-false}" = "true" ] || return 0
+  printf '%s' "${JUDGE_JSON:-}" | jq -e 'type == "object" and .revise_remaining == true' >/dev/null 2>&1 || return 0
+  if [ ! -f scripts/persist_orchestrator.py ] || [ ! -f prompts/mode-orchestrate-revise.txt ]; then
+    echo "PERSIST redecompose outcome=skipped reason=helper_absent" >&2
+    return 0
+  fi
+  if ! [[ "${CURRENT_WAVE:-}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${TOTAL_WAVES:-}" =~ ^[1-9][0-9]*$ ]] \
+    || [ "${CURRENT_WAVE}" -ge "${TOTAL_WAVES}" ]; then
+    echo "PERSIST redecompose outcome=skipped reason=last_wave" >&2
+    return 0
+  fi
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  prd_base="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}"
+  [ -d "${prd_base}" ] || prd_base="/tmp"
+  prd_reason="$(mktemp "${prd_base}/persist_revise_reason.XXXXXX" 2>/dev/null)" || prd_reason=""
+  prd_tail="$(mktemp "${prd_base}/persist_revise_tail.XXXXXX" 2>/dev/null)" || prd_tail=""
+  prd_prompt="$(mktemp "${prd_base}/persist_revise_prompt.XXXXXX" 2>/dev/null)" || prd_prompt=""
+  prd_out="$(mktemp "${prd_base}/persist_revise_out.XXXXXX" 2>/dev/null)" || prd_out=""
+  prd_state="$(mktemp "${prd_base}/persist_revise_state.XXXXXX" 2>/dev/null)" || prd_state=""
+  prd_comment="$(mktemp "${prd_base}/persist_revise_comment.XXXXXX" 2>/dev/null)" || prd_comment=""
+  if [ -z "${prd_reason}" ] || [ -z "${prd_tail}" ] || [ -z "${prd_prompt}" ] || [ -z "${prd_out}" ] \
+    || [ -z "${prd_state}" ] || [ -z "${prd_comment}" ]; then
+    echo "PERSIST redecompose outcome=error reason=scratch_unwritable" >&2
+    rm -f ${prd_reason:+"${prd_reason}"} ${prd_tail:+"${prd_tail}"} ${prd_prompt:+"${prd_prompt}"} \
+      ${prd_out:+"${prd_out}"} ${prd_state:+"${prd_state}"} ${prd_comment:+"${prd_comment}"}
+    return 0
+  fi
+  # The validator writes these only when every check passes.
+  rm -f "${prd_state}" "${prd_comment}"
+  printf '%s' "${JUDGE_JSON}" | jq -r '.revise_reason // "" | if type == "string" then .[0:500] else "" end' > "${prd_reason}" 2>/dev/null || : > "${prd_reason}"
+  if [ -n "${_current_wave_details_json:-}" ] && printf '%s' "${_current_wave_details_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    prd_details="$(mktemp "${prd_base}/persist_revise_details.XXXXXX" 2>/dev/null)" || prd_details=""
+    if [ -n "${prd_details}" ]; then
+      printf '%s' "${_current_wave_details_json}" > "${prd_details}" 2>/dev/null || { rm -f "${prd_details}"; prd_details=""; }
+    fi
+  fi
+  local prd_args=(revise-input --state-file "${STATE_FILE}" --current-wave "${CURRENT_WAVE}"
+    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE:-}" --reason-file "${prd_reason}" --out "${prd_tail}")
+  [ -n "${prd_details}" ] && prd_args+=(--details-file "${prd_details}")
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py "${prd_args[@]}" < /dev/null || true
+  if [ -s "${prd_tail}" ]; then
+    # Cache-stable static prefix first, then the task, then the fenced data.
+    if {
+      if [ -f "${RUNTIME_DIR:-}/judge_static.txt" ]; then
+        cat "${RUNTIME_DIR}/judge_static.txt"
+        echo
+      fi
+      echo "=== REVISE TASK ==="
+      echo
+      bash scripts/render_prompt.sh prompts/mode-orchestrate-revise.txt || prd_render_rc=$?
+      echo
+      cat "${prd_tail}"
+    } > "${prd_prompt}" 2>/dev/null; then
+      sanitize_codex_prompt_file "${prd_prompt}" || true
+      if [ "${prd_render_rc}" -ne 0 ]; then
+        # A prompt without the revise task text would waste the model call.
+        echo "PERSIST redecompose outcome=error reason=prompt_render_failed rc=${prd_render_rc}" >&2
+      elif ! _judge_isolation_should_run WAVE_JUDGE "${STATE_FILE}" "${TRACKING_NUM:-}" "${TRACKING_LABELS:-}"; then
+        echo "PERSIST redecompose outcome=skipped reason=isolation_unavailable" >&2
+      else
+        poller_claude_judge WAVE_JUDGE "${prd_prompt}" "${prd_out}" "${RUNTIME_DIR:-${prd_base}}/revise_log.txt" < /dev/null || prd_rc=$?
+        if [ "${prd_rc}" -eq 77 ]; then
+          echo "PERSIST redecompose outcome=skipped reason=isolation_unavailable" >&2
+        elif [ ! -s "${prd_out}" ]; then
+          echo "PERSIST redecompose outcome=skipped reason=llm_failed rc=${prd_rc}" >&2
+        else
+          PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py revise-validate --state-file "${STATE_FILE}" \
+            --current-wave "${CURRENT_WAVE}" --output-file "${prd_out}" --now "$(date -u +%s)" \
+            --out-state "${prd_state}" --out-comment "${prd_comment}" < /dev/null || true
+          if [ -s "${prd_state}" ] && [ -s "${prd_comment}" ] \
+            && jq -e 'type == "object" and (.waves | type) == "array" and (.total_waves | type) == "number"' "${prd_state}" >/dev/null 2>&1; then
+            if mv -f "${prd_state}" "${STATE_FILE}" 2>/dev/null; then
+              prd_total="$(jq -r '.total_waves' "${STATE_FILE}" 2>/dev/null || true)"
+              [[ "${prd_total}" =~ ^[1-9][0-9]*$ ]] && TOTAL_WAVES="${prd_total}"
+              echo "Remaining waves re-decomposed for #${TRACKING_NUM:-}; total waves now ${TOTAL_WAVES}."
+              if ! post_tracking_comment "$(cat "${prd_comment}")"; then
+                echo "PERSIST redecompose outcome=error reason=comment_failed" >&2
+              fi
+            else
+              echo "PERSIST redecompose outcome=error reason=state_write_failed" >&2
+            fi
+          fi
+        fi
+      fi
+    else
+      echo "PERSIST redecompose outcome=error reason=scratch_unwritable" >&2
+    fi
+  fi
+  rm -f "${prd_reason}" "${prd_tail}" "${prd_prompt}" "${prd_out}" "${prd_state}" "${prd_comment}" ${prd_details:+"${prd_details}"}
+  return 0
+}
+
 invoke_stall_judge() {
   local issue_num="$1"
   local phase="$2"
@@ -20121,6 +21436,19 @@ invoke_stall_judge() {
     | .[:3]
   ' 2>/dev/null || echo '[]')"
 
+  # Attempt journal (issue #8428, P1). Only with PERSIST_JOURNAL_ENABLED=true
+  # (default false): render the item's journal from comments this tick
+  # already holds (issue_comments_json for a standalone issue, the per-tick
+  # GraphQL details caches for a managed item; no new API call) and remember
+  # its newest entry key for the decision-cache key below. With the switch
+  # off nothing here runs and the cache key and diagnostics are unchanged.
+  local _persist_journal_file="" _persist_journal_key=""
+  if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ -f scripts/attempt_journal.py ]; then
+    _persist_journal_file="${RUNTIME_DIR:-/tmp}/attempt_journal_stall_${issue_num}.txt"
+    persist_journal_stall_context "${issue_num}" "${comments_issue_num}" "${issue_comments_json}" "${_persist_journal_file}" || true
+    _persist_journal_key="${PERSIST_JOURNAL_LAST_KEY:-}"
+  fi
+
   # Judge decision cache (Q1d): memoise judge output by
   # sha256({issue_num, head_sha, phase, last_conclusion,
   # recent_comments_hash_excluding_prior_stall_judge_comments}). When the same
@@ -20141,7 +21469,12 @@ invoke_stall_judge() {
     _judge_last_conclusion="$(printf '%s' "${workflow_outcomes}" | jq -r '.[0].conclusion // ""' 2>/dev/null || echo "")"
     _judge_cacheable_comments="$(printf '%s' "${recent_comments}" | jq -c '[.[] | select(((.body // "") | startswith("## 🧑‍⚖️ Stall Judge")) | not)]' 2>/dev/null || echo '[]')"
     _judge_recent_comments_hash="$(printf '%s' "${_judge_cacheable_comments}" | sha256sum 2>/dev/null | awk '{print $1}')"
-    _judge_cache_key="$(printf '%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    if [ -n "${_persist_journal_key}" ]; then
+      # A new journal entry (a new attempt) re-asks the judge (#8428).
+      _judge_cache_key="$(printf '%s|%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" "${_persist_journal_key}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    else
+      _judge_cache_key="$(printf '%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    fi
     if [ -n "${_judge_cache_key}" ]; then
       _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${_judge_state_file}" 2>/dev/null || echo "")"
       _judge_cache_replay_count="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].replay_count // 0' "${_judge_state_file}" 2>/dev/null || echo "0")"
@@ -20233,6 +21566,25 @@ invoke_stall_judge() {
         diagnostics_build_failed: true
       }' 2>/dev/null || echo '{"diagnostics_build_failed":true}')"
   fi
+  if [ -n "${_persist_journal_file}" ]; then
+    # attempt_journal (at most 4 KiB, via --rawfile: no MAX_ARG_STRLEN risk).
+    local _persist_diag
+    if _persist_diag="$(printf '%s' "${diagnostics}" | jq -c --rawfile journal "${_persist_journal_file}" \
+      '. + {attempt_journal: (if $journal == "" then null else $journal end)}' 2>/dev/null)" && [ -n "${_persist_diag}" ]; then
+      diagnostics="${_persist_diag}"
+    fi
+  fi
+  # Grouped failures (issue #8427, P8): the owner's diagnostics list the items
+  # paused under it (issue, local id, title, failure key). Switch off, or no entry for
+  # this issue, the diagnostics are unchanged.
+  if [ "${PERSIST_ORCH_FAILURE_GROUPING_ENABLED:-false}" = "true" ] && [ -n "${local_id}" ] && [ "${local_id}" != "null" ] \
+    && [ -n "${PERSIST_ORCH_GROUP_DIAG_JSON:-}" ] && [ "${PERSIST_ORCH_GROUP_DIAG_JSON}" != "{}" ]; then
+    local _persist_group_diag
+    if _persist_group_diag="$(printf '%s' "${diagnostics}" | jq -c --argjson g "${PERSIST_ORCH_GROUP_DIAG_JSON}" --arg n "${issue_num}" \
+      'if ($g[$n] | type) == "array" then . + {grouped_items: $g[$n]} else . end' 2>/dev/null)" && [ -n "${_persist_group_diag}" ]; then
+      diagnostics="${_persist_group_diag}"
+    fi
+  fi
 
   local stall_judge_prompt_file="${RUNTIME_DIR}/stall_judge_prompt_${issue_num}.txt"
   local stall_judge_output_file="${RUNTIME_DIR}/stall_judge_output_${issue_num}.txt"
@@ -20323,7 +21675,7 @@ invoke_stall_judge() {
         judge_success="true"
         break
       fi
-      sleep $(( 8 * attempt ))
+      "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" $(( 8 * attempt ))
     done
   fi
 
@@ -20691,6 +22043,7 @@ _fetch_candidate_issue_details_graphql() {
       [[ "${n}" =~ ^[0-9]+$ ]] || continue
       fragment+=$'\n'"        i${i}: issue(number: ${n}) {
           number
+          title
           state
           body
           author { login }
@@ -20749,6 +22102,7 @@ _fetch_candidate_issue_details_graphql() {
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
             body: .value.body,
+            title: (.value.title // ""),
             author_login: (.value.author.login // ""),
             author_association: (.value.authorAssociation // ""),
             last_edited_at: (.value.lastEditedAt // null),
@@ -23348,6 +24702,34 @@ PY
       continue
     fi
 
+    # Persistence budget (issue #8427, P6): after the per-issue skips and
+    # before the stall action is resolved. A landed re-plan stores the
+    # journal basis in this issue's state (one decision per journal state)
+    # and skips the stall action this tick; an escalation skips it too.
+    if _is_truthy "${PERSIST_BUDGET_ENABLED:-false}" && [ -f scripts/persist_budget.py ]; then
+      # Empty string when this issue's comment cache was unavailable, so the
+      # governor reads the comments once; `[]` from a complete cache is used as-is.
+      _pb_standalone_comments="${comments_json}"
+      if [ "${_standalone_staged_support_cache_available}" = "false" ] || [ "${_standalone_staged_support_comments_unavailable}" = "true" ]; then
+        _pb_standalone_comments=""
+      fi
+      persist_budget_govern_issue "${issue_num}" "${_pb_standalone_comments}" "${labels_json}" \
+        "$(printf '%s' "${updated_state}" | jq -r '.persist_budget_basis // ""' 2>/dev/null || true)" standalone
+      case "${PERSIST_BUDGET_LAST_ACTION}" in
+        replan)
+          updated_state="$(printf '%s' "${updated_state}" | jq -c --arg basis "${PERSIST_BUDGET_LAST_BASIS}" '.persist_budget_basis = $basis' 2>/dev/null || echo "${updated_state}")"
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+          continue
+          ;;
+        escalate)
+          if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+            write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+          fi
+          continue
+          ;;
+      esac
+    fi
+
     status_since="$(echo "${updated_state}" | jq -r '.status_since_ts // 0')"
     recovery_count="$(echo "${updated_state}" | jq -r '.stall_recovery_count | tonumber? // 0')"
     phase_attempts_count="$(printf '%s' "${updated_state}" | jq -r --arg phase "${phase}" '.phase_attempts[$phase] | tonumber? // 0' 2>/dev/null || echo "0")"
@@ -23616,7 +24998,7 @@ PY
               break
             fi
             if [ "${_std_attempt}" -lt 4 ]; then
-              sleep "${_std_backoff_sleeps[${_std_attempt}]}"
+              "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" "${_std_backoff_sleeps[${_std_attempt}]}"
             fi
           done
         fi
@@ -25744,6 +27126,14 @@ fi
 # complementary has_work gates keep it exclusive with the post-loop scan.
 if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
   run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
+  # Check after merge (#8427 P5) on idle ticks. This step runs on every idle
+  # tick, unlike the standalone-recovery sweep, which
+  # ENABLE_STANDALONE_STALL_RECOVERY=false skips. Prime the phase caps for the
+  # re-plan dispatches only when the switch is on.
+  if _is_truthy "${PERSIST_POSTMERGE_VERIFY_ENABLED:-false}"; then
+    prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+  fi
+  run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"
   exit 0
 fi
 
@@ -25779,6 +27169,7 @@ else
   TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 fi
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+if [[ "${COUNT}" =~ ^[0-9]+$ ]]; then _ORCH_POLL_CYCLE_PROJECTS_SEEN="${COUNT}"; _ORCH_POLL_CYCLE_PROJECTS_PROCESSED=0; fi || true
 FEATURE_SWEEP_DONE="false"
 # Smoke-gate fixture projects in this tick; tg_notify stays silent for them
 # whatever TRACKING_NUM currently names (Q42: A).
@@ -25798,10 +27189,15 @@ write_state_snapshot_actions_runs_export || true
 
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
+  _orch_poll_cycle_project_begin "${TRACKING_NUM}" || true
   TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
   unset FORCE_MERGE_LABEL_EVENT_JSON_CACHE
   unset _INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE
   HEALING_NOTES=()
+  # P9 (#8427): per-project head of the final PR, captured only by this
+  # project's external-finalize read.
+  PERSIST_ORCH_WAVE_CHECK_HEAD_SHA=""
+  PERSIST_ORCH_WAVE_CHECK_HEAD_PR=""
   echo "========================================"
   echo "Processing tracking issue #${TRACKING_NUM}: ${TRACKING_TITLE}"
   echo "========================================"
@@ -25827,9 +27223,27 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       COMMENTS_FOR_TRACKING_NUM="${TRACKING_NUM}"
     else
       echo "::warning::Comments JSON for issue #${TRACKING_NUM} failed validation; proceeding with empty list" >&2
-      echo "::group::Raw comments response (first 50 lines)" >&2
-      head -50 "${_comments_raw}" >&2
-      echo "::endgroup::" >&2
+      # Never print the response itself (SEC-002, follow-up to #8095): it holds
+      # user-controlled comment bodies and orchestrator state. Size, hash prefix
+      # and category only, mirroring gh_api_json_to_file in scripts/gh_helpers.sh.
+      _cmt_dump_bytes="$(wc -c < "${_comments_raw}" 2>/dev/null | tr -d '[:space:]' || true)"
+      [[ "${_cmt_dump_bytes}" =~ ^[0-9]+$ ]] || _cmt_dump_bytes="unknown"
+      _cmt_dump_sha=""
+      if command -v sha256sum >/dev/null 2>&1; then
+        _cmt_dump_sha="$(sha256sum < "${_comments_raw}" 2>/dev/null | cut -c1-12 || true)"
+      elif command -v shasum >/dev/null 2>&1; then
+        _cmt_dump_sha="$(shasum -a 256 < "${_comments_raw}" 2>/dev/null | cut -c1-12 || true)"
+      fi
+      [[ "${_cmt_dump_sha}" =~ ^[0-9a-f]{12}$ ]] || _cmt_dump_sha="unavailable"
+      if [ ! -s "${_comments_raw}" ]; then
+        _cmt_dump_cat="empty"
+      elif [ -s "${_comments_merged}" ] && jq empty "${_comments_merged}" >/dev/null 2>&1; then
+        # The pages merged into valid JSON, so only the type == "array" check failed.
+        _cmt_dump_cat="non_array"
+      else
+        _cmt_dump_cat="invalid_json"
+      fi
+      echo "::warning::Comments response summary for issue #${TRACKING_NUM}: bytes=${_cmt_dump_bytes} sha256=${_cmt_dump_sha} category=${_cmt_dump_cat}" >&2
     fi
     rm -f "${_comments_merged}"
   fi
@@ -26431,6 +27845,12 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
         _orch_extfin_pr_json="$(_fetch_pr_json "${_orch_extfin_pr}")"
         _orch_extfin_pr_state="$(_jq_field "${_orch_extfin_pr_json}" '.state' 'open|closed|merged')"
         _orch_extfin_pr_merged="$(_jq_field "${_orch_extfin_pr_json}" '.merged_at != null' 'true|false')"
+        # P9 (#8427): the between-waves check reads the open final PR's head
+        # from this read, so it makes no extra PR call.
+        if [ "${_orch_extfin_pr_state}" = "open" ]; then
+          PERSIST_ORCH_WAVE_CHECK_HEAD_SHA="$(_jq_field "${_orch_extfin_pr_json}" '.head.sha' '[0-9a-f]{40}')"
+          PERSIST_ORCH_WAVE_CHECK_HEAD_PR="${_orch_extfin_pr}"
+        fi
         if [ -z "${_orch_extfin_pr_state}" ] || [ -z "${_orch_extfin_pr_merged}" ]; then
           echo "::warning::[external-finalize] unable to inspect PR #${_orch_extfin_pr}; leaving final_merge_status pending."
         elif [ "${_orch_extfin_pr_state}" = "closed" ] && [ "${_orch_extfin_pr_merged}" = "true" ]; then
@@ -27759,14 +29179,21 @@ The poller will resume processing on the next cycle."
           # Capture intent fingerprints for the late-detected merged
           # sub-issue (going-forward only — see capture helper docs).
           _bws_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+          _pom_bws_pr=""
           if [ -n "${_bws_integ}" ]; then
             _bws_pr="$(_subissue_closing_pr_number "${pw_inum}" || echo "")"
             if [[ "${_bws_pr}" =~ ^[0-9]+$ ]]; then
               capture_intent_fingerprints_for_merged_subissue "${pw_inum}" "${_bws_pr}" || true
             fi
+            _pom_bws_pr="${_bws_pr}"
             unset _bws_pr
           fi
+          # persist_merged_pr (issue #8427, P7): reuses the lookup above only; no
+          # integration branch means no PR number here (no new API call), so the
+          # since-note renders "PR unknown" for this item.
           unset _bws_integ
+          persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${_pom_bws_pr}"
+          unset _pom_bws_pr
         elif echo "${PW_LABELS}" | jq -e 'index("ai:closed")' >/dev/null 2>&1; then
           echo "  [backward-scan] #${pw_inum} is now ai:closed. Updating state."
           jq --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
@@ -27812,6 +29239,8 @@ The poller will resume processing on the next cycle."
                 '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum)).status = "merged"' \
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
               PRIOR_WAVE_REMEDIATED="true"
+              # persist_merged_pr (issue #8427, P7): PW_PR is the verified merged PR.
+              persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${PW_PR}"
               _bws_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
               if [ -n "${_bws_integ}" ]; then
                 _bws_pr="$(_subissue_closing_pr_number "${pw_inum}" || echo "")"
@@ -27975,6 +29404,10 @@ The poller will resume processing on the next cycle."
       DEF_BODY="$(echo "${ISSUE_DEF}" | jq -r '.body' | sed 's/\\n/\n/g')"
       DEF_EXPECTED_SECTION="$(echo "${ISSUE_DEF}" | jq -c '.files_touched // []' 2>/dev/null | python3 scripts/orchestrate_lib.py render-expected-files --paths-json-file - 2>/dev/null || true)"
       if [ -n "${DEF_EXPECTED_SECTION}" ]; then DEF_BODY="$(printf '%s\n\n%s' "${DEF_BODY}" "${DEF_EXPECTED_SECTION}")"; fi
+      # Since-note (issue #8427, P7): empty unless PERSIST_ORCH_CONTEXT_ENABLED;
+      # no details cache yet at this point of the tick, so no journal lines.
+      DEF_SINCE_SECTION="$(persist_orch_since_note "${CURRENT_WAVE}")"
+      if [ -n "${DEF_SINCE_SECTION}" ]; then DEF_BODY="$(printf '%s\n\n%s' "${DEF_BODY}" "${DEF_SINCE_SECTION}")"; fi
       DEF_PRIORITY="$(echo "${ISSUE_DEF}" | jq -r '.priority')"
 
       FULL_BODY="${DEF_BODY}
@@ -28167,7 +29600,12 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # ---------------------------------------------------------------
   ISSUE_STATES_JSON='{}'
   PR_STATES_JSON='{}'
+  # Merged PR per issue for persist_merged_pr (issue #8427, P7); filled only
+  # with PERSIST_ORCH_CONTEXT_ENABLED, never persisted (PR_STATES_JSON unchanged).
+  PERSIST_ORCH_MERGED_PRS_JSON='{}'
   RECONCILE_LABELS_CHANGED=false
+  RB_REISSUE_ADOPTION_CANDIDATES=()
+  RB_REISSUE_ADOPTION_STATE_CHANGED=false
   for inum in ${ISSUE_NUMS}; do
     if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
       continue
@@ -28213,6 +29651,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       fi
     done
     PR_STATES_JSON="$(echo "${PR_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${PR_STATE}" --arg merged "${PR_MERGED}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || echo "${PR_STATES_JSON}")"
+    if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [[ "${LINKED_PR_NUM}" =~ ^[1-9][0-9]*$ ]]; then
+      PERSIST_ORCH_MERGED_PRS_JSON="$(printf '%s' "${PERSIST_ORCH_MERGED_PRS_JSON}" | jq -c --arg key "${inum}" --argjson pr "${LINKED_PR_NUM}" '. + {($key): $pr}' 2>/dev/null || printf '%s' "${PERSIST_ORCH_MERGED_PRS_JSON}")"
+    fi
 
     BEFORE_LABELS="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []')"
     AFTER_LABELS="$(reconcile_managed_issue_labels "${inum}" "${BEFORE_LABELS}" "${ISSUE_STATE}" "${PR_STATE}" "${PR_MERGED}")"
@@ -28220,7 +29661,108 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       RECONCILE_LABELS_CHANGED=true
       LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" --argjson labels "${AFTER_LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
     fi
+
+    # A closed issue with no merged PR may have been reissued by the review
+    # pipeline's review-blocked judge; see resolve_review_blocked_reissue_successor.
+    # Merged, implementation-failed (own reissue path) and skipped issues are left alone.
+    if [ "${ISSUE_STATE}" = "closed" ] && [ "${PR_MERGED}" != "true" ] \
+      && ! printf '%s' "${AFTER_LABELS}" | jq -e 'index("ai:merged") != null or index("ai:implementation-failed") != null' >/dev/null 2>&1 \
+      && jq -e --argjson wi "${WAVE_IDX}" --arg gh "${inum}" \
+        'any(.waves[$wi].issues[]?; (.github_issue | tostring) == $gh and (.status // "") != "merged" and (.status // "") != "skipped")' \
+        "${STATE_FILE}" >/dev/null 2>&1; then
+      _rb_reissue_rc=0
+      _rb_reissue_json="$(resolve_review_blocked_reissue_successor "${inum}")" || _rb_reissue_rc=$?
+      if [ "${_rb_reissue_rc}" -eq 0 ]; then
+        RB_REISSUE_ADOPTION_CANDIDATES+=("${inum}"$'\t'"${_rb_reissue_json}")
+      elif [ "${_rb_reissue_rc}" -eq 2 ]; then
+        echo "RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${inum} outcome=inconclusive successor=none"
+      fi
+      unset _rb_reissue_rc _rb_reissue_json
+    fi
   done
+
+  # Adopt review-blocked reissues found above before wave status, stall
+  # recovery or the wave judge read the closed predecessor as a failure.
+  for _rb_reissue_candidate in ${RB_REISSUE_ADOPTION_CANDIDATES[@]+"${RB_REISSUE_ADOPTION_CANDIDATES[@]}"}; do
+    _rb_reissue_closed="${_rb_reissue_candidate%%$'\t'*}"
+    _rb_reissue_json="${_rb_reissue_candidate#*$'\t'}"
+    _rb_reissue_num="$(printf '%s' "${_rb_reissue_json}" | jq -r '.number // empty' 2>/dev/null || true)"
+    [[ "${_rb_reissue_num}" =~ ^[0-9]+$ ]] || continue
+    _rb_reissue_adopt_rc=0
+    _rb_reissue_local_id="$(adopt_review_blocked_reissue_successor "${_rb_reissue_closed}" "${_rb_reissue_num}")" || _rb_reissue_adopt_rc=$?
+    if [ "${_rb_reissue_adopt_rc}" -ne 0 ]; then
+      if [ "${_rb_reissue_adopt_rc}" -eq 1 ]; then
+        echo "RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=skipped successor=${_rb_reissue_num} reason=no_wave_entry"
+      elif [ "${_rb_reissue_adopt_rc}" -eq 3 ]; then
+        echo "RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=skipped successor=${_rb_reissue_num} reason=already_tracked"
+      else
+        echo "::warning::RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=error successor=${_rb_reissue_num} reason=state_write_failed"
+      fi
+      continue
+    fi
+    echo "RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=adopted successor=${_rb_reissue_num} local_id=${_rb_reissue_local_id}"
+    add_healing_note "Issue #${_rb_reissue_closed}: review-blocked reissue #${_rb_reissue_num} adopted for \`${_rb_reissue_local_id}\` (rb_reissue_adopted)"
+    # Feed this tick's wave-status read from the timeline payload; the full
+    # label/PR reconcile for the successor runs on the next tick.
+    _rb_reissue_issue_nums=""
+    for _rb_reissue_inum in ${ISSUE_NUMS}; do
+      # An adopted orphan-rb-<successor> entry was removed; drop its number.
+      [ "${_rb_reissue_inum}" != "${_rb_reissue_num}" ] || continue
+      if [ "${_rb_reissue_inum}" = "${_rb_reissue_closed}" ]; then
+        _rb_reissue_inum="${_rb_reissue_num}"
+      fi
+      _rb_reissue_issue_nums="${_rb_reissue_issue_nums} ${_rb_reissue_inum}"
+    done
+    ISSUE_NUMS="${_rb_reissue_issue_nums}"
+    # check-wave-status reads PR truth by issue number.  Without an entry, a
+    # closed successor whose implementation PR merged before ai:merged was
+    # applied would read as closed-without-merge on this tick.
+    _rb_reissue_pr_inconclusive=false
+    # An existing {state:"unknown", merged:false} entry (an orphan-rb entry the
+    # reconcile loop read, possibly after a failed lookup) is not authoritative:
+    # look the PR up again so a failed read cannot read as closed-without-merge.
+    if ! printf '%s' "${PR_STATES_JSON}" | jq -e --arg key "${_rb_reissue_num}" 'has($key) and ((.[$key].state // "unknown") != "unknown" or .[$key].merged == true)' >/dev/null 2>&1; then
+      _rb_reissue_pr_state="unknown"
+      _rb_reissue_pr_merged="false"
+      _rb_reissue_pr_inconclusive=false
+      if printf '%s' "${_rb_reissue_json}" | jq -e '.state == "closed" and (.labels | index("ai:merged") == null)' >/dev/null 2>&1; then
+        if _rb_reissue_prs="$(_issue_cross_ref_pr_numbers_unique "${_rb_reissue_num}" 2>/dev/null)"; then
+          for _rb_reissue_pr in ${_rb_reissue_prs}; do
+            [[ "${_rb_reissue_pr}" =~ ^[0-9]+$ ]] || continue
+            _rb_reissue_pr_json="$(_fetch_pr_json "${_rb_reissue_pr}")"
+            if [ -z "${_rb_reissue_pr_json}" ] || [ "${_rb_reissue_pr_json}" = "{}" ]; then
+              _rb_reissue_pr_inconclusive=true
+              continue
+            fi
+            _pr_json_is_issue_implementation_pr "${_rb_reissue_num}" "${_rb_reissue_pr_json}" || continue
+            _rb_reissue_pr_state="$(_jq_field "${_rb_reissue_pr_json}" '.state' 'open|closed|merged')"
+            _rb_reissue_pr_merged="$(_jq_field "${_rb_reissue_pr_json}" '.merged_at != null' 'true|false')"
+            [ "${_rb_reissue_pr_merged}" != "true" ] || break
+          done
+        else
+          _rb_reissue_pr_inconclusive=true
+        fi
+      fi
+      [ "${_rb_reissue_pr_merged}" != "true" ] || _rb_reissue_pr_inconclusive=false
+      if [ "${_rb_reissue_pr_inconclusive}" != "true" ]; then
+        PR_STATES_JSON="$(printf '%s' "${PR_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" --arg state "${_rb_reissue_pr_state:-unknown}" --arg merged "${_rb_reissue_pr_merged:-false}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || printf '%s' "${PR_STATES_JSON}")"
+      fi
+    fi
+    LABELS_JSON="$(printf '%s' "${LABELS_JSON}" | jq -c --arg key "${_rb_reissue_num}" --argjson succ "${_rb_reissue_json}" '. + {($key): $succ.labels}' 2>/dev/null || printf '%s' "${LABELS_JSON}")"
+    ISSUE_STATES_JSON="$(printf '%s' "${ISSUE_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" --argjson succ "${_rb_reissue_json}" '. + {($key): $succ.state}' 2>/dev/null || printf '%s' "${ISSUE_STATES_JSON}")"
+    # A failed PR lookup must not read as merged:false (closed-without-merge
+    # would let the wave judge open a duplicate redo).  Treat the successor as
+    # open for this tick only; the next tick's reconcile reads its real state.
+    if [ "${_rb_reissue_pr_inconclusive:-false}" = "true" ]; then
+      echo "::warning::RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=inconclusive successor=${_rb_reissue_num} reason=successor_pr_lookup_failed"
+      ISSUE_STATES_JSON="$(printf '%s' "${ISSUE_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" '. + {($key): "open"}' 2>/dev/null || printf '%s' "${ISSUE_STATES_JSON}")"
+    fi
+    RB_REISSUE_ADOPTION_STATE_CHANGED=true
+  done
+  if [ "${RB_REISSUE_ADOPTION_STATE_CHANGED}" = "true" ]; then
+    post_state_comment || true
+  fi
+  unset _rb_reissue_candidate _rb_reissue_closed _rb_reissue_json _rb_reissue_num _rb_reissue_adopt_rc _rb_reissue_local_id _rb_reissue_issue_nums _rb_reissue_inum _rb_reissue_pr _rb_reissue_prs _rb_reissue_pr_json _rb_reissue_pr_state _rb_reissue_pr_merged _rb_reissue_pr_inconclusive
 
   # ---------------------------------------------------------------
   # Update issue phase timestamps for stall tracking
@@ -28437,6 +29979,24 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         fi
         unset _intent_integ
       fi
+    fi
+    # persist_merged_pr (issue #8427, P7): outside the transition branch, so a
+    # merged entry still missing it is recorded on a later tick too.
+    if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] && [ "${_ws_status}" = "merged" ] && [[ "${_ws_gh}" =~ ^[0-9]+$ ]]; then
+      _pom_pr="$(printf '%s' "${PERSIST_ORCH_MERGED_PRS_JSON:-}" | jq -r --arg key "${_ws_gh}" '.[$key] // empty' 2>/dev/null || true)"
+      if [[ "${_pom_pr}" =~ ^[1-9][0-9]*$ ]] && ! jq -e --arg lid "${_ws_id}" --argjson wi "${WAVE_IDX}" \
+        'any(.waves[$wi].issues[]; .id == $lid and has("persist_merged_pr"))' "${STATE_FILE}" >/dev/null 2>&1; then
+        if jq --arg lid "${_ws_id}" --arg pr "${_pom_pr}" --argjson wi "${WAVE_IDX}" \
+          '(.waves[$wi].issues[] | select(.id == $lid)).persist_merged_pr = ($pr|tonumber)' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+          RECONCILE_STATE_CHANGED=true
+          echo "PERSIST orch_context outcome=recorded issue=${_ws_gh} pr=${_pom_pr}" >&2
+        else
+          rm -f "${STATE_FILE}.tmp"
+          echo "PERSIST orch_context outcome=error reason=state_write_failed issue=${_ws_gh}" >&2
+        fi
+      fi
+      unset _pom_pr
     fi
   done < <(echo "${WAVE_STATUS}" | jq -c '.issues[]')
 
@@ -29616,7 +31176,7 @@ ${FOLLOWUP_BLOCK_REASON}"
             break
           fi
           if [ "${attempt}" -lt 2 ]; then
-            sleep 10
+            "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 10
           fi
         done
       fi
@@ -30822,9 +32382,6 @@ ${RB_FIX_DESC}
       fi
 
       echo "  Issue #${if_issue} has implementation-failed (no-op state=${OBSERVED_NOOP_COUNT}, ancestors=${ANCESTOR_NOOP_COUNT}, cap=${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
-
-      # Increment no-op counter before re-issuing
-      bump_impl_noop_count "${IF_LOCAL_ID}"
     else
       echo "  Issue #${if_issue} has implementation-failed (${IF_MODE}; blockers resolved). Closing and re-issuing..."
     fi
@@ -30844,22 +32401,23 @@ ${RB_FIX_DESC}
       IF_BODY=""
     fi
 
+    # BUG-002 (analysis/workflow-optimization-2026-10-07-2.md): a failed
+    # read left the title empty, the replacement create then failed, and the
+    # source had already been closed, so the task was lost. Defer with no
+    # mutation (no label, close, no-op counter or state change); the next
+    # poll cycle retries the read.
+    if [ -z "${IF_ISSUE_JSON}" ] || [ -z "${IF_TITLE}" ] || [ "${IF_TITLE}" = "null" ]; then
+      echo "::warning::IMPL_FAILED_REISSUE issue=${if_issue} outcome=deferred reason=source_unreadable"
+      continue
+    fi
+
     sync_implementation_fixup_blockers "${if_issue}" "${IF_LOCAL_ID}" "${WAVE_IDX}" "${IF_COMMENTS_JSON}" || true
     if [ "${SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED:-false}" = "true" ]; then
       IMPL_FAILED_STATE_CHANGED=true
     fi
 
-    # Close the failed issue
-    ensure_label_exists "ai:closed"
-    gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-      --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
-    if [ "${IF_MODE}" = "post-codex-validation" ]; then
-      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-        -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this source task is being re-issued with blocker-sequenced guidance." 2>/dev/null || true
-    else
-      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-        -c "Closing: implementation produced no changes. Re-issuing with additional guidance." 2>/dev/null || true
-    fi
+    # The source is closed only after the replacement is confirmed (see the
+    # confirmed-create branch below), so a failed create leaves it retryable.
 
     # Create replacement issue with extra guidance
     if [ "${IF_MODE}" = "post-codex-validation" ]; then
@@ -30909,23 +32467,65 @@ REISSUE_EOF
       --body "${NEW_BODY}" \
       --label "ai:clarification" \
       --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
+    # Reset per iteration so a value from an earlier if_issue can never
+    # confirm a failed create.
+    NEW_ISSUE_NUM=""
     if [ -n "${NEW_ISSUE_URL}" ]; then
       NEW_ISSUE_URL_CLEAN="$(printf '%s\n' "${NEW_ISSUE_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
       NEW_ISSUE_NUM="$(basename "${NEW_ISSUE_URL_CLEAN%%[?#]*}")"
+    fi
+    # Confirmed create: only now rewrite state, bump the no-op counter, and
+    # relabel/close the source (BUG-002).
+    if [[ "${NEW_ISSUE_NUM}" =~ ^[0-9]+$ ]]; then
       echo "  Created replacement issue #${NEW_ISSUE_NUM} for failed #${if_issue}."
 
       # Update state file: replace the old issue number with the new one
       # (impl_noop_count is preserved on the issue entry since we only
       # change github_issue, not the issue object itself)
-      if [[ "${NEW_ISSUE_NUM}" =~ ^[0-9]+$ ]]; then
-        jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
-          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      # One bounded retry narrows the window in which a transient write
+      # failure leaves the replacement untracked in state.
+      IF_STATE_REWRITE_OK=false
+      for _ in 1 2; do
+        if jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+          IF_STATE_REWRITE_OK=true
+          break
+        fi
+        rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      done
+      if [ "${IF_STATE_REWRITE_OK}" != "true" ]; then
+        # The replacement exists, so the source is still closed below;
+        # leaving it open would create another replacement every cycle.
+        echo "::warning::IMPL_FAILED_REISSUE issue=${if_issue} outcome=state_update_failed new_issue=${NEW_ISSUE_NUM}"
       fi
+
+      # Increment the no-op counter only after the replacement is confirmed,
+      # so a failed create does not spend MAX_IMPL_NOOP_REISSUES. The counter
+      # is keyed by local_id, so the github_issue rewrite above is harmless.
+      if [ "${IF_MODE}" = "no-op-implementation" ]; then
+        bump_impl_noop_count "${IF_LOCAL_ID}"
+      fi
+
+      # Close the failed issue
+      ensure_label_exists "ai:closed"
+      gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+        --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+      if [ "${IF_MODE}" = "post-codex-validation" ]; then
+        gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this source task was re-issued as #${NEW_ISSUE_NUM} with blocker-sequenced guidance." 2>/dev/null || true
+      else
+        gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: implementation produced no changes. Re-issued as #${NEW_ISSUE_NUM} with additional guidance." 2>/dev/null || true
+      fi
+      echo "IMPL_FAILED_REISSUE issue=${if_issue} outcome=reissued new_issue=${NEW_ISSUE_NUM} mode=${IF_MODE}"
 
       tg_notify "Re-issued implementation-failed issue #${if_issue} as #${NEW_ISSUE_NUM}: ${IF_TITLE}"$'\n'"Old issue: $(_gh_url "issues/${if_issue}")"$'\n'"New issue: $(_gh_url "issues/${NEW_ISSUE_NUM}")" "DEBUG"
       IMPL_FAILED_STATE_CHANGED=true
     else
       echo "::warning::Could not create replacement issue for #${if_issue}."
+      # The source keeps ai:implementation-failed and the state is untouched,
+      # so the next poll cycle selects it again and retries the create.
+      echo "IMPL_FAILED_REISSUE issue=${if_issue} outcome=deferred reason=create_failed"
     fi
   done < <(echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "implementation-failed") | .github_issue')
 
@@ -30985,12 +32585,83 @@ fi
     fi
 
     if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then
+    # Grouping repeated failures (issue #8427, P8): items whose newest failure
+    # shares a failure key with another open item of this wave are paused
+    # under one owner. Switch off, this only removes leftover state fields.
+    PERSIST_ORCH_GROUP_STATE_CHANGED=false
+    PERSIST_ORCH_GROUPED_ISSUES_JSON='{}'
+    PERSIST_ORCH_GROUP_DIAG_JSON='{}'
+    persist_orch_group_failures < /dev/null || true
+    # Persistence budget (issue #8427, P6) for the current wave's open
+    # issues, before stall detection. Labels and comments come from this
+    # cycle's LABELS_JSON / _current_wave_details_json caches; the active-run
+    # set is built from the per-tick runs cache. A landed re-plan stores the
+    # journal basis on the wave issue entry and the state comment is posted
+    # with the stall changes below.
+    PERSIST_BUDGET_STATE_CHANGED=false
+    # Stall-check view of the labels: issues the governor acted on this tick
+    # read as ai:needs-human so check-stalls leaves them alone until the next
+    # tick (a re-plan was just posted or an escalation just applied).
+    PERSIST_BUDGET_STALL_LABELS_JSON="${LABELS_JSON}"
+    # P8: grouped items read as ai:needs-human in this view too, so
+    # check-stalls skips them (no label is written to GitHub).
+    if [ -n "${PERSIST_ORCH_GROUPED_ISSUES_JSON:-}" ] && [ "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" != "{}" ]; then
+      PERSIST_BUDGET_STALL_LABELS_JSON="$(printf '%s' "${PERSIST_BUDGET_STALL_LABELS_JSON}" | jq -c --argjson g "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" \
+        'reduce ($g | keys[]) as $n (.; .[$n] = ((.[$n] // []) + ["ai:needs-human"]))' 2>/dev/null || printf '%s' "${PERSIST_BUDGET_STALL_LABELS_JSON}")"
+    fi
+    if _is_truthy "${PERSIST_BUDGET_ENABLED:-false}" && [ -f scripts/persist_budget.py ]; then
+      _load_actions_runs_cached >/dev/null 2>&1 || true
+      ACTIVE_WORKFLOW_ISSUES="$(build_active_issue_set 2>/dev/null || true)"
+      while IFS=$'\t' read -r _pb_issue _pb_status _pb_prior; do
+        [[ "${_pb_issue}" =~ ^[1-9][0-9]*$ ]] || continue
+        case "${_pb_status}" in
+          merged|closed|skipped|not_created) continue ;;
+        esac
+        # P8: an item paused under a failure group is not re-triggered.
+        if [ -n "${PERSIST_ORCH_GROUPED_ISSUES_JSON:-}" ] && [ "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" != "{}" ] \
+          && printf '%s' "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" | jq -e --arg n "${_pb_issue}" 'has($n)' >/dev/null 2>&1; then
+          echo "PERSIST governor outcome=skipped reason=grouped issue=${_pb_issue}" >&2
+          continue
+        fi
+        _pb_labels="$(printf '%s' "${LABELS_JSON:-}" | jq -c --arg n "${_pb_issue}" '.[$n] // []' 2>/dev/null || echo '[]')"
+        # Dedicated-handler phases (DEDICATED_HANDLER_PHASES in
+        # orchestrate_lib.py) and human latches are owned elsewhere; the
+        # standalone loop skips a similar (not identical) set before its hook.
+        if printf '%s' "${_pb_labels}" | jq -e 'any(.[]; (if type == "object" then .name else . end) | IN("ai:needs-human", "ai:claude-capacity-wait", "ai:split-to-project", "ai:blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing", "ai:security-pass", "ai:security-pass-fixing", "ai:destructive-blocked", "ai:scope-blocked"))' >/dev/null 2>&1; then
+          echo "PERSIST governor outcome=skipped reason=dedicated_phase issue=${_pb_issue}" >&2
+          continue
+        fi
+        # Empty string (not `[]`) when the cache has no comments for this
+        # issue, so the governor reads them once instead of treating the
+        # issue as having none.
+        _pb_comments="$(printf '%s' "${_current_wave_details_json:-}" | jq -c --arg n "${_pb_issue}" \
+          'if (.[$n].comments_available == true) and ((.[$n].comments | type) == "array") then .[$n].comments else empty end' 2>/dev/null || true)"
+        persist_budget_govern_issue "${_pb_issue}" "${_pb_comments}" "${_pb_labels}" "${_pb_prior}" managed < /dev/null
+        if [ "${PERSIST_BUDGET_LAST_ACTION}" = "replan" ] || [ "${PERSIST_BUDGET_LAST_ACTION}" = "escalate" ]; then
+          PERSIST_BUDGET_STALL_LABELS_JSON="$(printf '%s' "${PERSIST_BUDGET_STALL_LABELS_JSON}" | jq -c --arg n "${_pb_issue}" \
+            '.[$n] = ((.[$n] // []) + ["ai:needs-human"])' 2>/dev/null || printf '%s' "${PERSIST_BUDGET_STALL_LABELS_JSON}")"
+        fi
+        if [ "${PERSIST_BUDGET_LAST_ACTION}" = "replan" ] && [ -n "${PERSIST_BUDGET_LAST_BASIS}" ]; then
+          if jq --argjson wi "${WAVE_IDX}" --arg n "${_pb_issue}" --arg basis "${PERSIST_BUDGET_LAST_BASIS}" \
+            '(.waves[$wi].issues[] | select((.github_issue | tostring) == $n)).persist_budget_basis = $basis' \
+            "${STATE_FILE}" > "${STATE_FILE}.persist_budget.tmp" 2>/dev/null \
+            && mv "${STATE_FILE}.persist_budget.tmp" "${STATE_FILE}"; then
+            PERSIST_BUDGET_STATE_CHANGED=true
+          else
+            rm -f "${STATE_FILE}.persist_budget.tmp"
+            echo "PERSIST governor outcome=error reason=state_write_failed issue=${_pb_issue}" >&2
+          fi
+        fi
+      done < <(jq -r --argjson wi "${WAVE_IDX}" '.waves[$wi].issues[]? | select(.github_issue != null)
+        | [(.github_issue | tostring), (.status // "pending" | tostring), (.persist_budget_basis // "" | tostring)] | @tsv' "${STATE_FILE}" 2>/dev/null || true)
+    fi
+
     # ---------------------------------------------------------------
     # Stall detection and self-healing
     # ---------------------------------------------------------------
     _stall_check_args=(
       --state-file "${STATE_FILE}"
-      --labels-json "${LABELS_JSON}"
+      --labels-json "${PERSIST_BUDGET_STALL_LABELS_JSON:-${LABELS_JSON}}"
       --threshold-minutes "${STALL_THRESHOLD_MINUTES}"
       --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}"
       --stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}"
@@ -31240,7 +32911,7 @@ with open('${STATE_FILE}', 'w') as f:
       fi
     fi
 
-    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${TRACKING_BODY_SYNC_STATE_CHANGED:-false}" = "true" ] || [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${PERSIST_BUDGET_STATE_CHANGED:-false}" = "true" ] || [ "${PERSIST_ORCH_GROUP_STATE_CHANGED:-false}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${TRACKING_BODY_SYNC_STATE_CHANGED:-false}" = "true" ] || [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
       post_state_comment || true
     fi
     if [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ]; then
@@ -31248,6 +32919,13 @@ with open('${STATE_FILE}', 'w') as f:
     fi
 
     if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then
+      # P9 (#8427): an incomplete wave is not at a boundary, so wait fields
+      # kept by a red / timeout check (the judge advanced the wave or added
+      # fix-ups) must not carry over into the next boundary. One jq check
+      # when they are absent.
+      if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+        _persist_orch_wave_check_clear stale
+      fi
       continue
     fi
     fi  # end: INVOKE_JUDGE_FOR_STUCK != true
@@ -31257,6 +32935,17 @@ with open('${STATE_FILE}', 'w') as f:
     echo "Wave ${CURRENT_WAVE} stuck — invoking judge to define missing issues or decide next action..."
   else
     echo "Wave ${CURRENT_WAVE} complete!"
+  fi
+
+  # Check between waves (issue #8427, P9; PERSIST_ORCH_WAVE_CHECK_ENABLED,
+  # default off): hold the clean-wave skip while the integration PR's checks
+  # are pending, and route a red result to the wave judge.
+  PERSIST_ORCH_WAVE_CHECK_BLOCK=""
+  PERSIST_ORCH_WAVE_CHECK_HOLD=false
+  persist_orch_wave_check < /dev/null || true
+  if [ "${PERSIST_ORCH_WAVE_CHECK_HOLD}" = "true" ]; then
+    echo "Wave ${CURRENT_WAVE} held: integration PR checks pending."
+    continue
   fi
 
   SKIP_JUDGE_FOR_CLEAN_WAVE="false"
@@ -31378,6 +33067,7 @@ Manual intervention required." >/dev/null \
     --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
   if ! prepare_tracking_judge_checkout "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+    _persist_orch_wave_check_unjudge judge_checkout_failed
     continue
   fi
 
@@ -31535,6 +33225,7 @@ ${PR_DIFF}
     echo "=== JUDGE TASK ==="
     echo
     SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt
+    persist_orch_revise_option_block
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -31605,7 +33296,7 @@ ${PR_DIFF}
     if [ "${ANY_FAILED}" = "true" ]; then
       echo "WARNING: Some issues in this wave were closed without merge."
     fi
-    if [ "${INVOKE_JUDGE_FOR_STUCK}" = "true" ]; then
+    if [ "${INVOKE_JUDGE_FOR_STUCK}" = "true" ] && [ -z "${PERSIST_ORCH_WAVE_CHECK_BLOCK:-}" ]; then
       echo
       echo "WARNING: This judge invocation was triggered because the wave is STUCK."
       echo "Some issues in this wave have github_issue == null and no pending_issue_defs"
@@ -31613,6 +33304,11 @@ ${PR_DIFF}
       echo "All other (created) issues in the wave are in terminal states."
       echo "You must decide what to do: define the missing issues, skip them, or take"
       echo "another corrective action. The wave CANNOT complete on its own."
+    fi
+    if [ -n "${PERSIST_ORCH_WAVE_CHECK_BLOCK:-}" ]; then
+      echo
+      echo "WARNING: This judge invocation was triggered by the between-waves check on the integration PR (PERSIST_ORCH_WAVE_CHECK_ENABLED). Decide whether to add fix-up issues, revert, or advance."
+      printf '%s\n' "${PERSIST_ORCH_WAVE_CHECK_BLOCK}"
     fi
     echo
     echo "IMPORTANT: If current wave < total waves, the project is NOT complete."
@@ -31700,19 +33396,24 @@ ${PR_DIFF}
     fi
     judge_silent_rounds=$((judge_silent_rounds + 1))
     if [ "${attempt}" -lt "${max_attempts}" ]; then
-      sleep $(( 10 * attempt + RANDOM % 10 ))
+      "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" $(( 10 * attempt + RANDOM % 10 ))
     fi
   done
 
 	  if [ "${wave_judge_rc:-0}" -eq 77 ]; then
 	    echo "::warning::Wave judge isolation unavailable for #${TRACKING_NUM}; deferring without changing wave state." >&2
 	    [ "${wave_isolation_skipped:-false}" = true ] || tg_notify "Wave judge isolation unavailable for #${TRACKING_NUM}; retrying next poll." "DEBUG"
+	    # An escalated isolation latch ran no judge: keep the judged marker so
+	    # the wave check holds as judged_recently instead of repeating its reads.
+	    [ "${wave_isolation_skipped:-false}" = true ] || _persist_orch_wave_check_unjudge judge_isolation_unavailable
 	    continue
 	  fi
 	  if [ "${JUDGE_SUCCESS}" != "true" ]; then
 	    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
 	    _judge_output_failure_alert "Orchestrator Judge failed for #${TRACKING_NUM}."
 	    unblock_handover_judge_output "llm_failed"
+	    # No attempt ran (prompt over the stdin cap): the same failure repeats, so keep the marker.
+	    [ "${max_attempts:-0}" -le 0 ] || _persist_orch_wave_check_unjudge judge_failed
 	    continue
 	  fi
 	  _clear_judge_isolation_state WAVE_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
@@ -31725,6 +33426,7 @@ ${PR_DIFF}
     echo "::error::Could not parse judge output for #${TRACKING_NUM}"
     _judge_output_failure_alert "Orchestrator Judge output unparseable for #${TRACKING_NUM}."
     unblock_handover_judge_output "unparseable"
+    _persist_orch_wave_check_unjudge judge_unparseable
     continue
   fi
   if [ "$(jq -r '.judge_output_failures // 0' "${STATE_FILE}" 2>/dev/null || echo 0)" != "0" ]; then
@@ -32098,8 +33800,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
             if [ -n "${EXISTING_NUM}" ]; then
               EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
               if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
-                jq --arg new_id "${NEW_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-                  '.issue_number_map[$new_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $existing_num, "status": "pending"}]' \
+                jq --arg new_id "${NEW_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" --argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)" \
+                  '.issue_number_map[$new_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $existing_num, "status": "pending"} + (if $pja then {"persist_judge_added": true} else {} end)]' \
                   "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
                 echo "  ${NEW_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate addition."
                 continue
@@ -32134,8 +33836,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
           NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
           ADD_NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
           if [[ "${ADD_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
-            jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-              '.issue_number_map[$new_id] = $add_new_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $add_new_num, "status": "pending"}]' \
+            jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" --argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)" \
+              '.issue_number_map[$new_id] = $add_new_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $add_new_num, "status": "pending"} + (if $pja then {"persist_judge_added": true} else {} end)]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
           fi
         done
@@ -32158,8 +33860,20 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
         fi
         jq '.judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment || true
+        # A revise request waits for a verdict without current-wave changes
+        # (issue #8427, P10); log the drop so it is visible.
+        if [ "${PERSIST_ORCH_REDECOMPOSE_ENABLED:-false}" = "true" ] \
+          && printf '%s' "${JUDGE_JSON:-}" | jq -e 'type == "object" and .revise_remaining == true' >/dev/null 2>&1; then
+          echo "PERSIST redecompose outcome=skipped reason=current_wave_changed" >&2
+        fi
         # Skip wave advancement — next poll cycle will re-check this wave
       else
+
+      # Re-decompose the remaining waves when the judge asked for it
+      # (issue #8427, P10; PERSIST_ORCH_REDECOMPOSE_ENABLED, default off).
+      if [ "${CURRENT_WAVE}" -lt "${TOTAL_WAVES}" ]; then
+        persist_orch_redecompose < /dev/null || true
+      fi
 
       # Advance to next wave
       NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
@@ -32259,7 +33973,7 @@ The next poll tick will re-run the gate against the cleaned state. If an underly
 
             _gate_fp_file=""
             _gate_log_file=""
-            trap 'rm -f "${_gate_fp_file:-}" "${_gate_log_file:-}" 2>/dev/null || true' EXIT
+            trap '_orch_poll_cycle_exit_rc=$?; rm -f "${_gate_fp_file:-}" "${_gate_log_file:-}" 2>/dev/null || true; _orch_poll_cycle_on_exit "${_orch_poll_cycle_exit_rc}" || true' EXIT
             _gate_fp_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_fp.XXXXXX")"
             _gate_log_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_log.XXXXXX")"
             jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${_gate_fp_file}"
@@ -32285,6 +33999,7 @@ The next poll tick will re-run the gate against the cleaned state. If an underly
             fi
             rm -f "${_gate_fp_file}" "${_gate_log_file}" 2>/dev/null || true
             trap - EXIT
+            _orch_poll_cycle_install_exit_trap || true
           else
             echo "::warning::Wave-dispatch gate: could not resolve a fresh verification ref for integration branch '${_gate_integration_branch}'; gate fails open and dispatch proceeds."
           fi
@@ -32344,6 +34059,10 @@ ${_gate_violations:-(no violation lines parsed — see workflow run log for the 
           DEF_BODY="$(echo "${ISSUE_DEF}" | jq -r '.body' | sed 's/\\n/\n/g')"
           DEF_EXPECTED_SECTION="$(echo "${ISSUE_DEF}" | jq -c '.files_touched // []' 2>/dev/null | python3 scripts/orchestrate_lib.py render-expected-files --paths-json-file - 2>/dev/null || true)"
           if [ -n "${DEF_EXPECTED_SECTION}" ]; then DEF_BODY="$(printf '%s\n\n%s' "${DEF_BODY}" "${DEF_EXPECTED_SECTION}")"; fi
+          # Since-note (issue #8427, P7): empty unless PERSIST_ORCH_CONTEXT_ENABLED;
+          # the details cache holds the wave that just finished.
+          DEF_SINCE_SECTION="$(persist_orch_since_note "${NEXT_WAVE}" "${_current_wave_details_json:-}")"
+          if [ -n "${DEF_SINCE_SECTION}" ]; then DEF_BODY="$(printf '%s\n\n%s' "${DEF_BODY}" "${DEF_SINCE_SECTION}")"; fi
           DEF_PRIORITY="$(echo "${ISSUE_DEF}" | jq -r '.priority')"
 
           FULL_BODY="${DEF_BODY}
@@ -32431,9 +34150,11 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       ;;
   esac
 done
+_orch_poll_cycle_project_flush || true
 
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   run_standalone_stall_recovery
+  run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"
 
   release_staged_support_needs_human_latches
 
