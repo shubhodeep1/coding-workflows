@@ -10161,6 +10161,23 @@ def test_heal_stale_keeps_with_too_few_or_failed_runs() -> None:
 	assert _stale_decide(runs=bad)["reason"] == "runs_unavailable"
 
 
+def test_heal_stale_keeps_when_the_runs_page_may_not_reach_the_anchor() -> None:
+	# One page is read: more runs than the page holds and none at or before
+	# the anchor means an older failure could be missed.
+	cut = _stale_runs(5)
+	cut["total_count"] = 40
+	assert _stale_decide(runs=cut)["reason"] == "runs_window_incomplete"
+	missing = _stale_runs(5)
+	del missing["total_count"]
+	assert _stale_decide(runs=missing)["reason"] == "runs_window_incomplete"
+	# A run at or before the anchor on the page proves the window is covered.
+	reaching = _stale_runs(6)
+	reaching["total_count"] = 40
+	reaching["workflow_runs"][0]["created_at"] = "2025-12-31T00:00:00Z"
+	reaching["workflow_runs"].append({**reaching["workflow_runs"][1], "id": 4999, "created_at": "2026-01-07T00:00:00Z"})
+	assert _stale_decide(runs=reaching)["decision"] == "close"
+
+
 def test_heal_stale_occurrence_comment_moves_the_anchor_only_when_trusted() -> None:
 	occurrence = "<!-- workflow-failure-heal:occurrence -->\nSeen again."
 	trusted = _stale_comment(occurrence, created_at="2026-01-03T12:00:00Z")
@@ -12208,7 +12225,9 @@ def test_intake_cause_match_replay_posts_an_occurrence_with_no_new_reads() -> No
 	assert first.returncode == 0, first.stderr + first.stdout
 	cause = _p5_cause_from(first)
 	fp = re.search(r"WORKFLOW_HEAL fingerprint fp=([0-9a-f]{64})", first.stdout).group(1)
-	assert first_state["composed_issue"]["body"].split("\n")[5] == f"<!-- {heal.MARKER_PREFIX}cause={cause} -->"
+	# #8808: a workflow_run source puts the workflow= header line before cause=.
+	assert heal.parse_heal_markers(first_state["composed_issue"]["body"])["cause"] == cause
+	assert f"<!-- {heal.MARKER_PREFIX}cause={cause} -->" in first_state["composed_issue"]["body"].split("\n")[5:7]
 	# #8376: open, one day old, same cause, a different fingerprint (one error line fewer).
 	now = datetime.now(timezone.utc)
 	prior = _p5_open_heal(8376, fp="a" * 64, cause=cause, created=now - timedelta(days=1))
@@ -12244,7 +12263,8 @@ def test_intake_cause_match_window_and_switch_off_byte_identity() -> None:
 	result, state, _ = _run_p1_intake(_p1_state() | {"heal_issues": [stale]}, on)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert not state.get("comments_posted")
-	assert state["composed_issue"]["body"].split("\n")[5] == f"<!-- {heal.MARKER_PREFIX}cause={cause} -->"
+	assert heal.parse_heal_markers(state["composed_issue"]["body"])["cause"] == cause
+	assert f"<!-- {heal.MARKER_PREFIX}cause={cause} -->" in state["composed_issue"]["body"].split("\n")[5:7]
 	assert "reason=cause_match" not in result.stdout
 	# A longer window matches it.
 	wide, wide_state, _ = _run_p1_intake(_p1_state() | {"heal_issues": [stale]}, {**on, "WORKFLOW_HEAL_CAUSE_GROUPING_DAYS": "5"})

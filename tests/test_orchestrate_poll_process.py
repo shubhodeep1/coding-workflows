@@ -2536,10 +2536,12 @@ if args[0] == 'api':
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)$', path)
-	if m and method == 'PATCH' and any(f.startswith('state=') for f in fields):
+	if m and method == 'PATCH' and store.get('record_issue_state_patch') and any(f.startswith('state=') for f in fields):
 		# Issue #8808: heal stale auto-close (state=closed, state_reason=completed).
+		# Opt-in so other fixtures' state PATCHes (tracking-issue auto-close,
+		# plan-split close) keep the generic handling below.
 		num = int(m.group(1))
-		if num in set(store.get('fail_issue_patch_for', [])):
+		if num in set(store.get('fail_issue_state_patch_for', [])):
 			print('forced issue PATCH failure', file=sys.stderr)
 			sys.exit(1)
 		issue = get_issue(m.group(1))
@@ -31374,7 +31376,7 @@ def _heal_stale_tick(comments: list | None = None, env: dict | None = None, runs
 		mock_gh_issue_list_label_filter=True,
 		env_overrides=env or {},
 		mock_store_extra={"workflow_runs_by_file": {"ci.yml": runs if runs is not None else _heal_stale_runs(5)},
-			"issue_created_at": {"501": "2026-01-01T00:00:00Z"}, **(store_extra or {})},
+			"issue_created_at": {"501": "2026-01-01T00:00:00Z"}, "record_issue_state_patch": True, **(store_extra or {})},
 	)
 
 

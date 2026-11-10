@@ -7758,8 +7758,9 @@ def compose_issue_body(
 	diagnosis, and is neutralized and checked the same way. ``None`` or empty
 	adds nothing.
 
-	``cause`` (optional, :func:`cause_key`, 64 lowercase hex) adds the sixth
-	header line ``cause=<hex>`` (cause grouping P5 / D3); ``None``, empty or
+	``cause`` (optional, :func:`cause_key`, 64 lowercase hex) adds the header
+	line ``cause=<hex>`` (cause grouping P5 / D3), sixth, or seventh after the
+	``workflow=`` line of a workflow_run source (#8808); ``None``, empty or
 	invalid adds nothing, so a switch-off body is byte-identical.
 
 	``code_ran_from`` (optional, ``<branch>@<sha>``, code-ref routing P6) adds
@@ -10190,6 +10191,7 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 	if not isinstance(runs, dict) or not isinstance(runs.get("workflow_runs"), list):
 		return done("keep", "runs_unavailable")
 	window: list[tuple[datetime, dict[str, Any]]] = []
+	reaches_anchor = False
 	for run in runs["workflow_runs"]:
 		# A malformed entry could hide a failed run: keep the issue (fail open).
 		if not isinstance(run, dict):
@@ -10197,11 +10199,21 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 		created = _heal_stale_parse_time(run.get("created_at"))
 		if created is None:
 			return done("keep", "runs_unavailable")
+		if created <= anchor:
+			reaches_anchor = True
 		if run.get("event") != "push" or run.get("status") != "completed" or run.get("head_branch") != branch:
 			continue
 		if created <= anchor:
 			continue
 		window.append((created, run))
+	# One page is read. It shows every run since the anchor only when it
+	# reaches back to the anchor or holds every run the API counted;
+	# otherwise an older failure could sit past the page (keep the issue).
+	total_count = runs.get("total_count")
+	page_complete = isinstance(total_count, int) and not isinstance(total_count, bool) \
+		and total_count <= len(runs["workflow_runs"])
+	if not reaches_anchor and not page_complete:
+		return done("keep", "runs_window_incomplete")
 	window.sort(key=lambda item: item[0])
 	if any(run.get("conclusion") != "success" for _, run in window):
 		return done("keep", "run_not_green")

@@ -19113,7 +19113,7 @@ _heal_counterfactual_hold_notify()
 # held heal issues reach them. Every error keeps the issue open. On close it
 # posts one ai:heal-stale-close:v1 comment (none when a trusted one exists),
 # PATCHes state=closed/state_reason=completed (labels untouched) and sends
-# a Telegram INFO. Sets HEAL_STALE_CLOSE_OUTCOME (closed|kept|skipped) and
+# a Telegram DEBUG (the pipeline handled it). Sets HEAL_STALE_CLOSE_OUTCOME (closed|kept|skipped) and
 # always logs one HEAL_STALE_CLOSE line. Always returns 0.
 # Args: <issue_num> <details_map_json> <comments_json> <login> <phase>
 _heal_stale_close_check()
@@ -19226,7 +19226,7 @@ _heal_stale_close_check()
       runs_json="$(gh_retry gh api -X GET "repos/${src_repo}/actions/workflows/${workflow_base}/runs" \
         -f branch="${stale_branch}" -f event=push -f status=completed -F per_page="${per_page}" 2>/dev/null \
         | jq -c 'select(type == "object" and ((.workflow_runs | type) == "array"))
-          | {workflow_runs: [.workflow_runs[]
+          | {total_count: (.total_count // null), workflow_runs: [.workflow_runs[]
               | {id, html_url, head_sha, head_branch, event, status, conclusion, created_at}]}' 2>/dev/null)" || runs_json=""
       [ -n "${runs_json}" ] || runs_json="null"
       HEAL_STALE_RUNS_CACHE_JSON="$(printf '%s' "${HEAL_STALE_RUNS_CACHE_JSON:-{\}}" \
