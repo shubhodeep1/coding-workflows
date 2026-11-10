@@ -836,6 +836,46 @@ def test_operator_step_upsert_reopens_a_tracker_closed_after_its_listing(fake: F
 	assert ["api", f"repos/{REPO}/issues/{number}"] not in fake.calls
 
 
+def test_operator_step_upsert_survives_a_failed_close_race_check(fake: FakeGitHub,
+		monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	monkeypatch.delenv("OPERATOR_STEP_AUTO_RESOLVE_ENABLED", raising=False)
+	number = _tracker(fake)
+	original = fake.__call__
+
+	def failing_read(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if args == ["api", f"repos/{REPO}/issues/{number}"]:
+			raise writer.ApiError("HTTP 502")
+		return original(args, allow_existing_label=allow_existing_label)
+
+	monkeypatch.setattr(writer, "_gh", failing_read)
+	result = writer.upsert(REPO, "pr-5", "s", STEPS, SRC)
+	assert result["issue"] == number and len(_posts(fake, number)) == 1
+	assert f"OPERATOR_STEP_RESOLVE issue={number} outcome=skip unticked=unknown reason=recheck_failed" in capsys.readouterr().err
+
+
+def test_operator_step_resolve_logs_a_failed_reopen_after_a_failed_recheck(fake: FakeGitHub,
+		monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	done = writer._render_ticked(writer.render_entry("pr-1", "s", STEPS, SRC), STABLE, SRC)
+	_entry_comment(fake, number, 10, done)
+	original = fake.__call__
+	reads = {"count": 0}
+
+	def failing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if "--slurp" in args:
+			reads["count"] += 1
+			if reads["count"] == 3:
+				raise writer.ApiError("HTTP 502")
+		if args[:3] == ["api", "-X", "PATCH"] and "state=open" in args:
+			raise writer.ApiError("HTTP 502")
+		return original(args, allow_existing_label=allow_existing_label)
+
+	monkeypatch.setattr(writer, "_gh", failing)
+	with pytest.raises(writer.ApiError):
+		writer.resolve(REPO, BOT)
+	assert f"OPERATOR_STEP_RESOLVE issue={number} outcome=closed unticked=0 reason=recheck_failed" in capsys.readouterr().err
+
+
 def test_operator_step_resolve_caps_compares_and_drains_oldest_first(fake: FakeGitHub) -> None:
 	number = _tracker(fake)
 	fake.stable_sha = STABLE

@@ -175,7 +175,7 @@ for gap in match["gaps"]:
 	# merge reaches `@stable` needs no fix and no person, whatever kind the
 	# model gave it. It is kept as `code` and never opens a fix issue or an
 	# operator step.
-	release_wait = bool(re.fullmatch(r"@stable contains [0-9a-f]{7,40}\.?", dormant_until))
+	release_wait = bool(re.fullmatch(r"@stable contains [0-9a-f]{7,40}\.?", dormant_until.replace("`", "").strip().lower()))
 	kind = "code" if release_wait else gap["kind"]
 	gaps.append({
 		"kind": kind,

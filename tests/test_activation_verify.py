@@ -795,13 +795,14 @@ def test_normaliser_marks_release_waits_only_for_the_exact_condition(tmp_path: P
 		{"kind": "operator", "title": "b", "dormant_until": "NIGHTLY_REPORT_ENABLED"},
 		{"kind": "operator", "title": "c", "dormant_until": f"@stable contains {RELEASE_SHA} and the secret is set"},
 		{"kind": "code", "title": "d", "dormant_until": ""},
+		{"kind": "operator", "title": "e", "dormant_until": f"`@stable contains {RELEASE_SHA.upper()}`"},
 	]
 	raw.write_text(json.dumps({"verdict": "DORMANT", "summary": "s", "gaps": gaps}), encoding="utf-8")
 	out = subprocess.run(["bash", "-c", f'source "{VERIFY}"; activation_normalise_verdict "$1"', "_", str(raw)],
 		capture_output=True, text=True, check=True, env=dict(os.environ, SUPPORT_DIR=str(ROOT), RUNTIME_DIR=str(tmp_path / "rt"))).stdout
 	normalised = json.loads(out)["gaps"]
 	assert [(gap["kind"], gap["release_wait"]) for gap in normalised] == [
-		("code", True), ("operator", False), ("operator", False), ("code", False)]
+		("code", True), ("operator", False), ("operator", False), ("code", False), ("code", True)]
 
 
 def test_operator_entry_records_the_merge_commit(tmp_path: Path) -> None:

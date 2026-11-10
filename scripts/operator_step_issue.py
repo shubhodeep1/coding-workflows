@@ -80,7 +80,9 @@ outcome=ticked|not_contained|compare_failed|compare_cap|stable_unavailable|no_so
 status=` per entry and `OPERATOR_STEP_RESOLVE issue= outcome=closed|open|
 close_deferred|reopened|skip unticked= reason=` once per run. Kill switch
 `OPERATOR_STEP_AUTO_RESOLVE_ENABLED` (default `true`): `false` makes resolve
-a no-op with no API call and turns off upsert's reopen check. The needs-human
+a no-op with no API call. upsert's reopen check reads the same variable, so it
+is off only where the caller's environment sets it (the activation-verify
+steps do not map it); a failed check only logs `reason=recheck_failed`. The needs-human
 digest is never touched.
 
 Resolve API budget (CLAUDE.md §15): one tracker listing (the only call when no
@@ -434,8 +436,15 @@ def upsert(repo: str, key: str, source: str, steps: list[dict], source_sha: str 
 			# Close race with `resolve` (stuck-states P10): when the poller closed
 			# the tracker after this run listed it, reopen it so the new entry is
 			# never lost in a closed issue. Off with the resolve kill switch.
+			# The entry is already posted, so a failed check only logs: failing
+			# here would make the caller (activation_verify.sh) drop its verdict
+			# comment. Residual risk: the tracker can stay closed in that narrow
+			# race, since resolve only lists open trackers.
 			if resolve_enabled():
-				_reopen_if_closed(repo, number)
+				try:
+					_reopen_if_closed(repo, number)
+				except ApiError:
+					_resolve_log(issue=number, outcome="skip", unticked="unknown", reason="recheck_failed")
 		# Never patch the oldest comment with a proposal from a stale listing:
 		# a later writer's higher-id comment would otherwise be lost.
 		return {
@@ -716,7 +725,11 @@ def resolve(repo: str, trusted_login: str | None = None) -> dict:
 	try:
 		after = _authoritative_entry_comments(load_entry_comments(repo, number), login)
 	except ApiError:
-		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open"])
+		try:
+			_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open"])
+		except ApiError:
+			_resolve_log(issue=number, outcome="closed", unticked=unticked, reason="recheck_failed")
+			raise
 		result["closed"] = False
 		result["reopened"] = True
 		_resolve_log(issue=number, outcome="reopened", unticked=unticked, reason="recheck_failed")
