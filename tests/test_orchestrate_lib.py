@@ -3281,6 +3281,40 @@ def test_unrouted_ignores_claude_code_status_notes():
 	assert _unrouted(_unrouted_issue([plain]))[0]["comment_id"] == 7
 
 
+def test_unrouted_ignores_unblock_judge_status_notes():
+	# fun-token-multi-chain#821: the judge's unmarked "belongs in the harness"
+	# note, posted a second after its verdict comment, was flagged twice.
+	import unblock_actions
+	verdict = _unrouted_comment(2, "## Unblock judge: `operator_step` (round 1)\n\n<!-- ai:unblock:v1 item=7 -->", 20)
+	for index, call in enumerate((
+		lambda: unblock_actions._harness_ops(
+			{"item": 7, "stop": "blocked", "labels": ["ai:blocked"], "kind": "issue", "tracking": 0},
+			{"instructions": "Change the implement workflow.", "reason": "Wrong checkout.", "fingerprint": ""},
+			{"reason": "target_repo", "harness_paths": [], "project_paths": []}),
+		lambda: unblock_actions._untrusted_pr_ops({"item": 7}, "reissue"),
+	)):
+		bodies = [op["body"] for op in call() if op.get("op") == "comment"]
+		assert bodies, index
+		for body in bodies:
+			assert _unrouted(_unrouted_issue([verdict, _unrouted_comment(3, body, 19.98)], [("ai:blocked", 120)])) == [], body
+	for body in (
+		"The unblock judge has no verdicts left for this security finding. It stays open until a linked fix is merged.\n\nWhy: x",
+		"Next attempt, per the unblock judge: retry with the cache cleared",
+		"This security finding stays open: its finding marker could not be carried.",
+		"This pull request stays open: its linked issue's security finding marker could not be carried.",
+		"Superseded: owning PR #5 merged with its required checks passing at head `abc`. No re-issue was created.",
+	):
+		assert _unrouted(_unrouted_issue([_unrouted_comment(3, body, 20)])) == [], body
+	# A judge note after a human reply does not hide that reply.
+	answer = _unrouted_comment(4, "Pick option B.", 40)
+	note = _unrouted_comment(5, "The unblock judge found this work belongs in `o/r` (the shared workflow harness).", 30)
+	assert _unrouted(_unrouted_issue([answer, note])) == [
+		{"issue": 7, "comment_id": 4, "reason": "no_command", "age_minutes": 40}]
+	# A human who merely mentions the judge is still a human reply.
+	plain = _unrouted_comment(6, "I think the unblock judge found this work belongs in the harness; use B.", 20)
+	assert _unrouted(_unrouted_issue([plain]))[0]["comment_id"] == 6
+
+
 def test_unrouted_bookkeeping_after_a_reply_does_not_hide_it():
 	answer = _unrouted_comment(2, "Pick option B.", 40)
 	cleanup = _unrouted_comment(3, "<!-- tg_cleanup:1 -->", 30)
