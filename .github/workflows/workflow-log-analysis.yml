@@ -1235,9 +1235,9 @@ jobs:
                 "phase=workflow_log_analysis" \
                 "failure_mode=${failure_mode}" \
                 "failed_step_name=${failed_step_name}" \
-                "workflow_run_id=${{ github.run_id }}" \
-                "workflow_run_attempt=${{ github.run_attempt }}" \
-                "workflow_name=${{ github.workflow }}" \
+                "workflow_run_id=${GITHUB_RUN_ID}" \
+                "workflow_run_attempt=${GITHUB_RUN_ATTEMPT}" \
+                "workflow_name=${GITHUB_WORKFLOW}" \
                 "workflow_file=workflow-log-analysis.yml" \
                 "repository=${GITHUB_REPOSITORY}" \
                 "tracking_issue=0" \
@@ -1250,15 +1250,15 @@ jobs:
 
             local timestamp
             timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            local run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            local run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             local payload
             payload="$(jq -cn \
               --arg phase "workflow_log_analysis" \
               --arg failure_mode "${failure_mode}" \
               --arg failed_step_name "${failed_step_name}" \
-              --arg workflow_run_id "${{ github.run_id }}" \
-              --arg workflow_run_attempt "${{ github.run_attempt }}" \
-              --arg workflow_name "${{ github.workflow }}" \
+              --arg workflow_run_id "${GITHUB_RUN_ID}" \
+              --arg workflow_run_attempt "${GITHUB_RUN_ATTEMPT}" \
+              --arg workflow_name "${GITHUB_WORKFLOW}" \
               --arg workflow_file "workflow-log-analysis.yml" \
               --arg workflow_run_url "${run_url}" \
               --arg repository "${GITHUB_REPOSITORY}" \
@@ -1295,9 +1295,9 @@ jobs:
               "phase=workflow_log_analysis" \
               "failure_mode=${failure_mode}" \
               "failed_step_name=${failed_step_name}" \
-              "workflow_run_id=${{ github.run_id }}" \
-              "workflow_run_attempt=${{ github.run_attempt }}" \
-              "workflow_name=${{ github.workflow }}" \
+              "workflow_run_id=${GITHUB_RUN_ID}" \
+              "workflow_run_attempt=${GITHUB_RUN_ATTEMPT}" \
+              "workflow_name=${GITHUB_WORKFLOW}" \
               "workflow_file=workflow-log-analysis.yml" \
               "workflow_run_url=${run_url}" \
               "repository=${GITHUB_REPOSITORY}" \
