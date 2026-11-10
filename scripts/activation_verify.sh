@@ -741,6 +741,12 @@ activation_main()
 			_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} has ${operator_gaps} operator step(s), but the ai:operator-step issue could not be updated." "WARNING"
 			return 0
 		fi
+		# Surface upsert's contractual OPERATOR_STEP_RESOLVE lines (close-race
+		# reopen or failed recheck), which a successful upsert leaves in the log.
+		grep '^OPERATOR_STEP_RESOLVE ' "${RUNTIME_DIR}/operator_step_issue.log" || true
+		if grep -q '^OPERATOR_STEP_RESOLVE .*reason=recheck_failed' "${RUNTIME_DIR}/operator_step_issue.log"; then
+			echo "::warning::The ai:operator-step tracker state could not be rechecked after posting ${key}; it may be closed with a new entry."
+		fi
 	fi
 
 	comment_body="$(jq -r --arg key "${key}" --argjson lookup_ok "${activation_fix_lookup_ok}" '
