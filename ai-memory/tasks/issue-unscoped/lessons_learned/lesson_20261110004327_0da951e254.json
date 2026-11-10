@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-10T00:43:27Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=agents.md:1-1; cited_path=agents.md; files_touched=changelog.d/ftmc-739-superseded-ref-refresh.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrate_integration_ahead_by_gate.py.",
+  "phase": "review_autofix",
+  "pr_number": 9158,
+  "record_id": "lesson_20261110004327_0da951e254",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.md",
+    "changelog.d/ftmc-739-superseded-ref-refresh.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrate_integration_ahead_by_gate.py"
+  ]
+}
