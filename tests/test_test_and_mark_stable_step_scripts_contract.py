@@ -76,6 +76,17 @@ def test_workflow_keeps_fifty_thousand_bytes_of_headroom() -> None:
 	assert size <= MAX_WORKFLOW_BYTES, size
 
 
+def test_workflow_idle_comparisons_quote_their_operands() -> None:
+	"""SHELL-002: every inactivity-watchdog IDLE comparison quotes its operands.
+
+	Reads the raw workflow, not the expanded text: the moved Phase 4 body
+	(scripts/stable_e2e_step_wait_review.sh) is outside this check's scope.
+	"""
+	text = _raw()
+	assert "[ $IDLE -ge" not in text
+	assert '[ "$IDLE" -ge' in text
+
+
 def test_registry_wrappers_and_files_match() -> None:
 	steps = _e2e_steps(_raw())
 	wrapped = {}

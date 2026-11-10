@@ -4170,6 +4170,25 @@ _UNROUTED_AUTOMATION_PREFIXES = (
 	"ai planning workflow",
 	"ai implementation workflow",
 )
+# Openings of the unblock judge's unmarked status notes
+# (scripts/unblock_actions.py). They are posted under the owner's account a
+# second after the judge's verdict comment, so they look like a human reply to
+# the block (fun-token-multi-chain#821: the "belongs in the harness" note paged
+# the operator twice). They only disqualify the comment as the human
+# candidate; they do not show that an earlier reply was handled.
+_UNROUTED_PIPELINE_PREFIXES = (
+	"the unblock judge found this work belongs in",
+	"the unblock judge has no verdicts left",
+	"next attempt, per the unblock judge:",
+	"unblock judge could not act on",
+	# The bare "this ... stays open" openings are common prose, so these keep
+	# the judge-specific words that follow them.
+	"this security finding stays open: its finding marker",
+	"this security finding stays open; it is tracked here until",
+	"this security finding stays open and blocked: the unblock judge",
+	"this pull request stays open: its linked issue's security finding marker",
+	"superseded: owning pr #",
+)
 
 
 def is_reclarify_command_body(body: Any) -> bool:
@@ -4198,6 +4217,8 @@ def _is_unrouted_non_human_body(body: Any) -> bool:
 		return True
 	text = body if isinstance(body, str) else ""
 	if _UNROUTED_PIPELINE_MARKER_RE.search(text):
+		return True
+	if text.lstrip().lower().startswith(_UNROUTED_PIPELINE_PREFIXES):
 		return True
 	if (_UNROUTED_CLAUDE_CODE_FOOTER_RE.search(text) and not text.lstrip().startswith("/")
 			and not is_reclarify_command_body(text)):

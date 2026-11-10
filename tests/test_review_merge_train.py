@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -2848,3 +2849,433 @@ def test_gate_skips_non_object_and_null_filename_entries(tmp_path: Path, own_pat
 		assert "MERGE_TRAIN_GATE pr=4077 base=main result=unblocked action=continue" in result.stdout
 		assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
 	assert log_text.count("pulls/4075/files") == 1
+
+
+# SHELL-001 (Refs #8975): MERGE_TRAIN_DISPATCH_WORKFLOWS is split on default
+# IFS without pathname expansion; order and first-success stop are unchanged.
+def _dispatch_lines(log_text: str) -> list[str]:
+	return [line for line in log_text.splitlines() if line.startswith("gh workflow run ")]
+
+
+def test_release_dispatch_list_glob_is_not_expanded(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(tmp_path / "x.yml").write_text("", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="*.yml")
+	assert result.returncode == 0, result.stderr
+	assert "gh workflow run *.yml --repo acme/consumer -f pr_number=4077" in log_text
+	assert "gh workflow run x.yml" not in log_text
+	assert "MERGE_TRAIN_DISPATCHED pr=4077 workflow=*.yml ref=default head=ai/issue-4064" in result.stdout
+
+
+def test_release_default_dispatch_list_order_unchanged(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "dispatch_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	workflows = [line.split()[3] for line in _dispatch_lines(log_text)]
+	assert workflows == ["ai-review.yml", "internal-review.yml", "review_autofix.yml"]
+	assert " dispatch_failed=1 " in result.stdout
+
+
+def test_release_newline_separated_dispatch_list_is_split(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "dispatch_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="first.yml\nsecond.yml\tthird.yml\n")
+	assert result.returncode == 0, result.stderr
+	workflows = [line.split()[3] for line in _dispatch_lines(log_text)]
+	assert workflows == ["first.yml", "second.yml", "third.yml"]
+
+
+def test_release_whitespace_only_dispatch_list_dispatches_nothing(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="  \n ")
+	assert result.returncode == 0, result.stderr
+	assert _dispatch_lines(log_text) == []
+	assert "could not be dispatched" in result.stdout
+	assert " dispatch_failed=1 " in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# MERGE_TRAIN_RELEASE_SUMMARY API-cost fields (analysis/workflow-optimization-
+# 2026-10-08.md, GH API Call Audit #1). Appended after oldest_queued_age_secs=.
+# ---------------------------------------------------------------------------
+_MT_API_COST_FIELDS = ["file_list_fetches", "file_list_cache_hits", "active_listing_calls", "elapsed_ms"]
+
+
+def _release_summary_fields(stdout: str) -> tuple[str, dict[str, str]]:
+	summary = [line for line in stdout.splitlines() if line.startswith("MERGE_TRAIN_RELEASE_SUMMARY ")]
+	assert len(summary) == 1, stdout
+	return summary[0], dict(item.split("=", 1) for item in summary[0].split()[1:])
+
+
+def test_release_summary_appends_api_cost_fields(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"]),
+		_pr(4085, "ai/issue-4069", base="orchestrator/project-9", labels=["ai:merge-queued"]),
+		_pr(4090, "ai/issue-4073"),
+	]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(97)]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4081, ["backend/promo_email_sender.py", "db/contracts/promo_email_jobs.yml"])
+	_write_files(fixtures, 4085, ["twap_router.py"])
+	_write_files(fixtures, 4090, ["backend/promo_email_sender.py"])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	line, fields = _release_summary_fields(result.stdout)
+	# Existing prefix and fields stay byte-identical, in the same order.
+	assert line.startswith(
+		"MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=1 base_filter=main overlap=1 active_review=0"
+		" runs_incomplete=0 files_unavailable=0 blockers_unavailable=0 marker_unavailable=0"
+		" claim_skipped=0 dispatch_failed=0 oldest_queued_age_secs=none "
+	), line
+	# The four new fields close the line, in this order.
+	assert [token.split("=", 1)[0] for token in line.split()[-4:]] == _MT_API_COST_FIELDS
+	for key in _MT_API_COST_FIELDS:
+		assert re.fullmatch(r"[0-9]+", fields[key]), (key, fields[key])
+	assert fields["active_listing_calls"] == "1"
+
+
+def test_release_counts_shared_blocker_file_list_once(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064"),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"]),
+		_pr(4090, "ai/issue-4073", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4081, ["backend/promo_email_sender.py", "db/contracts/promo_email_jobs.yml"])
+	_write_files(fixtures, 4090, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	_line, fields = _release_summary_fields(result.stdout)
+	assert log_text.count("pulls/4077/files") == 1
+	assert int(fields["file_list_cache_hits"]) >= 1
+	# 4081 (own), 4077 (4081's blocker), 4090 (own) are fetched; 4090's pass
+	# reuses 4077 and 4081 from the cache.
+	assert fields["file_list_fetches"] == "3"
+	assert fields["file_list_cache_hits"] == "2"
+	assert int(fields["file_list_fetches"]) == sum(log_text.count(f"pulls/{n}/files") for n in (4077, 4081, 4090))
+
+
+def test_release_active_listing_calls_zero_or_one(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4085, "ai/issue-4069", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/a.py"])
+	_write_files(fixtures, 4085, ["backend/b.py"])
+	result, calls, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	_line, fields = _release_summary_fields(result.stdout)
+	assert fields["examined"] == "2"
+	assert fields["active_listing_calls"] == "1"
+	assert re.fullmatch(r"[0-9]+", fields["elapsed_ms"])
+	assert "actions/runs" in calls
+
+	other_tmp = tmp_path / "other-base"
+	other_tmp.mkdir()
+	bin_dir, fixtures, log = _install_fake_gh(other_tmp)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4085, "ai/issue-4069", base="orchestrator/project-9", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4085, ["twap_router.py"])
+	result, calls, _env = _run("release", other_tmp, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	_line, fields = _release_summary_fields(result.stdout)
+	assert fields["examined"] == "0"
+	assert fields["active_listing_calls"] == "0"
+	assert fields["file_list_fetches"] == "0"
+	assert fields["file_list_cache_hits"] == "0"
+	assert re.fullmatch(r"[0-9]+", fields["elapsed_ms"])
+	assert "actions/runs" not in calls
+
+
+# ---------------------------------------------------------------------------
+# Stale unattributed runs and the daily queue-age note.
+#
+# coding-workflows run 41814678900 (2026-11-04): GitHub accepted an
+# internal-review.yml dispatch and never started it. The run stayed "queued"
+# with no jobs and an unrendered title, so every release pass ended
+# reason=unattributed_run for six days and 16 PRs stayed queued unnoticed.
+# ---------------------------------------------------------------------------
+
+def _untitled_dispatch_run(run_id: int, status: str, hours_ago: float | None) -> dict:
+	run = {"id": run_id, "status": status, "event": "workflow_dispatch", "head_branch": "main",
+		"display_title": "Internal: AI Review & Autofix", "path": ".github/workflows/internal-review.yml"}
+	if hours_ago is not None:
+		run["created_at"] = _iso(hours_ago)
+	return run
+
+
+@pytest.mark.parametrize("status", ["queued", "requested", "pending", "waiting"])
+def test_release_ignores_stale_untitled_dispatch_that_never_started(tmp_path: Path, status: str) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [_untitled_dispatch_run(6100, status, 7)])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert ("MERGE_TRAIN_RUNS_LISTING outcome=ignored reason=stale_unattributed_run runs=1 ids=6100 max_age_hours=6"
+		in result.stderr)
+	assert "outcome=incomplete" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "runs_incomplete=0" in result.stdout
+
+
+@pytest.mark.parametrize("run", [
+	_untitled_dispatch_run(6101, "queued", 1),       # younger than the limit
+	_untitled_dispatch_run(6102, "in_progress", 7),  # executing: could be any PR's review
+	_untitled_dispatch_run(6103, "queued", None),    # no created_at: age unknown
+	dict(_untitled_dispatch_run(6104, "queued", None), created_at="yesterday"),
+])
+def test_release_keeps_other_untitled_dispatches_unattributed(tmp_path: Path, run: dict) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [run])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=unattributed_run" in result.stderr
+	assert "outcome=ignored" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+
+
+def test_release_stale_untitled_rule_can_be_turned_off(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [_untitled_dispatch_run(6105, "queued", 200)])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="0")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=unattributed_run" in result.stderr
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+
+
+def test_release_stale_untitled_limit_is_configurable_and_validated(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [_untitled_dispatch_run(6106, "queued", 7)])
+	# A 12-hour limit keeps a 7-hour-old run unattributed.
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="12")
+	assert "reason=unattributed_run" in result.stderr
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+	# A value that is not a whole number warns and falls back to 6 hours.
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="soon")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS is not a whole number of hours; using 6." in result.stderr
+	assert "soon" not in result.stderr
+	assert "ids=6106 max_age_hours=6" in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_stale_untitled_run_does_not_hide_an_active_review(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		_untitled_dispatch_run(6107, "queued", 150),
+		{"id": 6108, "status": "in_progress", "event": "workflow_dispatch", "head_branch": "main",
+			"display_title": "Internal: AI Review & Autofix [pr:4077]",
+			"path": ".github/workflows/internal-review.yml", "created_at": _iso(0.1)},
+	])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=ignored reason=stale_unattributed_run runs=1 ids=6107" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def _stall_alert_setup(tmp_path: Path, pr_hours_old: float = 30) -> tuple[Path, Path, Path, Path, dict]:
+	"""A queued PR the pass cannot release (a young untitled review run keeps
+	the listing incomplete), the real tg_helpers.sh and a fake curl that
+	records the Telegram call."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"], created_at=_iso(pr_hours_old)),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_runs(fixtures, [_untitled_dispatch_run(6200, "in_progress", 0.2)])
+	tg_log = tmp_path / "tg.log"
+	curl = bin_dir / "curl"
+	curl.write_text(
+		"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${FAKE_TG_LOG}\"\n"
+		"[ ! -f \"${FAKE_GH_DIR}/tg_fail\" ] || exit 7\nprintf '%s' '{\"result\":{\"message_id\":77}}'\n",
+		encoding="utf-8")
+	curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
+	env = {
+		"MERGE_TRAIN_TG_HELPERS": str(REPO_ROOT / "scripts" / "tg_helpers.sh"),
+		"MERGE_TRAIN_STALL_ALERT_HOUR_UTC": str(datetime.now(timezone.utc).hour),
+		"TG_BOT_SECRET": "test-bot-secret",
+		"TG_ADMIN_CHAT_ID": "12345",
+		"TG_CHAT_ID": "",
+		"ALERT_MSG_LEVEL": "WARNING",
+		"FAKE_TG_LOG": str(tg_log),
+		"BASE_BRANCH": "",
+	}
+	return bin_dir, fixtures, log, tg_log, env
+
+
+def _stall_note(comment_id: int, alert_date: str, author: str = "automation-bot") -> dict:
+	return {"id": comment_id, "user": {"login": author}, "created_at": "2026-10-01T00:00:00Z",
+		"body": f"<!-- merge-train:stalled alert_date={alert_date} -->\n**Merge train: still queued.**"}
+
+
+def _today_utc() -> str:
+	return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def test_release_sends_queue_age_note_once_for_an_old_queued_pr(tmp_path: Path) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	# One clock read gives both the slot hour and its start date, so they
+	# agree even if UTC midnight passes between setup and this point.
+	slot_start = datetime.now(timezone.utc)
+	env["MERGE_TRAIN_STALL_ALERT_HOUR_UTC"] = str(slot_start.hour)
+	today = slot_start.strftime("%Y-%m-%d")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+	assert re.search(r"MERGE_TRAIN_STALL_ALERT pr=4077 age_secs=\d+ queued=1 outcome=sent", result.stdout)
+	assert "gh api -X POST repos/acme/consumer/issues/4077/comments" in log_text
+	assert f"<!-- merge-train:stalled alert_date={today} -->" in log_text
+	assert "runs_incomplete=1" in log_text
+	sent = tg_log.read_text(encoding="utf-8")
+	assert sent.count("sendMessage") == 1
+	assert "WARNING" in sent and "#4077" in sent and "open 30h" in sent
+	assert "https://github.com/acme/consumer/pull/4077" in sent
+	# The summary line is unchanged and still last-but-one of the pass.
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=0" in result.stdout
+
+	# Second tick the same day: today's note exists, nothing is sent again.
+	(fixtures / "comments_4077.json").write_text(json.dumps([_stall_note(900, today)]), encoding="utf-8")
+	log.write_text("", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert "outcome=already_alerted" in result.stdout
+	assert "-X POST" not in log_text and "-X PATCH" not in log_text
+	assert tg_log.read_text(encoding="utf-8").count("sendMessage") == 1
+
+
+def test_release_queue_age_note_is_keyed_by_the_slot_start_date(tmp_path: Path) -> None:
+	"""A slot that started one hour ago keys the note by the slot's start
+	date (the previous UTC date when the slot crossed midnight), and a second
+	tick in the same slot is already alerted."""
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	slot_start = datetime.now(timezone.utc) - timedelta(hours=1)
+	env["MERGE_TRAIN_STALL_ALERT_HOUR_UTC"] = str(slot_start.hour)
+	expected_date = slot_start.strftime("%Y-%m-%d")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=sent" in result.stdout
+	assert f"<!-- merge-train:stalled alert_date={expected_date} -->" in log_text
+	(fixtures / "comments_4077.json").write_text(json.dumps([_stall_note(903, expected_date)]), encoding="utf-8")
+	log.write_text("", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert "outcome=already_alerted" in result.stdout
+	assert tg_log.read_text(encoding="utf-8").count("sendMessage") == 1
+
+
+def test_release_queue_age_note_updates_yesterdays_comment(tmp_path: Path) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	(fixtures / "comments_4077.json").write_text(json.dumps([_stall_note(901, "2026-01-01")]), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert "outcome=sent" in result.stdout
+	assert "gh api -X PATCH repos/acme/consumer/issues/comments/901" in log_text
+	assert "issues/4077/comments -f body" not in log_text
+	assert tg_log.read_text(encoding="utf-8").count("sendMessage") == 1
+
+
+def test_release_queue_age_note_ignores_a_note_from_another_author(tmp_path: Path) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	(fixtures / "comments_4077.json").write_text(
+		json.dumps([_stall_note(902, _today_utc(), author="someone-else")]), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert "outcome=sent" in result.stdout
+	assert "gh api -X POST repos/acme/consumer/issues/4077/comments" in log_text
+	assert "issues/comments/902" not in log_text
+
+
+@pytest.mark.parametrize("overrides,outcome", [
+	({"MERGE_TRAIN_STALL_ALERT_HOUR_UTC": str((datetime.now(timezone.utc).hour + 5) % 24)}, "outside_slot"),
+	({"MERGE_TRAIN_TG_HELPERS": ""}, "telegram_unavailable"),
+	({"MERGE_TRAIN_TG_HELPERS": "/nonexistent/tg_helpers.sh"}, "telegram_unavailable"),
+	({"TG_BOT_SECRET": ""}, "telegram_unconfigured"),
+	({"TG_ADMIN_CHAT_ID": ""}, "telegram_unconfigured"),
+	({"ALERT_MSG_LEVEL": "ERROR"}, "below_alert_level"),
+])
+def test_release_queue_age_note_skips_without_any_api_call(tmp_path: Path, overrides: dict, outcome: str) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	env.update(overrides)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_STALL_ALERT pr=4077" in result.stdout and f"outcome={outcome}" in result.stdout
+	assert "issues/4077/comments" not in log_text
+	assert not tg_log.exists()
+
+
+@pytest.mark.parametrize("overrides,pr_hours_old", [
+	({}, 23),                                         # younger than the 24-hour threshold
+	({"MERGE_TRAIN_STALL_ALERT_HOURS": "0"}, 300),    # turned off
+	({"MERGE_TRAIN_STALL_ALERT_HOURS": "48"}, 30),    # threshold raised
+	({"BASE_BRANCH": "main"}, 300),                   # a PR close event, not a poll tick
+])
+def test_release_queue_age_note_is_silent_when_not_due(tmp_path: Path, overrides: dict, pr_hours_old: float) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path, pr_hours_old=pr_hours_old)
+	env.update(overrides)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_STALL_ALERT" not in result.stdout
+	assert "issues/4077/comments" not in log_text
+	assert not tg_log.exists()
+
+
+@pytest.mark.parametrize("flag,outcome,telegram_calls", [
+	("comment_post_fail", "marker_write_failed", 0),
+	("fail_comments", "marker_unavailable", 0),
+	("fail_user", "marker_unavailable", 0),
+	("tg_fail", "not_delivered", 1),
+])
+def test_release_queue_age_note_failures_never_fail_the_pass(tmp_path: Path, flag: str, outcome: str,
+		telegram_calls: int) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	(fixtures / flag).touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert f"outcome={outcome}" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=0" in result.stdout
+	sent = tg_log.read_text(encoding="utf-8") if tg_log.exists() else ""
+	assert sent.count("sendMessage") == telegram_calls
+
+
+def test_release_queue_age_note_skips_a_pr_released_in_this_pass(tmp_path: Path) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path, pr_hours_old=300)
+	_write_runs(fixtures, [])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "MERGE_TRAIN_STALL_ALERT" not in result.stdout
+	assert not tg_log.exists()
+
+
+def test_poll_release_step_passes_the_trusted_telegram_helper() -> None:
+	doc = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8"))
+	steps = [step for job in doc["jobs"].values() for step in job.get("steps", [])
+		if "review_merge_train.sh release" in str(step.get("run", ""))]
+	assert len(steps) == 1
+	env, run = steps[0]["env"], steps[0]["run"]
+	assert env["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}"
+	assert env["TG_ADMIN_CHAT_ID"] == "${{ vars.TG_ADMIN_CHAT_ID || '' }}"
+	assert env["ALERT_MSG_LEVEL"] == "${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"
+	assert '_mt_tg_helpers="$(pwd)/.codex-workflow-src/scripts/tg_helpers.sh"' in run
+	assert '_mt_tg_helpers="$(pwd)/.codex-workflow-src-main/scripts/tg_helpers.sh"' in run
+	assert 'MERGE_TRAIN_TG_HELPERS="${_mt_tg_helpers}"' in run
+	# Never the repository's own scripts/ copy.
+	assert "scripts/tg_helpers.sh" not in run.replace(".codex-workflow-src/scripts/tg_helpers.sh", "").replace(
+		".codex-workflow-src-main/scripts/tg_helpers.sh", "")

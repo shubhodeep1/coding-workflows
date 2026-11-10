@@ -61,6 +61,18 @@
 # Env (release):
 #   BASE_BRANCH                            optional; restrict to PRs on this base
 #   MERGE_TRAIN_DISPATCH_WORKFLOWS         default "ai-review.yml internal-review.yml review_autofix.yml"
+#   MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS default 6; 0 = off. Age after which an
+#                                          untitled, not-started review dispatch stops
+#                                          making the active-run listing incomplete
+#                                          (_mt_inflight_review_branches)
+#   MERGE_TRAIN_STALL_ALERT_HOURS          default 24; 0 = off. Age of the oldest
+#                                          still-queued PR that triggers the daily
+#                                          queue-age note (_mt_release_stall_alert)
+#   MERGE_TRAIN_STALL_ALERT_HOUR_UTC       default 1 (09:00 SGT); first UTC hour of the
+#                                          3-hour slot in which the note may be sent
+#   MERGE_TRAIN_TG_HELPERS                 path of scripts/tg_helpers.sh from the trusted
+#                                          support checkout; unset = no queue-age note
+#   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, ALERT_MSG_LEVEL   scripts/tg_helpers.sh
 #
 # API budget (CLAUDE.md §15), all REST via `gh api`:
 #   gate:    1 list call (open PRs on BASE_BRANCH, oldest first) +
@@ -135,6 +147,9 @@ MT_MARKER="<!-- merge-train:queued -->"
 MT_RELEASED_MARKER="<!-- merge-train:released -->"
 MT_BYPASSED_MARKER="<!-- merge-train:bypassed -->"
 MT_RETIRED_MARKER="<!-- merge-train:queue-retired -->"
+# Queue-age note (release, _mt_release_stall_alert): the full first line is
+# "<!-- merge-train:stalled alert_date=YYYY-MM-DD -->".
+MT_STALLED_MARKER_PREFIX="<!-- merge-train:stalled"
 MT_AUTOMATION_LOGIN=""
 [[ "${MT_MAX_OLDER}" =~ ^[0-9]+$ ]] || MT_MAX_OLDER=20
 
@@ -221,12 +236,21 @@ MT_EVAL_SOURCE=""
 #
 # API budget: one paginated `GET /pulls/{n}/files` per distinct PR per run.
 declare -A _MT_FILES_CACHE=()
+# API-cost counters for MERGE_TRAIN_RELEASE_SUMMARY only (file_list_fetches=,
+# file_list_cache_hits=); _mt_release resets them at the start of each pass.
+# A fetch counts once per logical lookup (gh_retry retries are not counted
+# separately) and is counted even when the call fails. They never feed back
+# into any decision.
+_MT_FILE_LIST_FETCHES=0
+_MT_FILE_LIST_CACHE_HITS=0
 _mt_pr_files_into() {
 	local __mt_files_dest="$1" __mt_files_pr="$2" __mt_files_out=""
 	if [ -n "${_MT_FILES_CACHE[${__mt_files_pr}]+x}" ]; then
+		_MT_FILE_LIST_CACHE_HITS=$((_MT_FILE_LIST_CACHE_HITS + 1))
 		printf -v "${__mt_files_dest}" '%s' "${_MT_FILES_CACHE[${__mt_files_pr}]}"
 		return 0
 	fi
+	_MT_FILE_LIST_FETCHES=$((_MT_FILE_LIST_FETCHES + 1))
 	if ! __mt_files_out="$(gh_retry gh api --paginate "repos/${MT_REPO}/pulls/${__mt_files_pr}/files?per_page=100" --jq '.[] | select(type == "object") | (.filename | select(type == "string" and length > 0)), (.previous_filename | select(type == "string" and length > 0))' 2>/dev/null)"; then
 		return 1
 	fi
@@ -1058,6 +1082,23 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # every release (Q3). An untitled dispatch on the default branch (or null)
 # is still unattributed (review_autofix.yml self-dispatches).
 #
+# Stale unattributed runs: GitHub sometimes accepts a dispatch and never
+# starts it. The run then stays in a not-started status with no jobs and a
+# title that was never rendered (coding-workflows run 41814678900, queued
+# from 2026-11-04: every release pass ended reason=unattributed_run for six
+# days and 16 PRs stayed queued). Such a run is not an in-flight review, so
+# an untitled default-branch dispatch whose own status is queued, requested,
+# pending or waiting and whose created_at is more than
+# MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS old (default 6, the longest a
+# GitHub-hosted job can run; 0 turns the rule off; anything that is not a
+# whole number of at most 4 digits warns and uses 6) is dropped instead of
+# making the listing incomplete, and logged once on stderr:
+#   MERGE_TRAIN_RUNS_LISTING outcome=ignored reason=stale_unattributed_run runs=<n> ids=<id,...> max_age_hours=<h>
+# An in_progress run, a younger run, or one with a missing or malformed
+# created_at is still unattributed. If a dropped run does start later, the
+# release may have dispatched a second review of the same PR; the review
+# workflows' per-PR concurrency groups keep the two from running together.
+#
 # Input:     none (MT_REPO).
 # Output:    one key per line on stdout, sorted and unique: the head branch
 #            of each active review run that is not a workflow_dispatch run,
@@ -1173,6 +1214,15 @@ _mt_inflight_review_branches()
 	local __mt_runs_page_json="" __mt_runs_page_len=0 __mt_runs_total=0 __mt_runs_read=0 __mt_runs_read_before=0
 	local __mt_runs_query="" __mt_runs_created_bound=""
 	local __mt_runs_status_runs='[]' __mt_runs_all='[]' __mt_runs_keys="" __mt_runs_keyed='[]'
+	local __mt_runs_classified='{}' __mt_runs_stale_ids="" __mt_runs_stale_count=0 __mt_runs_now_epoch=0
+	local __mt_runs_stale_hours="${MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS:-6}"
+	if ! [[ "${__mt_runs_stale_hours}" =~ ^[0-9]{1,4}$ ]]; then
+		_mt_warn "merge-train release: MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS is not a whole number of hours; using 6." >&2
+		__mt_runs_stale_hours=6
+	fi
+	__mt_runs_stale_hours=$((10#${__mt_runs_stale_hours}))
+	__mt_runs_now_epoch="$(date -u +%s 2>/dev/null)" || __mt_runs_now_epoch=0
+	[[ "${__mt_runs_now_epoch}" =~ ^[0-9]+$ ]] || __mt_runs_now_epoch=0
 	local __mt_runs_shift_retries=0 __mt_runs_shift_retry_max="${MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES:-2}" __mt_runs_shift_sleep="${MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP:-2}"
 	[[ "${__mt_runs_shift_retry_max}" =~ ^[0-5]$ ]] || __mt_runs_shift_retry_max=2
 	[[ "${__mt_runs_shift_sleep}" =~ ^[0-9]{1,2}$ ]] || __mt_runs_shift_sleep=2
@@ -1284,32 +1334,52 @@ _mt_inflight_review_branches()
 		# Issue #6629: only a trusted dispatch run (see the header) gets its
 		# "pr:<N>" key; a dispatch on another non-empty branch, or a PR-named
 		# one whose title and path do not pair, is dropped (no key, not counted).
-		if ! __mt_runs_keyed="$(printf '%s' "${__mt_runs_all}" | jq -c --arg db "${__mt_runs_default_branch}" --arg repo "${MT_REPO}" '
+		# The filter classifies each review run once: {k: [keys]} for a run that
+		# is counted (an empty list is an unattributed run) or {s: id} for a
+		# stale unattributed run that is dropped (see the header). A clock that
+		# could not be read ($now 0) turns the stale rule off.
+		if ! __mt_runs_classified="$(printf '%s' "${__mt_runs_all}" | jq -c --arg db "${__mt_runs_default_branch}" --arg repo "${MT_REPO}" \
+			--argjson now "${__mt_runs_now_epoch}" --argjson stale_secs "$((__mt_runs_stale_hours * 3600))" '
 			def mt_review_path:
 				((.path // "") | if type == "string" then . else "" end | sub("@.*$"; "")) as $p
 				| if $repo != "" and ($p | ascii_downcase | startswith(($repo | ascii_downcase) + "/"))
 					then $p[(($repo | length) + 1):]
 					else $p
 					end;
+			def mt_stale_unattributed:
+				$stale_secs > 0 and $now > 0
+				and ((.status // "") as $s | $s == "queued" or $s == "requested" or $s == "pending" or $s == "waiting")
+				and (.created_at
+					| if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$")
+						then ((sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) <= ($now - $stale_secs))
+						else false
+						end);
 			[.[]?
 			| select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
 			| if (.event // "") == "workflow_dispatch" then
 				((.display_title // "") | if type == "string" then . else "" end) as $t
 				| [$t | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | .pr] as $prs
 				| if ((.head_branch | type) == "string" and .head_branch != "" and .head_branch != $db) then empty
-					elif ($prs | length) == 0 then []
+					elif ($prs | length) == 0 then (if mt_stale_unattributed then {s: .id} else {k: []} end)
 					elif (mt_review_path == ".github/workflows/internal-review.yml" and $t == ("Internal: AI Review & Autofix [pr:" + $prs[0] + "]"))
-						or (mt_review_path == ".github/workflows/ai-review.yml" and $t == ("AI Review [pr:" + $prs[0] + "]")) then ["pr:" + $prs[0]]
+						or (mt_review_path == ".github/workflows/ai-review.yml" and $t == ("AI Review [pr:" + $prs[0] + "]")) then {k: ["pr:" + $prs[0]]}
 					else empty
 					end
-				else [.head_branch | select(type == "string" and length > 0)]
-				end]' 2>/dev/null)"; then
+				else {k: [.head_branch | select(type == "string" and length > 0)]}
+				end] as $m
+			| {keyed: [$m[] | select(has("k")) | .k], stale: ([$m[] | select(has("s")) | .s] | unique)}' 2>/dev/null)" \
+			|| ! __mt_runs_keyed="$(printf '%s' "${__mt_runs_classified}" | jq -c '.keyed' 2>/dev/null)" \
+			|| ! __mt_runs_stale_ids="$(printf '%s' "${__mt_runs_classified}" | jq -r '.stale | map(tostring) | join(",")' 2>/dev/null)" \
+			|| ! __mt_runs_stale_count="$(printf '%s' "${__mt_runs_classified}" | jq -r '.stale | length' 2>/dev/null)"; then
 			__mt_runs_reason="filter_failed"
 		elif ! printf '%s' "${__mt_runs_keyed}" | jq -e 'all(.[]; length > 0)' >/dev/null 2>&1; then
 			__mt_runs_reason="unattributed_run"
 		elif ! __mt_runs_keys="$(printf '%s' "${__mt_runs_keyed}" | jq -r '.[][]' 2>/dev/null)"; then
 			__mt_runs_reason="filter_failed"
 		fi
+	fi
+	if [ -n "${__mt_runs_stale_ids}" ] && [ "${__mt_runs_reason}" != "filter_failed" ]; then
+		echo "MERGE_TRAIN_RUNS_LISTING outcome=ignored reason=stale_unattributed_run runs=${__mt_runs_stale_count} ids=${__mt_runs_stale_ids} max_age_hours=${__mt_runs_stale_hours}" >&2
 	fi
 	if [ -n "${__mt_runs_reason}" ]; then
 		echo "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=${__mt_runs_reason} status=${__mt_runs_status} page=${__mt_runs_page} read=${__mt_runs_read} total=${__mt_runs_total}" >&2
@@ -1333,7 +1403,15 @@ _mt_dispatch_review() {
 		_mt_warn "merge-train release: invalid PR number '${pr}' for head ${head}; not dispatching."
 		return 1
 	fi
-	for wf in ${MERGE_TRAIN_DISPATCH_WORKFLOWS:-ai-review.yml internal-review.yml review_autofix.yml}; do
+	# SHELL-001: an unquoted expansion of the list also glob-expanded items
+	# such as `*.yml` against the working directory. `read -a` splits on the
+	# default IFS (spaces, tabs, newlines; -d '' keeps every line) and never
+	# does pathname expansion, so global `set -f` is not needed. `|| true`:
+	# read -d '' returns 1 at end of input under set -e.
+	local -a mt_dispatch_workflow_list=()
+	IFS=$' \t\n' read -r -d '' -a mt_dispatch_workflow_list \
+		<<< "${MERGE_TRAIN_DISPATCH_WORKFLOWS:-ai-review.yml internal-review.yml review_autofix.yml}" || true
+	for wf in "${mt_dispatch_workflow_list[@]}"; do
 		if gh_retry gh workflow run "${wf}" --repo "${MT_REPO}" \
 			-f pr_number="${pr}" -f allow_workflow_edits="${allow_edits}" >/dev/null 2>&1; then
 			_mt_log "MERGE_TRAIN_DISPATCHED pr=${pr} workflow=${wf} ref=default head=${head}"
@@ -1341,6 +1419,142 @@ _mt_dispatch_review() {
 		fi
 	done
 	return 1
+}
+
+# Queue-age note: one Telegram WARNING a day while the oldest still-queued PR
+# is older than MERGE_TRAIN_STALL_ALERT_HOURS (default 24, 0 = off).
+#
+# Why: from 2026-11-04 the coding-workflows train released nothing for six
+# days (see "Stale unattributed runs" above) and nothing reported it. The note
+# states a fact, how long the oldest queued PR has been open and what the last
+# pass counted, not a diagnosis: one incomplete listing is routine, so a tick's
+# own result cannot tell a stall from churn.
+#
+# Input:     $1 PR number of the oldest still-queued PR, $2 its age in
+#            seconds, $3 PRs still queued after this pass, $4 its counters as text.
+# Called by: _mt_release on poll ticks only (no BASE_BRANCH filter), so a PR
+#            close event never sends it.
+# Once a day: sent only in the 3-hour UTC slot that starts at
+#            MERGE_TRAIN_STALL_ALERT_HOUR_UTC (default 1), and only when the
+#            PR has no automation-authored note for today. The note is one
+#            PR comment whose first line is
+#            "<!-- merge-train:stalled alert_date=YYYY-MM-DD -->", updated in
+#            place each day. It is written before Telegram is called, so a
+#            failed write sends nothing and a failed send is not repeated
+#            that day.
+# API calls: none unless the age, the slot, the Telegram helpers and the alert
+#            level all allow a send. Then one `GET user` (cached per process,
+#            _mt_resolve_automation_login), one paginated comments list of
+#            that PR and one comment PATCH or POST. The open-PR list and the
+#            active-run listing this pass already read carry no comments, so
+#            neither can answer "was today's note sent".
+# Fail-open: every failure logs its outcome and returns 0; no release, label
+#            or dispatch decision depends on it.
+# Log:       MERGE_TRAIN_STALL_ALERT pr=<n> age_secs=<n> queued=<n> outcome=<sent|not_delivered|already_alerted|outside_slot|telegram_unavailable|telegram_unconfigured|below_alert_level|marker_unavailable|marker_write_failed>
+_mt_release_stall_alert()
+{
+	local stall_pr="$1" stall_age_secs="$2" stall_examined="$3" stall_detail="$4"
+	local stall_hours="${MERGE_TRAIN_STALL_ALERT_HOURS:-24}" stall_slot_hour="${MERGE_TRAIN_STALL_ALERT_HOUR_UTC:-1}"
+	local stall_now_epoch="" stall_now_hour="" stall_today="" stall_rows="" stall_row="" stall_comment_id="" stall_comment_created="" stall_last_date=""
+	local stall_body="" stall_msg="" stall_msg_id="" stall_age_hours=0 stall_filter="" stall_outcome=""
+	if ! [[ "${stall_hours}" =~ ^[0-9]{1,4}$ ]]; then
+		_mt_warn "merge-train release: MERGE_TRAIN_STALL_ALERT_HOURS is not a whole number of hours; using 24."
+		stall_hours=24
+	fi
+	stall_hours=$((10#${stall_hours}))
+	[ "${stall_hours}" -gt 0 ] || return 0
+	[[ "${stall_pr}" =~ ^[1-9][0-9]*$ && "${stall_age_secs}" =~ ^[0-9]+$ ]] || return 0
+	[ "${stall_age_secs}" -ge "$((stall_hours * 3600))" ] || return 0
+	stall_age_hours=$((stall_age_secs / 3600))
+	if ! [[ "${stall_slot_hour}" =~ ^[0-9]{1,2}$ ]] || [ "$((10#${stall_slot_hour}))" -gt 23 ]; then
+		stall_slot_hour=1
+	fi
+	stall_slot_hour=$((10#${stall_slot_hour}))
+	stall_now_epoch="$(date -u +%s 2>/dev/null)" || stall_now_epoch=""
+	# One clock read: the hour comes from the same epoch, so an hour or
+	# midnight boundary between two date calls cannot skew the slot offset.
+	if [[ "${stall_now_epoch}" =~ ^[0-9]+$ ]]; then
+		stall_now_hour="$(date -u -d "@${stall_now_epoch}" +%H 2>/dev/null)" || stall_now_hour=""
+	fi
+	# The note is keyed by the UTC date the slot started, so a slot that
+	# crosses midnight (start hour 22 or 23) still sends only once.
+	if [[ "${stall_now_epoch}" =~ ^[0-9]+$ && "${stall_now_hour}" =~ ^[0-9]{2}$ ]]; then
+		stall_today="$(date -u -d "@$((stall_now_epoch - ((10#${stall_now_hour} - stall_slot_hour + 24) % 24) * 3600))" +%Y-%m-%d 2>/dev/null)" || stall_today=""
+	fi
+	if ! [[ "${stall_now_hour}" =~ ^[0-9]{2}$ && "${stall_today}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+		|| [ "$(( (10#${stall_now_hour} - stall_slot_hour + 24) % 24 ))" -ge 3 ]; then
+		stall_outcome="outside_slot"
+	elif [ -z "${MERGE_TRAIN_TG_HELPERS:-}" ] || [ -L "${MERGE_TRAIN_TG_HELPERS}" ] || [ ! -f "${MERGE_TRAIN_TG_HELPERS}" ]; then
+		stall_outcome="telegram_unavailable"
+	fi
+	if [ -z "${stall_outcome}" ]; then
+		# shellcheck disable=SC1090
+		source "${MERGE_TRAIN_TG_HELPERS}" 2>/dev/null || true
+		if ! type tg_send_msg >/dev/null 2>&1 || ! type _tg_should_send >/dev/null 2>&1; then
+			stall_outcome="telegram_unavailable"
+		elif [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" ]; then
+			stall_outcome="telegram_unconfigured"
+		elif ! _tg_should_send WARNING; then
+			stall_outcome="below_alert_level"
+		fi
+	fi
+	if [ -z "${stall_outcome}" ]; then
+		# Same trust rule as _mt_find_marker_comment (only the automation
+		# account's comment counts), plus the note's date in the same call.
+		stall_filter='.[] | select((.user.login // "" | ascii_downcase) == "MT_LOGIN" and ((.body // "") | startswith("MT_PREFIX"))) | "\(.id) \(.created_at) \((.body | capture("^MT_PREFIX alert_date=(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2}) -->").d) // "none")"'
+		stall_filter="${stall_filter//MT_PREFIX/${MT_STALLED_MARKER_PREFIX}}"
+		if ! _mt_resolve_automation_login; then
+			stall_outcome="marker_unavailable"
+		else
+			stall_filter="${stall_filter//MT_LOGIN/${MT_AUTOMATION_LOGIN}}"
+			if ! stall_rows="$(gh_retry gh api --paginate "repos/${MT_REPO}/issues/${stall_pr}/comments?per_page=100" --jq "${stall_filter}" 2>/dev/null)"; then
+				stall_outcome="marker_unavailable"
+			fi
+		fi
+	fi
+	if [ -z "${stall_outcome}" ]; then
+		stall_row="$(printf '%s\n' "${stall_rows}" | sed '/^$/d' | LC_ALL=C sort -k2,2r -k1,1nr | sed -n '1p')"
+		read -r stall_comment_id stall_comment_created stall_last_date <<< "${stall_row}" || true
+		if [ "${stall_last_date}" = "${stall_today}" ]; then
+			stall_outcome="already_alerted"
+		fi
+	fi
+	if [ -z "${stall_outcome}" ]; then
+		stall_body="${MT_STALLED_MARKER_PREFIX} alert_date=${stall_today} -->
+**Merge train: still queued.** This PR has been open for ${stall_age_hours} hours and is the oldest of ${stall_examined} pull request(s) still labelled \`${MT_LABEL}\`. Last release pass: ${stall_detail}. When \`runs_incomplete\` is not 0, look for \`MERGE_TRAIN_RUNS_LISTING outcome=incomplete\` in the latest orchestrator poll run. This note is updated at most once a day while the queue stays this old."
+		if [[ "${stall_comment_id}" =~ ^[0-9]+$ ]]; then
+			_mt_replace_comment "${stall_comment_id}" "${stall_body}" || stall_outcome="marker_write_failed"
+		else
+			gh_retry gh api -X POST "repos/${MT_REPO}/issues/${stall_pr}/comments" -f body="${stall_body}" >/dev/null 2>&1 || stall_outcome="marker_write_failed"
+		fi
+	fi
+	if [ -z "${stall_outcome}" ]; then
+		stall_msg="Merge train: ${stall_examined} queued PR(s) in ${MT_REPO}; the oldest, #${stall_pr}, has been open ${stall_age_hours}h. Last release pass: ${stall_detail}. https://github.com/${MT_REPO}/pull/${stall_pr}"
+		stall_msg_id="$(tg_send_msg "${stall_msg}" WARNING 2>/dev/null || true)"
+		if [ -n "${stall_msg_id}" ]; then
+			stall_outcome="sent"
+		else
+			stall_outcome="not_delivered"
+		fi
+	fi
+	_mt_log "MERGE_TRAIN_STALL_ALERT pr=${stall_pr} age_secs=${stall_age_secs} queued=${stall_examined} outcome=${stall_outcome}"
+	return 0
+}
+
+# Epoch milliseconds for elapsed_ms= in MERGE_TRAIN_RELEASE_SUMMARY. GNU date
+# supports %3N; BSD/busybox date may print a literal "3N" or nothing, so any
+# non-integer result falls back to whole seconds * 1000. No API calls.
+_mt_now_ms()
+{
+	local __mt_now_ms_val
+	__mt_now_ms_val="$(date +%s%3N 2>/dev/null || true)"
+	if [[ "${__mt_now_ms_val}" =~ ^[0-9]{13,}$ ]]; then
+		printf '%s\n' "${__mt_now_ms_val}"
+	else
+		__mt_now_ms_val="$(date -u +%s 2>/dev/null || true)"
+		[[ "${__mt_now_ms_val}" =~ ^[0-9]+$ ]] || __mt_now_ms_val=0
+		printf '%s\n' "$(( __mt_now_ms_val * 1000 ))"
+	fi
 }
 
 _mt_release() {
@@ -1359,7 +1573,16 @@ _mt_release() {
 	local release_count_files_unavailable=0 release_count_blockers_unavailable=0 release_count_marker_unavailable=0
 	local release_count_claim_skipped=0 release_count_dispatch_failed=0
 	local release_created_at="" release_created_epoch="" release_oldest_created_epoch="" release_oldest_age="none"
+	# Queue-age note (_mt_release_stall_alert): the oldest queued PR and the
+	# PRs this pass released, so a PR released just now is never reported.
+	local release_oldest_pr="" release_released_prs=" "
 	local release_now_epoch
+	# API-cost counters (analysis/workflow-optimization-2026-10-08.md, GH API
+	# Call Audit #1): reset per pass; they add no calls and change no decision.
+	local release_start_ms release_elapsed_ms=0 release_active_listing_calls=0
+	release_start_ms="$(_mt_now_ms)"
+	_MT_FILE_LIST_FETCHES=0
+	_MT_FILE_LIST_CACHE_HITS=0
 	release_now_epoch="$(date -u +%s)"
 	MT_EVAL_SOURCE="release"
 	if ! prs_json="$(_mt_list_open_prs "")"; then
@@ -1385,9 +1608,12 @@ _mt_release() {
 		if release_created_epoch="$(_mt_iso_epoch "${release_created_at}")" && [[ "${release_created_epoch}" =~ ^[0-9]+$ ]]; then
 			if [ -z "${release_oldest_created_epoch}" ] || [ "${release_created_epoch}" -lt "${release_oldest_created_epoch}" ]; then
 				release_oldest_created_epoch="${release_created_epoch}"
+				release_oldest_pr="${num}"
 			fi
 		fi
 		if [ -z "${release_runs_listing_state}" ]; then
+			# Counted here, not inside the listing: it runs in $(...).
+			release_active_listing_calls=$((release_active_listing_calls + 1))
 			if inflight_review_branches="$(_mt_inflight_review_branches)"; then
 				release_runs_listing_state="complete"
 			else
@@ -1452,6 +1678,7 @@ _mt_release() {
 			_mt_upsert_comment "${num}" "${MT_RELEASED_MARKER}" "${release_comment_body}" \
 				|| _mt_warn "merge-train release: could not upsert the released comment for PR #${num}; continuing."
 			released=$((released + 1))
+			release_released_prs="${release_released_prs}${num} "
 			_mt_log "MERGE_TRAIN_RELEASED pr=${num} source=release"
 		else
 			release_count_dispatch_failed=$((release_count_dispatch_failed + 1))
@@ -1478,9 +1705,19 @@ _mt_release() {
 		# Clock skew: a future-dated PR reports 0, never a negative age.
 		[ "${release_oldest_age}" -ge 0 ] || release_oldest_age=0
 	fi
-	# New fields are appended after base_filter= so the existing prefix and
-	# first three fields stay byte-identical for current consumers.
-	_mt_log "MERGE_TRAIN_RELEASE_SUMMARY examined=${examined} released=${released} base_filter=${base_filter:-*} overlap=${release_count_overlap} active_review=${release_count_active_review} runs_incomplete=${release_count_runs_incomplete} files_unavailable=${release_count_files_unavailable} blockers_unavailable=${release_count_blockers_unavailable} marker_unavailable=${release_count_marker_unavailable} claim_skipped=${release_count_claim_skipped} dispatch_failed=${release_count_dispatch_failed} oldest_queued_age_secs=${release_oldest_age}"
+	# Fields are only ever appended, never reordered or renamed: the per-reason
+	# fields (overlap= through oldest_queued_age_secs=) were appended after
+	# base_filter= so the prefix and first three fields stay byte-identical.
+	# The API-cost fields (file_list_fetches= through elapsed_ms=) are appended
+	# last, after oldest_queued_age_secs=; they add no calls.
+	release_elapsed_ms=$(( $(_mt_now_ms) - release_start_ms ))
+	[ "${release_elapsed_ms}" -ge 0 ] || release_elapsed_ms=0
+	_mt_log "MERGE_TRAIN_RELEASE_SUMMARY examined=${examined} released=${released} base_filter=${base_filter:-*} overlap=${release_count_overlap} active_review=${release_count_active_review} runs_incomplete=${release_count_runs_incomplete} files_unavailable=${release_count_files_unavailable} blockers_unavailable=${release_count_blockers_unavailable} marker_unavailable=${release_count_marker_unavailable} claim_skipped=${release_count_claim_skipped} dispatch_failed=${release_count_dispatch_failed} oldest_queued_age_secs=${release_oldest_age} file_list_fetches=${_MT_FILE_LIST_FETCHES} file_list_cache_hits=${_MT_FILE_LIST_CACHE_HITS} active_listing_calls=${release_active_listing_calls} elapsed_ms=${release_elapsed_ms}"
+	if [ -z "${base_filter}" ] && [ -n "${release_oldest_pr}" ] && [[ "${release_oldest_age}" =~ ^[0-9]+$ ]] \
+		&& [[ "${release_released_prs}" != *" ${release_oldest_pr} "* ]]; then
+		_mt_release_stall_alert "${release_oldest_pr}" "${release_oldest_age}" "$((examined - released))" \
+			"released=${released} overlap=${release_count_overlap} active_review=${release_count_active_review} runs_incomplete=${release_count_runs_incomplete}" || true
+	fi
 	return 0
 }
 
