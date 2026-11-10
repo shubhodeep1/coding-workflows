@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-10T06:11:01Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=.github/workflows/orchestrate_poll.yml:1-1; cited_path=CI check-run `copilot-pull-request-reviewer`; files_touched=.github/workflows/orchestrate_poll.yml, README.md, agents.d/merge-train-stale-untitled-run.md, changelog.d/merge-train-stale-untitled-run.md, scripts/review_merge_train.sh, tests/test_review_merge_train.py, tests/test_smoke_alert_silencing_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 9172,
+  "record_id": "lesson_20261110061101_79240c4c3e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "CI check-run `copilot-pull-request-reviewer`",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/merge-train-stale-untitled-run.md",
+    "changelog.d/merge-train-stale-untitled-run.md",
+    "scripts/review_merge_train.sh",
+    "tests/test_review_merge_train.py",
+    "tests/test_smoke_alert_silencing_contract.py"
+  ]
+}
