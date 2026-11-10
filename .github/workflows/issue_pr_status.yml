@@ -823,7 +823,7 @@ jobs:
                 fi
               fi
               if [ -n "${_triage_skip_reason}" ]; then
-                echo "Check-triage completion not applied to issue #${issue_number} (reason=${_triage_skip_reason}; base=$(sanitize_ref_for_log "${PR_BASE_REF}"); marker_head=$(sanitize_ref_for_log "${_triage_head_ref}"))."
+                echo "Check-triage completion not applied to issue #${issue_number} (reason=${_triage_skip_reason}; marker_pr=$(sanitize_ref_for_log "${_triage_marker_pr}"); base=$(sanitize_ref_for_log "${PR_BASE_REF}"); marker_head=$(sanitize_ref_for_log "${_triage_head_ref}"))."
               fi
             fi
 

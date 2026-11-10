@@ -5522,12 +5522,15 @@ close_merged_issues_sweep() {
               "$(echo "${issues_json}" | jq -c --argjson i "${idx}" '.[$i].labels // []' 2>/dev/null || echo "[]")" \
               "${_sweep_issue_body}" \
               "$(echo "${issues_json}" | jq -r --argjson i "${idx}" '.[$i].author // ""' 2>/dev/null || echo "")" || _sweep_triage_rc=$?
-            if [ "${_sweep_triage_rc}" = "2" ]; then
-              # Transient marker-PR read failure: defer like a failed candidate fetch.
-              sweep_pr_fetch_failed=true
-            fi
             _sweep_triage_branch="${_CLOSE_SWEEP_TRIAGE_BRANCH}"
             _sweep_triage_parsed=true
+            if [ "${_sweep_triage_rc}" = "2" ]; then
+              # Transient marker-PR read failure: defer like a failed candidate
+              # fetch, and do not log this candidate as rejected=non_target_base.
+              sweep_pr_fetch_failed=true
+              echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=check_triage_pr_fetch_failed"
+              continue
+            fi
           fi
           if [ "${_sweep_cand_bound}" = "true" ] && [ -n "${_sweep_triage_branch}" ] \
               && _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}" "${_sweep_triage_branch}"; then

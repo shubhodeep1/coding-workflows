@@ -19159,6 +19159,8 @@ def test_close_merged_sweep_check_triage_marker_fetch_failure_defers():
 	assert 10 not in result.get("closed_issues", []), result["stdout"]
 	assert "CLOSE_MERGED_SWEEP issue=10 triage_marker_pr=970 rejected=check_triage_pr_fetch_failed" in result["stdout"]
 	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label pr_fetch_failed — skipping this cycle." in result["stdout"] + result["stderr"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=971 rejected=check_triage_pr_fetch_failed" in result["stdout"]
+	assert "candidate_pr=971 rejected=non_target_base" not in result["stdout"]
 
 
 def test_close_merged_sweep_pending_check_triage_issue_is_silent():
