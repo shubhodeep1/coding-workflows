@@ -526,7 +526,8 @@ while index < len(lines) and index <= start + 4 and not lines[index].startswith(
 while index < len(lines) and lines[index].startswith("- L"):
 	index += 1
 if not (index + 2 < len(lines) and lines[index] == "" and lines[index + 1].startswith(PR_DATA) and lines[index + 2] == ""):
-	print("no_index")
+	# Header found but the block shape is unexpected: log it, never stay silent.
+	print("unmatched")
 	raise SystemExit(0)
 try:
 	info = os.lstat(agents_path) if agents_path else None
@@ -550,7 +551,11 @@ PY
 		no_index) return 0 ;;
 		inlined) echo "REVIEW_SANDBOX_STATIC_CONTEXT agents=${review_static_agents_state} role=${claude_role} fallback=inline" >&2 ;;
 		*)
-			echo "::warning::Review static-context agents index has no readable target and no trusted inline copy; the prompt keeps the index." >&2
+			case "${fallback_outcome}" in
+				unavailable) echo "::warning::Review static-context agents index has no readable target and no trusted inline copy; the prompt keeps the index." >&2 ;;
+				unmatched) echo "::warning::Review static-context agents index block has an unexpected shape; the prompt keeps the index." >&2 ;;
+				*) echo "::warning::Review static-context agents inline replacement failed; the prompt keeps the index." >&2 ;;
+			esac
 			echo "REVIEW_SANDBOX_STATIC_CONTEXT agents=${review_static_agents_state} role=${claude_role} fallback=${fallback_outcome:-failed}" >&2 ;;
 	esac
 	return 0

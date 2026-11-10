@@ -435,3 +435,30 @@ def test_sandbox_mounted_prompt_keeps_index(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert "fallback=" not in result.stderr
 	assert "CANONICAL AGENTS.MD INDEX" in (tmp_path / "prompt-seen.txt").read_text(encoding="utf-8")
+
+
+def test_sandbox_fallback_warning_names_the_real_cause(tmp_path: Path) -> None:
+	# A header with an unexpected block shape is logged, not skipped silently.
+	odd = "HEAD\n=== CANONICAL AGENTS.MD INDEX (coding-workflows) ===\nnot an index\n\nTAIL\n"
+	support = tmp_path / "support-agents.md"
+	support.write_text(SUPPORT_AGENTS_TEXT, encoding="utf-8")
+	case_dir = tmp_path / "unmatched"
+	case_dir.mkdir()
+	result, _argv, _seen = _run_opencode_sandbox(case_dir, "REVIEW_CONSOLIDATOR", "read", None, odd, support)
+	assert result.returncode == 0, result.stderr
+	assert "fallback=unmatched" in result.stderr
+	assert "unexpected shape" in result.stderr
+	assert "no trusted inline copy" not in result.stderr
+	# A trusted copy that cannot be read is a failed rewrite, not a missing file.
+	unreadable = tmp_path / "unreadable-agents.md"
+	unreadable.write_text(SUPPORT_AGENTS_TEXT, encoding="utf-8")
+	unreadable.chmod(0)
+	if os.access(unreadable, os.R_OK):
+		return  # running as root; the read cannot be made to fail here
+	case_dir = tmp_path / "failed"
+	case_dir.mkdir()
+	result, _argv, _seen = _run_opencode_sandbox(case_dir, "REVIEW_CONSOLIDATOR", "read", None, _index_prompt(case_dir), unreadable)
+	assert result.returncode == 0, result.stderr
+	assert "fallback=failed" in result.stderr
+	assert "inline replacement failed" in result.stderr
+	assert "no trusted inline copy" not in result.stderr
