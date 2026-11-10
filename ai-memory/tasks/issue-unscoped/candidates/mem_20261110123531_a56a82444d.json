@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/issue_pr_status.yml; scripts/orchestrate_poll_process.sh:issue_pr_status.yml:793-800; orchestrate_poll_process.sh:21415-19 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Both completion paths check the triage issue author against the GH_PAT login, but the documented triage workflow creates these issues with the separate CHECK_TRIAGE_ISSUES_TOKEN, so the author check fails and the issue stays open when the two tokens belong to different accounts.\n  WHY: A fix PR can merge into the marked PR's branch and pass the repository and branch checks, yet the helper rejects the marker because the issue author does not match the GH_PAT login, so both the primary close path and the scheduled sweep skip completion (source severity MAJOR, given here as high).\n- .github/workflows/ (General):copilot-pull-request-reviewer check-run failure | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, anthropic_claude-sonnet-5_5]\n  PROBLEM: The copilot-pull-request-reviewer job (Action run 42814437610, job 129823796452) fails with \"Prompt too big after adding system message\" / `custom_instructions_too_large`.\n  WHY: The reviewer cannot produce a review result, so the check stays red; anthropic_claude-sonnet-5_5 notes the failure comes from loading AGENTS.md and CLAUDE.md as custom instructions, that this PR does not change either file, and that no line in the diff causes it (both reviewers gave severity NIT, given here as low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- NOTE (external check-run, not mapped to repository code): copilot-pull-request-reviewer (Actions run 42814437610, job 129823796452) | severity=NIT | confidence=5\n  PROBLEM: The check-run failed with `custom_instructions_too_large` / \"Prompt too big after adding system message\" while the reviewer loaded the repository's AGENTS.md and CLAUDE.md as custom instructions.\n  WHY: This PR does not change either file and no line in the diff causes the failure, so there is nothing to fix in this PR's code.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ (General):copilot-pull-request-reviewer check-run failure | severity=NIT | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer job fails because the prompt is too large.\n  WHY: The reviewer cannot produce a review result, leaving this check red. The log (Action run 42814437610, job 129823796452) reports \"Prompt too big after adding system message\", preventing completion of the check.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/issue_pr_status.yml; scripts/orchestrate_poll_process.sh:issue_pr_status.yml:793-800; orchestrate_poll_process.sh:21415-19 | severity=MAJOR | confidence=4\n  PROBLEM: Both completion paths compare the triage issue author with the GH_PAT login, but the documented triage workflow creates these issues using the separate CHECK_TRIAGE_ISSUES_TOKEN; when those tokens belong to different accounts, the pipeline-created issue fails the author check and is left open.\n  WHY: A fix PR can merge into the marked PR's branch and satisfy the repository and branch checks, but the helper rejects the marker because the issue author does not match the GH_PAT login. The primary close path and scheduled sweep then both skip completion.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4ace303b5afb81150cea7348a0469460e8a07ceeccd2a1768f4f1be8833755d5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8968,
+    "run_id": "42814351427",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42814351427",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110123531_a56a82444d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8968,
+    "run_id": "42814351427"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-10T12:35:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
