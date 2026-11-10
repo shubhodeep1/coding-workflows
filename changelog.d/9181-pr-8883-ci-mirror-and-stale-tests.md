@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- The post-merge verifier's phase-label mirror (`PHASE_LABELS` in `scripts/persist_postmerge_verify.py`) now includes `ai:waiting-on-dependency`, so reopening an issue for a re-plan clears it. Three stale contract tests now pin the optional persistence-helper staging loops (and the matching `stage_support_optional_scripts` lists), the evidence-pack block harness sets `RUN_PLAN_CODEX_SUPPORT_DIR`, and the heal scope-freeze filter test passes the `blocker_runs` / `blocker_paths` arguments. Refs #9181.

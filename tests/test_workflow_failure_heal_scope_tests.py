@@ -1265,7 +1265,8 @@ def test_freeze_filter_adds_suspect_files_only_when_non_empty() -> None:
 	if shutil.which("jq") is None:
 		pytest.skip("jq is required to run the intake's scope-freeze filter")
 	args = {"failing_tests": {"names": [], "files": []}, "engine_runs": [], "engine_paths": [], "linked_paths": [],
-		"runs": [f"{SELF_REPO}:1"], "self_workflows": [".github/workflows/ci.yml"], "consumer_workflows": [], "changed": []}
+		"runs": [f"{SELF_REPO}:1"], "self_workflows": [".github/workflows/ci.yml"], "consumer_workflows": [], "changed": [],
+		"blocker_runs": [], "blocker_paths": []}
 
 	def freeze(extra: dict) -> str:
 		cmd = ["jq", "-n", "--arg", "crash", ""]
