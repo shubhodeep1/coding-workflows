@@ -691,6 +691,8 @@ def test_needs_human_cli_dispatch_keeps_prune_reachable(fake: FakeGitHub, capsys
 
 SRC = "a" * 40
 STABLE = "c" * 40
+# A step whose only condition is the release (plan P10): resolve may tick it.
+RELEASE_STEPS = [{"title": "Reaches consumers", "instructions": "Nothing to do.", "dormant_until": f"@stable contains {SRC[:12]}"}]
 POLL_WORKFLOW = ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 
 
@@ -712,7 +714,7 @@ def _fresh(monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
 def test_operator_step_resolve_ticks_only_ahead_or_identical(fake: FakeGitHub, status: str,
 		capsys: pytest.CaptureFixture[str]) -> None:
 	number = _tracker(fake)
-	_entry_comment(fake, number, 10, writer.render_entry("pr-1", "Activation of PR #1", STEPS, SRC))
+	_entry_comment(fake, number, 10, writer.render_entry("pr-1", "Activation of PR #1", RELEASE_STEPS, SRC))
 	fake.stable_sha = STABLE
 	fake.compare_status = writer.ApiError("HTTP 502") if status == "error" else status
 	result = writer.resolve(REPO, BOT)
@@ -779,7 +781,7 @@ def test_operator_step_resolve_defers_the_close_when_an_entry_lands_before_it(
 	number = _tracker(fake)
 	fake.stable_sha = STABLE
 	fake.compare_status = "ahead"
-	_entry_comment(fake, number, 10, writer.render_entry("pr-1", "s", STEPS, SRC))
+	_entry_comment(fake, number, 10, writer.render_entry("pr-1", "s", RELEASE_STEPS, SRC))
 	original = fake.__call__
 	reads = {"count": 0}
 
@@ -876,6 +878,22 @@ def test_operator_step_resolve_logs_a_failed_reopen_after_a_failed_recheck(fake:
 	assert f"OPERATOR_STEP_RESOLVE issue={number} outcome=closed unticked=0 reason=recheck_failed" in capsys.readouterr().err
 
 
+def test_operator_step_resolve_never_ticks_real_human_work(fake: FakeGitHub,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	# A secret or variable step keeps its box even when `stable` contains the merge.
+	number = _tracker(fake)
+	fake.stable_sha = STABLE
+	fake.compare_status = "ahead"
+	_entry_comment(fake, number, 10, writer.render_entry("pr-1", "s", STEPS, SRC))
+	mixed = STEPS + RELEASE_STEPS
+	_entry_comment(fake, number, 11, writer.render_entry("pr-2", "s", mixed, SRC))
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"not_release_wait": 2}
+	assert _compares(fake) == [] and _posts(fake, number) == [] and _state_patches(fake) == []
+	assert result["closed"] is False and result["unticked"] == 3
+	assert "OPERATOR_STEP_RESOLVE key=pr-1 outcome=not_release_wait status=none" in capsys.readouterr().err
+
+
 def test_operator_step_resolve_caps_compares_and_drains_oldest_first(fake: FakeGitHub) -> None:
 	number = _tracker(fake)
 	fake.stable_sha = STABLE
@@ -883,7 +901,7 @@ def test_operator_step_resolve_caps_compares_and_drains_oldest_first(fake: FakeG
 	shas = [f"{n:040x}" for n in range(1, 13)]
 	for index, sha in enumerate(shas):
 		# Key order is the reverse of comment-id order.
-		_entry_comment(fake, number, 10 + index, writer.render_entry(f"pr-{100 - index}", "s", STEPS, sha))
+		_entry_comment(fake, number, 10 + index, writer.render_entry(f"pr-{100 - index}", "s", RELEASE_STEPS, sha))
 	result = writer.resolve(REPO, BOT)
 	assert [args[1].split("/compare/")[1].split("...")[0] for args in _compares(fake)] == shas[:10]
 	assert result["ticked"] == [f"pr-{100 - index}" for index in range(10)]
@@ -905,7 +923,7 @@ def test_operator_step_resolve_scope_and_kill_switch(fake: FakeGitHub, monkeypat
 	result = writer.resolve(REPO, BOT)
 	assert result["ticked"] == [] and result["closed"] is False and _compares(fake) == []
 	# No `stable` commit (a consumer without the tag): no compare, nothing ticked.
-	_entry_comment(fake, number, 11, writer.render_entry("pr-2", "s", STEPS, SRC))
+	_entry_comment(fake, number, 11, writer.render_entry("pr-2", "s", RELEASE_STEPS, SRC))
 	fake.stable_sha = None
 	result = writer.resolve(REPO, BOT)
 	assert result["skipped"] == {"stable_unavailable": 1} and _compares(fake) == [] and result["closed"] is False

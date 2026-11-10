@@ -63,7 +63,10 @@ Resolving entries on every poller tick (stuck-states P10, Refs #8291):
 The poller (.github/workflows/orchestrate_poll.yml, step "Resolve operator
 steps") runs it on every tick. It uses tick's recorded condition: for each
 key, the newest entry comment by the pipeline login that still has a `- [ ]`
-box, carries the source-sha line and has no done marker. It reads the commit
+box, carries the source-sha line and has no done marker, and only when every
+unticked step records the release condition `@stable contains <sha>` (its
+`Stays off until then:` line; any other step is real human work and is
+skipped as `not_release_wait`). It reads the commit
 `stable` points at once, then compares `<source>...<stable commit>` (at most
 10 per run, oldest entry first; the rest are `compare_cap` and wait for the
 next tick). Only `ahead` or `identical` ticks the entry, with the same
@@ -76,8 +79,8 @@ reopens it. After posting a new entry, `upsert` reads the tracker's state and
 reopens it when `resolve` closed it in between. Output is one JSON line:
 `enabled`, `issue`, `stable`, `ticked`, `skipped` (`{reason: count}`),
 `unticked`, `closed`, `reopened`. Logs on stderr: `OPERATOR_STEP_RESOLVE key=
-outcome=ticked|not_contained|compare_failed|compare_cap|stable_unavailable|no_source_sha
-status=` per entry and `OPERATOR_STEP_RESOLVE issue= outcome=closed|open|
+outcome=ticked|not_contained|compare_failed|compare_cap|stable_unavailable|no_source_sha|
+not_release_wait status=` per entry and `OPERATOR_STEP_RESOLVE issue= outcome=closed|open|
 close_deferred|reopened|skip unticked= reason=` once per run. Kill switch
 `OPERATOR_STEP_AUTO_RESOLVE_ENABLED` (default `true`): `false` makes resolve
 a no-op with no API call. upsert's reopen check reads the same variable, so it
@@ -563,6 +566,29 @@ def resolve_enabled() -> bool:
 	return os.environ.get("OPERATOR_STEP_AUTO_RESOLVE_ENABLED", "true").strip().lower() != "false"
 
 
+# render_entry writes a step's dormant_until as `  Stays off until then: `<v>`.`;
+# a release condition is exactly `@stable contains <sha>` (the shape
+# activation_verify.sh treats as a release wait).
+RELEASE_CONDITION_RE = re.compile(r"stays off until then: @stable contains [0-9a-f]{7,40}\.?\.?")
+
+
+def _release_condition_entry(body: str) -> bool:
+	"""True when every unticked step of the entry records a release condition."""
+	steps: list[list[str]] = []
+	for line in str(body or "").replace("\r\n", "\n").split("\n"):
+		if line.startswith("- ["):
+			steps.append([line])
+		elif steps and line.startswith("  "):
+			steps[-1].append(line)
+		elif steps:
+			steps.append([])
+	unticked = [step for step in steps if step and UNTICKED_RE.match(step[0])]
+	return bool(unticked) and all(
+		any(RELEASE_CONDITION_RE.fullmatch(line.replace("`", "").strip().lower()) for line in step[1:])
+		for step in unticked
+	)
+
+
 def _unticked_count(body: str) -> int:
 	return sum(1 for line in str(body or "").replace("\r\n", "\n").split("\n") if UNTICKED_RE.match(line))
 
@@ -673,6 +699,14 @@ def resolve(repo: str, trusted_login: str | None = None) -> dict:
 		if not source_match:
 			result["skipped"]["no_source_sha"] = result["skipped"].get("no_source_sha", 0) + 1
 			_resolve_log(key=key, outcome="no_source_sha", status="none")
+			continue
+		# Plan P10: only an entry whose recorded condition is a release
+		# condition is auto-ticked. A step for real human work (a secret, a
+		# repository setting) stays open until a person ticks it, even after
+		# `stable` contains the merge.
+		if not _release_condition_entry(body):
+			result["skipped"]["not_release_wait"] = result["skipped"].get("not_release_wait", 0) + 1
+			_resolve_log(key=key, outcome="not_release_wait", status="none")
 			continue
 		pending.append((latest[key]["id"], key, source_match.group(1)))
 	# Oldest entry first, so a backlog drains in merge order across ticks.
