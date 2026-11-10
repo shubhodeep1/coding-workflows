@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-10T00:03:32Z",
+  "issue_number": 9143,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/implement.yml:5463-5471; cited_path=.github/workflows/implement.yml; files_touched=scripts/implement_commit_changes.sh, tests/test_implement_post_codex_recovery.py, README.md, changelog.d/unblock-9111-r1-self-repo-github-ai-adds.md, agents.d/unblock-9111-r1-self-repo-github-ai-adds.md.",
+  "phase": "review_autofix",
+  "pr_number": 9145,
+  "record_id": "lesson_20261110000332_8d99e26be8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/implement.yml",
+    "scripts/implement_commit_changes.sh",
+    "tests/test_implement_post_codex_recovery.py",
+    "README.md",
+    "changelog.d/unblock-9111-r1-self-repo-github-ai-adds.md",
+    "agents.d/unblock-9111-r1-self-repo-github-ai-adds.md"
+  ]
+}
