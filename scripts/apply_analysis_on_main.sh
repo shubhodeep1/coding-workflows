@@ -26,6 +26,14 @@
 #   APPLY_ANALYSIS_SKIPPED reason=all_docs_processed         every doc is recorded in
 #                                                            the processing report or
 #                                                            was dispatched before
+#   APPLY_ANALYSIS_SKIPPED reason=scan_capped_behind_markers searches=<n>
+#                                                            the marker-search cap
+#                                                            (APPLY_ANALYSIS_MAX_MARKER_SEARCHES)
+#                                                            stopped the scan before any
+#                                                            unprocessed doc was found;
+#                                                            a human decides (list the
+#                                                            docs in the processing
+#                                                            report or raise the cap)
 #   APPLY_ANALYSIS_SKIPPED reason=source_doc_removed         every unprocessed doc was
 #                                                            already deleted on the
 #                                                            dispatch branch tip
@@ -36,7 +44,10 @@
 #                                                            comment read, or the
 #                                                            workflow-runs list
 #                                                            failed; fail closed
-#   APPLY_ANALYSIS_CANDIDATES count=<n> docs=<a,b>           list-only mode
+#   APPLY_ANALYSIS_CANDIDATES count=<n> docs=<a,b>[ capped_behind_markers=true]
+#                                                            list-only mode; the suffix
+#                                                            means the marker cap stopped
+#                                                            the scan with docs unexamined
 #   APPLY_ANALYSIS_IN_FLIGHT_DOCS count=<n> docs=<a,b>       in-flight-docs mode
 #   APPLY_ANALYSIS_DISPATCHED doc=<path> role=<role>
 #
@@ -47,11 +58,25 @@
 # human decision, not a credit burner.
 #
 # API calls per run (§15): 1 issue list, 1 workflow-runs list, then per
-# candidate doc until the first unprocessed one: 1 search plus 1
-# issue-comments read per search hit (the trusted-author check; up to 20
-# hits per doc), and 1 dispatch. The common marker-present path therefore
-# costs 2 + 2·(docs already dispatched) + 1 calls, plus one contents read per
-# unprocessed doc checked on the dispatch branch tip (normally 1).
+# candidate doc (newest first): 1 search plus 1 issue-comments read per search
+# hit (the trusted-author check; up to 20 hits per doc), and 1 dispatch, plus
+# one contents read per printed doc checked on the dispatch branch tip
+# (normally 1).
+#
+# Bound (plan P6 step 3, Refs #9116): the purge no longer deletes docs the
+# processing report does not list, so the analysis/ backlog grows without
+# limit. unprocessed_docs therefore stops at whichever comes first:
+#   * the effective candidate cap of printed docs: APPLY_ANALYSIS_MAX_CANDIDATES
+#     (default 3), raised to PROMOTE_CYCLE_MIN_DOCS when that is a larger
+#     positive integer (stderr: APPLY_ANALYSIS_CANDIDATE_CAP raised_to=<n>
+#     reason=promote_cycle_min_docs);
+#   * APPLY_ANALYSIS_MAX_MARKER_SEARCHES (default 20) docs skipped for a trusted
+#     dispatch marker (stderr: APPLY_ANALYSIS_MARKER_SEARCH_CAP reached=<n>
+#     next=<path>; return code 3).
+# A run therefore makes at most candidate cap + marker cap search/issues calls
+# (3 + 20 = 23 at the defaults), each followed by up to 20 comment reads (460
+# at the defaults). Docs the processing report lists cost no call and count
+# toward neither cap. The bound adds no API call; it only removes calls.
 #
 # Branch-tip check: a promote cycle reads the docs from the checkout it pinned
 # when it started, but the daily log analysis purges reports older than its
@@ -92,6 +117,10 @@
 #   APPLY_ANALYSIS_LIST_ONLY                   true: print the unprocessed docs, no dispatch
 #   APPLY_ANALYSIS_IN_FLIGHT_DOCS              true: print the docs open projects use, no dispatch
 #   APPLY_ANALYSIS_DOC_GLOB                    default analysis/workflow-optimization-*.md
+#   APPLY_ANALYSIS_MAX_CANDIDATES              default 3; docs unprocessed_docs prints at most
+#   APPLY_ANALYSIS_MAX_MARKER_SEARCHES         default 20; marker-skipped docs before the scan stops
+#   PROMOTE_CYCLE_MIN_DOCS                     read only: raises the candidate cap when larger
+#                                              (promote_main_cycle.sh passes it in list-only mode)
 #   APPLY_ANALYSIS_REPORT_PATH                 default analysis/recommendation-processing-report.md
 #   APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE   default internal-orchestrate.yml
 #   APPLY_ANALYSIS_TRACKING_LABEL              default ai:comprehensive-test-pending
@@ -120,6 +149,8 @@ APPLY_ANALYSIS_DOC_GLOB="${APPLY_ANALYSIS_DOC_GLOB:-analysis/workflow-optimizati
 APPLY_ANALYSIS_REPORT_PATH="${APPLY_ANALYSIS_REPORT_PATH:-analysis/recommendation-processing-report.md}"
 APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE="${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE:-internal-orchestrate.yml}"
 APPLY_ANALYSIS_TRACKING_LABEL="${APPLY_ANALYSIS_TRACKING_LABEL:-ai:comprehensive-test-pending}"
+APPLY_ANALYSIS_MAX_CANDIDATES="${APPLY_ANALYSIS_MAX_CANDIDATES:-3}"
+APPLY_ANALYSIS_MAX_MARKER_SEARCHES="${APPLY_ANALYSIS_MAX_MARKER_SEARCHES:-20}"
 # Same setting the poller uses for its marker parser: comment authors whose
 # author_association is listed (plus github-actions[bot]) may vouch that a
 # doc was dispatched before. Anyone else's comment is ignored.
@@ -160,6 +191,26 @@ esac
 if [ -n "${APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE}" ] && ! [[ "${APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE}" =~ ^[0-9]+$ ]]; then
 	echo "::error::APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE must be an issue number."
 	exit 1
+fi
+# Scan caps (plan P6 step 3). Positive integers only: no leading zero (no octal
+# surprise in $(( ))) and at most 9 digits (no overflow). An invalid value
+# warns on stderr and falls back to the default instead of failing the run.
+if ! [[ "${APPLY_ANALYSIS_MAX_CANDIDATES}" =~ ^[1-9][0-9]{0,8}$ ]]; then
+	echo "::warning::APPLY_ANALYSIS_MAX_CANDIDATES must be a positive integer; using 3 (got '${APPLY_ANALYSIS_MAX_CANDIDATES}')." >&2
+	APPLY_ANALYSIS_MAX_CANDIDATES=3
+fi
+if ! [[ "${APPLY_ANALYSIS_MAX_MARKER_SEARCHES}" =~ ^[1-9][0-9]{0,8}$ ]]; then
+	echo "::warning::APPLY_ANALYSIS_MAX_MARKER_SEARCHES must be a positive integer; using 20 (got '${APPLY_ANALYSIS_MAX_MARKER_SEARCHES}')." >&2
+	APPLY_ANALYSIS_MAX_MARKER_SEARCHES=20
+fi
+# The promote cycle needs PROMOTE_CYCLE_MIN_DOCS candidates (proving +
+# verifying), so a larger minimum raises the candidate cap. Any other value is
+# ignored here; promote_main_cycle.sh rejects invalid values itself.
+apply_analysis_candidate_cap="${APPLY_ANALYSIS_MAX_CANDIDATES}"
+apply_analysis_candidate_cap_raised=false
+if [[ "${PROMOTE_CYCLE_MIN_DOCS:-}" =~ ^[1-9][0-9]{0,8}$ ]] && [ "${PROMOTE_CYCLE_MIN_DOCS}" -gt "${apply_analysis_candidate_cap}" ]; then
+	apply_analysis_candidate_cap="${PROMOTE_CYCLE_MIN_DOCS}"
+	apply_analysis_candidate_cap_raised=true
 fi
 
 emit_output()
@@ -331,20 +382,40 @@ orchestrate_run_in_flight()
 # doc). Newest first keeps the proving and verifying runs on findings closest
 # to the current code; older docs are mostly already implemented or stale by
 # the time they are reached. Docs listed in the processing report or carrying
-# a dispatch marker are skipped with a warning. Returns 2 when the marker
-# search is unavailable.
+# a dispatch marker are skipped with a warning. stdout carries doc paths only;
+# every cap or warning line goes to stderr.
+# Bounded scan (plan P6 step 3): stops after apply_analysis_candidate_cap
+# printed docs or once APPLY_ANALYSIS_MAX_MARKER_SEARCHES docs were skipped
+# for a trusted marker, whichever comes first.
+# Returns:
+#   0  every candidate was examined, or the candidate cap was reached;
+#   2  a marker lookup failed (callers fail closed: guard_unavailable);
+#   3  the marker cap stopped the scan with at least one candidate that needs
+#      a search still unexamined (a cap reached on the last candidate is a
+#      complete scan and returns 0).
 unprocessed_docs()
 {
 	local candidate candidate_basename dispatched_rc
+	local printed_count=0
+	local marker_skip_count=0
 	local candidates=()
 	while IFS= read -r candidate; do
 		[ -n "${candidate}" ] && candidates+=("${candidate}")
 	done < <(compgen -G "${APPLY_ANALYSIS_DOC_GLOB}" | sort -rV || true)
+	if [ "${apply_analysis_candidate_cap_raised}" = "true" ]; then
+		echo "APPLY_ANALYSIS_CANDIDATE_CAP raised_to=${apply_analysis_candidate_cap} reason=promote_cycle_min_docs" >&2
+	fi
 	for candidate in "${candidates[@]}"; do
 		candidate_basename="$(basename "${candidate}")"
 		if [ -f "${APPLY_ANALYSIS_REPORT_PATH}" ] && grep -qF -- "${candidate_basename}" "${APPLY_ANALYSIS_REPORT_PATH}"; then
 			echo "::warning::${candidate} is already listed in ${APPLY_ANALYSIS_REPORT_PATH} but still exists; skipping it (delete it by hand or via a normal PR)." >&2
 			continue
+		fi
+		# Checked before a search, not after a skip: the scan is "capped" only
+		# when a candidate that needs a search is left unexamined.
+		if [ "${marker_skip_count}" -ge "${APPLY_ANALYSIS_MAX_MARKER_SEARCHES}" ]; then
+			echo "APPLY_ANALYSIS_MARKER_SEARCH_CAP reached=${marker_skip_count} next=${candidate}" >&2
+			return 3
 		fi
 		set +e
 		doc_dispatched_before "${candidate}"
@@ -353,10 +424,15 @@ unprocessed_docs()
 		case "${dispatched_rc}" in
 			0)
 				echo "::warning::${candidate} was dispatched to the orchestrator before (marker comment found) but still exists; skipping it — decide by hand whether to re-run it." >&2
+				marker_skip_count=$((marker_skip_count + 1))
 				continue
 				;;
 			1)
 				printf '%s\n' "${candidate}"
+				printed_count=$((printed_count + 1))
+				if [ "${printed_count}" -ge "${apply_analysis_candidate_cap}" ]; then
+					return 0
+				fi
 				;;
 			*)
 				return 2
@@ -405,9 +481,11 @@ if is_truthy "${APPLY_ANALYSIS_LIST_ONLY}"; then
 	docs_output="$(unprocessed_docs)"
 	docs_rc=$?
 	set -e
-	if [ "${docs_rc}" -ne 0 ]; then
-		skip_dispatch guard_unavailable "mode=list_only"
-	fi
+	case "${docs_rc}" in
+		0) capped_suffix="" ;;
+		3) capped_suffix=" capped_behind_markers=true" ;;
+		*) skip_dispatch guard_unavailable "mode=list_only" ;;
+	esac
 	candidate_count=0
 	candidate_csv=""
 	while IFS= read -r line; do
@@ -415,7 +493,7 @@ if is_truthy "${APPLY_ANALYSIS_LIST_ONLY}"; then
 		candidate_count=$((candidate_count + 1))
 		candidate_csv="${candidate_csv:+${candidate_csv},}${line}"
 	done <<< "${docs_output}"
-	echo "APPLY_ANALYSIS_CANDIDATES count=${candidate_count} docs=${candidate_csv}"
+	echo "APPLY_ANALYSIS_CANDIDATES count=${candidate_count} docs=${candidate_csv}${capped_suffix}"
 	emit_output dispatched false
 	emit_output candidate_count "${candidate_count}"
 	emit_output candidate_docs "${candidate_csv}"
@@ -448,10 +526,15 @@ set +e
 docs_output="$(unprocessed_docs)"
 docs_rc=$?
 set -e
-if [ "${docs_rc}" -ne 0 ]; then
-	skip_dispatch guard_unavailable
-fi
+case "${docs_rc}" in
+	0|3) ;;
+	*) skip_dispatch guard_unavailable ;;
+esac
 if [ -z "$(printf '%s\n' "${docs_output}" | sed '/^$/d')" ]; then
+	if [ "${docs_rc}" -eq 3 ]; then
+		# No doc printed, so every search was a marker skip: the count is the cap.
+		skip_dispatch scan_capped_behind_markers "searches=${APPLY_ANALYSIS_MAX_MARKER_SEARCHES}"
+	fi
 	skip_dispatch all_docs_processed
 fi
 # The first unprocessed doc that still exists on the dispatch branch tip; the

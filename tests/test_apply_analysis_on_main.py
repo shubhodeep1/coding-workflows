@@ -235,7 +235,8 @@ def test_dispatches_newest_unprocessed_doc_first_including_same_day_suffixes() -
 		"analysis/workflow-optimization-2026-10-09-2.md",
 	]
 	with tempfile.TemporaryDirectory() as tmp:
-		listed, listed_final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
+		# The cap is raised to 5 so the whole order is visible (default 3, plan P6 step 3).
+		listed, listed_final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true", "APPLY_ANALYSIS_MAX_CANDIDATES": "5"})
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs)
 	assert listed.returncode == 0, listed.stderr
@@ -724,3 +725,160 @@ def test_pin_switches_are_forwarded_with_defaults() -> None:
 	hold_lines = poll.count("COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS:")
 	assert hold_lines >= 1
 	assert poll.count("PROMOTE_CYCLE_PIN_ENABLED: ${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}") == hold_lines
+
+
+# --- Bounded marker searches (plan P6 step 3, Refs #9116) --------------------
+# Docs are named by zero-padded September day so `sort -rV` puts the highest
+# day first and no doc path is a substring of another (the mock matches
+# search_hits markers by substring).
+
+def _day_doc(day: int) -> str:
+	return f"analysis/workflow-optimization-2026-09-{day:02d}.md"
+
+
+def _search_count(final: dict) -> int:
+	return sum(1 for call in final.get("calls", []) if call[:1] == ["api"] and "search/issues" in " ".join(call))
+
+
+def _marker_state(marker_days: list[int]) -> dict:
+	return {"open_tracking": [], "search_hits": {_day_doc(day): 1 for day in marker_days}}
+
+
+LIST_ONLY = {"APPLY_ANALYSIS_LIST_ONLY": "true"}
+
+
+def test_backlog_of_ten_unprocessed_docs_makes_three_searches_in_either_mode() -> None:
+	docs = [_day_doc(day) for day in range(1, 11)]
+	with tempfile.TemporaryDirectory() as tmp:
+		listed, listed_final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env=LIST_ONLY)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs)
+	assert listed.returncode == 0, listed.stderr
+	assert f"APPLY_ANALYSIS_CANDIDATES count=3 docs={_day_doc(10)},{_day_doc(9)},{_day_doc(8)}\n" in listed.stdout
+	assert _search_count(listed_final) == 3
+	assert not listed_final.get("dispatches")
+	assert proc.returncode == 0, proc.stderr
+	assert _search_count(final) == 3
+	assert f"APPLY_ANALYSIS_DISPATCHED doc={_day_doc(10)} role=proving" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_candidate_cap_raised_to_promote_cycle_min_docs() -> None:
+	docs = [_day_doc(day) for day in range(1, 11)]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={**LIST_ONLY, "PROMOTE_CYCLE_MIN_DOCS": "4"})
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_CANDIDATES count=4 docs=" in proc.stdout
+	assert _search_count(final) == 4
+	assert "APPLY_ANALYSIS_CANDIDATE_CAP raised_to=4 reason=promote_cycle_min_docs" in proc.stderr
+	assert "APPLY_ANALYSIS_CANDIDATE_CAP" not in proc.stdout
+	# A minimum at or below the cap does not raise it.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={**LIST_ONLY, "PROMOTE_CYCLE_MIN_DOCS": "2"})
+	assert "APPLY_ANALYSIS_CANDIDATES count=3 docs=" in proc.stdout
+	assert "APPLY_ANALYSIS_CANDIDATE_CAP" not in proc.stderr
+
+
+def test_marker_cap_stops_scan_and_skips_as_scan_capped_behind_markers() -> None:
+	days = list(range(1, 26))
+	docs = [_day_doc(day) for day in days]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), _marker_state(days), docs=docs)
+	assert proc.returncode == 0, proc.stderr
+	assert _search_count(final) == 20
+	assert "APPLY_ANALYSIS_SKIPPED reason=scan_capped_behind_markers searches=20" in proc.stdout
+	assert "all_docs_processed" not in proc.stdout
+	assert f"APPLY_ANALYSIS_MARKER_SEARCH_CAP reached=20 next={_day_doc(5)}" in proc.stderr
+	assert not final.get("dispatches")
+	assert "dispatched=false" in final["github_output"]
+	with tempfile.TemporaryDirectory() as tmp:
+		listed, listed_final = _run(Path(tmp), _marker_state(days), docs=docs, env=LIST_ONLY)
+	assert listed.returncode == 0, listed.stderr
+	assert "APPLY_ANALYSIS_CANDIDATES count=0 docs= capped_behind_markers=true\n" in listed.stdout
+	assert _search_count(listed_final) == 20
+
+
+def test_exactly_twenty_marker_docs_end_as_all_docs_processed() -> None:
+	# 20 marker docs, then only report-listed docs: the cap is reached on the
+	# last doc that needs a search, so the scan is complete, not capped.
+	marker_days = list(range(4, 24))
+	docs = [_day_doc(day) for day in range(1, 24)]
+	report = "".join(f"- `{_day_doc(day)}`\n" for day in range(1, 4))
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), _marker_state(marker_days), docs=docs, report=report)
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_SKIPPED reason=all_docs_processed" in proc.stdout
+	assert "scan_capped_behind_markers" not in proc.stdout
+	assert "APPLY_ANALYSIS_MARKER_SEARCH_CAP" not in proc.stderr
+	assert _search_count(final) == 20
+	with tempfile.TemporaryDirectory() as tmp:
+		listed, _ = _run(Path(tmp), _marker_state(marker_days), docs=docs, report=report, env=LIST_ONLY)
+	assert "APPLY_ANALYSIS_CANDIDATES count=0 docs=\n" in listed.stdout
+	assert "capped_behind_markers" not in listed.stdout
+
+
+def test_unprocessed_doc_before_marker_cap_is_listed_capped_and_dispatched() -> None:
+	marker_days = list(range(1, 26))
+	docs = [_day_doc(26)] + [_day_doc(day) for day in marker_days]
+	with tempfile.TemporaryDirectory() as tmp:
+		listed, listed_final = _run(Path(tmp), _marker_state(marker_days), docs=docs, env=LIST_ONLY)
+	assert listed.returncode == 0, listed.stderr
+	assert f"APPLY_ANALYSIS_CANDIDATES count=1 docs={_day_doc(26)} capped_behind_markers=true\n" in listed.stdout
+	assert _search_count(listed_final) == 21
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), _marker_state(marker_days), docs=docs)
+	assert proc.returncode == 0, proc.stderr
+	assert f"APPLY_ANALYSIS_DISPATCHED doc={_day_doc(26)} role=proving" in proc.stdout
+	assert len(final["dispatches"]) == 1
+	assert _search_count(final) == 21
+
+
+def test_cap_log_lines_never_reach_stdout() -> None:
+	marker_days = list(range(1, 26))
+	docs = [_day_doc(day) for day in marker_days]
+	for env in ({**LIST_ONLY, "PROMOTE_CYCLE_MIN_DOCS": "4"}, {"PROMOTE_CYCLE_MIN_DOCS": "4"}):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, _ = _run(Path(tmp), _marker_state(marker_days), docs=docs, env=env)
+		assert proc.returncode == 0, proc.stderr
+		assert "APPLY_ANALYSIS_CANDIDATE_CAP raised_to=4" in proc.stderr
+		assert "APPLY_ANALYSIS_MARKER_SEARCH_CAP reached=20" in proc.stderr
+		assert "APPLY_ANALYSIS_CANDIDATE_CAP" not in proc.stdout
+		assert "APPLY_ANALYSIS_MARKER_SEARCH_CAP" not in proc.stdout
+		assert "::warning::" not in proc.stdout
+
+
+def test_marker_docs_ahead_of_unprocessed_doc_within_cap_do_not_hide_it() -> None:
+	marker_days = list(range(6, 11))
+	docs = [_day_doc(day) for day in range(5, 11)]
+	with tempfile.TemporaryDirectory() as tmp:
+		listed, _ = _run(Path(tmp), _marker_state(marker_days), docs=docs, env=LIST_ONLY)
+	assert f"APPLY_ANALYSIS_CANDIDATES count=1 docs={_day_doc(5)}\n" in listed.stdout
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), _marker_state(marker_days), docs=docs)
+	assert f"APPLY_ANALYSIS_DISPATCHED doc={_day_doc(5)} role=proving" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_list_only_counts_two_or_more_within_bound() -> None:
+	marker_days = [10, 8, 6]
+	docs = [_day_doc(day) for day in range(6, 11)]
+	with tempfile.TemporaryDirectory() as tmp:
+		listed, _ = _run(Path(tmp), _marker_state(marker_days), docs=docs, env=LIST_ONLY)
+	assert listed.returncode == 0, listed.stderr
+	assert f"APPLY_ANALYSIS_CANDIDATES count=2 docs={_day_doc(9)},{_day_doc(7)}\n" in listed.stdout
+
+
+def test_invalid_caps_warn_and_fall_back() -> None:
+	docs = [_day_doc(day) for day in range(1, 11)]
+	for bad in ("0", "abc", "007", "-1"):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, _ = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={**LIST_ONLY, "APPLY_ANALYSIS_MAX_CANDIDATES": bad})
+		assert proc.returncode == 0, proc.stderr
+		assert f"::warning::APPLY_ANALYSIS_MAX_CANDIDATES must be a positive integer; using 3 (got '{bad}')." in proc.stderr
+		assert "APPLY_ANALYSIS_CANDIDATES count=3 docs=" in proc.stdout
+	marker_days = list(range(1, 26))
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), _marker_state(marker_days), docs=[_day_doc(d) for d in marker_days], env={"APPLY_ANALYSIS_MAX_MARKER_SEARCHES": "x"})
+	assert "::warning::APPLY_ANALYSIS_MAX_MARKER_SEARCHES must be a positive integer; using 20 (got 'x')." in proc.stderr
+	assert _search_count(final) == 20
+	assert "APPLY_ANALYSIS_SKIPPED reason=scan_capped_behind_markers searches=20" in proc.stdout
