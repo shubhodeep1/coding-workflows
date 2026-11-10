@@ -93,6 +93,7 @@ def test_dispatch_inputs_are_bound_through_step_environments() -> None:
 		("workflow-log-analysis.yml", "collect-logs", "Collect workflow logs"): {
 			"SINCE_INPUT",
 			"LOOKBACK_DAYS_INPUT",
+			"SINCE_LAST_REPORT_INPUT",
 		},
 		("mark-stable.yml", "resolve-version", "Resolve version tag"): {"INPUT_VERSION"},
 		("test-and-mark-stable.yml", "resolve-version", "Resolve version tag"): {"INPUT_VERSION"},

@@ -125,6 +125,10 @@ class _Sandbox:
 		shutil.copy(LINT_SCRIPT, seed / "scripts" / "lint_pr_body_auto_close.py")
 		(seed / "analysis").mkdir()
 		(seed / "analysis" / ".keep").write_text("", encoding="utf-8")
+		# The purge removes only docs this processing report lists (plan P5).
+		(seed / "analysis" / "recommendation-processing-report.md").write_text(
+			"# Recommendation processing report\n", encoding="utf-8"
+		)
 		_git(seed, "add", "-A", env=self.git_env)
 		_git(seed, "commit", "-q", "-m", "base", env=self.git_env)
 		_git(tmp, "init", "-q", "--bare", "-b", "main", str(self.origin), env=self.git_env)
@@ -251,6 +255,9 @@ def test_report_pr_auto_merge_drops_purge_deletions() -> None:
 	with tempfile.TemporaryDirectory() as raw:
 		box = _Sandbox(Path(raw))
 		(box.work / old_report).write_text("# old\n", encoding="utf-8")
+		# Processed, so the purge would delete it (plan P5).
+		with (box.work / "analysis" / "recommendation-processing-report.md").open("a", encoding="utf-8") as handle:
+			handle.write("- workflow-optimization-2020-01-01.md: applied\n")
 		_git(box.work, "add", "-A", env=box.git_env)
 		_git(box.work, "commit", "-q", "-m", "old report", env=box.git_env)
 		_git(box.work, "push", "-q", "origin", "HEAD:main", env=box.git_env)
