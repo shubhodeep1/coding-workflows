@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Should this fix also cover the three `orchestrate-poll` failures in `tests/test_workflow_untrusted_input_contract.py`, which have nothing to do with the new label?\nChoices:\nA) No. Fix only the two certain failures: add `\"ai:waiting-on-dependency\"` right after `\"ai:blocked\"` in `PHASE_LABELS`, and add `\"blocker_runs\": [], \"blocker_paths\": []` to the test's `args`. Leave the untrusted-input contract failures to a separate issue or a later triage generation, accepting that `orchestrate-poll` stays red on PR #8883 until then.\nB) Yes. Make all three CI worker jobs green on the PR branch. Do the two certain fixes, then fix each of the three untrusted-input contract failures where it starts. If the workflow or script is correct and the test setup is missing something (for example `RUN_PLAN_CODEX_SUPPORT_DIR` not set in `_run_evidence_block`), fix the test. If a `for f in gh_helpers.sh ...; do` staging loop in `clarify.yml`/`implement.yml` lost `attempt_journal.py`/`evidence_pack.py`, restore the staged file in the workflow. Never weaken an assertion. Leave the `copilot-pull-request-reviewer` failure alone, since it's an external limit. (RECOMMENDED)\nC) Partly. Do the two certain fixes plus only the failures PR #8883's own diff caused, as shown by comparing the PR head with the default branch. Leave failures that already exist on the default branch for a separate issue.",
+  "fingerprint": "fdeb764d3f09ea68497fd83347d45860cbffa7f48006707ca498817e6ee0d06f",
+  "lineage": {
+    "issue_number": 9181,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42782578707",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42782578707",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261110083007_9cd71bfbd9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9181,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42782578707"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9181 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-10T08:30:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
