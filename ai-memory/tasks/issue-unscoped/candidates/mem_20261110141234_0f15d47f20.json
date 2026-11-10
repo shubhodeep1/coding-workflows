@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:7339-7390 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `orchestrate-poll (1)` check on head 6ea36343 failed because test_security_pass_cap_converts_low_keep_fixing_to_advisory was killed at 180s (\"poller did not exit within 180s; process group killed\") after the poller's stdout had already reached \"Project complete!\"; the aggregate `lint` check fails because of it.\n  WHY: CI stays red and blocks the PR. All four reviewers rated it MAJOR (mapped to high here); confidence ranged from 2 to 5. Every reviewer says the failure is not tied to the PR diff. Sonnet adds that the same test name already serves as a failing-test fixture (tests/test_workflow_failure_heal_scope_tests.py lines 114, 163-169) and recommends re-running the shard. Luna also cites `_run_poller_subprocess` at lines 357-374. GLM suggests looking for a leftover child process that keeps the process group alive.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory, lines 7339-7351 (the `_run_poller(` call) | severity=MAJOR | confidence=3\n  PROBLEM: The `orchestrate-poll (1)` check on head 6ea36343 failed because this test was killed at 180s (\"poller did not exit within 180s; process group killed\"). The poller's stdout had already reached \"Project complete!\", so the hang happens during shutdown or cleanup. The aggregate `lint` check fails only because `orchestrate-poll` failed.\n  WHY: CI stays red. The reviewer could not tie the failure to the PR: `scripts/orchestrate_poll_process.sh` is not in the PR. The only PR-touched script involved is `codex_isolated_exec.sh` (`ORCH_CODEX_ISOLATED_EXEC`, line 387), and its new `sandbox_solc_resolve_versions` does nothing when `SANDBOX_SOLC_VERSIONS` is empty. tests/test_workflow_failure_heal_scope_tests.py uses this test name as a failing-test fixture (lines 114, 163-169). The editor should re-run the shard and change code only if the timeout reproduces on the merge-base.\n- Verified as sound: test_reissue_helper_switch_is_pinned_against_caller_value. `run_case` in scripts/resolve_integration_ref.sh (lines 712-761) inherits `RETARGET_MERGED_BASE_ENABLED=false`. Without the pin at line 595, scripts/retarget_merged_base.sh line 110 returns the input branch unchanged, which leads to `branch_missing` and exit 3. No defect found.\n- Task completeness: NONE. Both PR deliverables are present (`resolve_ci_reissue_base_branch`/`CI_TRIAGE_REISSUE_BASE_PY` and `SANDBOX_SOLC_VERSIONS`). HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory | severity=MAJOR | confidence=5\n  PROBLEM: CI check-run failure: orchestrate-poll timed out after 180 seconds and was killed.\n  WHY: The test suite fails in CI, which prevents PR completion. The failure is not clearly caused by the current diff, but it must be addressed to get the PR green.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:_run_poller_subprocess, lines 357-374; invoked by test_security_pass_cap_converts_low_keep_fixing_to_advisory at lines 7351-7357. | severity=MAJOR | confidence=5\n  PROBLEM: The supplied PR-head CI run timed out this poller test after its output reported \"Project complete!\"\n  WHY: communicate(timeout=POLLER_SUBPROCESS_TIMEOUT_SEC) timed out and raised an AssertionError, failing orchestrate-poll and the dependent lint check. The failure is not mapped to the PR diff but needs investigation.\n- HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory, lines 7339-7390 (`_run_poller` at 7351-7357) | severity=MAJOR | confidence=2\n  PROBLEM: The `orchestrate-poll (1)` check on head 6ea36343 failed because the poller subprocess did not exit within 180 s (\"poller did not exit within 180s; process group killed\"), which also turns the `lint` gate red. Stdout shows the poller finished its work normally (\"Project complete!\", `SECURITY_PASS_CLEAN`, `EAGER_DRAFT_PR_PROMOTED`, `project_complete: true`), so the process group stayed alive after completion.\n  WHY: The red check gates the PR. The reviewer could not map it to any PR hunk: orchestrate_poll_process.sh has no call to resolve_integration_ref.sh (only comments at lines 20104 and 23090), and the resolver in scripts/orchestrate_lib.py:2919 does not implement this routing. The editor should check for a leftover child process that keeps the process group alive.\n- Verified as sound: test_reissue_helper_switch_is_pinned_against_caller_value. The `run_case` harness (scripts/resolve_integration_ref.sh:739-755) inherits the caller environment, the pin is at scripts/resolve_integration_ref.sh:595, the unpinned path goes through scripts/retarget_merged_base.sh:110, and the mock is at scripts/resolve_integration_ref.sh:874-890. No defect found.\n- Not re-flagged: the copilot-pull-request-reviewer HTTP 422 `custom_instructions_too_large` failure, treated as a third-party prompt-size problem that earlier passes already dispositioned.\n- Task completeness: NONE. Both deliverables are present, including `SANDBOX_SOLC_VERSIONS` wired at .github/workflows/implement.yml:54-59. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d13c71ad695ebd9e4161f7d51ac3bdacabd3044118a902c92cf1dbf5652dab60",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "42825249972",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42825249972",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110141234_0f15d47f20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "42825249972"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-10T14:12:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
