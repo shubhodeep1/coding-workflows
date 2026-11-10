@@ -8,6 +8,9 @@ issue_json="${ISSUE_META_FILE:?}"
 # Extra key=value log fields set by the support-ref check (expected/actual
 # ref and SHA). Only script-validated values are ever placed here.
 refuse_context=""
+# Extra markdown appended to the refusal comment after the marker. Empty for
+# every reason except repro_not_fixed, so existing comments are unchanged.
+refuse_body_extra=""
 
 refuse()
 {
@@ -31,7 +34,7 @@ refuse()
 		echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason} outcome=skip_flag_failed" >&2
 		exit 1
 	fi
-	if ! gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "Workflow heal scope verification failed (${detail_text}); implementation was refused. <!-- ai:workflow-heal-scope-unverified:v1 reason=${reason}${detail_field} -->" >/dev/null; then
+	if ! gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "Workflow heal scope verification failed (${detail_text}); implementation was refused. <!-- ai:workflow-heal-scope-unverified:v1 reason=${reason}${detail_field} -->${refuse_body_extra}" >/dev/null; then
 		echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason} outcome=comment_failed" >&2
 		exit 1
 	fi
@@ -46,6 +49,59 @@ refuse()
 
 if [ "${1:-}" = refuse ] && [ "${2:-}" = out_of_heal_scope ]; then
 	refuse out_of_heal_scope
+fi
+# Heal reproduction check (Refs #8434, P2 step 8): heal_isolated_implement.sh
+# exits 43 when a [repro-required] heal's tests do not fail at the failing SHA
+# and pass on the edited tree; implement.yml maps that to this refusal. The
+# result file (heal_implement_repro.v1) is trusted runner temp written by that
+# script, but its test ids come from the model-written plan: every value is
+# reduced to a fixed token, a 40-hex SHA or an escaped, truncated test id.
+if [ "${1:-}" = refuse ] && [ "${2:-}" = repro_not_fixed ]; then
+	repro_result_file="${HEAL_REPRO_RESULT_FILE:-${RUNNER_TEMP:-/tmp}/heal-repro-result-${GITHUB_RUN_ID:-local}.json}"
+	repro_detail=result_unavailable
+	repro_rendered=""
+	if [ -f "${repro_result_file}" ] && [ ! -L "${repro_result_file}" ]; then
+		repro_rendered="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+import json, re, sys
+try:
+	with open(sys.argv[1], encoding="utf-8") as handle:
+		data = json.load(handle)
+except (OSError, ValueError):
+	sys.exit(1)
+if not isinstance(data, dict) or data.get("schema") != "heal_implement_repro.v1":
+	sys.exit(1)
+outcome = data.get("outcome")
+if outcome not in ("not_fixed", "unverified"):
+	sys.exit(1)
+def tok(value):
+	text = re.sub(r"[^a-z0-9_]", "", value if isinstance(value, str) else "")[:64]
+	return text or "unknown"
+def tid(value):
+	text = value if isinstance(value, str) else ""
+	text = re.sub(r"[`<>@|\x00-\x1f\x7f\u200b-\u200f\u2028\u2029\ufeff]", "", text)[:200]
+	return text or "(empty)"
+sha = data.get("failing_sha")
+sha = sha if isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha) else "unknown"
+tests = [t for t in data.get("tests") or [] if isinstance(t, dict)] if isinstance(data.get("tests"), list) else []
+lines = [outcome, "", "", "**Heal reproduction check**", "",
+	"- Outcome: `%s`" % outcome, "- Reason: `%s`" % tok(data.get("reason")), "- Failing SHA: `%s`" % sha]
+for item in tests[:20]:
+	lines.append("- `%s` - at failing SHA: %s; on edited tree: %s" % (tid(item.get("test")), tok(item.get("at_failing_sha")), tok(item.get("on_edited_tree"))))
+if len(tests) > 20:
+	lines.append("- ... and %d more" % (len(tests) - 20))
+print("\n".join(lines))
+' "${repro_result_file}" 2>/dev/null)" || repro_rendered=""
+	fi
+	case "${repro_rendered%%$'\n'*}" in
+		not_fixed|unverified)
+			repro_detail="${repro_rendered%%$'\n'*}"
+			refuse_body_extra="${repro_rendered#*$'\n'}"
+			;;
+		*)
+			refuse_body_extra=$'\n\n**Heal reproduction check**\n\n- Outcome: `result_unavailable`'
+			;;
+	esac
+	refuse repro_not_fixed "${repro_detail}"
 fi
 echo 'HEAL_ROUTE=false' >> "${GITHUB_ENV:?}"
 # The checkout-context step empties ISSUE_META_FILE when its metadata fetch
@@ -130,6 +186,42 @@ printf '%s' "${verified}" | jq -r '.paths[]' > "${scope_file}"
 # heal_own_agents_fragment_entry; review_untrusted_workspace.py accepts it.
 if [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]{0,9}$ ]]; then
 	printf 'agents.d/%s-*.md\n' "${ISSUE_NUMBER}" >> "${scope_file}"
+fi
+# Test-only heal approval lock (#8809). When the latest plan was auto-approved
+# as test-only, a trusted <!-- ai:heal-test-only-approval:v1 --> marker names
+# its exact tests/ and changelog.d/*.md paths. The scope file is narrowed to
+# those paths (already intersected with the verified heal scope), so the
+# isolated editor's transfer and the commit guard both bind to them, and
+# HEAL_TEST_ONLY_LOCK_FILE turns on heal_isolated_implement.sh's weakening
+# check. No marker keeps the heal scope as before; an unreadable comments
+# file or an invalid marker refuses. ISSUE_COMMENTS_FILE unset (legacy
+# callers) skips the lock: implement.yml always fills it before this step.
+scope_guard_py="${FILES_TOUCHED_SCOPE_GUARD_PY:-scripts/files_touched_scope_guard.py}"
+if [ -n "${ISSUE_COMMENTS_FILE:-}" ]; then
+	jq -e 'type == "array"' "${ISSUE_COMMENTS_FILE}" >/dev/null 2>&1 || refuse unavailable comments_unreadable
+	test_only_lock_file="${RUNNER_TEMP:-/tmp}/heal-test-only-lock-${GITHUB_RUN_ID:-local}.txt"
+	rm -f "${test_only_lock_file}"
+	test_only_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${scope_guard_py}" --heal-test-only-lock-scope \
+		--comments-file "${ISSUE_COMMENTS_FILE}" --issue-number "${ISSUE_NUMBER}" --pipeline-login "${identity}" \
+		--heal-scope-file "${scope_file}" --lock-out "${test_only_lock_file}" 2>/dev/null)" || refuse unavailable test_only_lock_invalid
+	test_only_status="$(printf '%s' "${test_only_json}" | jq -r '.status // ""' 2>/dev/null || true)"
+	case "${test_only_status}" in
+		none)
+			echo "AI_PHASE_GATE_V1 phase=implement gate=heal_test_only outcome=none issue=${ISSUE_NUMBER}"
+			;;
+		locked)
+			test_only_plan="$(printf '%s' "${test_only_json}" | jq -r '.plan_comment // ""' 2>/dev/null | tr -cd '0-9' || true)"
+			test_only_count="$(printf '%s' "${test_only_json}" | jq -r '.count // ""' 2>/dev/null | tr -cd '0-9' || true)"
+			[ -s "${test_only_lock_file}" ] || refuse unavailable test_only_lock_invalid
+			cp "${test_only_lock_file}" "${scope_file}" || refuse unavailable test_only_lock_invalid
+			chmod 0444 "${test_only_lock_file}" || refuse unavailable test_only_lock_invalid
+			echo "HEAL_TEST_ONLY_LOCK_FILE=${test_only_lock_file}" >> "${GITHUB_ENV}" || refuse unavailable test_only_lock_env_failed
+			echo "AI_PHASE_GATE_V1 phase=implement gate=heal_test_only outcome=locked plan_comment=${test_only_plan:-unknown} paths=${test_only_count:-0} issue=${ISSUE_NUMBER}"
+			;;
+		*)
+			refuse unavailable test_only_lock_invalid
+			;;
+	esac
 fi
 chmod 0444 "${scope_file}"
 # The support checkout is separate from the editor's writable source copy.

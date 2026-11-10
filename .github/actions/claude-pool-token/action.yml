@@ -2,7 +2,8 @@ name: Claude pool token
 description: |
   Fetch the Claude account pool for this job from the claude-pool-broker
   Worker with the job's GitHub OIDC token, probe each account's usage, and
-  write the accounts (least used under the gate first) to
+  write the accounts (under the gate, spare 7-day quota expiring soonest
+  first) to
   $RUNNER_TEMP/claude-pool for scripts/ai_engine.sh. Never fails the job:
   any problem is available=false with a reason, and the roles run codex
   (plan D1). The job needs `permissions: id-token: write`, and the Claude

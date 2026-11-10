@@ -1174,6 +1174,15 @@ if args[:1] == ["workflow"]:
 		sys.exit(1)
 	state["dispatched"].append(args)
 	done()
+if args[:2] == ["run", "view"]:
+	view_id = args[2] if len(args) > 2 else ""
+	if view_id in os.environ.get("FAKE_GH_RUN_VIEW_FAIL", "").split(","):
+		json.dump(state, open(state_path, "w"))
+		print("gh: logs unavailable", file=sys.stderr)
+		sys.exit(1)
+	if view_id in os.environ.get("FAKE_GH_RUN_VIEW_EMPTY", "").split(","):
+		done("")
+	done(os.environ.get("FAKE_GH_RUN_VIEW_LOG", "fake failed log line"))
 if args[:1] == ["run"]:
 	done("")
 if args[:2] == ["label", "create"] and os.environ.get("FAKE_GH_ITEM_COMMENTS_AFTER_LABEL_CREATE"):
@@ -1262,6 +1271,11 @@ if method == "POST" and endpoint.endswith("/comments"):
 		sys.exit(1)
 	if os.environ.get("FAKE_GH_FAIL_RESUME") and f.get("body", "").startswith(("/answer", "/approved", "/reclarify", "/judge_resume")):
 		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	# CONSIST-001: a transient-looking failure on the item's verdict comment.
+	if os.environ.get("FAKE_GH_FAIL_RECORD_502") and endpoint == "repos/o/r/issues/7/comments" and "verdict=" in f.get("body", ""):
+		json.dump(state, open(state_path, "w"))
+		print("gh: Bad Gateway (HTTP 502)", file=sys.stderr)
 		sys.exit(1)
 	state["comments"].append({"endpoint": endpoint, "body": f.get("body", "")})
 	done("{}")
@@ -1379,6 +1393,13 @@ if endpoint.startswith("repos/o/r/pulls/"):
 		"user": {"login": os.environ.get("FAKE_GH_PR_AUTHOR", "alice")},
 		"author_association": os.environ.get("FAKE_GH_PR_ASSOC", "MEMBER")}))
 if method == "GET" and endpoint == "repos/o/r/issues/7" and not jq:
+	# CONSIST-001: fail the first N item reads with a chosen stderr; failed
+	# attempts do not count as item_issue_reads, so re-check logic is unchanged.
+	if state.get("item_read_failures", 0) < int(os.environ.get("FAKE_GH_ITEM_READ_FAILURES", "0") or "0"):
+		state["item_read_failures"] = state.get("item_read_failures", 0) + 1
+		json.dump(state, open(state_path, "w"))
+		print(os.environ.get("FAKE_GH_ITEM_READ_STDERR", ""), file=sys.stderr)
+		sys.exit(1)
 	state["item_issue_reads"] = state.get("item_issue_reads", 0) + 1
 	if state["item_issue_reads"] > 1:
 		if os.environ.get("FAKE_GH_FAIL_ITEM_RECHECK"):
@@ -1417,6 +1438,9 @@ def _judge(tmp_path: Path, item: dict, comments: list | None = None, verdict: di
 	for name in ("UNBLOCK_JUDGE_ENABLED", "TG_BOT_SECRET", "GH_TOKEN", "NEEDS_HUMAN_DIGEST_ENABLED"):
 		env.pop(name, None)
 	env.update(REPOSITORY="o/r", ITEM="7", SUPPORT_DIR=str(ROOT), RUNTIME_DIR=str(tmp_path / "rt"), MOCK_UNBLOCK_JUDGE_NOW="2026-10-04T12:00:00Z")
+	# CONSIST-001: one gh_retry attempt by default keeps the fake's failure
+	# knobs single-shot (call counts, no backoff sleeps); retry tests raise it.
+	env["GH_RETRY_MAX_ATTEMPTS"] = "1"
 	if verdict is not None:
 		env["MOCK_UNBLOCK_JUDGE_JSON"] = verdict if isinstance(verdict, str) else json.dumps(verdict)
 	env.update(env_extra)
@@ -1457,6 +1481,63 @@ def test_unblock_model_timeout_uses_safe_default_for_invalid_input(tmp_path: Pat
 	assert timeout_file.read_text(encoding="utf-8").strip() == expected
 	assert ("outcome=timeout_fallback" in result.stdout) == (configured != expected)
 	assert any("verdict=retry_budget" in comment["body"] for comment in state["comments"])
+
+
+def _item_reads(state: dict) -> list[list[str]]:
+	return [call for call in state["calls"] if call[:1] == ["api"] and "repos/o/r/issues/7" in call and "-X" not in call and "-f" not in call and "--jq" not in call]
+
+
+def test_transient_item_read_failure_is_retried_and_the_judge_proceeds(tmp_path: Path) -> None:
+	"""CONSIST-001: an HTTP 502 on the item-metadata read is retried, not skipped."""
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		GH_RETRY_MAX_ATTEMPTS="3", FAKE_GH_ITEM_READ_FAILURES="1", FAKE_GH_ITEM_READ_STDERR="HTTP 502: Bad Gateway")
+	assert result.returncode == 0, result.stderr
+	assert "reason=item_unreadable" not in result.stdout
+	assert state.get("item_read_failures") == 1
+	first_two = [call for call in state["calls"] if call != ["api", "user", "--jq", ".login"]][:2]
+	assert first_two == [["api", "repos/o/r/issues/7"], ["api", "repos/o/r/issues/7"]]
+	assert any("verdict=retry_budget" in comment["body"] for comment in state["comments"])
+
+
+def test_permanent_item_read_failure_keeps_the_item_unreadable_skip(tmp_path: Path) -> None:
+	"""CONSIST-001: an HTTP 404 is not retried; the skip path and message are unchanged."""
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		GH_RETRY_MAX_ATTEMPTS="3", FAKE_GH_ITEM_READ_FAILURES="99", FAKE_GH_ITEM_READ_STDERR="gh: Not Found (HTTP 404)")
+	assert result.returncode == 0, result.stderr
+	assert "UNBLOCK_JUDGE item=7 outcome=skip reason=item_unreadable" in result.stdout
+	assert len(_item_reads(state)) == 1
+	assert not state["comments"]
+
+
+def test_comment_post_stays_single_attempt_on_a_transient_error(tmp_path: Path) -> None:
+	"""CONSIST-001: writes are never wrapped in gh_retry, so a 502 on a comment POST is tried once."""
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		GH_RETRY_MAX_ATTEMPTS="3", FAKE_GH_FAIL_RECORD_502="1")
+	assert result.returncode == 0, result.stderr
+	record_posts = [call for call in state["calls"] if "repos/o/r/issues/7/comments" in call
+		and any(arg.startswith("body=") and "verdict=retry_budget" in arg for arg in call)]
+	assert len(record_posts) == 1
+	assert not any("verdict=retry_budget" in comment["body"] for comment in state["comments"])
+
+
+def test_only_the_listed_reads_are_wrapped_in_gh_retry() -> None:
+	"""CONSIST-001: the helper source, the pass-through fallback and the five wrapped reads."""
+	text = JUDGE.read_text(encoding="utf-8")
+	assert 'if [ -f "${SUPPORT_DIR}/scripts/gh_helpers.sh" ]; then' in text
+	assert 'source "${SUPPORT_DIR}/scripts/gh_helpers.sh" >/dev/null 2>&1 || true' in text
+	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' in text
+	for read in (
+		'gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${number}/comments?per_page=100" 2>/dev/null | jq -s \'add // []\'',
+		'gh_retry gh api user --jq \'.login\'',
+		'gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item.json"',
+		'gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item_recheck.json"',
+		'gh_retry gh api "repos/${REPOSITORY}/actions/runs/${candidate_id}"',
+	):
+		assert text.count(read) == 1, read
+	for line in text.splitlines():
+		if "gh_retry" in line:
+			for write in ("-X POST", "-X PATCH", "-X DELETE", "/dispatches", "-f body="):
+				assert write not in line, line
 
 
 def _run_metadata(run_id: int, **changes) -> dict:
@@ -1564,6 +1645,74 @@ def test_project_named_run_is_bound(tmp_path: Path) -> None:
 		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
 		FAKE_GH_RUNS=json.dumps({"111": _run_metadata(111, display_title="Validation [tracking:7]")}))
 	assert "op=run_log outcome=attached run=111" in result.stdout, result.stderr
+	assert [call[2] for call in _run_calls(state, "view")] == ["111"]
+
+
+_BOUND_TWO_RUNS = json.dumps({str(n): _run_metadata(n, head_branch="ai/issue-7") for n in (111, 222)})
+
+
+@pytest.mark.parametrize("mode", ["FAKE_GH_RUN_VIEW_FAIL", "FAKE_GH_RUN_VIEW_EMPTY"])
+def test_failed_or_empty_log_download_is_not_reported_attached(tmp_path: Path, mode: str) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	result, state = _judge(tmp_path, ISSUE, comments=[_comment("/actions/runs/111 /actions/runs/222")],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		FAKE_GH_RUNS=_BOUND_TWO_RUNS, **{mode: "111,222"})
+	assert result.returncode == 0, result.stderr
+	assert "outcome=attached" not in result.stdout
+	assert "op=run_log outcome=omitted reason=log_unavailable candidates=2" in result.stdout
+	assert [call[2] for call in _run_calls(state, "view")] == ["222", "111"]
+	assert (tmp_path / "rt" / "run_log_tail.txt").read_text(encoding="utf-8") == ""
+	assert not (tmp_path / "rt" / "run_log_download.txt").exists()
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+
+
+@pytest.mark.parametrize("mode", ["FAKE_GH_RUN_VIEW_FAIL", "FAKE_GH_RUN_VIEW_EMPTY"])
+def test_failed_or_empty_log_download_tries_next_bound_candidate(tmp_path: Path, mode: str) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	result, state = _judge(tmp_path, ISSUE, comments=[_comment("/actions/runs/111 /actions/runs/222")],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		FAKE_GH_RUNS=_BOUND_TWO_RUNS, **{mode: "222"})
+	assert result.returncode == 0, result.stderr
+	assert "op=run_log outcome=attached run=111" in result.stdout
+	assert "outcome=attached run=222" not in result.stdout and "reason=log_unavailable" not in result.stdout
+	assert [call[2] for call in _run_calls(state, "view")] == ["222", "111"]
+	assert (tmp_path / "rt" / "run_log_tail.txt").read_text(encoding="utf-8").strip() == "fake failed log line"
+	assert not (tmp_path / "rt" / "run_log_download.txt").exists()
+
+
+def test_successful_log_download_writes_bounded_tail_without_echoing_it(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	# 401 lines: the last 400 still exceed 120000 bytes, so both the line cap
+	# and the byte cap apply, while the whole log stays under the per-string
+	# environment limit the fake gh reads it through.
+	lines = [f"LOGMARKER-{i:04d} " + "x" * 290 for i in range(401)]
+	assert len("\n".join(lines[-400:]).encode("utf-8")) > 120000
+	result, state = _judge(tmp_path, ISSUE, comments=[_comment("/actions/runs/111")],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		FAKE_GH_RUNS=json.dumps({"111": _run_metadata(111, head_branch="ai/issue-7")}),
+		FAKE_GH_RUN_VIEW_LOG="\n".join(lines))
+	assert result.returncode == 0, result.stderr
+	assert "op=run_log outcome=attached run=111" in result.stdout
+	tail = (tmp_path / "rt" / "run_log_tail.txt").read_bytes()
+	assert len(tail) == 120000 and tail.count(b"\n") <= 400
+	assert b"LOGMARKER-0000 " not in tail
+	assert tail.rstrip(b"\n").endswith(lines[-1].encode("utf-8"))
+	assert "LOGMARKER-" not in result.stdout and "LOGMARKER-" not in result.stderr
+	assert not (tmp_path / "rt" / "run_log_download.txt").exists()
+
+
+def test_log_unavailable_takes_precedence_over_run_unreadable(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	result, state = _judge(tmp_path, ISSUE, comments=[_comment("/actions/runs/111 /actions/runs/222")],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		FAKE_GH_RUNS=json.dumps({"111": _run_metadata(111, head_branch="ai/issue-7")}), FAKE_GH_RUN_VIEW_FAIL="111")
+	assert result.returncode == 0, result.stderr
+	assert "op=run_log outcome=omitted reason=log_unavailable candidates=2" in result.stdout
+	assert "outcome=attached" not in result.stdout
 	assert [call[2] for call in _run_calls(state, "view")] == ["111"]
 
 
@@ -4977,6 +5126,50 @@ def test_earlier_failure_skip_logs_label_none_for_a_missing_label(tmp_path: Path
 def test_dispatch_error_file_is_removed(tmp_path: Path) -> None:
 	_result, _state, _tg, runtime = _run_heal_ops(tmp_path, _heal_ops(hold=False), FAKE_GH_FAIL_HEAL_DISPATCH="1")
 	assert not (runtime / "heal_dispatch_error.txt").exists()
+
+
+# --- attempt journal in the unblock judge context (issue #8428, P1) -----------------
+
+def _unblock_journal_block() -> str:
+	text = JUDGE.read_text(encoding="utf-8")
+	start = text.index("unblock_ask_model()\n")
+	body = text[start:text.index("\n}\n", start)]
+	return body[body.index("# Attempt journal (issue #8428, P1)"):body.index('\t{\n\t\tbash "${SUPPORT_DIR}/scripts/render_prompt.sh" "${SUPPORT_DIR}/prompts/mode-judge-unblock.txt"')]
+
+
+def test_unblock_journal_is_switch_gated_trusts_only_the_pipeline_login_and_makes_no_call():
+	block = _unblock_journal_block()
+	assert block.count('if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ]') == 1
+	assert '--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}"' in block
+	assert "--max-bytes 4096" in block and "--rawfile journal" in block
+	assert "gh api" not in block and "--repo" not in block
+
+
+def test_unblock_journal_merge_adds_the_field_only_when_on(tmp_path):
+	sys.path.insert(0, str(ROOT / "scripts"))
+	import attempt_journal  # noqa: PLC0415
+	entry = attempt_journal.normalise_entry({"ts": "2026-10-30T10:00:00Z", "stage": "implement", "run_id": "1", "attempt": "1", "outcome": "fail"})
+	body = attempt_journal.build_comment([entry])
+	runtime = tmp_path / "rt"
+	(runtime / "support" / "scripts").mkdir(parents=True)
+	shutil.copy2(ROOT / "scripts" / "attempt_journal.py", runtime / "support" / "scripts" / "attempt_journal.py")
+	comments = [{"id": 1, "body": body, "user": {"login": "pipeline-bot"}}, {"id": 2, "body": body.replace("implement", "review"), "user": {"login": "mallory"}}]
+	(runtime / "item_comments.json").write_text(json.dumps(comments), encoding="utf-8")
+	original = {"block": {"item": 5}}
+	harness = 'set -uo pipefail\n' + _unblock_journal_block() + '\ncat "${RUNTIME_DIR}/judge_context.json"\n'
+	results = {}
+	for value in ("true", "false"):
+		(runtime / "judge_context.json").write_text(json.dumps(original), encoding="utf-8")
+		env = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "PERSIST_"))}
+		env.update({"PERSIST_JOURNAL_ENABLED": value, "RUNTIME_DIR": str(runtime), "SUPPORT_DIR": str(runtime / "support"),
+			"UNBLOCK_LOGIN": "pipeline-bot", "PYTHONDONTWRITEBYTECODE": "1"})
+		proc = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True, timeout=60)
+		assert proc.returncode == 0, proc.stderr
+		results[value] = proc.stdout
+	assert json.loads(results["false"]) == original and results["false"].strip() == json.dumps(original)
+	merged = json.loads(results["true"])
+	assert merged["block"] == original["block"]
+	assert "| implement |" in merged["attempt_journal"] and "| review |" not in merged["attempt_journal"]
 
 
 # #8470: a stop whose planning reason is "nothing to implement" is closed as

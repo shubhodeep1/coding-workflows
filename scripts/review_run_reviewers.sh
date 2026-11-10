@@ -3277,6 +3277,71 @@ assemble_reviewer_prompt() {
   } > "${target_file}"
 }
 
+# Byte count of one reviewer prompt input file, for the log-only
+# REVIEWER_PROMPT_COMPONENTS line (wfopt 2026-10-02, Refs #8845). Prints `0`
+# for an empty path, a non-regular or unreadable file, or any non-integer
+# `wc` result. Never prints file content.
+reviewer_prompt_component_bytes() {
+  local component_path="${1:-}"
+  local component_bytes="0"
+  if [ -n "${component_path}" ] && [ -f "${component_path}" ] && [ -r "${component_path}" ]; then
+    component_bytes="$(wc -c < "${component_path}" 2>/dev/null | tr -d '[:space:]' || printf '0')"
+  fi
+  if ! [[ "${component_bytes}" =~ ^[0-9]+$ ]]; then
+    component_bytes="0"
+  fi
+  printf '%s\n' "${component_bytes}"
+}
+
+# Log-only, fail-open per-component size line for one assembled reviewer
+# prompt (measurement only; never changes prompt bytes, order or budgets).
+# Usage: log_reviewer_prompt_components <pass_label> <assembled_file> \
+#          <prompt_body_file> [extra_context_file]
+# Counts the raw input files assemble_reviewer_prompt reads (README is the
+# raw trimmed file before UNTRUSTED_DATA framing), so the component sum does
+# not equal total_bytes: separators, hints, the memory placeholder and the
+# checklist block are not counted separately. static_prefix_sha256 is the
+# first 12 hex of the static context's sha256 (pattern from
+# gh_api_json_to_file in scripts/gh_helpers.sh), or `unavailable`. Never logs
+# file content or paths; the label is printed only when it matches
+# ^[A-Za-z0-9._-]+$, else `unknown`. Callers wrap it in `if !` and emit a
+# single ::warning:: on failure.
+log_reviewer_prompt_components() {
+  local rpc_pass="${1:-}"
+  local rpc_assembled_file="${2:-}"
+  local rpc_body_file="${3:-}"
+  local rpc_extra_file="${4:-}"
+  local rpc_static_file="${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}"
+  local rpc_readme_file=""
+  local rpc_static_bytes rpc_readme_bytes rpc_memory_bytes rpc_body_bytes
+  local rpc_semble_bytes rpc_extra_bytes rpc_total_bytes
+  local rpc_sha=""
+  local rpc_line
+  if ! [[ "${rpc_pass}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    rpc_pass="unknown"
+  fi
+  if [ -n "${RUNTIME_DIR:-}" ]; then
+    rpc_readme_file="${RUNTIME_DIR}/static_readme_trimmed.txt"
+  fi
+  rpc_static_bytes="$(reviewer_prompt_component_bytes "${rpc_static_file}")" || rpc_static_bytes="0"
+  rpc_readme_bytes="$(reviewer_prompt_component_bytes "${rpc_readme_file}")" || rpc_readme_bytes="0"
+  rpc_memory_bytes="$(reviewer_prompt_component_bytes "${MEMORY_CONTEXT_FILE:-}")" || rpc_memory_bytes="0"
+  rpc_body_bytes="$(reviewer_prompt_component_bytes "${rpc_body_file}")" || rpc_body_bytes="0"
+  rpc_semble_bytes="$(reviewer_prompt_component_bytes "${REVIEWER_SEMBLE_CONTEXT_FILE:-}")" || rpc_semble_bytes="0"
+  rpc_extra_bytes="$(reviewer_prompt_component_bytes "${rpc_extra_file}")" || rpc_extra_bytes="0"
+  rpc_total_bytes="$(reviewer_prompt_component_bytes "${rpc_assembled_file}")" || rpc_total_bytes="0"
+  if [ -f "${rpc_static_file}" ] && [ -r "${rpc_static_file}" ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      rpc_sha="$(sha256sum < "${rpc_static_file}" 2>/dev/null | cut -c1-12 || true)"
+    elif command -v shasum >/dev/null 2>&1; then
+      rpc_sha="$(shasum -a 256 < "${rpc_static_file}" 2>/dev/null | cut -c1-12 || true)"
+    fi
+  fi
+  [[ "${rpc_sha}" =~ ^[0-9a-f]{12}$ ]] || rpc_sha="unavailable"
+  rpc_line="REVIEWER_PROMPT_COMPONENTS pass=${rpc_pass} static_bytes=${rpc_static_bytes} readme_bytes=${rpc_readme_bytes} memory_bytes=${rpc_memory_bytes} body_bytes=${rpc_body_bytes} semble_bytes=${rpc_semble_bytes} extra_bytes=${rpc_extra_bytes} total_bytes=${rpc_total_bytes} static_prefix_sha256=${rpc_sha}"
+  printf '%s\n' "${rpc_line}"
+}
+
 # Assemble the default (pass 1 / single-pass) prompt.
 assemble_reviewer_prompt "${REVIEWER_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
 
@@ -3294,6 +3359,9 @@ if [ -f "${REVIEWER_PROMPT_FILE}" ]; then
     reviewer_prompt_assembled_bytes=0
   fi
   echo "Reviewer prompt assembled size: ${reviewer_prompt_assembled_bytes} bytes (codex stdin cap: ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES})."
+  if ! log_reviewer_prompt_components "default" "${REVIEWER_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"; then
+    echo "::warning::REVIEWER_PROMPT_COMPONENTS could not be computed for pass=default; continuing (log-only)."
+  fi
   if [ "${reviewer_prompt_assembled_bytes}" -ge "${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}" ]; then
     echo "::warning::Reviewer prompt is ${reviewer_prompt_assembled_bytes} bytes, at or over codex's ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}-character turn/start stdin cap. Reviewers will fail with 'Input exceeds the maximum length'. Raise REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES to tighten the embed budget or shrink the reviewer static context (${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}) / memory / semble context."
   fi
@@ -4012,6 +4080,7 @@ reviewer_attempt_result_failure_class() {
   local stall_state="${4:-}"
   local has_stderr=false
   local no_text=false
+  local malformed=false
 
   case "${cmd_rc}" in
     ''|*[!0-9]*) cmd_rc=0 ;;
@@ -4023,9 +4092,13 @@ reviewer_attempt_result_failure_class() {
     if grep -Eq 'OpenCode structured reviewer output contained no text events\.$' "${stderr_file}" 2>/dev/null; then
       no_text=true
     fi
+    # The malformed marker is appended the same way, so anchor it identically.
+    if grep -Eq 'OpenCode structured reviewer output was malformed\.$' "${stderr_file}" 2>/dev/null; then
+      malformed=true
+    fi
   fi
 
-  if [ "${cmd_rc}" = "0" ] && [ "${no_text}" = false ]; then
+  if [ "${cmd_rc}" = "0" ] && [ "${no_text}" = false ] && [ "${malformed}" = false ]; then
     printf 'ok\n'; return 0
   fi
   if [ "${wd_reason}" = "max_steps" ]; then
@@ -4066,15 +4139,22 @@ reviewer_attempt_result_failure_class() {
   fi
   # The no-text marker is appended for any attempt without a text event,
   # including watchdog kills, stalls and provider errors, so it only names
-  # the class when no more specific cause matched above.
+  # the class when no more specific cause matched above. The malformed marker
+  # gets the same lowest-specific precedence: a watchdog kill or provider
+  # error can also leave unparseable JSON behind.
   if [ "${no_text}" = true ]; then
     printf 'empty_structured_output\n'; return 0
+  fi
+  if [ "${malformed}" = true ]; then
+    printf 'malformed_structured_output\n'; return 0
   fi
   printf 'exit_nonzero\n'
   return 0
 }
 
-# Builds the sanitized REVIEWER_ATTEMPT_RESULT line (#8097). Reads no files.
+# Builds the sanitized REVIEWER_ATTEMPT_RESULT line (#8097). Reads no files;
+# the optional 10th arg output_bytes is a caller-measured integer (default 0)
+# appended as the last field so the existing field order stays stable.
 reviewer_attempt_result_line() {
   local pass="${1:-}"
   local slot="${2:-}"
@@ -4085,6 +4165,7 @@ reviewer_attempt_result_line() {
   local wd_reason="${7:-}"
   local stall_state="${8:-}"
   local failure_class="${9:-}"
+  local output_bytes="${10:-}"
   local token_re='^[A-Za-z0-9._/:-]+$'
 
   [[ "${pass}" =~ ${token_re} ]] || pass="unknown"
@@ -4099,9 +4180,10 @@ reviewer_attempt_result_line() {
     *) stall_state="none" ;;
   esac
   [[ "${failure_class}" =~ ^[a-z_]+$ ]] || failure_class="exit_nonzero"
+  [[ "${output_bytes}" =~ ^[0-9]+$ ]] || output_bytes="0"
 
-  printf 'REVIEWER_ATTEMPT_RESULT pass=%s slot=%s attempt=%s model=%s exit_code=%s duration_secs=%s wd_reason=%s stall_state=%s failure_class=%s\n' \
-    "${pass}" "${slot}" "${attempt}" "${model}" "${exit_code}" "${duration}" "${wd_reason}" "${stall_state}" "${failure_class}"
+  printf 'REVIEWER_ATTEMPT_RESULT pass=%s slot=%s attempt=%s model=%s exit_code=%s duration_secs=%s wd_reason=%s stall_state=%s failure_class=%s output_bytes=%s\n' \
+    "${pass}" "${slot}" "${attempt}" "${model}" "${exit_code}" "${duration}" "${wd_reason}" "${stall_state}" "${failure_class}" "${output_bytes}"
   return 0
 }
 
@@ -4118,7 +4200,7 @@ reviewer_attempt_result_emit_prelaunch() {
   if [[ "${start_time:-}" =~ ^[0-9]+$ ]] && [[ "${prelaunch_end}" =~ ^[0-9]+$ ]] && [ "${prelaunch_end}" -ge "${start_time}" ]; then
     prelaunch_duration=$(( prelaunch_end - start_time ))
   fi
-  prelaunch_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${prelaunch_rc}" "${prelaunch_duration}" "none" "none" "exit_nonzero" 2>/dev/null || true)"
+  prelaunch_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${prelaunch_rc}" "${prelaunch_duration}" "none" "none" "exit_nonzero" "0" 2>/dev/null || true)"
   if [ -n "${prelaunch_text}" ]; then
     if [ -n "${log_file:-}" ]; then
       printf '%s\n' "${prelaunch_text}" | tee -a "${log_file}" || true
@@ -4279,6 +4361,7 @@ execute_reviewer_attempt() {
   local reviewer_attempt_result_end=""
   local reviewer_attempt_result_duration=0
   local reviewer_attempt_result_text=""
+  local reviewer_attempt_result_output_bytes=0
 
   REVIEWER_ATTEMPT_OUTCOME="failed"
   REVIEWER_ATTEMPT_RETRYABLE_CLASS=""
@@ -4560,6 +4643,13 @@ execute_reviewer_attempt() {
   fi
   rm -f "${stall_status_file}"
 
+  # Log-only byte count of the raw structured output, taken before ANSI
+  # stripping or deletion; never logs the output text itself.
+  reviewer_attempt_result_output_bytes="$(wc -c 2>/dev/null < "${tmp_structured_output}" || echo 0)"
+  reviewer_attempt_result_output_bytes="$(printf '%s' "${reviewer_attempt_result_output_bytes}" | tr -d '[:space:]')"
+  case "${reviewer_attempt_result_output_bytes}" in
+    ''|*[!0-9]*) reviewer_attempt_result_output_bytes=0 ;;
+  esac
   reviewer_strip_opencode_output_file "${tmp_structured_output}"
   reviewer_strip_opencode_output_file "${tmp_stderr}"
   reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}" || reviewer_materialize_rc=$?
@@ -4607,7 +4697,7 @@ execute_reviewer_attempt() {
     if [[ "${start_time:-}" =~ ^[0-9]+$ ]] && [[ "${reviewer_attempt_result_end}" =~ ^[0-9]+$ ]] && [ "${reviewer_attempt_result_end}" -ge "${start_time}" ]; then
       reviewer_attempt_result_duration=$(( reviewer_attempt_result_end - start_time ))
     fi
-    reviewer_attempt_result_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${cmd_rc}" "${reviewer_attempt_result_duration}" "${wd_reason}" "${stall_state}" "${reviewer_attempt_result_class}" 2>/dev/null || true)"
+    reviewer_attempt_result_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${cmd_rc}" "${reviewer_attempt_result_duration}" "${wd_reason}" "${stall_state}" "${reviewer_attempt_result_class}" "${reviewer_attempt_result_output_bytes}" 2>/dev/null || true)"
     if [ -n "${reviewer_attempt_result_text}" ]; then
       if [ -n "${log_file:-}" ]; then
         printf '%s\n' "${reviewer_attempt_result_text}" | tee -a "${log_file}" || true
@@ -4683,7 +4773,7 @@ execute_reviewer_attempt() {
   if [[ "${start_time:-}" =~ ^[0-9]+$ ]] && [[ "${reviewer_attempt_result_end}" =~ ^[0-9]+$ ]] && [ "${reviewer_attempt_result_end}" -ge "${start_time}" ]; then
     reviewer_attempt_result_duration=$(( reviewer_attempt_result_end - start_time ))
   fi
-  reviewer_attempt_result_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${cmd_rc}" "${reviewer_attempt_result_duration}" "${wd_reason}" "${stall_state}" "${reviewer_attempt_result_class}" 2>/dev/null || true)"
+  reviewer_attempt_result_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${cmd_rc}" "${reviewer_attempt_result_duration}" "${wd_reason}" "${stall_state}" "${reviewer_attempt_result_class}" "${reviewer_attempt_result_output_bytes}" 2>/dev/null || true)"
   if [ -n "${reviewer_attempt_result_text}" ]; then
     if [ -n "${log_file:-}" ]; then
       printf '%s\n' "${reviewer_attempt_result_text}" | tee -a "${log_file}" || true
@@ -5974,6 +6064,9 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     echo "=== PASS 1: Broad sweep (xhigh reasoning) ==="
     PASS1_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass1.txt"
     assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
+    if ! log_reviewer_prompt_components "pass1" "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"; then
+      echo "::warning::REVIEWER_PROMPT_COMPONENTS could not be computed for pass=pass1; continuing (log-only)."
+    fi
 
     pass1_successful="$(run_reviewer_pass "pass1" "${PASS1_PROMPT_FILE}" "xhigh")"
     echo "Pass 1 complete: ${pass1_successful} reviewers successful."
@@ -6085,6 +6178,9 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   echo "=== PASS 2: Deep review (${PASS2_REASONING} reasoning — ${PASS2_GATE_NOTE}) ==="
   PASS2_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass2.txt"
   assemble_reviewer_prompt "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"
+  if ! log_reviewer_prompt_components "pass2" "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"; then
+    echo "::warning::REVIEWER_PROMPT_COMPONENTS could not be computed for pass=pass2; continuing (log-only)."
+  fi
 
   pass2_successful="$(run_reviewer_pass "review" "${PASS2_PROMPT_FILE}" "${PASS2_REASONING}")"
   echo "Pass 2 complete: ${pass2_successful} reviewers successful."

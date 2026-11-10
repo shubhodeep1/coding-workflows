@@ -10,7 +10,8 @@
 #      parsed (spike S3: whitespace stripped first);
 #   4. run the Haiku probe per account (spike S8) in an empty directory and
 #      read the five_hour / seven_day utilisation (S7);
-#   5. write the accounts, least used under the gate first (ties to the
+#   5. write the accounts under the gate, the one whose spare 7-day quota
+#      expires soonest first (ties to the
 #      alphabetically first name), to $CLAUDE_ENGINE_POOL_DIR
 #      (default $RUNNER_TEMP/claude-pool): `order`, `tokens/<NAME>` (0600)
 #      and `token` (the first account), which scripts/ai_engine.sh reads.
@@ -271,7 +272,7 @@ for name in "${accounts[@]}"; do
 done
 probes="${probes}]"
 
-# 5. The least used account under the gate first.
+# 5. The accounts under the gate, spare 7-day quota expiring soonest first.
 verdict="$(printf '%s' "${probes}" | engine_py choose --gate "${gate}")" || finish false choose_failed
 outcome="$(printf '%s' "${verdict}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["outcome"])')"
 if [ "${outcome}" != "selected" ]; then

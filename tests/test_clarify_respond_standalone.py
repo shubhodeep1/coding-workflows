@@ -486,3 +486,27 @@ def test_runtime_clarify_prompt_keeps_placeholder_rule() -> None:
 	assert "Missing critical information (credentials," not in inline
 	assert "private credential, a not-yet-existing commit SHA" not in inline
 	assert "Only when the task depends on the content of an auth-walled or" in inline
+
+
+# The SEC-002 issue-title GITHUB_ENV cases live in
+# tests/test_github_env_issue_title_newline.py and are collected here, since
+# CI already runs this file and ci.yml was outside that issue's file grant.
+# A name clash would hide a test, so it fails loudly.
+def _collect_github_env_issue_title_newline_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"github_env_issue_title_newline_cases",
+		Path(__file__).resolve().parent / "test_github_env_issue_title_newline.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 4, f"only {collected} issue-title GITHUB_ENV cases collected"
+
+
+_collect_github_env_issue_title_newline_cases()

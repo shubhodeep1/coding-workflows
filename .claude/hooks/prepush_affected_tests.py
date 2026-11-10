@@ -13,7 +13,15 @@ Subcommands
                     and static checks as JSON.
 ``run``             select, run every unit (sharded, time-boxed), re-run the
                     failures on ``--baseline-tree`` and write the result JSON
-                    plus a Markdown summary.
+                    plus a Markdown summary. ``--tests-only FILE`` replaces the
+                    selection with an explicit list of test files, one
+                    ``path[::name]`` per line (``select_tests`` is not called;
+                    the heal reproduction runner, issue #8461).
+                    ``--tests-file`` adds explicit ``path[::name]`` targets to
+                    the selection (a plan's done-check, issue #8427 P3) and
+                    ``--expect-baseline-fail-file`` re-runs its targets on the
+                    baseline tree; any of the three adds an ``acceptance`` map
+                    to the result. Without them the result is unchanged.
 ``assertion-diff``  list assertion lines removed from pre-existing test files.
 ``stamp``           interactive: run the gate on the committed HEAD against
                     its merge-base with origin and write a pass/fail stamp
@@ -120,11 +128,26 @@ GIT_SAFE = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null")
 RUFF_CHECK_ARGS = ("check", "--select", "E,F", "--ignore", "E501")
 SHELLCHECK_ARGS = ("--severity=error",)
 MAX_NEW_STATIC_FINDINGS_LISTED = 20
+# `run --tests-only` limits. The list may be built from untrusted CI log text,
+# so every line is validated and the file size and entry count are capped.
+# The entry cap counts rejected lines too, which bounds result.json.
+MAX_TESTS_FILE_BYTES = 256 * 1024
+MAX_TESTS_FILE_ENTRIES = 500
+MAX_TESTS_FILE_LINE = 1024
+_TESTS_FILE_NAME_RE = re.compile(r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*(?:\[[^\s\[\]]*\])?")
+_TESTS_FILE_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+_TESTS_FILE_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 # Lint messages that cite another line (ruff F811 "from line 12", F402) are
 # normalised so a finding that only moved still matches the baseline.
 _STATIC_MESSAGE_LINE_RE = re.compile(r"\bline \d+\b")
 # Dropped from a failing-stamp reason when another finding holds the push.
 STAMP_FAILURES_NOT_HELD = " The push was not held for this."
+# Explicit done-check targets (issue #8427, P3). Same path and name rules as
+# scripts/acceptance_check.py TEST_PATH_RE / TEST_NAME_RE; copied, not
+# imported, because this module ships to consumers on its own.
+MAX_EXPLICIT_TARGETS = 50
+_TARGET_PATH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,300}$")
+_TARGET_NAME_RE = re.compile(r"^[A-Za-z0-9_.\[\]:/-]{1,200}$")
 
 _TEST_JS_RE = re.compile(r".+\.(?:test|spec)\.(?:js|jsx|ts|tsx|mjs|cjs)$")
 _ASSERTION_RE = re.compile(r"\bassert\b|self\.assert\w*\(|\bexpect\(|pytest\.raises|\bxfail\b|\bskip\b")
@@ -134,6 +157,8 @@ _DEF_LINE_RE = re.compile(r"^[+-](?![+-])\s*(?:async\s+)?def\s+([A-Za-z_]\w*)|^[
 _FAILED_RE = re.compile(r"\bFAILED\s+(\S+::\S+)")
 _FAIL_RUNNER_RE = re.compile(r"^\s*FAIL\s{2,}([A-Za-z_]\w*)")
 _UNITTEST_RE = re.compile(r"^(?:FAIL|ERROR):\s+([A-Za-z_]\w*)\s+\(")
+# pytest summary line for a setup/teardown error: `ERROR path::node - ...`.
+_ERROR_NODE_RE = re.compile(r"^ERROR\s+(\S+::\S+)")
 _EVENT_PREFIX = "TEST_CASE_EVENT:"
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
@@ -575,6 +600,10 @@ def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 			files = " ".join(shlex.quote(entry["path"]) for entry in affected)
 			command = override.replace("{files}", files)
 			units.append({"id": "prepush_test_command", "file": None, "argv": ["bash", "-c", command], "kind": "test"})
+		for entry in affected:
+			if entry.get("functions") and "tests_file" in (entry.get("reasons") or []):
+				# `{files}` gets paths only: the listed `::name` filters do not apply.
+				unverified.append({"item": entry["path"], "reason": "tests_file_names_ignored"})
 		affected = []
 	for entry in affected:
 		path = entry["path"]
@@ -593,9 +622,17 @@ def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 					unverified.append({"item": path, "reason": "pytest_unavailable"})
 				else:
 					targets = [f"{path}::{name}" for name in names] or [path]
-					units.append({"id": path, "file": path, "argv": ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets], "kind": "test"})
+					unit = {"id": path, "file": path, "argv": ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets], "kind": "test"}
+					if names and "tests_file" in (entry.get("reasons") or []):
+						# Named `--tests-only` targets: a node missing on the
+						# baseline is not evidence the failure is inherited.
+						unit["tests_file_nodes"] = True
+					units.append(unit)
 			else:
 				units.append({"id": path, "file": path, "argv": ["python3", path], "kind": "test"})
+				if names and "tests_file" in (entry.get("reasons") or []):
+					# `python3 <file>` takes no test names: the whole file runs.
+					unverified.append({"item": path, "reason": "tests_file_names_ignored"})
 		elif path.endswith(".sh"):
 			units.append({"id": path, "file": path, "argv": ["bash", path], "kind": "test"})
 		elif re.search(r"\.(?:js|jsx|ts|tsx|mjs|cjs)$", path) and node:
@@ -706,6 +743,27 @@ def failing_names(tail: str) -> list[str]:
 	return unique[:50]
 
 
+def error_node_names(tail: str) -> list[str]:
+	"""Node IDs from pytest `ERROR path::node` summary lines (setup/teardown errors).
+
+	failing_names() parses FAILED lines only. Inherited entries carry no tail, so
+	these names are the only record of which listed nodes errored. They come
+	from the tested tree's output only and prove nothing about the baseline.
+	Only lines after the last "short test summary info" banner count (captured
+	output printed earlier is ignored); without the banner nothing is returned.
+	"""
+	unique: list[str] = []
+	lines = tail.splitlines()
+	banner = [index for index, line in enumerate(lines) if "short test summary info" in line]
+	for line in lines[banner[-1] + 1:] if banner else []:
+		match = _ERROR_NODE_RE.match(re.sub(r"^\d{4}-\d{2}-\d{2}T\S+\s+", "", line))
+		if match:
+			name = _sanitize_name(match.group(1))
+			if name and name not in unique:
+				unique.append(name)
+	return unique[:50]
+
+
 def _static_findings(tool: str, files: list[str], cwd: Path, deadline: float) -> list[tuple[str, str, str]] | None:
 	"""(file, code, message) per finding of one static tool on `files` in `cwd`.
 
@@ -802,11 +860,37 @@ def classify_baseline(
 	inherited_ids: set[str] = set()
 	rerun = [unit for unit in failed if unit.get("kind") != "static" and (unit.get("file") is None or (baseline / unit["file"]).is_file())]
 	if rerun:
+		pr_rcs = {unit["id"]: unit.get("rc") for unit in rerun}
 		reran = run_units(rerun, baseline, deadline, shards)
 		baseline_statuses = {unit["id"]: unit.get("status") for unit in reran}
+		baseline_rcs = {unit["id"]: unit.get("rc") for unit in reran}
+		ambiguous_ids: set[str] = set()
 		for unit in rerun:
 			unit["baseline_status"] = baseline_statuses.get(unit["id"])
-		inherited_ids = {unit["id"] for unit in reran if unit.get("status") == "fail"}
+			# Named `--tests-only` nodes cannot be compared when a 4/5 exit hides
+			# results: in a merged multi-name unit a 4/5 on either tree means its
+			# other nodes never ran there, and a node missing on this change's tree
+			# only never ran here. Report it unverified (baseline_error), not caused
+			# or inherited. A single node missing on the baseline only stays caused,
+			# and a single node missing on both trees stays inherited.
+			pr_missing = pr_rcs.get(unit["id"]) in (4, 5)
+			base_missing = baseline_rcs.get(unit["id"]) in (4, 5)
+			multi_node = sum(1 for arg in unit.get("argv", []) if "::" in arg) > 1
+			if unit.get("tests_file_nodes") and (
+				(multi_node and (pr_missing or base_missing)) or (pr_missing and not base_missing)
+			):
+				unit["baseline_status"] = "error"
+				ambiguous_ids.add(unit["id"])
+		# pytest exits 4 (node not found) or 5 (nothing collected) when a named
+		# `--tests-only` test does not exist on the baseline, for example a test
+		# the change added. That is not an inherited failure. A node missing on
+		# both trees (4/5 on the PR tree too) is still inherited for single-name units.
+		inherited_ids = {
+			unit["id"] for unit in reran
+			if unit.get("status") == "fail" and not (
+				unit.get("tests_file_nodes") and unit.get("rc") in (4, 5) and pr_rcs.get(unit["id"]) not in (4, 5)
+			) and unit["id"] not in ambiguous_ids
+		}
 	if repo is not None:
 		for unit in failed:
 			if unit.get("kind") != "static":
@@ -844,19 +928,187 @@ def assertion_diff(repo: Path, baseline: Path, changed: list[str]) -> list[dict]
 	return findings
 
 
+def _read_target_file(path: str | Path) -> list[str] | None:
+	"""Raw lines of a target file (at most 64 KiB), or None when unreadable."""
+	try:
+		target = Path(path)
+		if target.is_symlink() or not target.is_file() or target.stat().st_size > 65536:
+			return None
+		return target.read_text(encoding="utf-8", errors="replace").splitlines()
+	except OSError:
+		return None
+
+
+def _parse_targets(lines: list[str], repo: Path, label: str) -> tuple[list[tuple[str, str, str]], list[dict]]:
+	"""((target, path, name) per valid target, unverified items).
+
+	A target is ``path[::name]``: a safe relative path of a regular,
+	non-symlink file inside ``repo``. Blank and ``#`` lines are skipped; after
+	MAX_EXPLICIT_TARGETS targets the rest are dropped.
+	"""
+	root = repo.resolve()
+	targets: list[tuple[str, str, str]] = []
+	unverified: list[dict] = []
+	seen: set[str] = set()
+	count = 0
+	for raw in lines:
+		line = raw.strip()
+		if not line or line.startswith("#") or line in seen:
+			continue
+		if count >= MAX_EXPLICIT_TARGETS:
+			unverified.append({"item": label, "reason": "too_many_targets"})
+			break
+		count += 1
+		seen.add(line)
+		rel, sep, name = line.partition("::")
+		item = _sanitize_name(line)
+		if (not _TARGET_PATH_RE.match(rel) or rel.startswith("/") or any(part in ("", ".", "..") for part in rel.split("/"))
+				or (sep and not _TARGET_NAME_RE.match(name))):
+			unverified.append({"item": item, "reason": "tests_file_invalid"})
+			continue
+		full = repo / rel
+		if not full.exists() and not full.is_symlink():
+			unverified.append({"item": item, "reason": "tests_file_missing"})
+			continue
+		if full.is_symlink() or not full.is_file() or not _inside(full, root) or full.resolve() != root / rel:
+			unverified.append({"item": item, "reason": "tests_file_invalid"})
+			continue
+		targets.append((line, rel, name))
+	return targets, unverified
+
+
+def _merge_explicit_tests(selection: dict, targets: list[tuple[str, str, str]]) -> dict:
+	"""Add explicit targets to selection["affected_tests"] (no select_tests).
+
+	Names of one path are unioned; a whole-file target, or a path already
+	selected as a whole file, runs the whole file.
+	"""
+	affected = selection.setdefault("affected_tests", [])
+	by_path = {entry.get("path"): entry for entry in affected if isinstance(entry, dict)}
+	wanted: dict[str, list[str] | None] = {}
+	for _target, path, name in targets:
+		if not name:
+			wanted[path] = None
+		elif path not in wanted:
+			wanted[path] = [name]
+		elif wanted[path] is not None and name not in wanted[path]:
+			wanted[path].append(name)
+	for path, names in wanted.items():
+		entry = by_path.get(path)
+		if entry is None:
+			entry = {"path": path, "reasons": ["explicit"]}
+			if names:
+				entry["functions"] = list(names)
+			affected.append(entry)
+			by_path[path] = entry
+			continue
+		reasons = entry.setdefault("reasons", [])
+		if "explicit" not in reasons:
+			reasons.append("explicit")
+		existing = entry.get("functions")
+		if not existing or names is None:
+			entry.pop("functions", None)
+		else:
+			entry["functions"] = list(existing) + [n for n in names if n not in existing]
+	return selection
+
+
+def _name_failed(name: str, path: str, failing: list[str]) -> bool:
+	for failed in failing:
+		bare = re.sub(r"\[.*\]$", "", failed)
+		for candidate in (failed, bare):
+			if candidate == name or candidate == f"{path}::{name}" or candidate.endswith("::" + name):
+				return True
+	return False
+
+
+def _target_status(unit_results: list[dict], path: str, name: str) -> str:
+	"""pass | fail | unverified for one explicit target on one tree."""
+	by_id = {r.get("id"): r for r in unit_results if r.get("kind") == "test"}
+	unit = by_id.get(path) or by_id.get("prepush_test_command")
+	if unit is None:
+		return "unverified"
+	status = unit.get("status")
+	if status == "pass":
+		return "pass"
+	if status != "fail":
+		return "unverified"
+	failing = failing_names(unit.get("tail", ""))
+	if name and failing and not _name_failed(name, path, failing):
+		return "pass"
+	return "fail"
+
+
+def _baseline_target_statuses(
+	repo: Path,
+	baseline: Path | None,
+	targets: list[tuple[str, str, str]],
+	deadline: float,
+	shards: int,
+) -> dict[str, dict]:
+	"""{target: {"base": ..., "base_reason"?: ...}} for red-on-base targets."""
+	out: dict[str, dict] = {}
+	if baseline is None or not baseline.is_dir():
+		return {target: {"base": "unverified"} for target, _path, _name in targets}
+	present: list[tuple[str, str, str]] = []
+	for target, path, name in targets:
+		base_file = baseline / path
+		if base_file.is_symlink() or not base_file.is_file():
+			out[target] = {"base": "not_run", "base_reason": "absent_on_base"}
+		else:
+			present.append((target, path, name))
+	if present:
+		base_selection = _merge_explicit_tests({"affected_tests": []}, present)
+		units, _unverified = plan_units(repo, base_selection)
+		units = [unit for unit in units if unit.get("kind") == "test"]
+		# The caller passes the floored deadline it gave classify_baseline (one
+		# BASELINE_MIN_SECS window); past it these targets are "unverified".
+		reran = run_units(units, baseline, deadline, shards) if units else []
+		for target, path, name in present:
+			out[target] = {"base": _target_status(reran, path, name)}
+	return out
+
+
 def run_gate(
 	repo: Path,
 	selection: dict,
 	baseline: Path | None = None,
 	timeout_minutes: int | None = None,
 	shards: int | None = None,
+	explicit_tests: list[str] | None = None,
+	expect_baseline_fail: list[str] | None = None,
 ) -> dict:
 	repo = repo.resolve()
 	timeout_minutes = timeout_minutes or _int_env("PREPUSH_TEST_GATE_TIMEOUT_MINUTES", DEFAULT_TIMEOUT_MINUTES, 1, 360)
 	shards = shards or _int_env("PREPUSH_TEST_GATE_SHARDS", DEFAULT_SHARDS, 1, 64)
 	start = time.monotonic()
 	deadline = start + timeout_minutes * 60
+	# Validated `run --tests-only` lines (tests_file_selection; absent otherwise).
+	listed_tests = selection.get("tests_file_targets")
+	acceptance_requested = explicit_tests is not None or expect_baseline_fail is not None or listed_tests is not None
+	selected_count = len(selection.get("affected_tests", []))
+	target_unverified: list[dict] = []
+	head_targets: list[tuple[str, str, str]] = []
+	base_targets: list[tuple[str, str, str]] = []
+	if acceptance_requested:
+		head_targets, target_unverified = _parse_targets(list(explicit_tests or []), repo, "tests_file")
+		base_targets, base_unverified = _parse_targets(list(expect_baseline_fail or []), repo, "expect_baseline_fail_file")
+		known = {target for target, _path, _name in head_targets}
+		head_targets += [t for t in base_targets if t[0] not in known]
+		target_unverified += [u for u in base_unverified if u not in target_unverified]
+		selection = _merge_explicit_tests(selection, head_targets)
+		# `run --tests-only` lines are the selection already and were validated
+		# by parse_tests_file: they are only scored here, never re-parsed, so a
+		# rejected line is reported once, by line number, without its text.
+		known = {target for target, _path, _name in head_targets}
+		for line in (listed_tests or [])[:MAX_EXPLICIT_TARGETS]:
+			if line not in known:
+				path, _sep, name = line.partition("::")
+				head_targets.append((line, path, name))
+				known.add(line)
 	units, unverified = plan_units(repo, selection)
+	# Lines of a `run --tests-only` list that were not run (absent otherwise).
+	unverified = [*selection.get("tests_file_rejected", []), *target_unverified, *unverified]
 	results = run_units(units, repo, deadline, shards)
 	ran = [r for r in results if r.get("status") in ("pass", "fail")]
 	for r in results:
@@ -868,7 +1120,10 @@ def run_gate(
 	# The baseline re-run gets at least BASELINE_MIN_SECS even when the main
 	# run used the whole budget, so a late failure can still be confirmed as
 	# inherited (the container wrapper allows 120 s past the budget).
-	pr_caused, inherited = classify_baseline(failed, baseline, max(deadline, time.monotonic() + BASELINE_MIN_SECS), shards, repo)
+	# One floored deadline shared with the done-check re-run below, so both
+	# baseline re-runs stay inside one BASELINE_MIN_SECS window.
+	baseline_deadline = max(deadline, time.monotonic() + BASELINE_MIN_SECS)
+	pr_caused, inherited = classify_baseline(failed, baseline, baseline_deadline, shards, repo)
 	# A failure whose baseline re-run did not finish is unverified, not caused
 	# by the change: a slow test that fails on both trees would otherwise
 	# trigger a repair turn and a second full gate run (release v1.40.3).
@@ -879,6 +1134,16 @@ def run_gate(
 			# Keep the PR-side failing test names (not the tail) for diagnosis.
 			unverified.append({"item": r["id"], "reason": f"baseline_{r['baseline_status']}", "names": failing_names(r.get("tail", ""))})
 	changed_assertions = assertion_diff(repo, baseline, selection.get("changed_files", [])) if baseline is not None and baseline.is_dir() else []
+	acceptance: dict[str, dict] = {}
+	if acceptance_requested:
+		# A base result is scored only when the head run passed, so skip the
+		# baseline re-run for red-on-base targets that already fail on head.
+		base_targets = [t for t in base_targets if _target_status(results, t[1], t[2]) == "pass"]
+		base_statuses = _baseline_target_statuses(repo, baseline, base_targets, baseline_deadline, shards) if base_targets else {}
+		for target, path, name in head_targets:
+			entry = {"head": _target_status(results, path, name), "base": "not_run"}
+			entry.update(base_statuses.get(target, {}))
+			acceptance[target] = entry
 	if pr_caused:
 		status = "fail"
 	elif not units and not unverified:
@@ -892,12 +1157,15 @@ def run_gate(
 		"status": status,
 		"ran": [r["id"] for r in ran],
 		"failures": [{"test": r["id"], "file": r.get("file"), "names": failing_names(r.get("tail", "")), "tail": r.get("tail", "")} for r in pr_caused],
-		"inherited": [{"test": r["id"], "file": r.get("file"), "names": failing_names(r.get("tail", ""))} for r in inherited],
+		"inherited": [{"test": r["id"], "file": r.get("file"), "names": failing_names(r.get("tail", "")),
+			"error_names": error_node_names(r.get("tail", ""))} for r in inherited],
 		"unverified": unverified,
 		"changed_assertions": changed_assertions,
-		"selected": len(selection.get("affected_tests", [])),
+		"selected": selected_count,
 		"elapsed_secs": round(time.monotonic() - start, 2),
 	}
+	if acceptance_requested:
+		result["acceptance"] = acceptance
 	log(phase="run", outcome=status, selected=result["selected"], ran=len(ran), failures=len(pr_caused), inherited=len(inherited), unverified=len(unverified))
 	return result
 
@@ -1359,6 +1627,125 @@ def _selection_from_args(args: argparse.Namespace) -> dict:
 	return select_tests(repo, parse_changes(lines), planned=bool(args.paths_file))
 
 
+def _tests_file_path_reason(repo: Path, path: str) -> str:
+	"""Reason a `--tests-only` path is rejected, or "" when it is a test file in `repo`."""
+	if path.startswith("/") or "\\" in path or _TESTS_FILE_DRIVE_RE.match(path):
+		return "tests_file_absolute_path"
+	segments = path.split("/")
+	if ".." in segments:
+		return "tests_file_parent_traversal"
+	# A segment starting with `-` could be read as a pytest or python option.
+	if any(segment in ("", ".") or segment.startswith("-") for segment in segments):
+		return "tests_file_invalid_path"
+	try:
+		resolved = (repo / path).resolve()
+	except (OSError, RuntimeError):
+		return "tests_file_outside_repo"
+	if not _inside(resolved, repo):
+		return "tests_file_outside_repo"
+	if not resolved.is_file():
+		return "tests_file_missing"
+	if not is_test_file(path):
+		return "tests_file_not_test_file"
+	return ""
+
+
+def parse_tests_file(repo: Path, text: str, accepted: list[str] | None = None) -> tuple[list[dict], list[dict]]:
+	"""(affected_tests, rejected) from a `run --tests-only` list.
+
+	One ``path[::name]`` per line; blank lines and ``#`` comments are skipped.
+	The entries have the shape select_tests returns (``functions`` empty runs
+	the whole file). Rejected lines are reported by line number only, never
+	with their text. ``accepted``, when given, receives each valid line once,
+	in file order (the done-check ``acceptance`` keys, issue #8427 P3).
+	"""
+	repo = repo.resolve()
+	merged: dict[str, dict] = {}
+	rejected: list[dict] = []
+	count = 0
+	for number, raw in enumerate(text.split("\n"), start=1):
+		line = raw.strip()
+		if not line or line.startswith("#"):
+			continue
+		# strip() drops edge control and Unicode whitespace (\t, \f, \x85, \u2028, ...)
+		# that the regex may not cover; anything but spaces and a trailing CR rejects.
+		edge_control = raw.rstrip("\r").strip(" ") != line
+		if count >= MAX_TESTS_FILE_ENTRIES:
+			rejected.append({"item": "tests_file", "reason": "tests_file_too_many_entries"})
+			break
+		count += 1
+		path, separator, name = line.partition("::")
+		if len(line) > MAX_TESTS_FILE_LINE:
+			reason = "tests_file_line_too_long"
+		elif edge_control or _TESTS_FILE_CONTROL_RE.search(line):
+			reason = "tests_file_control_character"
+		else:
+			reason = _tests_file_path_reason(repo, path)
+			if not reason and separator and not _TESTS_FILE_NAME_RE.fullmatch(name):
+				reason = "tests_file_invalid_name"
+			elif not reason and separator and not path.endswith(".py"):
+				# Only Python units take test names; other runners get the path.
+				reason = "tests_file_name_unsupported"
+		if reason:
+			rejected.append({"item": f"tests_file:line{number}", "reason": reason})
+			continue
+		if accepted is not None and line not in accepted:
+			accepted.append(line)
+		entry = merged.setdefault(path, {"whole": False, "names": []})
+		if not separator:
+			entry["whole"] = True
+		elif name not in entry["names"]:
+			entry["names"].append(name)
+	affected = [
+		{"path": path, "reasons": ["tests_file"], "functions": [] if entry["whole"] else list(entry["names"])}
+		for path, entry in sorted(merged.items())
+	]
+	return affected, rejected
+
+
+def tests_file_selection(repo: Path, tests_file: str, changed_files: list[str]) -> dict:
+	"""Selection for `run --tests-only`: the listed tests only, select_tests is not called."""
+	repo = repo.resolve()
+	affected: list[dict] = []
+	rejected: list[dict] = []
+	accepted: list[str] = []
+	try:
+		with open(tests_file, "rb") as handle:
+			data = handle.read(MAX_TESTS_FILE_BYTES + 1)
+	except OSError:
+		data = None
+		rejected = [{"item": "tests_file", "reason": "tests_file_unreadable"}]
+	if data is not None:
+		if len(data) > MAX_TESTS_FILE_BYTES:
+			rejected = [{"item": "tests_file", "reason": "tests_file_too_large"}]
+		else:
+			try:
+				text = data.decode("utf-8")
+			except UnicodeDecodeError:
+				rejected = [{"item": "tests_file", "reason": "tests_file_unreadable"}]
+			else:
+				affected, rejected = parse_tests_file(repo, text, accepted)
+	log(phase="tests_file", outcome="rejected" if rejected else "loaded", entries=len(affected), rejected=len(rejected))
+	return {
+		"changed_files": sorted(changed_files),
+		"affected_tests": affected,
+		"companion_files": [],
+		"registry_checks": [],
+		"static_checks": [],
+		"tests_file_rejected": rejected,
+		"tests_file_targets": accepted,
+	}
+
+
+def _changes_from_args(args: argparse.Namespace) -> dict[str, str]:
+	"""Changed files for `run --tests-only` (they feed only changed_files)."""
+	repo = Path(args.repo_root).resolve()
+	if args.base:
+		return changes_from_base(repo, args.base)[0]
+	source = args.paths_file or args.changed_files_file
+	return parse_changes(Path(source).read_text(encoding="utf-8").splitlines())
+
+
 def _add_inputs(parser: argparse.ArgumentParser) -> None:
 	parser.add_argument("--repo-root", default=".")
 	group = parser.add_mutually_exclusive_group(required=True)
@@ -1380,6 +1767,9 @@ def main(argv: list[str] | None = None) -> int:
 	run_parser.add_argument("--shards", type=int)
 	run_parser.add_argument("--out")
 	run_parser.add_argument("--summary")
+	run_parser.add_argument("--tests-file")
+	run_parser.add_argument("--tests-only")
+	run_parser.add_argument("--expect-baseline-fail-file")
 	diff_parser = sub.add_parser("assertion-diff")
 	diff_parser.add_argument("--repo-root", default=".")
 	diff_parser.add_argument("--baseline-tree", required=True)
@@ -1399,7 +1789,10 @@ def main(argv: list[str] | None = None) -> int:
 		changed = list(parse_changes(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines()))
 		print(json.dumps(assertion_diff(Path(args.repo_root).resolve(), Path(args.baseline_tree), changed), indent=2))
 		return 0
-	selection = _selection_from_args(args)
+	if args.command == "run" and args.tests_only is not None:
+		selection = tests_file_selection(Path(args.repo_root), args.tests_only, list(_changes_from_args(args)))
+	else:
+		selection = _selection_from_args(args)
 	if args.command == "select":
 		text = json.dumps(selection, indent=2)
 		if args.out:
@@ -1410,7 +1803,27 @@ def main(argv: list[str] | None = None) -> int:
 	timeout = args.timeout_minutes if args.timeout_minutes and 0 < args.timeout_minutes <= 360 else None
 	shards = args.shards if args.shards and 0 < args.shards <= 64 else None
 	baseline = Path(args.baseline_tree) if args.baseline_tree else None
-	result = run_gate(Path(args.repo_root), selection, baseline, timeout, shards)
+	# Explicit done-check targets (issue #8427, P3): absent options keep the
+	# run and its result exactly as before. `--tests-file` adds its targets to
+	# the selection. The `--tests-only` list was read and validated by
+	# tests_file_selection above (issue #8461); run_gate scores its accepted
+	# lines, so it is not read a second time here.
+	target_lists: dict[str, list[str]] = {}
+	unreadable: list[str] = []
+	for key, option in (("tests_file", args.tests_file), ("expect_baseline_fail_file", args.expect_baseline_fail_file)):
+		if option:
+			lines = _read_target_file(option)
+			if lines is None:
+				unreadable.append(key)
+			target_lists[key] = lines or []
+	if target_lists:
+		result = run_gate(Path(args.repo_root), selection, baseline, timeout, shards,
+			explicit_tests=target_lists.get("tests_file", []), expect_baseline_fail=target_lists.get("expect_baseline_fail_file", []))
+		result["unverified"] += [{"item": key, "reason": "tests_file_unreadable"} for key in unreadable]
+		if unreadable and result["status"] in ("pass", "skipped"):
+			result["status"] = "unverified"
+	else:
+		result = run_gate(Path(args.repo_root), selection, baseline, timeout, shards)
 	text = json.dumps(result, indent=2)
 	if args.out:
 		Path(args.out).write_text(text + "\n", encoding="utf-8")

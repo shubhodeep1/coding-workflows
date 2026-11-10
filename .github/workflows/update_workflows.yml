@@ -106,22 +106,26 @@ jobs:
 
           # Clone only the workflow-templates and scripts directories (sparse checkout)
           TMPDIR=$(mktemp -d)
-          git clone --depth 1 --no-checkout \
+          # GH_PAT reaches git only through this one-shot credential helper, never
+          # through a remote URL or a written git config (SEC-001).
+          UPSTREAM_CRED_HELPER='!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GH_TOKEN}"; }; f'
+          upstream_git() { git -c credential.helper= -c "credential.helper=${UPSTREAM_CRED_HELPER}" -c core.hooksPath=/dev/null "$@"; }
+          upstream_git clone --depth 1 --no-checkout \
             --filter=blob:none --sparse \
-            "https://x-access-token:${GH_TOKEN}@github.com/${TEMPLATES_REPO}.git" \
+            "https://github.com/${TEMPLATES_REPO}.git" \
             "${TMPDIR}/upstream"
           cd "${TMPDIR}/upstream"
           # Fetch the release tag explicitly. A long-lived branch also named
           # stable exists, so --branch stable would leave the authoritative
           # source ambiguous during release preparation.
-          git fetch --force --no-tags --depth 1 origin "${TEMPLATES_REF}"
+          upstream_git fetch --force --no-tags --depth 1 origin "${TEMPLATES_REF}"
           UPSTREAM_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
-          git checkout --detach "${UPSTREAM_SHA}"
+          upstream_git checkout --detach "${UPSTREAM_SHA}"
           # In cone mode, repo-root files remain present alongside these
           # directory patterns, which keeps workflow-templates/CLAUDE.md
           # (a symlink to ../CLAUDE.md) readable without passing a bare
           # root-file argument here; modern git rejects that form.
-          git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}"
+          upstream_git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}"
           if [[ ! "${UPSTREAM_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::error::Resolved upstream stable ref is not a 40-character commit SHA."
             exit 1
@@ -278,8 +282,13 @@ jobs:
                   sys.exit(2)
           SYNC_VERIFY_PY
 
+          # GH_PAT reaches git only through this one-shot credential helper, never
+          # through a remote URL or a written git config (SEC-001).
+          UPSTREAM_CRED_HELPER='!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GH_TOKEN}"; }; f'
+          upstream_git() { git -c credential.helper= -c "credential.helper=${UPSTREAM_CRED_HELPER}" -c core.hooksPath=/dev/null "$@"; }
+
           # 1. The release version tag whose peeled commit is the fetched one.
-          TAG_LIST="$(git -C "${UPSTREAM_ROOT}" ls-remote --tags origin 'refs/tags/v*')" \
+          TAG_LIST="$(upstream_git -C "${UPSTREAM_ROOT}" ls-remote --tags origin 'refs/tags/v*')" \
             || reject ERR_SYNC_MANIFEST_NO_VERSION_TAG "detail=ls_remote_failed"
           SYNC_VERSION="$(printf '%s\n' "${TAG_LIST}" | while read -r tag_sha tag_ref; do
               [ "${tag_sha,,}" = "${UPSTREAM_SHA}" ] || continue
@@ -401,9 +410,14 @@ jobs:
           trap 'rm -rf "${WORK}"' EXIT
           MANIFEST="${WORK}/${ASSET_NAME}"
 
+          # GH_PAT reaches git only through this one-shot credential helper, never
+          # through a remote URL or a written git config (SEC-001).
+          UPSTREAM_CRED_HELPER='!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GH_TOKEN}"; }; f'
+          upstream_git() { git -c credential.helper= -c "credential.helper=${UPSTREAM_CRED_HELPER}" -c core.hooksPath=/dev/null "$@"; }
+
           # Release tag for UPSTREAM_SHA: git protocol on the existing clone
           # (no REST call). Peeled ^{} lines override annotated-tag objects.
-          if ! tag_refs="$(git -C "${UPSTREAM_ROOT}" ls-remote --tags origin 'refs/tags/v*' 2>/dev/null)"; then
+          if ! tag_refs="$(upstream_git -C "${UPSTREAM_ROOT}" ls-remote --tags origin 'refs/tags/v*' 2>/dev/null)"; then
             reject tag release_tag_missing
           fi
           TAG="$(printf '%s\n' "${tag_refs}" | awk -v want="${UPSTREAM_SHA}" '
@@ -1387,8 +1401,12 @@ jobs:
             # git protocol on the existing release clone (no REST call), the
             # same way the verify step does. Any failure leaves it unresolved.
             TAG_TEXT=""
+            # GH_PAT reaches git only through this one-shot credential helper, never
+            # through a remote URL or a written git config (SEC-001).
+            UPSTREAM_CRED_HELPER='!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GH_TOKEN}"; }; f'
+            upstream_git() { git -c credential.helper= -c "credential.helper=${UPSTREAM_CRED_HELPER}" -c core.hooksPath=/dev/null "$@"; }
             if TAG_ROOT="$(cd "${UPSTREAM_DIR:-/nonexistent}/.." 2>/dev/null && pwd -P)" \
-              && TAG_REFS="$(git -C "${TAG_ROOT}" ls-remote --tags origin 'refs/tags/v*' 2>/dev/null)"; then
+              && TAG_REFS="$(upstream_git -C "${TAG_ROOT}" ls-remote --tags origin 'refs/tags/v*' 2>/dev/null)"; then
               TAG_TEXT="$(printf '%s\n' "${TAG_REFS}" | awk -v want="${UPSTREAM_SHA}" '
                 NF >= 2 {
                   sha = tolower($1); ref = $2

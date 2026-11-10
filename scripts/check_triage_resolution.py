@@ -126,6 +126,24 @@ FAILED_JOB_CONCLUSIONS = ("failure", "timed_out")
 MAX_TRACEBACK_JOBS = 3
 MAX_EXCERPT_LINES = 120
 MAX_EXCERPT_BYTES = 12_000
+# Issue #8799: ranked excerpt anchors. The strongest failure signal wins: a
+# test-failure line, then the first step "##[error]" line (with the lines
+# before it), then a Python traceback, then TRACEBACK_START_RE as before.
+MAX_LOG_LINE_CHARS = 2000
+STEP_ERROR_AFTER_LINES = 5
+TEST_FAILURE_LEAD_LINES = 10
+TEST_FAILURE_RE = re.compile(
+	r"\bFAIL  [A-Za-z0-9_]+"
+	r"|(?:^|\s)FAIL\s+\S+\.(?:test|spec)\.[cm]?[jt]sx?\b"
+	r"|(?:^|\s)[\u00d7\u2717]\s+\S"
+	r"|\bAssertionError\b"
+	r"|(?:^|\s)not ok \d+"
+	r"|\bFAILED tests/"
+	r"|TEST_CASE_EVENT: .*\"status\":\s*\"fail\""
+)
+STEP_ERROR_RE = re.compile(r"##\[error\]")
+PY_TRACEBACK_RE = re.compile(r"Traceback \(most recent call last\)")
+EXCERPT_ANCHORS = ("test_failure", "step_error", "traceback", "legacy")
 GH_TIMEOUT_SECONDS = 120
 
 
@@ -740,14 +758,79 @@ def _fence(text: str) -> str:
 	return "`" * max(3, longest + 1)
 
 
-def _excerpt(filtered: str) -> str:
-	lines = filtered.split("\n")
-	start = next((index for index, line in enumerate(lines) if TRACEBACK_START_RE.search(line)), None)
-	if start is None:
-		return ""
+def _cap_long_lines(text: str) -> str:
+	"""Cut every line over MAX_LOG_LINE_CHARS characters (issue #8799).
+
+	A local copy of the collector's rule and marker: clarify stages only listed
+	helper files, so this module cannot import the collector.
+	"""
+	capped = []
+	for line in text.split("\n"):
+		if len(line) > MAX_LOG_LINE_CHARS:
+			line = line[:MAX_LOG_LINE_CHARS] + f" [\u2026 {len(line) - MAX_LOG_LINE_CHARS} chars truncated]"
+		capped.append(line)
+	return "\n".join(capped)
+
+
+def _first_match(lines: list[str], pattern: re.Pattern[str]) -> int | None:
+	return next((index for index, line in enumerate(lines) if pattern.search(line)), None)
+
+
+def _forward_window(lines: list[str], start: int) -> str:
 	excerpt = "\n".join(lines[start:start + MAX_EXCERPT_LINES])
 	encoded = excerpt.encode("utf-8")[:MAX_EXCERPT_BYTES]
 	return encoded.decode("utf-8", errors="ignore")
+
+
+def _step_error_window(lines: list[str], index: int) -> str:
+	"""MAX_EXCERPT_LINES lines ending at the step error plus up to STEP_ERROR_AFTER_LINES, trimmed
+	from the front to MAX_EXCERPT_BYTES; the error line itself always survives."""
+	after = min(STEP_ERROR_AFTER_LINES, len(lines) - index - 1)
+	before = lines[max(0, index + 1 - MAX_EXCERPT_LINES):index]
+	error_line = lines[index]
+	trailing = lines[index + 1:index + 1 + after]
+	while trailing and len("\n".join([error_line, *trailing]).encode("utf-8")) > MAX_EXCERPT_BYTES:
+		trailing.pop()
+	if len(error_line.encode("utf-8")) > MAX_EXCERPT_BYTES:
+		return error_line.encode("utf-8")[-MAX_EXCERPT_BYTES:].decode("utf-8", errors="ignore")
+	window = [error_line, *trailing]
+	used = len("\n".join(window).encode("utf-8"))
+	lead: list[str] = []
+	for line in reversed(before):
+		cost = len(line.encode("utf-8")) + 1
+		if used + cost > MAX_EXCERPT_BYTES:
+			break
+		lead.append(line)
+		used += cost
+	lead.reverse()
+	return "\n".join(lead + window)
+
+
+def _excerpt_with_anchor(filtered: str) -> tuple[str, str]:
+	"""(excerpt, anchor) for the strongest failure signal; ("", "") if none."""
+	lines = filtered.split("\n")
+	index = _first_match(lines, TEST_FAILURE_RE)
+	if index is not None:
+		start = max(0, index - TEST_FAILURE_LEAD_LINES)
+		# Drop lead lines until the matched failure line fits MAX_EXCERPT_BYTES,
+		# so long lead lines can never push it out of the excerpt.
+		while start < index and len("\n".join(lines[start:index + 1]).encode("utf-8")) > MAX_EXCERPT_BYTES:
+			start += 1
+		return _forward_window(lines, start), "test_failure"
+	index = _first_match(lines, STEP_ERROR_RE)
+	if index is not None:
+		return _step_error_window(lines, index), "step_error"
+	index = _first_match(lines, PY_TRACEBACK_RE)
+	if index is not None:
+		return _forward_window(lines, index), "traceback"
+	index = _first_match(lines, TRACEBACK_START_RE)
+	if index is not None:
+		return _forward_window(lines, index), "legacy"
+	return "", ""
+
+
+def _excerpt(filtered: str) -> str:
+	return _excerpt_with_anchor(filtered)[0]
 
 
 def _actions_job_log(repo: str, job_id: int) -> Any:
@@ -786,12 +869,16 @@ def fetch_failing_tracebacks(repo: str, failed_jobs: list[dict[str, Any]]) -> li
 			continue
 		if not isinstance(log_text, str) or not log_text:
 			continue
-		filtered = heal.filter_log(log_text)
+		# Redact the full text before any line is cut, so a cut can never leave
+		# a partial token that no longer matches a redaction shape (#8799).
+		filtered = heal.filter_log(_cap_long_lines(heal.redact_secrets(log_text)))
 		tests = heal.extract_failing_tests(filtered)
-		excerpt = _excerpt(filtered)
+		excerpt, anchor = _excerpt_with_anchor(filtered)
 		if not excerpt and not tests.get("names") and not tests.get("files"):
 			continue
-		results.append({"id": job["id"], "name": job.get("name", ""), "tests": tests, "excerpt": excerpt})
+		results.append({
+			"id": job["id"], "name": job.get("name", ""), "tests": tests, "excerpt": excerpt, "excerpt_anchor": anchor,
+		})
 	return results
 
 
@@ -873,6 +960,9 @@ def render_traceback_comment(issue_number: int, traceback: dict[str, Any], reaso
 			lines.append(f"- **{label}:** " + ", ".join(f"`{value}`" for value in values))
 	excerpt = _neutralize(traceback.get("excerpt") or "")
 	if excerpt:
+		anchor = traceback.get("excerpt_anchor")
+		if anchor in EXCERPT_ANCHORS:
+			lines.append(f"- **Excerpt anchor:** `{anchor}`")
 		fence = _fence(excerpt)
 		lines += ["", fence + "text", excerpt, fence]
 	lines += ["", f"<!-- ai:check-triage-traceback:v1 issue={issue_number} job={traceback['id']} -->"]
