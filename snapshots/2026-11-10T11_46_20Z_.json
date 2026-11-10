@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-09T06:00:56Z",
+  "tick_at": "2026-11-10T11:46:20Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,18 +11,18 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 3
+    "tracking_issues": 4
   },
   "tracking_issues": [
     {
       "current_wave": 16,
-      "integration_ahead_by": "158",
+      "integration_ahead_by": "175",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 1,
+        "merged": 2,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -30,20 +30,20 @@
       },
       "number": 8291,
       "project_complete": false,
-      "status": "in-progress",
+      "status": "waiting",
       "title": "[Orchestrator] Unattended pipeline: remove stuck states (plan P2a-P13 remainder)",
       "total_waves": 20,
-      "wave_complete": false
+      "wave_complete": true
     },
     {
       "current_wave": 4,
-      "integration_ahead_by": "28",
+      "integration_ahead_by": "45",
       "issue_counts": {
         "closed": 0,
         "done": 1,
         "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
+        "in_progress": 1,
+        "merged": 2,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -57,25 +57,46 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "1",
+      "current_wave": 3,
+      "integration_ahead_by": "19",
       "issue_counts": {
         "closed": 0,
-        "done": 2,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 1,
-        "merged": 1,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 9099,
+      "number": 9116,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-10-08.md",
+      "title": "[Orchestrator] Analysis findings: report delivery via PR, consumer coverage, collection checks, purge safety, findings checked first",
       "total_waves": 3,
       "wave_complete": false
+    },
+    {
+      "current_wave": 1,
+      "integration_ahead_by": "10",
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 2,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 9169,
+      "project_complete": false,
+      "status": "waiting",
+      "title": "[Orchestrator] Run CI-failure re-issues on the branch that holds the failing code, and give the implement sandbox a Solidity compiler",
+      "total_waves": 1,
+      "wave_complete": true
     }
   ]
 }
