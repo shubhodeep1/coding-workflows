@@ -805,11 +805,21 @@ def test_static_context_marker_is_advertised():
 DEFAULT_IMAGE_ARGS = ["--build-arg", "CODEX_VERSION=v0.114.0"]
 
 
-def _image_context(tmp_path, engine="codex", solc=None, name="ctx"):
+def _fake_uname(bin_dir, machine="x86_64"):
+	"""Pin `uname -m` for the helper, so solc tests do not depend on the host architecture."""
+	bin_dir.mkdir(parents=True, exist_ok=True)
+	target = bin_dir / "uname"
+	target.write_text(f"#!/bin/sh\nprintf '%s\\n' '{machine}'\n")
+	target.chmod(0o755)
+	return bin_dir
+
+
+def _image_context(tmp_path, engine="codex", solc=None, name="ctx", machine="x86_64"):
 	out = tmp_path / f"{name}-{engine}"
 	out.mkdir()
 	env = {k: v for k, v in os.environ.items() if k != "SANDBOX_SOLC_VERSIONS"}
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env["PATH"] = f"{_fake_uname(tmp_path / f'uname-{name}-{engine}', machine)}:{os.environ['PATH']}"
 	if solc is not None:
 		env["SANDBOX_SOLC_VERSIONS"] = solc
 	proc = subprocess.run(
@@ -886,6 +896,7 @@ def test_solc_versions_are_deduplicated_and_capped_after_dedupe(tmp_path):
 
 def test_solc_build_arg_is_forwarded_only_when_opted_in(sandbox, claude_engine):
 	write_fake_codex(sandbox)
+	_fake_uname(sandbox["bin"])
 	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS)
 	assert proc.returncode == 0, proc.stderr
 	(default_build,) = builds_of(sandbox)
@@ -1012,3 +1023,17 @@ def test_solc_install_reports_write_failure(tmp_path, monkeypatch, capsys):
 	assert module.main(["solc_install.py", "0.8.24"]) == 1
 	err = capsys.readouterr().err
 	assert "outcome=write_failed" in err and "outcome=fetch_failed" not in err
+	assert "solc_install version=0.8.24 outcome=write_failed" in err
+
+
+def test_non_x86_64_runner_warns_and_builds_without_solc(tmp_path):
+	probe = _fake_uname(tmp_path / "uname-probe", "aarch64")
+	seen = subprocess.run(["bash", "-c", "uname -m"], capture_output=True, text=True,
+		env={**os.environ, "PATH": f"{probe}:{os.environ['PATH']}"}).stdout.strip()
+	if seen != "aarch64":
+		pytest.skip("fake binaries cannot execute from tmp_path here (noexec mount)")
+	default, _ = _image_context(tmp_path, "codex", None, "default")
+	context, proc = _image_context(tmp_path, "codex", "0.8.24", "arm", machine="aarch64")
+	assert "::warning::CODEX_ISOLATION solc_versions_invalid reason=unsupported_arch" in proc.stderr
+	assert sorted(p.name for p in context.iterdir()) == ["Dockerfile"]
+	assert (context / "Dockerfile").read_bytes() == (default / "Dockerfile").read_bytes()

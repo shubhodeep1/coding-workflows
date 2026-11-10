@@ -86,8 +86,9 @@
 #       official linux-amd64/list.json (a mismatch fails the build), as
 #       /usr/local/bin/solc-<version> (/usr/local/bin/solc = the first one)
 #       and in a Hardhat compilers-v2 cache that the container links into
-#       $HOME/.cache at start. An invalid value warns and builds without
-#       solc. Empty or invalid, the image context and build args are
+#       $HOME/.cache at start. An invalid value, or a runner that is not
+#       x86_64 (reason=unsupported_arch), warns and builds without solc.
+#       Empty, invalid or skipped, the image context and build args are
 #       unchanged, so the prebuilt image hashes are too. Read by run,
 #       prepare, image and image-context.
 #   codex_isolated_exec.sh cleanup --root DIR
@@ -378,20 +379,25 @@ def install(versions, list_bytes, fetch_fn):
 		if not is_amd64_elf(data):
 			raise InstallError(version, "not_amd64_elf")
 		staged.append((version, path, data))
+	current = "-"
 	try:
 		os.makedirs(HARDHAT_DIR, mode=0o755, exist_ok=True)
 		os.chmod(HARDHAT_DIR, 0o755)
 		os.makedirs(BIN_DIR, mode=0o755, exist_ok=True)
 		for version, path, data in staged:
+			current = version
 			write_atomic(os.path.join(HARDHAT_DIR, path), data, 0o755)
+		current = "-"
 		write_atomic(os.path.join(HARDHAT_DIR, "list.json"), list_bytes, 0o644)
 		for index, (version, path, _data) in enumerate(staged):
+			current = version
 			binary = os.path.join(HARDHAT_DIR, path)
 			link_atomic(binary, os.path.join(BIN_DIR, "solc-" + version))
 			if index == 0:
 				link_atomic(binary, os.path.join(BIN_DIR, "solc"))
 	except OSError:
-		raise InstallError("-", "write_failed")
+		# Name the version whose write or link failed ("-" for the shared steps).
+		raise InstallError(current, "write_failed")
 	for version, _path, _data in staged:
 		log(version, "ok")
 
