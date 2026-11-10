@@ -190,7 +190,13 @@ sandbox_solc_resolve_versions()
 	sandbox_solc_raw="${sandbox_solc_raw//,/ }"
 	sandbox_solc_raw="${sandbox_solc_raw//$'\n'/ }"
 	read -r -a sandbox_solc_tokens <<< "${sandbox_solc_raw}" || true
-	[ "${#sandbox_solc_tokens[@]}" -gt 0 ] || return 0
+	if [ "${#sandbox_solc_tokens[@]}" -eq 0 ]; then
+		# Separator-only values (e.g. ",,,") are malformed, not unset.
+		if [[ "${SANDBOX_SOLC_VERSIONS:-}" =~ [^[:space:]] ]]; then
+			echo "::warning::CODEX_ISOLATION solc_versions_invalid reason=format; building the sandbox image without solc" >&2
+		fi
+		return 0
+	fi
 	for sandbox_solc_token in "${sandbox_solc_tokens[@]}"; do
 		if ! [[ "${sandbox_solc_token}" =~ ^0\.[0-9]{1,2}\.[0-9]{1,3}$ ]]; then
 			sandbox_solc_reason="format"
@@ -206,6 +212,12 @@ sandbox_solc_resolve_versions()
 	fi
 	if [ -n "${sandbox_solc_reason}" ]; then
 		echo "::warning::CODEX_ISOLATION solc_versions_invalid reason=${sandbox_solc_reason}; building the sandbox image without solc" >&2
+		return 0
+	fi
+	# The official static binaries are linux-amd64 only; another runner
+	# architecture builds without solc instead of failing every image build.
+	if [ "$(uname -m 2>/dev/null)" != "x86_64" ]; then
+		echo "::warning::CODEX_ISOLATION solc_versions_invalid reason=unsupported_arch; building the sandbox image without solc" >&2
 		return 0
 	fi
 	sandbox_solc_versions_arg="$(IFS=_; printf '%s' "${sandbox_solc_list[*]}")"
@@ -262,6 +274,7 @@ import os
 import re
 import sys
 import tempfile
+import urllib.parse
 import urllib.request
 
 LIST_URL = "https://binaries.soliditylang.org/linux-amd64/list.json"
@@ -294,8 +307,9 @@ def fetch(url, limit):
 	if not url.startswith("https://"):
 		raise ValueError("https only")
 	with urllib.request.urlopen(url, timeout=60) as response:
-		if not response.geturl().startswith("https://"):
-			raise ValueError("redirected off https")
+		final = urllib.parse.urlsplit(response.geturl())
+		if final.scheme != "https" or final.hostname != "binaries.soliditylang.org":
+			raise ValueError("redirected off binaries.soliditylang.org")
 		data = response.read(limit + 1)
 	if len(data) > limit:
 		raise ValueError("response too large")
@@ -364,17 +378,21 @@ def install(versions, list_bytes, fetch_fn):
 		if not is_amd64_elf(data):
 			raise InstallError(version, "not_amd64_elf")
 		staged.append((version, path, data))
-	os.makedirs(HARDHAT_DIR, mode=0o755, exist_ok=True)
-	os.chmod(HARDHAT_DIR, 0o755)
-	os.makedirs(BIN_DIR, mode=0o755, exist_ok=True)
-	for version, path, data in staged:
-		write_atomic(os.path.join(HARDHAT_DIR, path), data, 0o755)
-	write_atomic(os.path.join(HARDHAT_DIR, "list.json"), list_bytes, 0o644)
-	for index, (version, path, _data) in enumerate(staged):
-		binary = os.path.join(HARDHAT_DIR, path)
-		link_atomic(binary, os.path.join(BIN_DIR, "solc-" + version))
-		if index == 0:
-			link_atomic(binary, os.path.join(BIN_DIR, "solc"))
+	try:
+		os.makedirs(HARDHAT_DIR, mode=0o755, exist_ok=True)
+		os.chmod(HARDHAT_DIR, 0o755)
+		os.makedirs(BIN_DIR, mode=0o755, exist_ok=True)
+		for version, path, data in staged:
+			write_atomic(os.path.join(HARDHAT_DIR, path), data, 0o755)
+		write_atomic(os.path.join(HARDHAT_DIR, "list.json"), list_bytes, 0o644)
+		for index, (version, path, _data) in enumerate(staged):
+			binary = os.path.join(HARDHAT_DIR, path)
+			link_atomic(binary, os.path.join(BIN_DIR, "solc-" + version))
+			if index == 0:
+				link_atomic(binary, os.path.join(BIN_DIR, "solc"))
+	except OSError:
+		raise InstallError("-", "write_failed")
+	for version, _path, _data in staged:
 		log(version, "ok")
 
 

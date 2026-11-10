@@ -989,3 +989,26 @@ def test_solc_install_rejects_untrusted_listing_and_inputs(tmp_path, monkeypatch
 	monkeypatch.setattr(module, "fetch", lambda url, limit: listing if url == module.LIST_URL else binary)
 	assert module.main(argv) == 1
 	assert not hardhat.exists() and not bin_dir.exists()
+
+
+@pytest.mark.parametrize("value", [",,,", " , ,"])
+def test_separator_only_solc_versions_warn_and_build_without_solc(tmp_path, value):
+	default, _ = _image_context(tmp_path, "codex", None, "default")
+	context, proc = _image_context(tmp_path, "codex", value, "separators")
+	assert "::warning::CODEX_ISOLATION solc_versions_invalid reason=format" in proc.stderr
+	assert sorted(p.name for p in context.iterdir()) == ["Dockerfile"]
+	assert (context / "Dockerfile").read_bytes() == (default / "Dockerfile").read_bytes()
+
+
+def test_solc_install_reports_write_failure(tmp_path, monkeypatch, capsys):
+	module, _hardhat, _bin_dir = _load_solc_installer(tmp_path, monkeypatch)
+	listing = _listing()
+	monkeypatch.setattr(module, "fetch", lambda url, limit: listing if url == module.LIST_URL else FAKE_ELF)
+
+	def failing_write(target, data, mode):
+		raise OSError("disk full")
+
+	monkeypatch.setattr(module, "write_atomic", failing_write)
+	assert module.main(["solc_install.py", "0.8.24"]) == 1
+	err = capsys.readouterr().err
+	assert "outcome=write_failed" in err and "outcome=fetch_failed" not in err
