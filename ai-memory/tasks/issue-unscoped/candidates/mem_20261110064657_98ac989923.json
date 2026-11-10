@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:~505-535 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: review_static_agents_inline_fallback, embedded Python `start = lines.index(HEADER)` searches the whole assembled prompt, so in inline mode it can match a crafted five-line block in untrusted PR-authored text and replace it with the full trusted agents.md (~800 KB).\n  WHY: The affected role's prompt roughly doubles (~1.6 MB), which raises cache-write cost and risks context overflow; only trusted text is inserted, so the impact is size/cost, not injection. The source severity was NIT, mapped here to low. anthropic_claude-sonnet-5_5 raised the same issue only as a hardening suggestion (HARDENING_RISK_SCORE: 1). minimax_minimax-m3 disputes that it can happen at all: it says the header always matches first in the static prefix.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add a changelog fragment \"with the measured before/after prefix bytes from a real run.\"\n  expected_change_site: changelog.d/8954-review-agents-index.md\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The fragment says the byte counts were \"Measured locally with this repository's files\" and directs readers to check a live run; it does not provide measurements from a real workflow run. The source severity was NIT. anthropic_claude-sonnet-5_5 notes this wording was deferred in earlier rounds because no real run can exist before merge.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/review_untrusted_sandbox.sh | review_static_agents_inline_fallback, embedded Python, `start = lines.index(HEADER)`\n  PROBLEM: The header search scans the whole prompt, including author-controlled sections such as the PR description inside its UNTRUSTED fence. In inline mode a crafted five-line block could be replaced with the full trusted agents.md, roughly doubling the prompt size.\n  WHY: This is a cost and context-size problem, not an injection. The code predates the last run. Suggested fix: `limit = next((i for i, l in enumerate(lines) if l.startswith(\"=== BEGIN UNTRUSTED\")), len(lines))`, then `start = lines.index(HEADER, 0, limit)` (2 lines). HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: Add a changelog fragment \"with the measured before/after prefix bytes from a real run.\"\n  Expected change site: changelog.d/8954-review-agents-index.md\n  Evidence of absence: The fragment says the byte counts were \"Measured locally with this repository's files\" and directs readers to check a live run; it does not provide measurements from a real workflow run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_untrusted_sandbox.sh:review_static_agents_inline_fallback, embedded Python `start = lines.index(HEADER)` (lines ~505-535) | severity=NIT | confidence=4\n  PROBLEM: The fallback searches the entire assembled prompt for the index header. In inline mode the trusted prefix has no index header, so `lines.index(HEADER)` can match untrusted PR-authored text, and a crafted five-line block passes the shape check and gets replaced with the full trusted agents.md (~800 KB).\n  WHY: The affected role's prompt balloons to ~1.6 MB, which inflates cache-write cost and risks context overflow. Only trusted text is inserted, so the impact is size/cost, not injection.\n- HARDENING_SUGGESTION: scripts/review_untrusted_sandbox.sh | review_static_agents_inline_fallback, embedded Python, `start = lines.index(HEADER)`\n  PROBLEM: The header match can land on untrusted PR-authored text (same as the SECURITY finding above).\n  WHY: Suggested fix: bound the search to the trusted prefix via `limit = next((i for i, l in enumerate(lines) if l.startswith(\"=== BEGIN UNTRUSTED\")), len(lines))` then `lines.index(HEADER, 0, limit)`, or skip the rewrite when `=== AGENTS.MD ===` already appears before the header (2-3 lines). HARDENING_RISK_SCORE: 2.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "20c562a7ba48941b70c82f9acbe44418ae7032cfaf2fa06bdfe8055de4eff533",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8959,
+    "run_id": "42767945987",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42767945987",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110064657_98ac989923",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8959,
+    "run_id": "42767945987"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T06:46:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
