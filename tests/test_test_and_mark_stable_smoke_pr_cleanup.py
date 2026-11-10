@@ -68,8 +68,17 @@ def test_smoke_cleanup_closes_late_pr_when_pr_number_empty() -> None:
 	else_branch = body.index('elif [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then', pr_branch)
 	close_issue = body.index("# Close issue", else_branch)
 	fallback = body[else_branch:close_issue]
-	assert 'find_latest_scoped_run_field "${TEST_REPO}" "${IMPL_CREATED_AFTER_INPUT:-}" "Implement" "${ISSUE_TITLE}" "id" 3' in fallback
+	# Every still-active run of this issue is cancelled, not only the newest
+	# one: a newer completed run must not hide an older queued run.
+	assert "actions/workflows/implement.yml/runs?per_page=100${LATE_IMPL_CREATED_FILTER}" in fallback
+	assert 'LATE_IMPL_CREATED_FILTER="&created=>${IMPL_CREATED_AFTER_INPUT}"' in fallback
+	assert "select(.display_title == env.ISSUE_TITLE)" in fallback
+	assert 'select(.status != "completed")' in fallback
+	assert "find_latest_scoped_run_field" not in fallback
 	assert "/actions/runs/${LATE_IMPL_RUN_ID}/cancel" in fallback
+	# The late PR is closed without replacing its body; the note is a comment.
+	assert 'pulls/${LATE_PR}" -X PATCH -f state=closed >/dev/null' in fallback
+	assert "issues/${LATE_PR}/comments" in fallback
 	assert "pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=100" in fallback
 	assert fallback.index("/cancel") < fallback.index("pulls?state=open&head=")
 	# No auto-close keyword followed by an issue reference (§21).
@@ -101,6 +110,7 @@ def test_decompose_cleanup_closes_project_prs_before_branch_delete() -> None:
 	delete = body.index("git/refs/heads/${PROJECT_BRANCH}")
 	assert max(base_lookup, head_lookup, child_lookup) < close < delete
 	assert 'PROJECT_BRANCH="orchestrator/project-${TRACKING_NUMBER}"' in body
+	assert "::warning::Could not delete branch ${PROJECT_BRANCH} after 3 attempts" in body
 
 
 _FAKE_GH = textwrap.dedent("""\

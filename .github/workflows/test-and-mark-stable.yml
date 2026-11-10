@@ -3735,28 +3735,40 @@ jobs:
           elif [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
             # No PR recorded (issue #8953): Phase 3b gave up while Implement
             # was still pending, and that run opened a PR for the closed issue
-            # minutes later (#8239, #8346, #8348, #8373, #8389). Cancel this
-            # issue's Implement run (same title-scoped selector as Phase 3b),
-            # then close any ai/issue-<N> PR that already exists. Best effort.
-            if [ -n "${ISSUE_TITLE:-}" ] \
-              && . ./scripts/comprehensive_test_and_release_gh_api.sh 2>/dev/null \
-              && type find_latest_scoped_run_field >/dev/null 2>&1; then
-              LATE_IMPL_RUN_ID="$(find_latest_scoped_run_field "${TEST_REPO}" "${IMPL_CREATED_AFTER_INPUT:-}" "Implement" "${ISSUE_TITLE}" "id" 3 || true)"
-              if [[ "${LATE_IMPL_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            # minutes later (#8239, #8346, #8348, #8373, #8389). Cancel every
+            # still-active Implement run of this issue (title-scoped like Phase
+            # 3b, created after the issue, status != completed, so a newer
+            # completed run cannot hide an older queued one), then close any
+            # ai/issue-<N> PR that already exists. Best effort.
+            if [ -n "${ISSUE_TITLE:-}" ]; then
+              LATE_IMPL_CREATED_FILTER=""
+              if [ -n "${IMPL_CREATED_AFTER_INPUT:-}" ]; then
+                LATE_IMPL_CREATED_FILTER="&created=>${IMPL_CREATED_AFTER_INPUT}"
+              fi
+              LATE_IMPL_RUN_IDS="$(gh api "repos/${TEST_REPO}/actions/workflows/implement.yml/runs?per_page=100${LATE_IMPL_CREATED_FILTER}" \
+                --jq '[.workflow_runs[] | select(.display_title == env.ISSUE_TITLE) | select(.status != "completed") | .id] | .[]' 2>/dev/null || true)"
+              for LATE_IMPL_RUN_ID in ${LATE_IMPL_RUN_IDS}; do
+                [[ "${LATE_IMPL_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || continue
                 if gh api -X POST "repos/${TEST_REPO}/actions/runs/${LATE_IMPL_RUN_ID}/cancel" >/dev/null 2>&1; then
                   echo "  Cancelled Implement run ${LATE_IMPL_RUN_ID}"
                 else
                   echo "::warning::Could not cancel Implement run ${LATE_IMPL_RUN_ID} (already completed?)"
                 fi
-              fi
+              done
             fi
             LATE_PR_NUMBERS="$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=100" --jq '.[].number' 2>/dev/null || true)"
             for LATE_PR in ${LATE_PR_NUMBERS}; do
               [[ "${LATE_PR}" =~ ^[1-9][0-9]*$ ]] || continue
-              gh api "repos/${TEST_REPO}/pulls/${LATE_PR}" -X PATCH -f state=closed \
-                -f body="*Closed by E2E smoke test cleanup (run ${GITHUB_RUN_ID}): the Implement run opened it after the gate stopped waiting.*" \
-                >/dev/null 2>&1 && echo "  Closed late PR #${LATE_PR}" \
-                || echo "::warning::Could not close late PR #${LATE_PR}"
+              # Close only, keeping the PR body as diagnosis evidence; the
+              # cleanup note goes in a best-effort comment.
+              if gh api "repos/${TEST_REPO}/pulls/${LATE_PR}" -X PATCH -f state=closed >/dev/null 2>&1; then
+                gh api "repos/${TEST_REPO}/issues/${LATE_PR}/comments" \
+                  -f body="*Closed by E2E smoke test cleanup (run ${GITHUB_RUN_ID}): the Implement run opened it after the gate stopped waiting.*" \
+                  >/dev/null 2>&1 || true
+                echo "  Closed late PR #${LATE_PR}"
+              else
+                echo "::warning::Could not close late PR #${LATE_PR}"
+              fi
             done
           fi
 
@@ -4854,6 +4866,10 @@ jobs:
               if gh api "repos/${TEST_REPO}/git/refs/heads/${PROJECT_BRANCH}" \
                   -X DELETE >/dev/null 2>&1; then
                 echo "  deleted branch ${PROJECT_BRANCH}"
+                break
+              fi
+              if [ "${attempt}" -eq 3 ]; then
+                echo "::warning::Could not delete branch ${PROJECT_BRANCH} after 3 attempts"
                 break
               fi
               sleep $(( attempt * 2 ))

@@ -90,6 +90,47 @@ def test_fixup_function_is_guarded_at_its_top() -> None:
 	assert text.index("judge_tracking_issue_closed_skip() {") < start
 
 
+def _run_guard_flag(state: str) -> subprocess.CompletedProcess:
+	script = (
+		"set -euo pipefail\n"
+		f"get_issue_state_labels_json() {{ echo '{{\"state\":\"{state}\"}}'; }}\n"
+		+ _guard_function()
+		+ "judge_tracking_closed_skipped=0\n"
+		+ "judge_tracking_issue_closed_skip wave-advance || true\n"
+		+ 'echo "FLAG=${judge_tracking_closed_skipped}"\n'
+	)
+	env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "TRACKING_NUM": "8834"}
+	return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+
+
+def test_skip_sets_the_arm_flag_only_when_closed() -> None:
+	closed = _run_guard_flag("closed")
+	assert closed.returncode == 0, closed.stderr
+	assert "FLAG=1" in closed.stdout
+	assert "type=wave-advance" in closed.stdout
+	opened = _run_guard_flag("open")
+	assert opened.returncode == 0, opened.stderr
+	assert "FLAG=0" in opened.stdout
+
+
+def test_in_progress_arm_stops_before_the_wave_advance() -> None:
+	# Skipping only the judge-addition block left the arm to advance and
+	# create the next wave's sub-issues for the closed project.
+	text = _script_text()
+	guard = text.index('if [ "${NEW_ISSUES_COUNT}" -gt 0 ] && ! judge_tracking_issue_closed_skip judge-addition; then')
+	reset = text.rfind("judge_tracking_closed_skipped=0\n", 0, guard)
+	assert reset != -1 and guard - reset < 200
+	stop = text.index('if [ "${judge_tracking_closed_skipped}" = "1" ] \\\n', guard)
+	stop_cond = text[stop:text.index("; then", stop)]
+	assert 'judge_tracking_issue_closed_skip wave-advance' in stop_cond
+	assert '[ "${NEW_ISSUES_COUNT}" -eq 0 ]' in stop_cond
+	compare = text.index('elif [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ]', stop)
+	advance = text.index("persist_orch_redecompose < /dev/null", compare)
+	create = text.index("gh issue create", advance)
+	assert stop < compare < advance < create
+	assert text.index("Advancing to wave", compare) > compare
+
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	for test in tests:
