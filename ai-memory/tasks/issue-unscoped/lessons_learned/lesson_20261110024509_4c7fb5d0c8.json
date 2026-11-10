@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-10T02:45:09Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows:N/A; cited_path=.github/workflows; files_touched=analysis/validation-selftest-status.json.",
+  "phase": "review_autofix",
+  "pr_number": 9174,
+  "record_id": "lesson_20261110024509_4c7fb5d0c8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows",
+    "analysis/validation-selftest-status.json"
+  ]
+}
