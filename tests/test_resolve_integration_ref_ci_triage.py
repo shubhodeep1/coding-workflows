@@ -270,6 +270,9 @@ REISSUE_FIXTURES = {
 	"reissue_closed_unmerged_pr_keeps_default": (0, None, ""),
 	"reissue_merged_pr_routes_to_base_branch": (0, None, "orchestrator/project-768"),
 	"reissue_merged_pr_base_branch_missing_refuses": (3, "branch_missing", ""),
+	# The deleted base branch was itself merged into the default branch
+	# (finalize uses --delete-branch): keep the default branch.
+	"reissue_merged_pr_base_branch_merged_into_default_keeps_default": (0, None, ""),
 	"reissue_merged_pr_cross_repository_refuses": (3, "pr_cross_repository", ""),
 	"reissue_pr_lookup_failed_refuses": (3, "pr_lookup_failed", ""),
 	"reissue_merged_pr_base_ref_invalid_refuses": (3, "base_ref_invalid", ""),

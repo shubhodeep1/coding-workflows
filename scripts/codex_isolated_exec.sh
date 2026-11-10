@@ -304,10 +304,19 @@ def machine():
 	return os.uname().machine
 
 
+class AllowedHostRedirect(urllib.request.HTTPRedirectHandler):
+	def redirect_request(self, req, fp, code, msg, headers, newurl):
+		target = urllib.parse.urlsplit(newurl)
+		if target.scheme != "https" or target.hostname != "binaries.soliditylang.org":
+			raise ValueError("redirected off binaries.soliditylang.org")
+		return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def fetch(url, limit):
 	if not url.startswith("https://"):
 		raise ValueError("https only")
-	with urllib.request.urlopen(url, timeout=60) as response:
+	# Refuse an off-host redirect before following it; the check below stays.
+	with urllib.request.build_opener(AllowedHostRedirect).open(url, timeout=60) as response:
 		final = urllib.parse.urlsplit(response.geturl())
 		if final.scheme != "https" or final.hostname != "binaries.soliditylang.org":
 			raise ValueError("redirected off binaries.soliditylang.org")

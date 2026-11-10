@@ -343,7 +343,8 @@ elif head.get("ref") != ref:
 
 # Reads the pull request JSON on stdin for an unblock-judge reissue (#9170);
 # argv: REPO, PR number. Prints one line: `skip` (the PR did not merge, or
-# merged into the default branch), `refuse <reason>` or `route <base ref>`.
+# merged into the default branch), `refuse <reason>` or
+# `route <base ref> <default branch>`.
 # The base ref passes the same safety rules as a triage head ref.
 CI_TRIAGE_REISSUE_BASE_PY='
 import json
@@ -393,7 +394,7 @@ if (not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z0-9._/-]+", ref) or ".
 if ref == default_branch:
 	print("skip")
 	sys.exit(0)
-print("route " + ref)
+print("route " + ref + " " + default_branch)
 '
 
 CI_TRIAGE_REF_MATCH_PY='
@@ -493,15 +494,47 @@ resolve_ci_triage_branch() {
 	return 0
 }
 
+# Reads refs/heads/<ref> for the reissue path (#9170). Returns 0 when the
+# branch exists, 1 on a confirmed 404, 2 on any other failure and 3 when the
+# response names another ref; exits 75 when the read stays rate limited.
+# Called outside $(...) so GH_API_RETRY_LAST_STATUS stays visible.
+_ci_reissue_branch_state() {
+	local ref="$1" encoded_ref out_file err_file rc=0
+	encoded_ref="$(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${ref}")" || return 2
+	out_file="$(mktemp)" || return 2
+	if ! err_file="$(mktemp)"; then
+		rm -f "${out_file}"
+		return 2
+	fi
+	GH_API_RETRY_LAST_STATUS=""
+	# stderr goes to a file so retry/log lines never reach the JSON check.
+	ci_triage_gh_get "repos/${REPO}/git/ref/heads/${encoded_ref}" >"${out_file}" 2>"${err_file}" || rc=$?
+	if [ "${rc}" -eq 0 ]; then
+		python3 -I -c "${CI_TRIAGE_REF_MATCH_PY}" "${ref}" <"${out_file}" || rc=3
+	elif [ "${rc}" -eq 75 ]; then
+		rm -f "${out_file}" "${err_file}"
+		_resolver_rate_limited "branch"
+	elif [ "${GH_API_RETRY_LAST_STATUS:-}" = "404" ] || grep -Eq 'status=404|HTTP 404' "${err_file}"; then
+		rc=1
+	else
+		rc=2
+	fi
+	rm -f "${out_file}" "${err_file}"
+	return "${rc}"
+}
+
 # Merged-PR base-branch routing for an unblock-judge CI-failure reissue
 # (#9170). Prints the verified base branch of a PR that merged into a
 # non-default branch of this repository (rc 0), prints nothing when the PR did
-# not merge or merged into the default branch (rc 0), exits 75 when a read is
-# rate limited, or logs exactly one refusal and returns 3. Never returns 2 or
-# prints an empty line on failure: callers map those to the default branch.
+# not merge, merged into the default branch, or merged into a base branch that
+# retarget_merged_base.sh shows was itself merged into the default branch and
+# deleted (rc 0, ::notice:: reason=base_branch_merged_into_default), exits 75
+# when a read is rate limited, or logs exactly one refusal and returns 3.
+# Never returns 2 or prints an empty line on failure: callers map those to the
+# default branch.
 resolve_ci_reissue_base_branch() {
 	local pr="$1"
-	local pr_json pr_rc classified verdict ref encoded_ref ref_json ref_err ref_err_file ref_rc
+	local pr_json pr_rc classified verdict ref default_branch branch_state target
 	pr_rc=0
 	pr_json="$(ci_triage_gh_get "repos/${REPO}/pulls/${pr}" 2>/dev/null)" || pr_rc=$?
 	if [ "${pr_rc}" -eq 75 ]; then
@@ -516,7 +549,8 @@ resolve_ci_reissue_base_branch() {
 	fi
 	verdict=""
 	ref=""
-	read -r verdict ref <<< "${classified}" || true
+	default_branch=""
+	read -r verdict ref default_branch <<< "${classified}" || true
 	case "${verdict}" in
 		skip)
 			return 0
@@ -537,35 +571,37 @@ resolve_ci_reissue_base_branch() {
 			;;
 	esac
 
-	if ! encoded_ref="$(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${ref}")"; then
-		ci_triage_refuse "branch_lookup_failed" "${pr}"
-		return "${CI_TRIAGE_REFUSED_RC}"
-	fi
-	# stderr goes to a file so retry/log lines never reach the JSON check.
-	if ! ref_err_file="$(mktemp)"; then
-		ci_triage_refuse "branch_lookup_failed" "${pr}"
-		return "${CI_TRIAGE_REFUSED_RC}"
-	fi
-	ref_rc=0
-	ref_json="$(ci_triage_gh_get "repos/${REPO}/git/ref/heads/${encoded_ref}" 2>"${ref_err_file}")" || ref_rc=$?
-	if [ "${ref_rc}" -ne 0 ]; then
-		ref_err="$(cat "${ref_err_file}" 2>/dev/null || true)"
-		rm -f "${ref_err_file}"
-		if [ "${ref_rc}" -eq 75 ]; then
-			_resolver_rate_limited "branch"
-		fi
-		if printf '%s' "${ref_err}" | grep -Eq 'status=404|HTTP 404|Not Found'; then
+	branch_state=0
+	_ci_reissue_branch_state "${ref}" || branch_state=$?
+	case "${branch_state}" in
+		0)
+			;;
+		1)
+			# Finalize merges an integration branch into the default branch
+			# and deletes it (gh pr merge --delete-branch). Follow the deleted
+			# branch to the base its own merged PR went into; keep the default
+			# branch only when that is where the code went. Anything else
+			# (helper absent, lookup failed, abandoned branch) still refuses.
+			target=""
+			if [ -n "${default_branch}" ] && [ -f "${SCRIPT_DIR}/retarget_merged_base.sh" ]; then
+				target="$(bash "${SCRIPT_DIR}/retarget_merged_base.sh" resolve "${REPO}" "${ref}" "${default_branch}")" || target=""
+			fi
+			if [ -n "${target}" ] && [ "${target}" = "${default_branch}" ]; then
+				echo "::notice::CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=skipped reason=base_branch_merged_into_default branch=${ref}" >&2
+				return 0
+			fi
 			ci_triage_refuse "branch_missing" "${pr}"
-		else
+			return "${CI_TRIAGE_REFUSED_RC}"
+			;;
+		3)
+			ci_triage_refuse "branch_missing" "${pr}"
+			return "${CI_TRIAGE_REFUSED_RC}"
+			;;
+		*)
 			ci_triage_refuse "branch_lookup_failed" "${pr}"
-		fi
-		return "${CI_TRIAGE_REFUSED_RC}"
-	fi
-	rm -f "${ref_err_file}"
-	if ! printf '%s' "${ref_json}" | python3 -I -c "${CI_TRIAGE_REF_MATCH_PY}" "${ref}"; then
-		ci_triage_refuse "branch_missing" "${pr}"
-		return "${CI_TRIAGE_REFUSED_RC}"
-	fi
+			return "${CI_TRIAGE_REFUSED_RC}"
+			;;
+	esac
 
 	echo "CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=routed branch=${ref}" >&2
 	printf '%s\n' "${ref}"
@@ -816,6 +852,18 @@ def main() -> int:
 			if key in issue:
 				payload[key] = issue[key]
 		print(json.dumps(payload))
+		return 0
+
+	if endpoint.startswith("repos/") and "/pulls?" in endpoint:
+		# retarget_merged_base.sh closed-PR-by-head lookup; the fixture holds
+		# the already-shaped `{number, base, head_sha}` the --jq would print.
+		from urllib.parse import parse_qs, urlsplit
+		head = parse_qs(urlsplit(endpoint).query).get("head", [""])[0]
+		merged = fixture.get("merged_pulls_by_head", {}).get(head.split(":", 1)[-1])
+		if merged is None:
+			print(f"unsupported endpoint: {endpoint}", file=sys.stderr)
+			return 2
+		print(json.dumps(merged))
 		return 0
 
 	if endpoint.startswith("repos/") and "/pulls/" in endpoint:
