@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/resolve_integration_ref.sh:595\u2013608 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A rate-limited API lookup inside `retarget_merged_base.sh` is classified as `branch_lookup_failed` and returned as exit 3, rather than preserving the resolver's rate-limit exit 75 (related behavior in scripts/retarget_merged_base.sh, lines 54\u201356 and 114\u2013118).\n  WHY: When the helper's `pulls` query is rate-limited, the helper suppresses the API error and logs `reason=lookup_failed`, which the resolver maps to a routing refusal (exit 3), so the transient failure does not go through the rate-limit path; the source severity was NIT, mapped here to low, the lowest allowed value; z-ai_glm-5_3-flash separately noted that rate limits from `_ci_reissue_branch_state` do propagate as exit 75, but it did not address the helper's own lookup.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING (not a finding): scripts/resolve_integration_ref.sh:506-519 (the helper_err mktemp/rm block inside resolve_ci_reissue_base_branch)\n  PROBLEM: mktemp-created helper_err is removed by an inline rm, but a SIGTERM/SIGINT between mktemp and rm leaks the temp file.\n  WHY: The parent shell's trap, if any, would not know about this local temp path; suggested fix is a function-local `trap \"rm -f '${helper_err}'\" RETURN` (est. 2 lines); HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/resolve_integration_ref.sh:resolve_ci_reissue_base_branch, lines 595\u2013608; related behavior in scripts/retarget_merged_base.sh, lines 54\u201356 and 114\u2013118 | severity=NIT | confidence=4\n  PROBLEM: A rate-limited API lookup inside `retarget_merged_base.sh` is classified as `branch_lookup_failed` and returned as exit 3, rather than preserving the resolver's rate-limit exit 75.\n  WHY: The helper suppresses the rate-limited `pulls` API error and logs `reason=lookup_failed`, which the resolver maps to a refusal with exit 3; the workflow treats exit 3 as a routing refusal, so the transient API failure does not go through the resolver's rate-limit path.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "982f746b8e6599c3ea4601c7bdf6f242fff65c344361bd6da80e35e63d5ef25d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "42796653812",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42796653812",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110102949_e3b4850e32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "42796653812"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T10:29:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
