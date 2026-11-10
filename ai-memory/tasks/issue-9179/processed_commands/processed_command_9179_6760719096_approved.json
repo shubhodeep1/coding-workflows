@@ -5,13 +5,25 @@
   "entry_id": "processed_command_9179_6760719096_approved",
   "issue_number": 9179,
   "metadata": {
+    "branch": "ai/issue-9179",
+    "changed_files": [
+      "changelog.d/unblock-9112-r1-review-sandbox-chatgpt-pool-config.md",
+      "scripts/review_apply_fixes.sh",
+      "scripts/review_untrusted_workspace.py",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 9179,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9179",
+    "pr_number": 9180,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9180",
+    "run_attempt": "1",
+    "run_id": "42768811441",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/42768811441"
   },
   "run_attempt": 1,
   "run_id": "42768811441",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-10T06:31:12Z",
+  "status": "completed",
+  "timestamp": "2026-11-10T06:49:48Z",
   "workflow": "implement"
 }
