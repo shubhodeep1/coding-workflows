@@ -201,7 +201,45 @@ jobs:
             COLLECT_ARGS+=(--repo "${repo}")
           done
 
-          python3 scripts/collect_workflow_logs.py "${COLLECT_ARGS[@]}"
+          # P3: keep the collector's exit code, log coverage, then re-exit
+          # with the same code so the step result is unchanged.
+          collect_rc=0; python3 scripts/collect_workflow_logs.py "${COLLECT_ARGS[@]}" || collect_rc=$?
+
+          # --- collection coverage (P3) begin ---
+          # Diagnostics only and fail-open: no command here can change the
+          # step result. Only owner/repo names that pass the resolve_repos
+          # regex (anchored with \A..\z so a newline cannot smuggle a second
+          # line) and counts are printed; collector error text never is.
+          coverage_report="workflow_log_report.json"
+          coverage_repo_re='\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z'
+          if [ -f "${coverage_report}" ] && jq -e '(.coverage | type) == "object"' "${coverage_report}" >/dev/null 2>&1; then
+            coverage_repos="$(jq -r '[(.coverage.repositories_requested // []) | .[]? | strings] | length' "${coverage_report}" 2>/dev/null || true)"
+            [[ "${coverage_repos}" =~ ^[0-9]+$ ]] || coverage_repos=0
+            coverage_failed_csv="$(jq -r --arg re "${coverage_repo_re}" '[(.coverage.repositories_failed // []) | .[]? | objects | .repository | strings | select(test($re))] | unique | join(",")' "${coverage_report}" 2>/dev/null || true)"
+            coverage_truncated_csv="$(jq -r --arg re "${coverage_repo_re}" '[(.coverage.repositories_truncated // []) | .[]? | strings | select(test($re))] | unique | join(",")' "${coverage_report}" 2>/dev/null || true)"
+            coverage_failed_list=()
+            coverage_truncated_list=()
+            [ -n "${coverage_failed_csv}" ] && IFS=',' read -r -a coverage_failed_list <<< "${coverage_failed_csv}"
+            [ -n "${coverage_truncated_csv}" ] && IFS=',' read -r -a coverage_truncated_list <<< "${coverage_truncated_csv}"
+            echo "WORKFLOW_LOG_COLLECT_COVERAGE repos=${coverage_repos} failed=${#coverage_failed_list[@]} truncated=${#coverage_truncated_list[@]} failed_repos=${coverage_failed_csv} truncated_repos=${coverage_truncated_csv}"
+            for coverage_repo in "${coverage_failed_list[@]}"; do
+              echo "::error title=Workflow log collection::Could not read workflow runs for ${coverage_repo}; it is missing from this analysis."
+            done
+            for coverage_repo in "${coverage_truncated_list[@]}"; do
+              echo "::warning title=Workflow log collection::Run listing for ${coverage_repo} was truncated; this analysis covers only part of its runs."
+            done
+            {
+              echo "coverage_failed_count=${#coverage_failed_list[@]}"
+              echo "coverage_truncated_count=${#coverage_truncated_list[@]}"
+              echo "coverage_failed_repos=${coverage_failed_csv}"
+              echo "coverage_truncated_repos=${coverage_truncated_csv}"
+            } >> "${GITHUB_OUTPUT:-/dev/null}" || true
+          else
+            echo "::warning::workflow_log_report.json has no coverage object; collection coverage is unknown."
+          fi
+          # --- collection coverage (P3) end ---
+
+          exit "${collect_rc}"
 
       - name: Publish daily PAT consumer ranking
         if: ${{ github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' }}
@@ -232,6 +270,46 @@ jobs:
           path: ${{ steps.collect.outputs.log_output_dir }}
           if-no-files-found: warn
           retention-days: 7
+
+      # P3: one WARNING alert per run when collection had gaps. Separate step
+      # so TG_BOT_SECRET never shares a step with GH_PAT; skipped on the 06:00
+      # PAT-budget run, whose behaviour P3 leaves unchanged. ALERT_MSG_LEVEL
+      # (workflow env) still filters it, so SILENT holds it back.
+      - name: Alert on workflow log collection gaps
+        id: coverage_alert
+        if: ${{ always() && ((steps.collect.outputs.coverage_failed_count || '0') != '0' || (steps.collect.outputs.coverage_truncated_count || '0') != '0') && !(github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') }}
+        continue-on-error: true
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          WLA_COVERAGE_FAILED_COUNT: ${{ steps.collect.outputs.coverage_failed_count || '0' }}
+          WLA_COVERAGE_TRUNCATED_COUNT: ${{ steps.collect.outputs.coverage_truncated_count || '0' }}
+          WLA_COVERAGE_FAILED_REPOS: ${{ steps.collect.outputs.coverage_failed_repos || '' }}
+          WLA_COVERAGE_TRUNCATED_REPOS: ${{ steps.collect.outputs.coverage_truncated_repos || '' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "::warning::Telegram not configured (TG_BOT_SECRET or TG_ADMIN_CHAT_ID missing) — skipping collection gap alert."
+            exit 0
+          fi
+
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::scripts/tg_helpers.sh not found — skipping collection gap alert."
+            exit 0
+          fi
+
+          source scripts/tg_helpers.sh
+
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          MSG="Workflow log collection gaps for ${GITHUB_REPOSITORY}: failed=${WLA_COVERAGE_FAILED_COUNT} truncated=${WLA_COVERAGE_TRUNCATED_COUNT}"
+          MSG+=$'\n'
+          MSG+="Failed repos: ${WLA_COVERAGE_FAILED_REPOS:-none}"
+          MSG+=$'\n'
+          MSG+="Truncated repos: ${WLA_COVERAGE_TRUNCATED_REPOS:-none}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_msg "${MSG}" "WARNING" >/dev/null || echo "::warning::Collection gap alert could not be sent to Telegram."
 
   weekly-retro:
     needs: collect-logs
@@ -1826,24 +1904,46 @@ jobs:
             # apply. --match-head-commit refuses a head anyone pushed after
             # this run's own push.
             report_head_sha="$(git rev-parse HEAD)"
+            report_merge_requested=""
             if gh pr merge "${report_pr_number}" --squash --match-head-commit "${report_head_sha}"; then
-              report_delivery="pr_merged"
-              report_branch="${TARGET_BRANCH}"
-              # Fail-open cleanup. Not gh --delete-branch, which switches the
-              # local checkout mid-job.
-              if ! git push origin --delete "${REPORT_PR_BRANCH}"; then
-                echo "::warning::Could not delete merged report branch ${REPORT_PR_BRANCH}; delete it by hand."
+              # A merge queue can accept the PR (exit 0) without merging it
+              # yet, so the landing check below decides pr_merged.
+              report_merge_requested="direct"
+            else
+              # Auto-merge can land hours later, after the purge guard's
+              # answer is stale (#7022): an apply-analysis project dispatched
+              # meanwhile could read a doc this PR deletes. Drop the purge
+              # deletions from the PR before arming auto-merge; the next run
+              # purges again with a fresh guard.
+              report_purge_drop_ok=1
+              report_purged_paths="$(git diff --name-only --diff-filter=D HEAD~1 HEAD -- 'analysis/workflow-optimization-*.md' 2>/dev/null)" || report_purge_drop_ok=0
+              if [ "${report_purge_drop_ok}" -eq 1 ] && [ -n "${report_purged_paths}" ]; then
+                if printf '%s\n' "${report_purged_paths}" | xargs -d '\n' git checkout HEAD~1 -- \
+                   && git commit --amend -q -m "chore: add workflow log analysis report" \
+                   && git push --force-with-lease="refs/heads/${REPORT_PR_BRANCH}:${report_last_pushed_sha}" origin "HEAD:refs/heads/${REPORT_PR_BRANCH}"; then
+                  report_last_pushed_sha="$(git rev-parse HEAD)"
+                  report_head_sha="${report_last_pushed_sha}"
+                  echo "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending count=$(printf '%s\n' "${report_purged_paths}" | wc -l | tr -d ' ')"
+                else
+                  report_purge_drop_ok=0
+                fi
               fi
-            elif gh pr merge "${report_pr_number}" --auto --squash --match-head-commit "${report_head_sha}"; then
+              if [ "${report_purge_drop_ok}" -eq 1 ] \
+                 && gh pr merge "${report_pr_number}" --auto --squash --match-head-commit "${report_head_sha}"; then
+                report_merge_requested="auto"
+              elif [ "${report_purge_drop_ok}" -ne 1 ]; then
+                echo "::warning::Could not remove the purge deletions from report PR ${report_pr_url:-#${report_pr_number}}; not arming auto-merge so a stale purge cannot land later."
+              fi
+            fi
+            if [ -n "${report_merge_requested}" ]; then
               report_delivery="pr_auto_merge"
-              # Required checks usually block the direct merge, so wait a
-              # bounded time for auto-merge to land the report: deep-audit,
-              # api-redundancy and callers that read the newest report from
-              # the branch after this run need it there. Git only (fetch +
-              # cat-file), no GitHub API call. 0 disables the wait. The
-              # deadline is also clamped to 55 minutes after the job started
-              # (WLA_JOB_START_EPOCH), so a slow analysis cannot push the
-              # wait past the job's 60-minute timeout.
+              # Wait a bounded time for the report to reach the branch:
+              # deep-audit, api-redundancy and callers that read the newest
+              # report from the branch after this run need it there. Git only
+              # (fetch + cat-file), no GitHub API call. 0 still checks once.
+              # The deadline is also clamped to 55 minutes after the job
+              # started (WLA_JOB_START_EPOCH), so a slow analysis cannot push
+              # the wait past the job's 60-minute timeout.
               wla_wait_minutes="${WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES:-10}"
               if [[ ! "${wla_wait_minutes}" =~ ^(0|[1-9]|1[0-9]|20)$ ]]; then
                 echo "::warning::WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES must be an integer from 0 to 20; using 10."
@@ -1870,6 +1970,10 @@ jobs:
                 fi
                 sleep "${wla_poll_secs}"
               done
+              # Fail-open cleanup, only once the report is on the branch
+              # (deleting a queued PR's head would close it). Not gh
+              # --delete-branch, which switches the local checkout mid-job;
+              # the ls-remote check skips a branch GitHub already deleted.
               if [ "${report_delivery}" = "pr_merged" ] \
                  && git ls-remote --exit-code --heads origin "${REPORT_PR_BRANCH}" >/dev/null 2>&1 \
                  && ! git push origin --delete "${REPORT_PR_BRANCH}"; then
@@ -1903,6 +2007,7 @@ jobs:
           WLA_REPORT_DELIVERY: ${{ steps.commit_report.outputs.delivery || '' }}
           WLA_COMMIT_OUTCOME: ${{ steps.commit_report.outcome || '' }}
           WLA_REPORT_VIA_PR: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR || 'true' }}
+          WLA_TG_REPORT_FILE: ${{ steps.commit_report.outputs.report_file || steps.analyze.outputs.report_file || '' }}
         run: |
           set -euo pipefail
 
@@ -1922,7 +2027,9 @@ jobs:
           # commit_report may rename REPORT_FILE on a concurrent-write
           # collision; use its output when present so the Telegram link
           # points at the file that was actually pushed.
-          REPORT_FILE="${{ steps.commit_report.outputs.report_file || steps.analyze.outputs.report_file || '' }}"
+          # Read through env (WLA_TG_REPORT_FILE) so the LLM-run analyze
+          # output never reaches the shell as code.
+          REPORT_FILE="${WLA_TG_REPORT_FILE:-}"
           REPORT_URL=""
           if [ -n "${REPORT_FILE}" ]; then
             REPORT_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/${REPORT_FILE}"

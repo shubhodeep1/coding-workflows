@@ -200,6 +200,67 @@ def test_prepare_analysis_context_marks_insufficient_data_when_empty():
 	assert "insufficient" in ctx["analysis_guidance"].lower()
 
 
+def test_prepare_analysis_context_carries_collector_coverage() -> None:
+	ctx = analyzer.prepare_analysis_context(
+		{
+			"source_files": [],
+			"collector_report": {
+				"runs": [],
+				"summary": {"total_runs": 0},
+				"errors": [],
+				"coverage": {
+					"repositories_requested": ["o/a", "o/b", 7, "o/c"],
+					"repositories_failed": [
+						{"repository": "o/b", "message": "HTTP 403", "extra": "dropped"},
+						{"repository": 5, "message": "bad"},
+						"not-a-dict",
+						{"repository": "o/d", "message": None},
+					],
+					"repositories_truncated": ["o/c", None],
+					"page_limit_reached": "yes",
+				},
+			},
+			"run_metrics": None,
+			"summary_stats": None,
+		}
+	)
+	assert ctx["coverage"] == {
+		"repositories_requested": ["o/a", "o/b", "o/c"],
+		"repositories_failed": [
+			{"repository": "o/b", "message": "HTTP 403"},
+			{"repository": "o/d", "message": ""},
+		],
+		"repositories_truncated": ["o/c"],
+		"page_limit_reached": False,
+	}
+	ctx_true = analyzer.prepare_analysis_context(
+		{"collector_report": {"runs": [], "coverage": {"page_limit_reached": True}}}
+	)
+	assert ctx_true["coverage"]["page_limit_reached"] is True
+	assert ctx_true["coverage"]["repositories_failed"] == []
+
+
+def test_prepare_analysis_context_omits_coverage_when_absent() -> None:
+	base = {
+		"source_files": [],
+		"collector_report": {"runs": [], "summary": {"total_runs": 0}, "errors": []},
+		"run_metrics": None,
+		"summary_stats": None,
+	}
+	ctx = analyzer.prepare_analysis_context(base)
+	assert "coverage" not in ctx
+	assert set(ctx) == {
+		"source_files", "scope", "summary", "per_repo", "per_workflow_family", "failing_runs",
+		"slow_runs", "recent_runs", "errors", "insufficient_data", "analysis_guidance",
+	}
+	bad = analyzer.prepare_analysis_context(
+		{"collector_report": {"runs": [], "coverage": ["not", "an", "object"]}}
+	)
+	assert "coverage" not in bad
+	metrics_only = analyzer.prepare_analysis_context({"run_metrics": [], "summary_stats": None})
+	assert "coverage" not in metrics_only
+
+
 def test_prepare_analysis_context_failing_runs_sorted_by_duration():
 	runs = [
 		{"repository": "o/r", "run_id": 1, "conclusion": "failure", "duration_seconds": 10},

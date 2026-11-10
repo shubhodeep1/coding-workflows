@@ -10,6 +10,7 @@ Refs #9116.
 
 from __future__ import annotations
 
+import functools
 import os
 import subprocess
 from pathlib import Path
@@ -56,6 +57,8 @@ def _read(path: Path) -> str:
 	return path.read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
+# Rendered once per process; every test reads the same output.
+@functools.lru_cache(maxsize=None)
 def _render() -> str:
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
