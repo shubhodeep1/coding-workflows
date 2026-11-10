@@ -1290,6 +1290,9 @@ jobs:
           WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED || 'true' }}
           WLA_WINDOW_START: ${{ needs.collect-logs.outputs.window_start }}
           WLA_WINDOW_END: ${{ needs.collect-logs.outputs.window_end }}
+          # A repos_override run covers only some repositories, so its report
+          # gets no window marker (a full-roster run must not start there).
+          WLA_REPOS_OVERRIDE: ${{ github.event.inputs.repos_override || '' }}
         run: |
           set -euo pipefail
 
@@ -1685,7 +1688,10 @@ jobs:
           wla_marker_start="${WLA_WINDOW_START:-}"
           wla_marker_end="${WLA_WINDOW_END:-}"
           wla_marker_run="${GITHUB_RUN_ID:-}"
-          if [[ "${wla_marker_end}" =~ ${wla_marker_iso_re} ]] \
+          wla_marker_override="${WLA_REPOS_OVERRIDE:-}"
+          if [ -n "${wla_marker_override//[[:space:]]/}" ]; then
+            echo "::warning::repos_override limited this run to some repositories; publishing the report without the window marker so a later since_last_report run does not skip the others."
+          elif [[ "${wla_marker_end}" =~ ${wla_marker_iso_re} ]] \
             && { [ "${wla_marker_start}" = "unknown" ] || [[ "${wla_marker_start}" =~ ${wla_marker_iso_re} ]]; } \
             && [[ "${wla_marker_run}" =~ ^[0-9]+$ ]] && [ -f "${REPORT_FILE}" ]; then
             wla_marker_first="$(head -n 1 "${REPORT_FILE}" 2>/dev/null || true)"

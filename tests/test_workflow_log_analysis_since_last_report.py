@@ -367,6 +367,23 @@ def test_analyze_step_skips_an_invalid_window_with_a_warning() -> None:
 			assert report.read_text(encoding="utf-8") == "# r\n"
 
 
+def test_analyze_step_skips_the_marker_for_a_repos_override_run() -> None:
+	end = _iso(_now() - dt.timedelta(hours=1))
+	for override, marked in (("o/r", False), (" o/a, o/b ", False), ("  ", True), ("", True)):
+		with tempfile.TemporaryDirectory() as raw:
+			report = Path(raw) / "r.md"
+			report.write_text("# r\n", encoding="utf-8")
+			proc = _run_marker(report, WLA_WINDOW_START="unknown", WLA_WINDOW_END=end, WLA_REPOS_OVERRIDE=override)
+			assert proc.returncode == 0, proc.stderr
+			text = report.read_text(encoding="utf-8")
+			if marked:
+				assert text == _marker(end, "unknown", "987") + "\n# r\n", override
+			else:
+				# A single-repo window must not become a full-roster start.
+				assert text == "# r\n", override
+				assert "::warning::repos_override limited this run" in proc.stdout
+
+
 def test_marker_and_window_static_contract() -> None:
 	wf = WF_PATH.read_text(encoding="utf-8")
 	inputs = wf.split("    inputs:\n", 1)[1].split("\n  schedule:\n", 1)[0]
@@ -381,6 +398,7 @@ def test_marker_and_window_static_contract() -> None:
 	analyze = _step_text(WF_PATH, "Run workflow log analysis")
 	assert "WLA_WINDOW_START: ${{ needs.collect-logs.outputs.window_start }}" in analyze
 	assert "WLA_WINDOW_END: ${{ needs.collect-logs.outputs.window_end }}" in analyze
+	assert "WLA_REPOS_OVERRIDE: ${{ github.event.inputs.repos_override || '' }}" in analyze
 	body = _run_body(analyze)
 	marker_at = body.index(MARKER_BEGIN)
 	gap_at = body.index('if [ "${wla_logs_missing}" = "true" ]; then\n  if ! python3 -I -B scripts/check_workflow_analysis_report.py --insert-data-gap')

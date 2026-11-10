@@ -95,6 +95,7 @@ def test_dispatch_inputs_are_bound_through_step_environments() -> None:
 			"LOOKBACK_DAYS_INPUT",
 			"SINCE_LAST_REPORT_INPUT",
 		},
+		("workflow-log-analysis.yml", "analyze-commit-notify", "Run workflow log analysis"): {"WLA_REPOS_OVERRIDE"},
 		("mark-stable.yml", "resolve-version", "Resolve version tag"): {"INPUT_VERSION"},
 		("test-and-mark-stable.yml", "resolve-version", "Resolve version tag"): {"INPUT_VERSION"},
 		("promote-main-to-stable.yml", "promote", "Dispatch test-and-mark-stable on stable"): {
