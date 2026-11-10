@@ -5318,7 +5318,9 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # case, one `gh issue edit` to backfill ai:merged before close. For an
 # ai:check-triage issue whose implementation PR the existing rules rejected,
 # at most one more `pulls/<N>` read for the marker PR (plus the per-tick
-# memoized `user` read).
+# memoized `user` read). Every open ai:check-triage issue in the third list
+# costs its timeline read each tick, up to 200 issues, even while no fix PR
+# has merged yet.
 close_merged_issues_sweep() {
   if [ "${ENABLE_CLOSE_MERGED_ISSUES}" != "true" ]; then
     echo "Close merged issues sweep disabled by ENABLE_CLOSE_MERGED_ISSUES=${ENABLE_CLOSE_MERGED_ISSUES}."
@@ -5415,6 +5417,7 @@ close_merged_issues_sweep() {
   local _sweep_issue_body _sweep_is_managed _sweep_declared_branch _sweep_declared_parsed
   local _sweep_base_log _sweep_declared_log _sweep_non_target_note
   local _sweep_triage_branch _sweep_triage_parsed _sweep_target_ok
+  local _sweep_triage_rc _sweep_cand_head_repo _sweep_cand_head_ref _sweep_cand_bound
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -5504,15 +5507,29 @@ close_merged_issues_sweep() {
         else
           # Issue #8955: only after the existing rules rejected the merge,
           # resolve the ai:check-triage marker PR's head branch once per issue.
-          if [ "${_sweep_triage_parsed}" != "true" ]; then
+          # Like issue_pr_status.yml, the candidate must have a same-repository
+          # head bound to this issue (ai/issue-<n>, optional -/ suffix).
+          _sweep_cand_head_repo="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.head.repo.full_name // ""' 2>/dev/null || echo "")"
+          _sweep_cand_head_ref="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+          _sweep_cand_bound=false
+          if [ -n "${GITHUB_REPOSITORY:-}" ] && [ "${_sweep_cand_head_repo}" = "${GITHUB_REPOSITORY}" ] \
+              && [[ "${_sweep_cand_head_ref}" =~ ^ai/issue-${issue_num}([-/].*)?$ ]]; then
+            _sweep_cand_bound=true
+          fi
+          if [ "${_sweep_cand_bound}" = "true" ] && [ "${_sweep_triage_parsed}" != "true" ]; then
+            _sweep_triage_rc=0
             _close_sweep_check_triage_branch "${issue_num}" \
               "$(echo "${issues_json}" | jq -c --argjson i "${idx}" '.[$i].labels // []' 2>/dev/null || echo "[]")" \
               "${_sweep_issue_body}" \
-              "$(echo "${issues_json}" | jq -r --argjson i "${idx}" '.[$i].author // ""' 2>/dev/null || echo "")" || true
+              "$(echo "${issues_json}" | jq -r --argjson i "${idx}" '.[$i].author // ""' 2>/dev/null || echo "")" || _sweep_triage_rc=$?
+            if [ "${_sweep_triage_rc}" = "2" ]; then
+              # Transient marker-PR read failure: defer like a failed candidate fetch.
+              sweep_pr_fetch_failed=true
+            fi
             _sweep_triage_branch="${_CLOSE_SWEEP_TRIAGE_BRANCH}"
             _sweep_triage_parsed=true
           fi
-          if [ -n "${_sweep_triage_branch}" ] \
+          if [ "${_sweep_cand_bound}" = "true" ] && [ -n "${_sweep_triage_branch}" ] \
               && _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}" "${_sweep_triage_branch}"; then
             _sweep_target_ok=true
           fi
@@ -21365,7 +21382,11 @@ _pr_json_base_is_target_merge() {
 # text. API budget (CLAUDE.md §14): at most one `pulls/<N>` read
 # (_fetch_pr_json) per candidate issue, made only after the existing
 # target-merge rules rejected the merge, plus the memoized `user` read.
-# Every failure leaves the result empty (fail closed).
+# Every failure leaves the result empty (fail closed). Returns 2 (after a
+# rejected=check_triage_pr_fetch_failed line) when the marker PR read failed,
+# so the caller defers the issue like a failed candidate fetch; 1 otherwise.
+# The caller resolves it only for a candidate PR with a same-repository
+# ai/issue-<n> head, the binding issue_pr_status.yml requires.
 _CLOSE_SWEEP_TRIAGE_BRANCH=""
 _close_sweep_check_triage_branch() {
   local issue_num="$1"
@@ -21385,7 +21406,8 @@ _close_sweep_check_triage_branch() {
   [[ "${_triage_pr}" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
   _triage_pr_json="$(_fetch_pr_json "${_triage_pr}")"
   if [ -z "${_triage_pr_json}" ] || [ "${_triage_pr_json}" = "{}" ]; then
-    return 1
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_marker_pr=${_triage_pr} rejected=check_triage_pr_fetch_failed"
+    return 2
   fi
   _triage_head_repo="$(printf '%s' "${_triage_pr_json}" | jq -r '.head.repo.full_name // ""' 2>/dev/null || echo "")"
   _triage_head_ref="$(printf '%s' "${_triage_pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"

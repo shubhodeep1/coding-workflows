@@ -2858,6 +2858,26 @@ CHECK_TRIAGE_PR_MARKER_RE = re.compile(r"^ {0,3}<!-- check-failure-triage:pr=([1
 CHECK_TRIAGE_LABEL_NAME = "ai:check-triage"
 
 
+def _check_triage_lines_outside_fences(body: str) -> list[str]:
+	"""Body lines outside code fences.
+
+	Copy of check_triage_resolution._lines_outside_fences (a test compares
+	the two), so a marker quoted inside a fence is not counted.
+	"""
+	fence: str | None = None
+	kept: list[str] = []
+	for line in body.split("\n"):
+		match = re.match(r" {0,3}(`{3,}|~{3,})", line)
+		if fence is None:
+			if match:
+				fence = match.group(1)
+				continue
+			kept.append(line)
+		elif match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) and not line[match.end():].strip():
+			fence = None
+	return kept
+
+
 def check_triage_target_branch(
 	issue_body: Any,
 	labels: Any,
@@ -2877,7 +2897,8 @@ def check_triage_target_branch(
 	- ``author_login`` and ``pipeline_login`` are non-empty and equal,
 	case-insensitively (the issue was written by the pipeline login);
 	- the body has exactly one ``<!-- check-failure-triage:pr=<N> -->`` line
-	(CHECK_TRIAGE_PR_MARKER_RE); zero or several markers return None.
+	outside code fences (CHECK_TRIAGE_PR_MARKER_RE, fence rule shared with
+	check_triage_resolution); zero or several markers return None.
 
 	API budget: this function makes no API calls. Callers make at most one
 	``GET pulls/<N>`` per issue, only after the existing target-branch rules
@@ -2904,7 +2925,7 @@ def check_triage_target_branch(
 		return None
 	markers = [
 		match.group(1)
-		for match in (CHECK_TRIAGE_PR_MARKER_RE.match(line.rstrip("\r")) for line in issue_body.split("\n"))
+		for match in (CHECK_TRIAGE_PR_MARKER_RE.match(line.rstrip("\r")) for line in _check_triage_lines_outside_fences(issue_body))
 		if match
 	]
 	if len(markers) != 1:

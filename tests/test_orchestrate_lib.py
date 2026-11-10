@@ -3381,6 +3381,16 @@ def test_check_triage_marker_pattern_matches_resolution_gate() -> None:
 	assert orchestrate_lib.CHECK_TRIAGE_PR_MARKER_RE.pattern == check_triage_resolution.PR_MARKER_RE.pattern
 
 
+def test_check_triage_target_branch_ignores_fenced_marker_copies() -> None:
+	import check_triage_resolution
+
+	fn = orchestrate_lib.check_triage_target_branch
+	body = _TRIAGE_BODY + "```\n<!-- check-failure-triage:pr=5038 -->\n```\n~~~~\n<!-- check-failure-triage:pr=9 -->\n~~~~\n"
+	assert fn(body, ["ai:check-triage"], "bot", "bot") == 5038
+	for sample in (body, _TRIAGE_BODY, "a\n```\nb\n~~~\nc\n```\nd\n", "```\nunclosed\n"):
+		assert orchestrate_lib._check_triage_lines_outside_fences(sample) == check_triage_resolution._lines_outside_fences(sample)
+
+
 def _run_check_triage_target_pr_cli(body: str, *extra: str) -> subprocess.CompletedProcess:
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
