@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_chatgpt_reviewer_slot.py:124 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The new test test_shipped_pool_config_file_exists_and_keeps_the_slot_off asserts `POOL_CONFIG.is_file()` for .github/ai/chatgpt_pool.json (defined at line 40), but the PR never creates that file, so the test fails on every run.\n  WHY: CI log shows \"AssertionError: missing shipped switch file: .github/ai/chatgpt_pool.json\" (\"1 failed, 87 passed\") and the aggregate lint job fails; the test is correct, and the fix is to add the data file, not to weaken the test (reviewer severity BLOCKER, mapped to critical).\n- changelog.d/chatgpt-pool-config-file.md:2 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The changelog fragment says `.github/ai/chatgpt_pool.json` is committed with `reviewer_slot_enabled: false`, `model: gpt-6-sol`, but that file is in neither the PR diff nor the checkout.\n  WHY: If merged as is, the changelog records a fix that never landed, resolve_chatgpt_slot keeps returning reason=config_missing (scripts/claude_engine.py line 243) instead of switch_off, and the go-live PR has no file to edit (reviewer severity MAJOR, mapped to high).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Create `.github/ai/chatgpt_pool.json` with exactly the plan's content, JSON, 2-space indentation, trailing newline: {\"reviewer_slot_enabled\": false, \"model\": \"gpt-6-sol\", \"replaces\": \"openai/gpt-6-luna\", \"reasoning\": \"xhigh\"}. `reviewer_slot_enabled` MUST stay `false`.\" (issue #9111, Required change item 1)\n  expected_change_site: .github/ai/chatgpt_pool.json (new file; four keys in order, 2-space indented, trailing newline)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: pr_changed_files.txt lists only changelog.d/chatgpt-pool-config-file.md and tests/test_review_chatgpt_reviewer_slot.py, the PR diff has no hunk for .github/ai/chatgpt_pool.json, a glob of .github/ai/* returns only claude_engine.json, and the issue does not defer this file (earlier editor runs skipped it because of a sandbox write limit, not a scope deferral)\n- requirement: Acceptance: \"`PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_chatgpt_reviewer_slot.py` passes.\"\n  expected_change_site: .github/ai/chatgpt_pool.json (the same missing file; the test needs no change)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: tests-hooks-and-orchestrator log reports \"1 failed, 87 passed\" with the failure in test_shipped_pool_config_file_exists_and_keeps_the_slot_off at line 124, and the PR description's pre-push gate reports \"Failures caused by this change: 1\"\n- requirement: \"Acceptance: `.github/ai/chatgpt_pool.json` exists, with `reviewer_slot_enabled: false` and the plan's model, replaces and reasoning values.\"\n  expected_change_site: .github/ai/chatgpt_pool.json\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: no file on the ref and no diff hunk for it; same root cause, so one data file closes all three gaps and both findings\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_chatgpt_reviewer_slot.py:line 124 | severity=BLOCKER | confidence=5\n  PROBLEM: test_shipped_pool_config_file_exists_and_keeps_the_slot_off requires the committed switch file (POOL_CONFIG at line 40 = REPO_ROOT / \".github\" / \"ai\" / \"chatgpt_pool.json\"), but the PR never creates it.\n  WHY: is_file() returns False and the test fails with \"AssertionError: missing shipped switch file: .github/ai/chatgpt_pool.json\" (CI: \"1 failed, 87 passed\"; the lint job fails on tests-hooks-and-orchestrator). Once the file exists, resolve_chatgpt_slot in scripts/claude_engine.py (lines 240-247 and 284) gives source=\"file\" and reason=\"switch_off\". Fix: add the file, do not weaken the test.\n- changelog.d/chatgpt-pool-config-file.md:line 2 | severity=MAJOR | confidence=5\n  PROBLEM: The fragment says the switch file ships, but the file is in neither the PR diff nor the checkout.\n  WHY: The changelog would record a fix that never landed, resolve_chatgpt_slot keeps returning reason=config_missing (scripts/claude_engine.py line 243), and the go-live PR has no file to edit. Adding the file makes the fragment accurate.\n- TASK_GAP | severity=BLOCKER | confidence=5\n  Requirement: Create `.github/ai/chatgpt_pool.json` with {\"reviewer_slot_enabled\": false, \"model\": \"gpt-6-sol\", \"replaces\": \"openai/gpt-6-luna\", \"reasoning\": \"xhigh\"}, 2-space indent, trailing newline, with the slot kept off (issue #9111 item 1).\n  Expected change site: .github/ai/chatgpt_pool.json (new file)\n  Evidence of absence: not in pr_changed_files.txt, no diff hunk, and a glob of .github/ai/* returns only claude_engine.json; the issue does not defer it.\n- TASK_GAP | severity=BLOCKER | confidence=5\n  Requirement: Acceptance: the pytest command for tests/test_review_chatgpt_reviewer_slot.py passes.\n  Expected change site: .github/ai/chatgpt_pool.json\n  Evidence of absence: CI reports \"1 failed, 87 passed\" at line 124, and the pre-push gate reports \"Failures caused by this change: 1\".\n- TASK_GAP | severity=BLOCKER | confidence=5\n  Requirement: Acceptance: `.github/ai/chatgpt_pool.json` exists with `reviewer_slot_enabled: false` and the plan's model, replaces and reasoning values.\n  Expected change site: .github/ai/chatgpt_pool.json\n  Evidence of absence: no file on the ref and no diff hunk; same root cause as above.\n- Notes: test item 2 and changelog item 3 are met. Copilot's comment that the dict equality at line 127 is brittle is not actionable (issue #9111 item 2 requires it). The generate-check failure is inherited from the merge-base, and the copilot-pull-request-reviewer failure was a curl 504 on GitHub's side; neither is caused by this diff. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "4aebe1cc06d599f98c38d0eb98575df0bf76abb61f5fca7dc0c9e148887ab0ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9112,
+    "run_id": "42746616397",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42746616397",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110032806_be4e752ff3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9112,
+    "run_id": "42746616397"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T03:28:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
