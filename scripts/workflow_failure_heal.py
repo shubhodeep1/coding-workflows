@@ -10212,7 +10212,10 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 	# green_runs runs after the anchor (all of which must be green below).
 	# Gating on full coverage would keep any long-held issue on a busy
 	# branch forever; a failure that comes back posts a trusted occurrence
-	# comment, which moves the anchor past it.
+	# comment, which moves the anchor past it. Residual (accepted, issue
+	# #8808 "flake closed early"): a post-anchor failure older than the page
+	# goes unseen when the intake did not correlate it or its occurrence post
+	# failed; only a recurrence (the next lineage generation) recovers it.
 	total_count = runs.get("total_count")
 	page_complete = isinstance(total_count, int) and not isinstance(total_count, bool) \
 		and total_count <= len(runs["workflow_runs"])
