@@ -4504,6 +4504,10 @@ The daily `audit_consumer_drift.yml` run sent a Telegram WARNING whenever a cons
 
 What this means for operators: a drift WARNING now always needs action, either a stuck sync pull request to merge or close, or a problem the audit could not fix itself.
 
+### For contributors
+
+The summary JSON's `repairs` entries gain `pr_created_at`, `pr_stale` and `pr_for_release` (false when the sync pull request was built for another release; its note then says to close it or wait for one for the current release instead of "merge or close it"). The report step treats a missing `pr_stale` (older summaries) as stale.
+
 - **The orchestrator now tracks a wave issue's review-blocked reissue instead of opening a duplicate.** When the review pipeline's review-blocked judge closed a wave PR and reissued its issue, the poller never mapped the new issue into the project, so the wave judge saw "closed without merge" and opened a second redo of the same work.
 
 On project #8969, wave issue #8970 was reissued as #8994 by `scripts/review_rb_judge.sh`, and eight minutes later the wave judge opened #8995 for the same Phase 1. Both PRs built it; #9003 merged and #9005 was left conflicting, and the project raised the CRITICAL "wave PR(s) closed without merge" alert. The poller (`scripts/orchestrate_poll_process.sh`) now finds such a reissue from the closed issue's timeline and re-points the wave entry at it before wave status or the judge run. The reissue must carry `ai:orchestrator-managed` and the `Tracking issue`, `Replaces` and `review-blocked-reissue` lines. `scripts/review_rb_judge.sh` also stops dropping a wave parent's `Local ID`, `Priority` and `Managed by` lines, which it discarded because wave issues write the integration branch without backticks.
@@ -4541,10 +4545,6 @@ What this means for operators: a project that reports "Integration branch supers
 `tests/test_orchestrate_integration_ahead_by_gate.py` adds three cases that drive the extracted function against a local bare `origin`: a stale clone after the child PR lands on the integration branch (not superseded), a real supersede where the default branch already has the change (still superseded), and an unreachable `origin` (not confident).
 
 `scripts/orchestrate_poll_process.sh` also adds `|| true` to the `blocker_stderr` cleanup pipeline in `_runtime_blocker_dispatch_eligible`. That line only builds the text of a fail-open warning, so under `set -euo pipefail` a failing `tr | sed | cut` can no longer abort the poller there. Behaviour is otherwise unchanged.
-
-### For contributors
-
-The summary JSON's `repairs` entries gain `pr_created_at`, `pr_stale` and `pr_for_release` (false when the sync pull request was built for another release; its note then says to close it or wait for one for the current release instead of "merge or close it"). The report step treats a missing `pr_stale` (older summaries) as stale.
 
 - **The poller's deterministic validation-failure short-circuit no longer depends on SIGPIPE-prone pipelines.** `mark_validation_failed()` in `scripts/orchestrate_poll_process.sh` now matches the `AI_VALIDATION_FAILURE_CLASS:deterministic_*` marker with one Bash regex match and reads the class from `BASH_REMATCH[1]`, instead of a `printf | grep -q` test and a `grep -o | head` extraction. Under `set -euo pipefail` those pipelines could return 141 (SIGPIPE) on a long failure comment, which skipped the short-circuit and spent the recovery budget on a failure that retrying cannot fix. The first marker still wins, the class charset is still `[a-z_]+`, and the log message, labels, comments and state updates are unchanged. Refs #8975.
 
