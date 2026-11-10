@@ -3,7 +3,7 @@
 
 - **Candidate cap.** At most `APPLY_ANALYSIS_MAX_CANDIDATES` (default `3`) unprocessed docs are listed. The cap is raised to `PROMOTE_CYCLE_MIN_DOCS` when that is larger, and `APPLY_ANALYSIS_CANDIDATE_CAP raised_to=<n> reason=promote_cycle_min_docs` goes to stderr. The promote cycle now passes `PROMOTE_CYCLE_MIN_DOCS` to the dispatcher.
 - **Marker cap.** After `APPLY_ANALYSIS_MAX_MARKER_SEARCHES` (default `20`) docs skipped for a trusted dispatch marker, the scan stops if another doc still needs a search (stderr `APPLY_ANALYSIS_MARKER_SEARCH_CAP reached=<n> next=<path>`). List-only mode appends ` capped_behind_markers=true` to its `APPLY_ANALYSIS_CANDIDATES` line. Dispatch mode still dispatches any doc it found; with none, it logs `APPLY_ANALYSIS_SKIPPED reason=scan_capped_behind_markers searches=<n>` instead of `all_docs_processed`.
-- **Promote cycle.** A capped list with fewer than `PROMOTE_CYCLE_MIN_DOCS` docs skips as `PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers available=<n> required=<m>`, with the same text as a `::warning::`. An uncapped low count still skips as `insufficient_docs`.
+- **Promote cycle.** A capped list with fewer than `PROMOTE_CYCLE_MIN_DOCS` docs skips as `PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers available=<n> required=<m>`, with the same text as a `::warning::`. An uncapped low count still skips as `insufficient_docs`. The cycle's check uses one marker search less than the dispatcher (floor 1), because the proving run marks its own doc before the poller's verifying dispatch scans again, and that dispatch does not retry a capped scan.
 
 | The numbers that matter | Value |
 | --- | --- |

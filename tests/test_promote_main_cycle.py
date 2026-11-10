@@ -154,6 +154,7 @@ set -euo pipefail
 if [ "${APPLY_ANALYSIS_LIST_ONLY:-false}" = "true" ]; then
   if [ -n "${STUB_LIST_ENV_OUT:-}" ]; then
     echo "PROMOTE_CYCLE_MIN_DOCS=${PROMOTE_CYCLE_MIN_DOCS:-unset}" > "${STUB_LIST_ENV_OUT}"
+    echo "APPLY_ANALYSIS_MAX_MARKER_SEARCHES=${APPLY_ANALYSIS_MAX_MARKER_SEARCHES:-unset}" >> "${STUB_LIST_ENV_OUT}"
   fi
   echo "APPLY_ANALYSIS_CANDIDATES count=${STUB_CANDIDATES:-2} docs=a,b${STUB_CANDIDATES_SUFFIX:-}"
   exit 0
@@ -554,8 +555,23 @@ def test_capped_candidates_line_skips_as_scan_capped_behind_markers(available: s
 	assert "insufficient_docs" not in proc.stdout
 	assert "outcome=skipped:scan_capped_behind_markers" in final["github_output"]
 	assert not final.get("dispatches")
-	# The cycle passes its (non-exported) minimum so the dispatcher raises its cap.
-	assert list_env.strip() == "PROMOTE_CYCLE_MIN_DOCS=2"
+	# The cycle passes its (non-exported) minimum so the dispatcher raises its cap,
+	# and one marker search less than the dispatcher's default 20 so the proving
+	# run's own marker cannot cap the verifying dispatch's scan.
+	assert list_env.strip().splitlines() == ["PROMOTE_CYCLE_MIN_DOCS=2", "APPLY_ANALYSIS_MAX_MARKER_SEARCHES=19"]
+
+
+@pytest.mark.parametrize(("configured", "passed"), [("5", "4"), ("1", "1"), ("bogus", "19")])
+def test_candidates_check_leaves_one_marker_search_for_the_verifying_run(configured: str, passed: str) -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		list_env_out = Path(tmp) / "list_env.txt"
+		_run(
+			Path(tmp),
+			{"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}},
+			env={"STUB_CANDIDATES": "0", "STUB_LIST_ENV_OUT": str(list_env_out), "APPLY_ANALYSIS_MAX_MARKER_SEARCHES": configured},
+		)
+		list_env = list_env_out.read_text(encoding="utf-8")
+	assert f"APPLY_ANALYSIS_MAX_MARKER_SEARCHES={passed}" in list_env.splitlines()
 
 
 def test_capped_candidates_line_with_enough_docs_continues() -> None:

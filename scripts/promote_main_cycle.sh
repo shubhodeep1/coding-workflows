@@ -806,7 +806,16 @@ fi
 #    capped_behind_markers=true means the dispatcher's marker-search cap
 #    stopped the scan; the match is anchored at end of line so a doc path
 #    (which must end in .md) cannot fake it.
-candidates_line="$(PROMOTE_CYCLE_MIN_DOCS="${PROMOTE_CYCLE_MIN_DOCS}" APPLY_ANALYSIS_LIST_ONLY=true GITHUB_OUTPUT="" bash "${APPLY_ANALYSIS_DISPATCHER}" | sed -n '/^APPLY_ANALYSIS_CANDIDATES /p' | tail -n 1)"
+#    The check runs with one marker search less than the dispatcher's cap
+#    (floor 1): the proving run adds a trusted marker for its own doc before
+#    the poller's verifying dispatch scans again, and scan_capped_behind_markers
+#    is terminal there, so the check promises only what that scan can reach.
+promote_cycle_marker_cap="${APPLY_ANALYSIS_MAX_MARKER_SEARCHES:-20}"
+[[ "${promote_cycle_marker_cap}" =~ ^[1-9][0-9]{0,8}$ ]] || promote_cycle_marker_cap=20
+if [ "${promote_cycle_marker_cap}" -gt 1 ]; then
+	promote_cycle_marker_cap=$((promote_cycle_marker_cap - 1))
+fi
+candidates_line="$(APPLY_ANALYSIS_MAX_MARKER_SEARCHES="${promote_cycle_marker_cap}" PROMOTE_CYCLE_MIN_DOCS="${PROMOTE_CYCLE_MIN_DOCS}" APPLY_ANALYSIS_LIST_ONLY=true GITHUB_OUTPUT="" bash "${APPLY_ANALYSIS_DISPATCHER}" | sed -n '/^APPLY_ANALYSIS_CANDIDATES /p' | tail -n 1)"
 candidate_count="$(printf '%s\n' "${candidates_line}" | sed -n 's/^APPLY_ANALYSIS_CANDIDATES count=\([0-9]*\).*/\1/p')"
 [[ "${candidate_count}" =~ ^[0-9]+$ ]] || candidate_count=0
 candidates_capped=false
