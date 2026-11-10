@@ -884,7 +884,9 @@ def _park_command(args: argparse.Namespace, github_factory: Callable[[str], Any]
 	if args.kind in WAIT_KINDS:
 		target = target_label({"kind": args.kind, "repo": args.target_repo, "number": number})
 	status = park(github_factory(args.repo), args.repo, int(args.issue_number), args.kind, args.target_repo, number, args.phase, args.run_url or "")
-	_park_log("park", args.issue_number, target, args.phase, status)
+	# label_failed means the trusted marker comment already posted: say so, so an
+	# operator can spot a marker stranded on an issue that went to ai:blocked.
+	_park_log("park", args.issue_number, target, args.phase, status, "marker_posted" if status == "label_failed" else "")
 	return {"status": status, "target": target}
 
 

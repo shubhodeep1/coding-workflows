@@ -761,6 +761,14 @@ def test_cli_prints_one_json_line_and_exits_zero(tmp_path: Path, capsys: pytest.
 	assert json.loads(capsys.readouterr().out) == {"status": "parked", "target": "pr:owner/repo#7"}
 	assert dwr.main(["park", "--repo", REPO, "--issue-number", "5", "--kind", "pr", "--target-repo", REPO, "--number", "x7", "--phase", "plan"], github_factory=_boom) == 0
 	assert json.loads(capsys.readouterr().out)["status"] == "invalid_args"
+	gh = FakeGitHub()
+	gh.add_issue(5, {"ai:clarification"})
+	gh.targets[(REPO, 7)] = _pr()
+	gh.add_labels = lambda number, labels: False
+	assert dwr.main(park_argv, github_factory=lambda _repo: gh) == 0
+	captured = capsys.readouterr()
+	assert json.loads(captured.out) == {"status": "label_failed", "target": "pr:owner/repo#7"}
+	assert "outcome=label_failed detail=marker_posted" in captured.err and len(gh.posted) == 1
 
 
 # ---------------------------------------------------------------------------
