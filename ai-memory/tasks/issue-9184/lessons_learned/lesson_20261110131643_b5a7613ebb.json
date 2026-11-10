@@ -1,0 +1,25 @@
+{
+  "discovered_at": "2026-11-10T13:16:43Z",
+  "issue_number": 9184,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=scripts/stage_support_for_phase.sh:80-83, 99-149, 188-204, 329-339; cited_path=scripts/stage_support_for_phase.sh, scripts/run_plan_codex.sh, .github/workflows/clarify.yml, .github/workflows/plan.yml, agents.d/stuck-states-p2b-implement-support-scripts.md; files_touched=.github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p10-operator-step-resolve.md, changelog.d/stuck-states-p10-operator-step-resolve.md, prompts/_templates/mode-activation-verify.txt, prompts/mode-activation-verify.txt, scripts/activation_verify.sh, scripts/operator_step_issue.py, tests/test_activation_verify.py, tests/test_operator_step_issue.py, tests/test_unblock_judge.py.",
+  "phase": "review_autofix",
+  "pr_number": 9186,
+  "record_id": "lesson_20261110131643_b5a7613ebb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/stage_support_for_phase.sh, scripts/run_plan_codex.sh, .github/workflows/clarify.yml, .github/workflows/plan.yml, agents.d/stuck-states-p2b-implement-support-scripts.md",
+    "scripts/stage_support_for_phase.sh",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/stuck-states-p10-operator-step-resolve.md",
+    "changelog.d/stuck-states-p10-operator-step-resolve.md",
+    "prompts/_templates/mode-activation-verify.txt",
+    "prompts/mode-activation-verify.txt",
+    "scripts/activation_verify.sh",
+    "scripts/operator_step_issue.py",
+    "tests/test_activation_verify.py",
+    "tests/test_operator_step_issue.py",
+    "tests/test_unblock_judge.py"
+  ]
+}
