@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- External check run copilot-pull-request-reviewer (job 129599567931, run 42746434732; no repository file) | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The copilot-pull-request-reviewer check fails with HTTP 422 custom_instructions_too_large before producing any review output.\n  WHY: The repo-wide AGENTS.md/CLAUDE.md custom instructions exceed the external service's prompt limit, and no changed file causes or can fix it. Severity disagreement: sonnet-5_5 said MAJOR, openai_gpt-6-luna and z-ai_glm-5_3-flash said NIT, so the highest is used.\n- CHANGELOG.md:@@ -4524,6 +4524,24 @@ | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The PR edits CHANGELOG.md directly, against the \"Never edit CHANGELOG.md directly\" rule, and adds a duplicate \"### For contributors\" heading in the same release section.\n  WHY: This bypasses the changelog.d fragment contract. The content is inherited from stable, so any fix may belong on stable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- CLAUDE.md (check-run copilot-pull-request-reviewer, job 129599567931, log lines 2026-11-10T03:08:47.35 and 2026-11-10T03:08:54.69) | severity=MAJOR | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check on head 7ee855172b5e89c3f9eba650a88e8e20e7d5d78c fails with HTTP 422 before producing any review output.\n  WHY: The external reviewer rejects the request because the repo-wide custom instructions are too large (custom_instructions_too_large). None of the three changed files feeds that payload. A root-level AGENTS.md was not found in the working tree, so the size could not be measured.\n- CHANGELOG.md:@@ -4524,6 +4524,24 @@ | severity=NIT | confidence=3\n  PROBLEM: The PR edits CHANGELOG.md directly, against CLAUDE.md's \"Never edit CHANGELOG.md directly\" rule, and adds a duplicate \"### For contributors\" heading.\n  WHY: It bypasses the fragment assembler contract (tests/test_changelog_fragment_contract.py lines 115-116, 147-148). No test fails on it. The content is inherited from stable.\n- HARDENING_SUGGESTIONS: scripts/orchestrate_poll_process.sh:10077-10079 (evaluate_sync_superseded_by_main)\n  PROBLEM: The new git fetch has no time bound, so a stalled fetch blocks the poll tick until the 15-minute job timeout.\n  WHY: Suggested fix: prefix with `timeout 120`, so a timeout exits 124 and takes the existing fail-closed branch at line 10080. (1 line changed.) HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- External check run `copilot-pull-request-reviewer` (run 42746434732, job 129599567931; no repository file) | severity=NIT | confidence=5\n  PROBLEM: The reviewer check failed with HTTP 422 custom_instructions_too_large before it reviewed the PR.\n  WHY: The request was rejected after loading AGENTS.md and CLAUDE.md, leaving that automated review incomplete. The failure is not mapped to a changed code hunk.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- External check-run copilot-pull-request-reviewer (run 42746434732, job 129599567931; no repository file) | severity=NIT | confidence=5\n  PROBLEM: The external reviewer check failed with HTTP 422 custom_instructions_too_large before reviewing any code.\n  WHY: The injected repo-wide AGENTS.md/CLAUDE.md payload exceeded the service's prompt limit. No hunk in this PR feeds or worsens it, so it is unactionable within this diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9dbbd67858aa526f79a437cb247e7b8cd822e4165ddc7fb69a75c3b91d19ec27",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9177,
+    "run_id": "42746413986",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42746413986",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110041658_7b5d4f42c0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9177,
+    "run_id": "42746413986"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-10T04:16:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
