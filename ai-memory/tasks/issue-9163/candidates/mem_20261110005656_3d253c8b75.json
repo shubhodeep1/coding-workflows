@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: rewrite the smoke canary file (canary-a)\n\nPlanning ref: `orchestrator/project-9162` at `9420ed34b9474a852f544423ce5bd1d47b9b4d24`. The integration branch mismatch line reads `false`.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_e2e_editor_smoke_canary.py\nACCEPTANCE: post-merge none: this is a data-only smoke canary edit and no workflow depends on the run ID after merge\n\n## Functions or modules to implement\nNone. Only the file's contents change. Today the file holds `status: ok` and `decompose-run: 41445772297`, each line ending in a newline. Change the second line to `decompose-run: 42730467671` and keep the trailing newline. The result is exactly two lines.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Edit only the canary file, not the advisory test list\n- Chosen: change only `tests/e2e_smoke_canary.txt`.\n- Alternatives considered: also edit the 11 test files on the decomposition's \"expected files\" list.\n- Why: the issue says to touch no other file. A search found that no test under `tests/` contains `decompose-run` or the old run ID `41445772297`. The tests on that list only mention the canary path, so they need no change.\n\n## Security considerations\nNo trust boundary, endpoint, secret or external input is involved. The only risk is touching more than the one file. Leaving `tests/e2e_smoke_canary_b.txt` alone avoids a conflict with the parallel sibling issue.\n\n## Potential risks or edge cases\n- The trailing newline must be kept, and no blank line or CRLF line ending may be added.\n- Conflict flag: the decomposition's advisory \"expected files\" list does not match the issue's \"edit only this file\" rule. The issue's rule wins.\n- Open smoke PRs #8786, #8368 and #8304 also touch this file. They come from older runs and do not affect this branch.\n\n## Testing considerations\n- `head -n1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 42730467671`.\n- `wc -l` reports 2.\n- `git diff --stat` lists only `tests/e2e_smoke_canary.txt`.\n- The existing test `tests/test_e2e_editor_smoke_canary.py` should still pass.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for one exact change to one data file and says no other file may be touched. Nothing is reduced or expanded: the full change is a single line, so the \"complete\" and \"shortcut\" options are the same.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this is a data-only smoke canary edit and no workflow depends on the run ID after merge\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_e2e_editor_smoke_canary.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "0f6fc5ef886a3658fca5b6d084b570353f7220603558560fb663e0f0821fa4e4",
+  "lineage": {
+    "issue_number": 9163,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42731576365",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42731576365",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9163"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261110005656_3d253c8b75",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9163,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "42731576365"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9163",
+  "timestamps": {
+    "created_at": "2026-11-10T00:56:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
