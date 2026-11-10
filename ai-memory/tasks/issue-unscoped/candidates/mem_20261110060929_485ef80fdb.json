@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_merge_train.py:3116-3146 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The test reads the slot hour in `_stall_alert_setup` (line 3116) and reads `today` separately (lines 3136-3146). If UTC midnight falls between the two reads, `today` is the next date while the script stamps the slot-start date, so the `alert_date` assertion and the second-tick fixture use the wrong date.\n  WHY: The race window is microseconds wide, so it is essentially unreachable. The reviewers rated it NIT with confidence 2, 3 and 4. Anthropic called it not worth another edit, and minimax suggested computing the date from `slot_start` as the sibling test does.\n- scripts/review_merge_train.sh:1481-1483 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `stall_today` is computed with separate `date` calls from `stall_now_hour`, which can race around UTC midnight.\n  WHY: If midnight passes between the two calls, the daily alert comment could be keyed to the wrong date. The reviewer rated it NIT. Another reviewer said the script derives `stall_now_hour` from a single `stall_now_epoch`, which would contradict this claim.\n- CI check-run `copilot-pull-request-reviewer` (job 129658008379) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The external Copilot reviewer fails with 422 `custom_instructions_too_large` (\"Prompt too big after adding system message\") before it analyses any code.\n  WHY: It is an external size limit, and this PR touches neither `AGENTS.md` nor `CLAUDE.md`. Seven other checks were still in progress, so a pass for those checks is unconfirmed. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_merge_train.py:3136-3141 | severity=low | confidence=2\n  PROBLEM: `today = _today_utc()` is read after `_stall_alert_setup`. A microsecond gap remains between the setup hour read and the `today` read. If setup runs in hour 23 and `today` is read just after midnight, `today` is the next date while the script stamps the slot-start date.\n  WHY: It only fails if UTC midnight falls inside that gap, so it is essentially unreachable. The last-run diff made the test more stable, so another edit is not worth it. The reviewer rated it NIT.\n- CI check-run `copilot-pull-request-reviewer` (job 129658008379) | severity=low | confidence=2\n  PROBLEM: The external Copilot reviewer fails before it analyses any code, with `Error creating PR review request: Error: Prompt too big after adding system message` (statusCode 422, errorCode custom_instructions_too_large).\n  WHY: It is an external size limit, and this PR does not touch `AGENTS.md` or `CLAUDE.md`. `collection_status` is `timeout` and 7 other checks were still in progress, so a pass for those checks is not confirmed. The reviewer rated it NIT.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_merge_train.sh:1481-1483 | severity=low | confidence=4\n  PROBLEM: The calculation of `stall_today` relies on two separate `date` calls that are prone to a race condition around midnight.\n  WHY: If midnight UTC passes between the `stall_now_hour` derivation and the `stall_today` calculation, the daily alert comment could be keyed to the wrong date. The reviewer rated it NIT.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_merge_train.py:3140-3146 | severity=low | confidence=3\n  PROBLEM: The test captures `today = _today_utc()` once after `_stall_alert_setup` (line 3116) and reuses it. A residual race remains between the setup hour read and the `today` capture. If setup reads hour 23 just before midnight and `today` is read just after midnight, the script's `stall_today` is the previous day's date while `today` is the new day's date. The `alert_date` assertion and the `_stall_note(900, today)` fixture then use the wrong date.\n  WHY: The race window is narrow (microseconds around midnight UTC). The sibling test `test_release_queue_age_note_is_keyed_by_the_slot_start_date` computes `expected_date` from `slot_start` (`timedelta(hours=1)`), and the same pattern would remove the race. The reviewer rated it NIT.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_merge_train.py:3116,3140-3141 | severity=low | confidence=4\n  PROBLEM: The test captures the slot hour during setup, then reads the expected date separately. If setup captures hour 23 and midnight passes before `_today_utc()`, `today` is the next date, not the slot's start date.\n  WHY: The script stamps the alert with the date on which the slot started. In this boundary case, the assertion at line 3146 expects the next date and fails, and the second-tick fixture also uses that wrong date. The reviewer rated it NIT.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f92f6c587a36e2bcd474243962c9c3761dc8c34864ca92cfd6b1eedba27162d5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9172,
+    "run_id": "42764590655",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42764590655",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110060929_485ef80fdb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9172,
+    "run_id": "42764590655"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-10T06:09:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
