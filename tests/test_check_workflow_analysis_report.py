@@ -225,6 +225,35 @@ def test_negative_min_bytes_is_usage_error(tmp_path: Path) -> None:
 	assert proc.returncode == 2
 
 
+def test_repo_with_no_runs_in_window_is_exempt(tmp_path: Path) -> None:
+	report = _report(repos=(REPO_A,))
+	collect = _collect()
+	collect["runs"] = [{"repository": REPO_A, "conclusion": "success"}]
+	proc, _ = _run(tmp_path, report, collect)
+	assert proc.returncode == 0, proc.stdout
+	assert _check_line(proc.stdout) == _expected("ok", 0, "none", report, exempt_repos=REPO_B)
+	collect["runs"].append({"repository": REPO_B, "conclusion": "failure"})
+	proc, _ = _run(tmp_path, report, collect)
+	assert proc.returncode == 1
+	assert _check_line(proc.stdout) == _expected("invalid", 0, REPO_B, report)
+
+
+def test_prefix_sharing_repo_does_not_cover_another(tmp_path: Path) -> None:
+	report = _report(repos=("owner/app-two",))
+	proc, _ = _run(tmp_path, report, _collect(repos=("owner/app", "owner/app-two")))
+	assert proc.returncode == 1
+	assert _check_line(proc.stdout) == _expected("invalid", 0, "owner/app", report)
+
+
+def test_heading_inside_tilde_fence_is_not_counted(tmp_path: Path) -> None:
+	headings = tuple(h for h in HEADINGS if h != "Orchestrator Health")
+	report = _report(headings=headings)
+	report = report.replace("## Pipeline Flow Bottlenecks\n", "~~~\n```\n## Orchestrator Health\n~~~\n\n## Pipeline Flow Bottlenecks\n", 1)
+	proc, _ = _run(tmp_path, report, _collect())
+	assert proc.returncode == 1
+	assert _check_line(proc.stdout) == _expected("invalid", 1, "none", report)
+
+
 def test_insert_data_gap_at_top_and_idempotent(tmp_path: Path) -> None:
 	report = _report()
 	proc, path = _run(tmp_path, report, None, "--insert-data-gap")

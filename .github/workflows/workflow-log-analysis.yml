@@ -1545,6 +1545,10 @@ jobs:
               if [ "${codex_failure_mode}" = "report_structure_invalid" ]; then
                 # Held back from the branch: analysis_status is never set, so
                 # Commit and push report does not run; the upload step keeps it.
+                # The handler exits, so add the data-gap line here as well.
+                if [ "${wla_logs_missing}" = "true" ] && ! python3 -I -B scripts/check_workflow_analysis_report.py --insert-data-gap --report "${REPORT_FILE}"; then
+                  echo "::warning::Could not add the data-gap line to the held report."
+                fi
                 echo "held_report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
                 failure_summary="Workflow log analysis report failed the report structure check after ${max_attempts} attempts; held back from the branch, kept as artifact workflow-log-analysis-report."
                 echo "::error::${failure_summary}"

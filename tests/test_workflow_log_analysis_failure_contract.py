@@ -321,6 +321,9 @@ def test_analyze_runs_report_structure_check_with_kill_switch() -> None:
 		'"${analyze_attempts_used}" 0 "${failure_summary}"'
 	) in analyze
 	assert 'echo "held_report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"' in analyze
+	# The held report gets the data-gap line before the handler exits.
+	held_branch = analyze.split('if [ "${codex_failure_mode}" = "report_structure_invalid" ]; then', 1)[1]
+	assert held_branch.index("--insert-data-gap") < held_branch.index("handle_log_analysis_codex_failure")
 	# The held report is never marked completed: the handler exits first.
 	invalid_branch = analyze.split('if [ "${codex_failure_mode}" = "report_structure_invalid" ]; then', 1)[1]
 	assert invalid_branch.index("handle_log_analysis_codex_failure") < invalid_branch.index("analysis_status=completed")

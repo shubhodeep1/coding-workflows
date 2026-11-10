@@ -69,8 +69,16 @@ WINDOW_MARKER_RE = re.compile(r"^<!-- workflow-log-analysis:.*-->$")
 DATA_GAP_IDEMPOTENCY_LINES = 3
 
 
+def _fence_marker(line: str) -> str:
+	stripped = line.lstrip()
+	for marker in ("```", "~~~"):
+		if stripped.startswith(marker):
+			return marker
+	return ""
+
+
 def _is_fence(line: str) -> bool:
-	return line.lstrip().startswith("```")
+	return bool(_fence_marker(line))
 
 
 def _unfenced_lines(lines: list[str]) -> list[tuple[int, str]]:
@@ -79,12 +87,18 @@ def _unfenced_lines(lines: list[str]) -> list[tuple[int, str]]:
 	Fence lines themselves are dropped, so they can never count as headings.
 	"""
 	result: list[tuple[int, str]] = []
-	in_fence = False
+	open_marker = ""
 	for index, line in enumerate(lines):
-		if _is_fence(line):
-			in_fence = not in_fence
-			continue
-		if not in_fence:
+		marker = _fence_marker(line)
+		if marker:
+			# A fence closes only with the marker character that opened it.
+			if not open_marker:
+				open_marker = marker
+				continue
+			if marker == open_marker:
+				open_marker = ""
+				continue
+		if not open_marker:
 			result.append((index, line))
 	return result
 
@@ -211,13 +225,24 @@ def run_check(report_path: str, collect_report_path: str, min_bytes: int) -> int
 		required = _valid_repo_names(scope.get("repositories") if isinstance(scope, dict) else None)
 		exempt_all, exempt_source = _exempt_from_collect_report(payload)
 		exempt_lower = {name.lower() for name in exempt_all}
+		runs = payload.get("runs")
+		if isinstance(runs, list):
+			# A scoped repository with no run in the window has no per-repo data
+			# for the model to write about, so it does not need a subsection.
+			seen = {
+				item["repository"].lower()
+				for item in runs
+				if isinstance(item, dict) and isinstance(item.get("repository"), str)
+			}
+			exempt_lower |= {name.lower() for name in required if name.lower() not in seen}
 		subheadings = _per_repo_subheadings(unfenced) or []
 		for repo in required:
 			if repo.lower() in exempt_lower:
 				exempt_repos.append(repo)
 				continue
-			needle = repo.lower()
-			if not any(needle in heading for heading in subheadings):
+			# Bounded match so "owner/app-two" never covers "owner/app".
+			pattern = re.compile(r"(?<![A-Za-z0-9._/-])" + re.escape(repo.lower()) + r"(?![A-Za-z0-9._-])")
+			if not any(pattern.search(heading) for heading in subheadings):
 				missing_repos.append(repo)
 
 	valid = not missing_headings and not missing_repos and not too_small
