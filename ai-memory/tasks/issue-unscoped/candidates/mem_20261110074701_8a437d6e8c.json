@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:517-523 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: In `review_static_agents_inline_fallback`, the new fence-bound header search treats an index header at or after the first `=== BEGIN UNTRUSTED` line the same as having no index; both take the `ValueError` -> `no_index` path, and the shell branch `no_index) return 0 ;;` logs nothing.\n  WHY: An unmounted role's prompt would then keep an index that points at a file the role cannot read, with no `::warning::` and no `fallback=` line, unlike the `unavailable`/`unmatched`/`failed` outcomes (source severity NIT, mapped to low; this needs a future trusted-prefix line that starts with `=== BEGIN UNTRUSTED`, and `unattended_system_instructions.md` has none today).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_untrusted_sandbox.sh:517-523 | severity=NIT | confidence=3\n  PROBLEM: In the embedded Python in `review_static_agents_inline_fallback`, `limit = next((i for i, line in enumerate(lines) if line.startswith(\"=== BEGIN UNTRUSTED\")), len(lines))` / `start = lines.index(HEADER, 0, limit)` / `except ValueError: print(\"no_index\")` cannot tell \"header at or after the fence\" apart from \"no index\", and `no_index) return 0 ;;` logs nothing.\n  WHY: Unmounted roles (REVIEW_EDITOR, REVIEW_CONSOLIDATOR, RB_JUDGE, BEHAVIOURAL_SMOKE, JUDGE_INTERIM) would keep an index that points at an unreadable file, with no warning and no `REVIEW_SANDBOX_STATIC_CONTEXT ... fallback=` line; this can be triggered by future content drift in `unattended_system_instructions.md` (e.g. a quoted fence like scripts/review_run_reviewers.sh:2685).\n- HARDENING (same location, HARDENING_RISK_SCORE: 2): before `lines.index(HEADER, 0, limit)`, check `HEADER in lines[limit:]`, print a distinct outcome (e.g. `print(\"beyond_fence\")`), and add a shell case that emits the same warning plus a `fallback=beyond_fence` line (~5 lines changed).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "37a2c5b0193873ffb6523a08907512cf045f03e2b04f354730d692d96441810b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8959,
+    "run_id": "42772786406",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42772786406",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110074701_8a437d6e8c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8959,
+    "run_id": "42772786406"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T07:47:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
