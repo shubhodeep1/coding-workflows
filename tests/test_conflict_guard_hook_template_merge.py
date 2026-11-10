@@ -492,6 +492,7 @@ def test_shell_pair_list_matches_paired_live_copies() -> None:
 		resolved = re.sub(r"\$\{([A-Z_]+)\}", lambda m: assigned[m.group(1)], entry)
 		live, sep, template = resolved.partition("|")
 		assert sep and live and template, entry
+		assert live not in pairs, f"duplicate pair for {live}"
 		pairs[live] = template
 	spec = importlib.util.spec_from_file_location(
 		"_review_untrusted_workspace_pairs", REPO_ROOT / "scripts" / "review_untrusted_workspace.py"
@@ -503,7 +504,17 @@ def test_shell_pair_list_matches_paired_live_copies() -> None:
 		spec.loader.exec_module(module)
 	finally:
 		sys.dont_write_bytecode = previous
-	assert pairs == module.PAIRED_LIVE_COPIES
+	# Every Python pair must be covered by the shell list.  The shell list may
+	# run ahead of a checkout's PAIRED_LIVE_COPIES (the PR head and the merged
+	# base can differ), so an extra entry is allowed only in the paired shape:
+	# a .claude/hooks/ live copy of its workflow-templates/ twin.
+	missing = {live: tpl for live, tpl in module.PAIRED_LIVE_COPIES.items() if pairs.get(live) != tpl}
+	assert not missing, f"GUARD_HOOK_TEMPLATE_PAIRS does not cover {missing}"
+	for live, template in pairs.items():
+		if live in module.PAIRED_LIVE_COPIES:
+			continue
+		assert live.startswith(".claude/hooks/") and "/" not in live[len(".claude/hooks/"):], live
+		assert template == "workflow-templates/" + live, (live, template)
 
 
 def test_hook_only_commit_uses_shared_helper() -> None:

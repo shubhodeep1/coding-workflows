@@ -229,12 +229,15 @@ GUARD_HOOK_TEMPLATE_PATH="workflow-templates/.claude/hooks/pr_merge_status_guard
 # Second paired host-only hook (#9004): an integration-sync conflict on it
 # failed the resolver closed with sandbox_path_host_only (PR #8436, run
 # 42355218108).  GUARD_HOOK_TEMPLATE_PAIRS lists every "live|template" pair
-# the template merge covers.  It must equal PAIRED_LIVE_COPIES in
-# scripts/review_untrusted_workspace.py; the contract test
-# test_shell_pair_list_matches_paired_live_copies enforces that.
+# the template merge covers.  It must cover every pair in PAIRED_LIVE_COPIES
+# in scripts/review_untrusted_workspace.py (the default branch also pairs
+# gh_api_write_guard.py, pr_watch_guard.py and session-start.sh); any extra
+# entry must be a .claude/hooks/ live copy of its workflow-templates/ twin.
+# The contract test test_shell_pair_list_matches_paired_live_copies enforces
+# both.  The array must stay on one line for that test to parse it.
 PREPUSH_HOOK_LIVE_PATH=".claude/hooks/prepush_affected_tests.py"
 PREPUSH_HOOK_TEMPLATE_PATH="workflow-templates/.claude/hooks/prepush_affected_tests.py"
-GUARD_HOOK_TEMPLATE_PAIRS=("${GUARD_HOOK_LIVE_PATH}|${GUARD_HOOK_TEMPLATE_PATH}" "${PREPUSH_HOOK_LIVE_PATH}|${PREPUSH_HOOK_TEMPLATE_PATH}")
+GUARD_HOOK_TEMPLATE_PAIRS=("${GUARD_HOOK_LIVE_PATH}|${GUARD_HOOK_TEMPLATE_PATH}" "${PREPUSH_HOOK_LIVE_PATH}|${PREPUSH_HOOK_TEMPLATE_PATH}" ".claude/hooks/gh_api_write_guard.py|workflow-templates/.claude/hooks/gh_api_write_guard.py" ".claude/hooks/pr_watch_guard.py|workflow-templates/.claude/hooks/pr_watch_guard.py" ".claude/hooks/session-start.sh|workflow-templates/.claude/hooks/session-start.sh")
 # Per-pair merge: _conflict_prepare_guard_hook_template_merge_one <live> <template>.
 # Same return codes as the wrapper below: 0 staged, 1 refused, 2 fatal.
 _conflict_prepare_guard_hook_template_merge_one()
