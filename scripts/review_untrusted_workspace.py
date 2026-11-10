@@ -993,6 +993,10 @@ def main():
 		if sys.argv[1] == "seed":
 			seed(host, workspace, manifest, sys.argv[5], Path(sys.argv[6]))
 		elif sys.argv[1] == "snapshot":
+			# PR #9112 / issue #9111: read the switch once here, because snapshot
+			# stderr reaches the Actions log while transfer stderr is redirected
+			# to a reason file, so a mistyped value still logs its warning.
+			chatgpt_pool_config_admitted()
 			snapshot(host, workspace, manifest, Path(sys.argv[5]) if len(sys.argv) == 6 else None,
 				skip_oversized=os.environ.get("REVIEW_SNAPSHOT_SKIP_OVERSIZED", "0") == "1")
 		elif sys.argv[1] == "refresh":

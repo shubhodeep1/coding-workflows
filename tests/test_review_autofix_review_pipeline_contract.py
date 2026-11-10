@@ -9309,7 +9309,9 @@ def test_review_editor_prompt_explains_sandbox_limits() -> None:
 	spec.loader.exec_module(workspace_module)
 	assert not workspace_module.allowed(".claude/commands/audit-plans.md")
 	assert not workspace_module.allowed(".github/ai/other.json")
-	assert workspace_module.allowed(".github/ai/chatgpt_pool.json")
+	with mock.patch.dict(os.environ):
+		os.environ.pop("REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED", None)
+		assert workspace_module.allowed(".github/ai/chatgpt_pool.json")
 	assert not workspace_module.allowed(".claude/hooks/pr_merge_status_guard.py")
 	assert workspace_module.allowed(".github/workflows/x.yml")
 	assert workspace_module.allowed(".claude/hooks/gh_api_write_guard.py")
@@ -9603,6 +9605,27 @@ def test_review_isolation_transfers_new_chatgpt_pool_config() -> None:
 				assert not (host / ".github/ai/chatgpt_pool.json").exists()
 			else:
 				assert (host / ".github/ai/chatgpt_pool.json").read_text() == '{"enabled": true}\n'
+
+
+def test_review_isolation_snapshot_logs_unrecognised_chatgpt_pool_flag() -> None:
+	"""PR #9112 / issue #9111: snapshot (whose stderr reaches the Actions log) warns on a mistyped switch."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		(host / ".github/ai").mkdir(parents=True)
+		(host / ".github/ai/claude_engine.json").write_text("{}\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
+		(root / "isolated" / "source").mkdir(parents=True)
+		env = {**_git_clean_env(), "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED": "flase"}
+		result = subprocess.run(
+			[sys.executable, str(workspace_helper), "snapshot", str(host), str(root / "isolated" / "source"), str(root / "isolated" / "baseline.json")],
+			env=env, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "::warning::REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED has an unrecognised value" in result.stderr
+		assert "flase" not in result.stderr
 
 
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:
