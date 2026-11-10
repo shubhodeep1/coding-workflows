@@ -3159,11 +3159,11 @@ def test_release_sends_queue_age_note_once_for_an_old_queued_pr(tmp_path: Path) 
 
 
 def test_release_queue_age_note_is_keyed_by_the_slot_start_date(tmp_path: Path) -> None:
-	"""A slot that started two hours ago keys the note by the slot's start
+	"""A slot that started one hour ago keys the note by the slot's start
 	date (the previous UTC date when the slot crossed midnight), and a second
 	tick in the same slot is already alerted."""
 	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
-	slot_start = datetime.now(timezone.utc) - timedelta(hours=2)
+	slot_start = datetime.now(timezone.utc) - timedelta(hours=1)
 	env["MERGE_TRAIN_STALL_ALERT_HOUR_UTC"] = str(slot_start.hour)
 	expected_date = slot_start.strftime("%Y-%m-%d")
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
