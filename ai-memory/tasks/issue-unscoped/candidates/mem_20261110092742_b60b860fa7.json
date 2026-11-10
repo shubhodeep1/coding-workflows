@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/prepush_affected_tests.py:767-835 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate marks `ruff` as \"caused by this change\" on the current head, but this is a false positive from the gate and not a finding on PR code.\n  WHY: _static_findings (lines 767-789, fail-open contract at lines 770-771) and _new_static_findings (lines 813-835) count the failure as caused by the change whenever ruff cannot run or times out; a zero-edit autofix run still got the blame, and ruff with `--select E,F --ignore E501` found nothing on any PR-added line, so the gate blocks a change that adds no lint regression.\n- (not mappable to a diff file):failed[2] check-run `orchestrate-poll (1)` (run 42776825224, job 129697173067) and failed[0] aggregate `lint` job | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The orchestrate-poll failure, and the aggregate `lint` job that fails only because of it, cannot be mapped to any of the four PR-changed files.\n  WHY: The log tail holds only PASS TEST_CASE_EVENTs, and the `##[error]` fingerprint lines are stdout from a passing test that cites `.github/workflows/implement.yml` / issue #1059 / PR #1066, none of which this PR touches; the job needs a re-run or a diagnosis outside this diff.\n- (not mappable to a diff file):failed[1] check-run `copilot-pull-request-reviewer` (run 42776834602), error `custom_instructions_too_large` statusCode 422 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot reviewer fails before it reviews anything because AGENTS.md and CLAUDE.md exceed its prompt budget.\n  WHY: This PR touches neither file, so the failure is a repository-level prompt-size condition that nothing in this diff can cause or fix.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cGate only this new admission behind the env var `REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED`\u201d; `false` must turn the admission off.\n  expected_change_site: `.github/workflows/review_autofix.yml`, environment passed to the sandbox preparation step.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The helper reads the flag, but the review workflow does not forward it from repository variables, the preparation step's `env:` block at lines 3643-3650 omits it, and the changelog confirms that a repository variable alone does not reach the helper; as a result the normal review-autofix workflow cannot use the requested off switch through repository configuration.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cGate only this new admission behind the env var `REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED`\u201d; `false` must turn the admission off.\n  Expected change site: `.github/workflows/review_autofix.yml`, environment passed to the sandbox preparation step.\n  Evidence of absence: The helper reads the flag, but the review workflow does not forward it from repository variables. The preparation step\u2019s `env:` block at lines 3643-3650 omits it, and the changelog confirms a repository variable alone does not reach the helper. Consequently, the normal review-autofix workflow cannot use the requested off switch through repository configuration.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- workflow-templates/.claude/hooks/prepush_affected_tests.py:_static_findings lines 767-789 and _new_static_findings lines 813-835 | severity=NIT | confidence=3\n  PROBLEM: The pre-push gate reports `ruff` as \"caused by this change\" on the current head, but this is a false positive from the gate, not a finding on PR code. A zero-edit autofix run still got the blame, ruff 0.17.2 with `--select E,F --ignore E501` found nothing on PR-added lines (only pre-existing E101 in heredoc strings and F401 for `http.client` at test file line 8), and the fail-open contract at _static_findings line 770-771 explains the result.\n  WHY: The PR code has no runtime failure. The gate's ruff unit fails open and blocks the pre-push gate, so the editor should re-run the gate rather than change code to chase a ruff delta that cannot be attributed.\n- (not mappable to a diff file):failed[2] check-run `orchestrate-poll (1)` (run 42776825224, job 129697173067) and failed[0] aggregate `lint` job | severity=NIT | confidence=2\n  PROBLEM: The orchestrate-poll failure cannot be mapped to any of the four PR-changed files. Its log tail holds only PASS TEST_CASE_EVENTs, and the \"Integration fingerprint verification FAILED\" lines are stdout from the passing test `test_verify_integration_fingerprints_rejects_missing_must_contain`, citing `.github/workflows/implement.yml` and issue #1059 / PR #1066.\n  WHY: The failing step is not in the supplied log tail, so it cannot be fixed from this diff. `lint` will keep failing until orchestrate-poll passes on a re-run or is diagnosed outside this diff.\n- (not mappable to a diff file):failed[1] check-run `copilot-pull-request-reviewer` (run 42776834602), error `custom_instructions_too_large` statusCode 422 | severity=NIT | confidence=4\n  PROBLEM: The Copilot reviewer fails before it reviews anything because AGENTS.md and CLAUDE.md exceed its prompt budget, and this PR touches neither file.\n  WHY: It cannot be fixed within this PR; it is a repository-level prompt-size condition, not a defect in the changed code.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6ab0d31c60178d36388f8f30ceb01ca0359916085d193244fc2906220a00b855",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9180,
+    "run_id": "42783283391",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42783283391",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261110092742_b60b860fa7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9180,
+    "run_id": "42783283391"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-10T09:27:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
