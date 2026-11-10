@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-10T04:37:14Z",
+  "issue_number": 9171,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=tests/test_changelog_fragment_contract.py:67-77; cited_path=tests/test_changelog_fragment_contract.py, tests/test_agents_fragment_contract.py (checks of .gitattributes, changelog.d/.gitkeep, CLAUDE.md, workflow-templates/CLAUDE.md, prompts/mode-implement.txt); files_touched=.github/workflows/implement.yml, README.md, agents.d/sandbox-solc-versions.md, changelog.d/sandbox-solc-versions.md, scripts/codex_isolated_exec.sh, tests/test_codex_isolated_exec.py.",
+  "phase": "review_autofix",
+  "pr_number": 9176,
+  "record_id": "lesson_20261110043714_4617118b68",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_changelog_fragment_contract.py, tests/test_agents_fragment_contract.py (checks of .gitattributes, changelog.d/.gitkeep, CLAUDE.md, workflow-templates/CLAUDE.md, prompts/mode-implement.txt)",
+    "tests/test_changelog_fragment_contract.py",
+    ".github/workflows/implement.yml",
+    "README.md",
+    "agents.d/sandbox-solc-versions.md",
+    "changelog.d/sandbox-solc-versions.md",
+    "scripts/codex_isolated_exec.sh",
+    "tests/test_codex_isolated_exec.py"
+  ]
+}
