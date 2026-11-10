@@ -4524,6 +4524,24 @@ What this means for operators: a review-blocked reissue now counts toward the or
 
 - **The unblock judge now retries transient GitHub errors on its read-only lookups (CONSIST-001).** `scripts/unblock_judge.sh` sources `scripts/gh_helpers.sh` from the verified support checkout (with the same pass-through `gh_retry` fallback as `scripts/check_failure_triage.sh`) and wraps five reads in `gh_retry`: the paginated issue-comments read, the identity read, the item-metadata read, the item re-check read and the cited-run read. A 5xx or connection reset no longer skips the item or drops evidence on the first failure; `gh_retry` buffers stdout, so a failed attempt never feeds partial pages into the `jq -s` merge. Permanent errors (for example HTTP 404) still make one attempt, and a read that fails after every retry takes the same skip path and log line as before. Writes (comment POSTs, label changes, PATCH, issue creation, dispatches) stay single-attempt. Refs #9058.
 
+- **The orchestrator no longer marks an integration branch "superseded by main" from stale branch refs.** A project whose last wave PR merged just as a poll run started could be closed without its integration branch ever reaching the default branch.
+
+`evaluate_sync_superseded_by_main` in `scripts/orchestrate_poll_process.sh` reads child-PR state live from the GitHub API, then diffs the child PRs' paths between the default and integration branches using the poll job's local refs. Those refs come from the checkout's fetch at job start. When a wave PR merged after that fetch, the API counted it as terminal while the local integration ref still matched the default branch. The diff came back empty, the branch was marked `superseded-by-main`, and the final integration merge was skipped for good. The function now refetches both branches right before the diff. If that fetch fails, it reports itself not confident and never marks the branch superseded.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Affected project | `shubhodeep1/fun-token-multi-chain` #739 (wave PR #741) |
+| Gap between job-start fetch and the PR merge | 55 seconds (fetch 11:53:39Z, merge 11:54:34Z on 2026-11-08) |
+| Extra cost per superseded check | 1 `git fetch` of two branches, no GitHub API calls |
+
+What this means for operators: a project that reports "Integration branch superseded by main" now has its child PRs' changes on the default branch. A project hit by the old bug shows that comment while the compare API still reports the integration branch ahead of the default branch. Its work has to reach the default branch another way, for example the activation-fix issue the pipeline opens when activation grades the project DORMANT.
+
+### For contributors
+
+`tests/test_orchestrate_integration_ahead_by_gate.py` adds three cases that drive the extracted function against a local bare `origin`: a stale clone after the child PR lands on the integration branch (not superseded), a real supersede where the default branch already has the change (still superseded), and an unreachable `origin` (not confident).
+
+`scripts/orchestrate_poll_process.sh` also adds `|| true` to the `blocker_stderr` cleanup pipeline in `_runtime_blocker_dispatch_eligible`. That line only builds the text of a fail-open warning, so under `set -euo pipefail` a failing `tr | sed | cut` can no longer abort the poller there. Behaviour is otherwise unchanged.
+
 ### For contributors
 
 The summary JSON's `repairs` entries gain `pr_created_at`, `pr_stale` and `pr_for_release` (false when the sync pull request was built for another release; its note then says to close it or wait for one for the current release instead of "merge or close it"). The report step treats a missing `pr_stale` (older summaries) as stale.
