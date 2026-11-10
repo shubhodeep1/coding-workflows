@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-10T08:19:17Z",
+  "issue_number": 9179,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=.github/workflows/copilot-pull-request-reviewer:1; cited_path=.github/workflows/copilot-pull-request-reviewer; files_touched=changelog.d/unblock-9112-r1-review-sandbox-chatgpt-pool-config.md, scripts/review_apply_fixes.sh, scripts/review_untrusted_workspace.py, tests/test_review_autofix_review_pipeline_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 9180,
+  "record_id": "lesson_20261110081917_b06d311d68",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/copilot-pull-request-reviewer",
+    "changelog.d/unblock-9112-r1-review-sandbox-chatgpt-pool-config.md",
+    "scripts/review_apply_fixes.sh",
+    "scripts/review_untrusted_workspace.py",
+    "tests/test_review_autofix_review_pipeline_contract.py"
+  ]
+}
