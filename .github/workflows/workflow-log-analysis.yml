@@ -1189,6 +1189,7 @@ jobs:
           RUN_LOGS_DIR: ${{ steps.download_log_output.outputs.download-path }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
+          WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED || 'true' }}
         run: |
           set -euo pipefail
 
@@ -1234,9 +1235,9 @@ jobs:
                 "phase=workflow_log_analysis" \
                 "failure_mode=${failure_mode}" \
                 "failed_step_name=${failed_step_name}" \
-                "workflow_run_id=${{ github.run_id }}" \
-                "workflow_run_attempt=${{ github.run_attempt }}" \
-                "workflow_name=${{ github.workflow }}" \
+                "workflow_run_id=${GITHUB_RUN_ID}" \
+                "workflow_run_attempt=${GITHUB_RUN_ATTEMPT}" \
+                "workflow_name=${GITHUB_WORKFLOW}" \
                 "workflow_file=workflow-log-analysis.yml" \
                 "repository=${GITHUB_REPOSITORY}" \
                 "tracking_issue=0" \
@@ -1249,15 +1250,15 @@ jobs:
 
             local timestamp
             timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            local run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            local run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             local payload
             payload="$(jq -cn \
               --arg phase "workflow_log_analysis" \
               --arg failure_mode "${failure_mode}" \
               --arg failed_step_name "${failed_step_name}" \
-              --arg workflow_run_id "${{ github.run_id }}" \
-              --arg workflow_run_attempt "${{ github.run_attempt }}" \
-              --arg workflow_name "${{ github.workflow }}" \
+              --arg workflow_run_id "${GITHUB_RUN_ID}" \
+              --arg workflow_run_attempt "${GITHUB_RUN_ATTEMPT}" \
+              --arg workflow_name "${GITHUB_WORKFLOW}" \
               --arg workflow_file "workflow-log-analysis.yml" \
               --arg workflow_run_url "${run_url}" \
               --arg repository "${GITHUB_REPOSITORY}" \
@@ -1294,9 +1295,9 @@ jobs:
               "phase=workflow_log_analysis" \
               "failure_mode=${failure_mode}" \
               "failed_step_name=${failed_step_name}" \
-              "workflow_run_id=${{ github.run_id }}" \
-              "workflow_run_attempt=${{ github.run_attempt }}" \
-              "workflow_name=${{ github.workflow }}" \
+              "workflow_run_id=${GITHUB_RUN_ID}" \
+              "workflow_run_attempt=${GITHUB_RUN_ATTEMPT}" \
+              "workflow_name=${GITHUB_WORKFLOW}" \
               "workflow_file=workflow-log-analysis.yml" \
               "workflow_run_url=${run_url}" \
               "repository=${GITHUB_REPOSITORY}" \
@@ -1365,9 +1366,14 @@ jobs:
           # the prompt; without it Codex would fall back to the analysis
           # context's quick-index views and miss the untruncated step logs
           # that motivate the workflow-log-output artifact.
+          # A missing artifact still publishes the report, with a fixed
+          # data-gap line added after the analysis (project #9116, P2).
+          wla_logs_missing="false"
           if [ -z "${RUN_LOGS_DIR:-}" ] || [ ! -d "${RUN_LOGS_DIR}" ]; then
             echo "::warning::workflow-log-output artifact not present at '${RUN_LOGS_DIR:-<unset>}'; Codex will only see analysis_context.json."
             RUN_LOGS_DIR=""
+            wla_logs_missing="true"
+            echo "WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing"
           fi
 
           wla_run_logs_include_args=()
@@ -1376,9 +1382,13 @@ jobs:
             if ! RUN_LOGS_DIR="$(realpath -e -- "${RUN_LOGS_DIR}" 2>/dev/null)"; then
               echo "::warning::workflow-log-output path could not be resolved; using analysis_context.json only."
               RUN_LOGS_DIR=""
+              wla_logs_missing="true"
+              echo "WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing"
             elif ! [[ "${RUN_LOGS_DIR}" =~ ^/[A-Za-z0-9._@+/-]+$ ]] || [[ "${RUN_LOGS_DIR}" == *,* ]] || [[ "${RUN_LOGS_DIR}" == *"/../"* ]] || [[ "${RUN_LOGS_DIR}" == *"/.." ]]; then
               echo "::warning::workflow-log-output path is unsafe for the sandbox mount; using analysis_context.json only."
               RUN_LOGS_DIR=""
+              wla_logs_missing="true"
+              echo "WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing"
             else
               # Keep a bounded copy below the isolation helper's 256 MiB include limit.
               if wla_run_logs_result="$(python3 -I -B scripts/stage_workflow_log_bundle.py "${RUN_LOGS_DIR}" "${RUNNER_TEMP}/workflow-log-output-bounded" "$((200*1024*1024))")" \
@@ -1395,10 +1405,14 @@ jobs:
                 else
                   echo "::warning::workflow-log-output staged path is unsafe; using analysis_context.json only."
                   RUN_LOGS_DIR=""
+                  wla_logs_missing="true"
+                  echo "WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing"
                 fi
               else
                 echo "::warning::workflow-log-output staging failed; using analysis_context.json only."
                 RUN_LOGS_DIR=""
+                wla_logs_missing="true"
+                echo "WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing"
               fi
             fi
           fi
@@ -1448,6 +1462,17 @@ jobs:
           fi
           codex_failure_mode=""
           analyze_attempts_used=0
+          # Report structure check (project #9116, P2). false/0/no/off restores
+          # the plain non-empty check; any other value keeps it on. A checker
+          # exit other than 1 is a checker error and accepts the report (fail open).
+          wla_report_check_enabled="true"
+          case "$(printf '%s' "${WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+            false|0|no|off) wla_report_check_enabled="false" ;;
+          esac
+          if [ "${wla_report_check_enabled}" = "true" ] && [ ! -f scripts/check_workflow_analysis_report.py ]; then
+            echo "::warning::scripts/check_workflow_analysis_report.py not present; skipping the report structure check."
+            wla_report_check_enabled="false"
+          fi
           # The codex command of this pass, unchanged (AI_ENGINE_LOG_ANALYSIS=codex, or
           # no trusted engine support). Claude runs it as the fallback.
           wla_codex_analyze()
@@ -1498,10 +1523,25 @@ jobs:
               exit 80
             fi
             if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
-              codex_failure_mode=""
-              break
-            fi
-            if [ "${ANALYZE_EXIT}" -ne 0 ]; then
+              if [ "${wla_report_check_enabled}" != "true" ]; then
+                codex_failure_mode=""
+                break
+              fi
+              set +e
+              python3 -I -B scripts/check_workflow_analysis_report.py --report "${REPORT_FILE}" --collect-report workflow_log_report.json
+              wla_report_check_rc=$?
+              set -e
+              if [ "${wla_report_check_rc}" -eq 0 ]; then
+                codex_failure_mode=""
+                break
+              elif [ "${wla_report_check_rc}" -eq 1 ]; then
+                codex_failure_mode="report_structure_invalid"
+              else
+                echo "::warning::The report structure check errored (rc=${wla_report_check_rc}); accepting the report."
+                codex_failure_mode=""
+                break
+              fi
+            elif [ "${ANALYZE_EXIT}" -ne 0 ]; then
               codex_failure_mode="codex_rc_nonzero"
             else
               codex_failure_mode="codex_empty_output"
@@ -1510,6 +1550,18 @@ jobs:
               sleep_secs=$((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
               sleep "${sleep_secs}"
             else
+              if [ "${codex_failure_mode}" = "report_structure_invalid" ]; then
+                # Held back from the branch: analysis_status is never set, so
+                # Commit and push report does not run; the upload step keeps it.
+                # The handler exits, so add the data-gap line here as well.
+                if [ "${wla_logs_missing}" = "true" ] && ! python3 -I -B scripts/check_workflow_analysis_report.py --insert-data-gap --report "${REPORT_FILE}"; then
+                  echo "::warning::Could not add the data-gap line to the held report."
+                fi
+                echo "held_report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
+                failure_summary="Workflow log analysis report failed the report structure check after ${max_attempts} attempts; held back from the branch, kept as artifact workflow-log-analysis-report."
+                echo "::error::${failure_summary}"
+                handle_log_analysis_codex_failure "analysis_codex_pass" "report_structure_invalid" "${analyze_attempts_used}" 0 "${failure_summary}"
+              fi
               if [ "${codex_failure_mode}" = "codex_empty_output" ]; then
                 failure_summary="Workflow log analysis Codex pass returned empty output after ${max_attempts} attempts."
                 echo "::error::${failure_summary}"
@@ -1521,8 +1573,26 @@ jobs:
             fi
           done
 
+          if [ "${wla_logs_missing}" = "true" ]; then
+            if ! python3 -I -B scripts/check_workflow_analysis_report.py --insert-data-gap --report "${REPORT_FILE}"; then
+              echo "::warning::Could not add the data-gap line to the report; publishing it without the line."
+            fi
+          fi
+
           echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
           echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
+
+      # Keeps the report as an artifact, including one held back by the
+      # structure check (held_report_file) that never reaches the branch.
+      - name: Upload workflow log analysis report
+        if: always() && (steps.analyze.outputs.report_file != '' || steps.analyze.outputs.held_report_file != '')
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: workflow-log-analysis-report
+          path: ${{ steps.analyze.outputs.report_file || steps.analyze.outputs.held_report_file }}
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Render workflow scenario traces
         if: steps.analyze.outputs.analysis_status == 'completed' && env.WORKFLOW_LOG_SCENARIO_TRACE_ENABLED == 'true'

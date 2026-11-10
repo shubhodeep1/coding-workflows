@@ -296,6 +296,63 @@ def test_label_helpers_retry_through_real_gh_retry() -> None:
 	assert (rc, calls) == (0, 2)
 
 
+def _analyze_step_body(wf: str) -> str:
+	return wf.split("      - name: Run workflow log analysis\n", 1)[1].split("\n      - name: ", 1)[0]
+
+
+def test_analyze_runs_report_structure_check_with_kill_switch() -> None:
+	wf = _workflow_text()
+	analyze = _analyze_step_body(wf)
+	assert "WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED || 'true' }}" in analyze
+	assert "${WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED:-true}" in analyze
+	assert "false|0|no|off) wla_report_check_enabled=\"false\" ;;" in analyze
+	assert "[ ! -f scripts/check_workflow_analysis_report.py ]" in analyze
+	assert (
+		'python3 -I -B scripts/check_workflow_analysis_report.py --report "${REPORT_FILE}" '
+		"--collect-report workflow_log_report.json"
+	) in analyze
+	assert 'codex_failure_mode="report_structure_invalid"' in analyze
+	assert 'elif [ "${wla_report_check_rc}" -eq 1 ]; then' in analyze
+	# The existing failure modes keep their exact assignments.
+	assert 'codex_failure_mode="codex_rc_nonzero"' in analyze
+	assert 'codex_failure_mode="codex_empty_output"' in analyze
+	assert (
+		'handle_log_analysis_codex_failure "analysis_codex_pass" "report_structure_invalid" '
+		'"${analyze_attempts_used}" 0 "${failure_summary}"'
+	) in analyze
+	assert 'echo "held_report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"' in analyze
+	# The held report gets the data-gap line before the handler exits.
+	held_branch = analyze.split('if [ "${codex_failure_mode}" = "report_structure_invalid" ]; then', 1)[1]
+	assert held_branch.index("--insert-data-gap") < held_branch.index("handle_log_analysis_codex_failure")
+	# The held report is never marked completed: the handler exits first.
+	invalid_branch = analyze.split('if [ "${codex_failure_mode}" = "report_structure_invalid" ]; then', 1)[1]
+	assert invalid_branch.index("handle_log_analysis_codex_failure") < invalid_branch.index("analysis_status=completed")
+	assert 'wla_logs_missing="false"' in analyze
+	assert 'wla_logs_missing="true"' in analyze
+	assert 'echo "WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing"' in analyze
+	assert 'python3 -I -B scripts/check_workflow_analysis_report.py --insert-data-gap --report "${REPORT_FILE}"' in analyze
+	assert analyze.index("--insert-data-gap") < analyze.index('echo "report_file=${REPORT_FILE}"')
+	# ${{ }} never reaches the run: body for the new variable.
+	run_body = analyze.split("run: |", 1)[1]
+	assert "${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_CHECK_ENABLED" not in run_body
+
+
+def test_analyze_report_artifact_upload_is_always_gated() -> None:
+	wf = _workflow_text()
+	step = wf.split("      - name: Upload workflow log analysis report\n", 1)[1].split("\n      - name: ", 1)[0]
+	assert "if: always() && (steps.analyze.outputs.report_file != '' || steps.analyze.outputs.held_report_file != '')" in step
+	assert "continue-on-error: true" in step
+	assert "uses: actions/upload-artifact@v6" in step
+	assert "name: workflow-log-analysis-report" in step
+	assert "path: ${{ steps.analyze.outputs.report_file || steps.analyze.outputs.held_report_file }}" in step
+	assert "if-no-files-found: warn" in step
+	assert "retention-days: 30" in step
+	assert "run:" not in step
+	# Placed right after the analyze step and before the trace renderer.
+	assert wf.index("      - name: Run workflow log analysis\n") < wf.index("      - name: Upload workflow log analysis report\n")
+	assert wf.index("      - name: Upload workflow log analysis report\n") < wf.index("      - name: Render workflow scenario traces\n")
+
+
 # The report-delivery-via-PR cases live in
 # tests/test_workflow_log_analysis_report_pr.py and are collected here, since
 # CI already runs this file and ci.yml was outside that issue's file grant. A
@@ -481,6 +538,8 @@ def main() -> int:
 	test_failure_label_writes_route_through_gh_retry_with_fallback()
 	test_label_create_helper_does_not_retry_an_existing_label()
 	test_label_helpers_retry_through_real_gh_retry()
+	test_analyze_runs_report_structure_check_with_kill_switch()
+	test_analyze_report_artifact_upload_is_always_gated()
 	test_collect_step_logs_coverage_line_and_annotations()
 	test_collection_gap_alert_step_is_warning_and_fail_open()
 	test_prompt_names_coverage_gaps_in_executive_summary()
