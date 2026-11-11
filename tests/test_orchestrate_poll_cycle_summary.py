@@ -193,6 +193,28 @@ def test_cycle_summary_elapsed_ignores_a_date_clock_that_goes_backwards(tmp_path
 	assert len((tmp_path / "date_calls").read_text(encoding="utf-8").splitlines()) == 4
 
 
+def test_cycle_summary_forward_date_clock_reports_numeric_elapsed(tmp_path):
+	# Positive path for #9237: a clock that moves forward must still give a
+	# numeric elapsed_ms (never `unknown`) on both lines. Each `date` reading
+	# is 100 ms later: start, project start, flush and exit.
+	harness = tmp_path / "harness.sh"
+	harness.write_text(
+		"set -euo pipefail\nunset EPOCHREALTIME\n"
+		f"_fake_date_count_file='{tmp_path / 'date_calls'}'\n"
+		"date() { echo x >> \"${_fake_date_count_file}\"; "
+		"echo \"$(( 1700000000000 + $(wc -l < \"${_fake_date_count_file}\") * 100 ))\"; }\n"
+		+ _helper_block()
+		+ "\n_orch_poll_cycle_project_begin 7 || true\nexit 0\n",
+		encoding="utf-8",
+	)
+	result = subprocess.run(["bash", str(harness)], capture_output=True, text=True, check=False, env={"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp_path)})
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	summaries = [line for line in lines if line.startswith("ORCH_POLL_CYCLE_SUMMARY")]
+	assert len(summaries) == 1 and _fields(summaries[0])[0] == "300", result.stdout
+	assert [line for line in lines if line.startswith("ORCH_POLL_PROJECT_TIMING")] == ["ORCH_POLL_PROJECT_TIMING tracking_issue=7 elapsed_ms=100"], result.stdout
+
+
 def test_cycle_summary_negative_elapsed_reports_unknown():
 	# Any wall clock (EPOCHREALTIME included) can step backwards; a negative
 	# difference is reported as `unknown`, never as a negative number.
