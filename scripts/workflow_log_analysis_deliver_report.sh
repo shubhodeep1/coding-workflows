@@ -197,6 +197,13 @@ while IFS= read -r changed_path; do
 		echo "Run branch changes a path outside the analysis docs: ${changed_path}"
 		wla_deliver_fail unexpected_paths "branch=${REPORT_BRANCH}"
 	fi
+	# A matching name is not enough: only a regular file (or a deletion of a
+	# purged doc) may reach the PR, never a symlink or gitlink at a doc path.
+	changed_mode="$(git ls-tree --full-tree "${run_ref}" -- "${changed_path}" | awk '{print $1}')" || changed_mode="unreadable"
+	if [ -n "${changed_mode}" ] && [ "${changed_mode}" != "100644" ]; then
+		echo "Run branch changes '${changed_path}' to a non-regular file (mode ${changed_mode})."
+		wla_deliver_fail unexpected_paths "branch=${REPORT_BRANCH}"
+	fi
 done <"${changed_paths_file}"
 
 # A rerun after an earlier rename: the rename commit names the new path.

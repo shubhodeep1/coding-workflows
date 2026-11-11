@@ -632,6 +632,26 @@ def test_delivery_rejects_run_branch_with_unexpected_paths() -> None:
 		assert "pr create" not in (tmp / "gh.log").read_text(encoding="utf-8")
 
 
+def test_delivery_rejects_symlink_at_analysis_doc_path() -> None:
+	# The path check must also reject a non-regular file whose name matches.
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env = _delivery_sandbox(tmp, {})
+		seed = tmp / "seed"
+		_git(seed, env, "checkout", "-q", RUN_BRANCH)
+		(seed / REPORT).unlink()
+		(seed / REPORT).symlink_to("../README.md")
+		_git(seed, env, "add", "-A")
+		_git(seed, env, "commit", "-q", "-m", "symlinked report")
+		_git(seed, env, "push", "-q", "origin", f"HEAD:refs/heads/{RUN_BRANCH}")
+		proc = _deliver(tmp, env)
+		out = _out(proc)
+		assert proc.returncode == 1, out
+		assert "non-regular file (mode 120000)" in out
+		assert f"WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=failed reason=unexpected_paths branch={RUN_BRANCH}" in out
+		assert "pr create" not in (tmp / "gh.log").read_text(encoding="utf-8")
+
+
 def test_delivery_body_does_not_claim_sections_of_failed_jobs() -> None:
 	with tempfile.TemporaryDirectory() as raw:
 		tmp = Path(raw)
