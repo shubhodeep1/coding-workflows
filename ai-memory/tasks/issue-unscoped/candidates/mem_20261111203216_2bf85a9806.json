@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:543-548, 3476-3489 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `tests-hooks-and-orchestrator` job failed on the PR head and turned the aggregate `lint` job (\"Require every CI job to succeed\") red. The captured log tail does not show the failing step, so the failure cannot be mapped to the diff.\n  WHY: The failed job blocks merge, but none of the reviewers could trace it to the comment-only script change. Severity disagreement: sonnet-5_5 rated it NIT with confidence 1, luna rated it MAJOR with confidence 5, and glm-5_3-flash rated it MAJOR with confidence 4. The highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:3476 (`lint` job, step \"Require every CI job to succeed\") and the `tests-hooks-and-orchestrator` log tail | severity=NIT | confidence=1\n  PROBLEM: `tests-hooks-and-orchestrator` failed on this head, and `lint` failed only as the aggregate of that job. The log tail shows only PASS lines and the expected `##[error]` lines from negative cases, so the failing step cannot be mapped to the diff.\n  WHY: The reviewer did not trace the failure to this PR. The job does not run the review-checkout script or its test, and the likely cause is an inherited failure on the merge-base.\n- All other categories: NONE. The comment-only edit in `scripts/review_autofix_step_checkout_pr_head_branch.sh:43-48` is accurate, and the task completeness check found no gaps.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:543-548 | severity=MAJOR | confidence=5\n  PROBLEM: The `tests-hooks-and-orchestrator` job is reported failed on the PR-head CI run. The log tail does not identify the failing step or test, so it does not establish a defect in the checkout-clock change.\n  WHY: The failed job keeps the aggregate CI check red, and its cause cannot be identified from the available log.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:3476-3489 (aggregate lint step \"Require every CI job to succeed\"; failing job `tests-hooks-and-orchestrator`, run 43074478995, job 130710599942, head SHA e618572d71b23561377ed410b1f1c33576490b09) | severity=MAJOR | confidence=4\n  PROBLEM: `tests-hooks-and-orchestrator` failed and the aggregate `lint` job failed because of it. The captured log tail shows only passing pytest steps, so the failing step cannot be mapped to a specific file:line in the diff.\n  WHY: The gate blocks merge. Static cross-checks suggest the three pre-push-gate \"caused by this change\" entries are misclassified rather than diff-caused, so the failure needs investigation from the full job log.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "88adc5e24823e15ae4e2b7749b8966096e93e9a622dcfb78b8a027a85464da65",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9274,
+    "run_id": "43074479281",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43074479281",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111203216_2bf85a9806",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9274,
+    "run_id": "43074479281"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T20:32:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
