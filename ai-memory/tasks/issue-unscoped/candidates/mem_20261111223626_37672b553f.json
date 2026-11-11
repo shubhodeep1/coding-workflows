@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/9235-render-prompt-help-percent.md:2-4 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The fragment says the `--skip-syntax-validation` help text \"now escapes\" the percent signs and that this PR makes `render_prompt.py` start again on Python 3.14, but the base already has the escape (`scripts/render_prompt.py` line 147, `changelog.d/9200-ubuntu-2604-render-prompt-and-ci-fixes.md` line 4) and this PR does not touch `render_prompt.py`.\n  WHY: Release notes would carry two entries for one fix and credit this PR with a code change it does not make. Source severity: NIT.\n- tests/test_render_prompt_foundation.py:1358-1363 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The new `test_render_prompt_py_help_exits_zero` duplicates the existing `test_render_prompt_py_help_strings_are_valid_format_strings` (lines 154-169), which is never registered in `main()`.\n  WHY: CI runs the file as a script (`.github/workflows/ci.yml:2401`), so only tests listed in `main()` execute. The existing test never runs and the new one is redundant. Source severity: NIT.\n- .github/workflows/ci.yml:543 | severity=high | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The `tests-hooks-and-orchestrator` job failed (head 3461006), and the failing step cannot be identified from the supplied log tail.\n  WHY: The aggregate `lint` check stays red until this job passes. The reviewer could not map the failure to this diff and suspects a base-branch problem or a flake. Source severity: MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/9235-render-prompt-help-percent.md:2-4 | severity=NIT | confidence=4\n  PROBLEM: The fragment says the `--skip-syntax-validation` help text \"now escapes\" the percent signs and that this PR makes `render_prompt.py` start again on Python 3.14, but the base already has the escape (`scripts/render_prompt.py` line 147, `changelog.d/9200-ubuntu-2604-render-prompt-and-ci-fixes.md` line 4) and this PR does not touch `render_prompt.py`.\n  WHY: Release notes would carry two entries for one fix and credit this PR with a code change it does not make.\n- tests/test_render_prompt_foundation.py:1358-1363 | severity=NIT | confidence=4\n  PROBLEM: The new `test_render_prompt_py_help_exits_zero` duplicates the existing `test_render_prompt_py_help_strings_are_valid_format_strings` (lines 154-169), which is never registered in `main()`.\n  WHY: CI runs the file as a script (`.github/workflows/ci.yml:2401`), so only tests listed in `main()` execute. The existing test never runs and the new one is redundant. The new `help_strings_are_well_formed` test is not redundant.\n- .github/workflows/ci.yml:543 | severity=MAJOR | confidence=2\n  PROBLEM: The `tests-hooks-and-orchestrator` job failed (head 3461006), and the failing step cannot be identified from the supplied log tail.\n  WHY: The aggregate `lint` check stays red until this job passes. The reviewer could not map the failure to this diff.\n- Task completeness note: none reported. The reviewer treats the `{%%...%%}` escape being absent from the diff as a description mismatch, not a gap.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "e8ff1ce36ef43a19e0f15631c83a5938bfc56a52c7b6cbffecf26d43a39db5d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9245,
+    "run_id": "43080279358",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43080279358",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111223626_37672b553f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9245,
+    "run_id": "43080279358"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-11T22:36:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
