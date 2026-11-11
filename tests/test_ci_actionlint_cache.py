@@ -274,6 +274,10 @@ class ActionlintTarballCacheContract(unittest.TestCase):
 			"sha256sum",
 		)
 		self.assertGreater(checksum_index, fi_index, "sha256sum must run after the if/fi block")
+		open_blocks = sum(1 for line in self.lines[:checksum_index] if line.startswith("if ")) - sum(
+			1 for line in self.lines[:checksum_index] if line == "fi"
+		)
+		self.assertEqual(open_blocks, 0, "sha256sum must not sit inside any if block")
 		tar_index = _single_index(self.lines, lambda line: line.startswith("tar -xzf"), "tar")
 		self.assertGreater(tar_index, checksum_index, "extraction must follow verification")
 
