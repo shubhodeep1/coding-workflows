@@ -322,7 +322,8 @@ def test_semble_elapsed_ms_clamps_negative_duration_to_zero() -> None:
 		)
 
 		result = _run_bash(
-			f"source {HELPERS}\n_semble_elapsed_ms 1715251234567",
+			# No usable clock: bash's own clock off, and `date` failing.
+			f"unset EPOCHREALTIME\nsource {HELPERS}\n_semble_elapsed_ms 1715251234567",
 			root,
 			env={
 				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",

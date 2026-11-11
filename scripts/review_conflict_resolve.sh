@@ -426,7 +426,13 @@ _resolver_terminal_attempt_open_ms=""
 # Millisecond wall clock (pattern: _memory_epoch_ms in memory_helpers.sh).
 # Always returns 0; prints 0 when no clock is usable.
 _resolver_terminal_now_ms() {
-  local _rt_ms _rt_s
+  local _rt_ms _rt_s _rt_realtime="${EPOCHREALTIME:-}"
+  # Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
+  # coreutils) gave readings that went backwards within a run.
+  if [[ "${_rt_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+    printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
+    return 0
+  fi
   _rt_ms="$(date +%s%3N 2>/dev/null || true)"
   if [[ "${_rt_ms}" =~ ^[0-9]+$ ]]; then
     printf '%s\n' "${_rt_ms}"

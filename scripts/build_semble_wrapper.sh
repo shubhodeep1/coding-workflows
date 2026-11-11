@@ -22,7 +22,17 @@
 # SEMBLE_*_AVAILABLE env keys this script writes to GITHUB_ENV.
 
 set -euo pipefail
-SEMBLE_BUILD_START_MS="$(date +%s%3N)"
+semble_build_now_ms()
+{
+	# Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
+	# coreutils) gave readings that went backwards within a run.
+	if [[ "${EPOCHREALTIME:-}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+		printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
+		return 0
+	fi
+	date +%s%3N
+}
+SEMBLE_BUILD_START_MS="$(semble_build_now_ms)"
 SEMBLE_BUILD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "${SEMBLE_BUILD_SCRIPT_DIR}/emit_event.sh" ]; then
 	source "${SEMBLE_BUILD_SCRIPT_DIR}/emit_event.sh"
@@ -33,7 +43,7 @@ semble_bootstrap_event()
 	local state="$1" reason="${2:-}" line run_field="" event_mode index_ms
 	event_mode="$(printf '%s' "${SEMBLE_BOOTSTRAP_MODE:-eager}" | tr '[:upper:]' '[:lower:]')"
 	case "${event_mode}" in lazy|eager) ;; *) event_mode=eager ;; esac
-	index_ms="$(( $(date +%s%3N) - SEMBLE_BUILD_START_MS ))"
+	index_ms="$(( $(semble_build_now_ms) - SEMBLE_BUILD_START_MS ))"
 	if [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] && [[ "${GITHUB_RUN_ATTEMPT:-1}" =~ ^[0-9]+$ ]]; then
 		run_field=" run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
 	fi

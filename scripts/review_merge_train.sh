@@ -1546,7 +1546,13 @@ _mt_release_stall_alert()
 # non-integer result falls back to whole seconds * 1000. No API calls.
 _mt_now_ms()
 {
-	local __mt_now_ms_val
+	local __mt_now_ms_val _mt_now_ms_realtime="${EPOCHREALTIME:-}"
+	# Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
+	# coreutils) gave readings that went backwards within a run.
+	if [[ "${_mt_now_ms_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+		printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
+		return 0
+	fi
 	__mt_now_ms_val="$(date +%s%3N 2>/dev/null || true)"
 	if [[ "${__mt_now_ms_val}" =~ ^[0-9]{13,}$ ]]; then
 		printf '%s\n' "${__mt_now_ms_val}"
