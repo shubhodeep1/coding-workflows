@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How much should this issue cover, given that open PR #9246 (\"Fix the last two CI failures on ubuntu-26.04 runners (heartbeat clock, closed-reader test)\") changes the same files?\nChoices:\n- A: Only the heartbeat clock. Change `sf_now_ms()` in `.github/workflows/ci.yml` to read bash's `EPOCHREALTIME` first and fall back to `date`, following `_orch_poll_cycle_now_ms`. Keep the non-numeric guards and leave the `\\d+` assertion in `tests/test_ci_poll_test_sharding.py` as it is. Leave the closed-reader failure to #9246.\n- B: Fix both failures in this issue: the heartbeat clock as in A, plus the closed-reader failure in `tests-hooks-and-orchestrator`, done the way Q2 picks. This may conflict with #9246, and whichever lands second will need a rebase. (RECOMMENDED)\n- C: Change nothing. Treat this as a duplicate of #9246 and close it once #9246 merges.\n  **Note:** if you pick A or C, Q2 does not apply.\nQ2: If you pick Q1:B, how should `test_closed_reader_does_not_rerun_a_successful_command` be fixed? On ubuntu-26.04, the Rust (uutils) `cat` exits 0 when the reader closes early (`cat_head=0 0`, `inner_cat=0`). So `gh_retry`'s replay (`scripts/gh_helpers.sh:1229`) reports output that was never delivered as success, even though the test's contract says it must give a non-zero status.\nChoices:\n- A: Fix the root cause in production. Change how `gh_retry` replays output (and the matching replay paths that the test's inline-copy checks cover) so that output that was not delivered gives a non-zero status no matter which coreutils `cat` is installed. Keep the test's `rc != 0` assertion as it is. (RECOMMENDED)\n- B: Change only the test. Make the fixture or reader setup actually trigger the closed-pipe condition under uutils `cat`, for example with a payload larger than the pipe buffer `cat` sets up, or with a reader that closes before the write. Keep the `rc != 0` assertion and leave `gh_retry` unchanged, which accepts that uutils hosts may report rc=0 when the output was only partly delivered.",
+  "fingerprint": "7d65765e8a9d5e1d1601570009f91c1d97a8bb6fbb0b214db0e560389c24eb17",
+  "lineage": {
+    "issue_number": 9299,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43081863766",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43081863766",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111191100_96deada0ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9299,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43081863766"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9299 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T19:11:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
