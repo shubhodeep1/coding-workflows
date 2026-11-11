@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:860-1267 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, anthropic_claude-sonnet-5_5]\n  PROBLEM: The inline copies of `gh_retry()` still replay stdout with `cat`, which can report success on ubuntu-26.04 when the reader has closed the pipe.\n  WHY: The same cat-based replay problem the PR fixes in `scripts/gh_helpers.sh` remains here; both reviewers rated it NIT. The anthropic reviewer treated it as out of scope for #9227 and did not open the file. Another reviewer (z-ai_glm-5_3-flash) checked these copies and dropped them, because they replay into a caller's `$(...)` capture where the pipe never closes early.\n- scripts/gh_helpers.sh:1238-1247 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The replay reads NUL-free output into a single bash variable instead of streaming it, which roughly doubles peak memory and adds a byte-scan pass.\n  WHY: Large `gh api --paginate` responses pay this cost on every successful `gh_retry` call, though output and rc propagation stay correct (NIT). The anthropic reviewer saw the same cost but did not report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml:860-1267 | severity=low | confidence=1\n  PROBLEM: The two inline `gh_retry` copies still replay with `cat`. The reviewer did not open the file and took this from the pass-1 ledger. It is not a TASK_GAP, because issue #9227 names only `scripts/gh_helpers.sh`, and the workflow file is outside the approved `files_touched`.\n  WHY: The same cat replay could report rc=0 on ubuntu-26.04 when the reader has closed the pipe. The reviewer's HARDENING_SUGGESTIONS section calls this out of scope and suggests a separate issue. HARDENING_RISK_SCORE: 1.\n- TASK_GAP (assessed as not a gap):\n  Requirement: Part 1, skip existing link names with `os.path.lexists` in `tests/test_codex_isolated_exec.py`.\n  Expected change site: `tests/test_codex_isolated_exec.py`, in the loop that links system tools into `no_docker`.\n  Evidence of absence: the diff does not touch this file. The issue comment says the fix is already on `main`, and the changelog entry cites it (Refs #9200). The reviewer judged it satisfied elsewhere.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:860,1261 | severity=low | confidence=3\n  PROBLEM: The inline copies of `gh_retry()` still use `cat` to replay stdout.\n  WHY: On the ubuntu-26.04 runner, `cat` may return 0 when the reader closes the pipe early, so `gh_retry` would report success when it should fail. The reviewer's severity was NIT.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/gh_helpers.sh:1238-1247 | severity=low | confidence=2\n  PROBLEM: The replay no longer streams the stdout file. `read -d ''` accumulates NUL-free output into one bash variable and passes it as a single printf argument, roughly doubling peak memory and adding a byte-scan pass.\n  WHY: The output stays byte-exact and rc propagation is correct, but multi-megabyte paginate responses (for example at clarify.yml line 816) are replayed more slowly and use more memory than the old streaming `cat`. The reviewer's severity was NIT. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cf8825174eea7191e997fe43337c020f69e8d6566eff3e25949c8221b53686da",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9267,
+    "run_id": "43101554359",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43101554359",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111233315_dc931f0440",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9267,
+    "run_id": "43101554359"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T23:33:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
