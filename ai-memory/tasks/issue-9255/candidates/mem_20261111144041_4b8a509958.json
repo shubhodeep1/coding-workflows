@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Open PR #9246 (\"Fix the last two CI failures on ubuntu-26.04 runners (heartbeat clock, closed-reader test)\") already changes `tests/test_gh_retry_stdout_isolation.py` and `.github/workflows/ci.yml`. That covers the `test_closed_reader_does_not_rerun_a_successful_command` failure (the copy in this checkout's line 242 has no `_closed_pipe_diagnostics`, so CI ran a newer copy of the test). Should this issue fix both failing tests, or only the review-checkout one?\nChoices:\n- A: Fix only `test_head_moved_after_switch_reports_skipped_stale` (`fetch_ms`/`switch_ms` show up as `na`), and leave the closed-reader / `gh_retry` failure to PR #9246 (RECOMMENDED)\n- B: Fix both failures here, independently of PR #9246. This is likely to conflict with #9246 on `tests/test_gh_retry_stdout_isolation.py` and `ci.yml`.\n- C: Make no code change. Close this issue as a duplicate once PR #9246 merges, then re-run PR #9245's CI.\n  **Note:** if you pick C, Q2 doesn't apply.\nQ2: In `scripts/review_autofix_step_checkout_pr_head_branch.sh`, the summary line prints `na` whenever `review_head_checkout_elapsed_ms` returns something that isn't a non-negative integer (lines 110\u2013130). One example is a negative END\u2212START. The clock comes from `date +%s%3N` in `review_head_checkout_now_ms` (line 43). The same `date +%s%3N` pattern is used in `scripts/orchestrate_poll_process.sh:39` (`_orch_poll_cycle_now_ms`), `review_merge_train.sh`, `review_conflict_resolve.sh`, `semble_helpers.sh` and `install_semble.sh`. `scripts/memory_helpers.sh:_memory_epoch_ms` already tries `EPOCHREALTIME` first. How wide should the clock fix go?\nChoices:\n- A: Harden only the review-checkout clock and elapsed helpers in `review_autofix_step_checkout_pr_head_branch.sh`, so that the test at `tests/test_review_checkout_head_diagnostics.py:264` passes on ubuntu-26.04. Keep the test's assertion as it is (RECOMMENDED)\n- B: Apply the same hardening to every `date +%s%3N` millisecond helper listed above.\n- C: Same as A, plus the poller's `_orch_poll_cycle_now_ms` only. Skip this if PR #9246's \"heartbeat clock\" change already covers the poller.\nAssumptions:\n- Whichever option you pick, the fix will not touch `scripts/render_prompt.py` or its tests, and will not skip or loosen any CI check. The triage issue asks for both.\n- I haven't confirmed why the clock misbehaves on the new runner. The likeliest cause is that `date +%s%3N` behaves differently there and makes the elapsed time negative. Planning should confirm this before relying on it.\nMissing context:\n- No full job logs or recent `main` CI runs were available, so I couldn't check whether `main` fails the same way.",
+  "fingerprint": "1415c7b91d755c644cf56e579561e8fb3661683b439b2ed0b7c0c5359739176e",
+  "lineage": {
+    "issue_number": 9255,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43039404186",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43039404186",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111144041_4b8a509958",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9255,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43039404186"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9255 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T14:40:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
