@@ -56,6 +56,48 @@ Tick API budget (CLAUDE.md §15): at most one identity read (none with
 comment write per ticked key. No per-entry reads and no compare calls: the
 ancestor check is local git.
 
+Resolving released entries (stuck-states P10, Refs #8291):
+
+  operator_step_issue.py resolve --repo OWNER/REPO [--trusted-login LOGIN]
+
+The poller (`.github/workflows/orchestrate_poll.yml`, step "Resolve released
+operator steps") runs it on every tick. It ticks an entry only when its key is
+`pr-<n>` or `project-<n>`, its authoritative comment (highest id by the
+pipeline login) has a source-sha line and no done/resolved marker, and every
+unticked step is a release step: its `Stays off until then:` value starts
+with `@stable contains` (RELEASE_CONDITION_RE, kept in sync with
+scripts/activation_verify.sh) or its title is a release verb naming `stable`
+or the consumer sync. An entry that also holds a real human step (a secret, a
+setting) is never ticked. Containment is `GET compare/<source>...stable`:
+only `ahead` or `identical` count; `behind`, `diverged` or an unreadable
+status do not. Compares are cached per commit and capped at
+MAX_RESOLVE_COMPARES per run, oldest entry first; the first compare error
+(for example a 404 in a repository with no `stable` tag) halts the rest of
+the run's compares. Ticking appends one superseding comment (every `- [ ]`
+becomes `- [x]`, plus `<!-- ai:operator-step:resolved release=stable
+status=ahead|identical -->`); `tick` treats that marker as done.
+When no unticked step is left on any entry (and at least one entry exists),
+the tracker was not reopened by a person (`state_reason` `reopened`), and a
+re-read of the comments shows no change, it posts one
+`<!-- ai:operator-step:auto-closed -->` comment (skipped when a trusted one
+newer than every entry already exists, i.e. an earlier close PATCH failed)
+and closes the tracker as `completed`. Kill switch
+`OPERATOR_STEP_AUTO_RESOLVE_ENABLED` (default `true`): `false` makes it a
+no-op with no API call. Output is one JSON line: `issue`, `ticked`,
+`skipped` (`{reason: count}`), `compares`, `unticked`, `closed`. Each key logs
+`OPERATOR_STEP_RESOLVE key= outcome=ticked|already_done|not_release|
+no_source_sha|deferred|not_contained|compare_failed status=` and the close
+decision logs `OPERATOR_STEP_RESOLVE op=close issue= outcome=closed|open
+reason=` on stderr. The needs-human digest is never touched.
+
+Resolve API budget (CLAUDE.md §14): one tracker listing (and nothing else
+when no tracker is open); with a tracker, at most one identity read (none
+with `--trusted-login`), one paginated comment read, at most
+MAX_RESOLVE_COMPARES compare calls, one comment write per ticked key, and,
+only when closing, one more paginated comment read, at most one comment write
+and one issue PATCH. The poller's tracking-issue listing and the
+dependency-wait GraphQL return neither this tracker nor its comments.
+
 Output is one JSON line: `issue`, `url`, `created`, `entries`. Exit 0 on
 success, 1 on bad arguments, 2 when a GitHub call failed.
 
@@ -481,7 +523,7 @@ def tick(repo: str, stable_sha: str, repo_dir: str = ".", trusted_login: str | N
 		body = str(latest[key].get("body") or "").replace("\r\n", "\n")
 		lines = [line.strip() for line in body.split("\n")]
 		source_match = SOURCE_SHA_RE.match(lines[1]) if len(lines) > 1 else None
-		if any(DONE_RE.match(line) for line in lines):
+		if any(DONE_RE.match(line) or RESOLVED_RE.match(line) for line in lines):
 			outcome = "already_done"
 		elif not source_match:
 			outcome = "no_source_sha"
@@ -495,6 +537,202 @@ def tick(repo: str, stable_sha: str, repo_dir: str = ".", trusted_login: str | N
 		else:
 			result["skipped"][outcome] = result["skipped"].get(outcome, 0) + 1
 		print(f"OPERATOR_STEP_TICK key={key} outcome={outcome} stable={stable_sha[:7]}", file=sys.stderr)
+	return result
+
+
+# --- resolving released entries (stuck-states P10) -----------------------------
+
+# Keep in sync with RELEASE_CONDITION_RE in scripts/activation_verify.sh (a test checks parity).
+RELEASE_CONDITION_RE = re.compile(r"^@?stable\s+contains\b", re.I)
+RESOLVED_RE = re.compile(r"^<!-- ai:operator-step:resolved release=stable status=(ahead|identical) -->$")
+RELEASE_STEP_TITLE_RE = re.compile(
+	r"^(?:promote|tag|release|publish|cut|sync|propagate|roll out)\b[^\n]{0,200}?"
+	r"(?:@stable|\bstable\b|ai update workflows|update[ _-]workflows|wrapper sync|consumer sync)",
+	re.I,
+)
+RELEASE_ENTRY_KEY_RE = re.compile(r"^(?:pr|project)-[1-9][0-9]{0,9}$")
+AUTO_CLOSED_MARKER = "<!-- ai:operator-step:auto-closed -->"
+AUTO_CLOSED_TEXT = (
+	"Every step listed here is done, so the poller closed this issue. "
+	"A new operator step opens a new issue."
+)
+MAX_RESOLVE_COMPARES = 10
+RELEASE_REF = "stable"
+UNTICKED_STEP_RE = re.compile(r"^- \[ \] \*\*(.*)\*\*$")
+DORMANT_LINE_RE = re.compile(r"^Stays off until then: `(.*)`\.$")
+
+
+def operator_step_auto_resolve_enabled() -> bool:
+	return os.environ.get("OPERATOR_STEP_AUTO_RESOLVE_ENABLED", "true").strip().lower() != "false"
+
+
+def _unticked_steps(body: str) -> list[tuple[str, str]]:
+	"""(title, dormant text) per `- [ ] **Title**` line.
+
+	render_entry writes the dormant line last in a step, so only the step's
+	last indented line counts; an instruction line cannot stand in for it.
+	"""
+	steps: list[list] = []
+	current: list | None = None
+	for raw in str(body or "").replace("\r\n", "\n").split("\n"):
+		if raw.startswith("- ["):
+			match = UNTICKED_STEP_RE.match(raw.rstrip())
+			current = [match.group(1), []] if match else None
+			if current is not None:
+				steps.append(current)
+		elif current is not None and raw.startswith("  ") and raw.strip():
+			current[1].append(raw.strip())
+		elif current is not None and raw.strip():
+			current = None
+	result = []
+	for title, indented in steps:
+		dormant_match = DORMANT_LINE_RE.match(indented[-1]) if indented else None
+		result.append((title, dormant_match.group(1) if dormant_match else ""))
+	return result
+
+
+def _is_release_entry(body: str) -> bool:
+	"""True when at least one step is unticked and every unticked step is a release step."""
+	steps = _unticked_steps(body)
+	return bool(steps) and all(
+		RELEASE_CONDITION_RE.match(dormant) or RELEASE_STEP_TITLE_RE.match(title) for title, dormant in steps
+	)
+
+
+def _count_unticked(body: str) -> int:
+	return sum(1 for line in str(body or "").replace("\r\n", "\n").split("\n") if line.startswith("- [ ]"))
+
+
+def _release_status(repo: str, sha: str, cache: dict[str, str]) -> str:
+	"""ahead | identical | behind | diverged | unknown for `<sha>...stable`; ApiError propagates."""
+	if sha not in cache:
+		raw = _gh(["api", f"repos/{repo}/compare/{sha}...{RELEASE_REF}", "--jq", ".status"]).strip()
+		cache[sha] = raw if raw in ("ahead", "identical", "behind", "diverged") else "unknown"
+	return cache[sha]
+
+
+def _render_resolved(body: str, status: str, source_sha: str) -> str:
+	lines = [
+		"- [x]" + line[len("- [ ]"):] if line.startswith("- [ ]") else line
+		for line in body.replace("\r\n", "\n").rstrip().split("\n")
+	]
+	lines += [
+		"",
+		f"<!-- ai:operator-step:resolved release={RELEASE_REF} status={status} -->",
+		f"Done: the `{RELEASE_REF}` tag includes the merge `{source_sha[:7]}` (compare status `{status}`); ticked by the poller.",
+	]
+	return "\n".join(lines)
+
+
+def _resolve_open_state(latest: dict[str, dict], legacy: list[tuple[str, str]], ticked: set[str]) -> tuple[int, int]:
+	"""(unticked steps, entry count): authoritative comments first, legacy body sections otherwise."""
+	unticked = 0
+	for key, comment in latest.items():
+		if key not in ticked:
+			unticked += _count_unticked(str(comment.get("body") or ""))
+	for key, text in legacy:
+		if key not in latest:
+			unticked += _count_unticked(text)
+	return unticked, len(set(latest) | {key for key, _ in legacy})
+
+
+def _resolve_log(**fields: object) -> None:
+	print("OPERATOR_STEP_RESOLVE " + " ".join(f"{name}={value}" for name, value in fields.items()), file=sys.stderr)
+
+
+def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX_RESOLVE_COMPARES) -> dict:
+	if not REPO_RE.match(repo):
+		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
+	result: dict = {"issue": None, "ticked": [], "skipped": {}, "compares": 0, "unticked": None, "closed": False}
+	if not operator_step_auto_resolve_enabled():
+		_resolve_log(op="resolve", outcome="skip", reason="disabled")
+		result["reason"] = "disabled"
+		return result
+	listing = _gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"])
+	try:
+		issues = json.loads(listing or "[]")
+	except ValueError as exc:
+		raise ApiError(f"unreadable issue list: {exc}") from exc
+	candidates = find_issues(issues)
+	if not candidates:
+		return result
+	tracker = candidates[0]
+	number = tracker.get("number")
+	if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+		raise ApiError("unreadable issue list: operator-step tracker has no issue number")
+	result["issue"] = number
+	login = (trusted_login or "").strip() or _gh(["api", "user", "--jq", ".login"]).strip()
+	if not login:
+		raise ApiError("operator-step resolve identity is unavailable")
+	latest = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+	cache: dict[str, str] = {}
+	halted = False
+	resolved: set[str] = set()
+	for key in sorted(latest, key=lambda entry_key: latest[entry_key]["id"]):
+		body = str(latest[key].get("body") or "").replace("\r\n", "\n")
+		raw_lines = body.split("\n")
+		lines = [line.strip() for line in raw_lines]
+		source_match = SOURCE_SHA_RE.match(lines[1]) if len(lines) > 1 else None
+		status = "-"
+		if any(DONE_RE.match(line) or RESOLVED_RE.match(line) for line in lines) or not any(line.startswith("- [ ]") for line in raw_lines):
+			outcome = "already_done"
+		elif not RELEASE_ENTRY_KEY_RE.match(key) or not _is_release_entry(body):
+			outcome = "not_release"
+		elif not source_match:
+			outcome = "no_source_sha"
+		else:
+			sha = source_match.group(1)
+			if halted or (sha not in cache and result["compares"] >= max_compares):
+				outcome = "deferred"
+			else:
+				try:
+					if sha not in cache:
+						result["compares"] += 1
+					status = _release_status(repo, sha, cache)
+				except ApiError:
+					# Fail closed: nothing is ticked on an unreadable compare, and
+					# the rest of this run's compares are skipped.
+					halted = True
+					outcome = "compare_failed"
+				else:
+					outcome = "ticked" if status in ("ahead", "identical") else "not_contained"
+		if outcome == "ticked":
+			_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={_render_resolved(body, status, sha)}"])
+			result["ticked"].append(key)
+			resolved.add(key)
+		else:
+			result["skipped"][outcome] = result["skipped"].get(outcome, 0) + 1
+		_resolve_log(key=key, outcome=outcome, status=status)
+	legacy = parse_entries(str(tracker.get("body") or ""))
+	unticked, entry_count = _resolve_open_state(latest, legacy, resolved)
+	result["unticked"] = unticked
+	if entry_count == 0:
+		reason = "no_entries"
+	elif unticked > 0:
+		reason = "unticked"
+	elif str(tracker.get("state_reason") or "") == "reopened":
+		# A person reopened the tracker: never close it again automatically.
+		reason = "reopened"
+	else:
+		recheck_comments = load_entry_comments(repo, number)
+		recheck_latest = _authoritative_entry_comments(recheck_comments, login)
+		recheck_unticked, _ = _resolve_open_state(recheck_latest, legacy, set())
+		if recheck_unticked != 0 or set(recheck_latest) - set(latest):
+			reason = "recheck_changed"
+		else:
+			newest_entry = max((comment["id"] for comment in recheck_latest.values()), default=0)
+			already_posted = any(
+				isinstance(comment.get("id"), int) and comment["id"] > newest_entry
+				and (comment.get("user") if isinstance(comment.get("user"), dict) else {}).get("login") == login
+				and str(comment.get("body") or "").replace("\r\n", "\n").split("\n", 1)[0].strip() == AUTO_CLOSED_MARKER
+				for comment in recheck_comments
+			)
+			if not already_posted:
+				_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={AUTO_CLOSED_MARKER}\n{AUTO_CLOSED_TEXT}"])
+			_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=closed", "-f", "state_reason=completed"])
+			result["closed"] = True
+			reason = "closed"
+	_resolve_log(op="close", issue=number, outcome="closed" if result["closed"] else "open", reason=reason)
 	return result
 
 
@@ -969,6 +1207,9 @@ def main(argv: list[str] | None = None) -> int:
 	tick_cmd.add_argument("--stable-sha", required=True)
 	tick_cmd.add_argument("--repo-dir", default=".")
 	tick_cmd.add_argument("--trusted-login", default="")
+	resolve_cmd = sub.add_parser("resolve")
+	resolve_cmd.add_argument("--repo", required=True)
+	resolve_cmd.add_argument("--trusted-login", default="")
 	digest_cmd = sub.add_parser("needs-human")
 	digest_sub = digest_cmd.add_subparsers(dest="digest_command", required=True)
 	park_cmd = digest_sub.add_parser("park")
@@ -1005,6 +1246,8 @@ def main(argv: list[str] | None = None) -> int:
 			result = needs_human_alert_confirm(args.repo, args.item, args.parking, args.comment_id, args.message_id)
 		elif args.command == "needs-human" and args.digest_command == "prune":
 			result = needs_human_prune(args.repo, args.trusted_login or None)
+		elif args.command == "resolve":
+			result = resolve(args.repo, args.trusted_login or None)
 		elif args.command == "tick":
 			result = tick(args.repo, args.stable_sha, args.repo_dir, args.trusted_login or None)
 		else:

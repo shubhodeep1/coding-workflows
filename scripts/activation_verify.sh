@@ -95,6 +95,19 @@
 # request, but go into no fix issue, so the pipeline never plans a duplicate
 # of work that is already under review. When every code gap is tagged, no fix
 # issue is searched for or opened.
+# Release-pending gaps (stuck-states P10, Refs #8291): work that only takes
+# effect once the next `@stable` release ships it is reported by the model as
+# a `code` gap whose `dormant_until` starts with `@stable contains`. The
+# normaliser marks such a gap `release_pending`, rewrites its condition to
+# `@stable contains <merge commit>` (this run's own commit, never a model
+# value) and reroutes a model `operator` gap carrying that condition to `code`
+# (`rerouted`), so promoting `main`, tagging `stable` and the consumer sync
+# never reach a person. Release-pending gaps appear only in the verdict
+# comment: no fix issue, no operator step, no WARNING. The poller's
+# `operator_step_issue.py resolve` step ticks older release entries once
+# `stable` contains their merge. Log: op=release_pending_gaps count= rerouted=
+# outcome=left_to_release. RELEASE_CONDITION_RE matches the one in
+# scripts/operator_step_issue.py (a test checks parity).
 # POSTs are single-attempt: retrying after a lost response can duplicate writes.
 # The one exception is the verdict comment, which is retried once, and only
 # after a successful listing shows no trusted comment ending in its marker
@@ -129,11 +142,16 @@ _activation_tg_send()
 # Validates and normalises the model's verdict; prints the clean JSON or nothing.
 # $2 (optional) is the context file: a code gap's `open_pr` is kept only when
 # it names a pull request in its `open_pull_requests` list, else it is null.
+# $3 (optional) is the merge commit (40 lower-case hex, else ignored): a
+# release-pending gap's `dormant_until` becomes `@stable contains <commit>`.
 activation_normalise_verdict()
 {
-	python3 - "$1" "${2:-}" <<'PY'
+	python3 - "$1" "${2:-}" "${3:-}" <<'PY'
 import json, os, re, sys
+# Keep in sync with RELEASE_CONDITION_RE in scripts/operator_step_issue.py.
+RELEASE_CONDITION_RE = re.compile(r"^@?stable\s+contains\b", re.I)
 raw = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+source_sha = sys.argv[3] if len(sys.argv) > 3 and re.fullmatch(r"[0-9a-f]{40}", sys.argv[3]) else ""
 open_pr_numbers = set()
 if len(sys.argv) > 2 and sys.argv[2]:
 	try:
@@ -165,13 +183,19 @@ if not isinstance(match.get("gaps"), list) or len(match["gaps"]) > 20:
 for gap in match["gaps"]:
 	if not isinstance(gap, dict) or gap.get("kind") not in ("code", "operator"):
 		sys.exit(1)
+	dormant_until = clean(gap.get("dormant_until"), 200)
+	release_pending = bool(RELEASE_CONDITION_RE.match(dormant_until))
+	if release_pending and source_sha:
+		dormant_until = "@stable contains " + source_sha
 	gaps.append({
-		"kind": gap["kind"],
+		"kind": "code" if release_pending else gap["kind"],
 		"title": clean(gap.get("title"), 200) or "Activation gap",
 		"evidence": clean(gap.get("evidence"), 600),
 		"fix": clean(gap.get("fix"), 1500),
-		"dormant_until": clean(gap.get("dormant_until"), 200),
-		"open_pr": gap.get("open_pr") if gap["kind"] == "code" and type(gap.get("open_pr")) is int and gap.get("open_pr") in open_pr_numbers else None,
+		"dormant_until": dormant_until,
+		"open_pr": gap.get("open_pr") if gap["kind"] == "code" and not release_pending and type(gap.get("open_pr")) is int and gap.get("open_pr") in open_pr_numbers else None,
+		"release_pending": release_pending,
+		"rerouted": release_pending and gap["kind"] == "operator",
 	})
 print(json.dumps({
 	"verdict": match["verdict"],
@@ -430,7 +454,8 @@ activation_main()
 	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file activation_model_rc=0
 	local activation_fix_lookup_rc activation_fix_recheck_rc activation_verdict_posted activation_expected_marker activation_verdict_recheck_rc
 	local activation_symlinks_context activation_context_tmp activation_open_prs_context
-	local activation_issue_gaps activation_in_flight_prs
+	local activation_issue_gaps activation_in_flight_prs activation_release_gaps activation_rerouted_gaps
+	local activation_source_sha=""
 	local verdict code_gaps operator_gaps model reasoning comment_body fix_body steps_file tg_level item_label
 	local activation_files_json activation_files_response activation_fix_lookup_ok
 	local activation_engine_labels="" activation_sync_label=""
@@ -639,7 +664,18 @@ activation_main()
 				--skip-git-repo-check --model "${model}" --sandbox read-only < "${prompt_file}" > "${output_file}" 2>"${RUNTIME_DIR}/activation_codex.err") || true
 		fi
 	fi
-	if ! activation_normalise_verdict "${output_file}" "${context_file}" > "${verdict_file}" 2>/dev/null || [ ! -s "${verdict_file}" ]; then
+	# The merge commit: release-pending gaps name it in `dormant_until`, and
+	# the operator-step entry records it so the nightly promote cycle can tick
+	# the entry once the `stable` tag includes it (operator_step_issue.py tick,
+	# plan item 4d). PR mode: the merge commit; project mode: the checked-out
+	# default branch. Without a valid commit the entry is recorded but never
+	# auto-ticked.
+	if [ "${mode}" = "pr" ]; then
+		activation_source_sha="${MERGE_SHA:-}"
+	else
+		activation_source_sha="$(git -C "${TARGET_DIR}" rev-parse HEAD 2>/dev/null || true)"
+	fi
+	if ! activation_normalise_verdict "${output_file}" "${context_file}" "${activation_source_sha}" > "${verdict_file}" 2>/dev/null || [ ! -s "${verdict_file}" ]; then
 		activation_log "mode=${mode} item=${item} outcome=skip reason=invalid_verdict"
 		return 0
 	fi
@@ -649,10 +685,17 @@ activation_main()
 
 	# Code gaps tagged `open_pr` are left to that open pull request: they are
 	# reported in the verdict comment but go into no fix issue.
-	activation_issue_gaps="$(jq '[.gaps[] | select(.kind == "code" and .open_pr == null)] | length' "${verdict_file}")"
+	# Release-pending gaps are left to the next `@stable` release: reported in
+	# the verdict comment, but in no fix issue and no operator step.
+	activation_issue_gaps="$(jq '[.gaps[] | select(.kind == "code" and .open_pr == null and (.release_pending | not))] | length' "${verdict_file}")"
+	activation_release_gaps="$(jq '[.gaps[] | select(.release_pending)] | length' "${verdict_file}")"
+	activation_rerouted_gaps="$(jq '[.gaps[] | select(.rerouted)] | length' "${verdict_file}")"
 	activation_in_flight_prs="$(jq -r '[.gaps[] | select(.kind == "code" and .open_pr != null) | .open_pr] | unique | map(tostring) | join(",")' "${verdict_file}")"
 	if [ -n "${activation_in_flight_prs}" ]; then
-		activation_log "mode=${mode} item=${item} op=in_flight_gaps count=$((code_gaps - activation_issue_gaps)) prs=${activation_in_flight_prs} outcome=left_to_open_prs"
+		activation_log "mode=${mode} item=${item} op=in_flight_gaps count=$((code_gaps - activation_issue_gaps - activation_release_gaps)) prs=${activation_in_flight_prs} outcome=left_to_open_prs"
+	fi
+	if [ "${activation_release_gaps}" -gt 0 ]; then
+		activation_log "mode=${mode} item=${item} op=release_pending_gaps count=${activation_release_gaps} rerouted=${activation_rerouted_gaps} outcome=left_to_release"
 	fi
 
 	activation_fix_lookup_ok="true"
@@ -674,7 +717,7 @@ activation_main()
 				"<!-- ai:activation-fix:v1 source=" + $key + " -->\n"
 				+ "## Activation gaps\n\nActivation verification of " + $source_label
 				+ " found these gaps that code in this repository can close. Close each one with the smallest change; do not change unrelated behaviour.\n\n"
-				+ ([.gaps[] | select(.kind == "code" and .open_pr == null) | "- **" + .title + "**\n  Evidence: " + .evidence + "\n  Fix: " + .fix] | join("\n"))
+				+ ([.gaps[] | select(.kind == "code" and .open_pr == null and (.release_pending | not)) | "- **" + .title + "**\n  Evidence: " + .evidence + "\n  Fix: " + .fix] | join("\n"))
 			' "${verdict_file}")"
 			activation_fix_recheck_rc=0
 			if ! gh api "repos/${REPOSITORY}/issues" -f title="Activation gaps after ${item_label}" -f body="${fix_body}" >/dev/null 2>&1; then
@@ -702,16 +745,7 @@ activation_main()
 	if [ "${operator_gaps}" -gt 0 ]; then
 		steps_file="${RUNTIME_DIR}/activation_operator_steps.json"
 		jq '[.gaps[] | select(.kind == "operator") | {title, instructions: (.fix + (if .evidence != "" then "\nEvidence: " + .evidence else "" end)), dormant_until}]' "${verdict_file}" > "${steps_file}"
-		# The merge commit lets the nightly promote cycle tick the entry once the
-		# `stable` tag includes it (operator_step_issue.py tick, plan item 4d).
-		# PR mode: the merge commit; project mode: the checked-out default branch.
-		# Without a valid commit the entry is recorded but never auto-ticked.
-		local activation_source_sha=""
-		if [ "${mode}" = "pr" ]; then
-			activation_source_sha="${MERGE_SHA:-}"
-		else
-			activation_source_sha="$(git -C "${TARGET_DIR}" rev-parse HEAD 2>/dev/null || true)"
-		fi
+		# activation_source_sha was computed before normalising the verdict.
 		local -a activation_source_args=()
 		if [[ "${activation_source_sha}" =~ ^[0-9a-f]{40}$ ]]; then
 			activation_source_args=(--source-sha "${activation_source_sha}")
@@ -728,7 +762,7 @@ activation_main()
 	comment_body="$(jq -r --arg key "${key}" --argjson lookup_ok "${activation_fix_lookup_ok}" '
 		"## Activation: " + .verdict + "\n\nSummary: " + .summary + "\n\n"
 		+ (if .trigger != "" then "Trigger: " + .trigger + "\n\n" else "" end)
-		+ (if (.gaps | length) > 0 then "Gaps:\n" + ([.gaps[] | "- [" + .kind + "] " + .title + (if .open_pr != null then " (fix in progress in open PR #" + (.open_pr | tostring) + ")" else "" end)] | join("\n")) + "\n\n" else "" end)
+		+ (if (.gaps | length) > 0 then "Gaps:\n" + ([.gaps[] | "- [" + .kind + "] " + .title + (if .release_pending then " (ships with the next `@stable` release; the promote cycle does this)" elif .open_pr != null then " (fix in progress in open PR #" + (.open_pr | tostring) + ")" else "" end)] | join("\n")) + "\n\n" else "" end)
 		+ (if $lookup_ok then "<!-- ai:activation:v1 verdict=" + .verdict + " source=" + $key + " -->" else "Code-gap follow-up is pending: the GitHub fix-issue lookup failed. The activation verdict is not finalized; retry verification.\n\n<!-- ai:activation:v1 partial=true source=" + $key + " -->" end)
 	' "${verdict_file}")"
 	activation_verdict_posted="false"

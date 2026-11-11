@@ -728,16 +728,86 @@ def test_tracked_symlinks_flag_dangling_targets(tmp_path: Path) -> None:
 
 
 def test_prompt_never_classifies_release_or_consumer_sync_as_operator_steps() -> None:
+	# Stuck-states P10 (Refs #8291): never an `operator` gap; work that waits
+	# for the next release is a release-pending `code` gap instead.
 	rule = ("Never list promoting `main`, tagging `stable`, or the consumer sync (`AI Update Workflows` / daily wrapper sync) "
-		"as a gap of either kind; the pipeline performs them.")
+		"as an `operator` gap; the pipeline performs them (`promote-main-to-stable.yml`, `update_workflows.yml`).")
+	release_rule = ("report that as one `code` gap with `dormant_until` set to `@stable contains <merge commit>`. "
+		"The pipeline leaves that gap to the release and opens no issue for it.")
 	for prompt in (ROOT / "prompts" / "mode-activation-verify.txt", ROOT / "prompts" / "_templates" / "mode-activation-verify.txt"):
 		text = prompt.read_text(encoding="utf-8")
 		assert "tag a release" not in text, prompt
 		assert "a release action a person must perform" not in text, prompt
+		assert "as a gap of either kind" not in text, prompt
 		assert rule in text, prompt
+		assert release_rule in text, prompt
+		assert "Secrets, repository settings and external accounts stay `operator` gaps." in text, prompt
+		assert "it is never an `operator` gap." in text, prompt
 		assert "The nightly promote cycle (tagging `stable`, promoting `main`) and the consumer sync" in text, prompt
 		# The verdict output contract is unchanged.
 		assert '"verdict": "LIVE" | "DORMANT",' in text and '"kind": "code" | "operator",' in text, prompt
+
+
+RELEASE_MERGE_SHA = "c" * 40
+RELEASE_GAP = {"kind": "code", "title": "Consumers get the new wrapper", "evidence": "workflow-templates/ai-x.yml:1",
+	"fix": "Nothing to change; the next release ships it.", "dormant_until": "@stable contains 1234567"}
+
+
+def _normalised_verdict(tmp_path: Path) -> dict:
+	return json.loads((tmp_path / "rt" / "activation_verdict.json").read_text(encoding="utf-8"))
+
+
+def test_release_gap_goes_to_neither_fix_issue_nor_operator_step(tmp_path: Path) -> None:
+	verdict = {"verdict": "DORMANT", "trigger": "workflow_call from consumer wrappers", "summary": "Ships with the next release.", "gaps": [RELEASE_GAP]}
+	result, state = _verify(tmp_path, verdict, env_extra={"MERGE_SHA": RELEASE_MERGE_SHA})
+	assert result.returncode == 0
+	assert state["created"] == []
+	assert not any(len(call) > 1 and call[1].startswith("search/issues?") for call in state["calls"])
+	assert not any("issues?labels=ai:operator-step" in " ".join(call) for call in state["calls"])
+	assert "ACTIVATION_VERIFY mode=pr item=42 op=release_pending_gaps count=1 rerouted=0 outcome=left_to_release" in result.stdout
+	assert "op=in_flight_gaps" not in result.stdout
+	assert "ACTIVATION_VERIFY mode=pr item=42 verdict=DORMANT code_gaps=1 operator_gaps=0 outcome=posted" in result.stdout
+	body = state["comments"][-1]["body"]
+	assert "- [code] Consumers get the new wrapper (ships with the next `@stable` release; the promote cycle does this)" in body
+	assert body.endswith("<!-- ai:activation:v1 verdict=DORMANT source=pr-42 -->")
+	gap = _normalised_verdict(tmp_path)["gaps"][0]
+	# The script's own merge commit replaces the model's value.
+	assert gap["dormant_until"] == f"@stable contains {RELEASE_MERGE_SHA}"
+	assert gap["release_pending"] is True and gap["rerouted"] is False and gap["kind"] == "code"
+
+
+def test_operator_gap_with_release_condition_is_rerouted_to_code(tmp_path: Path) -> None:
+	verdict = json.loads(json.dumps(DORMANT))
+	verdict["gaps"].append({"kind": "operator", "title": "Tag stable", "evidence": "promote-main-to-stable.yml",
+		"fix": "Run the promote workflow", "dormant_until": "stable contains the merge", "open_pr": 91})
+	result, state = _verify(tmp_path, verdict, env_extra={"MERGE_SHA": RELEASE_MERGE_SHA}, open_prs=[OPEN_PR_91])
+	assert result.returncode == 0
+	assert "op=release_pending_gaps count=1 rerouted=1 outcome=left_to_release" in result.stdout
+	assert "op=in_flight_gaps" not in result.stdout
+	assert "code_gaps=2 operator_gaps=1 outcome=posted" in result.stdout
+	entry = next(comment for comment in state["comments"] if comment["body"].startswith("<!-- ai:operator-step:entry key=pr-42 -->"))
+	assert "Set NIGHTLY_REPORT_ENABLED" in entry["body"] and "Tag stable" not in entry["body"]
+	fix_issue = _fix_issues(state)[0]
+	assert "README lacks the new variable" in fix_issue["body"] and "Tag stable" not in fix_issue["body"]
+	body = state["comments"][-1]["body"]
+	assert "- [code] Tag stable (ships with the next `@stable` release; the promote cycle does this)" in body
+	assert "fix in progress" not in body
+	gap = _normalised_verdict(tmp_path)["gaps"][2]
+	assert gap["kind"] == "code" and gap["rerouted"] is True and gap["release_pending"] is True
+	assert gap["open_pr"] is None and gap["dormant_until"] == f"@stable contains {RELEASE_MERGE_SHA}"
+
+
+def test_release_gap_without_a_valid_merge_commit_keeps_its_condition(tmp_path: Path) -> None:
+	verdict = {"verdict": "DORMANT", "trigger": "push", "summary": "s", "gaps": [RELEASE_GAP]}
+	result, state = _verify(tmp_path, verdict, env_extra={"MERGE_SHA": "not-a-sha"})
+	assert result.returncode == 0 and state["created"] == []
+	assert _normalised_verdict(tmp_path)["gaps"][0]["dormant_until"] == "@stable contains 1234567"
+
+
+def test_ordinary_gaps_are_not_release_pending(tmp_path: Path) -> None:
+	result, _ = _verify(tmp_path, DORMANT, env_extra={"MERGE_SHA": RELEASE_MERGE_SHA})
+	assert "op=release_pending_gaps" not in result.stdout
+	assert all(gap["release_pending"] is False and gap["rerouted"] is False for gap in _normalised_verdict(tmp_path)["gaps"])
 
 
 def test_operator_entry_records_the_merge_commit(tmp_path: Path) -> None:
