@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9237,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9237\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9275\",\"pr_number\":9275,\"branch\":\"ai/issue-9237\",\"run_id\":\"43041690114\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43041690114\",\"changed_files\":[\"changelog.d/9237-poller-negative-elapsed-unknown.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_codex_isolated_exec.py\",\"tests/test_orchestrate_poll_cycle_summary.py\"]}",
+  "fingerprint": "4206cd275d4782614e369ef9c52bc121438254c34fc5338b3e437b311301ebce",
+  "lineage": {
+    "issue_number": 9237,
+    "parent_ids": [],
+    "pr_number": 9275,
+    "run_id": "43041690114",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43041690114",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9275"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261111154556_9d73a9a1cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9237,
+    "level": "run",
+    "pr_number": 9275,
+    "run_id": "43041690114"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9237: https://github.com/shubhodeep1/coding-workflows/pull/9275",
+  "timestamps": {
+    "created_at": "2026-11-11T15:45:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
