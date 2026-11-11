@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_log_analysis_purge_safety.py:91-116 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: Required CI jobs `tests-heal-plan-and-validation`, `tests-hooks-and-orchestrator` and `orchestrate-poll` fail on head 5155af73, and the aggregate `lint` job fails because of them. The failing assertions are at lines 91 and 116: `origin_has('refs/heads/main', 'analysis/workflow-optimization-2026-11-09.md')` is false after a run with `WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=false`.\n  WHY: The red required jobs block merge whatever the cause, but the failures do not map to this PR's hunks. The pre-push gate flags them as inherited from the merge-base, and z-ai_glm-5_3-flash also cites test_gh_api_write_guard.py path0 cases and test_files_touched_scope_guard.py failing on files this PR does not touch. Both reviewers rated it NIT, mapped here to low. z-ai_glm-5_3-flash cited File `.github/workflows/ci.yml (head 5155af73dacbe38c65d04be9e504d2b67c4a26d0)` with the same test lines. The full logs of run 43105478939 are needed to confirm.\n- scripts/apply_analysis_on_main.sh:462 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The candidate-cap raise accepts only `PROMOTE_CYCLE_MIN_DOCS` values matching `^[1-9][0-9]{0,5}$`, but `scripts/promote_main_cycle.sh` lines 170-174 accept any positive digit string such as `04`. A value like that passes the cycle's check but is rejected by the dispatcher.\n  WHY: With four docs available, the cap stays at 3, so the promote cycle skips as `insufficient_docs` despite the configured minimum of four. README.md line 268 states without qualification that a value above the cap raises it. The source rated this NIT, mapped here to low. anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite and z-ai_glm-5_3-flash raised the same pattern mismatch as a hardening suggestion (risk 1), not as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_log_analysis_purge_safety.py:line 91 `assert box.origin_has(\"refs/heads/main\", CASES.REPORT)` and line 116 `assert box.origin_has(\"refs/heads/main\", doc), doc` (CI job `tests-heal-plan-and-validation`, run 43105478939) | severity=NIT | confidence=2\n  PROBLEM: CI fails on head 5155af73 in `tests-heal-plan-and-validation`, `tests-hooks-and-orchestrator` and `orchestrate-poll`, and the aggregate `lint` job fails because of them. `analysis/workflow-optimization-2026-11-09.md` is missing from origin `refs/heads/main` after a run with `WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=false`. The failing step is not visible in the other two jobs' logs.\n  WHY: The PR cannot merge while required CI is red. Nothing in the PR touches `.github/workflows/workflow-log-analysis.yml` or the purge test, and the pre-push gate lists the test as inherited from the merge-base. The full logs of run 43105478939 are needed to confirm.\n- HARDENING scripts/apply_analysis_on_main.sh:the block that raises the candidate cap from `PROMOTE_CYCLE_MIN_DOCS` (`[[ \"${PROMOTE_CYCLE_MIN_DOCS:-}\" =~ ^[1-9][0-9]{0,5}$ ]]`) | risk=1\n  PROBLEM: `scripts/promote_main_cycle.sh` line 170 accepts a value such as `02`, which the stricter dispatcher pattern rejects, silently leaving the cap unraised. The cycle still fails safe.\n  WHY: Suggested fix: print a `::warning::` to stderr on a pattern mismatch (about 3 lines).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- HARDENING scripts/promote_main_cycle.sh:line 171 (the candidate count check) | risk=1\n  PROBLEM: The dispatcher uses a stricter validation pattern (`^[1-9][0-9]{0,5}$`) than `promote_main_cycle.sh`, which accepts any positive integer such as `02`.\n  WHY: Suggested fix: emit a stderr `::warning::` in `promote_main_cycle.sh` when `PROMOTE_CYCLE_MIN_DOCS` is a valid positive integer that does not match `^[1-9][0-9]{0,5}$` (about 3 lines).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/apply_analysis_on_main.sh:462 | severity=NIT | confidence=5\n  PROBLEM: The candidate-cap raise accepts only `PROMOTE_CYCLE_MIN_DOCS` values matching `^[1-9][0-9]{0,5}$`, but `scripts/promote_main_cycle.sh` accepts any positive digit string at lines 170-174. For example, `PROMOTE_CYCLE_MIN_DOCS=04` passes the promote-cycle check and is rejected here.\n  WHY: With four docs available, the dispatcher leaves the cap at 3, and the promote cycle skips as `insufficient_docs` despite the configured minimum of four. README.md line 268 states without qualification that a value above the cap raises it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml (head 5155af73dacbe38c65d04be9e504d2b67c4a26d0):failing jobs tests-heal-plan-and-validation, tests-hooks-and-orchestrator, orchestrate-poll (aggregate job lint fails on them); concrete failing assertions at tests/test_workflow_log_analysis_purge_safety.py:91 and :116 (`origin_has('refs/heads/main', 'analysis/workflow-optimization-2026-11-09.md')` false), plus test_gh_api_write_guard.py path0 cases and test_files_touched_scope_guard.py. | severity=NIT | confidence=2\n  PROBLEM: Three required CI jobs are red on the PR head, and none of the failures map to this PR's hunks. The pre-push gate flags the purge-safety failures as inherited from the merge-base (the fixture's \"recent doc\" depends on the date window). The guard suites fail on files the PR does not touch (.claude/settings.json, .github/ai/label_contract.v1.json).\n  WHY: The red required jobs block merge whatever the cause, and the purge assertion also fails on this branch's merge-base.\n- HARDENING scripts/apply_analysis_on_main.sh:line 462, the PROMOTE_CYCLE_MIN_DOCS raise guard (`^[1-9][0-9]{0,5}$`) | risk=1\n  PROBLEM: scripts/promote_main_cycle.sh:171 accepts any `^[0-9]+$` value \u2265 1, so a value like `004` or `1234567` passes the cycle's check but fails the dispatcher's pattern. The cap is not raised, and the cycle then skips with `insufficient_docs` or `scan_capped_behind_markers`.\n  WHY: Suggested fix: print a stderr `::warning::` from the raise guard when the value is numerically valid but fails the pattern (about 3 lines).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d949c6007c58d58ca4959a8f23e11534b60b4a652fb7fe6677d892740d0e173c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9265,
+    "run_id": "43099449117",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43099449117",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111232719_31426e6860",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9265,
+    "run_id": "43099449117"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T23:27:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
