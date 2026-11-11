@@ -5,13 +5,25 @@
   "entry_id": "processed_command_9297_6805316804_approved",
   "issue_number": 9297,
   "metadata": {
+    "branch": "ai/issue-9297",
+    "changed_files": [
+      "changelog.d/9297-ubuntu-2604-checkout-clock-and-closed-reader-test.md",
+      "scripts/review_autofix_step_checkout_pr_head_branch.sh",
+      "tests/test_gh_retry_stdout_isolation.py",
+      "tests/test_review_checkout_head_diagnostics.py"
+    ],
+    "issue_number": 9297,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9297",
+    "pr_number": 9316,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9316",
+    "run_attempt": "1",
+    "run_id": "43087799300",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43087799300"
   },
   "run_attempt": 1,
   "run_id": "43087799300",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-11T19:51:05Z",
+  "status": "completed",
+  "timestamp": "2026-11-11T20:04:09Z",
   "workflow": "implement"
 }
