@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Should this issue also fix the `tests-hooks-and-orchestrator` failure (`test_closed_reader_does_not_rerun_a_successful_command`), or only the `sf_now_ms` clock bug?\nChoices:\nA) Clock only: change `sf_now_ms` in `.github/workflows/ci.yml` and add the regression test that fakes a `date` going backwards in `tests/test_ci_poll_test_sharding.py`. Track the closed-reader failure separately. (RECOMMENDED)\nB) Both: also fix `gh_retry`'s replay in `scripts/gh_helpers.sh` so that output it could not deliver to a closed reader returns non-zero under Rust/uutils coreutils. Keep the test assertion strict. This adds `scripts/gh_helpers.sh` and possibly the inline `gh_retry` copies in `review_autofix.yml` to scope.\nC) Both, but treat the closed-reader failure as an environment quirk and change only the test (skip it or relax it on uutils `cat`). **Note:** this conflicts with the issue's \"do not hide the symptom\" rule.\nQ2: Open PR #9246 already changes `ci.yml` and `tests/test_ci_poll_test_sharding.py` and claims to fix both failures. How should this issue relate to it?\nChoices:\nA) Go ahead on its own against the default branch with the smallest change. If #9246 lands first, the implementer rebases and drops whatever is already fixed. (RECOMMENDED)\nB) Wait for #9246 and close this issue as a duplicate if #9246 merges and CI turns green.\nC) Make this issue's PR the one to keep and treat #9246 as superseded.",
+  "fingerprint": "d326557f72bac9714506d2f073c10c47655141a6d2089d7a355aa538c7e67c78",
+  "lineage": {
+    "issue_number": 9315,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43091956038",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43091956038",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111201156_48dcf67d25",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9315,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43091956038"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9315 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T20:11:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
