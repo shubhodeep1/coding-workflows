@@ -1066,6 +1066,15 @@ def test_review_gate_self_run_newest_is_not_evaluated() -> None:
 	assert lines == [] and _status_calls(calls) == [], (lines, calls)
 
 
+def test_review_gate_supersede_context_matches_head_gate_helper() -> None:
+	"""The pinned supersede context must stay equal to the context
+	scripts/review_head_gate.sh posts; a drift would silently bring back the
+	PR #9168 stall (it fails closed with no_head_gate_status)."""
+	helper = (REPO_ROOT / "scripts" / "review_head_gate.sh").read_text(encoding="utf-8")
+	assert 'REVIEW_HEAD_GATE_CONTEXT="ai-review/head-gate"' in helper
+	assert 'local gate_sup_status_ctx="ai-review/head-gate"' in LIB.read_text(encoding="utf-8")
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = skipped = failed = 0
