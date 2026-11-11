@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should the fix change, now that the runner's `cat` returns 0 when its reader closes early?\nChoices:\nA) Change only the test: make the payload larger than the system's maximum pipe size, read from the runner (for example `/proc/sys/fs/pipe-max-size`), so the reader always closes before the write finishes. Keep both assertions (`_calls == 1` and `rc != 0`) as they are. (RECOMMENDED)\nB) Change `gh_retry` itself: replace the `cat` replay at `scripts/gh_helpers.sh:1229` with a replay method that reliably returns non-zero when not all output is delivered, whatever coreutils is installed. Keep the test unchanged.\nC) Loosen the test: keep the `_calls == 1` no-rerun assertion, and accept `rc=0` when the platform's `cat` hides the closed pipe (for example, when `cat --version` reports uutils).\nD) Change no code. Treat it as environmental: re-run the job and close this issue.\n   **Note:** the diagnostics suggest this happens every time on the 26.04 image, so a re-run will probably fail again.\nQ2: Where should the fix go?\nChoices:\nA) A new standalone PR against the default branch, leaving PR #9218 unchanged, because the failure is inherited and not caused by #9218. #9218 then goes green on re-run once the fix merges. (RECOMMENDED)\nB) Push the fix onto PR #9218's branch (`claude/optimistic-carson-cnxdow`) so that PR goes green directly.",
+  "fingerprint": "3bdaa0859e9bef6d5cfc960679c2217780a6ccd9102a105d9a46e6b5e29d1164",
+  "lineage": {
+    "issue_number": 9303,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43084034608",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43084034608",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111192417_68f0f81a35",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9303,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43084034608"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9303 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T19:24:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
