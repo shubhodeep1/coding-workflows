@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_files_touched_scope_guard.py; tests/test_gh_api_write_guard.py; tests/test_orchestrate_lib.py; tests/test_session_start_extract_repo_slug.py:n/a | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate is red on these four suites, and the gate attributes the failures to this change.\n  WHY: Severity disagreement: openai_gpt-6-luna said BLOCKER, conf 5. z-ai_glm-5_3-flash said NIT, conf 2, and called it environmental because `.claude/settings.json` and `.github/ai/label_contract.v1.json` are missing from the runner workspace and no changed hunk maps to the failures. Highest severity is used.\n- tests/test_conflict_guard_hook_template_merge.py:486-520 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The contract test `test_shell_pair_list_matches_paired_live_copies` was relaxed from strict equality to coverage plus shape-checked extras. The reviewer verified it as sound and found no defect.\n  WHY: The reviewer recorded it as a NIT because pass-1 flagged CI red here.\n- scripts/review_conflict_prepare.sh:357-434 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Mixed-outcome handling in the wrapper `_conflict_prepare_guard_hook_template_merge` and its caller was verified as sound and matches the documented behaviour. The reviewer found no defect.\n  WHY: The reviewer recorded it as a NIT, conf 2.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_files_touched_scope_guard.py; tests/test_gh_api_write_guard.py; tests/test_orchestrate_lib.py; tests/test_session_start_extract_repo_slug.py:n/a | severity=BLOCKER | confidence=5\n  PROBLEM: The pre-push gate is red on these suites, and the failure evidence does not tie to a changed hunk.\n  WHY: The gate reports four failures caused by this change and the associated CI jobs fail, so the PR cannot be considered verified.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_conflict_guard_hook_template_merge.py:486-520 | severity=NIT | confidence=2\n  PROBLEM: The contract test was relaxed from strict equality to coverage plus shape-checked extras. The reviewer verified it as sound and found no defect.\n  WHY: N/A, verified sound.\n- scripts/review_conflict_prepare.sh:357-434 | severity=NIT | confidence=2\n  PROBLEM: Mixed-outcome handling in the wrapper and its caller was verified as sound and matches the documented behaviour. The reviewer found no defect.\n  WHY: N/A, verified sound.\n- (no changed hunk) tests/test_gh_api_write_guard.py, tests/test_files_touched_scope_guard.py, tests/test_session_start_extract_repo_slug.py, tests/test_orchestrate_lib.py; failing check-runs `lint`, `tests-hooks-and-orchestrator`, `orchestrate-poll (2)`, `review / codex-agent` | severity=NIT | confidence=2\n  PROBLEM: The gate classifies 4 suites as caused-by-this-change, but the failures trace to runner-workspace files that are absent from the sandbox, namely `/source/.claude/settings.json` and `/source/.github/ai/label_contract.v1.json`. No hunk in the last-run diff can cause or fix them.\n  WHY: The cause is environmental, and it blocks the gate on every iteration until the runner workspace carries those files.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "18458ed3dad045394477939a1b59396a07d7558422555b9a4ca0896b85772b9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9010,
+    "run_id": "43046874930",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43046874930",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111175310_5dbc463b9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9010,
+    "run_id": "43046874930"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T17:53:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
