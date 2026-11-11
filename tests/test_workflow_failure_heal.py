@@ -5282,6 +5282,8 @@ def test_autofix_report_keeps_pr_head_without_a_usable_event_head() -> None:
 		("not_json", "pull_request", "not an object", {}),
 		("missing_file", "pull_request", None, {}),
 		("invalid_override", "workflow_dispatch", None, {"REPORT_RUN_HEAD_SHA": "not-a-sha"}),
+		# The identical-failure cap keeps the PR (gate) head its counted markers carry.
+		("identical_failure_cap", "pull_request", good, {"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "REPORT_RUN_HEAD_SHA": SHA_C}),
 	]
 	for name, event_name, event, extra in cases:
 		with tempfile.TemporaryDirectory(prefix=f"heal-autofix-run-head-{name}-") as tmp_name:

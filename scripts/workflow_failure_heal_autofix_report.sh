@@ -88,7 +88,8 @@
 #                                          sets it; its own run has no failed job)
 #   REPORT_RUN_HEAD_SHA                    the failed run's own head SHA (default empty; a test
 #                                          override). Used only when it is 40 hex; otherwise the
-#                                          head comes from the pull_request event file
+#                                          head comes from the pull_request event file. Not used
+#                                          for identical_failure_cap reports (they keep the PR head)
 #
 # The payload's head_sha is the failed run's own head (issue #9250): the
 # REPORT_RUN_HEAD_SHA override, else `.pull_request.head.sha` of
@@ -356,10 +357,13 @@ fi
 # value against the run object and the PR head's ancestry. Only when the staged
 # helper knows --run-head-sha (an older copy would reject it and the report
 # would be lost). pull_request_target is left out: that run's head is the base
-# branch, not the PR head.
+# branch, not the PR head. The identical_failure_cap report is left out too: its
+# counted failure markers carry the gate head (the API PR read), and the cap
+# only reports when the PR head still equals that gate head, so the event head
+# would miss those markers and drop the failed runs from run_refs.
 RUN_HEAD_SHA=""
 RUN_HEAD_SOURCE="none"
-if grep -q 'run-head-sha' "${HEAL_PY}" 2>/dev/null; then
+if [ "${FAILURE_REASON}" != "identical_failure_cap" ] && grep -q 'run-head-sha' "${HEAL_PY}" 2>/dev/null; then
 	if [ -n "${REPORT_RUN_HEAD_SHA:-}" ]; then
 		RUN_HEAD_OVERRIDE="$(printf '%s' "${REPORT_RUN_HEAD_SHA}" | tr '[:upper:]' '[:lower:]')"
 		if [[ "${RUN_HEAD_OVERRIDE}" =~ ^[0-9a-f]{40}$ ]]; then
