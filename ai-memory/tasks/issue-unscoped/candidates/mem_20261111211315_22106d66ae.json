@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:(job tests-hooks-and-orchestrator, step \"PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py\") | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Failed check-run 130641953818 and lint roll-up 130687738005 on head cf74ca3ceded are red, but they cannot be tied to any file this PR changes; the log tail ends inside the tests/test_lint_pr_body_auto_close.py step, and no failing assertion or traceback appears.\n  WHY: The merge gate stays red until the job is re-run, and no code change in this PR's scope is indicated (source severity NIT; minimax_minimax-m3 separately describes this as an inherited pre-PR baseline failure that is not in PR scope).\n- .github/workflows/plan.yml:2328-2353 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The bash script block implementing the blocked planning output lacks `set -euo pipefail`.\n  WHY: Failing commands such as `jq` or `gh` would not stop the script, so incomplete actions could be treated as successful (source severity MAJOR); anthropic_claude-sonnet-5_5 and minimax_minimax-m3 dispute it, citing `set -euo pipefail` at plan.yml line 2314, the first line of the step's run: body.\n- tests/test_plan_clarify_blocked_output.py:808 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test runs the `plan.yml` script body using `subprocess.run([\"bash\", \"-c\", script], ...)` without enabling `set -euo pipefail`.\n  WHY: Script failures in the test environment could be ignored and give false-positive results (source severity MAJOR); anthropic_claude-sonnet-5_5 and minimax_minimax-m3 dispute it, because `_run_blocked_planning_step` runs step[\"run\"] verbatim and so inherits the strict flags.\n- scripts/check_failure_triage.sh:490-504 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `rd_codeql_url_re` matches `github.com/...` as an unbounded substring, so in `triage_release_download_classify` it accepts URLs hosted on `evilgithub.com` or URLs with `github.com/...` in their path.\n  WHY: A workflow can emit the expected CodeQL failure text with a 504 status and a non-GitHub URL, and the job is then classified as a release-download failure, its failed jobs are re-run, and triage is skipped (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Use `set -euo pipefail` in `scripts/check_failure_triage.sh`.\" (Implicit standard for new scripts/modifications to bash scripts)\n  expected_change_site: `scripts/check_failure_triage.sh`\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The added `triage_release_download_rerun_gate` function and surrounding code do not explicitly set strict bash flags.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml (job tests-hooks-and-orchestrator, step \"PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py\"); failed check-run 130641953818 and lint roll-up 130687738005 on head cf74ca3ceded | severity=NIT | confidence=2\n  PROBLEM: The two red checks on this head cannot be tied to any file this PR changes. tests/test_lint_pr_body_auto_close.py is not in PR CHANGED FILES, and the last run diff only touches agents.d/9120-release-download-rerun.md, scripts/check_failure_triage.sh and tests/test_check_failure_triage_release_download_rerun.py.\n  WHY: The merge gate stays red until the job is re-run. The editor should re-run the check and confirm the cause is infrastructure or live #2734 label state, not a code defect in this PR. No code change in this PR's scope is indicated.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:2328-2353 | severity=MAJOR | confidence=4\n  PROBLEM: The bash script block implementing the blocked planning output lacks `set -euo pipefail`.\n  WHY: Failing commands such as `jq` or `gh` will not cause the script to exit early, which can lead to silent failures where incomplete actions are treated as successful.\n- tests/test_plan_clarify_blocked_output.py:808 | severity=MAJOR | confidence=4\n  PROBLEM: The test runs the `plan.yml` script body using `subprocess.run([\"bash\", \"-c\", script], ...)` without enabling `set -euo pipefail`.\n  WHY: Failures in the script logic may be ignored in the test environment, masking bugs and giving false-positive results.\n- TASK_GAP\n  Requirement: \"Use `set -euo pipefail` in `scripts/check_failure_triage.sh`.\" (Implicit standard for new scripts/modifications to bash scripts)\n  Expected change site: `scripts/check_failure_triage.sh`\n  Evidence of absence: The added `triage_release_download_rerun_gate` function and surrounding code do not explicitly set strict bash flags.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/check_failure_triage.sh:Lines 490-504, especially `rd_codeql_url_re` and its use in `triage_release_download_classify` | severity=NIT | confidence=4\n  PROBLEM: The CodeQL URL pattern matches `github.com/...` as an unbounded substring, so it accepts URLs hosted on `evilgithub.com` or containing `github.com/...` in their path.\n  WHY: A workflow can emit annotations with the expected CodeQL failure text and a 504 status alongside a non-GitHub URL. The classifier then treats the job as a release-download failure, reruns failed jobs, and skips triage even though the download was not from `github.com`. Hardening suggestion (Line 490): require the same `https://github.com/` host prefix used by `rd_release_url_re`, about 1 line changed, HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "326cb7954823c140a9a36bc2b6d17be612536fb7b7f509c3a66188d8f043dbae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9125,
+    "run_id": "43083470243",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43083470243",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111211315_22106d66ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9125,
+    "run_id": "43083470243"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-11T21:13:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
