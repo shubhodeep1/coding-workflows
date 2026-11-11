@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:806-813 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The required check `tests-hooks-and-orchestrator` (and the `lint` rollup) is red on head 78084b8e4fce, and the failing step is not visible in the log tail, which ends inside the \"PR body auto-close lint unit tests\" step.\n  WHY: The merge gate stays closed and the failure could not be tied to this diff. Severity is MAJOR across all four reviewers. Confidence ranges from 2 to 5.\n- PR Description and Commit Messages (PR description line 1; commit message #2 line 3) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR description and a commit message contain auto-close keywords (\"Closes\", \"resolved\") referencing orchestrator-tracking issue #2734.\n  WHY: This would violate \u00a721 and auto-close the tracking issue on merge. Severity disagreement: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rebutted the claim as fixture text from tests/test_lint_pr_body_auto_close.py, not the PR's own body or commits.\n- tests/test_conflict_guard_hook_template_merge.py:36-59 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `PREPUSH_GAP_REASON` (around line 55-59) and the `_xfail_without_pytest` shim (lines 36-46) are unused now that the strict xfail marker has been removed.\n  WHY: It has no runtime impact, but the stale scaffolding misleads readers about a marker contract that no longer exists.\n- tests/test_review_conflict_resolve_sandbox_only.py:1053-1054 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The comment still points to a strict xfail in tests/test_conflict_guard_hook_template_merge.py that this PR removed.\n  WHY: It has no runtime impact, but the stale documentation misleads readers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:job `tests-hooks-and-orchestrator` (check-run 130705596669; `lint` 130724744856 is a rollup) | severity=MAJOR | confidence=2\n  PROBLEM: The job is red on head 78084b8e4fce, and no failing step or test name is visible in the log tail. The `##[error]` lines come from expected fixture output.\n  WHY: The required check blocks the merge. The failure could not be tied to this diff and is probably inherited from the merge from main.\n- tests/test_review_conflict_resolve_sandbox_only.py:1053-1054 | severity=NIT | confidence=4\n  PROBLEM: The comment references the strict xfail marker in tests/test_conflict_guard_hook_template_merge.py, which this PR removed. `PREPUSH_GAP_REASON` (about line 59) and the xfail shim (around lines 36-46) are also unused now.\n  WHY: It does not fail at runtime. The stale text misleads readers.\n- Other categories: NONE. Task completeness: all deliverables of issue #9004 verified present. The pass-1 \u00a721 findings were rejected as fixture text.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- PR Description and Commit Messages:PR Description line 1; Commit message #2 line 3 | severity=BLOCKER | confidence=5\n  PROBLEM: The PR description and a commit message contain auto-close keywords (\"Closes\", \"resolved\") referencing orchestrator-tracking issue #2734.\n  WHY: This violates \u00a721, and merging would auto-close tracking issue #2734 and kill the orchestrator state machine.\n- .github/workflows/ci.yml:Job `tests-hooks-and-orchestrator` failure | severity=MAJOR | confidence=5\n  PROBLEM: The required CI check `tests-hooks-and-orchestrator` (and `lint`) is failing on head 78084b8e4fce99f6d2caf314555e7d14e6730eb0.\n  WHY: The CI gate is red and blocks the merge. The failure is not clearly attributed to the diff.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_conflict_guard_hook_template_merge.py:55 and 36-46, 55-59 | severity=NIT | confidence=4\n  PROBLEM: The xfail decorator was removed from `test_prepush_hook_integration_sync_conflict_is_resolved_from_template`, so `PREPUSH_GAP_REASON` is dead code and the `_xfail_without_pytest` shim is no longer exercised.\n  WHY: It does not fail at runtime. The stale scaffolding misleads future contributors.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:806-813 | severity=MAJOR | confidence=5\n  PROBLEM: The `tests-hooks-and-orchestrator` check failed on head 78084b8e4fce99f6d2caf314555e7d14e6730eb0, and the `lint` rollup failed with it. The log tail ends during the \"PR body auto-close lint unit tests\" step without showing the failing assertion.\n  WHY: The required test job is red and blocks the merge. The evidence does not establish whether the PR caused it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:806-813 (run 43073024644, job 130705596669 `tests-hooks-and-orchestrator`, job 130724744856 `lint` rollup) | severity=MAJOR | confidence=4\n  PROBLEM: The required check is red on the merged head. The log window ends inside the \"PR body auto-close lint unit tests\" step, whose `##[error]` lines are expected fixture output (tests/test_lint_pr_body_auto_close.py:464, :489, :468). The actual failing step lies beyond the log window and cannot be mapped to any hunk in this PR. The failure has recurred across at least four review rounds.\n  WHY: The merge gate stays closed, and each review round re-flags an unmapped red check.\n- tests/test_conflict_guard_hook_template_merge.py:36-46 and :59 | severity=NIT\n  PROBLEM: The pytest-absent xfail shim and `PREPUSH_GAP_REASON` are unused now that no function carries an xfail mark.\n  WHY: It is cosmetic with no runtime impact.\n- tests/test_review_conflict_resolve_sandbox_only.py:1053-1054 | severity=NIT\n  PROBLEM: The comment still points to a strict xfail marker that this PR deleted.\n  WHY: The stale doc misleads readers.\n- Verified non-findings: the gemini \u00a721 BLOCKER claims were rebutted as fixture text. The relaxed `test_shell_pair_list_matches_paired_live_copies` contract is not a defect.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a9215f36c694a4a6f88a50eddaf05b91b736987a9cac3820adf506f04481637f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9010,
+    "run_id": "43094184619",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43094184619",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111230102_5044e2d6c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9010,
+    "run_id": "43094184619"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T23:01:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
