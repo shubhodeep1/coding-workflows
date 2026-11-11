@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- PR BODY / COMMIT MESSAGES:PR body line 1 / Commit message #2 line 3 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Violation of \u00a721 (Auto-close keyword discipline). The PR body contains an auto-close keyword referencing an `ai:orchestrator-tracking` issue (#2734), and commit message #2 contains a similar reference.\n  WHY: On merge, the orchestrator-tracking issue would be closed, halting orchestrator wave processing. Severity is reported as BLOCKER, mapped here to critical. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) disputed this finding, saying the PR closes sub-issue #9210 and only refs #9207, and the #2734 references come from lint test fixtures.\n- orchestrate-poll check-run:Integration fingerprint verification | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The integration branch `orchestrator/project-9207` is failing fingerprint verification, showing a regression in `scripts/render_prompt.sh` sub-issue intent (`must_contain` pattern missing).\n  WHY: CI validation blocks PR mergeability until the fingerprint regression is resolved. Severity is reported as BLOCKER, mapped here to critical. The reviewer notes the PR only touches `tests/e2e_smoke_canary.txt`. Other reviewers said the failure is inherited from the merge-base and unrelated to this change.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- PR BODY / COMMIT MESSAGES:PR body line 1 / Commit message #2 line 3 | severity=BLOCKER | confidence=5\n  PROBLEM: Violation of \u00a721 (Auto-close keyword discipline). The PR body contains an auto-close keyword referencing an `ai:orchestrator-tracking` issue (#2734), and commit message #2 contains a similar reference.\n  WHY: On merge, the orchestrator-tracking issue will be closed, preventing further orchestrator wave processing for this project.\n- orchestrate-poll check-run:Integration fingerprint verification | severity=BLOCKER | confidence=4\n  PROBLEM: The integration branch `orchestrator/project-9207` is failing fingerprint verification, showing a regression in `scripts/render_prompt.sh` sub-issue intent (`must_contain` pattern missing).\n  WHY: CI validation blocks PR mergeability until the fingerprint regression is resolved in the orchestrator's integration flow.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "60649b423c31fb84cbf160681b4241a5b5e2f9a5ae9a2396247bed46ba61189b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9263,
+    "run_id": "43043048952",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43043048952",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111163935_b6293d99fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9263,
+    "run_id": "43043048952"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-11T16:39:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
