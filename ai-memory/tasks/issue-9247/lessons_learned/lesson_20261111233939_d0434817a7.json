@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-11T23:39:39Z",
+  "issue_number": 9247,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/ci.yml:543-548; cited_path=.github/workflows/ci.yml; files_touched=changelog.d/9247-argparse-help-string-guard.md, tests/test_ci_wires_every_test_file.py, tests/test_render_prompt_foundation.py, tests/test_scripts_build_parser_help.py.",
+  "phase": "review_autofix",
+  "pr_number": 9270,
+  "record_id": "lesson_20261111233939_d0434817a7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    "changelog.d/9247-argparse-help-string-guard.md",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_render_prompt_foundation.py",
+    "tests/test_scripts_build_parser_help.py"
+  ]
+}
