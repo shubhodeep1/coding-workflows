@@ -4645,6 +4645,15 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 		# ubuntu-26.04's `date +%s%3N` sometimes returned a reading a digit
 		# short, so a heartbeat printed a negative elapsed_ms. The step reads
 		# bash's EPOCHREALTIME first, so a bad `date` cannot do that.
+		# On bash < 5 (no EPOCHREALTIME) the step falls back to `date` by
+		# design, so the fake `date` would be read and there is nothing to test.
+		probe = subprocess.run(
+			["bash", "--noprofile", "--norc", "-c", '[ -n "${EPOCHREALTIME:-}" ]'],
+			capture_output=True,
+			timeout=30,
+		)
+		if probe.returncode != 0:
+			self.skipTest("bash has no EPOCHREALTIME (bash < 5); sf_now_ms uses its `date` fallback")
 		with tempfile.TemporaryDirectory(prefix="test_sf_clock_") as tmp:
 			markers = Path(tmp, "markers")
 			markers.mkdir()
