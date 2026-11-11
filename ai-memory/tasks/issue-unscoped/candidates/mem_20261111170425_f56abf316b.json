@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3465-3490 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The aggregate `lint` check fails because the `tests-hooks-and-orchestrator` and `orchestrate-poll` jobs fail, which blocks the required CI gate.\n  WHY: Both reviewers say the failures are not caused by the data-only change in `analysis/validation-selftest-status.json`. Both rated it MAJOR, mapped here to high. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 saw the same CI failures but did not report them as findings.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:3465-3490 | severity=MAJOR | confidence=5\n  PROBLEM: The aggregate `lint` check is failing because two dependent jobs, `tests-hooks-and-orchestrator` and `orchestrate-poll (2)`, are failing.\n  WHY: These failures prevent the PR from passing its required status checks, blocking merge. They do not appear to be caused by the data-only change in `analysis/validation-selftest-status.json`.\n- TASK_GAP (flagged NIT, no gap found):\n  Requirement: Update validation self-test status.\n  Expected change site: analysis/validation-selftest-status.json\n  Evidence of absence: The PR correctly updates this file, as verified by the diff. No gaps found.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:3465-3490 | severity=MAJOR | confidence=5\n  PROBLEM: The PR head has failing `tests-hooks-and-orchestrator` and `orchestrate-poll` checks, so the aggregate `lint` check fails. These failures are not attributable to the changed status JSON, but they block the PR's required CI gate.\n  WHY: The aggregate job exits non-zero when any required job result is not `success`.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "d08fcd18c8e288d4828a7d37333cd5a19c36e2683ac3a25c26294e6b0ef1396d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9229,
+    "run_id": "43043933851",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43043933851",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111170425_f56abf316b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9229,
+    "run_id": "43043933851"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T17:04:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
