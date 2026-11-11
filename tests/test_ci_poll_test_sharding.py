@@ -4672,6 +4672,8 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 			self.assertEqual(result.returncode, 0, out + result.stderr)
 			self.assertRegex(out, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=\d+\n")
 			self.assertEqual(len(re.findall(r"CI_SUBTEST_END subtest=\S+ elapsed_ms=\d+ rc=0\n", out)), 3, out)
+			# Only the fake `date` writes count_file, so it must not exist.
+			self.assertFalse(count_file.exists(), out)
 
 	def test_full_body_overlaps_modules_and_fails_closed(self) -> None:
 		for failing in (1, None):
