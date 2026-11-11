@@ -944,10 +944,37 @@ def _plan_tree_real_dir(repo_root: str, name: str) -> bool:
 		return False
 
 
+def _plan_tree_directory(repo_root: str, path: str) -> bool:
+	"""True only when ``path`` is a real directory inside ``repo_root``: not a
+	symlink, no symlinked parent, never outside the root. Errors are False."""
+	if not repo_root or not path:
+		return False
+	try:
+		root_real = os.path.realpath(repo_root)
+		if not os.path.isdir(root_real):
+			return False
+		full = os.path.join(root_real, *path.split("/"))
+		if not full.startswith(root_real + os.sep) or os.path.realpath(full) != full:
+			return False
+		return stat.S_ISDIR(os.lstat(full).st_mode)
+	except (OSError, ValueError):
+		return False
+
+
 # A bare bullet token is the listed file when nothing follows it or a
 # separator does (`- bin/deploy — new script`, `- bin/deploy (new)`), or it
 # ends with `:` / `,` / `;`. Prose (`- and/or the helper`) never matches.
 _PLAN_BULLET_LISTING_REST_RE = re.compile(r"^\s*$|^\s+(?:[\u2014\u2013]|-+\s|\(|:)")
+
+
+# Issue #9130: list decoration before the listed backticked file (`**`, `__`,
+# `*`, `_`, a `[ ]` / `[x]` checkbox, a short `(new)` note) and the joiners
+# between listed files (`,`, `;`, `&`, `+`, `and`, `or`, closing emphasis).
+# Without these, `- **`bin/deploy`**`, `- [ ] `public/CNAME`` or the second
+# file of `- `bin/deploy`, `public/CNAME`` would read as prose and, with no
+# planning root (the poller), be left out of the grant silently.
+_PLAN_LISTING_DECORATION_RE = re.compile(r"^(?:[\s*_]|\[[ xX]\]|\([^()\n`]{0,40}\))*$")
+_PLAN_LISTING_JOINER_RE = re.compile(r"^(?:[\s,;&+*_]|\band\b|\bor\b)*$", re.IGNORECASE)
 
 
 def _plan_bullet_token_is_listing(line: str, bullet: "re.Match[str]") -> bool:
@@ -976,8 +1003,10 @@ def extract_plan_file_path_sets(plan_text: str, repo_root: str = "") -> tuple[li
 	files verified as regular files under ``repo_root``. ``ungrantable`` lists
 	the nested extensionless tokens that could not be verified (a directory, a
 	missing path, or no ``repo_root``). Only a token the line lists counts (its
-	leading backticked span, a bare bullet token followed by nothing or a
-	separator, or a protected-path token); a later backticked span counts only
+	leading backticked span, after list decoration such as `**`, a `[ ]`
+	checkbox or a short `(new)` note, and each span joined to it by `,`, `;`,
+	`and` or `or`; a bare bullet token followed by nothing or a separator; or a
+	protected-path token); a later backticked span counts only
 	when ``repo_root`` has its first segment as a directory, so a prose word or
 	reference (`origin/main`, `actions/checkout@v5`) never holds a plan. With
 	PLAN_GRANT_TREE_FILE_CHECK_ENABLED off both behave as before (empty list).
@@ -1014,9 +1043,21 @@ def extract_plan_file_path_sets(plan_text: str, repo_root: str = "") -> tuple[li
 		# the planning root has its first segment as a directory.
 		bullet = _PLAN_GRANT_BULLET_RE.match(line)
 		content_start = bullet.start(1) if bullet else len(line) - len(line.lstrip())
-		leading_span = line[content_start:content_start + 1] == "`"
-		candidates = [(raw, index == 0 and leading_span, index > 0 or not leading_span)
-			for index, raw in enumerate(_PLAN_GRANT_BACKTICK_RE.findall(line))]
+		spans = list(_PLAN_GRANT_BACKTICK_RE.finditer(line))
+		if spans and _PLAN_FILES_LEADIN_RE.match(line) and ":" in line[content_start:spans[0].start()]:
+			# The lead-in line ("## Files likely to change: `public/CNAME`").
+			content_start = line.rindex(":", content_start, spans[0].start()) + 1
+		candidates = []
+		listing = False
+		previous_end = content_start
+		for index, span in enumerate(spans):
+			gap = line[previous_end:span.start()]
+			# The first span lists the item when only decoration precedes it; a
+			# later one when only a joiner separates it from a listed span.
+			listing = bool(_PLAN_LISTING_DECORATION_RE.match(gap)) if index == 0 else (
+				listing and bool(_PLAN_LISTING_JOINER_RE.match(gap)))
+			candidates.append((span.group(1), listing, not listing))
+			previous_end = span.end()
 		# The bullet's first token counts even when the line also has
 		# backticked spans (`- README.md — use `parse()``): otherwise a
 		# non-path span would drop the listed file from the grant.
@@ -1119,7 +1160,13 @@ def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: ob
 	companions = auto_heal_companions_allowed(issue_body, author_login, pipeline_login)
 	# Issue #9130: an unverified extensionless path the plan lists is compared
 	# too, so a list that misses it holds here instead of at implement.
+	# Issue #9130: a token that is a directory in the planning root, or has a
+	# files_touched entry beneath it, is a directory the list already covers
+	# file by file (as before #9130), so it is not compared.
 	plan_paths, ungrantable = extract_plan_file_path_sets(plan_text, planning_root)
+	ungrantable = [path for path in ungrantable
+		if not any(entry.startswith(path + "/") for entry in allowlist)
+		and not _plan_tree_directory(planning_root, path)]
 	return [path for path in plan_paths + ungrantable
 		if not path_in_scope(path, allowlist, own_fragment_issue=issue_number,
 			allow_auto_heal_companions=companions)]

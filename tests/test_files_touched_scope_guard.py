@@ -2345,6 +2345,49 @@ def test_plan_grant_only_unverified_paths_still_hold_replannable() -> None:
 		assert guard.extract_files_touched(body)[0] == "scripts/deploy"
 
 
+def test_plan_grant_decorated_or_joined_listings_never_drop_silently() -> None:
+	# Issue #9130 review: bold, checkbox, a short note, the lead-in line and
+	# files joined on one line are listings, so with no planning root (the
+	# poller) an unverified one holds instead of leaving the grant silently.
+	for line, expected in (
+		("- **`bin/deploy`** — new script\n", ["bin/deploy"]),
+		("- [ ] `public/CNAME`\n", ["public/CNAME"]),
+		("- [x] __`bin/deploy`__\n", ["bin/deploy"]),
+		("- (new) `bin/deploy`\n", ["bin/deploy"]),
+		("1. `bin/deploy`, `public/CNAME` and `newdir/tool`\n", ["bin/deploy", "public/CNAME", "newdir/tool"]),
+	):
+		plan = "## Files likely to change\n- `scripts/a.sh`\n" + line
+		assert guard.extract_plan_file_path_sets(plan) == (["scripts/a.sh"], expected), line
+		code, record, body = _run_grant_cli(plan, _pipeline_meta())
+		assert record["reason"] == "plan_path_not_grantable" and record["replannable"] is True, (line, record)
+		assert body is None
+	leadin = "## Files likely to change: `public/CNAME`\n- `scripts/a.sh`\n"
+	assert guard.extract_plan_file_path_sets(leadin) == (["scripts/a.sh"], ["public/CNAME"])
+	# A prose span after a listed file still never holds, and a joiner after
+	# prose does not turn the next span into a listing.
+	prose = "## Files likely to change\n- `scripts/a.sh` — pin `actions/checkout@v5` and `origin/main`\n"
+	assert guard.extract_plan_file_path_sets(prose) == (["scripts/a.sh"], [])
+	with tempfile.TemporaryDirectory() as td:
+		_planning_tree(Path(td))
+		bold = "## Files likely to change\n- `scripts/a.sh`\n- **`bin/deploy`**\n- [ ] `newdir/tool`\n"
+		assert guard.extract_plan_file_path_sets(bold, td) == (["scripts/a.sh", "bin/deploy"], ["newdir/tool"])
+
+
+def test_plan_files_outside_files_touched_skips_covered_directory_tokens() -> None:
+	plan = "## Files likely to change\n- `docs/plans`\n- `scripts/lib`\n- `README.md`\n"
+	body = _body("docs/plans/new.md", "scripts/lib/x.sh", "README.md")
+	# Without a root, a token with a files_touched entry beneath it is covered.
+	assert guard.plan_files_outside_files_touched(plan, body) == []
+	with tempfile.TemporaryDirectory() as td:
+		_planning_tree(Path(td))
+		# With a root, a real directory is not compared (as before #9130).
+		assert guard.plan_files_outside_files_touched(plan, _body("README.md", "scripts/lib/x.sh"),
+			planning_root=td) == []
+		# A missing extensionless path is still compared.
+		assert guard.plan_files_outside_files_touched(plan + "- `bin/missing`\n",
+			_body("README.md", "scripts/lib/x.sh"), planning_root=td) == ["bin/missing"]
+
+
 # Replay of the consumer fun-token-multi-chain #771 shape (#9126 / #9130): a
 # static site plan that lists the Pages config files next to an extensionless
 # file under the same nested public directory. The consumer's plan text is not
