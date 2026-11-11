@@ -1355,14 +1355,6 @@ def test_render_prompt_py_help_strings_are_well_formed() -> None:
 	assert "{%...%}" in help_text, help_text
 
 
-def test_render_prompt_py_help_exits_zero() -> None:
-	env = _base_env()
-	env["PYTHONDONTWRITEBYTECODE"] = "1"
-	proc = subprocess.run([sys.executable, str(RENDER_PROMPT_PY), "--help"], env=env, text=True, capture_output=True, timeout=60)
-	assert proc.returncode == 0, proc.stderr
-	assert "--skip-syntax-validation" in proc.stdout
-
-
 def main() -> int:
 	test_output_contract_reference_includes_status_update_cadence()
 	test_render_prompt_sh_renders_implement_contract_defaults_and_env_values()
@@ -1389,7 +1381,7 @@ def main() -> int:
 	test_render_prompt_py_uses_checked_in_persona_source()
 	test_apply_phase_c_persona_prefix_accepts_legacy_mode_name_only_call()
 	test_render_prompt_py_help_strings_are_well_formed()
-	test_render_prompt_py_help_exits_zero()
+	test_render_prompt_py_help_strings_are_valid_format_strings()
 	test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legacy_body()
 	test_render_prompt_py_enables_phase_c_persona_prefix_by_default()
 	test_render_prompt_py_treats_blank_persona_env_value_as_disabled()
