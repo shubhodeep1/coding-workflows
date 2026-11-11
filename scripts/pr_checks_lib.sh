@@ -240,7 +240,8 @@ _pr_required_check_names_for_base()
 # (one conditional `GET commits/<sha>/statuses?per_page=100`, first page,
 # newest first; no call at all when the gate did not fail) and drops that
 # one check-run from the blocking count only when the newest status with
-# context ${REVIEW_HEAD_GATE_CONTEXT:-ai-review/head-gate} has state
+# context `ai-review/head-gate` (pinned literal, the value
+# scripts/review_head_gate.sh posts; not read from the environment) has state
 # success, names the full 40-hex head SHA, and was created strictly after
 # the check-run's completed_at. Every other case keeps blocking. Each
 # evaluation logs one `PR_CHECKS_GATE_SUPERSEDED pr=<n> head=<sha>
@@ -432,9 +433,13 @@ _pr_checks_completed()
 				# the first page holds the newest head-gate status; a miss
 				# keeps blocking (no_head_gate_status).
 				local gate_sup_statuses_json="" gate_sup_decision=""
+				# Pinned to the literal scripts/review_head_gate.sh posts, so an
+				# inherited REVIEW_HEAD_GATE_CONTEXT cannot widen which status relaxes
+				# the required check.
+				local gate_sup_status_ctx="ai-review/head-gate"
 				if gate_sup_statuses_json="$(gh_retry _safe_gh_jq "repos/${repo}/commits/${head_sha}/statuses?per_page=100" 2>/dev/null)"; then
 					gate_sup_decision="$(printf '%s' "${gate_sup_statuses_json}" | jq -r \
-						--arg ctx "${REVIEW_HEAD_GATE_CONTEXT:-ai-review/head-gate}" \
+						--arg ctx "${gate_sup_status_ctx}" \
 						--arg sha "${head_sha}" --arg failed_at "${gate_sup_failed_at}" '
 						if (type != "array") then "skip\tstatus_read_failed"
 						else
