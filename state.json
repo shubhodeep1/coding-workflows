@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-11T00:29:49Z",
+  "tick_at": "2026-11-11T00:47:16Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,21 +11,21 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 4
+    "tracking_issues": 5
   },
   "tracking_issues": [
     {
       "current_wave": 17,
-      "integration_ahead_by": "178",
+      "integration_ahead_by": "179",
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
+        "in_progress": 1,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
-        "review_blocked": 1,
+        "review_blocked": 0,
         "skipped": 0
       },
       "number": 8291,
@@ -37,7 +37,7 @@
     },
     {
       "current_wave": 4,
-      "integration_ahead_by": "47",
+      "integration_ahead_by": "48",
       "issue_counts": {
         "closed": 1,
         "done": 0,
@@ -58,7 +58,7 @@
     },
     {
       "current_wave": 3,
-      "integration_ahead_by": "22",
+      "integration_ahead_by": "23",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -96,6 +96,27 @@
       "title": "[Orchestrator] Run CI-failure re-issues on the branch that holds the failing code, and give the implement sandbox a Solidity compiler",
       "total_waves": 0,
       "wave_complete": false
+    },
+    {
+      "current_wave": 1,
+      "integration_ahead_by": "0",
+      "issue_counts": {
+        "closed": 2,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 9207,
+      "project_complete": true,
+      "status": "failed",
+      "title": "[Orchestrator] [E2E Orchestrate Smoke 42930970244] Update two independent smoke canary files",
+      "total_waves": 1,
+      "wave_complete": true
     }
   ]
 }
