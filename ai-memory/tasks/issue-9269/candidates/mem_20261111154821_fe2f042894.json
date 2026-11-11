@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: If no bad help strings turn up, step 3 adds `--help` exit-0 tests only for the scripts \"that tests in those two CI jobs call\". Which jobs in `.github/workflows/ci.yml` does that mean?\nChoices:\nA) `tests-heal-plan-and-validation` and `tests-promote-stall-and-review`, which cover the clarify, plan, review and judge paths that broke on Python 3.14 (RECOMMENDED)\nB) `tests-hooks-and-orchestrator` and `orchestrate-poll`\nC) `tests-release-and-log-analysis` and `tests-hooks-and-orchestrator`\nD) All five test jobs (`tests-hooks-and-orchestrator`, `tests-heal-plan-and-validation`, `tests-promote-stall-and-review`, `tests-release-and-log-analysis`, `orchestrate-poll`), so every argparse script a CI test calls gets a `--help` test\nE) A different pair. Name the two job IDs in your `/answer`.",
+  "fingerprint": "fb051fa8760d31669da000b8065e666b49c3d725af837c4f5388bd2100bea45c",
+  "lineage": {
+    "issue_number": 9269,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43046547686",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43046547686",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111154821_fe2f042894",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9269,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43046547686"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9269 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T15:48:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
