@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: Open PR #9246 already changes `tests/test_gh_retry_stdout_isolation.py` and `.github/workflows/ci.yml` to fix the closed-reader failure and the heartbeat clock (the latter is the likely `orchestrate-poll` cause). Option B would conflict with it on those same files, and option C ships nothing for the review-checkout failure. So this issue fixes only `test_head_moved_after_switch_reports_skipped_stale` (`tests/test_review_checkout_head_diagnostics.py:253-267`) on `main`. The plan must not touch `scripts/render_prompt.py`, its tests, `tests/test_gh_retry_stdout_isolation.py` or `.github/workflows/ci.yml`, and must not take any action on PR #9246.\nQ2: Limit the fix to `review_head_checkout_now_ms` in `scripts/review_autofix_step_checkout_pr_head_branch.sh` (lines 40-53), plus `review_head_checkout_elapsed_ms` (lines 78-93) if needed. Read the clock from bash `EPOCHREALTIME` first, as `_memory_epoch_ms` already does in `scripts/memory_helpers.sh:33-67`, then fall back to the current `date +%s%3N` path and then to `date +%s`\u00d71000. The `date +%s%3N` text must stay in the script, because `test_script_contract_is_additive` (`tests/test_review_checkout_head_diagnostics.py:320`) asserts it is present. Keep the `isdigit()` assertion at line 264 unchanged, leave `_orch_poll_cycle_now_ms` (`scripts/orchestrate_poll_process.sh:36-49`) and the other `date +%s%3N` helpers alone to avoid overlapping #9246, and pair the fix with a regression test. The plan must also confirm the root cause first. The cause is still unconfirmed: the clarify phase thinks `date +%s%3N` misbehaves on ubuntu-26.04 (for example, a bad sub-second field that makes END\u2212START negative). The new test should therefore pin `date` to a bad sub-second output and check that `fetch_ms` and `switch_ms` still come out as non-negative integers.",
+  "fingerprint": "2d4f4f6b95ff50acbe70676a76ec2e2ec236be309224dd24da2d083a7731cbb7",
+  "lineage": {
+    "issue_number": 9255,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43040704278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43040704278",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9255"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261111144913_b28fde4f78",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9255,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43040704278"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9255",
+  "timestamps": {
+    "created_at": "2026-11-11T14:49:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
