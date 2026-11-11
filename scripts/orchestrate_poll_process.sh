@@ -10981,6 +10981,12 @@ maybe_auto_resume_final_merge_exhausted() {
 		echo "${log_prefix} outcome=skip reason=validation_stale detail=missing"
 		return 1
 	fi
+	# The once-per-head history must be absent or an array. Any other shape
+	# fails closed instead of being reset, so no retried head is forgotten.
+	if ! jq -e '(.final_merge_auto_resumed_head_shas // []) | type == "array"' "${STATE_FILE}" >/dev/null 2>&1; then
+		echo "${log_prefix} outcome=skip reason=lookup_failed detail=state"
+		return 1
+	fi
 
 	resume_pr_json="$(_fetch_pr_json "${resume_final_pr}")"
 	resume_head_sha="$(_jq_field "${resume_pr_json}" '.head.sha' '[0-9a-fA-F]{40}')"
@@ -11053,7 +11059,7 @@ maybe_auto_resume_final_merge_exhausted() {
 			| .final_merge_status = "pending"
 			| .final_merge_attempt_count = 0
 			| .final_merge_failure_kind = null
-			| .final_merge_auto_resumed_head_shas = (((if (.final_merge_auto_resumed_head_shas | type) == "array" then .final_merge_auto_resumed_head_shas else [] end) - [$sha] + [$sha]) | .[-20:])
+			| .final_merge_auto_resumed_head_shas = (((if (.final_merge_auto_resumed_head_shas | type) == "array" then .final_merge_auto_resumed_head_shas else [] end) - [$sha] + [$sha]))
 			| .final_merge_auto_resumed_at_utc = $now_utc
 		' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
 		rm -f "${STATE_FILE}.tmp" "${STATE_FILE}.famr_bak" 2>/dev/null || true
@@ -11062,16 +11068,30 @@ maybe_auto_resume_final_merge_exhausted() {
 		return 1
 	fi
 	if ! post_state_comment; then
-		mv "${STATE_FILE}.famr_bak" "${STATE_FILE}" 2>/dev/null || true
+		if ! mv "${STATE_FILE}.famr_bak" "${STATE_FILE}" 2>/dev/null; then
+			echo "::warning::Could not restore the parked state file for project #${TRACKING_NUM} after a failed state publish."
+		fi
 		echo "::warning::Could not publish the final-merge auto-resume state for project #${TRACKING_NUM}; leaving it parked this tick."
 		echo "${log_prefix} outcome=skip reason=lookup_failed detail=state_write"
+		return 1
+	fi
+	# ai:validated replaces ai:blocked (same phase-label group). The readiness
+	# gate in finalize_integration_merge_if_needed keys off ai:validated, so the
+	# merge runs only once that write is confirmed. On a failed write restore
+	# and republish the parked state (the head leaves the guard again, since no
+	# merge was attempted) and skip this tick.
+	if ! set_tracking_phase_label "ai:validated"; then
+		echo "::warning::Could not apply ai:validated to project #${TRACKING_NUM} for the final-merge auto-resume; restoring the parked state."
+		if ! { mv "${STATE_FILE}.famr_bak" "${STATE_FILE}" 2>/dev/null && post_state_comment; }; then
+			echo "::warning::Could not republish the parked state for project #${TRACKING_NUM} after a failed label write; the next tick reads the published validating state."
+		fi
+		rm -f "${STATE_FILE}.famr_bak" 2>/dev/null || true
+		echo "${log_prefix} outcome=skip reason=lookup_failed detail=label_write"
 		return 1
 	fi
 	rm -f "${STATE_FILE}.famr_bak" 2>/dev/null || true
 	PROJECT_STATUS="validating"
 
-	# ai:validated replaces ai:blocked (same phase-label group).
-	set_tracking_phase_label "ai:validated"
 	if printf '%s' "${TRACKING_LABELS:-[]}" | jq -e 'type == "array" and any(.[]; . == "ai:needs-human")' >/dev/null 2>&1; then
 		if ! gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:needs-human" >/dev/null 2>&1; then
 			echo "::warning::Could not remove ai:needs-human from project #${TRACKING_NUM} after the final-merge auto-resume."
@@ -11082,6 +11102,7 @@ maybe_auto_resume_final_merge_exhausted() {
 	if printf '%s' "${resume_labels_json}" | jq -e 'type == "array" and index("ai:validated") != null' >/dev/null 2>&1; then
 		TRACKING_LABELS="$(printf '%s' "${resume_labels_json}" | jq -c '.')"
 	else
+		# The ai:validated write above succeeded, so only this read failed.
 		# Keep ai:needs-human in the local view when its removal failed, so the
 		# in-memory labels match the issue.
 		TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c --arg keep_nh "${resume_needs_human_kept}" 'map(select(. != "ai:blocked" and ($keep_nh == "true" or . != "ai:needs-human"))) + ["ai:validated"] | unique' 2>/dev/null || echo '["ai:validated"]')"

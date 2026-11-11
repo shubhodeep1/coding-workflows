@@ -28350,6 +28350,36 @@ def test_final_merge_auto_resume_skips_ended_comprehensive_cycle():
 	_famr_assert_skipped(result, "not_final_merge_exhausted detail=comprehensive_cycle", pr_read=False)
 
 
+def test_final_merge_auto_resume_skips_non_array_resumed_history():
+	# A malformed once-per-head history fails closed instead of being reset.
+	result = _famr_run(state=_famr_state(final_merge_auto_resumed_head_shas=_FAMR_HEAD))
+	output = _famr_output(result)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=lookup_failed detail=state" in output, output[-4000:]
+	assert "outcome=resumed" not in output
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["final_merge_auto_resumed_head_shas"] == _FAMR_HEAD
+	assert _FAMR_PR not in result.get("merged_prs", [])
+	assert str(_FAMR_PR) not in result.get("pr_get_calls", {})
+
+
+def test_final_merge_auto_resume_failed_state_publish_keeps_project_parked():
+	# The guard cannot be published: the .famr_bak copy restores the parked
+	# state, nothing is merged and no label or tracking comment changes.
+	result = _famr_run(fail_issue_comment_post_for=[192])
+	_famr_assert_skipped(result, "lookup_failed detail=state_write")
+	assert "ai:blocked" in result["tracking_labels"]
+	assert "ai:validated" not in result["tracking_labels"]
+
+
+def test_final_merge_auto_resume_failed_label_write_reparks_without_merging():
+	# ai:validated cannot be applied: the parked state (without the guard) is
+	# republished and the merge is not attempted, so a later tick can retry.
+	result = _famr_run(fail_issue_edit_for=[192])
+	_famr_assert_skipped(result, "lookup_failed detail=label_write")
+	assert "ai:validated" not in result["tracking_labels"]
+	assert "ai:blocked" in result["tracking_labels"]
+
+
 def test_final_merge_auto_resume_refailed_merge_counts_attempts_then_reparks_once_per_head():
 	pr = _famr_pr(merge_error="Required status check is failing")
 	first = _famr_run(pr=pr)
