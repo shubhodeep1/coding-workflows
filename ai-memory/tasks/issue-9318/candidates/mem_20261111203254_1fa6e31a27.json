@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue deliver, given that the failing step is unknown and PR #9010's change is already in the tree?\nChoices:\n- A: Only fix the log excerpt in `scripts/collect_pr_check_runs_context.py` (`_select_log_tail_window`, lines 399-478) so that expected fixture `##[error]` lines no longer hide the real failure, and add tests for it. The #9010 CI failure is treated as superseded. Re-running the job, or filing a new triage issue, will surface the real step with a correct excerpt. (RECOMMENDED)\n- B: Do A, and also run the eight candidate steps from `ci.yml:806-1051` on current main during implement. Fix any failure that reproduces reliably and is attributable to the `GUARD_HOOK_TEMPLATE_PAIRS` loops (`scripts/review_conflict_prepare.sh:352-405`), without loosening any test. If nothing reproduces, ship A alone.\n- C: Make no code change. Close the issue as a base-branch failure or flake that is no longer actionable now that PR #9010's change is on main.\nQ2: Which `##[error]` line should the excerpt anchor on when a job log contains several? Today it anchors on the first one (line 419-421). Existing tests pin that the window ends at the step error and not at a later teardown dump (`tests/test_collect_pr_check_runs_pending_identity.py:539`).\nChoices:\n- A: Prefer the first `##[error]Process completed with exit code` line, which the runner emits at the end of the failing step. Keep the existing lead context so the step's own output (traceback or `AssertionError`) shows above it. If that line is missing, fall back to today's first-`##[error]` anchor, then to end-of-log. (RECOMMENDED)\n- B: Anchor on the last `##[error]` line in the scanned window. **Note:** this can land on teardown or post-job `##[error]` lines and may conflict with the #8799 behaviour pinned at `test_window_ends_at_the_step_error_not_the_teardown_dump`.\n- C: Keep the first-`##[error]` anchor, but skip `##[error]` lines whose message starts with a known fixture prefix such as `[lint_pr_body_auto_close]`, using an explicit allowlist in the script.",
+  "fingerprint": "b1b219936c9b3d804f07835d0d5f9bb64518f6ac7bec09359b23b5ea76ebeb7e",
+  "lineage": {
+    "issue_number": 9318,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43094139928",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43094139928",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111203254_1fa6e31a27",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9318,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43094139928"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9318 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T20:32:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
