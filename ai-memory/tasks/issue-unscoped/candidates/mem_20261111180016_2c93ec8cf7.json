@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_checkout_pr_head_branch.sh:43-47 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The comment in `review_head_checkout_now_ms` says \"Same check as `_orch_poll_cycle_now_ms`\", but that helper (scripts/orchestrate_poll_process.sh:36-49) reads only `date +%s%3N` and has no EPOCHREALTIME path. The pattern actually mirrored is `_memory_epoch_ms` in scripts/memory_helpers.sh.\n  WHY: No runtime failure, but the wrong citation misleads maintainers into thinking the poller clock was hardened. All four reviewers rated it NIT.\n- .github/workflows/ci.yml:3476 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: CI run 43050802650 is red. `tests-hooks-and-orchestrator` and `orchestrate-poll (2)` failed, so the aggregate `lint` step \"Require every CI job to succeed\" exits 1. The captured logs do not show the failing steps, and the failures cannot be linked to the diff.\n  WHY: The CI gate stays blocked until the failures are identified. Severity disagreement: anthropic_claude-sonnet-5_5 said NIT with confidence 2, openai_gpt-6-luna said MAJOR with confidence 5, and z-ai_glm-5_3-flash said MAJOR with confidence 3. The highest severity and confidence are used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_autofix_step_checkout_pr_head_branch.sh:43-47 | severity=NIT | confidence=5\n  PROBLEM: The comment cites `_orch_poll_cycle_now_ms` as the precedent, but that helper has no EPOCHREALTIME path. The code actually mirrors `_memory_epoch_ms` in scripts/memory_helpers.sh:36.\n  WHY: It does not fail at runtime, but it could lead a maintainer to think the poller clock was already hardened.\n- .github/workflows/ci.yml (CI run 43050802650: jobs tests-hooks-and-orchestrator, orchestrate-poll (2), aggregate lint) | severity=NIT | confidence=2\n  PROBLEM: CI is red at the PR head. The log tails show only PASS events and expected negative-case errors, so the failing step is not visible.\n  WHY: The `lint` aggregate fails while either job is red. The failures look like they already exist on the base branch or come from the environment. The reviewer did not confirm this and does not recommend changing the PR code.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_checkout_pr_head_branch.sh:43-47 | severity=NIT | confidence=5\n  PROBLEM: The comment claims the code is the \"Same check as `_orch_poll_cycle_now_ms`\", but that helper (orchestrate_poll_process.sh:36-49) only reads `date +%s%3N`. The mirrored pattern is `_memory_epoch_ms` in scripts/memory_helpers.sh:33-67.\n  WHY: There is no runtime failure, but a maintainer may wrongly conclude the poller was hardened or skip hardening it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:3476 | severity=MAJOR | confidence=5\n  PROBLEM: CI run 43050802650 is red. `tests-hooks-and-orchestrator` and `orchestrate-poll (2)` failed, so the aggregate lint job failed. The failure cannot be attributed to this PR's changed code from the available evidence.\n  WHY: The aggregate gate exits non-zero, leaving the PR's CI check blocked until the failures are identified and resolved.\n- scripts/review_autofix_step_checkout_pr_head_branch.sh:45-46 | severity=NIT | confidence=5\n  PROBLEM: The comment says this is the same check as `_orch_poll_cycle_now_ms`, but that helper only reads `date`. The EPOCHREALTIME precedent is `_memory_epoch_ms`.\n  WHY: There is no runtime failure, but the inaccurate reference misdirects maintainers.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_autofix_step_checkout_pr_head_branch.sh:45-46 | severity=NIT | confidence=5\n  PROBLEM: The comment claims \"Same check as _orch_poll_cycle_now_ms\", but that helper (scripts/orchestrate_poll_process.sh:36-49) has no EPOCHREALTIME path. The implemented pattern is `_memory_epoch_ms` in scripts/memory_helpers.sh:33-67, which AD-2 named.\n  WHY: It is a comment-only defect, but it misdirects the next hardening pass on the poller, which is still exposed to the same bug.\n- .github/workflows/ci.yml (CI run 43050802650 at head 45ae5892c2f6c3e2e8f317caed37d0d6aae3422f; jobs tests-hooks-and-orchestrator job 130627060463, orchestrate-poll (2) job 130627060577, lint aggregate job 130664654265) | severity=MAJOR | confidence=3\n  PROBLEM: CI is red at the PR head. The captured log tails show only PASS events and expected negative-case errors. The pre-push gate's three attributed failures assert repo scaffolding that exists on this checkout, and none of those tests exercise paths the diff touches.\n  WHY: The gate cannot go green until the failing steps are identified from the full job logs, and the failure cannot be mapped to the changed code. The reviewer says the editor should investigate the logs rather than modify this diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f6e646eae6fbe9c03e56f06c5e96e2e23ae76cff30a7a3ecbdba15191f989ac1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9274,
+    "run_id": "43050802647",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43050802647",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111180016_2c93ec8cf7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9274,
+    "run_id": "43050802647"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T18:00:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
