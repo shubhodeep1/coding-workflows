@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-11T17:50:07Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=tests/test_workflow_failure_heal.py:1172-1186; cited_path=PR description (## Testing section); files_touched=agents.d/9200-heal-filter-log-traceback-frames.md, changelog.d/9200-heal-filter-log-traceback-frames.md, scripts/workflow_failure_heal.py, tests/test_workflow_failure_heal.py.",
+  "phase": "review_autofix",
+  "pr_number": 9219,
+  "record_id": "lesson_20261111175007_302bc150a2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "PR description (## Testing section)",
+    "tests/test_workflow_failure_heal.py",
+    "agents.d/9200-heal-filter-log-traceback-frames.md",
+    "changelog.d/9200-heal-filter-log-traceback-frames.md",
+    "scripts/workflow_failure_heal.py"
+  ]
+}
