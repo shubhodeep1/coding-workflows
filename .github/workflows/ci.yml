@@ -733,6 +733,15 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_anthropic_relay.py
 
+      # The same files also run inside the sandbox images in the
+      # tests-sandbox-python job (#9233); here they run on the pinned 3.12.
+      - name: Sandbox entry-point tests on the pinned Python
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_openrouter_broker_bridge.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_changed_files_syntax.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_sandbox_python_coverage.py
+
       - name: Claude pool token action tests
         run: |
           set -euo pipefail
@@ -3418,6 +3427,285 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
 
+  tests-system-python:
+    # The whole pytest-collected tests/ suite on the runner's own
+    # /usr/bin/python3 (#9233). The unattended pipelines (plan, clarify,
+    # implement, review_autofix, validate) run that interpreter, not the
+    # setup-python 3.12 every other job pins; the 2026-11-10 render_prompt.py
+    # break happened only on ubuntu-26.04's 3.14. No setup-python here:
+    # `Setup Python` builds a venv from /usr/bin/python3, and the install
+    # step proves sys.base_prefix is /usr. The shard step collects once and
+    # runs the functions with NR % total == index; raise the shard count by
+    # editing the matrix list alone (job-index / job-total feed the step).
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        system-python-shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    permissions:
+      contents: read
+    env:
+      CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Prepare template-only PR live copies for system-Python tests
+        if: >-
+          (github.event_name == 'pull_request' && github.base_ref != 'stable') ||
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-'))
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          # Live copies are synced only after a push to main, so an
+          # orchestrator integration branch can carry template changes that
+          # earlier sub-issue PRs merged. The sync's drift recovery copies
+          # those too (template committed after its live copy), but only
+          # when --before is a reachable commit: the script skips an empty,
+          # all-zero or unreachable one. A push has no PR base, so it passes
+          # its own before; a branch-creation or force push falls back to
+          # the merge-base with main. Pull-request CI runs for every base
+          # since #7283, so a fix PR routed to a failing PR's ai/issue-* head
+          # is prepared too; only PRs into stable check the committed tree.
+          before="${PR_BASE_SHA:-${PUSH_BEFORE_SHA}}"
+          if [ -z "${before//0/}" ] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+            fallback="$(git merge-base HEAD origin/main 2>/dev/null || true)"
+            echo "::warning::Template parity preparation: before=${before:-empty} is not a reachable commit; using merge-base with main (${fallback:-unavailable})."
+            before="${fallback}"
+          fi
+          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${before}" --after HEAD --keep-committed-security-paths
+
+      - name: Setup Python
+        run: |
+          set -euo pipefail
+          echo "runner image: ImageOS=${ImageOS:-unknown} ImageVersion=${ImageVersion:-unknown}"
+          if [ ! -x /usr/bin/python3 ]; then
+            echo "::error::The runner image has no /usr/bin/python3; the pipelines run that interpreter, so this job cannot stand in for them."
+            exit 1
+          fi
+          /usr/bin/python3 --version
+          if ! /usr/bin/python3 -m venv "${RUNNER_TEMP}/system-python-venv"; then
+            echo "::error::/usr/bin/python3 -m venv failed (python3-venv / ensurepip missing on this image). Do not fall back to setup-python."
+            exit 1
+          fi
+          echo "${RUNNER_TEMP}/system-python-venv/bin" >> "${GITHUB_PATH}"
+
+      - name: Install Python CI dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+          system_python_base_prefix="$(python3 -c 'import sys; print(sys.base_prefix)')"
+          echo "python3=$(command -v python3) $(python3 --version) sys.base_prefix=${system_python_base_prefix}"
+          if [ "${system_python_base_prefix}" != "/usr" ]; then
+            echo "::error::python3 on PATH is not the runner's /usr/bin/python3 (sys.base_prefix=${system_python_base_prefix})."
+            exit 1
+          fi
+
+      - name: Set up Node 22 for system-Python tests
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: System-Python test shard
+        env:
+          CI_SYSTEM_PYTHON_SHARD_INDEX: ${{ strategy.job-index }}
+          CI_SYSTEM_PYTHON_SHARD_TOTAL: ${{ strategy.job-total }}
+        run: |
+          # Same scheme as the heal-modules step: collect tests/ once, fail on a
+          # collection error, group parametrized cases under their function, and
+          # run the functions with NR % total == index in one sequential pytest
+          # process. Every function runs exactly once; an empty shard fails. The
+          # tests/test_*.sh shell tests stay in their existing jobs (known gap).
+          set -euo pipefail
+
+          shard_index="${CI_SYSTEM_PYTHON_SHARD_INDEX:-0}"
+          shard_total="${CI_SYSTEM_PYTHON_SHARD_TOTAL:-1}"
+          if ! [[ "${shard_total}" =~ ^[1-9][0-9]{0,2}$ ]] || ! [[ "${shard_index}" =~ ^[0-9]{1,3}$ ]] || [ "${shard_index}" -ge "${shard_total}" ]; then
+            echo "::error::Invalid system-Python shard index=${shard_index} total=${shard_total}."
+            exit 2
+          fi
+
+          export TMPDIR="${RUNNER_TEMP:-/tmp}"
+          export PYTHONDONTWRITEBYTECODE=1
+
+          echo "system-python shard: index=${shard_index} total=${shard_total} python=$(command -v python3) version=$(python3 --version 2>&1)"
+
+          work_dir="$(mktemp -d "${TMPDIR}/system-python-shard.XXXXXX")"
+          trap 'rm -rf -- "${work_dir}"' EXIT
+          collect_log="${work_dir}/collect.log"
+          all_tests="${work_dir}/tests.txt"
+          shard_file="${work_dir}/shard.txt"
+
+          # Keep the raw collect output so a collection error prints its traceback.
+          if ! python3 -m pytest --collect-only -q -p no:cacheprovider tests > "${collect_log}" 2>&1; then
+            cat "${collect_log}"
+            echo "::error::Test collection of tests/ failed on the system Python."
+            exit 1
+          fi
+          if grep -qE '^(ERROR|E   )' "${collect_log}"; then
+            cat "${collect_log}"
+            echo "::error::Test collection of tests/ reported errors on the system Python."
+            exit 1
+          fi
+
+          # Keep only test IDs, then group parametrized cases under their function.
+          awk 'index($0, "tests/") == 1 && index($0, "::") > 0' "${collect_log}" \
+            | sed 's/\[.*$//' | awk '!seen[$0]++' > "${all_tests}"
+          test_count="$(wc -l < "${all_tests}" | tr -d '[:space:]')"
+          if ! [ "${test_count}" -ge 1 ] 2>/dev/null; then
+            cat "${collect_log}"
+            echo "::error::No tests collected from tests/."
+            exit 1
+          fi
+
+          awk -v n="${shard_index}" -v total="${shard_total}" 'NR % total == n' "${all_tests}" > "${shard_file}"
+          if ! [ -s "${shard_file}" ]; then
+            echo "::error::System-Python shard ${shard_index} of ${shard_total} has no tests (${test_count} test functions in total)."
+            exit 1
+          fi
+          mapfile -t shard_tests < "${shard_file}"
+          echo "system-python shard ${shard_index}/${shard_total}: ${#shard_tests[@]} of ${test_count} test functions"
+
+          set +e
+          python3 -m pytest -q -p no:cacheprovider "${shard_tests[@]}"
+          shard_rc=$?
+          set -e
+          if [ "${shard_rc}" -ne 0 ]; then
+            echo "::error::System-Python shard ${shard_index} of ${shard_total} failed (pytest exit ${shard_rc}) on $(python3 --version 2>&1)."
+          fi
+          exit "${shard_rc}"
+
+  tests-sandbox-python:
+    # The tests that cover every in-container Python entry point, run inside
+    # the real sandbox images with their own python3 (Debian bookworm, 3.11)
+    # (#9233). Images resolve through scripts/sandbox_image.sh exactly as the
+    # call sites do. The registry of entry points and covering tests lives in
+    # tests/test_sandbox_python_coverage.py, which fails when a launch script
+    # gains an entry point it does not list. The test container gets no
+    # network, no credential and no root.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        sandbox-family: [clarify, review, codex-isolated-codex]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python CI dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
+      - name: Sandbox Python coverage guard
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_sandbox_python_coverage.py
+
+      - name: Sandbox-image Python tests
+        env:
+          CI_SANDBOX_PYTHON_FAMILY: ${{ matrix.sandbox-family }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
+        run: |
+          # Resolve the family's image as its call sites do (sandbox_image.sh:
+          # GHCR pull by input hash, local build fallback), derive a throwaway
+          # image with Debian's python3-pytest (no pip), and run the covering
+          # tests tests/test_sandbox_python_coverage.py registers for the family.
+          # The test container gets no network, no credential, no capability and
+          # no root: uid 65534, read-only root and checkout (/src), tmpfs /tmp.
+          set -euo pipefail
+
+          family="${CI_SANDBOX_PYTHON_FAMILY:-}"
+          codex_version="${CODEX_VERSION:-v0.114.0}"
+          opencode_version="${OPENCODE_VERSION:-1.18.23}"
+          workspace="${GITHUB_WORKSPACE:-$(pwd)}"
+
+          case "${family}" in
+            clarify|review|codex-isolated-codex) ;;
+            *)
+              echo "::error::CI_SANDBOX_PYTHON_FAMILY must be clarify, review or codex-isolated-codex (got '${family}')."
+              exit 2
+              ;;
+          esac
+
+          mapfile -t family_tests < <(python3 tests/test_sandbox_python_coverage.py --print-tests "${family}")
+          if [ "${#family_tests[@]}" -eq 0 ]; then
+            echo "::error::No covering tests registered for sandbox family ${family}."
+            exit 1
+          fi
+
+          # No credential reaches the image helpers; GHCR pulls are anonymous.
+          case "${family}" in
+            clarify)
+              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/sandbox_image.sh build --family clarify \
+                --build-arg "CODEX_VERSION=${codex_version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)" || image_id=""
+              ;;
+            review)
+              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/sandbox_image.sh build --family review \
+                --build-arg "OPENCODE_VERSION=${opencode_version}" -f scripts/review_sandbox/Dockerfile scripts/review_sandbox)" || image_id=""
+              ;;
+            codex-isolated-codex)
+              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN CODEX_VERSION="${codex_version}" bash scripts/codex_isolated_exec.sh image | tail -n 1)" || image_id=""
+              ;;
+          esac
+          if ! [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not resolve the ${family} sandbox image (got '${image_id}')."
+            exit 1
+          fi
+          echo "sandbox family=${family} image=${image_id}"
+
+          run_tag="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$$"
+          base_ref="ci-sandbox-python-base:${family}-${run_tag}"
+          derived_ref="ci-sandbox-python:${family}-${run_tag}"
+          cleanup()
+          {
+            docker image rm -f "${derived_ref}" "${base_ref}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker tag "${image_id}" "${base_ref}"
+          printf 'FROM %s\nUSER root\nRUN apt-get update \\\n && apt-get install -y --no-install-recommends python3-pytest \\\n && rm -rf /var/lib/apt/lists/*\n' "${base_ref}" \
+            | docker build -q -t "${derived_ref}" - >/dev/null
+
+          # Git identity and safe.directory live in the throwaway HOME, so tests that
+          # commit in temp repos or read the read-only /src checkout work as uid 65534.
+          docker run --rm --network none --user 65534:65534 --cap-drop ALL \
+            --security-opt no-new-privileges --read-only \
+            --tmpfs /tmp:rw,exec,size=512m \
+            -e HOME=/tmp/home -e TMPDIR=/tmp -e PYTHONDONTWRITEBYTECODE=1 \
+            --mount "type=bind,src=${workspace},dst=/src,readonly" \
+            -w /src "${derived_ref}" \
+            sh -c '
+              set -e
+              mkdir -p /tmp/home
+              if command -v git >/dev/null 2>&1; then
+                git config --global user.name "ci-sandbox-python"
+                git config --global user.email "ci-sandbox-python@example.invalid"
+                git config --global init.defaultBranch main
+                git config --global --add safe.directory "*"
+              fi
+              echo "sandbox python: $(command -v python3) $(python3 --version 2>&1)"
+              python3 -m pytest -q -p no:cacheprovider "$@"
+            ' _ "${family_tests[@]}"
+
   budget-watch:
     # Early warning for the two budgets CI has hit without notice (workflow
     # file size near the §27 guard, a CI job near its timeout-minutes). Runs
@@ -3432,6 +3720,8 @@ jobs:
       - tests-promote-stall-and-review
       - tests-release-and-log-analysis
       - orchestrate-poll
+      - tests-system-python
+      - tests-sandbox-python
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -3469,6 +3759,8 @@ jobs:
       - tests-promote-stall-and-review
       - tests-release-and-log-analysis
       - orchestrate-poll
+      - tests-system-python
+      - tests-sandbox-python
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
