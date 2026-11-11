@@ -1979,7 +1979,21 @@ jobs:
             HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md" bash scripts/workflow_failure_heal_evidence.sh
             export HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md"
           fi
-          bash scripts/run_plan_codex.sh
+          # Issue #9266: on failure, name the runner's last exception in one
+          # ::error::RUN_PLAN_CODEX_FAILED line; exit code and stderr unchanged.
+          plan_runner_stderr_copy="$(mktemp "${RUNNER_TEMP:-/tmp}/plan-runner-stderr.XXXXXX" 2>/dev/null)" || plan_runner_stderr_copy=""
+          if [ -z "${plan_runner_stderr_copy}" ]; then
+            exec bash scripts/run_plan_codex.sh
+          fi
+          set +e
+          { bash scripts/run_plan_codex.sh 2>&1 1>&3 3>&- | tee "${plan_runner_stderr_copy}" >&2; plan_runner_rc="${PIPESTATUS[0]}"; } 3>&1
+          set -e
+          if [ "${plan_runner_rc}" -ne 0 ]; then
+            plan_runner_exception="$(grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Exit|Interrupt|Warning)\b' "${plan_runner_stderr_copy}" 2>/dev/null | tail -n 1 | tr -d '\000-\037\177' | cut -c1-300 | sed 's/%/%25/g')" || plan_runner_exception=""
+            echo "::error::RUN_PLAN_CODEX_FAILED rc=${plan_runner_rc} exception=${plan_runner_exception:-none}" >&2
+          fi
+          rm -f -- "${plan_runner_stderr_copy}"
+          exit "${plan_runner_rc}"
 
       - name: Enforce plan write guard
         if: env.SKIP_PLAN != 'true'

@@ -53,6 +53,29 @@ PRE_EXTRACTION_PROMPT_BYTES = 18_031
 PRE_EXTRACTION_PROMPT_LINES = 270
 
 
+# Issue #9266: the step runs the runner through a wrapper that prints one
+# ::error::RUN_PLAN_CODEX_FAILED line on failure and keeps the exit code.
+PLAN_RUNNER_FAILURE_DIAGNOSTIC = (
+	"          # Issue #9266: on failure, name the runner's last exception in one\n"
+	"          # ::error::RUN_PLAN_CODEX_FAILED line; exit code and stderr unchanged.\n"
+	'          plan_runner_stderr_copy="$(mktemp "${RUNNER_TEMP:-/tmp}/plan-runner-stderr.XXXXXX" 2>/dev/null)" || plan_runner_stderr_copy=""\n'
+	'          if [ -z "${plan_runner_stderr_copy}" ]; then\n'
+	"            exec bash scripts/run_plan_codex.sh\n"
+	"          fi\n"
+	"          set +e\n"
+	'          { bash scripts/run_plan_codex.sh 2>&1 1>&3 3>&- | tee "${plan_runner_stderr_copy}" >&2; plan_runner_rc="${PIPESTATUS[0]}"; } 3>&1\n'
+	"          set -e\n"
+	'          if [ "${plan_runner_rc}" -ne 0 ]; then\n'
+	"            plan_runner_exception=\"$(grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Exit|Interrupt|Warning)\\b' "
+	"\"${plan_runner_stderr_copy}\" 2>/dev/null | tail -n 1 | tr -d '\\000-\\037\\177' | cut -c1-300 | sed 's/%/%25/g')\" "
+	'|| plan_runner_exception=""\n'
+	'            echo "::error::RUN_PLAN_CODEX_FAILED rc=${plan_runner_rc} exception=${plan_runner_exception:-none}" >&2\n'
+	"          fi\n"
+	'          rm -f -- "${plan_runner_stderr_copy}"\n'
+	'          exit "${plan_runner_rc}"\n'
+)
+
+
 def _workflow_step(workflow_text: str, step_name: str) -> str:
 	marker = f"      - name: {step_name}\n"
 	start = workflow_text.find(marker)
@@ -97,9 +120,11 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 		'            HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md" bash scripts/workflow_failure_heal_evidence.sh\n'
 		'            export HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md"\n'
 		"          fi\n"
-		"          bash scripts/run_plan_codex.sh\n"
+		+ PLAN_RUNNER_FAILURE_DIAGNOSTIC
 	)
-	assert len(step.encode("utf-8")) < 2_000
+	# Issue #9266: the failure diagnostic wrapper took the step past 2,000
+	# bytes; the limit only guards against inlining the runner again.
+	assert len(step.encode("utf-8")) < 3_000
 
 
 def test_workflow_reference_checker_accepts_claude_settings_template() -> None:
@@ -995,6 +1020,32 @@ def test_plan_prompts_mention_isolated_base() -> None:
 		paragraphs.append(text[start:end])
 		assert "Never plan" in text[start:end]
 	assert paragraphs[0] == paragraphs[1]
+
+
+# The "Run Codex planning" failure diagnostic cases (#9266) live in
+# tests/test_plan_run_codex_failure_diagnostic.py and are collected here,
+# since CI already runs this file and ci.yml was outside that issue's file
+# grant. A name clash would hide a test, so it fails loudly.
+def _collect_plan_runner_failure_diagnostic_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"plan_run_codex_failure_diagnostic_cases",
+		Path(__file__).resolve().parent / "test_plan_run_codex_failure_diagnostic.py",
+	)
+	assert spec is not None and spec.loader is not None
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	assert collected, "no failure diagnostic cases collected"
+
+
+_collect_plan_runner_failure_diagnostic_cases()
 
 
 def main() -> int:
