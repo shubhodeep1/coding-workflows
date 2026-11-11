@@ -109,6 +109,13 @@ def test_alt_model_cleanup_cancels_scoped_implement_runs() -> None:
 	assert "for ALT_IMPL_PAGE in 1 2 3 4 5; do" in body
 	assert "all(.workflow_runs[]; .id > ${PRE_IMPLEMENT:-0})" in body
 	assert body.index("/cancel") < body.index("pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1")
+	# implement.yml owns no runs, so the id snapshot is 0; a created=> window
+	# taken before the issue is created bounds the listing instead.
+	assert 'echo "created_after=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"' in create
+	assert create.index("created_after=") < create.index('gh api "repos/${TEST_REPO}/issues"')
+	assert "ALT_CREATED_AFTER: ${{ steps.create.outputs.created_after }}" in env
+	assert 'ALT_IMPL_CREATED_FILTER="&created=>${ALT_CREATED_AFTER}"' in body
+	assert "actions/runs?per_page=100&page=${ALT_IMPL_PAGE}${ALT_IMPL_CREATED_FILTER}" in body
 
 
 def test_decompose_cleanup_closes_project_prs_before_branch_delete() -> None:
@@ -219,6 +226,52 @@ def test_smoke_cleanup_cancels_a_caller_run_past_page_one() -> None:
 		cancels = [c for c in calls if "/cancel" in c]
 		assert cancels == ["api -X POST repos/o/r/actions/runs/41/cancel"], calls
 		assert not [c for c in calls if "implement.yml/runs" in c]
+
+
+_FAKE_ALT_GH = textwrap.dedent("""\
+	#!/usr/bin/env bash
+	printf '%s\\n' "$*" >> "${FAKE_DIR}/calls"
+	case "$*" in
+		*"actions/runs?per_page=100&page=1&created=>2026-11-01T00:00:00Z"*)
+			jq -n --arg t "$ALT_ISSUE_TITLE" '{workflow_runs: [
+				{id: 51, name: "Internal: AI Implement", display_title: $t, status: "queued"},
+				{id: 50, name: "Internal: AI Implement", display_title: "other", status: "queued"},
+				{id: 49, name: "Internal: AI Plan", display_title: $t, status: "queued"}]}'
+			exit 0 ;;
+		*"actions/runs?"*) exit 1 ;;
+		*"/cancel"*|*"-X PATCH"*|*"-X DELETE"*) exit 0 ;;
+		*"pulls?state=open&head="*) exit 0 ;;
+	esac
+	exit 1
+	""")
+
+
+def test_alt_model_cleanup_cancels_within_the_created_window() -> None:
+	body = _run_body(_step(_wf(), "- name: Cleanup alt-model artifacts"))
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		gh = bin_dir / "gh"
+		gh.write_text(_FAKE_ALT_GH, encoding="utf-8")
+		gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+			"FAKE_DIR": str(root),
+			"TEST_REPO": "o/r",
+			"ISSUE_NUMBER": "12",
+			"ALT_ISSUE_TITLE": "[E2E Smoke Test alt-model] update canary (run 1)",
+			"PRE_IMPLEMENT": "0",
+			"ALT_CREATED_AFTER": "2026-11-01T00:00:00Z",
+		}
+		script = "sleep() { :; }\n" + body
+		proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
+		assert proc.returncode == 0, proc.stdout + proc.stderr
+		calls = (root / "calls").read_text(encoding="utf-8").splitlines()
+		lookups = [c for c in calls if "actions/runs?" in c]
+		# One short page inside the window ends the scan.
+		assert len(lookups) == 1 and "&created=>2026-11-01T00:00:00Z" in lookups[0], calls
+		assert [c for c in calls if "/cancel" in c] == ["api -X POST repos/o/r/actions/runs/51/cancel"], calls
 
 
 def main() -> int:

@@ -3756,6 +3756,7 @@ jobs:
                   || { echo "::warning::Implement run lookup failed for issue #${ISSUE_NUMBER} (page ${LATE_IMPL_PAGE})"; break; }
                 LATE_IMPL_RUN_IDS+=" $(printf '%s' "${LATE_IMPL_PAGE_JSON}" | jq -r '.workflow_runs[] | select((.name // "") | test("Implement"; "i")) | select(.display_title == env.ISSUE_TITLE) | select(.status != "completed") | .id' 2>/dev/null || true)"
                 [ "$(printf '%s' "${LATE_IMPL_PAGE_JSON}" | jq -r '.workflow_runs | length' 2>/dev/null || echo 0)" -ge 100 ] 2>/dev/null || break
+                [ "${LATE_IMPL_PAGE}" -lt 10 ] || echo "::warning::Implement run lookup hit the 10-page cap for issue #${ISSUE_NUMBER}; older runs were not checked"
               done
               for LATE_IMPL_RUN_ID in ${LATE_IMPL_RUN_IDS}; do
                 [[ "${LATE_IMPL_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || continue
@@ -5286,6 +5287,9 @@ jobs:
           # Capture the latest run id of each phase workflow BEFORE creating
           # the issue. The post-wait capture step uses these as anchors to
           # find the new alt-model phase runs (id > pre_<phase>_run_id).
+          # implement.yml is workflow_call-only, so pre_implement_run_id is 0;
+          # cleanup bounds its late-Implement cancel by this time instead (#8953).
+          echo "created_after=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           for WF in clarify plan implement review_autofix; do
             LATEST=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo "0")
             echo "pre_${WF}_run_id=${LATEST}" >> "$GITHUB_OUTPUT"
@@ -5476,6 +5480,7 @@ jobs:
           ISSUE_NUMBER: ${{ steps.create.outputs.issue_number }}
           ALT_ISSUE_TITLE: ${{ steps.create.outputs.title }}
           PRE_IMPLEMENT: ${{ steps.create.outputs.pre_implement_run_id }}
+          ALT_CREATED_AFTER: ${{ steps.create.outputs.created_after }}
         run: |
           # Defence in depth — never abort on single failure; retry each
           # close 3× with backoff. Same pattern as orchestrate-decompose-test
@@ -5501,20 +5506,27 @@ jobs:
           close_with_retry "issues" "${ISSUE_NUMBER}"
           # Cancel this issue's still-active Implement runs first (#8953): a
           # run that starts after the wait gave up would open a PR the
-          # lookup below cannot see yet (#8346). Scoped to runs newer than
-          # the pre-create snapshot whose display_title is this issue's title.
+          # lookup below cannot see yet (#8346). Scoped to runs created after
+          # the issue (ALT_CREATED_AFTER) whose display_title is its title.
           if [ -n "${ALT_ISSUE_TITLE:-}" ] && [[ "${PRE_IMPLEMENT:-0}" =~ ^[0-9]+$ ]]; then
             # implement.yml is workflow_call-only and owns no runs, so page the
             # repo-wide listing (name match "Implement", like Phase 3b), newest
             # first, up to 5 pages; stop at a short or failed page, or one that
-            # reaches the pre-create snapshot id.
+            # reaches the pre-create snapshot id (only when that id is nonzero:
+            # implement.yml owns no runs, so it is normally 0 and the
+            # created=> window is what bounds the listing).
             ALT_ACTIVE_IMPL_IDS=""
+            ALT_IMPL_CREATED_FILTER=""
+            if [[ "${ALT_CREATED_AFTER:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+              ALT_IMPL_CREATED_FILTER="&created=>${ALT_CREATED_AFTER}"
+            fi
             for ALT_IMPL_PAGE in 1 2 3 4 5; do
-              ALT_IMPL_PAGE_JSON=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=100&page=${ALT_IMPL_PAGE}" 2>/dev/null) \
+              ALT_IMPL_PAGE_JSON=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=100&page=${ALT_IMPL_PAGE}${ALT_IMPL_CREATED_FILTER}" 2>/dev/null) \
                 && printf '%s' "${ALT_IMPL_PAGE_JSON}" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1 \
                 || { echo "::warning::Implement run lookup failed for issue #${ISSUE_NUMBER} (page ${ALT_IMPL_PAGE})"; break; }
               ALT_ACTIVE_IMPL_IDS+=" $(printf '%s' "${ALT_IMPL_PAGE_JSON}" | jq -r ".workflow_runs[] | select(.id > ${PRE_IMPLEMENT:-0}) | select((.name // \"\") | test(\"Implement\"; \"i\")) | select(.display_title == env.ALT_ISSUE_TITLE) | select(.status != \"completed\") | .id" 2>/dev/null)"
               printf '%s' "${ALT_IMPL_PAGE_JSON}" | jq -e "(.workflow_runs | length) >= 100 and all(.workflow_runs[]; .id > ${PRE_IMPLEMENT:-0})" >/dev/null 2>&1 || break
+              [ "${ALT_IMPL_PAGE}" -lt 5 ] || echo "::warning::Implement run lookup hit the 5-page cap for issue #${ISSUE_NUMBER}; older runs were not checked"
             done
             for RUN_ID_TO_CANCEL in ${ALT_ACTIVE_IMPL_IDS}; do
               [[ "${RUN_ID_TO_CANCEL}" =~ ^[1-9][0-9]*$ ]] || continue
