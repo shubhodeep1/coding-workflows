@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh:240,352-390 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The three added shell pairs (`gh_api_write_guard.py`, `pr_watch_guard.py`, `session-start.sh`) are absent from this checkout's `PAIRED_LIVE_COPIES`, but the reviewer found no defect and recorded it as a verified interaction. (Source severity NIT.)\n  WHY: The wrapper only stages allowlisted pairs, the per-pair checks are enforced, and the live copy equals the merged template after staging.\n- tests/test_lint_pr_body_auto_close.py:464,489 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The failed check-runs (`lint`, `tests-hooks-and-orchestrator`, `orchestrate-poll (2)`) cannot be mapped to any hunk in this PR. (Source severity NIT.)\n  WHY: The `[lint_pr_body_auto_close]` errors are fixture output from the test file, and the other failures come from the sandbox environment, not this diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR body and commit messages must not use auto-close keywords (`Fixes #N`, `Closes #N`, `Resolves #N`) against `ai:orchestrator-tracking` issues (\u00a721)\n  expected_change_site: PR body / commit messages (as reported by `scripts/lint_pr_body_auto_close.py`)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The lint job reported `Fixes #2734` in the PR body line 1 and `resolved #2734` in commit message #2 line 3, and the LAST RUN DIFF does not touch the PR body or commit messages. (Disputed by anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash, who say these lines are fixture output from `tests/test_lint_pr_body_auto_close.py:464,489` and that the real PR body references only #9004.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: PR body and commit messages must not use auto-close keywords (`Fixes #N`, etc.) when referencing `ai:orchestrator-tracking` issues.\nExpected change site: PR body / Commit messages (as reported by `lint_pr_body_auto_close.py`).\nEvidence of absence: The PR lint job failed with multiple auto-close keyword violations against orchestrator-tracking issue #2734 (e.g. `Fixes #2734` in the PR body, `resolved #2734` in a commit message), which violates \u00a721 of the system instructions.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: PR body and commit messages must not use auto-close keywords (`Fixes #N`, `Closes #N`, `Resolves #N`, case-insensitive) followed by a reference to an `ai:orchestrator-tracking` issue; `Refs #N` or `Related to #N` must be used instead for semantic linkage to tracking issues (\u00a721, CLAUDE.md).\nExpected change site: PR body (line 1) and commit message #2 (line 3) on the PR branch, as reported by `scripts/lint_pr_body_auto_close.py` invoked from `.github/workflows/lint-pr-body-auto-close.yml`.\nEvidence of absence: The CI job `lint_pr_body_auto_close.py` failed in the PR head SHA `221c8529` (run 42854888160, log tail lines 4329/16411) with two annotations: `PR body:line 1 \u2014 auto-close keyword 'Fixes' references ai:orchestrator-tracking issue #2734. Matched line: Fixes #2734` and `commit message #2:line 3 \u2014 auto-close keyword 'resolved' references ai:orchestrator-tracking issue #2734. Matched line: though each conflict was resolved: #2734 failed`. The LAST RUN DIFF does not touch the PR body or reword any commit, so the violation is unfixed at the end of this rollout.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_conflict_prepare.sh:240,352-390 | severity=NIT | confidence=2\n  PROBLEM: The three added shell pairs (`gh_api_write_guard.py`, `pr_watch_guard.py`, `session-start.sh`) are absent from this checkout's `PAIRED_LIVE_COPIES`; no defect found, recorded as a verified interaction.\n  WHY: n/a, no failure path demonstrated.\n- tests/test_lint_pr_body_auto_close.py:464,489 | severity=NIT | confidence=3\n  PROBLEM: The failed check-runs cannot be mapped to any hunk in this PR; the lint errors are fixture output from the test file.\n  WHY: The steps fail for reasons outside the diff (sandbox-stripped files, fixture-driven expected-output steps).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "90d28c3d5355ce8d5f98f7816caaee383c21afeeca148a9648f067e3aaf76dbb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9010,
+    "run_id": "43034476290",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43034476290",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111145237_bd77993589",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9010,
+    "run_id": "43034476290"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T14:52:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
