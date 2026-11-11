@@ -5,13 +5,25 @@
   "entry_id": "processed_command_9237_6798928983_approved",
   "issue_number": 9237,
   "metadata": {
+    "branch": "ai/issue-9237",
+    "changed_files": [
+      "changelog.d/9237-poller-negative-elapsed-unknown.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_codex_isolated_exec.py",
+      "tests/test_orchestrate_poll_cycle_summary.py"
+    ],
+    "issue_number": 9237,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9237",
+    "pr_number": 9275,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9275",
+    "run_attempt": "1",
+    "run_id": "43041690114",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43041690114"
   },
   "run_attempt": 1,
   "run_id": "43041690114",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-11T15:09:51Z",
+  "status": "completed",
+  "timestamp": "2026-11-11T15:46:35Z",
   "workflow": "implement"
 }
