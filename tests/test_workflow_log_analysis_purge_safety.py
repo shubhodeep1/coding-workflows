@@ -46,9 +46,25 @@ def _report_pr_cases():
 CASES = _report_pr_cases()
 
 
-def _recent_doc() -> str:
-	stamp = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=2)).strftime("%Y-%m-%d")
-	return f"analysis/workflow-optimization-{stamp}.md"
+# Day offsets tried, in order, for the "recent" doc that sits inside the
+# retention window. Issue #9251: on 2026-11-11 "today minus 2 days" is the same
+# file as the hard-coded CASES.REPORT (analysis/workflow-optimization-2026-11-09.md).
+# The step's report-path collision handling (commit_report) then renames the
+# report to `-2.md` and amends the commit, which removes that path from origin
+# main. That handling is correct; the fixture must simply never pick that path.
+RECENT_DOC_DAY_OFFSETS: tuple[int, ...] = (2, 3)
+
+
+def _recent_doc(now: dt.datetime | None = None) -> str:
+	if now is None:
+		now = dt.datetime.now(dt.timezone.utc)
+	for offset in RECENT_DOC_DAY_OFFSETS:
+		stamp = (now - dt.timedelta(days=offset)).strftime("%Y-%m-%d")
+		candidate = f"analysis/workflow-optimization-{stamp}.md"
+		if candidate != CASES.REPORT:
+			return candidate
+	# Two neighbouring offsets cannot both match one fixed date; fail closed.
+	raise AssertionError(f"no recent doc path distinct from {CASES.REPORT}")
 
 
 def _seed(box, *, processing_report: str | None, in_flight: str = "") -> None:
@@ -72,6 +88,21 @@ def _seed(box, *, processing_report: str | None, in_flight: str = "") -> None:
 
 def _skip_lines(stdout: str) -> list[str]:
 	return [line for line in stdout.splitlines() if line.startswith("WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED ")]
+
+
+def test_recent_doc_never_collides_with_the_report_path() -> None:
+	report_stamp = Path(CASES.REPORT).stem.removeprefix("workflow-optimization-")
+	report_day = dt.datetime.strptime(report_stamp, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc)
+	nows = [report_day + dt.timedelta(days=delta) for delta in range(1, 6)]
+	nows.append(dt.datetime(2026, 11, 11, tzinfo=dt.timezone.utc))
+	for now in nows:
+		doc = _recent_doc(now)
+		assert doc != CASES.REPORT, (now, doc)
+		doc_stamp = Path(doc).stem.removeprefix("workflow-optimization-")
+		doc_day = dt.datetime.strptime(doc_stamp, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc)
+		age = now.date() - doc_day.date()
+		# Stays well inside the default REPORT_RETENTION_DAYS=30 window.
+		assert dt.timedelta(days=2) <= age <= dt.timedelta(days=3), (now, doc)
 
 
 def test_purge_removes_only_processed_docs_past_the_window() -> None:
@@ -151,6 +182,7 @@ def test_purge_guard_order_and_identifiers_static() -> None:
 
 
 def main() -> int:
+	test_recent_doc_never_collides_with_the_report_path()
 	test_purge_removes_only_processed_docs_past_the_window()
 	test_purge_keeps_everything_when_the_processing_report_is_missing()
 	test_purge_reads_the_processing_report_from_apply_analysis_report_path()
