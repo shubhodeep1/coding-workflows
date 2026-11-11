@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Open PR #9246 already targets this closed-reader test failure on ubuntu-26.04. What should this issue do?\nChoices:\n- A: Treat it as a duplicate of #9246. Make no code change here, record that #9246 owns the fix, and let check-triage close this issue once main is green. (RECOMMENDED)\n- B: Implement a separate fix in this issue's own PR. This may conflict with #9246.\n- C: Implement here only the parts #9246 does not cover. For example, add the fix to the inline `gh_retry()` copies in `review_autofix.yml` steps if #9246 only fixes `scripts/gh_helpers.sh`.\nQ2: If a fix is implemented here (Q1 = B or C), which layer should change? The test's contract is that \"the undelivered output is reported as a non-zero status\".\nChoices:\n- A: Fix the replay in `gh_retry`. It should report undelivered output as a non-zero status without depending on how the host's `cat` handles a closed pipe, and keep the test assertion as it is. (RECOMMENDED)\n- B: Relax the test so it accepts `rc=0` on hosts with Rust coreutils. This drops the guarantee in production on ubuntu-26.04 runners.\n- C: Make `gh_retry` call GNU `cat` explicitly by path or name. This only works if GNU coreutils is still installed on ubuntu-26.04 runners.\n**Note:** Q2 does not apply if Q1 = A.",
+  "fingerprint": "36d2934fd07d6ce45a3c332965dd35e8da92525499b4f85927fadd53684e04a7",
+  "lineage": {
+    "issue_number": 9308,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43086910794",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43086910794",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111194627_0dd9df9e64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9308,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43086910794"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9308 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T19:46:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
