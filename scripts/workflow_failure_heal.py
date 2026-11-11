@@ -638,7 +638,8 @@ _TRACEBACK_CHAIN_RE = re.compile(
 	r"|During handling of the above exception, another exception occurred):?\s*$"
 )
 # Lines kept after one header (the innermost ones when a traceback is longer),
-# and how far one traceback is scanned before it is treated as ended.
+# and how far one traceback is scanned before it is treated as ended (past it,
+# a traceback with no exception line yet is followed on to that line only).
 _TRACEBACK_CONTEXT_MAX_LINES = 30
 _TRACEBACK_SCAN_MAX_LINES = 400
 
@@ -3693,6 +3694,8 @@ def _traceback_context_indices(lines: list[str]) -> set[int]:
 	or the next header ends it, and a chained traceback's header starts its
 	own block. Each block keeps at most _TRACEBACK_CONTEXT_MAX_LINES lines, the
 	last ones, since the innermost frames and the exception are printed last.
+	A traceback still without its exception line after
+	_TRACEBACK_SCAN_MAX_LINES lines is followed on to that line.
 	The Actions timestamp prefix is ignored. The header lines themselves are
 	not returned (_SOFT_LOG_PATTERNS keeps them).
 	"""
@@ -3719,6 +3722,19 @@ def _traceback_context_indices(lines: list[str]) -> set[int]:
 			else:
 				break
 			cursor += 1
+		# Past the scan window with no exception line yet (mutual recursion
+		# prints hundreds of uncollapsed frames): walk on over the remaining
+		# frames to the exception line so it and the innermost frames are kept.
+		# cursor only moves forward and index = cursor below, so this is linear.
+		if not exception_seen and cursor == scan_end:
+			while cursor < total:
+				content = _LOG_TIMESTAMP_RE.sub("", lines[cursor])
+				if _TRACEBACK_HEADER_RE.search(content) or _TRACEBACK_CHAIN_RE.match(content.strip()):
+					break
+				block.append(cursor)
+				cursor += 1
+				if content.strip() and not content[:1].isspace():
+					break
 		while block and not _LOG_TIMESTAMP_RE.sub("", lines[block[-1]]).strip():
 			block.pop()
 		kept.update(block[-_TRACEBACK_CONTEXT_MAX_LINES:])
