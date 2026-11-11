@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **CI now catches a bad argparse help string in any script before release.** A new test builds the parser of every `scripts/*.py` that defines `build_parser()` and formats its `--help` text, so a bare `%` like the one in `scripts/render_prompt.py` that stopped clarify, plan and review on Python 3.14 runners fails CI instead of production runs. The existing `render_prompt.py --help` regression test was never called by the CI script run; it now runs too.
