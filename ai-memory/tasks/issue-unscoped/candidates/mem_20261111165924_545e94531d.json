@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:789 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Check run 43043259085 reports `tests-hooks-and-orchestrator` failed (running `tests/test_lint_pr_body_auto_close.py`), but the supplied log tail does not identify a failure attributable to this PR's changed files.\n  WHY: The failed job causes the aggregate `lint` check to fail and blocks CI; the failure site remains unidentified. Reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR body, PR title, commit message, or merge commit trailer must not use an auto-close keyword followed by a reference to an `ai:orchestrator-tracking` issue (\u00a719 CLAUDE.md, \u00a721 unattended_system_instructions.md; enforced by `scripts/lint_pr_body_auto_close.py`)\n  expected_change_site: PR body on this PR (line matched as `Fixes #2734`) and commit #2 on this PR branch (line `though each conflict was resolved: #2734 failed`)\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `tests-hooks-and-orchestrator` -> `lint` check-run for head 0a60071a5becdc06e364182b3e191714719491d9 failed, with `##[error][lint_pr_body_auto_close]` lines for PR body:line 1 (`Fixes #2734`) and commit message #2:line 3 (`resolved: #2734`) printed after the eight PASS self-test lines. Severity stated as BLOCKER. Disagreement: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash treated these lines as expected fixture output and reported no gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: The PR body, PR title, commit message, or merge commit trailer must not use an auto-close keyword followed by a reference to an `ai:orchestrator-tracking` issue (\u00a719 CLAUDE.md, \u00a721 unattended_system_instructions.md; enforced by `scripts/lint_pr_body_auto_close.py`).\n  Expected change site: PR body on this PR (line matched as `Fixes #2734`) and commit #2 on this PR branch (line `though each conflict was resolved: #2734 failed`); needs rebase + force-push out of band.\n  Evidence of absence: `lint` job log for head 0a60071a5becdc06e364182b3e191714719491d9 (run 43043259085, job 130600375433) shows `##[error][lint_pr_body_auto_close]` lines for PR body:line 1 (`Fixes #2734`) and commit message #2:line 3 (`resolved: #2734`), printed after the eight PASS lines, as live lint output; the pre-push gate's six inherited failures do not include this lint run. The pass-1 ledger rated it NIT by mistaking the lines for fixture output.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:789 | severity=low (source: NIT) | confidence=4\n  PROBLEM: Check run 43043259085 reports `tests-hooks-and-orchestrator` failed, but the supplied log tail does not identify a failure attributable to this PR's changed files.\n  WHY: The failed job causes the aggregate `lint` check to fail and blocks CI; the failure site remains unidentified.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "15f35adfe7a3b7f4156418b8a2d682eb5a6abb36051a72714274d8a8cc5e0ec9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9015,
+    "run_id": "43043259327",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43043259327",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111165924_545e94531d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9015,
+    "run_id": "43043259327"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-11T16:59:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
