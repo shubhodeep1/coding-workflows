@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_orchestrate_lib.py, tests/test_session_start_extract_repo_slug.py:(multiple) | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR diff introduces regressions in existing test suites, causing 5 test failures as reported by the pre-push gate.\n  WHY: These regressions block merge and suggest an interaction issue with the log tail collector change; severity BLOCKER as stated by the source. Other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) found these tests do not read changed files, so they are not attributable to this diff.\n- scripts/collect_pr_check_runs_context.py:430-436 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The last-match runner-exit anchor can be stolen by a later failing always()/cleanup step's `##[error]Process completed with exit code` line, so the front-trim drops the real failing assertion.\n  WHY: The window ends at the later exit line plus 5 and earlier traceback lines are trimmed; the source rated it NIT and noted the editor run accepted this trade-off.\n- .github/workflows/ci.yml:543 | severity=high | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash, anthropic_claude-sonnet-5_5]\n  PROBLEM: The PR head is red (job tests-hooks-and-orchestrator, run 43050739857), and its log_tail ends at the first `##[error]` plus 5 lines with the real failing assertion not visible.\n  WHY: The failure cannot be mapped to files this PR changes, and the next editor iteration still has no visible failing assertion. Severity disagreement: z-ai_glm-5_3-flash said MAJOR (confidence 3); anthropic_claude-sonnet-5_5 said NIT (confidence 2) and noted the snapshot was likely built with the old rule.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- CI job tests-hooks-and-orchestrator (run 43050739857) | severity=low | confidence=2\n  PROBLEM: The captured log_tail was built with the old first-`##[error]` rule and ends at passing test_lint_pr_body_auto_close output, so the real failing assertion is not in the snapshot.\n  WHY: Not attributed to this diff. The attributed tests do not read changed files, and the PR description and editor summary say the failures also occur on the base branch. Source severity was NIT.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_orchestrate_lib.py, tests/test_session_start_extract_repo_slug.py:(Multiple tests) | severity=critical | confidence=4\n  PROBLEM: The PR diff introduces regressions in existing test suites, causing 5 test failures as reported by the pre-push gate.\n  WHY: These regressions prevent the PR from being merged and suggest an interaction issue or incorrect assumption introduced by the changes to the log tail collector. Source severity was BLOCKER.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/collect_pr_check_runs_context.py:430-436 | severity=low | confidence=3\n  PROBLEM: The last-match runner-exit anchor can be stolen by a later failing always()/cleanup step's `##[error]Process completed with exit code` line, so the front-trim drops the real failing assertion.\n  WHY: The window ends at the later exit line plus 5 and earlier traceback lines are trimmed. Source severity was NIT, and it noted the editor run accepted this trade-off.\n- .github/workflows/ci.yml:543 | severity=high | confidence=3\n  PROBLEM: The PR head is red (run 43050739857, head c6173090044db3d827eae9415aa046a4db9a1f13), and the failed job's log_tail ends at the first `##[error]` plus 5 lines with no exit line or FAIL line visible.\n  WHY: The failure cannot be mapped to any file this PR changes. The PR cannot reach a green merge state, and the next editor iteration still has no visible failing assertion. Source severity was MAJOR.\n- HARDENING suggestion (HARDENING_RISK_SCORE: 1): scripts/collect_pr_check_runs_context.py:430 (_select_log_tail_window)\n  PROBLEM: The bare substring match on LOG_TAIL_STEP_EXIT_MARKER also fires on printed test output containing the literal marker, which can steal the anchor.\n  WHY: The suggested fix is a module-level regex `LOG_TAIL_STEP_EXIT_RE = re.compile(r\"(?:^|\\s)\" + re.escape(LOG_TAIL_STEP_EXIT_MARKER))`, used via `.search(line)`.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ac76b350559ca10f7a749c915e05f0a3e375daa60a43eb912314c945d6c79dce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9218,
+    "run_id": "43050740133",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43050740133",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111180559_940af6f0f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9218,
+    "run_id": "43050740133"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T18:05:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
