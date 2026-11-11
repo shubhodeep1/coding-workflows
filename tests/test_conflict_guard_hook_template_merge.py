@@ -32,19 +32,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-try:
-	import pytest
-except ImportError:  # script mode without pytest: record the mark main() reads
-	import types
-
-	def _xfail_without_pytest(**kwargs):
-		def wrap(func):
-			func.pytestmark = [*getattr(func, "pytestmark", []), types.SimpleNamespace(name="xfail", kwargs=kwargs)]
-			return func
-		return wrap
-
-	pytest = types.SimpleNamespace(mark=types.SimpleNamespace(xfail=_xfail_without_pytest))
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PREPARE = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
 
@@ -52,11 +39,9 @@ LIVE = ".claude/hooks/pr_merge_status_guard.py"
 TEMPLATE = "workflow-templates/.claude/hooks/pr_merge_status_guard.py"
 # A second paired live hook (#7137). The template merge did not cover it
 # (#8973), so an integration-sync conflict on it failed closed; #9004 extends
-# the merge to every pair in GUARD_HOOK_TEMPLATE_PAIRS.  PREPUSH_GAP_REASON is
-# kept for reference only.
+# the merge to every pair in GUARD_HOOK_TEMPLATE_PAIRS.
 PREPUSH_LIVE = ".claude/hooks/prepush_affected_tests.py"
 PREPUSH_TEMPLATE = "workflow-templates/.claude/hooks/prepush_affected_tests.py"
-PREPUSH_GAP_REASON = "#8973: guard-hook template merge covers only pr_merge_status_guard.py; scripts outside heal scope"
 MERGE_RESOLVE_COMMIT_MESSAGE = "[ai-merge-resolve] resolve merge conflicts"
 BASE_LINES = [f"line {i}" for i in range(1, 11)]
 
