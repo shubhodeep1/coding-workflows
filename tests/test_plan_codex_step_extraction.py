@@ -67,7 +67,7 @@ PLAN_RUNNER_FAILURE_DIAGNOSTIC = (
 	"          set -e\n"
 	'          if [ "${plan_runner_rc}" -ne 0 ]; then\n'
 	"            plan_runner_exception=\"$(grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Exit|Interrupt|Warning)\\b' "
-	"\"${plan_runner_stderr_copy}\" 2>/dev/null | tail -n 1 | tr -d '\\000-\\037\\177' | cut -c1-300 | sed 's/%/%25/g')\" "
+	"\"${plan_runner_stderr_copy}\" 2>/dev/null | tail -n 1 | tr -d '\\000-\\037\\177' | sed 's/%/%25/g' | cut -c1-300)\" "
 	'|| plan_runner_exception=""\n'
 	'            echo "::error::RUN_PLAN_CODEX_FAILED rc=${plan_runner_rc} exception=${plan_runner_exception:-none}" >&2\n'
 	"          fi\n"

@@ -155,6 +155,18 @@ def test_long_exception_is_cut_to_one_short_line() -> None:
 	assert exception == long_message[:300]
 
 
+def test_percent_heavy_exception_stays_within_300_characters() -> None:
+	# The cut runs after `%` encoding, so the emitted field never exceeds 300.
+	percent_message = "RuntimeError: " + "%" * 400
+	result, _runner_temp = _run(f"printf '%s\\n' '{percent_message}' >&2\nexit 2\n")
+	assert result.returncode == 2
+	lines = _diagnostic_lines(result.stderr)
+	assert len(lines) == 1
+	exception = lines[0].split("exception=", 1)[1]
+	assert len(exception) == 300
+	assert exception == percent_message.replace("%", "%25")[:300]
+
+
 def test_heal_route_failure_is_unchanged() -> None:
 	result, runner_temp = _run(
 		"echo RUNNER_RAN\nexit 0\n", heal_route_script="sys.exit(1)\n"
