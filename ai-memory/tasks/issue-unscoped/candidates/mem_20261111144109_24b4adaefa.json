@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:aggregate `lint` check (jobs `tests-hooks-and-orchestrator` line 543, `orchestrate-poll` line 2489) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The CI jobs `tests-hooks-and-orchestrator` and `orchestrate-poll` failed, which makes the aggregate `lint` check fail.\n  WHY: Failing CI blocks merge. Severity disagreement: gemini rated BLOCKER, luna rated NIT, so the highest is used. luna said the log excerpts show no failure in the changed code, and its confidence was 2.\n- PR Body / Commit Message:PR body:line 1 and commit message #2:line 3 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR body and commit message are said to use auto-close keywords ('Fixes', 'resolved') that reference orchestrator-tracking issue #2734.\n  WHY: Merging would auto-close an `ai:orchestrator-tracking` issue and break wave dispatch. The reviewer rated it BLOCKER. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 disputed the finding: the `#2734` text comes from `tests/test_lint_pr_body_auto_close.py` fixtures, and the PR body uses only `Refs #9235`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:Aggregate failure in `lint` check due to failed jobs `tests-hooks-and-orchestrator` and `orchestrate-poll` | severity=BLOCKER | confidence=4\n  PROBLEM: The pull request currently fails CI, preventing merge.\n  WHY: CI jobs are required to pass for a successful merge, and the current failure status blocks the PR.\n- PR Body / Commit Message:PR body:line 1 and commit message #2:line 3 | severity=BLOCKER | confidence=5\n  PROBLEM: The PR body and commit message use auto-close keywords ('Fixes', 'resolved') that reference orchestrator-tracking issue #2734.\n  WHY: Merging would trigger GitHub to auto-close an `ai:orchestrator-tracking` issue, which breaks the orchestrator's state machine and wave dispatch.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:`tests-hooks-and-orchestrator` job at line 543; `orchestrate-poll` job at line 2489 | severity=NIT | confidence=2\n  PROBLEM: The PR check run reports both jobs failed, which causes the aggregate `lint` check to fail. The supplied log excerpts do not identify a failure in the changed code.\n  WHY: These jobs reported failure on this PR head, and the aggregate check reports them as unsuccessful. The failure cause remains unresolved.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "fa88681a6c6f084f703001fc9ab6ad201d0cd009112ce9f8ec3ffdc38b372ca3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9245,
+    "run_id": "43032478634",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43032478634",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111144109_24b4adaefa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9245,
+    "run_id": "43032478634"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T14:41:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
