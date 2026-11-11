@@ -42,6 +42,8 @@ class FakeGitHub:
 		# `<sha>...stable` compare status per commit; a missing or "error" status fails the call.
 		self.compare_status: dict[str, str] = {}
 		self.closed: list[int] = []
+		self.closed_issues: dict[int, dict] = {}
+		self.reopened: list[int] = []
 
 	def __call__(self, args: list[str], *, allow_existing_label: bool = False) -> str:
 		self.calls.append(args)
@@ -63,7 +65,14 @@ class FakeGitHub:
 		if args[:3] == ["api", "-X", "PATCH"] and "state=closed" in args and "/comments/" not in args[3]:
 			number = int(args[3].rsplit("/", 1)[1])
 			self.closed.append(number)
+			self.closed_issues.update({issue["number"]: issue for issue in self.issues if issue["number"] == number})
 			self.issues[:] = [issue for issue in self.issues if issue["number"] != number]
+			return "{}"
+		if args[:3] == ["api", "-X", "PATCH"] and args[-1] == "state=open":
+			number = int(args[3].rsplit("/", 1)[1])
+			self.reopened.append(number)
+			if number in self.closed_issues:
+				self.issues.append(dict(self.closed_issues.pop(number), state_reason="reopened"))
 			return "{}"
 		if args[:2] == ["api", "-X"] and args[2] == "PATCH":
 			number = int(args[3].rsplit("/", 1)[1])
@@ -964,3 +973,65 @@ def test_poller_wires_operator_step_resolve_step() -> None:
 	assert run.index("exit 0") < run.index("python3 -I -B")
 	assert 'PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${helper}" resolve --repo "${GITHUB_REPOSITORY}"' in run
 	assert "outcome=error reason=helper_exit" in run
+
+
+# --- review follow-ups: human steps with release-verb titles, close race ------
+
+
+def test_operator_step_resolve_never_ticks_a_human_step_with_a_release_title(fake: FakeGitHub) -> None:
+	number = _tracker(fake)
+	human = {"title": "Sync the DEPLOY_TOKEN secret to the stable environment", "instructions": "gh secret set DEPLOY_TOKEN",
+		"dormant_until": "DEPLOY_TOKEN"}
+	assert not writer._is_release_entry(writer.render_entry("pr-5", "s", [human], RELEASE_SHA))
+	_release_entry(fake, number, 10, "pr-5", steps=[human])
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"not_release": 1}
+	assert _compares(fake) == [] and result["closed"] is False and fake.closed == []
+
+
+def test_operator_step_resolve_reopens_when_an_entry_lands_during_the_close(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	original = fake.__call__
+
+	def racing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if args[:3] == ["api", "-X", "PATCH"] and "state=closed" in args:
+			# An activation run posts a new entry right after the close PATCH.
+			_entry_comment(fake, number, 4000, writer.render_entry("pr-9", "nine", [SECRET_STEP], RELEASE_SHA))
+		return out
+
+	monkeypatch.setattr(writer, "_gh", racing)
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == ["pr-1"] and result["closed"] is False
+	assert fake.closed == [number] and fake.reopened == [number]
+	assert [issue["number"] for issue in fake.issues] == [number]
+	assert f"op=close issue={number} outcome=open reason=reopened_after_close" in capsys.readouterr().err
+	# A tracker the pipeline reopened is never closed again automatically.
+	assert writer.resolve(REPO, BOT)["closed"] is False and fake.closed == [number]
+
+
+def test_operator_step_upsert_reopens_a_tracker_closed_while_it_posted(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	original = fake.__call__
+
+	def closing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if args[0] == "api" and args[1] == f"repos/{REPO}/issues/{number}/comments" and "-f" in args:
+			# resolve closes the tracker after its last re-read, before this post is visible.
+			original(["api", "-X", "PATCH", f"repos/{REPO}/issues/{number}", "-f", "state=closed", "-f", "state_reason=completed"])
+		return out
+
+	monkeypatch.setattr(writer, "_gh", closing)
+	result = writer.upsert(REPO, "pr-3", "three", [SECRET_STEP])
+	assert result["issue"] == number and fake.reopened == [number]
+	assert [issue["number"] for issue in fake.issues] == [number]
+	assert f"op=upsert_recheck issue={number} outcome=reopened" in capsys.readouterr().err
+	# The tracker stays open: no reopen when nothing closed it.
+	monkeypatch.setattr(writer, "_gh", original)
+	writer.upsert(REPO, "pr-4", "four", [SECRET_STEP])
+	assert fake.reopened == [number]
