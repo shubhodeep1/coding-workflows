@@ -4640,6 +4640,33 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 		self.assertIn(f"CI_SUBTEST_END subtest={module} elapsed_ms=1000 rc=1\n", result.stdout)
 		self.assertIn(f"::error::single-file module tests failed: {module}\n", result.stdout)
 
+	def test_backwards_clock_clamps_end_elapsed_to_zero(self) -> None:
+		# #9294: a clock that went backwards must read elapsed_ms=0, never a negative value.
+		files = self.green()
+		files[0] = {"log": "ok 0\n", "rc": "0\n", "start_ms": "2000\n", "end_ms": "1000\n"}
+		result = run_single_file_step_judge(self.run, files)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		module = SINGLE_FILE_MODULES[0]
+		self.assertIn(f"CI_SUBTEST_END subtest={module} elapsed_ms=0 rc=0\n", result.stdout)
+		self.assertNotRegex(result.stdout, r"elapsed_ms=-")
+
+	def test_clock_is_monotonic_with_wall_clock_fallback(self) -> None:
+		clock_line = SINGLE_FILE_STEP_CLOCK_RE.search(self.run).group(0)
+		self.assertIn("/proc/uptime", clock_line)
+		self.assertIn("date +%s%3N", clock_line)
+		result = subprocess.run(
+			["bash", "-c", f"set -euo pipefail\n{clock_line}\nsf_now_ms"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertRegex(result.stdout, r"^[0-9]+\n$")
+
+	def test_heartbeat_elapsed_is_clamped(self) -> None:
+		self.assertIn('[ "${sf_beat_elapsed_ms}" -ge 0 ] || sf_beat_elapsed_ms=0', self.run)
+		self.assertIn('[ "${sf_elapsed_ms}" -ge 0 ] || sf_elapsed_ms=0', self.run)
+
 	def test_full_body_overlaps_modules_and_fails_closed(self) -> None:
 		for failing in (1, None):
 			with self.subTest(failing=failing), tempfile.TemporaryDirectory(prefix="test_sf_body_") as tmp:
@@ -4658,7 +4685,7 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 				for n in range(3):
 					self.assertEqual(markers.joinpath(f"saw_{n}").read_text(), "3", f"fake {n} ran alone:\n{out}")
 				self.assertEqual(out.count("CI_SUBTEST_START subtest="), 3, out)
-				self.assertEqual(len(re.findall(r"CI_SUBTEST_END subtest=\S+ elapsed_ms=-?\d+ rc=\d+\n", out)), 3, out)
+				self.assertEqual(len(re.findall(r"CI_SUBTEST_END subtest=\S+ elapsed_ms=\d+ rc=\d+\n", out)), 3, out)
 				self.assertRegex(out, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=\d+\n")
 				if failing is None:
 					self.assertEqual(result.returncode, 0, out + result.stderr)

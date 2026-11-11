@@ -3192,7 +3192,10 @@ jobs:
           sf_modules=(tests/test_orchestrate_poll_noop_suspicious_recovery.py tests/test_state_snapshot.py tests/test_run_substate_ledger.py)
           rm -f /tmp/single_file_step_*.log /tmp/single_file_step_*.rc \
             /tmp/single_file_step_*.start_ms /tmp/single_file_step_*.end_ms
-          sf_now_ms() { date +%s%3N; }
+          # Monotonic milliseconds since boot from /proc/uptime (not moved when the
+          # runner's wall clock is set back, #9294); falls back to date +%s%3N.
+          # Keep this a one-line definition: the sharding contract tests cut it out.
+          sf_now_ms() { awk '{printf "%.0f\n", $1 * 1000}' /proc/uptime 2>/dev/null | grep -Ex '[0-9]+' || date +%s%3N; }
           sf_step_start_ms="$(sf_now_ms || true)"
           case "${sf_step_start_ms}" in
             ''|*[!0-9]*)
@@ -3227,7 +3230,10 @@ jobs:
               sf_beat_elapsed_ms=0
               case "${sf_beat_ms}" in
                 ''|*[!0-9]*) ;;
-                *) [ "${sf_step_start_ms}" = "0" ] || sf_beat_elapsed_ms="$((10#${sf_beat_ms} - 10#${sf_step_start_ms}))" ;;
+                *)
+                  [ "${sf_step_start_ms}" = "0" ] || sf_beat_elapsed_ms="$((10#${sf_beat_ms} - 10#${sf_step_start_ms}))"
+                  # A clock that went backwards reads 0, never a negative value.
+                  [ "${sf_beat_elapsed_ms}" -ge 0 ] || sf_beat_elapsed_ms=0 ;;
               esac
               sf_running_csv="$(IFS=,; echo "${sf_running[*]}")"
               echo "CI_SUBTEST_HEARTBEAT running=${sf_running_csv} elapsed_ms=${sf_beat_elapsed_ms}"
@@ -3251,7 +3257,8 @@ jobs:
               ''|*[!0-9]*) sf_rc=1 ;;
             esac
             # Timing is telemetry only: a missing or non-numeric start time gives 0;
-            # a missing or non-numeric end time is replaced by the current clock.
+            # a missing or non-numeric end time is replaced by the current clock;
+            # a negative difference (clock went backwards) reads 0.
             sf_start_ms="$(cat "${sf_stem}.start_ms" 2>/dev/null || true)"
             sf_end_ms="$(cat "${sf_stem}.end_ms" 2>/dev/null || true)"
             case "${sf_end_ms}" in
@@ -3260,7 +3267,9 @@ jobs:
             sf_elapsed_ms=0
             case "${sf_start_ms}:${sf_end_ms}" in
               :*|*:|*[!0-9:]*) ;;
-              *) sf_elapsed_ms="$((10#${sf_end_ms} - 10#${sf_start_ms}))" ;;
+              *)
+                sf_elapsed_ms="$((10#${sf_end_ms} - 10#${sf_start_ms}))"
+                [ "${sf_elapsed_ms}" -ge 0 ] || sf_elapsed_ms=0 ;;
             esac
             echo "CI_SUBTEST_END subtest=${sf_module} elapsed_ms=${sf_elapsed_ms} rc=${sf_rc}"
             echo "::group::single-file module ${sf_module}"

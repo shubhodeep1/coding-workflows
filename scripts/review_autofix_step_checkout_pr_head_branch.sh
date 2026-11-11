@@ -40,6 +40,14 @@ REVIEW_HEAD_CHECKOUT_EMITTED=false
 review_head_checkout_now_ms()
 {
   local review_head_checkout_now_value=""
+  # Monotonic milliseconds since boot first (#9294): /proc/uptime is not moved
+  # when the runner's wall clock is set back. The date paths below are the
+  # unchanged fallback where /proc/uptime is unreadable.
+  review_head_checkout_now_value="$(awk '{printf "%.0f", $1 * 1000}' /proc/uptime 2>/dev/null || true)"
+  if [[ "${review_head_checkout_now_value}" =~ ^[0-9]+$ ]]; then
+    printf '%s' "${review_head_checkout_now_value}"
+    return 0
+  fi
   review_head_checkout_now_value="$(date +%s%3N 2>/dev/null || true)"
   if [[ "${review_head_checkout_now_value}" =~ ^[0-9]{13,}$ ]]; then
     printf '%s' "${review_head_checkout_now_value}"
@@ -78,14 +86,21 @@ review_head_checkout_classify_fetch_stderr()
 review_head_checkout_elapsed_ms()
 {
   # Args: start_ms end_ms now_ms. Prints END-START, NOW-START when the
-  # operation was interrupted, or na when it never started.
+  # operation was interrupted, or na when it never started. A negative
+  # difference (the clock went backwards, #9294) prints 0, so a started
+  # operation never reads na.
   local review_head_checkout_elapsed_start="${1:-}" review_head_checkout_elapsed_end="${2:-}" review_head_checkout_elapsed_now="${3:-}"
+  local review_head_checkout_elapsed_diff=0
   if ! [[ "${review_head_checkout_elapsed_start}" =~ ^[0-9]+$ ]]; then
     printf 'na'
   elif [[ "${review_head_checkout_elapsed_end}" =~ ^[0-9]+$ ]]; then
-    printf '%s' "$(( review_head_checkout_elapsed_end - review_head_checkout_elapsed_start ))"
+    review_head_checkout_elapsed_diff="$(( 10#${review_head_checkout_elapsed_end} - 10#${review_head_checkout_elapsed_start} ))"
+    [ "${review_head_checkout_elapsed_diff}" -ge 0 ] || review_head_checkout_elapsed_diff=0
+    printf '%s' "${review_head_checkout_elapsed_diff}"
   elif [[ "${review_head_checkout_elapsed_now}" =~ ^[0-9]+$ ]]; then
-    printf '%s' "$(( review_head_checkout_elapsed_now - review_head_checkout_elapsed_start ))"
+    review_head_checkout_elapsed_diff="$(( 10#${review_head_checkout_elapsed_now} - 10#${review_head_checkout_elapsed_start} ))"
+    [ "${review_head_checkout_elapsed_diff}" -ge 0 ] || review_head_checkout_elapsed_diff=0
+    printf '%s' "${review_head_checkout_elapsed_diff}"
   else
     printf 'na'
   fi

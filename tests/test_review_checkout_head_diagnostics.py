@@ -321,3 +321,49 @@ def test_script_contract_is_additive() -> None:
 	handler = text[text.index("review_head_checkout_on_exit()"):text.index("REVIEW_HEAD_CHECKOUT_START_MS=")]
 	assert "exit " not in handler
 	assert "REVIEW_CHECKOUT_SHA=" not in text
+
+
+def _script_function(name: str, next_marker: str) -> str:
+	text = SCRIPT_PATH.read_text()
+	return text[text.index(f"{name}()"):text.index(next_marker)]
+
+
+@pytest.mark.parametrize(
+	("start", "end", "now", "expected"),
+	[
+		("1000", "900", "", "0"),
+		("1000", "", "900", "0"),
+		("", "900", "1000", "na"),
+		("1000", "1250", "", "250"),
+		("1000", "", "1300", "300"),
+		("1000", "", "", "na"),
+	],
+)
+def test_elapsed_ms_clamps_backwards_clock_to_zero(start: str, end: str, now: str, expected: str) -> None:
+	# #9294: a clock that went backwards reads 0; na still means "never started".
+	fn = _script_function("review_head_checkout_elapsed_ms", "review_head_checkout_on_exit()")
+	result = subprocess.run(
+		["bash", "-c", fn + '\nreview_head_checkout_elapsed_ms "$1" "$2" "$3"', "_", start, end, now],
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == expected
+
+
+def test_now_ms_prints_integer_milliseconds() -> None:
+	text = SCRIPT_PATH.read_text()
+	fn = _script_function("review_head_checkout_now_ms", "# Prints one class token")
+	assert "/proc/uptime" in fn
+	# The uptime source comes first; the wall-clock fallbacks stay after it.
+	assert fn.index("/proc/uptime") < fn.index("date +%s%3N") < fn.index("date +%s 2>")
+	assert "date +%s%3N" in text
+	result = subprocess.run(
+		["bash", "-c", "set -euo pipefail\n" + fn + "\nreview_head_checkout_now_ms"],
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	assert re.fullmatch(r"[0-9]+", result.stdout), result.stdout
