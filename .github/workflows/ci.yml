@@ -354,11 +354,18 @@ jobs:
               curl -sSLf --retry 5 --retry-all-errors --retry-delay 15 --retry-max-time 300 \
                 --connect-timeout 20 --max-time 120 -o "${tarball}" \
                 "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}" || actionlint_rc=$?
-              if [ "${actionlint_rc}" -eq 0 ]; then break; fi
+              if [ "${actionlint_rc}" -eq 0 ]; then
+                break
+              fi
               echo "actionlint download run ${actionlint_attempt}/4 failed (curl exit ${actionlint_rc})."
-              if [ "${actionlint_attempt}" -lt 4 ]; then sleep 20; fi
+              if [ "${actionlint_attempt}" -lt 4 ]; then
+                sleep 20
+              fi
             done
-            if [ "${actionlint_rc}" -ne 0 ]; then echo "::error::actionlint download failed after 4 curl runs (curl exit ${actionlint_rc})."; exit "${actionlint_rc}"; fi
+            if [ "${actionlint_rc}" -ne 0 ]; then
+              echo "::error::actionlint download failed after 4 curl runs (curl exit ${actionlint_rc})."
+              exit "${actionlint_rc}"
+            fi
           fi
           # Runs on a cache hit and on a miss: a corrupt or poisoned cache entry fails closed.
           echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
@@ -3394,6 +3401,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_collect_pr_check_runs_pending_identity.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_checkout_head_diagnostics.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py

@@ -197,16 +197,19 @@ run_consumer_retro() {
 
 	local rendered_prompt
 	rendered_prompt="$(bash "${SCRIPT_DIR}/render_prompt.sh" "${REPO_ROOT}/prompts/mode-workflow-analysis.txt")" || return 1
+	# errexit is suppressed here (see the `if ! run_consumer_retro` note
+	# below), so every member is chained with && and the group fails closed:
+	# an incomplete prompt never reaches the model (SHELL-001).
 	{
-		echo "Mode: retro"
-		printf '%s\n' "${rendered_prompt}"
-		echo
-		echo "=== WEEKLY RETRO CONTEXT ==="
-		cat "${ctx_file}"
-		echo
-		echo "=== WEEKLY RETRO JSON ==="
+		echo "Mode: retro" &&
+		printf '%s\n' "${rendered_prompt}" &&
+		echo &&
+		echo "=== WEEKLY RETRO CONTEXT ===" &&
+		cat "${ctx_file}" &&
+		echo &&
+		echo "=== WEEKLY RETRO JSON ===" &&
 		cat "${json_file}"
-	} > "${prompt_file}"
+	} > "${prompt_file}" || { echo "::warning::retro-fanout: prompt assembly failed for ${target_repo}; skipping the model call."; return 1; }
 
 	local attempt codex_exit sleep_secs
 	codex_exit=0
@@ -216,7 +219,17 @@ run_consumer_retro() {
 	# holds the cross-repo GH_PAT, the OpenRouter key or a checkout's .git.
 	for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
 		if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
-			sanitize_codex_prompt_file "${prompt_file}"
+			# Fail closed: never send an unsanitized prompt (SHELL-001).
+			if ! sanitize_codex_prompt_file "${prompt_file}"; then
+				echo "::warning::retro-fanout: prompt sanitization failed for ${target_repo}; skipping the model call."
+				return 1
+			fi
+			# The shared helper is best-effort and returns 0 even when it
+			# could not rewrite the file, so verify its result here.
+			if ! python3 -I -c 'import sys; open(sys.argv[1], "rb").read().decode("utf-8")' "${prompt_file}" 2>/dev/null; then
+				echo "::warning::retro-fanout: prompt for ${target_repo} is not valid UTF-8 after sanitization; skipping the model call."
+				return 1
+			fi
 		fi
 		set +e
 		retro_fanout_model_call "${prompt_file}" "${body_file}"
@@ -255,7 +268,7 @@ run_consumer_retro() {
 	# here would silently continue instead of marking this repo failed.
 	ensure_label_exists "ai:retro" "${target_repo}" || return 1
 
-	cat > "${tracker_body_file}" <<EOF
+	cat > "${tracker_body_file}" <<EOF || { echo "::warning::retro-fanout: tracker body assembly failed for ${target_repo}."; return 1; }
 ${TRACKER_MARKER}
 # ${TRACKER_TITLE}
 
@@ -340,12 +353,12 @@ PY
 
 	local comment_marker="<!-- ai:workflow-retro:${week_label} -->"
 	{
-		echo "${comment_marker}"
-		echo
-		echo "_Posted by the consumer retro fan-out in shubhodeep1/coding-workflows (workflow-log-analysis.yml)._"
-		echo
+		echo "${comment_marker}" &&
+		echo &&
+		echo "_Posted by the consumer retro fan-out in shubhodeep1/coding-workflows (workflow-log-analysis.yml)._" &&
+		echo &&
 		cat "${body_file}"
-	} > "${comment_file}"
+	} > "${comment_file}" || { echo "::warning::retro-fanout: retro comment assembly failed for ${target_repo}."; return 1; }
 
 	# Query only the current retro window so the week-scoped comment upsert
 	# stays bounded even as the tracker grows over time.

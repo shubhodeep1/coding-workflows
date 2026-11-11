@@ -1,2 +1,0 @@
-<!-- changelog: changed -->
-- **CI wiring guard part 2 step moved from `orchestrate-poll` group 4 to group 0.** `orchestrate-poll (4)` took 15m15s of its 20-minute timeout on main (run 42359183844). The step `Regression tests wired by the CI wiring guard (part 2)` now runs in group 0 only, once per CI run; its name, body, job, `timeout-minutes` and the matrix are unchanged, and group 4 keeps the unblock judge step. Refs #8980.

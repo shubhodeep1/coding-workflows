@@ -426,6 +426,243 @@ What this means for operators: a project no longer waits on fix-up issues for a 
 
 `retrieve` in `scripts/ai_memory.py` adds `records_considered` to its JSON output and its `AI_MEMORY_TELEMETRY` line. It counts the eligible records after the existing status, prune, schema, category, scope and dedupe filters, before the token-budget and `--max` selection, so comparing it with `records_selected` shows whether the budget is cutting relevant records. The disabled, branch-unavailable and git-error paths report `0`. The field is additive: no key is renamed or removed, the injected context text is unchanged, and only a count is emitted. Refs #8845.
 
+- **Re-decompose remaining waves, behind `PERSIST_ORCH_REDECOMPOSE_ENABLED` (default off).** With the repo variable on, the wave judge may add `revise_remaining: true` and a short `revise_reason` to an `in_progress` verdict when what has merged makes the plan for the later waves wrong. Before advancing the wave, the poller then makes one sandboxed model call that re-plans only the issues of later waves that have not been created yet, from fenced untrusted context (the project spec, the pending definitions, what merged, journal steps and the judge's reason). The result is used only if it passes strict checks: schema bounds, a required size estimate of at most 60 minutes per item, no reuse of existing ids, edges only between new items, no forged pipeline markers, no cycles, and the same file-partition guard the decomposer uses. On success the remaining waves and pending definitions are replaced, the previous definitions and layout are kept in the state, and one tracking comment lists removed and added items. Revises are capped per project by `PERSIST_ORCH_MAX_REDECOMPOSE` (default 2). Created issues and the current wave never change, and any failure leaves the plan as it was. With the variable off nothing changes. Phase P10 of the persistent unattended workflows plan; Refs #8427.
+
+- **Evidence broker for the plan stage, behind `PERSIST_EVIDENCE_BROKER_ENABLED` (default off).** With the repo variable on, the planner may end a `STATUS: NOT_CLEAR` plan with `PLAN_SELF_CHECK: BLOCKER: evidence needed` and at most 10 `EVIDENCE_REQUEST:` lines from a fixed menu (default-branch `git log`/`git show`/diffstat, a run's steps or job log tail, a pull request's files or diff, an issue). The new host-side `scripts/evidence_broker.py` refuses other repositories, unsafe or credential paths, malformed ids and lines past the cap one by one, answers the rest with at most 10 read-only GitHub API calls as fenced, scrubbed, redacted and byte-capped results (`PERSIST_EVIDENCE_BROKER_MAX_REQUESTS`, `PERSIST_EVIDENCE_BROKER_MAX_BYTES`), and `scripts/run_plan_codex.sh` re-runs the planner once with them. The attempt journal records the results' sha256 as `evidence_hash`. A plan without requests runs exactly once, and with the variable off nothing changes. Phase P11 of the persistent unattended workflows plan; Refs #8427.
+
+- **Done-check for approved plans, behind `PERSIST_ACCEPTANCE_ENABLED` (default off).** With the repo variable on, the planner names the tests, CI checks and post-merge workflow that show the change is delivered, as `ACCEPTANCE:` lines. plan.yml validates them against the repository with the new `scripts/acceptance_check.py`, stores a valid done-check as an `AI_ACCEPTANCE_V1` marker in the plan comment and records an invalid one in the attempt journal. Implement adds an `## Acceptance` section (status `not run`) to the PR body. An invalid done-check never holds a plan. With the variable off nothing changes. Phase P2 of the persistent unattended workflows plan; Refs #8427.
+
+- **Repair loop before the PR, behind `PERSIST_REPAIR_LOOP_ENABLED` (default off).** With the repo variable on, the implement and review pre-push test gates run the approved plan's done-check tests on every run (red-on-base tests also on the merge-base), and repeat the repair turn while the count of failures this change caused plus unmet done-check targets keeps dropping, up to `PERSIST_REPAIR_MAX_TURNS` (default 3, at most 5) and the step's time budget. The PR body's `## Acceptance` section shows the gate's statuses, and an unmet done-check adds the advisory `ai:acceptance-unmet` label (review removes it once met). With the variable off nothing changes. Phase P3 of the persistent unattended workflows plan; Refs #8427.
+
+- **The conflict resolver joins the repair loop behind `PERSIST_REPAIR_LOOP_ENABLED` (default off).** With the repo variable on, the resolver's pre-push test gate repeats its repair attempt while the failures the merge caused plus unmet done-check targets keep dropping, up to `PERSIST_REPAIR_MAX_TURNS` and the step's time budget, and runs the approved plan's done-check tests on every run. The review round's attempt journal now records the newest gate run (up to the sixth) instead of only the second. With the variable off nothing changes. Refs #8427.
+
+- **Evidence packs for clarify, plan and implement prompts, behind `PERSIST_EVIDENCE_PACK_ENABLED` (default off).** With the repo variable on, the new host-side `scripts/evidence_pack.py` builds a fenced, scrubbed, byte-capped block (`PERSIST_EVIDENCE_PACK_MAX_BYTES`, default 12000) listing trusted same-repo open pull requests that touch the paths in play, the recent default-branch commit subjects for those paths and the latest completed default-branch runs, using at most four read-only GitHub API calls. Each prompt appends it after its dynamic context. The helper fails open, and with the variable off nothing changes. Phase P4 of the persistent unattended workflows plan; Refs #8427.
+
+- **Check after merge, behind `PERSIST_POSTMERGE_VERIFY_ENABLED` (default off).** With the repo variable on, a standalone issue whose PR merges into the default branch and whose approved plan names a post-merge workflow gets an `ai:verify-pending` label and a pending marker. Each poller tick, the new `scripts/persist_postmerge_verify.py` grades the first completed run of that workflow that contains the merge (at most `PERSIST_POSTMERGE_MAX_PER_TICK` issues, default 3). A green run removes the label. A failed run reopens the issue in `ai:planning` and re-triggers planning, or escalates to `ai:needs-human` after `PERSIST_MAX_APPROACHES` re-plans. No run within `PERSIST_POSTMERGE_WINDOW_HOURS` (default 24) marks the check unverified. With the variable off nothing is armed, and leftover labels are removed once their window passes. Phase P5 of the persistent unattended workflows plan; Refs #8427.
+
+- **Budget and progress governor, behind `PERSIST_BUDGET_ENABLED` (default off).** With the repo variable on, the poller runs the new `scripts/persist_budget.py` over each open standalone issue and each open issue in the current orchestrator wave, using the issue's attempt journal. After `PERSIST_REPLAN_AFTER_FAILED_ROUNDS` failed rounds (default 3), two failed rounds with no progress, `PERSIST_MAX_ROUNDS` rounds on one approach (default 5; not while the pull request waits to merge) or a failed check after merge, it re-triggers planning with a new approach. An issue whose pull request is still open is escalated instead, because planning skips it. Once `PERSIST_MAX_APPROACHES` approaches have been tried (default 3), or the work has run longer than `PERSIST_MAX_HOURS` (default 48, counted again from the first step after a person resumes an escalated issue, as are the rounds), it escalates the issue to `ai:needs-human` with a comment instead. Security items, issues already waiting for a person and orchestrator issues owned by another handler (blocked, validating, capacity wait and similar) are left alone, an issue the governor acted on gets no stall recovery in the same tick, and at most 5 decisions act per tick. With the variable off nothing changes. Phase P6 of the persistent unattended workflows plan; Refs #8427.
+
+- **Orchestrator context, behind `PERSIST_ORCH_CONTEXT_ENABLED` (default off).** With the repo variable on, the poller records the merged pull request of each merged orchestrator item in the project state (when its pull request number is already known in that tick), and each issue of a later wave gets a `## Since this plan was decomposed` section listing earlier waves' merged items with their pull requests and files, items the wave judge added, and the newest attempt-journal step, at no extra API cost and at most 4 KiB. The decomposer prompt also lists up to 20 other open orchestrator projects (one API read) and, when the evidence pack is on, an evidence pack for the paths of the plan file the description names. With the variable off nothing changes. Phase P7 of the persistent unattended workflows plan; Refs #8427.
+
+- **Grouping repeated failures, behind `PERSIST_ORCH_FAILURE_GROUPING_ENABLED` (default off).** With the repo variable on, open items of the current orchestrator wave whose newest attempt-journal failure has the same failure key (within `PERSIST_ORCH_GROUP_WINDOW_HOURS`, default 24) are grouped under the item that failed first: the others are paused (stall recovery and budget re-triggers skip them), each gets one explanatory comment, and the owner's stall-judge diagnostics list them. The pause ends when the owner's failure changes, its pull request merges, the item's own failure changes, or `PERSIST_ORCH_GROUP_MAX_HOURS` (default 12) pass. No extra API reads. With the variable off nothing changes, apart from removing leftover grouping fields. Phase P8 of the persistent unattended workflows plan; Refs #8427.
+
+- **Check between waves, behind `PERSIST_ORCH_WAVE_CHECK_ENABLED` (default off).** With the repo variable on, a cleanly completed orchestrator wave no longer advances straight away: the poller holds the boundary for one tick (the head it read predates that tick's merges), then reads the check runs on the integration PR's head (one call, no extra PR read). Only failures of the checks the final merge requires (`ORCH_FINAL_MERGE_REQUIRED_CHECKS`) count, a newer run of the same name hides only a cancelled one (for the CI check, only a re-run in the same Actions run), and a check-runs page cut off by the page limit counts as pending. The wait is bounded per wave boundary, also when the integration PR's head moves. Passing checks advance the wave as before; pending checks hold the wave (recorded once in `wave_check_wait_since`) for up to `PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES` (default 90); failing checks, or checks still pending after the wait, send the wave to the existing wave judge with a fenced `UNTRUSTED WAVE CHECK` block (failing checks, one log tail of at most 8 KiB, unmet done-checks), at most once per head and result per wait period. A missing final PR, an unknown head or unreadable checks fall back to today's behaviour. At most two API reads per tick. With the variable off nothing changes, apart from removing a leftover wait field. Phase P9 of the persistent unattended workflows plan; Refs #8427.
+
+- **Attempt journal behind `PERSIST_JOURNAL_ENABLED` (default off).** New `scripts/attempt_journal.py` keeps one `AI_ATTEMPT_JOURNAL_V1` comment per issue that clarify, plan, implement, the review editor and the conflict resolver append to at each stage end. Plan, implement and the review editor read the fenced journal at the end of their prompts; both pre-push gate repair prompts add an `EDITOR DELETIONS THIS ROUND` section and the new `prompts/mode-persist-journal-rules.txt` (the #8371 fix: update a test to match a deliberate deletion instead of restoring it); the stall judge and the unblock judge get an `attempt_journal` context field. Only comments by the pipeline login are trusted, every path is fail-open, and with the variable unset every prompt and judge context is byte-identical. Refs #8428.
+
+- **A regression test now locks the conflict resolver's pairing of the pre-push gate hook with its template.** When an integration-sync merge leaves both `.claude/hooks/prepush_affected_tests.py` and its `workflow-templates/` twin unmerged with identical index stages, the test checks that the resolver's paired-live report sends only the template to the model, so the runner can copy the resolved template byte for byte onto the live hook, which stays outside the sandbox.
+
+`PAIRED_LIVE_COPIES` in `scripts/review_untrusted_workspace.py` now lists this hook next to `pr_merge_status_guard.py`, and `test_prepush_hook_pair_is_listed_in_paired_live_report` (`tests/test_review_conflict_resolve_sandbox_only.py`) is an ordinary regression test that fails if the pair is dropped or remapped. The guard tests still check that the live hook is never admitted to the sandbox and never taken from the base branch on `orchestrator/project-*` or with `IS_INTEGRATION_SYNC=true`. The host-only template merge in `scripts/review_conflict_prepare.sh` (`_conflict_prepare_guard_hook_template_merge`) still handles only `pr_merge_status_guard.py`, and is out of scope for this heal issue. The strict xfail `test_prepush_hook_integration_sync_conflict_is_resolved_from_template` (`tests/test_conflict_guard_hook_template_merge.py`) marks that gap; once the merge is generalised, strict mode fails CI until the marker is removed. Until then, on an integration-sync PR (an `orchestrator/project-*` head or `IS_INTEGRATION_SYNC=true`, where the host-only take-base fallback is off), a conflict on only the live pre-push hook, with a template that merged cleanly, needs a manual merge, and PR #8436 is not shown to be unblocked by this change. Refs #8973.
+
+- **Heal issues can now group reports by root cause.** Behind `WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED` (off by default) the heal intake gives each workflow-run or phase failure a cause key built from the workflow name, the failing step and the error class (stall, timeout, test failure, crash, API error or other). A new heal issue records that key in a sixth hidden header line. A later report whose error lines differ slightly (so its fingerprint differs) but whose cause matches an open heal issue filed in the last `WORKFLOW_HEAL_CAUSE_GROUPING_DAYS` days (default 3) is recorded as an occurrence on that issue, with its run link, its error signature and, when the evidence pack is on, its `## Evidence pack`, instead of opening a second heal issue for the same problem.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED=false`) |
+| Match window | `3` days (`WORKFLOW_HEAL_CAUSE_GROUPING_DAYS`, 1 to 30) |
+| Extra GitHub API calls | none |
+| Log line | `WORKFLOW_HEAL duplicate reason=cause_match ...` |
+
+What this means for operators: nothing changes until the switch is on; then near-identical failures stop filing separate heal issues, and fingerprint, source and re-issue matches and the lineage cap still take precedence.
+
+- **Heal issues can now target the branch the failing code actually ran from.** Behind `WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED` (off by default) the heal intake looks at the child run the failed release or promotion run was watching, such as the implement run in the 2026-10-27 release-gate incident that ran code from `main` while the release run itself was on `stable`. When that child failed or stalled on another branch and its workflow is in the heal issue's frozen scope, the heal issue targets the child's branch instead, and its body says `Code ran from: <branch>@<sha>`.
+
+The child comes from the runs the failed logs link to, or from the evidence pack's issue-linked runs. Fork runs, orchestrator integration branches, heal fix branches and the `promote-candidate` mirror are never used. The new target must still pass the issue-body routing check and must exist; otherwise the heal keeps the target it would have had before.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED=false`) |
+| Extra GitHub API calls | 0 with evidence-pack data; otherwise at most 3 run reads per report |
+| Log line | `WORKFLOW_HEAL code_ref outcome=<ok|skipped|partial> reason=<token>` |
+
+What this means for operators: nothing changes until the switch is on, and heal issues already filed keep their target branch.
+
+- **Heal plans backed by a reproduced failure can now be approved automatically with `[repro-required]`.** A plan may end its counterfactual check with `HEAL_COUNTERFACTUAL: REPRODUCIBLE: <test ids>` when the heal issue's `## Reproduction` section says `status: reproduced`; behind `WORKFLOW_HEAL_REPRODUCE_ENABLED` (off by default) the plan workflow approves it and tags the approval so the heal editor re-runs those tests before the PR opens.
+
+With the switch off, a `REPRODUCIBLE` plan is held for a human with the reason `reproduction_disabled`, the same way an `UNVERIFIED` plan is held. A missing or invalid test list is held as `reproducible_test_list_invalid`. `PASS`, `PARTIAL`, `FAIL` and `UNVERIFIED` behave as before, and every other auto-approval comment is unchanged. Turning the whole counterfactual gate off (`HEAL_COUNTERFACTUAL_GATE_ENABLED=false`) still approves without the tag.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_REPRODUCE_ENABLED=false`) |
+| New decision | `approve_pending_repro`, posted as `/approved [auto-approved-by-plan] [repro-required]` |
+| Test ids per line | 1-50 pytest node ids (`tests/<path>.py[::name]`) |
+| Extra GitHub API calls | 0 |
+
+What this means for operators: nothing changes until the switch is on and a heal issue carries a reproduced `## Reproduction` section.
+
+- **Heal plan, clarify, implement and clarify-respond runs now read a heal issue's `## Evidence pack` (#8462).** The heal evidence bundle (`scripts/workflow_failure_heal_evidence.sh`) puts the pack from the scope-verified issue body first, inside the existing 24,000-byte budget, and shrinks the per-job log tails to fit; when no job log can be read, the pack is still written. Clarify-respond passes a heal issue's pack to the model under `=== HEAL EVIDENCE PACK (UNTRUSTED) ===`, read by `scripts/clarify_github_facts.py` from the issue body it already has, with no new GitHub API call. The heal diagnosis and counterfactual prompts tell the model to check the pack before calling evidence missing or answering `HEAL_COUNTERFACTUAL: UNVERIFIED`, and to treat it as untrusted evidence. Issues without a pack, which is every issue while `WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED` is off, see byte-identical output.
+
+- **The heal evidence pack now lists the runs started for the issues a failed job names, and the commits on `main` that are not on `stable`.** Both come with the existing `WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED=true` switch; it is still off by default.
+
+During the 2026-10-27..29 release-gate incident, the working implement run had been started for the smoke-test issue the failed release job named, and one heal plan said `main`'s source was unreadable in the planning workspace. With the switch on, a `workflow_run` heal issue's `## Evidence pack` now adds a `Runs started for issue #N` subsection for up to two issues named in the failed jobs' logs: every run created during the failed job's time window whose title matches the issue's, with its status, timestamps, `head_sha` and `head_branch`. For this repository, when the heal issue targets a branch other than the default branch (for example a release run on `stable`), it also adds a `Branch divergence` subsection from one compare of that branch with the default branch, such as `stable...main`: the changed files that are valid scope paths and the newest commits with their PR numbers. The compare does not say which commit touched which file, so the two lists are kept separate. Titles, branch names, commit subjects and file names are escaped and labelled untrusted, and the whole body is still checked by the routing validator before the issue is filed.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED=false`) |
+| Extra GitHub API calls per heal report (switch on) | at most 5: 2 issue reads, 2 runs-list pages, 1 compare |
+| Issues followed per report | 2 |
+| Rendered per subsection | 10 runs per issue; 20 files and 10 commits for the divergence |
+| New `evidence_pack` reason tokens | `issue_unreadable`, `runs_unreadable`, `runs_truncated`, `compare_unreadable`, `compare_malformed`, `job_window_unavailable`, `requests_failed` |
+
+What this means for operators: with the switch off, heal issues are byte-identical to before and no call is made. With it on, a failed read never blocks the heal issue; it shows up as `WORKFLOW_HEAL evidence_pack outcome=partial reason=<token>`.
+
+- **Heal issues can carry an evidence pack: the failed run's own step timeline and the linked runs' head commit and branch.** Turn it on with the repo variable `WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED=true`; it is off by default.
+
+During the 2026-10-27..29 release-gate incident, heal plans ended `HEAL_COUNTERFACTUAL: UNVERIFIED` because the issue named the failing step but showed neither how long each step of the failed run took nor which commit and branch the linked runs ran on. With the switch on, the heal intake adds an `## Evidence pack` section to the issue body. It holds the failed run's step timeline, with `[LONG]` marks, and the linked runs' timelines, each with a `head_sha` / `head_branch` line. The pack is built from run and job data the intake already downloaded, after the heal scope is frozen, so it adds no GitHub API calls and never changes the scope marker. Job, step, run and branch names are escaped and labelled untrusted, and the whole body is still checked by the routing validator before the issue is filed.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED=false`) |
+| Pack size cap | 12000 bytes by default (`WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES`, clamped to 1024-20000) |
+| Extra GitHub API calls | 0 |
+| Log line | `WORKFLOW_HEAL evidence_pack outcome=ok\|partial\|skipped bytes=<n> [reason=<token>] [truncated=true]` |
+
+What this means for operators: with the switch off, heal issues are byte-identical to before. With it on, a heal plan can read step durations and head refs straight from the issue. A pack that hits the cap is cut, closed cleanly and logged as `outcome=partial reason=truncated`.
+
+- **New pure helper `classify_failure_shape()` in `scripts/workflow_failure_heal.py` sorts a heal failure's error signature into one of six classes.** Nothing calls it yet.
+
+It takes the `error_signature()` output, the failed job's conclusion and whether failing tests were found, and returns the first match in this order: `stall`, `timeout` (a `timed_out` conclusion or the signature), `test_failure` (failing tests found or the signature), `crash`, `api_error`, otherwise `other`. Matching is case-insensitive because `error_signature()` lowercases every line it keeps.
+
+`error_signature()` also replaces every number with `<n>`, so the `exit code 13[4-9]` (crash) and `HTTP [45][0-9][0-9]` (api_error) patterns cannot match a signature. An optional `raw_error_text` input, the failed job's error lines before normalisation, is checked against just those two patterns. Without it, an exit-code crash or a bare HTTP status error is classed `other`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Classes | 6 |
+| Extra GitHub API calls | 0 |
+| Default behaviour | unchanged (no caller yet) |
+
+What this means for operators: nothing changes until the heal trends (P3) and root-cause grouping (P5) phases wire it in.
+
+- **Heals approved with `[repro-required]` now open a PR only when their tests really fail at the failing commit and pass after the fix.** The heal editor runs the check behind `WORKFLOW_HEAL_REPRODUCE_ENABLED` (off by default); with the switch on, the heal pre-push gate also gets a dependency venv, so pytest files are checked instead of coming back `unverified`.
+
+When the approving comment carries `[repro-required]`, the heal editor reads the test ids from the approved plan's `HEAL_COUNTERFACTUAL: REPRODUCIBLE:` line and the failing commit from the heal issue's `Head SHA` line. It runs `scripts/heal_reproduce.sh` on the edited tree and, when every test passes there, once more at the failing commit. Any test that still fails, passes at the failing commit or cannot be checked holds the heal: nothing reaches the checkout, the issue gets a comment with the per-test result and the `ai:needs-human` label. A `[repro-required]` approval with the switch off is held too, never skipped.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_REPRODUCE_ENABLED=false`) |
+| New exit code | 43, mapped to the refusal reason `repro_not_fixed` |
+| Reproduction runs | at most 2, each capped at half the remaining gate budget (max 1 hour) |
+| Extra GitHub API calls | 0 |
+| Log line | `HEAL_ISOLATED_EDITOR phase=repro_check outcome=<fixed|not_fixed|unverified> reason=<reason> tests=<n>` |
+
+What this means for operators: nothing changes until the switch is on and a plan asks for reproduction. Test code only ever runs in the network-less, credential-free gate container.
+
+- **The heal intake can now check whether a CI failure's failing tests really reproduce, and shows the answer in the heal issue.** Behind `WORKFLOW_HEAL_REPRODUCE_ENABLED` (off by default), a self-repo `workflow_run` report whose job logs name failing test files runs them through `scripts/heal_reproduce.sh` at the failing commit against the last green run of the same workflow on the same branch.
+
+The heal issue gets a `## Reproduction` section, marked as untrusted evidence, with `status:`, `reason:`, `failing_at:`, `passing_at:` and one line per test. Only `reproduced` changes anything: a diagnosis that called the failure `transient` is filed as `inconclusive` instead, and the `status: reproduced` line lets the planner pick `HEAL_COUNTERFACTUAL: REPRODUCIBLE`. `pre_existing`, `passes_at_failing_sha` and `unverified` (with its reason, for example `no_baseline` or `timeout`) are shown and change nothing. The last-green lookup is a reusable `last_green_run` helper in `scripts/workflow_failure_heal.py`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_REPRODUCE_ENABLED=false`) |
+| Extra GitHub API calls | at most 1 per report (the last-green lookup), none when no failing tests were extracted |
+| Wall time | 10 minutes (`WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES`, clamped 1-20 by the intake) |
+| Intake job timeout | 156 minutes (was 130), to cover the reproduction wall |
+| Log line | `WORKFLOW_HEAL reproduction outcome=<status> reason=<reason> tests=<n> [baseline=<reason>]` |
+
+What this means for operators: with the switch off the heal issue body and the API calls are byte-identical to before. Test code only runs in the network-less, credential-free gate container.
+
+- **A heal merged into `stable` now gets a follow-up heal issue on `main` when the same patch still applies there.** Behind `WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED` (off by default), when a heal PR (a same-repository `ai/issue-<N>` branch whose issue is a heal) merges into `stable`, the PR-close workflow checks the merged patch against the default branch with `git apply --check`. If it applies and no port issue exists yet, it files one heal issue targeting the default branch with the patch summary and `Refs #<N>`. The heal pipeline itself still never opens PRs on two branches. This runs only in coding-workflows; consumer repositories are unaffected.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED=false`) |
+| Extra GitHub API calls | 0 for non-heal or non-`stable` PRs; otherwise 1 GraphQL read and at most 1 issue create |
+| Log line | `WORKFLOW_HEAL port outcome=<filed|not_needed|not_applicable>` |
+
+What this means for operators: nothing changes until the switch is on; with it on, each heal fixed on `stable` is carried over to `main` through the normal heal pipeline.
+
+- **Heal plans that only raise a timeout while runs got slower are no longer auto-approved.** Behind `WORKFLOW_HEAL_TREND_ENABLED` (off by default), when a stall or timeout heal issue's `## Run-time trend` says `regression=true`, the plan must name the file or commit that made the runs slower in a `HEAL_REGRESSION: <file or commit>` line, or explain it in a `HEAL_REGRESSION: not a regression: <reason>` line. A plan without that line is held (`regression_line_missing`), and so is a plan that only changes `timeout-minutes`, `*_TIMEOUT*`, `PHASE_TIMEOUT` or `*_BUDGET*` in the failing workflow (`budget_only_plan`), whatever its line says.
+
+The check runs in the plan workflow's automatic approval step, right after the heal counterfactual gate, and posts the same kind of hold comment. The heal intake and heal planner prompts now ask for the line.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_TREND_ENABLED=false`) |
+| Hold reasons | `regression_line_missing`, `budget_only_plan`, `heal_regression_check_unavailable` |
+| Extra GitHub API calls | none |
+| Log line | `AI_PHASE_GATE_V1 phase=plan gate=heal_regression ...` |
+
+What this means for operators: nothing changes until the switch is on; then a held heal plan still goes ahead with a human `/approved`. The orchestrator poller's stall recovery does not apply this check yet.
+
+- **New helper `scripts/heal_reproduce.sh` checks whether a heal's failing tests really fail at the failing commit and pass at the last green one.** Nothing calls it yet; the heal intake and the heal editor will call it behind `WORKFLOW_HEAL_REPRODUCE_ENABLED` (off by default).
+
+The helper takes the failing-test list, the commit to test (or an existing worktree) and the last green commit. It fetches what a shallow checkout is missing, adds a temporary worktree and runs the list in the existing credential-free pre-push gate container, which re-runs every failure on the merge-base. It writes a `heal_repro.v1` result: `reproduced` only when every listed test fails at the failing commit and passes at the last green one, `not_reproduced` with `pre_existing` or `passes_at_failing_sha`, and `unverified` with the gate's reason (`timeout`, `no_merge_base`, ...) when it cannot tell. The worktree and temp files are removed on success, failure and timeout.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (the callers gate on `WORKFLOW_HEAL_REPRODUCE_ENABLED=false`) |
+| Wall time | 10 minutes (`WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES`, 1-60), then `unverified` / `timeout` |
+| Fetch depth ladder | 50, 200, 1000 commits, then `no_merge_base` |
+| Extra GitHub API calls | 0 |
+| Log line | `HEAL_REPRODUCE outcome=<status> reason=<reason> tests=<n>` |
+
+What this means for operators: nothing changes until a caller is wired and the switch is turned on. Test code only ever runs in the network-less, credential-free gate container.
+
+- **Stall and timeout heal issues can now show a run-time trend.** Behind `WORKFLOW_HEAL_TREND_ENABLED` (off by default) the heal intake adds a `## Run-time trend` section to heal issues whose failure is a stall or a timeout: per UTC day, the number, median and p90 duration of the last 7 days of successful runs of the failing workflow and of the workflows of its linked runs. One line, `- regression=<true|false> first_slow_day=<YYYY-MM-DD|none> history=<complete|truncated>`, says whether the latest day is markedly slower than before and on which day the slowdown started, so a heal plan can look for the change that made runs slower instead of only raising a timeout.
+
+A table whose history could not be read completely is marked `history=truncated` and never reports a regression. Other failure shapes get no section and no extra API call, and with the switch off the heal issue is unchanged.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_TREND_ENABLED=false`) |
+| Regression ratio | `1.5` (`WORKFLOW_HEAL_TREND_REGRESSION_RATIO`) |
+| Workflows per report | at most 3 |
+| Extra GitHub API calls | at most 6 per stall / timeout report (2 pages per workflow) |
+| Log line | `WORKFLOW_HEAL trend outcome=<ok|partial|skipped> ...` |
+
+What this means for operators: nothing changes until the switch is on; then stall and timeout heal issues carry the trend, and the trend never blocks an issue from being filed.
+
+- **Stall and timeout heal issues can now list suspect commits.** Behind `WORKFLOW_HEAL_TREND_ENABLED` (off by default) the heal intake adds a `## Suspect commits` section after the run-time trend: the commits merged since the failing workflow last passed (short SHA, subject and the PR number of a squash merge), the pipeline files that changed in that range (`scripts/`, `.github/workflows/`, `workflow-templates/`, `prompts/`), and, when the trend reports a regression, the default-branch commits merged on the first slow day. A heal plan can then start from the change that most likely made runs slower.
+
+Commit subjects and file names are shown as untrusted data and escaped. For a consumer report the first-slow-day list comes from that repository's own default branch. The intake reuses the last-green lookup the reproduction step already made, other failure shapes get no section and no extra API call, a failed read never blocks the issue, and with the switch off the heal issue is unchanged.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_TREND_ENABLED=false`) |
+| Commits shown | newest 15 of the range (the caption says when GitHub listed only the oldest part of a long range), plus up to 15 from the first slow day |
+| Pipeline files shown | at most 20 (aggregate for the range) |
+| Extra GitHub API calls | at most 3 per stall / timeout report; at most 9 with the trend |
+| Log line | `WORKFLOW_HEAL suspect_commits outcome=<ok|partial|skipped> ...` |
+
+What this means for operators: nothing changes until the switch is on; then stall and timeout heal issues name their likely culprits, without extra calls for other failures.
+
+- **Heal issues can now let the fix touch the files that changed since the workflow last passed.** Behind `WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED` (off by default) the heal intake adds up to 8 pipeline files changed between the failing workflow's last green run and the failing commit to the heal issue's frozen scope, so a regression in a script the failing workflow only calls (as in release run 40876853022, `scripts/implement_step_prepush_test_gate.sh` and `workflow-templates/.claude/hooks/prepush_affected_tests.py`) is no longer held by the plan's out-of-scope gate.
+
+The files come from GitHub's compare data, never from logs or the diagnosis. Removed files, a renamed file's old name, anything outside `scripts/`, `.github/workflows/`, `workflow-templates/` and `prompts/`, anything under a top-level `.claude/` or `.github/ai/`, and files missing at the scope commit are left out. The largest changes come first, and the scope's 20-path cap is unchanged. Only reports of this repository from a same-repository run qualify. When the run-time trend is also on, the suspect-commits step reuses this lookup instead of repeating it.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED=false`) |
+| Files added to the scope | at most 8, ranked by lines changed |
+| Extra GitHub API calls | 2 per report (0 when suspect-commit data already exists); at most 9 with the trend when the compare succeeds |
+| Log line | `WORKFLOW_HEAL suspect_scope outcome=<added|none|partial|skipped> ...` |
+
+What this means for operators: nothing changes until the switch is on, and heal issues already filed keep their scope.
+
+- **Merged workflow heals are now checked after the merge.** Behind `WORKFLOW_HEAL_VERIFY_ENABLED` (off by default) a new `heal-verify` job on the heal intake's hourly schedule looks at heal issues closed in the last 7 days by a merged pull request. It waits for the first decisive run of the failed workflow on the target branch at or after the merge commit. A pass leaves a `held` marker; a failure at the same step reopens the heal with a `## Fix did not hold` comment, or links the newer heal when the intake already filed one in the same lineage; a failure at another step is recorded as inconclusive. A heal whose fix fails a second time also gets `ai:workflow-heal-escalated` and a CRITICAL alert.
+
+Only this repository's release, CI and scheduled-check heals are verified; consumer and pull-request heals are skipped. Markers count only when the pipeline account wrote them, fork and pull-request runs are ignored, and a failed GitHub call never writes anything: the next hourly run retries.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default | off (`WORKFLOW_HEAL_VERIFY_ENABLED=false`) |
+| Heals checked per hour | 3 (`WORKFLOW_HEAL_VERIFY_MAX_PER_TICK`, 1-10) |
+| Window | heals closed in the last 7 days |
+| GitHub API calls | 1 list query per hour, then at most 3 reads per heal |
+| Log line | `WORKFLOW_HEAL_VERIFY outcome=<held|recurred|recurred_lineage|inconclusive|pending|skip|error> ...` |
+
+What this means for operators: nothing changes until the switch is on; then a heal whose fix did not hold comes back on its own instead of waiting for the same failure to be reported again.
+
+- **Pre-push test gate: `--tests-file` runs an explicit list of tests (#8461).** `prepush_affected_tests.py run` and `scripts/prepush_test_gate_run.sh` accept `--tests-file FILE`, one `path[::name]` per line (for example `tests/test_x.py::test_y`). The listed tests replace the affected-test selection, and failures are still re-run on the merge-base to separate those the change caused from inherited ones. A single listed test that does not exist on the merge-base (for example one the change added) counts as caused by the change, not inherited; when several tests of one file are listed and pytest cannot find one of them on either tree, or a listed test is missing only on the change's tree, the file is reported as `unverified` (`baseline_error`) instead. Lines that are absolute, contain `..`, start a segment with `-`, point outside the repository or at a file that is not a test, name an invalid test, or name a test in a file other than `.py` are skipped and reported in `unverified` by line number, never with their text. The wrapper copies the file into its private run root and mounts it read-only at `/gate/tests.txt`; a missing, symlinked or oversized file (over 256 KiB) gives a synthetic `unverified` result instead of running the normal selection.
+
+  This is for the heal reproduction runner, which will run the failing tests of a CI run in the credential-free gate container. Existing callers and consumer repos see no change unless they pass the flag, and the container hardening is unchanged.
+
+- **The workflow log analyzer now tells a missing log archive or an unknown duration apart from a genuine 0s run.** `scripts/analyze_workflow_logs.py` copies the collector's `log_download_status`, `jobs_fetch_status` and `diagnostic_failure_reason` into each run in `analysis_context.json` (non-empty strings only, capped at `RUN_DIAGNOSTIC_FIELD_MAX_CHARS` = 512 characters), adds `duration_known` (false when `run_started_at` or `updated_at` is missing, empty or unparseable; left out for legacy rows that carry neither key), and adds an `unknown_duration_count` to the top-level summary and to every `per_repo` and `per_workflow_family` entry (`null` for an entry that comes only from `summary_stats` and has no run rows to check). Additive only: `duration_seconds`, the average and p50/p95 durations, list ordering and every collector output are unchanged. Refs #8975.
+
+- **The conflict resolver now logs why it exited.** `scripts/review_conflict_resolve.sh` prints one `RESOLVER_TERMINAL` line from its EXIT trap with the run id, run attempt, PR number, the number of resolver attempts started, per-attempt wall-clock milliseconds, an exit class (`ok`, `timeout`, `no_progress`, `markers`, `fingerprint`, `scope`, `commit` or `other`), the exit code, the fingerprint-violation count and the residual-marker count. Every value is an integer or an enum token. The record is fail-open: it runs in a subshell, never changes the exit code and never skips the integration-judge dispatch. No new environment variables or GitHub API calls. Refs #9033.
+
+- **The check-failure triage post step now says why it stopped.** The `Post check-failure triage issue` step of `.github/workflows/check_failure_triage.yml` prints exactly one `CHECK_TRIAGE op=post stage=<code> pr=<n>` line on every exit path. The codes are `body_missing`, `marker_invalid`, `metadata_invalid`, `token_missing` (the issues token is empty; only its emptiness is tested), `create_failed`, `url_missing` and `created`. `create_failed` adds `http_class=<4xx|5xx|unknown>` (from the first `HTTP NNN` token in gh's stderr, which is captured to a run-local file and never printed) and `attempts=1` (issue creates are single-attempt). Failures still fail the step, no GitHub API call is added, and the existing `CHECK_TRIAGE created issue=...` and `CHECK_TRIAGE op=supersede outcome=skip_create` lines are unchanged. Refs #9033.
+
 ### For contributors
 
 - New `workflow_call` outputs: `failure_owner` (`harness`, `project`, `mixed` or `none`), `harness_report`, `harness_stage`, `harness_reason` and `harness_fp`. The existing outputs are unchanged.
@@ -1847,6 +2084,56 @@ Before each job, `.github/actions/claude-pool-token` probes every account and `c
 | Unserved work in a 6-week, 10-account simulation above pool capacity | 609 → 159 (% of one account's weekly quota) |
 
 What this means for operators: weekly use should track each account's reset schedule, so less quota is thrown away at resets and the pool is fully gated less often. The daily usage report and the hourly near-cap alert are unchanged; only the order jobs try accounts in changes.
+
+- **The review gate no longer re-reviews a head that already had a clean review.** A full review whose editor changed nothing now ends its "AI autofix editor summary" comment with a hidden `review-autofix-clean:v1` marker for the head, base and review-support SHA. Later runs on the same head (sweep cron, poller dispatches, manual dispatches) skip at the gate with `skip_reason=clean_same_head` and make no model call.
+
+A Claude pool audit for 2026-11-05 to 2026-11-07 found seven e2e smoke PRs re-reviewed 68-113 times each on unchanged heads, about $3,891 (83.5% of pool spend). Each round ended with `Change status: not-edited`.
+
+| What re-arms a review | |
+| --- | --- |
+| A new head, a moved base, or a new review-support SHA | the marker no longer matches |
+| A newer comment or submitted review from anyone other than the pipeline account or a bot | `reason=newer_human_comment` / `newer_review` |
+| A newer pipeline failure, partial-finalize or no-op comment, a newer single-issue security-pass result, or a freshness CI-failure marker for the head | `reason=newer_failure_marker` / `newer_security_pass_result` / `freshness_ci_failed` |
+| A conflicted or not-yet-computed PR, a `force_rb_judge` or `post_sync_test_repair` dispatch, a retargeted base, a reopened PR | checked before the marker |
+
+The `force-review` label and `[force-review]` title marker still force one full review per head, but no longer re-review a head that already has a clean marker. Any lookup failure runs the review. Set the repository variable `AUTOFIX_SKIP_CLEAN_SAME_HEAD=false` to turn the skip off.
+
+Refs #8952.
+
+- **Auto-heal remediation plans that add an index are no longer held for a person.** A pipeline-authored auto-heal remediation issue may now change `db/contracts/<name>.yml` and top-level `tests/test_<name>.py` files even when its `files_touched` list does not name them.
+
+The remediation issue's `files_touched` list is built when the monitor files it, before any plan exists, so it cannot name the index contract and index test that a plan adding an index must also change. On 2026-11-06 the consumer's remediation issue for a `POST /api/bet` SlowRoute was held with `plan_files_outside_files_touched` for exactly `db/contracts/streak_claim_ledger.yml` and `tests/test_streaks_quest_contracts_indexes.py`, and stall recovery skips such holds by design.
+
+`scripts/files_touched_scope_guard.py` now treats those two path shapes as in scope when the issue was authored by the pipeline login and its body carries the `<!-- auto-heal-remediation:v1 ` marker. The plan auto-approval gate and the implement-time files_touched guards (preflight, commit and the pre-push allow-list narrowing) use the same check, so they agree. A person who copies the marker into an issue gets nothing, nested paths (`tests/sub/test_x.py`, `db/contracts/sub/x.yml`), `tests/conftest.py` and other paths stay out of scope, and `ai:scope:` label scopes, heal scopes and automation-path grants are unchanged.
+
+- CI: the step `Regression tests wired by the CI wiring guard (part 2)` now splits its test functions across 4 local pytest processes in `orchestrate-poll` group 0, which took 15m15s of its 20 minutes on main (run 42426489708). Each collected test function runs exactly once, a listed module that collects nothing fails the step, and a shard without exit code 0 fails it. The step name, its `if: strategy.job-index == 0` guard, its 53-module set, the job, `timeout-minutes` and the matrix are unchanged. The step timings of that run could not be read, so the choice is an estimate from test counts, not a measurement. Refs #9021.
+
+- **Claude engine judges and validation harness sandbox steps moved from `orchestrate-poll` group 3 to group 4.** `orchestrate-poll (3)` took 15m16s of its 20-minute timeout on main (run 42436104717). The steps `Orchestrator judges on the Claude engine tests (Phase 5c)` and `Validation harness sandbox tests` now run in group 4 only, once per CI run; their names, bodies, job, `timeout-minutes` and the matrix are unchanged, and group 3 keeps its slice and the single-file module step. Refs #9037.
+
+- CI: the step `Workflow failure heal contract and driver tests` in `tests-heal-plan-and-validation`, which took 17m00s of its 20 minutes on main (run 42445170048), no longer runs 14 of its modules in two serial pytest commands after its local shards. Those modules now join `tests/test_workflow_failure_heal.py` in the step's existing 4 local pytest processes, split by test function. Each collected test function runs exactly once, a listed module that collects nothing fails the step, and a shard without exit code 0 fails it. The job, the step name, `timeout-minutes` and the 15-module set are unchanged, and operators have nothing to do. The step timings of that run could not be read, so the saving is an estimate from test and subprocess counts, not a measurement. Refs #9045.
+- CI: the `Install actionlint` step in `static-checks` now runs the actionlint download up to 4 times, with a 20-second pause between runs, and each run keeps curl's own retries (up to 5, backing off 1 to 16 seconds). curl's retries alone stop about 31 seconds after the first failure, so HTTP 504 responses failed the step on runs 42465084748 and 42469096786; the step now rides out about 3 minutes of 504s and fails with an `::error::` line naming the curl exit code if every run fails. The sha256 check is unchanged. Refs #9045.
+
+- **Two test steps moved out of the CI job `orchestrate-poll (0)`.** That matrix group took 15m34s of its 20-minute timeout on `main` (run 42445170048, budget-watch issue #9046). A job that reaches its timeout turns CI red even when the code is fine. `Review synthesize-smoke contract test` and `Clarify loop guard unit tests` now run at the end of `tests-hooks-and-orchestrator`, the 20-minute job with the fewest subprocess call sites. Each step runs unchanged, under the same name, once per CI run; only its group-0 guard is gone. The run's step timings could not be read, so the pick is an estimate from the planning sandbox and from test and subprocess counts, not a measurement. No job was added or renamed, no `timeout-minutes` changed, the matrix is unchanged, and `CI / lint` is unchanged; operators have nothing to do. If any job comes near its timeout, the next `budget-watch` run on `main` opens an issue for it. `tests/test_ci_poll_test_sharding.py` now checks that each moved step runs once, unguarded, in its new job, after that job's setup, and still names every module.
+
+Refs #9046.
+
+- **The actionlint download in the CI job `static-checks` now rides out longer GitHub outages.** CI run 35615284953 failed on an HTTP 504 from the release download, and CI run 42465389350 (PR #9038) hit the same 504 again: the old `--retry 3 --retry-delay 0` used up curl's 1s/2s/4s exponential backoff in about 7 seconds. The `Install actionlint` step now runs curl with `--retry 5 --retry-all-errors --retry-delay 15 --retry-max-time 300`, so it makes up to 5 retries (6 attempts) a fixed 15 seconds apart, which rides out about 75 seconds of fast-failing 504s; the 300-second window only caps the total retry time. `--connect-timeout 20 --max-time 120` still bound each attempt. actionlint still runs, the pinned version and URL are unchanged, and the sha256 check still verifies the tarball after the download; operators have nothing to do. `tests/test_ci_actionlint_install_retry.py` now also checks that the retry delay is a fixed 10 to 60 seconds and that the retry window is bounded and long enough for every retry when attempts fail fast.
+
+Refs #9053.
+
+### For contributors
+
+`path_in_scope`, `evaluate_allowlist` and `evaluate` take `allow_auto_heal_companions` (default `False`), computed only by `auto_heal_companions_allowed`. The issue-body CLI mode reads the existing `--issue-meta-file` and `--pipeline-login` flags; `implement.yml` exports the login it already reads as `IMPLEMENT_SCOPE_PIPELINE_LOGIN` after a shape check. A plan-gate run without a pipeline login holds with `identity_unavailable` in this case, so `plan.yml` reads the login once and re-runs. An approving record carries `auto_heal_companions: true` when the rule applied.
+
+- **CI wiring guard part 2 step moved from `orchestrate-poll` group 4 to group 0.** `orchestrate-poll (4)` took 15m15s of its 20-minute timeout on main (run 42359183844). The step `Regression tests wired by the CI wiring guard (part 2)` now runs in group 0 only, once per CI run; its name, body, job, `timeout-minutes` and the matrix are unchanged, and group 4 keeps the unblock judge step. Refs #8980.
+
+- **Three test steps moved out of the CI job `tests-heal-plan-and-validation`.** That job took 16m08s of its 20-minute timeout on `main` (run 42373283876, budget-watch issue #8993). A job that reaches its timeout turns CI red even when the code is fine. `Orchestrate lib unit tests` now runs at the end of `tests-release-and-log-analysis`, the 20-minute job with the fewest test functions, and `Merge-base freshness gate (pr_checks_lib) tests` and `Conflict-dispatch active-run visibility contract tests` run at the end of `tests-hooks-and-orchestrator`, the one with the fewest subprocess call sites. Each step runs unchanged, under the same name, once per CI run, and they go to two jobs so that no single job takes all of them. The run's step timings could not be read, so the pick is an estimate from the planning sandbox and from test and subprocess counts, not a measurement. No job was added or renamed, no `timeout-minutes` changed, and `CI / lint` is unchanged; operators have nothing to do. If any job comes near its timeout, the next `budget-watch` run on `main` opens an issue for it. `tests/test_ci_poll_test_sharding.py` now checks that each moved step runs once, in its new job, after that job's setup.
+
+Refs #8993.
+
+- **The wiring-guard part 1 step and the Node test pair moved out of the CI job `tests-heal-plan-and-validation`.** That job took 17m59s of its 20-minute timeout on `main` (run 42413379208, budget-watch issue #9018). A job that reaches its timeout turns CI red even when the code is fine. `Regression tests wired by the CI wiring guard (part 1)` now runs at the end of `tests-promote-stall-and-review`, which checks out the same way as the heal job (depth 1, no `.claude/` live-copy preparation). `Set up Node 22 for the claude-pool-broker Worker tests` and `claude-pool-broker Worker tests (vitest)` now run, in that order, at the end of `tests-release-and-log-analysis`. Each step runs unchanged, under the same name, once per CI run, and the moves go to two jobs so that no single job takes both. The run's step timings could not be read, so the pick is an estimate from test and subprocess counts and the Node pair's install cost, not a measurement. No job was added or renamed, no `timeout-minutes` changed, and `CI / lint` is unchanged; operators have nothing to do. If any job comes near its timeout, the next `budget-watch` run on `main` opens an issue for it. `tests/test_ci_poll_test_sharding.py` now checks that each moved step runs once, in its new job, after that job's setup.
+
+Refs #9018.
 
 ### For contributors
 
@@ -4189,6 +4476,79 @@ What this means for operators: a PR stuck in an "Editor changes lost" loop on wh
 - **Write-guard config errors name the right file when the repository path contains `*`, `?` or `[`.** The `config=` path in `WRITE_GUARD_CONFIG_ERROR` is now repo-relative only for a config file that is really under the repository root.
 
 `write_guard_check()` in `scripts/write_guard.sh` stripped the repository root from the logged config path with an unquoted pattern, so glob characters in the root were treated as wildcards. A root such as `root[ab]*?` could fail to strip its own path, or strip a sibling directory's path that only matched as a glob. The root is now quoted inside both expansions and matched literally. Test: `tests/test_write_guard_root_pattern_chars.py`. Refs #8924.
+
+- **The conflict resolver now handles conflicts on the live pre-push gate hook instead of parking the PR.** When `.claude/hooks/prepush_affected_tests.py` and its `workflow-templates/.claude/hooks/prepush_affected_tests.py` twin conflict with identical index stages, the model resolves only the template and the runner copies it byte-for-byte over the live hook, the same #6595 pairing path `.claude/hooks/pr_merge_status_guard.py` already used.
+
+Before this fix the live copy was refused as a dot-directory path, so the whole conflict set failed closed with `sandbox_path_host_only` and no model ran. Integration-sync PRs escalate that reason at once, which is how project #8434's PR #8436 was parked in run 42360075171 on a merge with main that also touched five ordinary files. The pair is now listed in `PAIRED_LIVE_COPIES` in `scripts/review_untrusted_workspace.py`. A live copy whose template conflicts differently still fails closed.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Paired live hooks | 2 (`pr_merge_status_guard.py`, `prepush_affected_tests.py`) |
+| Failing run | 42360075171 (PR #8436, `.claude/hooks/prepush_affected_tests.py`) |
+
+What this means for operators: a merge that changes the pre-push gate hook on both sides no longer needs a manual merge. A PR already parked on this conflict still needs a resolved head pushed to resume, and the fix reaches the resolver once it is on the workflow support ref the review workflow runs from.
+
+- **The review-blocked judge's close-and-reissue `ai:closed` swap no longer replaces the whole label set.** `_resilient_phase_swap` in `scripts/review_rb_judge.sh` used to build a full label list from its first GET and send it with a PUT for terminal targets (`ai:merged` / `ai:closed`), so any label added in between was erased, including a concurrent `ai:merged` from `issue_pr_status.yml` and non-phase labels such as `ai:orchestrator-managed`. Terminal targets now use the same additive pattern as non-terminal ones: POST the target, DELETE only the phase labels the first GET saw, then run a reconciliation GET. If `ai:merged` appeared during an `ai:closed` swap, merge evidence wins and `ai:closed` is removed again. The PUT and its POST fallback are gone; a failed POST now warns and returns 1 (the only terminal caller uses `|| true`). Refs #8941.
+
+- **The unblock judge no longer reports a failed run-log download as attached.** `unblock_select_run_log` in `scripts/unblock_judge.sh` used to pipe `gh run view --log-failed` through `tail ... || true` and always log `op=run_log outcome=attached run=<id>`, even when the download failed or was empty, so the judge prompt silently lost its log evidence. The download now goes to a temp file under `RUNTIME_DIR`; only when `gh` exits 0 and the output is non-empty is the existing 400-line / 120000-byte tail written and `outcome=attached` logged. Otherwise the tail file is reset to empty and the next bound candidate is tried (the 3-candidate cap is unchanged). When at least one candidate was bound but no download produced output, the `outcome=omitted` line now carries the new additive `reason=log_unavailable`, which takes precedence over `run_unreadable` and `run_unbound`. Log contents are never printed. Refs #8941.
+
+- **The consumer drift audit no longer warns about drift that an open sync pull request already fixes.** It warns again if that pull request stays open for 3 days.
+
+The daily `audit_consumer_drift.yml` run sent a Telegram WARNING whenever a consumer drifted from the `stable` release, even when the consumer had an open `auto/update-workflows-*` or `ai-sync/stable` pull request that restores every wrapper. That drift is now reported at `DEBUG` with a "nothing to do" message naming each pull request, which the default `ALERT_MSG_LEVEL=WARNING` hides. A sync pull request open for 3 days or longer, one whose open date cannot be read, or one built for an older release than the audited one counts as stuck and raises a WARNING that names it. Fetch errors, failed repairs, new or refreshed restore pull requests, and drift with no sync pull request still warn as before.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Stuck after | 3 days (`SYNC_PR_STALE_AFTER_SECONDS`) |
+| Extra GitHub API calls | 0 (open date comes from the existing pull request listing) |
+| New `DRIFT_REPAIR` field | `stale=true\|false` on `reason=sync_pull_request_open` |
+
+What this means for operators: a drift WARNING now always needs action, either a stuck sync pull request to merge or close, or a problem the audit could not fix itself.
+
+### For contributors
+
+The summary JSON's `repairs` entries gain `pr_created_at`, `pr_stale` and `pr_for_release` (false when the sync pull request was built for another release; its note then says to close it or wait for one for the current release instead of "merge or close it"). The report step treats a missing `pr_stale` (older summaries) as stale.
+
+- **The orchestrator now tracks a wave issue's review-blocked reissue instead of opening a duplicate.** When the review pipeline's review-blocked judge closed a wave PR and reissued its issue, the poller never mapped the new issue into the project, so the wave judge saw "closed without merge" and opened a second redo of the same work.
+
+On project #8969, wave issue #8970 was reissued as #8994 by `scripts/review_rb_judge.sh`, and eight minutes later the wave judge opened #8995 for the same Phase 1. Both PRs built it; #9003 merged and #9005 was left conflicting, and the project raised the CRITICAL "wave PR(s) closed without merge" alert. The poller (`scripts/orchestrate_poll_process.sh`) now finds such a reissue from the closed issue's timeline and re-points the wave entry at it before wave status or the judge run. The reissue must carry `ai:orchestrator-managed` and the `Tracking issue`, `Replaces` and `review-blocked-reissue` lines. `scripts/review_rb_judge.sh` also stops dropping a wave parent's `Local ID`, `Priority` and `Managed by` lines, which it discarded because wave issues write the integration branch without backticks.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra API calls | 1 REST timeline read per closed-without-merge wave issue per tick, until it is adopted or leaves the wave |
+| New log prefix | `RB_REISSUE_ADOPTION` |
+| Incident | project #8969: #8970 → #8994, duplicate #8995 |
+
+What this means for operators: a review-blocked reissue now counts toward the original wave item, so the project stops reporting it as closed without merge and dependent waves unblock when the reissue merges.
+
+- **The poller no longer loses an implementation-failed task when its replacement issue cannot be created.** The implementation-failed re-issue loop in `scripts/orchestrate_poll_process.sh` used to relabel and close the source issue before running `gh issue create`, so a failed issue read (empty title) or a failed create left the source closed while the state still pointed at it, and nothing retried. The loop now creates the replacement first and, only once it returns a numeric issue number, rewrites the state, bumps the no-op counter (no-op mode), then relabels and closes the source with a comment naming the replacement. An unreadable source (`IMPL_FAILED_REISSUE ... reason=source_unreadable`) or a failed create (`IMPL_FAILED_REISSUE ... reason=create_failed`) defers with no label, close, counter or state change, so the next poll cycle retries and a failed create no longer spends the `MAX_IMPL_NOOP_REISSUES` budget. The existing `::warning::Could not create replacement issue for #N.` line is unchanged. Refs #9033.
+
+- **The inactivity-watchdog tests in the stable release gate workflow now quote their operands.** The three remaining `if [ $IDLE -ge $INACTIVITY_LIMIT ]` checks in `.github/workflows/test-and-mark-stable.yml` (Phase 1 clarify wait, Phase 2 plan wait and the review-blocked simulation wait) now read `if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]`, matching the other sites, so an empty or multi-word value can no longer word-split into a misparsed `test` call (SHELL-002, workflow-optimization-2026-10-07-3). The Phase 4 review wait, whose body lives in `scripts/stable_e2e_step_wait_review.sh`, is unchanged and still uses the unquoted form; both of its values are integers the script computes itself. Refs #9058.
+
+- **The consumer retro fan-out no longer sends an incomplete or unsanitized prompt to the model.** `run_consumer_retro` in `scripts/workflow_retro_fanout.sh` runs with `errexit` suppressed, so a failed prompt write, a failed `sanitize_codex_prompt_file`, or a failed tracker-body or retro-comment write used to be ignored. Each of those steps is now checked, and because the shared sanitizer returns success even when it could not rewrite the file, the prompt is also checked for valid UTF-8 after sanitization: the repository gets a `::warning::retro-fanout: ...` line, skips the model call (or the tracker/comment write), and is marked `status=failed`, while the remaining repositories still run. Addresses SHELL-001 from analysis/workflow-optimization-2026-10-07-3.md. Refs #9058.
+
+- **The unblock judge now retries transient GitHub errors on its read-only lookups (CONSIST-001).** `scripts/unblock_judge.sh` sources `scripts/gh_helpers.sh` from the verified support checkout (with the same pass-through `gh_retry` fallback as `scripts/check_failure_triage.sh`) and wraps five reads in `gh_retry`: the paginated issue-comments read, the identity read, the item-metadata read, the item re-check read and the cited-run read. A 5xx or connection reset no longer skips the item or drops evidence on the first failure; `gh_retry` buffers stdout, so a failed attempt never feeds partial pages into the `jq -s` merge. Permanent errors (for example HTTP 404) still make one attempt, and a read that fails after every retry takes the same skip path and log line as before. Writes (comment POSTs, label changes, PATCH, issue creation, dispatches) stay single-attempt. Refs #9058.
+
+- **The orchestrator no longer marks an integration branch "superseded by main" from stale branch refs.** A project whose last wave PR merged just as a poll run started could be closed without its integration branch ever reaching the default branch.
+
+`evaluate_sync_superseded_by_main` in `scripts/orchestrate_poll_process.sh` reads child-PR state live from the GitHub API, then diffs the child PRs' paths between the default and integration branches using the poll job's local refs. Those refs come from the checkout's fetch at job start. When a wave PR merged after that fetch, the API counted it as terminal while the local integration ref still matched the default branch. The diff came back empty, the branch was marked `superseded-by-main`, and the final integration merge was skipped for good. The function now refetches both branches right before the diff. If that fetch fails, it reports itself not confident and never marks the branch superseded.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Affected project | `shubhodeep1/fun-token-multi-chain` #739 (wave PR #741) |
+| Gap between job-start fetch and the PR merge | 55 seconds (fetch 11:53:39Z, merge 11:54:34Z on 2026-11-08) |
+| Extra cost per superseded check | 1 `git fetch` of two branches, no GitHub API calls |
+
+What this means for operators: a project that reports "Integration branch superseded by main" now has its child PRs' changes on the default branch. A project hit by the old bug shows that comment while the compare API still reports the integration branch ahead of the default branch. Its work has to reach the default branch another way, for example the activation-fix issue the pipeline opens when activation grades the project DORMANT.
+
+### For contributors
+
+`tests/test_orchestrate_integration_ahead_by_gate.py` adds three cases that drive the extracted function against a local bare `origin`: a stale clone after the child PR lands on the integration branch (not superseded), a real supersede where the default branch already has the change (still superseded), and an unreachable `origin` (not confident).
+
+`scripts/orchestrate_poll_process.sh` also adds `|| true` to the `blocker_stderr` cleanup pipeline in `_runtime_blocker_dispatch_eligible`. That line only builds the text of a fail-open warning, so under `set -euo pipefail` a failing `tr | sed | cut` can no longer abort the poller there. Behaviour is otherwise unchanged.
+
+- **The poller's deterministic validation-failure short-circuit no longer depends on SIGPIPE-prone pipelines.** `mark_validation_failed()` in `scripts/orchestrate_poll_process.sh` now matches the `AI_VALIDATION_FAILURE_CLASS:deterministic_*` marker with one Bash regex match and reads the class from `BASH_REMATCH[1]`, instead of a `printf | grep -q` test and a `grep -o | head` extraction. Under `set -euo pipefail` those pipelines could return 141 (SIGPIPE) on a long failure comment, which skipped the short-circuit and spent the recovery budget on a failure that retrying cannot fix. The first marker still wins, the class charset is still `[a-z_]+`, and the log message, labels, comments and state updates are unchanged. Refs #8975.
+
+- **The merge train no longer glob-expands `MERGE_TRAIN_DISPATCH_WORKFLOWS` items.** `_mt_dispatch_review` in `scripts/review_merge_train.sh` expanded the list unquoted, so an item such as `*.yml` was replaced by matching file names in the working directory before `gh workflow run`. The list is now read into an array with `read -a` (default IFS: spaces, tabs and newlines), which never does pathname expansion. The default list, split rules, dispatch order, stop at the first successful dispatch, the `MERGE_TRAIN_DISPATCHED` log line and the return codes are unchanged. Refs #8975.
 
 ### For contributors
 
@@ -9316,6 +9676,12 @@ What this means for consumer repos: after the next `@stable` sync, a fetch of an
 - **Removing the `ai:orchestrator-tracking` label no longer turns an integration PR's readiness check green.** The readiness status now fails closed when the tracking label is missing, unless the PR carries the override label.
 
 `scripts/check_integration_pr_readiness.py` used to post a neutral `success` on the `orchestrator/integration-pr-not-ready` context when an `orchestrator/project-<N>` head pointed at an issue without `ai:orchestrator-tracking`, without checking the task list. It now posts `failure`, logs `::error::[integration-pr-readiness] issue #N is not labeled ai:orchestrator-tracking; ...`, and names `ai:override-incomplete-merge` as the escape valve. With that override label on the PR, it posts `success` with a description that records the missing tracking label. When the labels come from `--tracking-labels-file` (the poller's cached snapshot) and lack the tracking label, the script re-reads the issue's labels once before failing closed, so a stale snapshot does not post a false failure; if that read fails, the snapshot is used. Exit codes are unchanged: 0 after a posted status, 1 when the status POST fails. Refs #8924.
+
+- **The poller no longer prints raw tracking-issue comments to the Actions log when their JSON fails validation.** `scripts/orchestrate_poll_process.sh` used to dump the first 50 lines of the comments response, which holds user-controlled comment bodies and orchestrator state; a line starting with `::` was read as a workflow command. It now logs one `::warning::Comments response summary for issue #<n>: bytes=<n> sha256=<12-hex|unavailable> category=<empty|invalid_json|non_array>` line, the same shape `gh_api_json_to_file` uses since #8095. The poller still proceeds with an empty comment list. Refs #8941.
+
+- **The consumer workflow updater no longer puts `GH_PAT` in the upstream clone URL or its `.git/config`.** The clone of `coding-workflows@stable` and the later release-tag lookups now authenticate through a one-shot credential helper.
+
+`.github/workflows/update_workflows.yml` ("Fetch latest workflow templates from coding-workflows@stable") cloned the template repository from `https://x-access-token:<token>@github.com/...`. The token showed up in the clone's process arguments and was saved as `remote.origin.url` in the clone, which later steps keep on disk and run upstream scripts next to. The step now clones from `https://github.com/shubhodeep1/coding-workflows.git` and runs the clone, fetch, checkout and sparse-checkout through a step-local `upstream_git` helper that hands the token to git only through `credential.helper`, the pattern the release-verify step already uses. The tag lookups (`ls-remote`) in "Verify signed sync manifest", "Verify attested release manifest" and "Commit and push updates" use the same helper, so they still authenticate now that the remote URL carries no token. Step names, ids, outputs and reason codes are unchanged. Refs #8941.
 
 ### For contributors
 
