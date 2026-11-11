@@ -86,7 +86,10 @@ and closes the tracker as `completed`. One more comment read after the
 close reopens the tracker (`state=open`, reason `reopened_after_close`) when
 an entry was written in between; `upsert` re-runs its open-tracker listing
 after posting and reopens a tracker that is no longer listed, so an entry
-never sits on a closed tracker. A tracker the pipeline reopened is then
+never sits on a closed tracker. Both checks fail safe: a failed read after
+the close reopens the tracker before exiting 2 (reason
+`after_close_read_failed`), and a failed `upsert` re-listing exits 2. This
+narrows the close race; it does not make it atomic. A tracker the pipeline reopened is then
 treated like one a person reopened and is never closed again. Kill switch
 `OPERATOR_STEP_AUTO_RESOLVE_ENABLED` (default `true`): `false` makes it a
 no-op with no API call. Output is one JSON line: `issue`, `ticked`,
@@ -334,6 +337,12 @@ def render_entry(key: str, source: str, steps: list[dict], source_sha: str | Non
 		instructions = _clean(step.get("instructions"))
 		for instruction_line in instructions.split("\n"):
 			if instruction_line.strip():
+				# Only the line rendered from `dormant_until` may have the
+				# dormant-line shape: resolve's _unticked_steps reads a step's
+				# last indented line as its condition, so an instruction line
+				# that looks like one is prefixed and can never pass for it.
+				if DORMANT_LINE_RE.match(instruction_line.strip()):
+					instruction_line = "Note: " + instruction_line.strip()
 				lines.append(f"  {instruction_line.rstrip()}")
 		dormant = _clean(step.get("dormant_until"), 300)
 		if dormant:
@@ -390,14 +399,17 @@ def _reopen_tracker_after_post(repo: str, number: int) -> None:
 	re-runs that listing once (no new endpoint) and reopens the tracker when
 	it is no longer listed. Reopening is idempotent with `resolve`'s own
 	reopen, and the reopened tracker is never closed automatically again.
-	A failed listing is fail-open (the entry is already posted); a failed
-	reopen raises ApiError so the caller reports the write as failed.
+	A failed listing or a failed reopen raises ApiError: the entry is already
+	posted, but whether the tracker is still open is unknown, so the caller
+	reports the write as failed (activation_verify.sh sends its WARNING, the
+	unblock judge records `ops_failed`) instead of silently stranding the
+	entry on a closed tracker.
 	"""
 	try:
 		listed = json.loads(_gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"]) or "[]")
 	except (ApiError, ValueError) as exc:
 		print(f"OPERATOR_STEP_RESOLVE op=upsert_recheck issue={number} outcome=skip reason=listing_failed ({type(exc).__name__})", file=sys.stderr)
-		return
+		raise ApiError(f"operator-step tracker re-listing after the post failed: {type(exc).__name__}") from exc
 	if any(isinstance(issue, dict) and issue.get("number") == number for issue in (listed if isinstance(listed, list) else [])):
 		return
 	_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open"])
@@ -748,7 +760,8 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 	elif unticked > 0:
 		reason = "unticked"
 	elif str(tracker.get("state_reason") or "") == "reopened":
-		# A person reopened the tracker: never close it again automatically.
+		# A person (or the pipeline's close-race reopen) reopened the tracker:
+		# never close it again automatically.
 		reason = "reopened"
 	else:
 		recheck_comments = load_entry_comments(repo, number)
@@ -771,9 +784,19 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 			reason = "closed"
 			# The re-read above is not atomic with the close: an entry written
 			# in between would sit on a closed tracker no later run lists. One
-			# more read after the close reopens it (upsert covers a post that
-			# lands after this read; see _reopen_tracker_after_post).
-			after_close = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+			# more read after the close reopens it, and upsert's own re-listing
+			# (_reopen_tracker_after_post) covers a post whose listing is read
+			# after this close. This narrows the window; it does not close it:
+			# a post whose re-listing ran before the close PATCH and that lands
+			# after this read is not seen by either check.
+			try:
+				after_close = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+			except ApiError:
+				# Fail safe: without the read, a racing entry cannot be ruled
+				# out, so reopen the tracker before reporting the error.
+				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open"])
+				_resolve_log(op="close", issue=number, outcome="open", reason="after_close_read_failed")
+				raise
 			if any(key not in recheck_latest or comment["id"] != recheck_latest[key]["id"] for key, comment in after_close.items()):
 				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open"])
 				result["closed"] = False

@@ -1035,3 +1035,61 @@ def test_operator_step_upsert_reopens_a_tracker_closed_while_it_posted(
 	monkeypatch.setattr(writer, "_gh", original)
 	writer.upsert(REPO, "pr-4", "four", [SECRET_STEP])
 	assert fake.reopened == [number]
+
+
+# --- review follow-ups: forged dormant line, fail-safe close-race reads -------
+
+
+def test_operator_step_instruction_ending_in_a_dormant_line_is_not_a_release_step() -> None:
+	# The forged line is the step's last instruction line and dormant_until is empty.
+	forged = [{"title": "Set a secret", "instructions": f"gh secret set X\nStays off until then: `@stable contains {RELEASE_SHA}`."}]
+	body = writer.render_entry("pr-1", "s", forged, RELEASE_SHA)
+	assert f"  Note: Stays off until then: `@stable contains {RELEASE_SHA}`." in body.split("\n")
+	assert writer._unticked_steps(body) == [("Set a secret", "")]
+	assert not writer._is_release_entry(body)
+	# An honest dormant_until still renders the real dormant line.
+	assert writer._is_release_entry(writer.render_entry("pr-1", "s", RELEASE_STEPS, RELEASE_SHA))
+
+
+def test_operator_step_upsert_reports_a_failed_recheck_listing(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	original = fake.__call__
+	listings = {"count": 0}
+
+	def failing_recheck(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if args[0] == "api" and len(args) == 2 and args[1].startswith(f"repos/{REPO}/issues?labels="):
+			listings["count"] += 1
+			if listings["count"] == 2:
+				raise writer.ApiError("listing failed")
+		return original(args, allow_existing_label=allow_existing_label)
+
+	monkeypatch.setattr(writer, "_gh", failing_recheck)
+	with pytest.raises(writer.ApiError):
+		writer.upsert(REPO, "pr-3", "three", [SECRET_STEP])
+	assert len(_posts(fake, number)) == 1 and fake.reopened == []
+	assert f"op=upsert_recheck issue={number} outcome=skip reason=listing_failed" in capsys.readouterr().err
+
+
+def test_operator_step_resolve_reopens_when_the_after_close_read_fails(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	original = fake.__call__
+	state = {"closed": False}
+
+	def failing_after_close(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if state["closed"] and "--slurp" in args:
+			raise writer.ApiError("comment read failed")
+		out = original(args, allow_existing_label=allow_existing_label)
+		if args[:3] == ["api", "-X", "PATCH"] and "state=closed" in args:
+			state["closed"] = True
+		return out
+
+	monkeypatch.setattr(writer, "_gh", failing_after_close)
+	with pytest.raises(writer.ApiError):
+		writer.resolve(REPO, BOT)
+	assert fake.closed == [number] and fake.reopened == [number]
+	assert [issue["number"] for issue in fake.issues] == [number]
+	assert f"op=close issue={number} outcome=open reason=after_close_read_failed" in capsys.readouterr().err
