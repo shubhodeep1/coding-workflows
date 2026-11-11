@@ -639,7 +639,8 @@ _TRACEBACK_CHAIN_RE = re.compile(
 )
 # Lines kept after one header (the innermost ones when a traceback is longer),
 # and how far one traceback is scanned before it is treated as ended (past it,
-# a traceback with no exception line yet is followed on to that line only).
+# a traceback with no exception line yet is walked on with the same line rules,
+# so its exception line and any continuation lines and chain marker are kept).
 _TRACEBACK_CONTEXT_MAX_LINES = 30
 _TRACEBACK_SCAN_MAX_LINES = 400
 
@@ -3695,7 +3696,9 @@ def _traceback_context_indices(lines: list[str]) -> set[int]:
 	own block. Each block keeps at most _TRACEBACK_CONTEXT_MAX_LINES lines, the
 	last ones, since the innermost frames and the exception are printed last.
 	A traceback still without its exception line after
-	_TRACEBACK_SCAN_MAX_LINES lines is followed on to that line.
+	_TRACEBACK_SCAN_MAX_LINES lines is walked on with the same line rules, so
+	its exception line and the continuation lines and chain marker after it
+	are kept.
 	The Actions timestamp prefix is ignored. The header lines themselves are
 	not returned (_SOFT_LOG_PATTERNS keeps them).
 	"""
