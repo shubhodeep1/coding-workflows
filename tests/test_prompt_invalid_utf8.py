@@ -74,13 +74,19 @@ def test_render_prompt_sh_invalid_utf8_exits_zero(tmp_path: Path) -> None:
 	if not RENDER_PROMPT_SH.is_file():
 		pytest.skip("scripts/render_prompt.sh not present")
 	body = tmp_path / "body.txt"
-	# An env-derived placeholder next to the invalid bytes: the wrapper's
-	# collect_prompt_placeholders helper must still discover it.
-	body.write_bytes(INVALID_BODY + b"Probe: {{UTF8_HEAL_PROBE_VALUE}}\n")
+	# An attacker-named env placeholder next to the invalid bytes must NOT be
+	# substituted on the untrusted already-assembled path (it could name a
+	# secret), while the static scaffolding placeholder still renders.
+	body.write_bytes(
+		INVALID_BODY
+		+ b"Probe: {{UTF8_HEAL_PROBE_VALUE}}\n"
+		+ b"Overlay: {{MODEL_FAMILY_OVERLAY}}\n"
+	)
 	env = _env(tmp_path)
 	env["RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED"] = "1"
 	env["RENDER_PROMPT_SKIP_SYNTAX_VALIDATION"] = "1"
 	env["UTF8_HEAL_PROBE_VALUE"] = "probe-substituted"
+	env["MODEL_FAMILY_OVERLAY"] = "overlay-substituted"
 	result = subprocess.run(
 		["bash", str(RENDER_PROMPT_SH), str(body)],
 		capture_output=True,
@@ -94,7 +100,33 @@ def test_render_prompt_sh_invalid_utf8_exits_zero(tmp_path: Path) -> None:
 	assert "Traceback" not in stderr
 	assert "Traceback" not in stdout
 	assert "�" in stdout
-	assert "Probe: probe-substituted" in stdout
+	assert "probe-substituted" not in stdout
+	assert "Probe: {{UTF8_HEAL_PROBE_VALUE}}" in stdout
+	assert "overlay-substituted" in stdout
+
+
+def test_render_prompt_sh_trusted_template_invalid_utf8_keeps_env_placeholders(tmp_path: Path) -> None:
+	if not RENDER_PROMPT_SH.is_file():
+		pytest.skip("scripts/render_prompt.sh not present")
+	body = tmp_path / "body.txt"
+	# Trusted (not already-assembled) renders keep the env passthrough; the
+	# wrapper's placeholder discovery must survive invalid bytes.
+	body.write_bytes(INVALID_BODY + b"Probe: {{UTF8_HEAL_PROBE_VALUE}}\n")
+	env = _env(tmp_path)
+	env.pop("RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED", None)
+	env["RENDER_PROMPT_SKIP_SYNTAX_VALIDATION"] = "1"
+	env["UTF8_HEAL_PROBE_VALUE"] = "probe-substituted"
+	result = subprocess.run(
+		["bash", str(RENDER_PROMPT_SH), str(body)],
+		capture_output=True,
+		cwd=str(tmp_path),
+		env=env,
+		check=False,
+	)
+	stderr = result.stderr.decode("utf-8", errors="replace")
+	assert result.returncode == 0, stderr
+	assert "Traceback" not in stderr
+	assert "Probe: probe-substituted" in result.stdout.decode("utf-8")
 
 
 def _import_render_prompt():

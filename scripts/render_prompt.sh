@@ -278,8 +278,14 @@ fi
 # fail-open requires both flags. Placeholder substitution for the static
 # scaffolding still runs. Default (unset) keeps
 # include assembly for every trusted template render.
+UNTRUSTED_BODY_ENV_PASSTHROUGH_ENABLED=true
 case "${RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED:-}" in
 	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		# The body embeds untrusted PR text, so a `{{NAME}}` token in it must
+		# not select a process env var: that rendered secrets such as the
+		# OpenRouter key into the model prompt (heal #9261 review). Only the
+		# four static append_render_var names below are passed on this path.
+		UNTRUSTED_BODY_ENV_PASSTHROUGH_ENABLED=false
 		if [ "${INPUT_ALREADY_ASSEMBLED_FLAG_ADDED}" != "true" ]; then
 			RENDER_ARGS+=(--input-already-assembled)
 			INPUT_ALREADY_ASSEMBLED_FLAG_ADDED=true
@@ -304,12 +310,14 @@ append_render_var "SEMBLE_PREFETCH" "${SEMBLE_PREFETCH_BLOCK}"
 append_render_var "SERENA_TOOL_HINTS" "${SERENA_TOOL_HINTS_BLOCK}"
 append_render_var "MODEL_FAMILY_OVERLAY" "${MODEL_FAMILY_OVERLAY_BLOCK}"
 
-while IFS= read -r placeholder_name; do
-	[ -n "${placeholder_name}" ] || continue
-	if [ "${!placeholder_name+x}" = "x" ]; then
-		append_render_var "${placeholder_name}" "${!placeholder_name}"
-	fi
-done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
+if [ "${UNTRUSTED_BODY_ENV_PASSTHROUGH_ENABLED}" = "true" ]; then
+	while IFS= read -r placeholder_name; do
+		[ -n "${placeholder_name}" ] || continue
+		if [ "${!placeholder_name+x}" = "x" ]; then
+			append_render_var "${placeholder_name}" "${!placeholder_name}"
+		fi
+	done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
+fi
 
 if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
 	"${RENDER_ARGS[@]}"
