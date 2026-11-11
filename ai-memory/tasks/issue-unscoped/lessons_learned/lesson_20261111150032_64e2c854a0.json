@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-11T15:00:32Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=scripts/collect_pr_check_runs_context.py:404-489; cited_path=CI check runs `lint`, `orchestrate-poll (2)`, `tests-hooks-and-orchestrator` (run 42939355701); files_touched=README.md, agents.md, changelog.d/9179-check-runs-log-anchor-runner-exit-line.md, scripts/collect_pr_check_runs_context.py, tests/test_collect_pr_check_runs_pending_identity.py.",
+  "phase": "review_autofix",
+  "pr_number": 9218,
+  "record_id": "lesson_20261111150032_64e2c854a0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "CI check runs `lint`, `orchestrate-poll (2)`, `tests-hooks-and-orchestrator` (run 42939355701)",
+    "scripts/collect_pr_check_runs_context.py",
+    "README.md",
+    "agents.md",
+    "changelog.d/9179-check-runs-log-anchor-runner-exit-line.md",
+    "tests/test_collect_pr_check_runs_pending_identity.py"
+  ]
+}
