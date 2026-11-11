@@ -2439,11 +2439,13 @@ case "${ACTION}" in
 			# carries this issue's own labels, so when it already shows the
 			# escalated label the alert is replaced by a stable
 			# `escalate_repeat ... alert=suppressed` line. The check cannot tell
-			# which path set the label: post-merge verification
-			# (workflow_failure_heal_verify.sh) and the lineage-cap branch below
-			# also add it, each with its own CRITICAL alert, so whenever it is
-			# present a human has already been alerted once for this issue and
-			# this alert is suppressed too. A missing or unreadable label list
+			# which path set the label, and it is suppressed whenever the label
+			# is present. Post-merge verification
+			# (workflow_failure_heal_verify.sh) and the `escalate)` lineage-cap
+			# branch below each sent their own CRITICAL alert. The synced-file
+			# security and synced-check lineage caps (above) send only a
+			# WARNING summary, so a self-failure of an issue they escalated
+			# never gets a CRITICAL; that gap is accepted. A missing or unreadable label list
 			# fails open (alert sent). Two intakes racing on the same issue may
 			# both alert; that is accepted.
 			HEAL_SELF_ESCALATED="$(jq -r --arg l "${ESCALATED_LABEL}" '[.labels[]? | if type == "object" then .name else . end] | index($l) != null' "${PAYLOAD_FILE}" 2>/dev/null || echo false)"

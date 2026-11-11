@@ -2143,8 +2143,10 @@ through `clarify → plan → implement → review`.
   `WORKFLOW_HEAL escalate reason=heal_issue_failed_itself` and sends a
   CRITICAL Telegram alert on the first escalation only. When the report's
   issue labels already include `ai:workflow-heal-escalated`, whichever path
-  set it (an earlier self-failure, the lineage cap or post-merge
-  verification, each of which already sent its own CRITICAL alert), a repeat
+  set it (an earlier self-failure, the main lineage cap or
+  post-merge verification, which each sent a CRITICAL alert, or a
+  synced-file security or check lineage cap, which sent only a WARNING
+  summary, an accepted gap), a repeat
   logs `WORKFLOW_HEAL escalate_repeat ... alert=suppressed` instead of
   alerting (a missing label list fails open and alerts). Stall recovery then pauses
   the issue (`STALL_SKIP ... reason=human_gated_latch

@@ -6802,7 +6802,9 @@ def test_intake_heal_self_escalation_alerts_once() -> None:
 	assert len(_heal_self_escalation_alerts(calls)) == 1, calls
 	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
 	# Fail open on a malformed label list too: a bare string (not a list) and
-	# object entries are not a readable label list, so the alert is still sent.
+	# object entries are not a readable label list: validate-payload
+	# (workflow_failure_heal.py) keeps only string entries, so the escalated
+	# label never reaches the intake's jq check and the alert is still sent.
 	for malformed in (heal.ESCALATED_LABEL, [{"name": heal.ESCALATED_LABEL}], {"name": heal.ESCALATED_LABEL}):
 		result, state_after, fp, calls = _run_heal_self_escalation_intake(None, raw_labels=malformed)
 		assert result.returncode == 0, result.stderr + result.stdout

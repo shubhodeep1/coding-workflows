@@ -1602,8 +1602,8 @@ DEDICATED_HANDLER_PHASES: set[str] = {
 # codex stall-judge run plus Telegram alerts, until the recovery budget
 # closed the issue and the judge regenerated it under a fresh number
 # (issue #3906 on shubhodeep1/tele-funtoken-msg-scoring, 2026-09-01).
-# The guard that latches these labels already posted the human-facing
-# comment and CRITICAL alert, so stall recovery must pause exactly like
+# The guard that latches ai:destructive-blocked / ai:scope-blocked
+# already posted the human-facing comment and CRITICAL alert, so stall recovery must pause exactly like
 # it does for ai:needs-human until a human removes the latch.
 # ai:workflow-heal-escalated (issue #9248) is latched too: the workflow
 # failure heal intake sets it when a heal issue's own clarify / plan /
