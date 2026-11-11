@@ -231,9 +231,14 @@ GUARD_HOOK_TEMPLATE_PATH="workflow-templates/.claude/hooks/pr_merge_status_guard
 # live|template pairs, mirroring PAIRED_LIVE_COPIES in
 # scripts/review_untrusted_workspace.py in the same order;
 # tests/test_conflict_guard_hook_template_merge.py keeps the two in step.
+# A pair whose live path is not unmerged is skipped, so an entry for a hook
+# a given tree does not ship is a no-op.
 GUARD_HOOK_TEMPLATE_PAIRS=(
   "${GUARD_HOOK_LIVE_PATH}|${GUARD_HOOK_TEMPLATE_PATH}"
   ".claude/hooks/prepush_affected_tests.py|workflow-templates/.claude/hooks/prepush_affected_tests.py"
+  ".claude/hooks/gh_api_write_guard.py|workflow-templates/.claude/hooks/gh_api_write_guard.py"
+  ".claude/hooks/pr_watch_guard.py|workflow-templates/.claude/hooks/pr_watch_guard.py"
+  ".claude/hooks/session-start.sh|workflow-templates/.claude/hooks/session-start.sh"
 )
 _conflict_prepare_guard_hook_template_merge()
 {

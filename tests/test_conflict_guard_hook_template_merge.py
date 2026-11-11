@@ -468,7 +468,17 @@ def test_guard_hook_pairs_mirror_paired_live_copies() -> None:
 		entry = entry[1:-1].replace("${GUARD_HOOK_LIVE_PATH}", LIVE).replace("${GUARD_HOOK_TEMPLATE_PATH}", TEMPLATE)
 		live, _, template = entry.partition("|")
 		pairs.append((live, template))
-	assert pairs == expected
+	# Every registry pair must be covered, in registry order, at the head of
+	# the array. Entries past the registry are allowed only for a paired hook
+	# this tree's registry does not list yet (the array also serves the merge
+	# tree): they must follow the workflow-templates/<live> convention and the
+	# template must exist. A pair the array misses still fails here.
+	assert pairs[: len(expected)] == expected, (pairs, expected)
+	for live, template in pairs[len(expected):]:
+		assert live.startswith(".claude/hooks/"), live
+		assert template == "workflow-templates/" + live, (live, template)
+		assert (REPO_ROOT / template).is_file(), template
+	assert len(set(pairs)) == len(pairs), pairs
 	assert pairs[0] == (LIVE, TEMPLATE)
 	assert (PREPUSH_LIVE, PREPUSH_TEMPLATE) in pairs
 
