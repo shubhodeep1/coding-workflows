@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The checkout shows the root-cause fix is already on `main`. `scripts/render_prompt.py:147` now reads `{{...}}/{%%...%%}`, and `tests/test_render_prompt_foundation.py:157-168` runs `render_prompt.py --help` as a subprocess and checks that `--skip-syntax-validation` appears in its output. The work that is still missing and fits this issue's scope (`tests/**`, `changelog.d/*.md`) is the cross-script guard from the issue's \"Suggested fix\" item 3. A grep for `^def build_parser` finds it in 35 `scripts/*.py` modules, and no test calls `format_help()` across them. Option B is ruled out because closing issues and acting on PR #9245 are outside what the pipeline can do: it only changes repository files and opens one PR.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - `scripts/render_prompt.py:147`: the escaped fix, already present; do not modify this file.\n    - `tests/test_render_prompt_foundation.py:157-168`: the existing `--help` subprocess regression test; keep it unchanged.\n    - The 35 modules matching `^def build_parser` under `scripts/*.py`: validation_lint, render_prompt, ai_memory, workflow_failure_heal, unblock_scan, validation_selftest_matrix, analyze_workflow_logs, build_state_snapshot, evidence_broker, render_scenario_trace, claude_engine, persist_budget, orphan_fixup_close, attempt_journal, render_validation_templates, persist_postmerge_verify, auto_decisions, generate_resource_id, load_workflow_overlay, collect_workflow_logs, security_pass_skip, unblock_ledger, assemble_agents, workflow_retro, summarize_unselected_runs, orchestrate_lib, persist_orchestrator, partial_delivery, assemble_changelog, ai_labels, validation_selftest_status, acceptance_check, blocker_check, evidence_pack, unblock_actions.\n  steps:\n    - Add one new test module under `tests/` (for example `tests/test_scripts_build_parser_help.py`). It finds `scripts/*.py` files with a top-level `def build_parser` by text scan, so new scripts are covered automatically. For each one it loads the module with `importlib.util.spec_from_file_location`, calls `build_parser()`, and asserts that `.format_help()` returns a non-empty string without raising. Include a sanity assertion that at least one module was discovered and that `render_prompt` is among them.\n    - Run the test with `PYTHONDONTWRITEBYTECODE=1` and keep the scripts directory on `sys.path`, the way the existing tests import scripts.\n    - Reproduce the failure: temporarily restore the bare `{%...%}` at `scripts/render_prompt.py:147` in a scratch copy, confirm the `render_prompt` case fails, then revert. Record both runs in the PR body.\n    - Add one `changelog.d/*.md` fragment describing the new cross-script argparse help guard.\n    - Do not edit `scripts/` files. A rough grep of help strings found no other bare `%`; the `%%` uses in `consumer_health_check.py:196` and `collect_workflow_logs.py:456` are already escaped. If the new test still finds a real offender, report it in the PR body and do not widen scope.\n    - In the PR body, use `Refs #9234`, `Refs #9238` and `Refs #9244`, not auto-close keywords.\n  replaces_acceptance_criterion: \"ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix\"\n  equivalence_argument: The new test fails at `aa8aa9346a35`, because `format_help()` expands every help string and raises on a bare `%...%` on any supported Python version. It passes on the current tree. It also covers all 35 argparse entry points, so a repeat of this defect class in any script is caught in CI, not in production plan, clarify or review runs.\n  reversibility: The change only adds one test file and one changelog fragment, with no runtime behaviour change. Deleting those two files undoes it completely.",
+  "fingerprint": "e59c95c24cbe44759c53fc0d626a4829bcbda9974c6a4fa95cc07bc823554598",
+  "lineage": {
+    "issue_number": 9247,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43036000499",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43036000499",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9247"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261111141934_8cb49d1c93",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9247,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43036000499"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9247",
+  "timestamps": {
+    "created_at": "2026-11-11T14:19:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
