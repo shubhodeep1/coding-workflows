@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-11T17:11:45Z",
+  "issue_number": 9225,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=tests/test_ci_poll_test_sharding.py:4669; cited_path=tests/test_ci_poll_test_sharding.py; files_touched=changelog.d/9225-gh-retry-closed-reader-builtin-replay.md, scripts/gh_helpers.sh, tests/test_gh_retry_stdout_isolation.py.",
+  "phase": "review_autofix",
+  "pr_number": 9264,
+  "record_id": "lesson_20261111171145_d58337d8a7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_ci_poll_test_sharding.py",
+    "changelog.d/9225-gh-retry-closed-reader-builtin-replay.md",
+    "scripts/gh_helpers.sh",
+    "tests/test_gh_retry_stdout_isolation.py"
+  ]
+}
