@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The collector fix the issue asks for is already present. The two tests that actually failed are different: `tests/test_review_checkout_head_diagnostics.py:208` (`fetch_ms` came out as `na` and failed the `isdigit()` check) and `tests/test_gh_retry_stdout_isolation.py:242` (closed-reader `rc=0`, with uutils `cat` on ubuntu-26.04). What should this issue deliver?\nChoices:\n- A: Change no code. Check that `tests/test_collect_pr_check_runs_pending_identity.py` passes on the current tree, then close this issue as already fixed. The two remaining failures are left to the open PRs #9344 (issue #9317) and #9246 / #9264, and PR #9218's CI is re-run once those merge. (RECOMMENDED)\n- B: Fix both remaining failures in this issue: the `na` value for `fetch_ms` emitted by `scripts/review_autofix_step_checkout_pr_head_branch.sh` (lines 110 and 129) on a failed fetch, and the closed-reader test under uutils `cat`. This may duplicate or conflict with #9344, #9246 and #9264.\n- C: Fix only the `fetch_ms` failure (`orchestrate-poll (1)`) in this issue, and leave the closed-reader test to #9246 / #9264.\nQ2: This only applies if Q1 is B or C. On a failed fetch, `fetch_ms` came out as `na`. The likely cause is a negative elapsed time on the ubuntu-26.04 runner clock, which the `^[0-9]+$` check at line 129 turns into `na`. Which side should change?\nChoices:\n- A: Fix the script. Clamp a negative elapsed time to `0` in `review_head_checkout_elapsed_ms`, so a fetch that was attempted always reports a number. Keep the test as it is. (RECOMMENDED)\n- B: Keep the script as it is, and relax the test so it also accepts `na` after a failed fetch.\n- C: Look into the clock source (`review_head_checkout_now_ms`) and change how it measures time before deciding.\n**Note:** if Q1 is A, skip this question. Any answer you give to it will be ignored.",
+  "fingerprint": "bade1970d960f98666c10e6a5f3c6a0e17f8302787796de75a0f5c1380028068",
+  "lineage": {
+    "issue_number": 9343,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43116833242",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43116833242",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111233629_864d3fb75b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9343,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43116833242"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9343 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T23:36:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
