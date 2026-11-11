@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Should this issue fix both ubuntu-26.04 test failures, or only the one that open PR #9246 does not cover?\nHere is what the repo shows:\n- **Failure 1: `orchestrate-poll (1)`.** The test `test_head_moved_after_switch_reports_skipped_stale` (`tests/test_review_checkout_head_diagnostics.py:264`) fails because `fetch_ms` or `switch_ms` comes out as `na`.\n  - The time comes from `review_head_checkout_now_ms` in `scripts/review_autofix_step_checkout_pr_head_branch.sh:40-53`, which still calls `date +%s%3N` first.\n  - When an elapsed value is negative, `review_head_checkout_elapsed_ms` returns something that fails the `^[0-9]+$` check, so line 129 or 130 turns it into `na`.\n  - Commit a638db8 already fixed the same clock problem in the poller. `_orch_poll_cycle_now_ms` in `scripts/orchestrate_poll_process.sh:36-56` now reads bash's `EPOCHREALTIME` first. The checkout script never got that change.\n  - No open PR touches this script.\n- **Failure 2: `tests-hooks-and-orchestrator`.** The test `test_closed_reader_does_not_rerun_a_successful_command` (`tests/test_gh_retry_stdout_isolation.py:242`) sees `rc=0` because uutils `cat` handles a closed pipe differently.\n  - Open PR #9246 (\"Fix the last two CI failures on ubuntu-26.04 runners (heartbeat clock, closed-reader test)\") already changes this test file and `.github/workflows/ci.yml`.\nChoices:\n- A. Fix only the review-checkout clock: give `review_head_checkout_now_ms` the same `EPOCHREALTIME`-first reading as the poller, and add a contract test. Leave the closed-reader failure to PR #9246. CI on #8307 goes green once both PRs are on main and the integration branch picks them up. (RECOMMENDED)\n- B. Fix both failures here, the checkout clock and the gh_retry closed-reader behaviour. This overlaps PR #9246 and will probably conflict with it on `tests/test_gh_retry_stdout_isolation.py` and `ci.yml`.\n- C. Fix both, but put the commits on the integration branch `orchestrator/project-8291` instead of `main`. This only unblocks #8307, and `main` keeps the review-checkout failure.",
+  "fingerprint": "a274c79d537a6331e32e861cbcdd1396ea456f7ce202fae4a6bb3c8735fe3a34",
+  "lineage": {
+    "issue_number": 9256,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43040144173",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43040144173",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111144222_50896f29f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9256,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43040144173"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9256 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T14:42:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
