@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3465-3490 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The required `lint` aggregate check is red on PR head 18c58be2 (run 43085267118, job 130768195671) because its dependencies `tests-hooks-and-orchestrator` (job 130747872621) and `orchestrate-poll` (job 130747873570) failed, and the supplied logs do not tie either failure to any line this PR changes.\n  WHY: While `lint` stays red, the merge gate refuses the PR with reason=required_checks_failed, the same kind of silent block this PR is meant to fix; the failures need a CI re-run or a full-log read, not a code edit. Reviewers disagreed on severity: openai_gpt-6-luna said BLOCKER, while anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash said MAJOR. The highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:aggregate lint job, line 3489 (echo \"::error::CI jobs that did not succeed: ${ci_unsuccessful_jobs}\"). The jobs it depends on start at line 543 (tests-hooks-and-orchestrator) and line 2489 (orchestrate-poll). | severity=MAJOR | confidence=3\n  PROBLEM: The required lint check is red on PR head 18c58be2 (run 43085267118, job 130768195671) because tests-hooks-and-orchestrator (job 130747872621) and orchestrate-poll (1) (job 130747873570) failed. Neither log tail shows the step that failed. The fixtures in tests/test_orchestrate_final_merge_required_checks_gate.py (lines 693 and 845) do not trigger the new supersede jq guard, so neither failure could be tied to a line this PR changes.\n  WHY: While lint stays red, the merge gate refuses this PR with reason=required_checks_failed, the same kind of silent block this PR is meant to fix. Someone needs to re-run CI or read the full job logs, and the reviewer found no code defect in the diff that explains either failure.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:3465-3490 | severity=BLOCKER | confidence=5\n  PROBLEM: The PR head's required `lint` check is failing because its `tests-hooks-and-orchestrator` and `orchestrate-poll` dependencies failed in run 43085267118, and the supplied logs do not tie those failures to this PR's changed files.\n  WHY: The aggregate exits non-zero whenever a dependency does not succeed, which leaves the required check red and blocks the PR. The failures need triage, and the supplied evidence establishes no defect in the changed code.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml (aggregate lint job, run 43085267118, job 130768195671; failing deps: tests-hooks-and-orchestrator job 130747872621 and orchestrate-poll job 130747873570):ci.yml lint aggregate step (\"CI jobs that did not succeed: tests-hooks-and-orchestrator, orchestrate-poll\"); PR head 18c58be219db175b3d5662f316c02a8dadce7009 | severity=MAJOR | confidence=2\n  PROBLEM: The required lint check-run is red on the current PR head because two CI dependency jobs failed in run 43085267118. Neither failure is tied to a line this PR changes. The PR's own tests/test_pr_checks_lib_required_filter.py passes (60 tests), and the log tails show only PASS lines and expected fixture ##[error] output.\n  WHY: The red required lint check keeps auto-merge refused with reason=required_checks_failed, the same symptom class this PR fixes for review / gate. Both jobs need a CI re-run or a read of the full job logs, because the ~16 KB tails are truncated mid-job, and no code edit in this PR addresses them.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1a9c63ed942eba10e85576e8f2aee92b51962491ec9008f613eda6b1d42933f9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9262,
+    "run_id": "43085267098",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43085267098",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111211443_10c7fbb0d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9262,
+    "run_id": "43085267098"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T21:14:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
