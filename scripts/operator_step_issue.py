@@ -68,7 +68,9 @@ unticked step is a release step: its `Stays off until then:` value starts
 with `@stable contains` (RELEASE_CONDITION_RE, kept in sync with
 scripts/activation_verify.sh), or it has no such line and its title is a
 release verb naming `stable` or the consumer sync. A step whose own dormant
-line names anything else is a human step whatever its title says, and an
+line names anything else is a human step whatever its title says, a
+title-only step whose title names a secret, token, credential, password,
+variable, setting, permission, account or key is a human step too, and an
 entry that also holds a real human step (a secret, a setting) is never ticked. Containment is `GET compare/<source>...stable`:
 only `ahead` or `identical` count; `behind`, `diverged` or an unreadable
 status do not. Compares are cached per commit and capped at
@@ -88,7 +90,8 @@ an entry was written in between; `upsert` re-runs its open-tracker listing
 after posting and reopens a tracker that is no longer listed, so an entry
 never sits on a closed tracker. Both checks fail safe: a failed read after
 the close reopens the tracker before exiting 2 (reason
-`after_close_read_failed`), and a failed `upsert` re-listing exits 2. This
+`after_close_read_failed`), and a failed `upsert` re-listing or reopen exits 3
+(entry posted, tracker state unknown). This
 narrows the close race; it does not make it atomic. A tracker the pipeline reopened is then
 treated like one a person reopened and is never closed again. Kill switch
 `OPERATOR_STEP_AUTO_RESOLVE_ENABLED` (default `true`): `false` makes it a
@@ -103,13 +106,19 @@ Resolve API budget (CLAUDE.md §14): one tracker listing (and nothing else
 when no tracker is open); with a tracker, at most one identity read (none
 with `--trusted-login`), one paginated comment read, at most
 MAX_RESOLVE_COMPARES compare calls, one comment write per ticked key, and,
-only when closing, two more paginated comment reads, at most one comment
-write and one issue PATCH (a second PATCH only to reopen). `upsert` adds one
-open-tracker listing, and a PATCH only to reopen, after it posts an entry. The poller's tracking-issue listing and the
-dependency-wait GraphQL return neither this tracker nor its comments.
+only when closing, two more paginated comment reads, one single-issue read
+of the tracker right before the close (a reopen during the tick keeps it
+open, reason `reopened`), at most one comment write and one issue PATCH (a
+second PATCH only to reopen). Every pipeline reopen sends
+`state_reason=reopened` explicitly. `upsert` adds one open-tracker listing,
+and a PATCH only to reopen, after it posts an entry. The poller's
+tracking-issue listing and the dependency-wait GraphQL return neither this
+tracker nor its comments.
 
 Output is one JSON line: `issue`, `url`, `created`, `entries`. Exit 0 on
-success, 1 on bad arguments, 2 when a GitHub call failed.
+success, 1 on bad arguments, 2 when a GitHub call failed, 3 when `upsert`
+posted its entry but the open-tracker re-check after the post (or the reopen
+it triggered) failed (output `{"error": ..., "posted": true}`).
 
 GitHub API budget (CLAUDE.md §15): one identity read, bounded tracker list
 retries, a label lookup and issue create only when absent, and one paginated
@@ -244,6 +253,16 @@ class UsageError(Exception):
 
 class ApiError(Exception):
 	"""A GitHub call failed: exit 2."""
+
+
+class TrackerRecheckError(ApiError):
+	"""`upsert` posted its entry, but the open-tracker re-check after the post failed: exit 3.
+
+	The entry is on the tracker; only whether the tracker is still open is
+	unknown (or a reopen failed). A distinct exit code lets the caller warn
+	accurately and keep its own follow-up (activation_verify.sh still posts its
+	verdict comment) instead of treating the entry write as lost.
+	"""
 
 
 def _clean(value: object, limit: int = MAX_FIELD) -> str:
@@ -399,20 +418,26 @@ def _reopen_tracker_after_post(repo: str, number: int) -> None:
 	re-runs that listing once (no new endpoint) and reopens the tracker when
 	it is no longer listed. Reopening is idempotent with `resolve`'s own
 	reopen, and the reopened tracker is never closed automatically again.
-	A failed listing or a failed reopen raises ApiError: the entry is already
-	posted, but whether the tracker is still open is unknown, so the caller
-	reports the write as failed (activation_verify.sh sends its WARNING, the
-	unblock judge records `ops_failed`) instead of silently stranding the
-	entry on a closed tracker.
+	A failed listing or a failed reopen raises TrackerRecheckError (exit 3):
+	the entry is already posted, but whether the tracker is still open is
+	unknown, so the caller warns a person (activation_verify.sh sends its
+	WARNING and still posts the verdict comment; the unblock judge records
+	`ops_failed`) instead of silently stranding the entry on a closed tracker.
+	The re-listing asks for 100 issues so a crowded label listing cannot hide
+	an open tracker and trigger a needless reopen.
 	"""
 	try:
-		listed = json.loads(_gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"]) or "[]")
+		listed = json.loads(_gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=100"]) or "[]")
 	except (ApiError, ValueError) as exc:
-		print(f"OPERATOR_STEP_RESOLVE op=upsert_recheck issue={number} outcome=skip reason=listing_failed ({type(exc).__name__})", file=sys.stderr)
-		raise ApiError(f"operator-step tracker re-listing after the post failed: {type(exc).__name__}") from exc
+		print(f"OPERATOR_STEP_RESOLVE op=upsert_recheck issue={number} outcome=error reason=listing_failed ({type(exc).__name__})", file=sys.stderr)
+		raise TrackerRecheckError(f"operator-step entry posted, but the tracker re-listing after the post failed: {type(exc).__name__}") from exc
 	if any(isinstance(issue, dict) and issue.get("number") == number for issue in (listed if isinstance(listed, list) else [])):
 		return
-	_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open"])
+	try:
+		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open", "-f", "state_reason=reopened"])
+	except ApiError as exc:
+		print(f"OPERATOR_STEP_RESOLVE op=upsert_recheck issue={number} outcome=error reason=reopen_failed", file=sys.stderr)
+		raise TrackerRecheckError(f"operator-step entry posted on closed tracker #{number}, and reopening it failed") from exc
 	print(f"OPERATOR_STEP_RESOLVE op=upsert_recheck issue={number} outcome=reopened reason=closed_during_post", file=sys.stderr)
 
 
@@ -600,6 +625,12 @@ AUTO_CLOSED_TEXT = (
 	"Every step listed here is done, so the poller closed this issue. "
 	"A new operator step opens a new issue."
 )
+# A title-only release step (no dormant line) must not name something only a
+# person can supply: "Publish the DEPLOY_TOKEN secret to stable" stays a human step.
+HUMAN_OBJECT_TITLE_RE = re.compile(
+	r"\b(?:secrets?|tokens?|credentials?|passwords?|variables?|settings?|permissions?|accounts?|keys?)\b",
+	re.I,
+)
 MAX_RESOLVE_COMPARES = 10
 RELEASE_REF = "stable"
 UNTICKED_STEP_RE = re.compile(r"^- \[ \] \*\*(.*)\*\*$")
@@ -642,8 +673,10 @@ def _is_release_entry(body: str) -> bool:
 		# The step's own dormant line decides; a release-verb title counts only
 		# for a step that has no dormant line, so a human step such as "Sync the
 		# DEPLOY_TOKEN secret to the stable environment" (dormant `DEPLOY_TOKEN`)
-		# is never ticked.
-		RELEASE_CONDITION_RE.match(dormant) or (not dormant and RELEASE_STEP_TITLE_RE.match(title))
+		# is never ticked. `dormant_until` is optional, so a title-only step also
+		# must not name a secret, token, variable, setting or similar.
+		RELEASE_CONDITION_RE.match(dormant)
+		or (not dormant and RELEASE_STEP_TITLE_RE.match(title) and not HUMAN_OBJECT_TITLE_RE.search(title))
 		for title, dormant in steps
 	)
 
@@ -687,6 +720,23 @@ def _resolve_open_state(latest: dict[str, dict], legacy: list[tuple[str, str]], 
 
 def _resolve_log(**fields: object) -> None:
 	print("OPERATOR_STEP_RESOLVE " + " ".join(f"{name}={value}" for name, value in fields.items()), file=sys.stderr)
+
+
+def _tracker_still_closable(repo: str, number: int) -> bool:
+	"""True when a fresh read shows the tracker open and not reopened.
+
+	CLAUDE.md section 14 audit: the tick's only tracker read is the listing at
+	its start, and the comment reads carry no issue state, so one single-issue
+	GET right before the close is the only way to see a reopen made during the
+	tick. An unreadable response raises ApiError, so nothing is closed.
+	"""
+	try:
+		current = json.loads(_gh(["api", f"repos/{repo}/issues/{number}"]) or "{}")
+	except ValueError as exc:
+		raise ApiError(f"unreadable operator-step tracker: {exc}") from exc
+	if not isinstance(current, dict):
+		raise ApiError("unreadable operator-step tracker: expected an issue object")
+	return current.get("state") == "open" and str(current.get("state_reason") or "") != "reopened"
 
 
 def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX_RESOLVE_COMPARES) -> dict:
@@ -769,6 +819,10 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 		recheck_unticked, _ = _resolve_open_state(recheck_latest, legacy, set())
 		if recheck_unticked != 0 or set(recheck_latest) - set(latest):
 			reason = "recheck_changed"
+		elif not _tracker_still_closable(repo, number):
+			# The listing above is minutes of round trips old: a person who
+			# closed and reopened the tracker meanwhile keeps it open.
+			reason = "reopened"
 		else:
 			newest_entry = max((comment["id"] for comment in recheck_latest.values()), default=0)
 			already_posted = any(
@@ -794,11 +848,15 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 			except ApiError:
 				# Fail safe: without the read, a racing entry cannot be ruled
 				# out, so reopen the tracker before reporting the error.
-				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open"])
+				try:
+					_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open", "-f", "state_reason=reopened"])
+				except ApiError:
+					_resolve_log(op="close", issue=number, outcome="closed", reason="after_close_reopen_failed")
+					raise
 				_resolve_log(op="close", issue=number, outcome="open", reason="after_close_read_failed")
 				raise
 			if any(key not in recheck_latest or comment["id"] != recheck_latest[key]["id"] for key, comment in after_close.items()):
-				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open"])
+				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open", "-f", "state_reason=reopened"])
 				result["closed"] = False
 				reason = "reopened_after_close"
 	_resolve_log(op="close", issue=number, outcome="closed" if result["closed"] else "open", reason=reason)
@@ -1324,6 +1382,10 @@ def main(argv: list[str] | None = None) -> int:
 	except UsageError as exc:
 		print(json.dumps({"error": str(exc)}))
 		return 1
+	except TrackerRecheckError as exc:
+		# Before ApiError: the entry was posted; only the tracker re-check failed.
+		print(json.dumps({"error": str(exc), "posted": True}))
+		return 3
 	except ApiError as exc:
 		print(json.dumps({"error": str(exc)}))
 		return 2

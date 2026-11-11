@@ -70,6 +70,10 @@ if endpoint == "repos/o/r/labels" and fields.get("name") == "ai:operator-step":
 	state["label_missing"] = False
 	done(json.dumps({"name": "ai:operator-step"}))
 if "issues?labels=ai:operator-step" in endpoint:
+	if os.environ.get("FAKE_GH_FAIL_OPERATOR_RECHECK") == "1" and any(str(comment.get("body", "")).startswith("<!-- ai:operator-step:entry") for comment in state["comments"]):
+		# The open-tracker re-listing after the entry post fails.
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	if state.get("stale_operator_lists", 0) and state.get("created"):
 		state["stale_operator_lists"] -= 1
 		done("[]")
@@ -808,6 +812,17 @@ def test_ordinary_gaps_are_not_release_pending(tmp_path: Path) -> None:
 	result, _ = _verify(tmp_path, DORMANT, env_extra={"MERGE_SHA": RELEASE_MERGE_SHA})
 	assert "op=release_pending_gaps" not in result.stdout
 	assert all(gap["release_pending"] is False and gap["rerouted"] is False for gap in _normalised_verdict(tmp_path)["gaps"])
+
+
+def test_operator_tracker_recheck_failure_still_posts_the_verdict(tmp_path: Path) -> None:
+	# operator_step_issue.py upsert exits 3: the entry is posted, only the
+	# tracker re-check failed, so the verdict comment must still be written.
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FAIL_OPERATOR_RECHECK": "1"})
+	assert result.returncode == 0
+	assert any(comment["body"].startswith("<!-- ai:operator-step:entry key=pr-42 -->") for comment in state["comments"])
+	assert "ACTIVATION_VERIFY mode=pr item=42 op=operator_issue outcome=warn reason=tracker_recheck_failed" in result.stdout
+	assert "reason=operator_issue_failed" not in result.stdout
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=DORMANT source=pr-42 -->")
 
 
 def test_operator_entry_records_the_merge_commit(tmp_path: Path) -> None:

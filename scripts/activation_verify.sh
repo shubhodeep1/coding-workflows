@@ -742,6 +742,7 @@ activation_main()
 			fi
 		fi
 	fi
+	local activation_operator_unconfirmed="false"
 	if [ "${operator_gaps}" -gt 0 ]; then
 		steps_file="${RUNTIME_DIR}/activation_operator_steps.json"
 		jq '[.gaps[] | select(.kind == "operator") | {title, instructions: (.fix + (if .evidence != "" then "\nEvidence: " + .evidence else "" end)), dormant_until}]' "${verdict_file}" > "${steps_file}"
@@ -750,8 +751,19 @@ activation_main()
 		if [[ "${activation_source_sha}" =~ ^[0-9a-f]{40}$ ]]; then
 			activation_source_args=(--source-sha "${activation_source_sha}")
 		fi
-		if ! PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_DIR}/scripts/operator_step_issue.py" upsert --repo "${REPOSITORY}" --key "${key}" \
-			--source "Activation of ${item_label}" --steps-file "${steps_file}" "${activation_source_args[@]}" >"${RUNTIME_DIR}/operator_step_issue.log" 2>&1; then
+		local activation_operator_rc=0
+		PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_DIR}/scripts/operator_step_issue.py" upsert --repo "${REPOSITORY}" --key "${key}" \
+			--source "Activation of ${item_label}" --steps-file "${steps_file}" "${activation_source_args[@]}" >"${RUNTIME_DIR}/operator_step_issue.log" 2>&1 \
+			|| activation_operator_rc=$?
+		if [ "${activation_operator_rc}" -eq 3 ]; then
+			# Exit 3: the entry was posted, but the tracker re-check after the
+			# post (or its reopen) failed. Warn a person and still post the
+			# verdict comment, which has no automatic retry in PR mode; the one
+			# Telegram message at the end becomes a WARNING that says so.
+			echo "::warning::The ai:operator-step entry for ${key} was posted, but the tracker could not be confirmed open: $(tr '\r\n' '  ' < "${RUNTIME_DIR}/operator_step_issue.log" | cut -c1-300)"
+			activation_log "mode=${mode} item=${item} op=operator_issue outcome=warn reason=tracker_recheck_failed"
+			activation_operator_unconfirmed="true"
+		elif [ "${activation_operator_rc}" -ne 0 ]; then
 			echo "::warning::Could not update the ai:operator-step issue for ${key}: $(tr '\r\n' '  ' < "${RUNTIME_DIR}/operator_step_issue.log" | cut -c1-300)"
 			activation_log "mode=${mode} item=${item} outcome=skip reason=operator_issue_failed"
 			_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} has ${operator_gaps} operator step(s), but the ai:operator-step issue could not be updated." "WARNING"
@@ -810,7 +822,12 @@ activation_main()
 	if [ "${verdict}" = "DORMANT" ] && { [ "${operator_gaps}" -gt 0 ] || [ "${activation_fix_lookup_ok}" = "false" ]; }; then
 		tg_level="WARNING"
 	fi
-	_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} (${code_gaps} code gap(s), ${operator_gaps} operator step(s))" "${tg_level}"
+	if [ "${activation_operator_unconfirmed}" = "true" ]; then
+		tg_level="WARNING"
+		_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} (${code_gaps} code gap(s), ${operator_gaps} operator step(s)); the operator-step entry was posted, but the ai:operator-step issue could not be confirmed open. Check that it is open." "${tg_level}"
+	else
+		_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} (${code_gaps} code gap(s), ${operator_gaps} operator step(s))" "${tg_level}"
+	fi
 	if [ "${activation_fix_lookup_ok}" = "false" ]; then
 		activation_log "mode=${mode} item=${item} verdict=${verdict} code_gaps=${code_gaps} operator_gaps=${operator_gaps} outcome=partial reason=fix_lookup_failed"
 	else
