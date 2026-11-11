@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:543 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The required `lint` check is red because job `tests-hooks-and-orchestrator` failed on head d16b9dfec4675de93a59d2100b34a7306346b34b (run 43063214223, job 130671078575); the visible log tail ends before the failing test, so the actual failure cannot be identified.\n  WHY: While the job stays failed, `lint` blocks the PR and auto-merge refuses with reason=required_checks_failed. Severity disagreement: openai_gpt-6-luna rated it BLOCKER/conf 5, while anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rated it NIT/conf 2. Those two say no hunk in this PR explains the failure, the `##[error][lint_pr_body_auto_close]` lines are fixture output from `tests/test_lint_pr_body_auto_close.py`, and the fix is a CI re-run or triage rather than a code edit.\n- scripts/pr_checks_lib.sh:370-485 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The CI pre-push gate and later runs report failures in tests that were previously stable: tests/test_files_touched_scope_guard.py and tests/test_persist_orchestrator.py::test_revise_constants_mirror_the_decomposition_schema.\n  WHY: These failures block the merge whether or not the logic in scripts/pr_checks_lib.sh causes them, so they must be triaged before merge. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected attribution to this PR: those tests read only fixture strings or files this PR does not touch.\n- PR Metadata (PR body and commit message):PR body line 1 and commit message #2 line 3 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR body (\"Fixes #2734\") and the second commit message (\"resolved: #2734\") contain auto-close keywords that reference orchestrator-tracking issue #2734.\n  WHY: This would violate the \u00a721 auto-close discipline, fail `tests-hooks-and-orchestrator` and the required `lint` check, and on merge close the tracking issue and stall the orchestrator. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected this: the matched lines are fixtures in `tests/test_lint_pr_body_auto_close.py`, and the PR body references only #9212.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:job `tests-hooks-and-orchestrator` (line 543); step at line 813 `python3 tests/test_lint_pr_body_auto_close.py`; run 43063214223, job 130671078575, head d16b9dfec4675de93a59d2100b34a7306346b34b; required `lint` summary job (line 3459) | severity=NIT | confidence=2\n  PROBLEM: The failure cannot be traced to any part of this PR's diff. The `##[error][lint_pr_body_auto_close]` lines come from fixtures at lines 464 and 489 of `tests/test_lint_pr_body_auto_close.py`. The failing step is not visible in the log. The only pr_checks_lib.sh-loading test in this job (`tests/test_pr_base_freshness_gate.py`, ci.yml line 976) passed the pre-push gate. The PR's own test module (ci.yml line 1302) passed in `tests-heal-plan-and-validation`.\n  WHY: Until the job is re-run or triaged, `lint` stays failed and auto-merge refuses with `reason=required_checks_failed`. The fix is a CI re-run or triage, not a code edit.\n- HARDENING_SUGGESTION: tests/test_review_autofix_review_pipeline_contract.py (next to the existing assertion at line 94) | HARDENING_RISK_SCORE=1\n  PROBLEM: No test ties `scripts/pr_checks_lib.sh` line 439 (`local gate_sup_status_ctx=\"ai-review/head-gate\"`) to `scripts/review_head_gate.sh` line 5.\n  WHY: If the context is renamed, the supersede rule silently falls back to `no_head_gate_status`. This still blocks, so it is safe, but the #9168 stall would return unnoticed. Suggested fix: assert that `gate_sup_status_ctx=\"ai-review/head-gate\"` is present in scripts/pr_checks_lib.sh (about 2 lines).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh:_pr_checks_completed (lines 370-485) | severity=BLOCKER | confidence=5\n  PROBLEM: The CI pre-push gate and later runs report failures in tests that were previously stable: tests/test_files_touched_scope_guard.py and tests/test_persist_orchestrator.py::test_revise_constants_mirror_the_decomposition_schema.\n  WHY: These failures block the merge whether they are caused directly or are collateral; they must be triaged before merge.\n- PR Metadata (PR body and commit message):PR body line 1 and commit message #2 line 3 | severity=BLOCKER | confidence=5\n  PROBLEM: The PR body (\"Fixes #2734\") and the second commit message (\"resolved: #2734\") contain auto-close keywords that reference orchestrator-tracking issue #2734.\n  WHY: This violates \u00a721. It fails `tests-hooks-and-orchestrator` and the required `lint` check, and on merge it would close the tracking issue and stall the orchestrator.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:`tests-hooks-and-orchestrator` job, line 543; the `lint` aggregate depends on it | severity=BLOCKER | confidence=5\n  PROBLEM: The PR-head CI run reports `tests-hooks-and-orchestrator` failed, which fails `lint`. The log tail lacks the failing assertion, so the failure cannot be tied to a defect in the changed code.\n  WHY: The failing required CI job prevents the PR from passing its `lint` check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml (job tests-hooks-and-orchestrator, aggregated by required check lint):run 43063214223, job 130671078575, step `python3 tests/test_lint_pr_body_auto_close.py` | severity=NIT | confidence=2\n  PROBLEM: The required lint check is red because tests-hooks-and-orchestrator fails on this head. The visible log tail holds only the expected fixture ::error:: lines from `test_main_exit_codes` and is cut off before the summary, so the failing test cannot be identified.\n  WHY: Until the job is re-run or triaged, lint stays failed and auto-merge refuses with reason=required_checks_failed. No hunk in this PR explains the failure. The pre-push gate's \"caused by this change\" rows (tests/test_files_touched_scope_guard.py, tests/test_persist_orchestrator.py) read files this PR does not modify. It needs a CI re-run or triage, not a code edit.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "72e23eb917defbc7fc22976548d21f3077da07a7053728127e57ba97abf58e28",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9262,
+    "run_id": "43063214794",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43063214794",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111190456_d252ccafda",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9262,
+    "run_id": "43063214794"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T19:04:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
