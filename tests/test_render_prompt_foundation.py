@@ -151,6 +151,26 @@ def _run_render_prompt_py(
 	)
 
 
+def test_render_prompt_py_help_strings_are_well_formed() -> None:
+	# Python 3.14 argparse %-expands every help string inside add_argument(), so a
+	# bare '%' (here the literal '{%...%}' in --skip-syntax-validation) crashed
+	# build_parser() on every call with "ValueError: badly formed help string".
+	# That broke every plan / review / judge render on the ubuntu-26.04 runners.
+	# Older Pythons only expand help on --help, so run --help to catch it here too.
+	result = subprocess.run(
+		[sys.executable, str(RENDER_PROMPT_PY), "--help"],
+		cwd=REPO_ROOT,
+		env=_base_env(),
+		capture_output=True,
+		text=True,
+		check=False,
+		timeout=60,
+	)
+	assert result.returncode == 0, result.stderr
+	assert "badly formed help string" not in result.stderr
+	assert "{{...}}/{%...%} tokens" in re.sub(r"\s+", " ", result.stdout)
+
+
 def test_output_contract_reference_includes_status_update_cadence() -> None:
 	reference_text = _load_reference_text("output-contract.txt")
 	assert "Emit one short preamble sentence (≤20 words) before each tool-call batch" in reference_text
@@ -1317,6 +1337,7 @@ def test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt() -> Non
 
 
 def main() -> int:
+	test_render_prompt_py_help_strings_are_well_formed()
 	test_output_contract_reference_includes_status_update_cadence()
 	test_render_prompt_sh_renders_implement_contract_defaults_and_env_values()
 	test_render_prompt_sh_renders_header_with_empty_repo_learnings()
