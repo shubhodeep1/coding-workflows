@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How much should this triage issue fix?\nChoices:\nA) Only the flaky timing regexes in `SingleFileModulesConcurrencyContractTest.test_full_body_overlaps_modules_and_fails_closed`: lines 4662 and 4669 accept `-?\\d+`, matching line 4661. Leave the closed-reader failure (`test_gh_retry_stdout_isolation.py:242`) to the open PRs that already target it (#9246 / #9264 / #9267 / #9316). The workflow step and `scripts/gh_helpers.sh` stay unchanged. (RECOMMENDED)\nB) Option A, plus fix the closed-reader failure in this issue too. That means making the `gh_retry` closed-pipe status report non-zero when `cat` is Rust coreutils on ubuntu-26.04, in `scripts/gh_helpers.sh` and/or its test. This may conflict with the open PRs listed in A.\nC) Change nothing here and close this issue as a duplicate of open PR #9246, which already covers both the heartbeat clock and the closed-reader test.",
+  "fingerprint": "a804503fb2ab55eafa7abddd2c03e02f5bf484ac824ed1da473e9403f4a73b39",
+  "lineage": {
+    "issue_number": 9330,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43102221001",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43102221001",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111212731_a0837130e9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9330,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43102221001"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9330 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T21:27:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
