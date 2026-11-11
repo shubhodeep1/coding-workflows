@@ -5627,16 +5627,19 @@ jobs:
             fi
           fi
           if [ -n "${JUDGE_CRASH_REASON}" ]; then
+            # A skip reason written before the crash may have set DEBUG.
+            JUDGE_ALERT_LEVEL="CRITICAL"
             JUDGE_CRASH_DETAIL="${JUDGE_CRASH_REASON}"
             if [ "${JUDGE_CRASH_REASON}" = "judge_crashed" ] && [[ "${RB_JUDGE_EXIT_CODE:-}" =~ ^[0-9]+$ ]]; then
               JUDGE_CRASH_DETAIL="exit ${RB_JUDGE_EXIT_CODE}"
             fi
             MSG="$(printf 'PR review blocked — review-blocked judge failed (%s; %s autofix commits, max %s)\nNo autofix exhaustion: the judge itself could not complete. Needs a look at the run log' "${JUDGE_CRASH_DETAIL}" "${AUTOFIX_ITERATION}" "${MAX_AUTOFIX_ITERATIONS}")"
-            if [ "${RB_BLOCKED_REPEAT:-}" = "true" ]; then
-              echo "RB_JUDGE_CRASH_ALERT pr=${PR_NUMBER} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${JUDGE_CRASH_REASON} repeat=true level=SUPPRESSED"
-              exit 0
-            fi
-            echo "RB_JUDGE_CRASH_ALERT pr=${PR_NUMBER} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${JUDGE_CRASH_REASON} repeat=false level=${JUDGE_ALERT_LEVEL}"
+            # unchecked: the comment step (and its marker dedupe) did not run,
+            # e.g. a security-pass-only run; that path pages as before.
+            JUDGE_CRASH_REPEAT="${RB_BLOCKED_REPEAT:-unchecked}"
+            [ "${JUDGE_CRASH_REPEAT}" != "true" ] || JUDGE_ALERT_LEVEL="SUPPRESSED"
+            echo "RB_JUDGE_CRASH_ALERT pr=${PR_NUMBER} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${JUDGE_CRASH_REASON} repeat=${JUDGE_CRASH_REPEAT} level=${JUDGE_ALERT_LEVEL}"
+            [ "${JUDGE_CRASH_REPEAT}" != "true" ] || exit 0
           fi
           MSG+=$'\n'
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"

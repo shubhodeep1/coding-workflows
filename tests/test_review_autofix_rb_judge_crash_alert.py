@@ -305,6 +305,8 @@ def _judge_alert(env: dict[str, str]) -> tuple[list[tuple[str, str]], str]:
 			"JUDGE_HANDLED": "",
 			"JUDGE_ACTION": "",
 			"JUDGE_SKIP_REASON": "",
+			# The comment step ran and found no marker (its normal output).
+			"RB_BLOCKED_REPEAT": "false",
 		}
 		run_env.update(env)
 		result = subprocess.run(["bash", "-c", body], env=run_env, capture_output=True, text=True, check=False)
@@ -340,6 +342,23 @@ def test_alert_repeat_sends_nothing_and_logs():
 	sends, stdout = _judge_alert({"RB_JUDGE_STATUS": "failed", "RB_JUDGE_EXIT_CODE": "1", "AUTOFIX_ITERATION": "0", "RB_BLOCKED_REPEAT": "true"})
 	assert sends == []
 	assert f"RB_JUDGE_CRASH_ALERT pr=7 head={HEAD_A} reason=judge_crashed repeat=true level=SUPPRESSED" in stdout
+
+
+def test_alert_crash_without_comment_step_logs_unchecked_and_pages():
+	# Security-pass-only run: the comment step (and its dedupe) is skipped,
+	# so its output is empty; the crash still pages and says so in the log.
+	sends, stdout = _judge_alert({"RB_JUDGE_STATUS": "failed", "AUTOFIX_ITERATION": "1", "RB_BLOCKED_REPEAT": ""})
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "review-blocked judge failed" in sends[0][1]
+	assert "reason=judge_crashed repeat=unchecked level=CRITICAL" in stdout
+
+
+def test_alert_crash_overrides_debug_level_from_earlier_skip_reason():
+	for reason in ("merge_conflict", "mergeability_pending", "blocking_check_runs", "check_runs_query_failed"):
+		sends, stdout = _judge_alert({"RB_JUDGE_STATUS": "failed", "JUDGE_SKIP_REASON": reason, "AUTOFIX_ITERATION": "0"})
+		assert len(sends) == 1 and sends[0][0] == "CRITICAL", reason
+		assert "review-blocked judge failed" in sends[0][1], reason
+		assert "reason=judge_crashed repeat=false level=CRITICAL" in stdout, reason
 
 
 def test_alert_exhaustion_text_unchanged():
