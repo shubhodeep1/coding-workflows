@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The contract comment at `scripts/gh_helpers.sh:1196-1198` promises callers a non-zero status when a successful attempt's output can't be delivered. Today that status depends only on the exit code of the external `cat \"${stdout_file}\" || _gh_retry_replay_rc=$?` at line 1229, so the promise holds only where `cat` reports a broken pipe. Option A fixes the cause in the helper and keeps the contract and the `rc != 0` assertion at `tests/test_gh_retry_stdout_isolation.py:245`. Option B would weaken a production guarantee just to get a test to pass. `gh_retry_to_file` copies with `cat \"${attempt_file}\" > \"${outfile}\"` (line 1320), which writes to a regular file, not a pipe. It has no closed-reader case, so it stays unchanged unless planning finds a real fault there.\n\nEXECUTION PLAN (required for any non-letter decision):\n\nSETUP REQUIRED (only when a decision relies on a placeholder):",
+  "fingerprint": "0c96aa911320110f5c38478675060072a350247553fa56fc65dac1bf15cf9a21",
+  "lineage": {
+    "issue_number": 9258,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43042488635",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43042488635",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9258"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261111150106_cb34f7daf6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9258,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43042488635"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9258",
+  "timestamps": {
+    "created_at": "2026-11-11T15:01:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
