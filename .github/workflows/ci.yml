@@ -3442,7 +3442,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        system-python-shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        # 12 shards ran ~970 functions each and hit the 20-minute timeout on
+        # 3.14 (run 43053071771); 24 keeps each shard near half the budget.
+        system-python-shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     permissions:
       contents: read
     env:
@@ -3531,12 +3533,15 @@ jobs:
             exit 2
           fi
 
-          export TMPDIR="${RUNNER_TEMP:-/tmp}"
+          # TMPDIR stays the runner default (/tmp), as in every other test job: a
+          # RUNNER_TEMP-based pytest tmp_path pushes the heal tests' broker socket
+          # (heal_isolated_implement.sh ${root}/socket/provider.sock) past the
+          # 108-byte AF_UNIX limit (run 43053071771, shard 3).
           export PYTHONDONTWRITEBYTECODE=1
 
           echo "system-python shard: index=${shard_index} total=${shard_total} python=$(command -v python3) version=$(python3 --version 2>&1)"
 
-          work_dir="$(mktemp -d "${TMPDIR}/system-python-shard.XXXXXX")"
+          work_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/system-python-shard.XXXXXX")"
           trap 'rm -rf -- "${work_dir}"' EXIT
           collect_log="${work_dir}/collect.log"
           all_tests="${work_dir}/tests.txt"
@@ -3703,7 +3708,11 @@ jobs:
                 git config --global --add safe.directory "*"
               fi
               echo "sandbox python: $(command -v python3) $(python3 --version 2>&1)"
-              python3 -m pytest -q -p no:cacheprovider "$@"
+              # Template/live-copy parity is not interpreter-specific; the 3.12 jobs and
+              # tests-system-python check it with the PR-base drift tolerance this
+              # shallow, base-SHA-free container cannot provide.
+              python3 -m pytest -q -p no:cacheprovider \
+                --deselect tests/test_gh_api_write_guard.py::test_template_parity "$@"
             ' _ "${family_tests[@]}"
 
   budget-watch:
