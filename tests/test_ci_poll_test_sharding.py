@@ -4659,14 +4659,16 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 					self.assertEqual(markers.joinpath(f"saw_{n}").read_text(), "3", f"fake {n} ran alone:\n{out}")
 				self.assertEqual(out.count("CI_SUBTEST_START subtest="), 3, out)
 				self.assertEqual(len(re.findall(r"CI_SUBTEST_END subtest=\S+ elapsed_ms=-?\d+ rc=\d+\n", out)), 3, out)
-				self.assertRegex(out, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=\d+\n")
+				# elapsed_ms uses the wall clock (date +%s%3N) and can go negative when
+				# the runner clock steps back; timing is telemetry only (#9330).
+				self.assertRegex(out, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=-?\d+\n")
 				if failing is None:
 					self.assertEqual(result.returncode, 0, out + result.stderr)
 					self.assertNotIn("single-file module tests failed", out)
 					continue
 				self.assertEqual(result.returncode, 1, out + result.stderr)
 				self.assertIn(f"CI_SUBTEST_END subtest={fakes[failing]} elapsed_ms=", out)
-				self.assertRegex(out, rf"subtest={re.escape(fakes[failing])} elapsed_ms=\d+ rc=3\n")
+				self.assertRegex(out, rf"subtest={re.escape(fakes[failing])} elapsed_ms=-?\d+ rc=3\n")
 				error_line = f"::error::single-file module tests failed: {fakes[failing]}\n"
 				self.assertIn(error_line, out)
 				self.assertIn(f"| ::error::forged {failing}", out)
