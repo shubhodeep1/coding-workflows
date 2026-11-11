@@ -5,13 +5,25 @@
   "entry_id": "processed_command_9247_6798757286_approved",
   "issue_number": 9247,
   "metadata": {
+    "branch": "ai/issue-9247",
+    "changed_files": [
+      "changelog.d/9247-argparse-help-string-guard.md",
+      "tests/test_ci_wires_every_test_file.py",
+      "tests/test_render_prompt_foundation.py",
+      "tests/test_scripts_build_parser_help.py"
+    ],
+    "issue_number": 9247,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9247",
+    "pr_number": 9270,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9270",
+    "run_attempt": "1",
+    "run_id": "43040576875",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43040576875"
   },
   "run_attempt": 1,
   "run_id": "43040576875",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-11T15:04:23Z",
+  "status": "completed",
+  "timestamp": "2026-11-11T15:17:43Z",
   "workflow": "implement"
 }
