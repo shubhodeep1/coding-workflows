@@ -680,6 +680,71 @@ def test_redaction_never_swallows_the_next_lines_step_error():
 	assert result.startswith("log_tail_anchor: step_error\n") and STEP_ERROR in result
 	assert mod._redact_log_text("extraheader: AUTHORIZATION: basic abcdefgh") == "extraheader: [redacted]"
 
+
+# --- Issue #9318: prefer the runner's step-exit line as the anchor ----------
+FIXTURE_ERROR = "##[error][lint_pr_body_auto_close] PR body:line 1 — auto-close keyword 'Fixes' references #2734."
+
+
+def test_window_prefers_the_step_exit_line_over_earlier_fixture_errors():
+	lines = [_ts(1) + "##[group]Run python3 tests/test_lint_pr_body_auto_close.py"]
+	lines.append(_ts(1) + FIXTURE_ERROR)
+	lines += [_ts(2) + f"PASS  test_lint_case_{n:03d}" for n in range(60)]
+	lines += [_ts(3) + "##[group]Run python3 tests/test_failing_step.py", _ts(3) + "AssertionError: boom"]
+	lines.append(_ts(4) + STEP_ERROR)
+	lines += [_ts(5) + f"teardown line {n}" for n in range(20)]
+	data = ("\n".join(lines) + "\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=512, partial_start=False)
+	assert result.startswith("log_tail_anchor: step_error\n")
+	body_lines = result.split("\n", 1)[1].split("\n")
+	body = "\n".join(body_lines)
+	assert "AssertionError: boom" in body and STEP_ERROR in body
+	assert "[lint_pr_body_auto_close]" not in body
+	exit_idx = next(i for i, line in enumerate(body_lines) if STEP_ERROR in line)
+	assert len(body_lines) - 1 - exit_idx <= mod.LOG_TAIL_STEP_ERROR_AFTER_LINES
+	assert len(body.encode("utf-8")) <= 512
+
+
+def test_window_falls_back_to_first_error_without_a_step_exit_line():
+	lines = ["context"] + ["##[error]first failure"] + [f"after {n}" for n in range(10)] + ["##[error]second failure", "tail"]
+	data = ("\n".join(lines) + "\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=8000, partial_start=False)
+	assert result.startswith("log_tail_anchor: step_error\n")
+	body_lines = result.split("\n", 1)[1].split("\n")
+	assert "##[error]first failure" in body_lines
+	assert "##[error]second failure" not in body_lines
+	first_idx = body_lines.index("##[error]first failure")
+	assert len(body_lines) - 1 - first_idx <= mod.LOG_TAIL_STEP_ERROR_AFTER_LINES
+	assert body_lines[-1] == "after 4"
+
+
+def test_partial_first_line_step_exit_is_never_the_anchor():
+	data = b"##[error]Process completed with exit code 1.\nnext\n##[error]other\nlast"
+	partial = mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=True)
+	assert partial.startswith("log_tail_anchor: step_error\n")
+	partial_body = partial.split("\n", 1)[1]
+	assert partial_body == "next\n##[error]other\nlast"
+	whole = mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=False)
+	assert whole.startswith("log_tail_anchor: step_error\n")
+	assert whole.split("\n", 1)[1] == "##[error]Process completed with exit code 1.\nnext\n##[error]other\nlast"
+	assert mod._select_log_tail_window(
+		b"##[error]other\n##[error]Process completed with exit code 2.\nafter",
+		log_tail_bytes=1000,
+		partial_start=False,
+	).split("\n", 1)[1] == "##[error]other\n##[error]Process completed with exit code 2.\nafter"
+
+
+def test_first_of_several_step_exit_lines_is_the_anchor():
+	second = "##[error]Process completed with exit code 2."
+	lines = ["cause one", STEP_ERROR] + [f"between {n}" for n in range(10)] + ["cause two", second, "tail"]
+	data = ("\n".join(lines) + "\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=8000, partial_start=False)
+	assert result.startswith("log_tail_anchor: step_error\n")
+	body_lines = result.split("\n", 1)[1].split("\n")
+	assert second not in body_lines and "cause one" in body_lines
+	first_idx = body_lines.index(STEP_ERROR)
+	assert len(body_lines) - 1 - first_idx <= mod.LOG_TAIL_STEP_ERROR_AFTER_LINES
+
+
 if __name__ == "__main__":
 	import pytest
 

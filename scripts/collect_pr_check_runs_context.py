@@ -40,6 +40,13 @@ LOG_SCAN_BYTES = 262144
 # huge line (an error embedding initcode hex) cannot crowd out the rest.
 LOG_LINE_CHAR_CAP = 2000
 LOG_TAIL_STEP_ERROR_MARKER = "##[error]"
+# Issue #9318: the GitHub runner prints this line at the end of the failing
+# step. An earlier "##[error]" line can be expected output from a passing step
+# (e.g. the "[lint_pr_body_auto_close]" fixture lines printed by
+# tests/test_lint_pr_body_auto_close.py), and such a line must not hide the
+# real failure. A continue-on-error step also prints this line; the first one
+# in the scan still wins (accepted trade-off).
+LOG_TAIL_STEP_EXIT_MARKER = "##[error]Process completed with exit code"
 LOG_TAIL_STEP_ERROR_AFTER_LINES = 5
 FAILURE_CONCLUSIONS = {"failure", "timed_out", "action_required", "cancelled", "stale", "startup_failure"}
 # Full commit SHA accepted for PR_CHECK_RUNS_HEAD_SHA_OVERRIDE (#6918).
@@ -400,7 +407,9 @@ def _select_log_tail_window(out: bytes, *, log_tail_bytes: int, partial_start: b
 	"""Pick the ``failed[i].log_tail`` text from the scanned end of a job log.
 
 	When the scan holds a step-level ``##[error]`` line, the window ends at the
-	first one (plus up to 5 following lines) and is trimmed from the front to
+	first step-exit ``##[error]Process completed with exit code`` line, else at
+	the first ``##[error]`` line (issues #8799, #9318), plus up to 5 following
+	lines, and is trimmed from the front to
 	``log_tail_bytes`` bytes and ``LOG_TAIL_LINES`` lines (issue #8799).
 	Otherwise the window is the pre-#8799 one: the last ``log_tail_bytes``
 	bytes, last ``LOG_TAIL_LINES`` lines. A ``log_tail_anchor:`` line names the
@@ -412,12 +421,17 @@ def _select_log_tail_window(out: bytes, *, log_tail_bytes: int, partial_start: b
 	out = decoded.encode("utf-8")
 	lines = decoded.splitlines()
 	anchor: int | None = None
-	for index, line in enumerate(lines):
-		# A partial range may start mid-line; that fragment is never an anchor.
-		if index == 0 and partial_start:
-			continue
-		if LOG_TAIL_STEP_ERROR_MARKER in line:
-			anchor = index
+	# Issue #9318: prefer the runner's step-exit line; fall back to the first
+	# "##[error]" line only when the scan holds no step-exit line.
+	for marker in (LOG_TAIL_STEP_EXIT_MARKER, LOG_TAIL_STEP_ERROR_MARKER):
+		for index, line in enumerate(lines):
+			# A partial range may start mid-line; that fragment is never an anchor.
+			if index == 0 and partial_start:
+				continue
+			if marker in line:
+				anchor = index
+				break
+		if anchor is not None:
 			break
 	if anchor is None:
 		tail = out[-log_tail_bytes:] if len(out) > log_tail_bytes else out
