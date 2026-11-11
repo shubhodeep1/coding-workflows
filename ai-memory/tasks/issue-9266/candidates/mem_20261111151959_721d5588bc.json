@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The plan-step crash cannot be fixed without the actual exception. Can you supply it, or how should this issue proceed without it?\nChoices:\n- A: I will paste the traceback for run 43040637560 (job `plan / plan`, step \"Run Codex planning\", the lines after `14:47:28.39`, down to the final `XxxError: ...` line) as an `/answer`, and the plan fixes that helper so it fails closed with an `::error::` line instead of crashing. (RECOMMENDED)\n- B: The traceback is not available. Ship only a diagnostic change (an `ERR` trap in `scripts/run_plan_codex.sh` that prints `RUN_PLAN_CODEX_FAILED line=... rc=...`) so the next failure names the failing command. Fix the crash itself in a later heal generation.\n- C: The traceback is not available and no code change is wanted here. Record the root cause as undetermined, point to PR #9219 for the evidence-capture gap, and close as nothing to implement.\n**Note:** B needs scope beyond the current heal marker (see Q2).\nQ2: The heal-scope marker allows only `.github/workflows/plan.yml`, `tests/**` and `changelog.d/*.md`. The likely fixes are in `scripts/run_plan_codex.sh`, `scripts/render_prompt.sh` (the unguarded `collect_prompt_placeholders` heredoc at lines 187-199) and `scripts/render_prompt.py`. Which files may this issue change?\nChoices:\n- A: Widen the scope to the `scripts/` helper(s) the traceback (or the Q1:B diagnostic) points to, plus their tests and changelog. (RECOMMENDED)\n- B: Keep the marker scope as it is. Only `plan.yml`-level changes are allowed, for example capturing the step's stderr there.\n**Note:** B conflicts with Q1:A whenever the traceback names a `scripts/` helper, and with Q1:B. Choosing either pair will need re-clarification.\nQ3: Fix 2 from the issue (keeping traceback frames and exception lines in `filter_log`) is already the subject of open PR #9219. How should this issue treat it?\nChoices:\n- A: Leave it to PR #9219. This issue does not touch `scripts/workflow_failure_heal.py` or its `filter_log` tests. (RECOMMENDED)\n- B: Include it here as well and resolve the overlap with PR #9219 at merge time.",
+  "fingerprint": "ffda3df767ae43c1474e4fe3cc8377c1965df5b6f3a7841073adb4a41305eba1",
+  "lineage": {
+    "issue_number": 9266,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43043987587",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43043987587",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111151959_721d5588bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9266,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43043987587"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9266 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T15:19:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
