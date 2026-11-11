@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-11T20:09:34Z",
+  "issue_number": 9266,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=.github/workflows/ci.yml:543, 813, 2489, 3486-3489; cited_path=.github/workflows/ci.yml; files_touched=.github/workflows/plan.yml, agents.d/9266-plan-codex-failure-diagnostic.md, changelog.d/9266-plan-codex-failure-diagnostic.md, tests/test_ci_wires_every_test_file.py, tests/test_plan_codex_step_extraction.py, tests/test_plan_run_codex_failure_diagnostic.py.",
+  "phase": "review_autofix",
+  "pr_number": 9288,
+  "record_id": "lesson_20261111200934_31cfb961cc",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/plan.yml",
+    "agents.d/9266-plan-codex-failure-diagnostic.md",
+    "changelog.d/9266-plan-codex-failure-diagnostic.md",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_plan_codex_step_extraction.py",
+    "tests/test_plan_run_codex_failure_diagnostic.py"
+  ]
+}
