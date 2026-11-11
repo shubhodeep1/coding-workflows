@@ -86,13 +86,37 @@ _semble_index_path()
 	printf '.semble-index\n'
 }
 
+_semble_now_ms()
+{
+	local semble_now_value="" semble_now_realtime="${EPOCHREALTIME:-}"
+	# Bash's own clock first: on ubuntu-26.04 runners (Rust uutils coreutils)
+	# `date +%s%3N` sometimes returned a reading one digit short (#9240).
+	# `date` stays as the fallback for bash < 5. Always returns 0.
+	if [[ "${semble_now_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+		printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
+		return 0
+	fi
+	semble_now_value="$(date +%s%3N 2>/dev/null || true)"
+	if [[ "${semble_now_value}" =~ ^[0-9]{13,}$ ]]; then
+		printf '%s\n' "${semble_now_value}"
+		return 0
+	fi
+	semble_now_value="$(date +%s 2>/dev/null || true)"
+	if [[ "${semble_now_value}" =~ ^[0-9]+$ ]]; then
+		printf '%s\n' "$(( 10#${semble_now_value} * 1000 ))"
+		return 0
+	fi
+	printf '0\n'
+	return 0
+}
+
 _semble_elapsed_ms()
 {
 	local start_ms="${1:-0}"
 	local end_ms=""
 	local diff="0"
 
-	end_ms="$(date +%s%3N 2>/dev/null || printf '0')"
+	end_ms="$(_semble_now_ms)"
 	case "${start_ms}${end_ms}" in
 		*[!0-9]*)
 			printf '0\n'
@@ -228,7 +252,7 @@ semble_ensure_ready()
 	wrapper_path="${SEMBLE_WRAPPER_DIR:-$(dirname "${index_path}")/semble/bin}/semble"
 	install_result="$(mktemp "${bootstrap_root}/semble-install.XXXXXX")" || { exec {lock_fd}>&-; return 1; }
 	remaining="$((deadline - $(date +%s)))"
-	start_ms="$(date +%s%3N)"
+	start_ms="$(_semble_now_ms)"
 	if [ "${remaining}" -gt 0 ] && [ -f "${_SEMBLE_HELPERS_SCRIPT_DIR}/install_semble.sh" ] &&
 		(cd "${bootstrap_root}" && GITHUB_WORKSPACE="${workspace_root}" SEMBLE_INSTALL_RESULT_FILE="${install_result}" env -u BASH_ENV -u ENV timeout "${remaining}" bash "${_SEMBLE_HELPERS_SCRIPT_DIR}/install_semble.sh") &&
 		[ "$(cat "${install_result}" 2>/dev/null)" = "available" ]; then
@@ -237,7 +261,7 @@ semble_ensure_ready()
 		remaining="$((deadline - $(date +%s)))"
 		build_log="$(mktemp "${bootstrap_root}/semble-build.XXXXXX")" || true
 		if [ -n "${build_log}" ] && [ "${remaining}" -gt 0 ] && [ -f "${_SEMBLE_HELPERS_SCRIPT_DIR}/build_semble_wrapper.sh" ]; then
-			build_start_ms="$(date +%s%3N)"
+			build_start_ms="$(_semble_now_ms)"
 			(cd "${bootstrap_root}" && GITHUB_WORKSPACE="${workspace_root}" SEMBLE_INDEX_PATH="${index_path}" env -u BASH_ENV -u ENV timeout "${remaining}" bash "${_SEMBLE_HELPERS_SCRIPT_DIR}/build_semble_wrapper.sh") 2> "${build_log}" && build_rc=0
 			cat "${build_log}" >&2
 		fi
@@ -329,7 +353,7 @@ semble_query_block()
 		return 1
 	fi
 
-	start_ms="$(date +%s%3N 2>/dev/null || printf '0')"
+	start_ms="$(_semble_now_ms)"
 	if command -v timeout >/dev/null 2>&1; then
 		if timeout --preserve-status "${timeout_secs}s" \
 			"${semble_bin}" query "${query_text}" --index "${semble_index}" --top-k "${max_chunks}" --format text "$@" >"${tmp_stdout}" 2>"${tmp_stderr}"; then
