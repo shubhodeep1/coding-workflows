@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_pr_check_runs_context.py:423-432 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: _select_log_tail_window anchors on the FIRST runner exit-code marker, so a tolerated (continue-on-error) step's exit line can win over the real failing step's later exit line and cut the real failure out of the tail window.\n  WHY: The real failure is excluded from the editor excerpt, which can misattribute the failure; all three reviewers rated it NIT (low) with confidence 2-3.\n- (CI context: lint, orchestrate-poll (2), tests-hooks-and-orchestrator, run 42939355701, head 0f316dd2) | severity=high | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Three CI jobs are failing, and no hunk in this PR's five changed files corresponds to the failing assertions; the log tails were captured with the pre-fix anchoring.\n  WHY: The lint gate stays red and blocks merge, but the failures are outside the diff (the PR description says they are inherited from the base branch), so attribution should be confirmed before any edit. The reviewer rated it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/collect_pr_check_runs_context.py:423-432 | severity=NIT | confidence=3\n  PROBLEM: The log tail window is anchored to the first occurrence of the runner exit-code marker.\n  WHY: If a log has multiple exit-code markers (e.g. a tolerated continue-on-error failure followed by a real failure), the anchor locks onto the first and may leave the critical failure out of the tail.\n- HARDENING_SUGGESTIONS: scripts/collect_pr_check_runs_context.py, _select_log_tail_window exit-marker search (lines 423-432). Store the last matching index for LOG_TAIL_STEP_EXIT_MARKER instead of returning at the first match (~4-6 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/collect_pr_check_runs_context.py:423-432 | severity=NIT | confidence=2\n  PROBLEM: The anchor is the first `##[error]Process completed with exit code` line in the scan window. The runner prints it for every non-zero step, including continue-on-error steps, so an earlier tolerated step's line wins and the real failure is cut off. The pre-#9179 code had the same first-match shape, so this is not a regression.\n  WHY: With steps [lint] continue-on-error exiting 1 and [test] exiting 1, the 5-line after-window holds lines unrelated to the failing test, so the editor misattributes the failure.\n- TASK COMPLETENESS: none. All deliverables named in the PR description are present.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/collect_pr_check_runs_context.py:423-432 | severity=NIT | confidence=2\n  PROBLEM: A job log with more than one runner exit-code line anchors on the earliest. A tolerated earlier step's line plus 5 lines ends the window and drops the real failure.\n  WHY: Real runner logs can have this layout, and the editor excerpt would again exclude the failing assertion, reproducing the #9179 stall for those logs.\n- (CI context: lint, orchestrate-poll (2), tests-hooks-and-orchestrator, run 42939355701, head 0f316dd2) | severity=MAJOR | confidence=3\n  PROBLEM: Three failing jobs have log tails captured by the pre-fix first-`##[error]` anchoring. No hunk in this PR's five changed files corresponds to the failing assertions, and the PR description says the 3 failures are inherited from the base branch.\n  WHY: The lint gate stays red and blocks merge, but the failures are outside the diff, so attribution should be confirmed against the base branch before touching anything.\n- HARDENING_SUGGESTIONS: scripts/collect_pr_check_runs_context.py, _select_log_tail_window lines 423-432. For LOG_TAIL_STEP_EXIT_MARKER, record the LAST matching index instead of breaking at the first, fall back to first-match for the generic marker, and add one test with two exit-code lines (~4-6 lines). HARDENING_RISK_SCORE: 1\n- TASK COMPLETENESS: none.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1fe6c229a96cc6da83c5a1ad30e6cbdd062e9828c2ba31837742f95244a045b1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9218,
+    "run_id": "43034543244",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43034543244",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111145912_3b244137bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9218,
+    "run_id": "43034543244"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T14:59:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
