@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9249,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9249\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9276\",\"pr_number\":9276,\"branch\":\"ai/issue-9249\",\"run_id\":\"43040945106\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43040945106\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/review_autofix.yml\",\"agents.d/9249-rb-judge-crash-alert.md\",\"changelog.d/9249-rb-judge-crash-alert.md\",\"scripts/review_autofix_step_post_review_blocked_comment.sh\",\"tests/test_review_autofix_rb_judge_crash_alert.py\"]}",
+  "fingerprint": "23fa1c99c2fd2feb6e452656b0195a66064affc824c6996f49ed6d6f073ab3f2",
+  "lineage": {
+    "issue_number": 9249,
+    "parent_ids": [],
+    "pr_number": 9276,
+    "run_id": "43040945106",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43040945106",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9276"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261111154728_6496db2297",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9249,
+    "level": "run",
+    "pr_number": 9276,
+    "run_id": "43040945106"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9249: https://github.com/shubhodeep1/coding-workflows/pull/9276",
+  "timestamps": {
+    "created_at": "2026-11-11T15:47:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
