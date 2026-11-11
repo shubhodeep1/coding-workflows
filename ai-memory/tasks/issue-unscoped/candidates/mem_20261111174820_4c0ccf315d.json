@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:543-549 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `tests-hooks-and-orchestrator` check run (job 130606294464) failed on head 254b6ba3, so the aggregate `lint` check that depends on it (job 130646405646, ci.yml lines 3450, 3487) also failed. The failing step is above the 16 KB log tail, and none of the 4 changed files maps to it.\n  WHY: The log tail shows only PASS lines plus the intended `::error::[lint_pr_body_auto_close]` fixture output for #2734. The PR's own test file runs at ci.yml:3387 in a different group, which passed, and scripts/review_apply_fixes.sh appears only under static-checks (line 190), which also passed. The pre-push gate lists the job as inherited from the merge-base. The gate's `ruff` \"caused by this change\" unit could not be reproduced: the ruff step (ci.yml:400) lints only scripts/*.py, and no reviewer found an E/F finding on an added line. Fixing it needs a rerun or the full job log, not a change to this diff. All reviewers said NIT, so there is no severity disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cGate only this new admission behind the env var REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED\u201d and make `false` turn it off.\n  expected_change_site: `.github/workflows/review_autofix.yml` workflow-level `env:` configuration, forwarding the repository variable to the helper process.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR reads the flag in `scripts/review_untrusted_workspace.py` but does not add it to the `review_autofix.yml` environment. That workflow maps repository variables into its environment at lines 114-162, and the changelog confirms the flag is not forwarded. As a result, setting the repository variable never reaches the helper, which sees it unset and keeps the admission enabled. The source gave severity MAJOR. anthropic_claude-sonnet-5_5 disagrees: it says forwarding the flag from review_autofix.yml is not a requirement of the issue, and that the workflow file is outside the files_touched grant.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:job tests-hooks-and-orchestrator (line 543). The last visible step is \"python3 tests/test_lint_pr_body_auto_close.py\" (line 833). The aggregate lint job (failed[0]) failed only because it depends on this job. | severity=NIT | confidence=2\n  PROBLEM: The check run tests-hooks-and-orchestrator is failing on head 254b6ba3, and no line in its log tail traces to any changed file. The ##[error][lint_pr_body_auto_close] lines are intended negative-test output, and the failing step is above the 16 KB tail. tests/test_review_autofix_review_pipeline_contract.py runs at line 3387 in a different group, which passed. scripts/review_apply_fixes.sh is listed only at line 190, under static-checks, which passed.\n  WHY: The lint aggregate stays red until a rerun passes or the real failing step is found in the full job log. The pre-push gate lists the job as inherited from the merge-base, and there is nothing to fix in this PR's diff.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:`tests-hooks-and-orchestrator` job, lines 543-549 | severity=NIT | confidence=2\n  PROBLEM: The check run for this job failed, and so did the aggregate `lint` check. The supplied log tail does not identify the failing step: it ends with passing tests and expected fixture output.\n  WHY: The job failed on the reviewed head, but the available log evidence neither maps the failure to the changed files nor shows its cause. The full job log is needed.\n- TASK_GAP\n  Requirement: \u201cGate only this new admission behind the env var REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED\u201d and make `false` turn it off.\n  Expected change site: `.github/workflows/review_autofix.yml` workflow-level `env:` configuration, forwarding the repository variable to the helper process.\n  Evidence of absence: The PR reads the flag in `scripts/review_untrusted_workspace.py` but does not add it to the `review_autofix.yml` environment. That workflow maps repository variables into its environment at lines 114-162, and the changelog confirms the flag is not forwarded, so setting the repository variable never reaches the helper, which sees it unset and keeps the admission enabled.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:job tests-hooks-and-orchestrator (line 543); aggregate lint job depends on it (lines 3450, 3487) | severity=NIT | confidence=2\n  PROBLEM: The failed check-runs `tests-hooks-and-orchestrator` (job 130606294464) and its dependent aggregate `lint` (job 130646405646) do not map to any code site in this PR. The 16 KB log tail shows only PASS lines plus the intentional `::error::` fixture output of tests/test_lint_pr_body_auto_close.py, and the failing step is above the captured tail. The PR's test file runs at ci.yml:3387, which succeeded, and the pre-push gate classifies the job as inherited from the merge-base. The gate's `ruff` \"caused by this change\" unit is still unreproduced: the ruff step (ci.yml:400) lints only scripts/*.py, and no E/F finding has been found on a line this PR adds to scripts/review_untrusted_workspace.py.\n  WHY: The `lint` check stays red until the job is rerun or the upstream failure is diagnosed outside this diff. Nothing in the four changed files explains it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "31cc288dcf7f5ef3e80bb305aee54372c4ba7125e421febfcd2cc4d8e0e7b5f4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9180,
+    "run_id": "43044948229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43044948229",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111174820_4c0ccf315d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9180,
+    "run_id": "43044948229"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T17:48:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
