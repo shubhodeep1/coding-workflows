@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **The check-run `log_tail` excerpt now ends at the step that failed, not at `##[error]` text a passing test printed.** `_select_log_tail_window` in `scripts/collect_pr_check_runs_context.py` prefers the runner's `##[error]Process completed with exit code N` line as its anchor.
+
+In the triage of PR #9272, the collector anchored on the first `##[error]` line in the scan, which was expected output from the passing `tests/test_lint_pr_body_auto_close.py`, so the excerpt ended before the step that actually failed. The window now ends at the first runner step-failure line when the scan has one (the step's own `##[error]` messages just before it are kept as lead context) and falls back to the first `##[error]` line, then to the end of the log, as before. The output format, the `log_tail_anchor:` labels, the byte and line budgets, redaction and the request count are unchanged. Consumers get the new anchor after the next `@stable` sync.

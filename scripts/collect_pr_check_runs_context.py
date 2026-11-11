@@ -41,6 +41,16 @@ LOG_SCAN_BYTES = 262144
 LOG_LINE_CHAR_CAP = 2000
 LOG_TAIL_STEP_ERROR_MARKER = "##[error]"
 LOG_TAIL_STEP_ERROR_AFTER_LINES = 5
+# Issue #9326: the runner's own step-failure line. The runner writes it once
+# for each `run:` step that exits non-zero; a passing step never writes it, so
+# "##[error]" lines a passing test prints (e.g. lint self-tests) cannot outrank
+# it. Only this one pattern is matched, and only when "##[error]" starts the
+# message (optional BOM and runner timestamp first). Step-level messages such
+# as "##[error]merge-train step shards failed: rest" sit just before it and
+# land in the lead context without a pattern of their own.
+LOG_TAIL_STEP_FAILURE_LINE_RE = re.compile(
+	r"^\ufeff?(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z )?##\[error\]Process completed with exit code -?\d+"
+)
 FAILURE_CONCLUSIONS = {"failure", "timed_out", "action_required", "cancelled", "stale", "startup_failure"}
 # Full commit SHA accepted for PR_CHECK_RUNS_HEAD_SHA_OVERRIDE (#6918).
 _HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -400,8 +410,11 @@ def _select_log_tail_window(out: bytes, *, log_tail_bytes: int, partial_start: b
 	"""Pick the ``failed[i].log_tail`` text from the scanned end of a job log.
 
 	When the scan holds a step-level ``##[error]`` line, the window ends at the
-	first one (plus up to 5 following lines) and is trimmed from the front to
-	``log_tail_bytes`` bytes and ``LOG_TAIL_LINES`` lines (issue #8799).
+	first ``##[error]Process completed with exit code N`` line
+	(``LOG_TAIL_STEP_FAILURE_LINE_RE``) when there is one, otherwise at the
+	first ``##[error]`` line (issue #9326). It keeps up to 5 following lines
+	and is trimmed from the front to ``log_tail_bytes`` bytes and
+	``LOG_TAIL_LINES`` lines (issue #8799).
 	Otherwise the window is the pre-#8799 one: the last ``log_tail_bytes``
 	bytes, last ``LOG_TAIL_LINES`` lines. A ``log_tail_anchor:`` line names the
 	window kind; it is informational and not counted in the byte budget.
@@ -411,14 +424,22 @@ def _select_log_tail_window(out: bytes, *, log_tail_bytes: int, partial_start: b
 	decoded = _redact_log_text(out.decode("utf-8", errors="replace"))
 	out = decoded.encode("utf-8")
 	lines = decoded.splitlines()
-	anchor: int | None = None
+	first_marker_index: int | None = None
+	step_failure_index: int | None = None
 	for index, line in enumerate(lines):
 		# A partial range may start mid-line; that fragment is never an anchor.
 		if index == 0 and partial_start:
 			continue
-		if LOG_TAIL_STEP_ERROR_MARKER in line:
-			anchor = index
+		if LOG_TAIL_STEP_ERROR_MARKER not in line:
+			continue
+		if first_marker_index is None:
+			first_marker_index = index
+		if LOG_TAIL_STEP_FAILURE_LINE_RE.match(line):
+			step_failure_index = index
 			break
+	# Issue #9326: prefer the runner's step-failure line; otherwise keep the
+	# pre-#9326 anchor, the first "##[error]" line.
+	anchor = step_failure_index if step_failure_index is not None else first_marker_index
 	if anchor is None:
 		tail = out[-log_tail_bytes:] if len(out) > log_tail_bytes else out
 		tail_lines = tail.decode("utf-8", errors="replace").splitlines()

@@ -680,6 +680,97 @@ def test_redaction_never_swallows_the_next_lines_step_error():
 	assert result.startswith("log_tail_anchor: step_error\n") and STEP_ERROR in result
 	assert mod._redact_log_text("extraheader: AUTHORIZATION: basic abcdefgh") == "extraheader: [redacted]"
 
+
+# --- Issue #9326: anchor on the runner's step-failure line -------------------
+# A passing test can print "##[error]" lines (tests/test_lint_pr_body_auto_close.py
+# does); the window must end at the runner's "Process completed with exit code N"
+# line instead, as in the PR #9272 triage.
+
+LINT_ERROR = (
+	"##[error][lint_pr_body_auto_close] PR body:line 1 \u2014 auto-close keyword 'Fixes' "
+	"references ai:orchestrator-tracking issue #2734."
+)
+SHARD_ERROR = "##[error]merge-train step shards failed: rest"
+
+
+def build_passing_test_error_log() -> bytes:
+	lines = [_ts(1) + "##[group]Run python3 tests/test_lint_pr_body_auto_close.py"]
+	lines.append(_ts(2) + "  PASS  test_lookup_failure_without_fail_open_reports_error_for_exit_2")
+	lines.append(_ts(2) + LINT_ERROR)
+	lines.append(_ts(2) + "  PASS  test_forged_reference_is_reported")
+	lines.append(_ts(2) + LINT_ERROR)
+	lines.append(_ts(2) + "  PASS  test_tracking_reference_is_reported_once")
+	lines.append(_ts(3) + "##[endgroup]")
+	lines += [_ts(4) + f"tests/test_rest_{n:03d}.py::test_case PASSED" for n in range(220)]
+	lines.append(_ts(5) + "1 failed, 239 passed in 15.26s")
+	lines.append(_ts(5) + SHARD_ERROR)
+	lines.append(_ts(5) + STEP_ERROR)
+	lines += [
+		_ts(6) + "Post job cleanup.",
+		_ts(6) + "[command]/usr/bin/git version",
+		_ts(6) + "git version 2.56.0",
+		_ts(6) + "Adding repository directory to the temporary git global config as a safe directory",
+		_ts(6) + "[command]/usr/bin/git config --local --name-only --get-regexp core\\.sshCommand",
+		_ts(6) + "Cleaning up orphan processes",
+	]
+	return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def test_step_failure_line_wins_over_passing_test_error_output():
+	data = build_passing_test_error_log()
+	result = mod._select_log_tail_window(data, log_tail_bytes=mod.DEFAULT_LOG_TAIL_BYTES, partial_start=False)
+	assert result.startswith("log_tail_anchor: step_error\n")
+	body_lines = result.split("\n", 1)[1].split("\n")
+	assert any(line.endswith(SHARD_ERROR) for line in body_lines)
+	assert any(line.endswith(STEP_ERROR) for line in body_lines)
+	assert "lint_pr_body_auto_close" not in result
+	anchor_pos = next(i for i, line in enumerate(body_lines) if line.endswith(STEP_ERROR))
+	assert len(body_lines) - 1 - anchor_pos == mod.LOG_TAIL_STEP_ERROR_AFTER_LINES
+	assert body_lines[-1].endswith("[command]/usr/bin/git config --local --name-only --get-regexp core\\.sshCommand")
+
+
+def test_single_step_error_window_is_unchanged():
+	after = [f"after {n}" for n in range(1, 8)]
+	for error_line in (STEP_ERROR, "##[error]Some action failed"):
+		data = ("\n".join(["lead 1", "lead 2", error_line, *after]) + "\n").encode("utf-8")
+		result = mod._select_log_tail_window(data, log_tail_bytes=mod.DEFAULT_LOG_TAIL_BYTES, partial_start=False)
+		expected = "log_tail_anchor: step_error\n" + "\n".join(["lead 1", "lead 2", error_line, *after[:5]])
+		assert result == expected
+
+
+def test_step_failure_anchor_keeps_budgets_and_partial_start_rule():
+	passing_only = ("\n".join(_ts(n) + f"  PASS  test_{n}" for n in range(30)) + "\n").encode("utf-8")
+	assert mod._select_log_tail_window(passing_only, log_tail_bytes=4096, partial_start=False).startswith("log_tail_anchor: end_of_log\n")
+	data = build_passing_test_error_log()
+	result = mod._select_log_tail_window(data, log_tail_bytes=4096, partial_start=False)
+	assert result.startswith("log_tail_anchor: step_error\n")
+	body = result.split("\n", 1)[1]
+	assert len(body.encode("utf-8")) <= 4096
+	assert len(body.split("\n")) <= mod.LOG_TAIL_LINES
+	assert STEP_ERROR in body and "lint_pr_body_auto_close" not in body
+	tiny = mod._select_log_tail_window(data, log_tail_bytes=64, partial_start=False).split("\n", 1)[1]
+	assert "\n" not in tiny and len(tiny.encode("utf-8")) <= 64
+	assert tiny.endswith("Process completed with exit code 1.")
+	fragment = b"##[error]Process completed with exit code 1.\n##[error]other\nlast"
+	assert mod._select_log_tail_window(fragment, log_tail_bytes=1000, partial_start=True) == "log_tail_anchor: step_error\n##[error]other\nlast"
+	assert mod._select_log_tail_window(fragment, log_tail_bytes=1000, partial_start=False) == (
+		"log_tail_anchor: step_error\n##[error]Process completed with exit code 1.\n##[error]other\nlast"
+	)
+
+
+def test_non_step_failure_errors_fall_back_to_the_first_error():
+	tail = [f"b{n}" for n in range(1, 7)]
+	data = ("\n".join(["a", "##[error]first", *tail, "##[error]second", "c"]) + "\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=False)
+	assert result == "log_tail_anchor: step_error\n" + "\n".join(["a", "##[error]first", *tail[:5]])
+	quoted = 'print("##[error]Process completed with exit code 1.")'
+	data = ("\n".join(["a", "##[error]first", *tail, quoted, "c"]) + "\n").encode("utf-8")
+	result = mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=False)
+	assert result == "log_tail_anchor: step_error\n" + "\n".join(["a", "##[error]first", *tail[:5]])
+	assert not mod.LOG_TAIL_STEP_FAILURE_LINE_RE.match(quoted)
+	assert mod.LOG_TAIL_STEP_FAILURE_LINE_RE.match("\ufeff2026-11-11T18:57:13.9876442Z " + STEP_ERROR)
+
+
 if __name__ == "__main__":
 	import pytest
 
