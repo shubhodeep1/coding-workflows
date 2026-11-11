@@ -7547,6 +7547,42 @@ def test_non_retryable_route_explains_sandbox_excluded_editor_stop() -> None:
 	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={SANDBOX_EXCLUDED_REASON} -->")
 
 
+def test_provenance_accepts_a_green_sandbox_excluded_run_bound_by_its_trusted_marker() -> None:
+	"""PR #9112 / intake run 42583232747: the #8321 marker run and the cap run both end
+	`success`, so the cap report was rejected as no_verified_runs and never diagnosed."""
+	cap_ref = _autofix_payload()["run_refs"][0]
+	payload = heal.validate_payload(_autofix_payload(
+		failure_reason="identical_failure_cap",
+		run_refs=[{**cap_ref, "run_id": "801", "url": f"https://github.com/{CONSUMER_REPO}/actions/runs/801"}, cap_ref],
+	))
+	marker_run = _provenance_run(801, path="ai-review.yml", conclusion="success", event="pull_request")
+	cap_run = _provenance_run(500, path="ai-review.yml", conclusion="success", pull_requests=[{"number": 4174}])
+
+	def check(comment: dict, run: dict = marker_run) -> dict:
+		return heal.verify_run_provenance(payload, runs={"801": run, "500": cap_run}, comments=[comment], trusted_login=NR_LOGIN, self_repo=SELF_REPO)
+
+	trusted = _sandbox_excluded_summary_comment(head=SHA_B, author=NR_LOGIN)
+	verdict = check(trusted)
+	assert verdict["status"] == "ok" and [ref["run_id"] for ref in verdict["run_refs"]] == ["801"]
+	assert verdict["rejections"] == [{"run_id": "500", "reason": "not_failed"}] and verdict["marker_head_run_ids"] == ["801"]
+	routed = heal.non_retryable_route(dict(payload, run_refs=verdict["run_refs"]), comments=[trusted], trusted_login=NR_LOGIN)
+	assert routed["route"] is True and routed["reason"] == SANDBOX_EXCLUDED_REASON
+	# Before the fix this was the outcome for every such report; it still is
+	# whenever the marker does not bind this run, head and reason.
+	retryable_marker = heal.render_failure_marker(SHA_B, "workflow_failure", FP_HEX, False, "801", None)
+	for comment, run in (
+		(_sandbox_excluded_summary_comment(head=SHA_B, author="attacker"), marker_run),
+		(_sandbox_excluded_summary_comment(head=SHA_A, author=NR_LOGIN), marker_run),
+		(_sandbox_excluded_summary_comment(head=SHA_B, run="802", author=NR_LOGIN), marker_run),
+		(dict(trusted, body=trusted["body"] + "\n\nquoted after the marker"), marker_run),
+		({"author_login": NR_LOGIN, "body": "AI review/autofix failed\n\n" + retryable_marker}, marker_run),
+		(trusted, dict(marker_run, conclusion="cancelled")),
+	):
+		assert check(comment, run)["reason"] == "no_verified_runs", comment
+	# The green-run exemption never relaxes the workflow-path check.
+	assert check(trusted, dict(marker_run, path=".github/workflows/evil.yml"))["rejections"][0] == {"run_id": "801", "reason": "unexpected_workflow_path"}
+
+
 def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None:
 	payload = _consumer_payload()
 	assert heal.skip_reason(payload, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, non_retryable_diagnosed=True) == "non_retryable_diagnosed"
@@ -10027,6 +10063,277 @@ def test_synced_check_issue_and_occurrence_carry_no_free_text() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Stale auto-close of held run-sourced heal issues (issue #8808)
+# ---------------------------------------------------------------------------
+
+_STALE_LOGIN = "github-actions[bot]"
+_STALE_PLAN = "880801"
+_STALE_NOW = datetime(2026, 3, 1, tzinfo=timezone.utc)
+
+
+def _stale_run_payload() -> dict:
+	payload = _autofix_payload()
+	payload.update({"source_kind": "workflow_run", "workflow_name": "CI", "issue_number": None})
+	return payload
+
+
+def _stale_body(*, source: str = "owner/repo#run", workflow: str | None = ".github/workflows/ci.yml",
+		branch: str | None = "main", scope_runs: str | None = None) -> str:
+	lines = [f"<!-- workflow-failure-heal:fp={FP_HEX} -->", "<!-- workflow-failure-heal:gen=1 -->",
+		f"<!-- workflow-failure-heal:root={FP_HEX} -->", f"<!-- workflow-failure-heal:source={source} -->",
+		"<!-- workflow-failure-heal:classification=workflow-defect -->"]
+	if workflow:
+		lines.append(f"<!-- workflow-failure-heal:workflow={workflow} -->")
+	lines.append("")
+	if branch:
+		lines += [f"- **Target branch:** `{branch}`", ""]
+	lines.append("## Automated workflow failure heal (generation 1 of max 3)")
+	if scope_runs:
+		lines += ["", f"<!-- ai:workflow-heal-scope:v1 paths=scripts/x.sh,tests/**,changelog.d/*.md runs={scope_runs} -->"]
+	return "\n".join(lines) + "\n"
+
+
+def _stale_issue(**overrides) -> dict:
+	issue = {"number": 8352, "state": "open", "body": _stale_body(),
+		"labels": ["ai:workflow-heal", "ai:awaiting-approval"], "user": {"login": _STALE_LOGIN},
+		"author_association": "NONE", "created_at": "2026-01-01T00:00:00Z"}
+	issue.update(overrides)
+	return issue
+
+
+def _stale_comment(body: str, *, login: str = _STALE_LOGIN, association: str = "NONE",
+		created_at: str = "2026-01-01T01:00:00Z") -> dict:
+	return {"id": 1, "body": body, "user": {"login": login}, "author_association": association, "created_at": created_at}
+
+
+def _stale_hold(plan: str = _STALE_PLAN, **kwargs) -> dict:
+	return _stale_comment(f"Held.\n\n<!-- ai:heal-counterfactual-hold:v1 issue=8352 plan_comment={plan} result=UNVERIFIED source=plan -->", **kwargs)
+
+
+def _stale_runs(count: int, *, start_day: int = 2, conclusion: str = "success", event: str = "push") -> dict:
+	return {"total_count": count, "workflow_runs": [{"id": 4000 + i,
+		"html_url": f"https://github.com/owner/repo/actions/runs/{4000 + i}", "head_sha": f"{i + 1:040x}",
+		"head_branch": "main", "event": event, "status": "completed", "conclusion": conclusion,
+		"created_at": f"2026-01-{start_day + i:02d}T00:00:00Z"} for i in range(count)]}
+
+
+def _stale_decide(issue: dict | None = None, comments: list | None = None, runs: object = "default", **kwargs) -> dict:
+	params = {"pipeline_login": _STALE_LOGIN, "plan_comment": _STALE_PLAN, "workflow": "ci.yml", "branch": "main",
+		"linked_pr": None, "green_runs": 5, "min_age_hours": 24, "now": _STALE_NOW}
+	params.update(kwargs)
+	return heal.heal_stale_decision(issue if issue is not None else _stale_issue(),
+		comments if comments is not None else [_stale_hold()], _stale_runs(5) if runs == "default" else runs, **params)
+
+
+def test_heal_stale_closes_with_enough_green_runs_after_the_anchor() -> None:
+	result = _stale_decide()
+	assert result["decision"] == "close" and result["reason"] == "workflow_green"
+	assert result["green_runs"] == 5 and result["anchor"] == "2026-01-01T00:00:00Z"
+	assert result["first_green"]["id"] == 4000 and result["newest_green"]["id"] == 4004
+	assert result["marker_present"] is False
+	body = result["comment_body"]
+	assert body.rstrip().endswith("<!-- ai:heal-stale-close:v1 issue=8352 workflow=ci.yml branch=main green_runs=5 newest_run=4004 -->")
+	assert "https://github.com/owner/repo/actions/runs/4000" in body and f"{1:040x}" in body
+	assert "HEAL_STALE_AUTO_CLOSE_ENABLED" in body
+	assert not AUTO_CLOSE_RE.search(body) and "#" not in body.replace("<!--", "")
+
+
+def test_heal_stale_keeps_with_too_few_or_failed_runs() -> None:
+	assert _stale_decide(runs=_stale_runs(4))["reason"] == "too_few_green_runs"
+	runs = _stale_runs(6)
+	runs["workflow_runs"][2]["conclusion"] = "failure"
+	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
+	runs["workflow_runs"][2]["conclusion"] = "cancelled"
+	assert _stale_decide(runs=runs)["decision"] == "keep"
+	# Runs at or before the anchor, other branches and other events do not count.
+	old = _stale_runs(5)
+	old["workflow_runs"][0]["created_at"] = "2025-12-31T00:00:00Z"
+	old["workflow_runs"][1]["head_branch"] = "stable"
+	old["workflow_runs"][2]["event"] = "pull_request"
+	result = _stale_decide(runs=old)
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 2
+	# A malformed entry could hide a failed run: the issue is kept.
+	bad = _stale_runs(5)
+	bad["workflow_runs"].append("garbage")
+	assert _stale_decide(runs=bad)["reason"] == "runs_unavailable"
+	bad = _stale_runs(5)
+	bad["workflow_runs"][1]["created_at"] = "yesterday"
+	assert _stale_decide(runs=bad)["reason"] == "runs_unavailable"
+
+
+def test_heal_stale_runs_page_cut_short_closes_only_with_enough_green_runs() -> None:
+	# One page is read. A long-held issue on a busy branch (#8352) has a page
+	# that is all after the anchor and a far larger total_count: it closes
+	# once the page alone holds green_runs green runs after the anchor.
+	cut = _stale_runs(5)
+	cut["total_count"] = 40
+	assert _stale_decide(runs=cut)["decision"] == "close"
+	missing = _stale_runs(5)
+	del missing["total_count"]
+	assert _stale_decide(runs=missing)["decision"] == "close"
+	# A failure on the page still keeps it.
+	failed = _stale_runs(15)
+	failed["total_count"] = 400
+	failed["workflow_runs"][7]["conclusion"] = "failure"
+	assert _stale_decide(runs=failed)["reason"] == "run_not_green"
+	# A cut-short page with too few runs after the anchor keeps it.
+	short = _stale_runs(5)
+	short["total_count"] = 40
+	short["workflow_runs"][0]["head_branch"] = "stable"
+	assert _stale_decide(runs=short)["reason"] == "runs_window_incomplete"
+	# A run at or before the anchor on the page proves the window is covered.
+	reaching = _stale_runs(6)
+	reaching["total_count"] = 40
+	reaching["workflow_runs"][0]["created_at"] = "2025-12-31T00:00:00Z"
+	reaching["workflow_runs"].append({**reaching["workflow_runs"][1], "id": 4999, "created_at": "2026-01-07T00:00:00Z"})
+	assert _stale_decide(runs=reaching)["decision"] == "close"
+
+
+def test_heal_stale_occurrence_comment_moves_the_anchor_only_when_trusted() -> None:
+	occurrence = "<!-- workflow-failure-heal:occurrence -->\nSeen again."
+	trusted = _stale_comment(occurrence, created_at="2026-01-03T12:00:00Z")
+	result = _stale_decide(comments=[_stale_hold(), trusted])
+	assert result["anchor"] == "2026-01-03T12:00:00Z"
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 3
+	forged = _stale_comment(occurrence, login="outsider", association="NONE", created_at="2026-01-03T12:00:00Z")
+	assert _stale_decide(comments=[_stale_hold(), forged])["decision"] == "close"
+
+
+def test_heal_stale_keeps_for_pr_sourced_issue_and_open_or_unknown_pr() -> None:
+	target = heal.heal_stale_target(_stale_issue(body=_stale_body(source="owner/consumer#123")))
+	assert target["reason"] == "not_run_sourced" and target["source_kind"] == "pr"
+	assert _stale_decide(linked_pr={"number": 9, "state": "OPEN", "head_ref": "ai/issue-8352"})["reason"] == "open_pr"
+	assert _stale_decide(linked_pr=heal.HEAL_STALE_LINKED_PR_UNKNOWN)["reason"] == "linked_pr_unknown"
+	assert _stale_decide(linked_pr="garbage")["reason"] == "linked_pr_unknown"
+	assert _stale_decide(linked_pr={"number": 9, "state": "MERGED"})["decision"] == "close"
+
+
+def test_heal_stale_keeps_young_issue_and_fails_open_on_bad_runs() -> None:
+	assert _stale_decide(now=datetime(2026, 1, 1, 12, tzinfo=timezone.utc))["reason"] == "too_young"
+	assert _stale_decide(runs=None)["reason"] == "runs_unavailable"
+	assert _stale_decide(runs={"message": "Not Found"})["reason"] == "runs_unavailable"
+	assert _stale_decide(runs=[1, 2])["reason"] == "runs_unavailable"
+	assert _stale_decide(issue=_stale_issue(created_at=None))["reason"] == "anchor_unavailable"
+
+
+def test_heal_stale_needs_trusted_hold_marker_for_the_current_plan() -> None:
+	assert _stale_decide(comments=[])["reason"] == "hold_marker_missing"
+	assert _stale_decide(comments=[_stale_hold(plan="111")])["reason"] == "hold_marker_missing"
+	assert _stale_decide(comments=[_stale_hold(login="outsider")])["reason"] == "hold_marker_missing"
+	assert _stale_decide(plan_comment="unknown")["reason"] == "hold_marker_missing"
+	assert _stale_decide(comments=[_stale_hold(login="maintainer", association="MEMBER")])["decision"] == "close"
+
+
+def test_heal_stale_skips_managed_and_keeps_untrusted_author() -> None:
+	managed = _stale_issue(labels=["ai:workflow-heal", "ai:awaiting-approval", "ai:orchestrator-managed"])
+	assert _stale_decide(issue=managed) == {**_stale_decide(issue=managed), "decision": "skip", "reason": "orchestrator_managed"}
+	assert _stale_decide(issue=_stale_issue(labels=["ai:workflow-heal", "ai:planning"]))["reason"] == "not_awaiting_approval"
+	assert _stale_decide(issue=_stale_issue(state="closed"))["reason"] == "not_heal_issue"
+	assert _stale_decide(issue=_stale_issue(user={"login": "outsider"}))["reason"] == "untrusted_issue_author"
+
+
+def test_heal_stale_reports_an_existing_trusted_close_marker() -> None:
+	marker = _stale_comment("<!-- ai:heal-stale-close:v1 issue=8352 workflow=ci.yml branch=main green_runs=5 newest_run=4004 -->")
+	assert _stale_decide(comments=[_stale_hold(), marker])["marker_present"] is True
+	forged = _stale_comment(marker["body"], login="outsider")
+	assert _stale_decide(comments=[_stale_hold(), forged])["marker_present"] is False
+
+
+def test_heal_stale_closes_a_held_plan_with_no_files() -> None:
+	# Modelled on #8357: the UNVERIFIED plan lists no files (the fix was merging
+	# a held sync PR). Nothing in the decision reads the plan.
+	result = _stale_decide(issue=_stale_issue(number=8357, body=_stale_body(workflow=None, branch="main")),
+		comments=[_stale_comment("Held.\n<!-- ai:heal-counterfactual-hold:v1 issue=8357 plan_comment=880801 result=UNVERIFIED source=plan -->")],
+		workflow="ci.yml")
+	assert result["decision"] == "close"
+
+
+def test_heal_stale_target_and_resolve_fallback() -> None:
+	target = heal.heal_stale_target(_stale_issue())
+	assert target == {"source_repo": "owner/repo", "source_kind": "run", "workflow": "ci.yml", "branch": "main",
+		"fallback_run": None, "reason": ""}
+	legacy = heal.heal_stale_target(_stale_issue(body=_stale_body(workflow=None, branch=None,
+		scope_runs="other/repo:7,owner/repo:40990538508")))
+	assert legacy["workflow"] is None and legacy["fallback_run"] == {"repo": "owner/repo", "run_id": "40990538508"}
+	assert legacy["reason"] == ""
+	assert heal.heal_stale_target(_stale_issue(body=_stale_body(workflow=None)))["reason"] == "workflow_unknown"
+	assert heal.heal_stale_resolve_run({"path": ".github/workflows/ci.yml", "head_branch": "main"}) == {
+		"workflow": "ci.yml", "branch": "main", "reason": ""}
+	assert heal.heal_stale_resolve_run({"path": "../x.yml", "head_branch": "main"})["reason"] == "workflow_unknown"
+	assert heal.heal_stale_resolve_run(None)["reason"] == "workflow_unknown"
+
+
+def test_heal_stale_decision_cli(tmp_path) -> None:
+	def write(name: str, value: object) -> str:
+		path = tmp_path / name
+		path.write_text(json.dumps(value), encoding="utf-8")
+		return str(path)
+
+	def run(*args: str) -> subprocess.CompletedProcess:
+		return subprocess.run([sys.executable, "-I", "-B", str(LIB_PATH), "heal-stale-decision", *args],
+			capture_output=True, text=True, check=False)
+
+	base = ["--stage", "decide", "--issue-json", write("issue.json", _stale_issue()),
+		"--comments-json", write("comments.json", [_stale_hold()]), "--pipeline-login", _STALE_LOGIN,
+		"--plan-comment", _STALE_PLAN, "--workflow", "ci.yml", "--branch", "main", "--now", "2026-03-01T00:00:00Z"]
+	closed = run(*base, "--runs-json", write("runs.json", _stale_runs(5)), "--linked-pr-json", write("pr.json", None))
+	assert closed.returncode == 0 and json.loads(closed.stdout)["decision"] == "close", closed.stderr
+	# No --linked-pr-json: unknown, kept.
+	assert json.loads(run(*base, "--runs-json", str(tmp_path / "runs.json")).stdout)["reason"] == "linked_pr_unknown"
+	(tmp_path / "bad.json").write_text("{not json", encoding="utf-8")
+	bad = run(*base, "--runs-json", str(tmp_path / "bad.json"), "--linked-pr-json", str(tmp_path / "pr.json"))
+	assert bad.returncode == 0 and json.loads(bad.stdout)["reason"] == "runs_unavailable"
+	# Invalid integers fall back to the defaults (5 runs, 24 hours).
+	lax = run(*base, "--runs-json", str(tmp_path / "runs.json"), "--linked-pr-json", str(tmp_path / "pr.json"),
+		"--green-runs", "zero", "--min-age-hours", "-1")
+	assert json.loads(lax.stdout)["decision"] == "close"
+	assert run("--stage", "decide", "--issue-json", str(tmp_path / "missing.json")).returncode == 2
+	target = run("--stage", "target", "--issue-json", str(tmp_path / "issue.json"))
+	assert target.returncode == 0 and json.loads(target.stdout)["workflow"] == "ci.yml"
+
+
+def test_compose_issue_body_adds_workflow_marker_only_for_workflow_run() -> None:
+	kwargs = {"diagnosis": "## Summary\nx", "fp": FP_HEX, "gen": 1, "root": FP_HEX, "classification": "workflow-defect",
+		"target_branch": "main", "max_depth": 3, "intake_run_url": "u", "run_summaries": []}
+	body = heal.compose_issue_body(payload=_stale_run_payload(), workflow_path=".github/workflows/ci.yml", **kwargs)
+	lines = body.split("\n")
+	assert lines[5] == "<!-- workflow-failure-heal:workflow=.github/workflows/ci.yml -->"
+	assert heal.parse_heal_markers(body)["workflow"] == ".github/workflows/ci.yml"
+	assert heal.validate_heal_issue_body_routing(body, target_branch="main", integration_branch=None) == ""
+	plain = heal.compose_issue_body(payload=_stale_run_payload(), **kwargs)
+	assert "workflow=" not in plain
+	assert heal.compose_issue_body(payload=_stale_run_payload(), workflow_path="../evil.yml", **kwargs) == plain
+	assert heal.compose_issue_body(payload=_stale_run_payload(), workflow_path=".github/workflows/x.yml -->", **kwargs) == plain
+	autofix = heal.validate_payload(_autofix_payload())
+	assert heal.compose_issue_body(payload=autofix, workflow_path=".github/workflows/ci.yml", **kwargs) == \
+		heal.compose_issue_body(payload=autofix, **kwargs)
+
+
+def test_heal_body_validator_accepts_only_one_wellformed_workflow_line() -> None:
+	kwargs = {"diagnosis": "x", "fp": FP_HEX, "gen": 1, "root": FP_HEX, "classification": "workflow-defect",
+		"target_branch": "main", "max_depth": 3, "intake_run_url": "u", "run_summaries": []}
+	body = heal.compose_issue_body(payload=_stale_run_payload(), workflow_path=".github/workflows/ci.yml", **kwargs)
+
+	def validate(candidate: str) -> str:
+		return heal.validate_heal_issue_body_routing(candidate, target_branch="main", integration_branch=None)
+
+	assert validate(body) == ""
+	marker = "<!-- workflow-failure-heal:workflow=.github/workflows/ci.yml -->"
+	assert validate(body.replace(marker, marker + "\n" + marker)) == "marker"
+	assert validate(body.replace(marker, "<!-- workflow-failure-heal:workflow=scripts/x.sh -->")) == "marker"
+	assert validate(body.replace(marker, "<!-- other -->")) == "marker"
+	assert validate(body + "<!-- workflow-failure-heal:fp=dead -->\n") == "marker"
+	# A five-line header still validates as before.
+	assert validate(heal.compose_issue_body(payload=_stale_run_payload(), **kwargs)) == ""
+
+
+def test_intake_passes_the_verified_run_path_to_compose_issue() -> None:
+	intake = (SCRIPTS_DIR / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
+	assert '--workflow-path "${heal_workflow_path}" \\' in intake
+	assert 'if [ "${SOURCE_KIND}" = "workflow_run" ]; then' in intake.split("local heal_workflow_path", 1)[1].split("compose-issue", 1)[0]
+
+
+# ---------------------------------------------------------------------------
 # Evidence pack, P1 (issue #8435; docs/plans/heal-evidence-reproduction-and-trends-plan.md)
 # During the 2026-10-27..29 release-gate incident heal plans ended
 # HEAL_COUNTERFACTUAL: UNVERIFIED for lack of the failed run's own step
@@ -11929,7 +12236,9 @@ def test_intake_cause_match_replay_posts_an_occurrence_with_no_new_reads() -> No
 	assert first.returncode == 0, first.stderr + first.stdout
 	cause = _p5_cause_from(first)
 	fp = re.search(r"WORKFLOW_HEAL fingerprint fp=([0-9a-f]{64})", first.stdout).group(1)
-	assert first_state["composed_issue"]["body"].split("\n")[5] == f"<!-- {heal.MARKER_PREFIX}cause={cause} -->"
+	# #8808: a workflow_run source puts the workflow= header line before cause=.
+	assert heal.parse_heal_markers(first_state["composed_issue"]["body"])["cause"] == cause
+	assert f"<!-- {heal.MARKER_PREFIX}cause={cause} -->" in first_state["composed_issue"]["body"].split("\n")[5:7]
 	# #8376: open, one day old, same cause, a different fingerprint (one error line fewer).
 	now = datetime.now(timezone.utc)
 	prior = _p5_open_heal(8376, fp="a" * 64, cause=cause, created=now - timedelta(days=1))
@@ -11965,7 +12274,8 @@ def test_intake_cause_match_window_and_switch_off_byte_identity() -> None:
 	result, state, _ = _run_p1_intake(_p1_state() | {"heal_issues": [stale]}, on)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert not state.get("comments_posted")
-	assert state["composed_issue"]["body"].split("\n")[5] == f"<!-- {heal.MARKER_PREFIX}cause={cause} -->"
+	assert heal.parse_heal_markers(state["composed_issue"]["body"])["cause"] == cause
+	assert f"<!-- {heal.MARKER_PREFIX}cause={cause} -->" in state["composed_issue"]["body"].split("\n")[5:7]
 	assert "reason=cause_match" not in result.stdout
 	# A longer window matches it.
 	wide, wide_state, _ = _run_p1_intake(_p1_state() | {"heal_issues": [stale]}, {**on, "WORKFLOW_HEAL_CAUSE_GROUPING_DAYS": "5"})
