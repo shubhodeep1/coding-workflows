@@ -82,6 +82,7 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Pre-push affected-test gate": ("review_autofix_step_prepush_test_gate.sh", "error"),
 	"Integration post-sync test repair": ("review_autofix_step_prepush_test_gate.sh", "error"),
 	"Single-issue security pass (deterministic skip)": ("review_autofix_step_deterministic_skip_security_pass.sh", "error"),
+	"Checkout PR head branch": ("review_autofix_step_checkout_pr_head_branch.sh", "error"),
 }
 
 # Gate-job step scripts -> the verified checkout directory their wrapper reads.

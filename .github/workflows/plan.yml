@@ -1186,6 +1186,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPO_SLUG: ${{ github.repository }}
           PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED: ${{ vars.PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED || 'true' }}
+          CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
           PLAN_SUPERSEDE_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
           PLAN_PR_NOT_OPEN: ${{ steps.refctx.outputs.pr_not_open }}
           PLAN_PR_NOT_OPEN_PR: ${{ steps.refctx.outputs.pr_not_open_pr }}
@@ -1417,7 +1418,63 @@ jobs:
                 # to planning on the default branch.
                 pr_not_open_unresolved invalid_base_ref
               else
-                log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=plan reason=merged_check_not_passed"
+                # The check is red on the merged PR's final head, but the
+                # default branch may have run it green after the merge
+                # (consumer fun-token-multi-chain #765: CI failed on a 504
+                # while installing Foundry, the PR merged, main went green,
+                # and planning still ran and blocked on "re-run and close").
+                # The #7095 resolution gate verifies that from GitHub and
+                # closes the issue with evidence; anything it cannot verify
+                # plans as before. It honours CHECK_TRIAGE_RESOLVED_GATE_ENABLED.
+                triage_gate="$(dirname "${helper}")/check_triage_resolution.py"
+                triage_gate_status=""
+                # "not_run" until the gate actually runs, so a skipped gate is
+                # never logged as a successful one.
+                triage_gate_rc="not_run"
+                if [ -f "${triage_gate}" ] && [ ! -L "${triage_gate}" ] && \
+                  [[ "${PLAN_DEFAULT_BRANCH:-}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]]; then
+                  triage_gate_rc=0
+                  triage_gate_err="$(mktemp 2>/dev/null || echo /dev/null)"
+                  triage_gate_json="$(python3 -I -B "${triage_gate}" gate --issue-json "${ISSUE_META_FILE}" \
+                    --repo "${REPO_SLUG}" --issue-number "${ISSUE_NUMBER}" \
+                    --default-branch "${PLAN_DEFAULT_BRANCH}" 2>"${triage_gate_err}")" || triage_gate_rc=$?
+                  if [ "${triage_gate_rc}" != "0" ] && [ "${triage_gate_rc}" != "3" ]; then
+                    echo "::warning::Check-triage resolution gate exited ${triage_gate_rc} for issue #${ISSUE_NUMBER}; planning as before."
+                    if [ -s "${triage_gate_err}" ]; then
+                      # Keep the gate's diagnostics: last lines, printable ASCII,
+                      # workflow-command prefixes broken up.
+                      tail -n 10 "${triage_gate_err}" | tr -cd '[:print:]\n' | cut -c1-300 | sed 's/::/: :/g; s/^/| /'
+                    fi
+                  fi
+                  [ "${triage_gate_err}" = "/dev/null" ] || rm -f "${triage_gate_err}"
+                  triage_gate_status="$(printf '%s' "${triage_gate_json}" | python3 -I -B -c 'import json, sys
+          try:
+              value = json.load(sys.stdin).get("status")
+          except Exception:
+              value = ""
+          sys.stdout.write(value if isinstance(value, str) else "")' 2>/dev/null | tr -cd 'a-z_' | cut -c1-40)"
+                fi
+                if [ "${triage_gate_rc}" = "0" ] && { [ "${triage_gate_status}" = "resolved" ] || \
+                  [ "${triage_gate_status}" = "already_resolved" ]; }; then
+                  echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+                  # The gate adds ai:closed but leaves this job's ai:planning;
+                  # drop it like the superseded close path (best effort).
+                  triage_label_state="applied"
+                  if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO_SLUG}" \
+                    --remove-label 'ai:planning' >/dev/null 2>&1; then
+                    triage_label_state="failed"
+                    echo "::warning::Check-triage issue #${ISSUE_NUMBER} was closed but ai:planning could not be removed."
+                  fi
+                  log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=resolved reason=default_branch_green gate=${triage_gate_status} gate_rc=${triage_gate_rc} label=${triage_label_state}"
+                elif [ "${triage_gate_rc}" = "3" ]; then
+                  # Verified fixed, but the close write failed: never plan a
+                  # fixed issue; stall recovery retries the close.
+                  echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+                  echo "::warning::Check-triage issue #${ISSUE_NUMBER} is verified fixed on the default branch but could not be closed; skipping planning this run."
+                  log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=skip reason=resolved_close_failed gate=${triage_gate_status:-none} gate_rc=${triage_gate_rc}"
+                else
+                  log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=plan reason=merged_check_not_passed gate=${triage_gate_status:-none} gate_rc=${triage_gate_rc}"
+                fi
               fi
               ;;
             *)

@@ -282,14 +282,24 @@ jobs:
           MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}
           MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
           MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          # Daily queue-age note (review_merge_train.sh _mt_release_stall_alert).
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           if [ ! -f scripts/review_merge_train.sh ]; then
             echo "merge-train release skipped: scripts/review_merge_train.sh not staged."
             exit 0
           fi
+          # The Telegram helper is read from the trusted support checkout,
+          # never from the repository's own scripts/ directory.
+          _mt_tg_helpers="$(pwd)/.codex-workflow-src/scripts/tg_helpers.sh"
+          if [ ! -f "${_mt_tg_helpers}" ]; then
+            _mt_tg_helpers="$(pwd)/.codex-workflow-src-main/scripts/tg_helpers.sh"
+          fi
           _mt_rc=0
-          SUPPORT_SCRIPTS_DIR="$(pwd)/scripts" bash scripts/review_merge_train.sh release || _mt_rc=$?
+          MERGE_TRAIN_TG_HELPERS="${_mt_tg_helpers}" SUPPORT_SCRIPTS_DIR="$(pwd)/scripts" bash scripts/review_merge_train.sh release || _mt_rc=$?
           if [ "${_mt_rc}" -ne 0 ]; then
             echo "::warning::review_merge_train.sh release exited ${_mt_rc}; continuing the poll (fail-open)."
           fi
@@ -975,6 +985,9 @@ jobs:
           RECLARIFY_UNROUTED_MAX_AGE_HOURS: ${{ vars.RECLARIFY_UNROUTED_MAX_AGE_HOURS || '168' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
+          HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
+          HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
           HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
@@ -1387,6 +1400,9 @@ jobs:
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
+          HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
+          HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
           HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
@@ -1607,6 +1623,9 @@ jobs:
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
+          HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
+          HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
           HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
@@ -1705,6 +1724,9 @@ jobs:
           STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
+          HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
+          HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
           HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
@@ -1738,6 +1760,9 @@ jobs:
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
+          HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
+          HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
           HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}

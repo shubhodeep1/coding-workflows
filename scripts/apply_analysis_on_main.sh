@@ -326,16 +326,20 @@ orchestrate_run_in_flight()
 }
 
 # unprocessed_docs
-# Prints one unprocessed doc path per line, oldest first. Docs listed in the
-# processing report or carrying a dispatch marker are skipped with a warning.
-# Returns 2 when the marker search is unavailable.
+# Prints one unprocessed doc path per line, newest first (reverse version sort
+# of the dated filenames, so a same-day -2/-3 doc comes before the day's first
+# doc). Newest first keeps the proving and verifying runs on findings closest
+# to the current code; older docs are mostly already implemented or stale by
+# the time they are reached. Docs listed in the processing report or carrying
+# a dispatch marker are skipped with a warning. Returns 2 when the marker
+# search is unavailable.
 unprocessed_docs()
 {
 	local candidate candidate_basename dispatched_rc
 	local candidates=()
 	while IFS= read -r candidate; do
 		[ -n "${candidate}" ] && candidates+=("${candidate}")
-	done < <(compgen -G "${APPLY_ANALYSIS_DOC_GLOB}" | sort -V || true)
+	done < <(compgen -G "${APPLY_ANALYSIS_DOC_GLOB}" | sort -rV || true)
 	for candidate in "${candidates[@]}"; do
 		candidate_basename="$(basename "${candidate}")"
 		if [ -f "${APPLY_ANALYSIS_REPORT_PATH}" ] && grep -qF -- "${candidate_basename}" "${APPLY_ANALYSIS_REPORT_PATH}"; then

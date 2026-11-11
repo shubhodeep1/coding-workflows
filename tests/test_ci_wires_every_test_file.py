@@ -43,6 +43,10 @@ UNWIRED_ALLOWLIST: dict[str, str] = {
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_gh_pr_comments_argv_limit.py, which collects them"
 	),
+	"tests/test_review_static_context_agents_index.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_review_static_context_readme.py, which collects them"
+	),
 	"tests/test_review_autofix_clean_same_head_gate.py": (
 		"ci.yml is outside the file grant of the issue that added it (#8952); its cases run in CI "
 		"through tests/test_review_autofix_terminal_same_head_gate.py, which collects them"
@@ -58,6 +62,10 @@ UNWIRED_ALLOWLIST: dict[str, str] = {
 	"tests/test_check_failure_triage_transient_rerun.py": (
 		"ci.yml is outside the file grant of the issue that added it (#9130); its cases run in CI "
 		"through tests/test_check_failure_triage_post_stage.py, which collects them"
+	),
+	"tests/test_orchestrate_poll_cycle_summary.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_alert_levels_human_only.py, which collects them"
 	),
 }
 
