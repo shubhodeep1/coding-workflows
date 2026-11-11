@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Both failures appear only on the uutils-coreutils `ubuntu-26.04` image. In the first, `gh_retry`'s replay (`scripts/gh_helpers.sh:1229`, `cat \"${stdout_file}\" || _gh_retry_replay_rc=$?`) returns 0 when its reader closes early; the diagnostic shows `inner_cat=0`. In the second, `switch_ms` comes out as `na`. How should this be fixed?\nChoices:\n- A: Fix the scripts so they behave the same under GNU and uutils coreutils. `gh_retry` would still return non-zero when its output is not delivered, and `switch_ms` would always be a number. The tests stay as written. Production workflows also run on `ubuntu-latest`, so they get the same fix. (RECOMMENDED)\n- B: Pin the CI jobs in `.github/workflows/ci.yml` from `ubuntu-latest` to `ubuntu-24.04`. Scripts and tests stay unchanged; production workflows on `ubuntu-latest` keep the uutils behaviour.\n- C: Loosen the two tests so they accept the uutils behaviour (closed-reader `rc=0`, `switch_ms=na`). This drops the \"undelivered output is non-zero\" contract on 26.04.\n- A+B: Fix the scripts and also pin CI to `ubuntu-24.04` as a temporary safeguard.\nQ2: How wide should the fix go?\nChoices:\n- A: Only the two failing tests and the code they cover: `gh_retry`'s closed-reader replay in `scripts/gh_helpers.sh` and the review checkout-head diagnostics timing. Other spots that might break under uutils become follow-up issues. (RECOMMENDED)\n- B: Also check and fix other shell helpers under `scripts/` that depend on the same GNU-coreutils behaviour (the exit status of `cat`/`head` on a broken pipe, `date` with sub-second formats), even where no test fails today.\n**Note:** Q2 applies only if Q1 includes A. With Q1:B or Q1:C, answer Q2:A.",
+  "fingerprint": "7e5fa58279575c9ea39576be3299b775349f1b2ec11357f06cc57b414205dab3",
+  "lineage": {
+    "issue_number": 9302,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43083597229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43083597229",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111192229_ed81fe91d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9302,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43083597229"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9302 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T19:22:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
