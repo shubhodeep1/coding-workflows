@@ -74,6 +74,21 @@ sleep() {
 }
 """
 
+# Opt-in date() fake (Layout.run(extra_functions=...)): every call prints a
+# 13-digit millisecond reading lower than the previous one, like the Rust
+# coreutils `date +%s%3N` on ubuntu-26.04 runners that went backwards within a
+# run. The call count lives in a file because the clock is read inside $(...)
+# subshells. Strictly decreasing, so any END-START from `date` is negative.
+BACKWARDS_DATE_FUNCTION = """date() {
+  local fake_date_calls=0
+  if [ -f "${FAKE_DATE_COUNTER}" ]; then fake_date_calls="$(cat "${FAKE_DATE_COUNTER}")"; fi
+  fake_date_calls=$((fake_date_calls + 1))
+  echo "${fake_date_calls}" > "${FAKE_DATE_COUNTER}"
+  printf '%s\\n' "$(( 1700000010000 - 10 * fake_date_calls ))"
+  return 0
+}
+"""
+
 
 class Layout:
 	def __init__(self, root: Path) -> None:
@@ -132,13 +147,14 @@ class Layout:
 		env.update(overrides)
 		return env
 
-	def run(self, *, sourced: bool = False, **overrides: str) -> subprocess.CompletedProcess[str]:
+	def run(self, *, sourced: bool = False, extra_functions: str = "", **overrides: str) -> subprocess.CompletedProcess[str]:
 		self.github_env.write_text("")
+		prelude = FAKE_FUNCTIONS + extra_functions
 		if sourced:
 			# Mirrors the workflow step: GitHub's bash -eo pipefail shell sources the script file.
-			cmd = ["bash", "-c", FAKE_FUNCTIONS + 'set -eo pipefail; source "$1"', "_", str(SCRIPT_PATH)]
+			cmd = ["bash", "-c", prelude + 'set -eo pipefail; source "$1"', "_", str(SCRIPT_PATH)]
 		else:
-			cmd = ["bash", "-c", FAKE_FUNCTIONS + review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")]
+			cmd = ["bash", "-c", prelude + review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")]
 		return subprocess.run(cmd, cwd=self.split, env=self.env(**overrides), capture_output=True, text=True)
 
 
@@ -264,6 +280,29 @@ def test_head_moved_after_switch_reports_skipped_stale(layout: Layout) -> None:
 	assert fields["fetch_ms"].isdigit() and fields["switch_ms"].isdigit()
 	assert "AUTOFIX_STALE_BASE_SKIP=true" in layout.github_env.read_text()
 	assert "TARGET_BRANCH=" not in layout.github_env.read_text()
+	_assert_no_temp_files(layout)
+
+
+@pytest.mark.parametrize("sourced", [False, True])
+def test_backwards_date_clock_still_reports_numeric_fetch_and_switch_ms(layout: Layout, sourced: bool) -> None:
+	# Regression for issue #9255: on ubuntu-26.04 `date +%s%3N` went backwards,
+	# END-START was negative and the summary printed fetch_ms=na/switch_ms=na.
+	# The clock now reads bash's EPOCHREALTIME first, so a backwards `date`
+	# never reaches the elapsed values.
+	(layout.seed / "newer.txt").write_text("new head\n")
+	layout.git("add", "newer.txt")
+	layout.git("commit", "-qm", "advanced head")
+	result = layout.run(
+		sourced=sourced,
+		extra_functions=BACKWARDS_DATE_FUNCTION,
+		FAKE_DATE_COUNTER=str(layout.root / "date_counter"),
+	)
+	assert result.returncode == 0, result.stderr
+	_, fields = _summary(result)
+	assert fields["stage"] == "head_moved_guard"
+	assert fields["outcome"] == "skipped_stale"
+	assert fields["exit_code"] == "0"
+	assert fields["fetch_ms"].isdigit() and fields["switch_ms"].isdigit()
 	_assert_no_temp_files(layout)
 
 
