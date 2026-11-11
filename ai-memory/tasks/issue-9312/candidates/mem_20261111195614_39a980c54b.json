@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: PR #9246 is already open to fix this same test on ubuntu-26.04. What should this triage issue do?\nChoices:\n- A: Don't make a separate fix. Leave this to #9246, then re-run CI on PR #9281 once #9246 merges into `main`. (RECOMMENDED)\n- B: Fix it independently here, as a base-branch change to `scripts/gh_helpers.sh` and its tests. This accepts a likely merge conflict with #9246.\n- C: Fix it inside PR #9281's branch (`ai/issue-9248`), even though that PR did not cause the failure.\n  **Note:** if you choose A, Q2 doesn't apply.\nQ2: If the fix is made here (Q1:B or Q1:C), how much should it cover? The contract stays the same: when the reader closes early, the output was not delivered, so the status must be non-zero, and the command must not be re-run. The test must not be weakened.\nChoices:\n- A: Only `gh_retry` in `scripts/gh_helpers.sh` (the replay at line 1229 that the failing test exercises).\n- B: `gh_retry` in `scripts/gh_helpers.sh`, plus the inline `gh_retry` copies in `.github/workflows/review_autofix.yml` that this test file also checks (`_inline_gh_retry`), so the copies stay identical. (RECOMMENDED)\n- C: Option B, plus every other place in `scripts/gh_helpers.sh` that replays a temp file through `cat` (around lines 1108, 1320, 1393 and 1526).",
+  "fingerprint": "f958264b780fbe926f551627acb253f39faa96fad7255e9020a3a73e43df66e9",
+  "lineage": {
+    "issue_number": 9312,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43089668930",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43089668930",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111195614_39a980c54b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9312,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43089668930"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9312 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T19:56:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
