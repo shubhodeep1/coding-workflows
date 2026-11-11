@@ -47,8 +47,16 @@ CASES = _report_pr_cases()
 
 
 def _recent_doc() -> str:
-	stamp = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=2)).strftime("%Y-%m-%d")
-	return f"analysis/workflow-optimization-{stamp}.md"
+	now = dt.datetime.now(dt.timezone.utc)
+	stamp = (now - dt.timedelta(days=2)).strftime("%Y-%m-%d")
+	doc = f"analysis/workflow-optimization-{stamp}.md"
+	# On 2026-11-11 "two days ago" equals CASES.REPORT: _seed() then committed
+	# the "old report" at the path box.write_report() overwrites, breaking the
+	# setup. Fall back to one day ago, which is still inside the window.
+	if doc == CASES.REPORT:
+		stamp = (now - dt.timedelta(days=1)).strftime("%Y-%m-%d")
+		doc = f"analysis/workflow-optimization-{stamp}.md"
+	return doc
 
 
 def _seed(box, *, processing_report: str | None, in_flight: str = "") -> None:
