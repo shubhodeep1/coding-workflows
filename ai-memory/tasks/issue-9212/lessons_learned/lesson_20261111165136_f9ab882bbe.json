@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-11T16:51:36Z",
+  "issue_number": 9212,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=tests/test_lint_pr_body_auto_close.py:458-506; cited_path=tests/test_lint_pr_body_auto_close.py; files_touched=agents.d/9212-review-gate-supersede.md, changelog.d/9212-review-gate-supersede.md, scripts/pr_checks_lib.sh, tests/test_pr_checks_lib_required_filter.py.",
+  "phase": "review_autofix",
+  "pr_number": 9262,
+  "record_id": "lesson_20261111165136_f9ab882bbe",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_lint_pr_body_auto_close.py",
+    "agents.d/9212-review-gate-supersede.md",
+    "changelog.d/9212-review-gate-supersede.md",
+    "scripts/pr_checks_lib.sh",
+    "tests/test_pr_checks_lib_required_filter.py"
+  ]
+}
