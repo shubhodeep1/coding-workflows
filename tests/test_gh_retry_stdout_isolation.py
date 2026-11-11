@@ -226,15 +226,19 @@ def test_stdout_buffer_mktemp_failure_does_not_run_the_command(tmp_path: Path) -
 
 
 def test_closed_reader_does_not_rerun_a_successful_command(tmp_path: Path) -> None:
-	# 1 MiB of output into `head -c 1`: the reader goes away long before the
-	# output is written. The command already succeeded, so it must not be
-	# run again; the undelivered output is reported as a non-zero status.
+	# 1 MiB of output into a reader that takes one byte and exits: the reader
+	# goes away long before the output is written. The command already
+	# succeeded, so it must not be run again; the undelivered output is
+	# reported as a non-zero status. The reader is bash's own `read -n 1`, not
+	# `head -c 1`: on ubuntu-26.04 (uutils coreutils) `head -c 1` did not close
+	# the pipe early (diagnostics showed cat_head=0 while cat_closed=141), so
+	# the test depended on the host's `head`.
 	big = "x" * (1024 * 1024)
 	env = _setup(tmp_path, [(big, "", 0)])
 	result = _run(
 		tmp_path,
 		env,
-		"gh_retry gh api repos/o/r | head -c 1 > /dev/null\n"
+		"gh_retry gh api repos/o/r | { IFS= read -r -n 1 _ghr_closed_reader_byte || true; }\n"
 		'echo "rc=${PIPESTATUS[0]}"',
 	)
 	assert _calls(tmp_path) == 1, result.stderr

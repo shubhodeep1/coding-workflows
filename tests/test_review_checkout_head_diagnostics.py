@@ -132,13 +132,13 @@ class Layout:
 		env.update(overrides)
 		return env
 
-	def run(self, *, sourced: bool = False, **overrides: str) -> subprocess.CompletedProcess[str]:
+	def run(self, *, sourced: bool = False, prelude: str = "", **overrides: str) -> subprocess.CompletedProcess[str]:
 		self.github_env.write_text("")
 		if sourced:
 			# Mirrors the workflow step: GitHub's bash -eo pipefail shell sources the script file.
-			cmd = ["bash", "-c", FAKE_FUNCTIONS + 'set -eo pipefail; source "$1"', "_", str(SCRIPT_PATH)]
+			cmd = ["bash", "-c", FAKE_FUNCTIONS + prelude + 'set -eo pipefail; source "$1"', "_", str(SCRIPT_PATH)]
 		else:
-			cmd = ["bash", "-c", FAKE_FUNCTIONS + review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")]
+			cmd = ["bash", "-c", FAKE_FUNCTIONS + prelude + review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")]
 		return subprocess.run(cmd, cwd=self.split, env=self.env(**overrides), capture_output=True, text=True)
 
 
@@ -264,6 +264,27 @@ def test_head_moved_after_switch_reports_skipped_stale(layout: Layout) -> None:
 	assert fields["fetch_ms"].isdigit() and fields["switch_ms"].isdigit()
 	assert "AUTOFIX_STALE_BASE_SKIP=true" in layout.github_env.read_text()
 	assert "TARGET_BRANCH=" not in layout.github_env.read_text()
+	_assert_no_temp_files(layout)
+
+
+def test_fetch_and_switch_ms_ignore_a_date_clock_that_goes_backwards(layout: Layout) -> None:
+	# ubuntu-26.04's `date +%s%3N` gave readings that went backwards within a
+	# run, so END - START went negative and the timing fields printed `na`.
+	# The clock reads bash's EPOCHREALTIME first, so a bad `date` cannot do that.
+	date_calls = layout.root / "date_calls"
+	# A file counter, because the clock calls `date` inside $(...) subshells.
+	prelude = (
+		f"_fake_date_count_file='{date_calls}'\n"
+		'date() { echo x >> "${_fake_date_count_file}"; '
+		'echo "$(( 1700000009000 - 100 * $(wc -l < "${_fake_date_count_file}") ))"; }\n'
+	)
+	result = layout.run(prelude=prelude)
+	assert result.returncode == 0, result.stderr
+	_, fields = _summary(result)
+	assert (fields["stage"], fields["outcome"]) == ("done", "ok")
+	assert fields["duration_ms"].isdigit()
+	assert fields["fetch_ms"].isdigit(), fields
+	assert fields["switch_ms"].isdigit(), fields
 	_assert_no_temp_files(layout)
 
 
