@@ -2329,26 +2329,57 @@ jobs:
             --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          {
-            printf '%s\n' "Planning blocked: human input required."
-            printf '\n'
-            printf '%s\n' "Reason: ${BLOCKED_REASON}"
-            printf '\n'
-            printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
-            printf '%s\n' "Provide the required input, then reply with /answer."
-            printf '\n'
-            printf '%s\n' "Run: ${RUN_URL}"
-          } > "${PLAN_COMMENT_FILE}"
+          # A block that only waits for another open PR (the planner's
+          # "work is delivered by open PR #<N>" self-check, #8335) needs no
+          # human: the unblock judge parks it on a pr_on_branch hold and
+          # resumes it after that PR merges. Say so, and page at WARNING
+          # instead of CRITICAL. Every other reason keeps the old comment and
+          # page. The "Planning blocked:" opening stays, because
+          # orchestrate_lib.py reads it as an automation comment.
+          PLAN_BLOCKED_WAIT_PR=""
+          plan_blocked_wait_re='^work is delivered by open PR #([1-9][0-9]{0,8}); resume once it is merged$'
+          if [[ "${BLOCKED_REASON}" =~ ${plan_blocked_wait_re} ]]; then
+            PLAN_BLOCKED_WAIT_PR="${BASH_REMATCH[1]}"
+          fi
+          if [ -n "${PLAN_BLOCKED_WAIT_PR}" ]; then
+            {
+              printf '%s\n' "Planning blocked: waiting on open PR #${PLAN_BLOCKED_WAIT_PR}."
+              printf '\n'
+              printf '%s\n' "Reason: ${BLOCKED_REASON}"
+              printf '\n'
+              printf '%s\n' "No action is needed. The unblock judge resumes this issue after PR #${PLAN_BLOCKED_WAIT_PR} merges."
+              printf '\n'
+              printf '%s\n' "Run: ${RUN_URL}"
+            } > "${PLAN_COMMENT_FILE}"
+          else
+            {
+              printf '%s\n' "Planning blocked: human input required."
+              printf '\n'
+              printf '%s\n' "Reason: ${BLOCKED_REASON}"
+              printf '\n'
+              printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
+              printf '%s\n' "Provide the required input, then reply with /answer."
+              printf '\n'
+              printf '%s\n' "Run: ${RUN_URL}"
+            } > "${PLAN_COMMENT_FILE}"
+          fi
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${PLAN_COMMENT_FILE}")" >/dev/null
 
-          MSG="Planning blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
+          if [ -n "${PLAN_BLOCKED_WAIT_PR}" ]; then
+            echo "PLAN_BLOCKED_WAIT issue=${ISSUE_NUMBER} pr=${PLAN_BLOCKED_WAIT_PR} level=WARNING"
+            MSG="Planning for issue #${ISSUE_NUMBER} is waiting on open PR #${PLAN_BLOCKED_WAIT_PR}; it resumes automatically after that PR merges."
+            PLAN_BLOCKED_TG_LEVEL="WARNING"
+          else
+            MSG="Planning blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
+            PLAN_BLOCKED_TG_LEVEL="CRITICAL"
+          fi
           MSG+=$'\n'
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "CRITICAL"
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "${PLAN_BLOCKED_TG_LEVEL}"
 
       - name: Complete /answer command (blocked)
         if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.blocked == 'true'
