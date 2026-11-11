@@ -131,16 +131,15 @@ def test_guard_flags_bare_percent_help_string() -> None:
 		"\t)\n"
 		"\treturn parser\n"
 	)
+	saved_sys_path = list(sys.path)
 	with tempfile.TemporaryDirectory(prefix="bp_help_guard_") as td:
 		directory = Path(td)
 		(directory / "bad_help.py").write_text(bad_script, encoding="utf-8")
 		paths = _discover_build_parser_scripts(directory)
 		assert [path.name for path in paths] == ["bad_help.py"]
 		failures = _build_parser_help_failures(paths)
-		try:
-			sys.path.remove(str(directory))
-		except ValueError:
-			pass
+	# `_build_parser_help_failures` restores sys.path itself.
+	assert sys.path == saved_sys_path, "the guard leaked sys.path entries"
 	assert len(failures) == 1, failures
 	assert failures[0].startswith("bad_help.py: "), failures
 
@@ -162,7 +161,12 @@ def test_guard_flags_bare_percent_in_subcommand_help_string() -> None:
 		failures = _build_parser_help_failures(_discover_build_parser_scripts(directory))
 	assert sys.path == saved_sys_path, "the guard leaked sys.path entries"
 	assert len(failures) == 1, failures
-	assert failures[0].startswith("bad_sub_help.py: RuntimeError: tool render: "), failures
+	# Before 3.14 the bad help string surfaces in format_help() and is wrapped
+	# with the subcommand name; 3.14 rejects it earlier, inside add_argument()
+	# during build_parser(), as `ValueError: badly formed help string`.
+	assert failures[0].startswith(
+		("bad_sub_help.py: RuntimeError: tool render: ", "bad_sub_help.py: ValueError: ")
+	), failures
 
 
 def main() -> int:
