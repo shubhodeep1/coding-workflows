@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-11T20:33:33Z",
+  "issue_number": 9255,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/ci.yml:3476-3489; cited_path=.github/workflows/ci.yml; files_touched=changelog.d/9255-review-checkout-epochrealtime-clock.md, scripts/review_autofix_step_checkout_pr_head_branch.sh, tests/test_review_checkout_head_diagnostics.py.",
+  "phase": "review_autofix",
+  "pr_number": 9274,
+  "record_id": "lesson_20261111203333_7aaffa5b07",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    "changelog.d/9255-review-checkout-epochrealtime-clock.md",
+    "scripts/review_autofix_step_checkout_pr_head_branch.sh",
+    "tests/test_review_checkout_head_diagnostics.py"
+  ]
+}
