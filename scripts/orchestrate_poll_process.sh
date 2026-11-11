@@ -11071,18 +11071,30 @@ maybe_auto_resume_final_merge_exhausted() {
 		if ! mv "${STATE_FILE}.famr_bak" "${STATE_FILE}" 2>/dev/null; then
 			echo "::warning::Could not restore the parked state file for project #${TRACKING_NUM} after a failed state publish."
 		fi
+		rm -f "${STATE_FILE}.famr_bak" 2>/dev/null || true
 		echo "::warning::Could not publish the final-merge auto-resume state for project #${TRACKING_NUM}; leaving it parked this tick."
 		echo "${log_prefix} outcome=skip reason=lookup_failed detail=state_write"
 		return 1
 	fi
 	# ai:validated replaces ai:blocked (same phase-label group). The readiness
 	# gate in finalize_integration_merge_if_needed keys off ai:validated, so the
-	# merge runs only once that write is confirmed. On a failed write restore
-	# and republish the parked state (the head leaves the guard again, since no
-	# merge was attempted) and skip this tick.
-	if ! set_tracking_phase_label "ai:validated"; then
-		echo "::warning::Could not apply ai:validated to project #${TRACKING_NUM} for the final-merge auto-resume; restoring the parked state."
-		if ! { mv "${STATE_FILE}.famr_bak" "${STATE_FILE}" 2>/dev/null && post_state_comment; }; then
+	# merge runs only once a fresh label read shows it on the issue:
+	# set_issue_phase_label also returns 0 on its non-fatal "could not remove
+	# label" / "not found" path, where the whole edit was rejected. On a failed
+	# or unconfirmed write restore and republish the parked state, keeping the
+	# head in final_merge_auto_resumed_head_shas so this head's single try is
+	# spent (a permanent label failure must not re-run every gate each tick),
+	# and skip.
+	resume_labels_json="[]"
+	if set_tracking_phase_label "ai:validated"; then
+		resume_labels_json="$(get_issue_labels_json "${TRACKING_NUM}")"
+	fi
+	# Empty input is defaulted to [] so `jq -e` cannot pass on no output.
+	if ! printf '%s' "${resume_labels_json:-[]}" | jq -e 'type == "array" and index("ai:validated") != null' >/dev/null 2>&1; then
+		echo "::warning::Could not confirm ai:validated on project #${TRACKING_NUM} for the final-merge auto-resume; restoring the parked state."
+		if ! { jq --arg sha "${resume_head_sha}" '.final_merge_auto_resumed_head_shas = (((if (.final_merge_auto_resumed_head_shas | type) == "array" then .final_merge_auto_resumed_head_shas else [] end) - [$sha] + [$sha]))' \
+				"${STATE_FILE}.famr_bak" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" && post_state_comment; }; then
+			rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
 			echo "::warning::Could not republish the parked state for project #${TRACKING_NUM} after a failed label write; the next tick reads the published validating state."
 		fi
 		rm -f "${STATE_FILE}.famr_bak" 2>/dev/null || true
@@ -11098,15 +11110,10 @@ maybe_auto_resume_final_merge_exhausted() {
 			resume_needs_human_kept="true"
 		fi
 	fi
-	resume_labels_json="$(get_issue_labels_json "${TRACKING_NUM}")"
-	if printf '%s' "${resume_labels_json}" | jq -e 'type == "array" and index("ai:validated") != null' >/dev/null 2>&1; then
-		TRACKING_LABELS="$(printf '%s' "${resume_labels_json}" | jq -c '.')"
-	else
-		# The ai:validated write above succeeded, so only this read failed.
-		# Keep ai:needs-human in the local view when its removal failed, so the
-		# in-memory labels match the issue.
-		TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c --arg keep_nh "${resume_needs_human_kept}" 'map(select(. != "ai:blocked" and ($keep_nh == "true" or . != "ai:needs-human"))) + ["ai:validated"] | unique' 2>/dev/null || echo '["ai:validated"]')"
-	fi
+	# Local view from the confirmed read above (it carries ai:validated). Drop
+	# ai:needs-human only when its removal succeeded, so the in-memory labels
+	# match the issue.
+	TRACKING_LABELS="$(printf '%s' "${resume_labels_json}" | jq -c --arg keep_nh "${resume_needs_human_kept}" 'map(select($keep_nh == "true" or . != "ai:needs-human"))' 2>/dev/null || printf '%s' "${resume_labels_json}")"
 
 	post_tracking_comment "<!-- final-merge-auto-resume:${resume_head_sha} -->
 ## 🔁 Final integration merge retried automatically

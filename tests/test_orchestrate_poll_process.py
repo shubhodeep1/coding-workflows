@@ -873,6 +873,7 @@ def _run_poller(
 	fail_issue_patch_for: list[int] | None = None,
 	fail_issue_edit_for: list[int] | None = None,
 	fail_issue_edit_on_calls: dict[int, list[int]] | None = None,
+	fail_issue_edit_stderr: str | None = None,
 	fail_issue_close_for: list[int] | None = None,
 	fail_branch_ref_after: dict[str, int] | None = None,
 	fail_branch_ref_not_found_after: dict[str, int] | None = None,
@@ -1454,6 +1455,7 @@ esac
 			"fail_issue_patch_for": [int(x) for x in fail_issue_patch_for],
 			"fail_issue_edit_for": [int(x) for x in fail_issue_edit_for],
 			"fail_issue_edit_on_calls": {str(k): [int(call) for call in calls] for k, calls in fail_issue_edit_on_calls.items()},
+			"fail_issue_edit_stderr": fail_issue_edit_stderr or "",
 			"fail_issue_close_for": [int(x) for x in fail_issue_close_for],
 			"fail_branch_ref_after": {str(k): int(v) for k, v in fail_branch_ref_after.items()},
 			"fail_branch_ref_not_found_after": {str(k): int(v) for k, v in fail_branch_ref_not_found_after.items()},
@@ -2014,7 +2016,7 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'edit':
 	issue_edit_call_counts[num] = issue_edit_call_count
 	if int(num) in set(store.get('fail_issue_edit_for', [])) or issue_edit_call_count in set(store.get('fail_issue_edit_on_calls', {}).get(num, [])):
 		save()
-		print('forced issue edit failure', file=sys.stderr)
+		print(store.get('fail_issue_edit_stderr') or 'forced issue edit failure', file=sys.stderr)
 		sys.exit(1)
 	issue = get_issue(num)
 	body = None
@@ -28372,10 +28374,23 @@ def test_final_merge_auto_resume_failed_state_publish_keeps_project_parked():
 
 
 def test_final_merge_auto_resume_failed_label_write_reparks_without_merging():
-	# ai:validated cannot be applied: the parked state (without the guard) is
-	# republished and the merge is not attempted, so a later tick can retry.
+	# ai:validated cannot be applied: the parked state is republished with the
+	# head kept in the guard (its single try is spent, so a permanent label
+	# failure cannot re-run every gate each tick) and the merge is not attempted.
 	result = _famr_run(fail_issue_edit_for=[192])
-	_famr_assert_skipped(result, "lookup_failed detail=label_write")
+	_famr_assert_skipped(result, "lookup_failed detail=label_write", resumed_heads=[_FAMR_HEAD])
+	assert "ai:validated" not in result["tracking_labels"]
+	assert "ai:blocked" in result["tracking_labels"]
+	second = _famr_run(state=result["latest_state"])
+	_famr_assert_skipped(second, f"already_resumed_on_head head_sha={_FAMR_HEAD}", resumed_heads=[_FAMR_HEAD])
+
+
+def test_final_merge_auto_resume_unconfirmed_label_write_reparks_without_merging():
+	# set_issue_phase_label returns 0 on its non-fatal "could not remove label"
+	# path although the whole edit was rejected. The fresh label read shows no
+	# ai:validated, so the resume must not invent it locally and merge.
+	result = _famr_run(fail_issue_edit_for=[192], fail_issue_edit_stderr="could not remove label: ai:blocked")
+	_famr_assert_skipped(result, "lookup_failed detail=label_write", resumed_heads=[_FAMR_HEAD])
 	assert "ai:validated" not in result["tracking_labels"]
 	assert "ai:blocked" in result["tracking_labels"]
 
