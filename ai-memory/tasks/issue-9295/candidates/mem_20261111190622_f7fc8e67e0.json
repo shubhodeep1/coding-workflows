@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Open PRs #9246 and #9264 already target this failing test. How should this triage issue relate to them?\nChoices:\nA) Treat this issue as a duplicate: no new code here. Close or hold it until #9246 merges, then re-run CI on PR #9180 (RECOMMENDED)\nB) Make a separate, independent fix in this issue's PR, accepting likely merge conflicts with #9246/#9264\nC) Build on #9246's approach: wait for it to merge, then fix only what is still failing on PR #9180\n**Note:** if you pick A, Q2 does not apply.\nQ2: If a new fix is made here (Q1 = B or C), what should it change, given the triage instruction \"do not loosen the test\"?\nChoices:\nA) Change `gh_retry`'s replay in `scripts/gh_helpers.sh` so a closed reader always gives a non-zero status, whichever `cat` the runner has (GNU or uutils). The production contract then holds on ubuntu-26.04, and the test's assertion stays as it is (RECOMMENDED)\nB) Pin the test or CI step to GNU coreutils `cat` (for example, put a GNU `cat` first on PATH). The `gh_retry` code is left as it is\nC) Accept rc=0 as valid when the runner's `cat` swallows EPIPE, by changing the test's assertion\n**Note:** C loosens the test, which the triage issue forbids. Choosing it will need explicit maintainer sign-off.",
+  "fingerprint": "0953252b104dc808778e0ba0b41ed0da22ed4fc53ee21d9f916f25f9a6d5a8e1",
+  "lineage": {
+    "issue_number": 9295,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43080755845",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43080755845",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111190622_f7fc8e67e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9295,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43080755845"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9295 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T19:06:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
