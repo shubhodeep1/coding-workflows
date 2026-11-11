@@ -46,6 +46,18 @@ Existing mechanisms this plan extends rather than duplicates (§5):
   actors. A fix for a broken review pipeline can never merge through that
   same pipeline, which is why a break-glass gate is needed (Phase 3).
 
+The 2026-11-10/11 outage added a third fact. GitHub's `ubuntu-latest` moved
+to `ubuntu-26.04` (Python 3.14), and `scripts/render_prompt.py` then crashed
+in every consumer's clarify, plan and review runs, in every release from
+v1.45.0 to v1.47.1 (fixed on `main` by #9240 and on `stable` by #9339). As
+first drafted, this plan would have classified that failure `environmental`
+(a `done` marker, no Telegram), and even a correct self-fix would have
+reached only `main`, leaving consumers broken until the next promotion. A
+failure introduced by a release needs the opposite treatment: roll `@stable`
+back. Phase 6 adds two fleet routes that tell these cases apart from inbox
+data this plan already captures (`source_repo`, `release_sha`), using the
+rollback workflow from #9342.
+
 ### Operator decisions (clarification session, 2026-11-11)
 
 | Q | Answer | Meaning |
@@ -61,6 +73,10 @@ Existing mechanisms this plan extends rather than duplicates (§5):
 | Q9 | A | WARNING/ERROR go to the inbox only (Telegram only if unfixable); CRITICAL is still sent immediately and also captured |
 | Q10 | A | Clarify questions on issues opened by this system are always answered with the RECOMMENDED option and never page the operator; other issues unchanged |
 | Q11 | A (assumed) | Daily watchdog in `workflow-log-analysis.yml` |
+| Q12 | A | Fleet triggers live in this plan (Phase 6); the rollback workflow itself is #9342 (asked as Q5 in the rollback session) |
+| Q13 | A | A rollback holds automatic re-releases with a self-clearing `ai/stable-hold` marker (#9342; asked as Q6) |
+| Q14 | A | Automatic rollback: same fingerprint in at least 3 consumers within 2 hours, all on the current `stable` SHA, never seen on the previous release; one step back, at most once per 24 hours (asked as Q7) |
+| Q15 | A | A fleet-wide failure that is not a release regression is fixed forward: self-fix on `main`, cherry-pick PR to `stable`, full release gate (asked as Q8) |
 
 ## Decisions
 
@@ -106,7 +122,8 @@ Existing mechanisms this plan extends rather than duplicates (§5):
   (idempotent per record id), within one hour of capture.
 - Each alert group gets one of these outcomes, logged with a stable prefix:
   `noise`, `already_tracked`, `healable`, `pipeline_blocked`,
-  `environmental`, `escalated`.
+  `environmental`, `escalated`, and (Phase 6) `release_regression`,
+  `fleet_environmental`.
 - `healable` alerts produce a heal-intake report; the intake's dedup and
   budget decide whether an issue opens.
 - `pipeline_blocked` alerts produce a fix PR on the default branch with
@@ -115,6 +132,13 @@ Existing mechanisms this plan extends rather than duplicates (§5):
 - The operator gets a Telegram message only for: an alert the job could not
   fix, a heal issue or self-fix PR stuck past its threshold, a break-glass
   merge, or the job itself not running.
+- A failure seen in at least `ALERT_TRIAGE_FLEET_MIN_REPOS` consumers within
+  `ALERT_TRIAGE_FLEET_WINDOW_MINUTES` is never marked `done` silently
+  (Phase 6).
+- A fleet failure that started with the current `@stable` release is rolled
+  back through `rollback-stable.yml` (#9342); a fleet failure that the
+  previous release also shows is fixed forward on `stable` and released
+  through the full gate (Phase 6).
 
 ## Non-goals
 
@@ -162,7 +186,7 @@ Existing mechanisms this plan extends rather than duplicates (§5):
 | Item | Answer |
 |---|---|
 | Scripts | New scripts only, all invoked by workflows: `scripts/alert_inbox_capture.sh` (sourced by `tg_helpers.sh`), `scripts/alert_inbox_store.sh`, `scripts/alert_triage.py`, `scripts/alert_triage_route.sh`, `scripts/alert_self_fix.sh`, `scripts/alert_self_fix_break_glass.sh`. `tg_helpers.sh`, `workflow_failure_heal_intake.sh`, `clarify.yml`, `orchestrate_clarify_respond.yml` and `workflow-log-analysis.yml` are extended. |
-| Scheduler entry points | `.github/workflows/alert-inbox-intake.yml` (`repository_dispatch` type `alert-inbox`); `.github/workflows/alert-triage.yml` (cron `17 * * * *` + `workflow_dispatch`); `.github/workflows/alert-self-fix.yml` (`workflow_dispatch` from alert-triage + cron `47 * * * *` for the break-glass scan); `.github/workflows/workflow-log-analysis.yml` (existing daily cron `0 6 * * *`). |
+| Scheduler entry points | `.github/workflows/alert-inbox-intake.yml` (`repository_dispatch` type `alert-inbox`); `.github/workflows/alert-triage.yml` (cron `17 * * * *` + `workflow_dispatch`); `.github/workflows/alert-self-fix.yml` (`workflow_dispatch` from alert-triage + cron `47 * * * *` for the break-glass scan); `.github/workflows/workflow-log-analysis.yml` (existing daily cron `0 6 * * *`). Phase 6 adds no trigger: `alert-triage.yml` dispatches the existing `rollback-stable.yml` (#9342) and `alert-self-fix.yml`, which dispatches the existing `test-and-mark-stable.yml` on `stable`. |
 | Long-running supervisor | None. Every piece is a bounded scheduled or dispatched job with a `concurrency` group. |
 | DB gate | Not applicable (no database). Idempotency comes from per-record `done/` markers and per-fingerprint ledger files on the inbox branch, written in one commit per run. |
 | `docs/scripts-pending-removal.md` | No entry. None of the new scripts is single-use, long-running or a supervisor under §18.F; they are permanent parts of scheduled workflows. |
@@ -247,7 +271,25 @@ wait for the next run), and:
    open `ai:alert-self-fix` PR carries the same fingerprint (one list call each,
    reused for the whole run);
 3. checks the per-fingerprint ledger on the inbox branch: after 2 fix attempts
-   for one fingerprint in 7 days, the group is escalated instead of retried.
+   for one fingerprint in 7 days, the group is escalated instead of retried;
+4. (Phase 6) classifies fleet groups before any model call. It counts the
+   distinct consumer `source_repo` values with the group's fingerprint in the
+   inbox (14-day retention, processed records included). If at least
+   `ALERT_TRIAGE_FLEET_MIN_REPOS` (default 3) report it within
+   `ALERT_TRIAGE_FLEET_WINDOW_MINUTES` (default 120), the group is a fleet
+   group and is never marked `done`:
+
+   | Condition (all must hold) | Classification |
+   |---|---|
+   | every fleet record's `release_sha` is the current `stable` commit; the fingerprint's first record is after the current release's `published_at`; no record with that fingerprint carries the previous release's `release_sha` | `release_regression` |
+   | any other fleet group | `fleet_environmental` |
+
+   A consumer that lags on an older release and still shows the failure is
+   evidence against a release regression, which keeps the rule on the safe
+   side. The current and previous release SHAs and `published_at` come from
+   one tag-refs read and one release read per run, reused for every group
+   (§15). Fleet groups skip the model's classification; the model still
+   writes `summary`, `proposed_fix` and `files` for the hotfix lane.
 
 Each remaining group goes to the Claude engine as role `ALERT_TRIAGE`
 (`.github/ai/claude_engine.json`: Opus, high effort; codex fallback through
@@ -284,6 +326,10 @@ Routing (`scripts/alert_triage_route.sh`):
 | `healable` | `workflow-failure-heal` dispatch, kind `alert_triage`, with the diagnosis as evidence | none |
 | `pipeline_blocked` | `alert-self-fix.yml` dispatch (when `ALERT_TRIAGE_SELF_FIX_ENABLED=true`) | none; escalates if the switch is off or the dispatch fails |
 | `unsure`, model failure, ledger cap, parse failure | `done` marker + escalation | one message per group |
+| `release_regression` (Phase 6) | dispatch `rollback-stable.yml` (#9342; `target_version` blank = previous release, `reason` = fingerprint + repo list) when `ALERT_TRIAGE_AUTO_ROLLBACK_ENABLED=true`, no automatic rollback in the last 24 hours (ledger) and no active stable hold | CRITICAL from `rollback-stable.yml`; escalates instead if the switch is off, the cap is hit, a hold is active or the dispatch fails |
+| `fleet_environmental` (Phase 6) | `alert-self-fix.yml` dispatch with `stable_hotfix=true` when `ALERT_TRIAGE_STABLE_HOTFIX_ENABLED=true` | one notice per group (fleet-wide outage); escalates if the switch is off or the dispatch fails |
+
+A single-repo `environmental` group keeps its row above (`done`, no Telegram).
 
 All `done` markers and ledger updates of one run are written in one commit.
 Each run also re-checks open `ai:alert-triage` issues and `ai:alert-self-fix`
@@ -337,6 +383,28 @@ The break-glass scan (cron `47 * * * *` in the same workflow, gated by
 Each break-glass pass sends one Telegram message (merge happened without the
 review pipeline). Code still reaches consumers only through the existing
 `@stable` release gate.
+
+### Stable hotfix lane (Phase 6)
+
+When `alert-self-fix.yml` is dispatched with `stable_hotfix=true`:
+
+1. It makes the fix on the default branch as above, unless the model's
+   `proposed_fix` names a commit already merged on `main` (as #9240 was
+   during the 2026-11-10/11 outage); then it goes straight to step 2.
+2. Once the `main` fix has merged (checked by the hourly scan, no polling
+   loop), or right away for an already-merged commit, it cherry-picks that
+   commit's diff onto `origin/stable` as
+   `ai/alert-stable-hotfix-<fingerprint8>-<run_id>`, runs the affected tests,
+   opens a PR to `stable` labelled `ai:alert-self-fix` and `ai:stable-hotfix`,
+   and enables auto-merge. A cherry-pick conflict escalates; it is never
+   resolved by the model. The `stable` branch requires no status checks today
+   (rules: no deletion, no force push, Copilot review), so break-glass does
+   not apply to this PR.
+3. After that PR merges, it dispatches `test-and-mark-stable.yml` on `stable`
+   with the full gate (never `skip_e2e`). A deliberately dispatched release
+   is not blocked by a stable hold, and it clears the hold (#9342).
+4. Cap: one stable hotfix per fingerprint per 24 hours (ledger). A failed
+   release gate escalates.
 
 ### Clarify: RECOMMENDED-only for `ai:alert-triage` issues (Q10)
 
@@ -396,6 +464,19 @@ depends on another phase's output does nothing (or escalates) until it exists.
    Skips when `ALERT_TRIAGE_ENABLED` is not `true` or the workflow does not
    exist. *Done:* tests for stale-run, stale-inbox and skip cases.
    *Rollback:* revert.
+6. **Fleet routes.** Fleet detection in `alert_triage.py`, the
+   `release_regression` and `fleet_environmental` routing rows, the
+   `stable_hotfix` input of `alert-self-fix.yml`, and the label
+   `ai:stable-hotfix`. New variables, all safe by default:
+   `ALERT_TRIAGE_AUTO_ROLLBACK_ENABLED=false`,
+   `ALERT_TRIAGE_STABLE_HOTFIX_ENABLED=false`,
+   `ALERT_TRIAGE_FLEET_MIN_REPOS=3`, `ALERT_TRIAGE_FLEET_WINDOW_MINUTES=120`.
+   Without phase 2 there is nothing to classify; without phase 3 or with
+   `rollback-stable.yml` (#9342) not merged, the dispatch fails and the group
+   escalates. *Done:* fixture tests for both classifications, including the
+   lagging-consumer case, the 24-hour caps, an active hold, a cherry-pick
+   conflict and the already-merged-fix shortcut. *Rollback:* revert, or turn
+   both switches off.
 
 ## Implementation Steps
 
@@ -464,6 +545,20 @@ depends on another phase's output does nothing (or escalates) until it exists.
    `.github/workflows/workflow-log-analysis.yml`.
 2. Tests, README, `agents.d/` (`ALERT_TRIAGE_WATCHDOG`), `changelog.d/`.
 
+### Phase 6
+1. `scripts/alert_triage.py`: fleet grouping over the inbox window and the
+   `release_regression` / `fleet_environmental` rule; one tag-refs read and
+   one release read per run.
+2. `scripts/alert_triage_route.sh`: the two rows, the 24-hour rollback and
+   hotfix caps in the ledger, and the stable-hold check (one contents read of
+   `ai/stable-hold`, from #9342).
+3. `.github/workflows/alert-self-fix.yml` + `scripts/alert_self_fix.sh`:
+   `stable_hotfix` input, cherry-pick PR to `stable`, release-gate dispatch.
+4. `.github/ai/label_contract.v1.json`: `ai:stable-hotfix`.
+5. Tests, README rows for the four variables, `agents.d/` (log prefix
+   `ALERT_TRIAGE_FLEET outcome=release_regression|fleet_environmental`),
+   `changelog.d/`.
+
 ## Files & Modules
 
 - `[new] .github/ai/alert_inbox.json`
@@ -493,6 +588,11 @@ None. No MongoDB collection is read or written.
 - **Unit:** routing table and fail-open in `tg_send_msg`; payload validation;
   grouping and fingerprint normalisation; ledger cap; routing rows; each
   break-glass condition; clarify label path; watchdog thresholds.
+- **Fleet fixtures (Phase 6):** the 2026-11-10/11 outage replayed (3+
+  consumers, failure also on the previous release → `fleet_environmental`);
+  a synthetic release regression (all on the new SHA, first seen after
+  `published_at` → `release_regression`); two repos only (no fleet); a
+  lagging consumer (→ `fleet_environmental`).
 - **Integration (Actions, dry run):** phase 2 ships with
   `ALERT_TRIAGE_DRY_RUN=true` by default; the first week of runs logs
   decisions against real alerts without dispatching, and the operator compares
@@ -529,6 +629,14 @@ None. No MongoDB collection is read or written.
   can be fixed one by one.
 - **Workflow runs per alert.** One short `alert-inbox-intake` run per captured
   alert. ACCEPTED — WARNING+ volume is low by design.
+- **An automatic rollback for a failure the release did not cause.** Three
+  conditions must hold (current SHA only, onset after the release, never on
+  the previous release), it goes one step back, at most once per 24 hours,
+  and every rollback sends a CRITICAL notice. The switch stays off until a
+  `dry_run` rollback has been rehearsed.
+- **A stable hotfix ships a bad cherry-pick.** The fix already merged on
+  `main` through review (or break-glass), conflicts escalate, and the full
+  release gate runs before consumers see it.
 
 ## Rollout
 
@@ -541,6 +649,9 @@ None. No MongoDB collection is read or written.
    `ALERT_TRIAGE_BREAK_GLASS_ENABLED=true`.
 5. Set `route_warning_error_to_inbox: true` and release to `@stable`. From
    here WARNING/ERROR only reach Telegram when unfixable.
+6. After step 4, set `ALERT_TRIAGE_STABLE_HOTFIX_ENABLED=true`, then
+   `ALERT_TRIAGE_AUTO_ROLLBACK_ENABLED=true` once one `rollback-stable.yml`
+   `dry_run=true` dispatch has been checked.
 
 Rollback at any step: flip the switch back (repo variable, or one PR to
 `alert_inbox.json` + release).
