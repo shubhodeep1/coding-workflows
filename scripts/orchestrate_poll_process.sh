@@ -20,6 +20,153 @@
 
 set -euo pipefail
 
+# --- ORCH_POLL_CYCLE_SUMMARY helpers (begin) ---
+# Per-cycle timing summary (analysis/workflow-optimization-2026-10-08.md,
+# Speed #2): the EXIT trap prints exactly one ORCH_POLL_CYCLE_SUMMARY line per
+# run, and the tracking loop prints one ORCH_POLL_PROJECT_TIMING line per
+# project processed. sleep_ms sums only the sleep sites in this file that call
+# "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" (gh_retry backoff in gh_helpers.sh is
+# not counted). Fail-open: no gh/API calls, no new or longer sleeps, the trap
+# never calls exit (bash keeps the original exit status) and every step runs
+# in an `|| true` context so errexit cannot abort it. Installed here, before
+# the first `exit`, so early sweep-only and failure exits are covered too.
+# Only a directly executed run (`bash scripts/orchestrate_poll_process.sh`)
+# reports; test harnesses that `source` the poller as a library get no trap,
+# no ledger file and no extra stdout lines.
+_orch_poll_cycle_now_ms()
+{
+	local _orch_poll_cycle_now_value="" _orch_poll_cycle_now_realtime="${EPOCHREALTIME:-}"
+	# Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
+	# coreutils) gave readings that went backwards within a run, which printed
+	# negative elapsed_ms. `date` stays as the fallback for bash < 5.
+	if [[ "${_orch_poll_cycle_now_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+		printf '%s' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
+		return 0
+	fi
+	_orch_poll_cycle_now_value="$(date +%s%3N 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_now_value}" =~ ^[0-9]{13,}$ ]]; then
+		printf '%s' "${_orch_poll_cycle_now_value}"
+		return 0
+	fi
+	_orch_poll_cycle_now_value="$(date +%s 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_now_value}" =~ ^[0-9]+$ ]]; then
+		printf '%s' "$(( _orch_poll_cycle_now_value * 1000 ))"
+	fi
+	return 0
+}
+
+# Same arguments and exit status as `sleep`: records the requested duration
+# in the run's sleep ledger, then runs the original sleep unchanged. The
+# ledger is a file so sleeps inside $(...) subshells are counted too; nothing
+# is written once the main shell has removed it.
+_orch_poll_cycle_sleep()
+{
+	local _orch_poll_cycle_sleep_ledger="${_ORCH_POLL_CYCLE_SLEEP_LEDGER:-}"
+	if [ -n "${_orch_poll_cycle_sleep_ledger}" ] && [ -f "${_orch_poll_cycle_sleep_ledger}" ]; then
+		if [[ "${1:-}" =~ ^[0-9]{1,9}$ ]]; then
+			printf '%s\n' "$(( 10#${1} * 1000 ))" 2>/dev/null >> "${_orch_poll_cycle_sleep_ledger}" || true
+		else
+			printf 'unknown\n' 2>/dev/null >> "${_orch_poll_cycle_sleep_ledger}" || true
+		fi
+	fi
+	sleep "$@"
+}
+
+_orch_poll_cycle_project_flush()
+{
+	local _orch_poll_cycle_flush_num="" _orch_poll_cycle_flush_now="" _orch_poll_cycle_flush_elapsed="unknown"
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ] || [ -z "${_ORCH_POLL_CYCLE_PROJECT_NUM:-}" ]; then
+		return 0
+	fi
+	_orch_poll_cycle_flush_num="${_ORCH_POLL_CYCLE_PROJECT_NUM}"
+	[[ "${_orch_poll_cycle_flush_num}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_flush_num="unknown"
+	_orch_poll_cycle_flush_now="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_flush_now}" =~ ^[0-9]+$ ]] && [[ "${_ORCH_POLL_CYCLE_PROJECT_START_MS:-}" =~ ^[0-9]+$ ]]; then
+		_orch_poll_cycle_flush_elapsed="$(( _orch_poll_cycle_flush_now - _ORCH_POLL_CYCLE_PROJECT_START_MS ))"
+	fi
+	# Clear first so a failed write can never print the same project twice.
+	_ORCH_POLL_CYCLE_PROJECT_NUM=""
+	_ORCH_POLL_CYCLE_PROJECT_START_MS=""
+	echo "ORCH_POLL_PROJECT_TIMING tracking_issue=${_orch_poll_cycle_flush_num} elapsed_ms=${_orch_poll_cycle_flush_elapsed}" 2>/dev/null || true
+	return 0
+}
+
+# Called at the top of each tracking-loop pass: prints the previous project's
+# timing line (so the loop's many `continue` paths need no edits), counts the
+# new project and starts its clock.
+_orch_poll_cycle_project_begin()
+{
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ]; then
+		return 0
+	fi
+	_orch_poll_cycle_project_flush || true
+	if [[ "${_ORCH_POLL_CYCLE_PROJECTS_PROCESSED:-}" =~ ^[0-9]+$ ]]; then
+		_ORCH_POLL_CYCLE_PROJECTS_PROCESSED="$(( _ORCH_POLL_CYCLE_PROJECTS_PROCESSED + 1 ))"
+	fi
+	_ORCH_POLL_CYCLE_PROJECT_NUM="${1:-unknown}"
+	_ORCH_POLL_CYCLE_PROJECT_START_MS="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+	return 0
+}
+
+_orch_poll_cycle_on_exit()
+{
+	local _orch_poll_cycle_exit_code="${1:-}" _orch_poll_cycle_exit_now="" _orch_poll_cycle_exit_elapsed="unknown"
+	local _orch_poll_cycle_exit_sleep="unknown" _orch_poll_cycle_exit_ledger="${_ORCH_POLL_CYCLE_SLEEP_LEDGER:-}"
+	local _orch_poll_cycle_exit_seen="${_ORCH_POLL_CYCLE_PROJECTS_SEEN:-unknown}" _orch_poll_cycle_exit_processed="${_ORCH_POLL_CYCLE_PROJECTS_PROCESSED:-unknown}"
+	local _orch_poll_cycle_exit_reason="completed"
+	# Subshells never emit; the main shell emits exactly once.
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ] || [ "${BASHPID:-$$}" != "$$" ] || [ "${_ORCH_POLL_CYCLE_EMITTED:-false}" = "true" ]; then
+		return 0
+	fi
+	_ORCH_POLL_CYCLE_EMITTED="true"
+	[[ "${_orch_poll_cycle_exit_code}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_code="unknown"
+	_orch_poll_cycle_project_flush || true
+	_orch_poll_cycle_exit_now="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+	if [[ "${_orch_poll_cycle_exit_now}" =~ ^[0-9]+$ ]] && [[ "${_ORCH_POLL_CYCLE_START_MS:-}" =~ ^[0-9]+$ ]]; then
+		_orch_poll_cycle_exit_elapsed="$(( _orch_poll_cycle_exit_now - _ORCH_POLL_CYCLE_START_MS ))"
+	fi
+	if [ -n "${_orch_poll_cycle_exit_ledger}" ] && [ -f "${_orch_poll_cycle_exit_ledger}" ] && [ -r "${_orch_poll_cycle_exit_ledger}" ]; then
+		_orch_poll_cycle_exit_sleep="$(awk 'BEGIN { total = 0; bad = 0 } /^[0-9]+$/ { total += $0; next } { bad = 1 } END { if (bad) print "unknown"; else printf "%.0f\n", total }' "${_orch_poll_cycle_exit_ledger}" 2>/dev/null || true)"
+		[[ "${_orch_poll_cycle_exit_sleep}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_sleep="unknown"
+	fi
+	if [ -n "${_orch_poll_cycle_exit_ledger}" ]; then
+		rm -f "${_orch_poll_cycle_exit_ledger}" 2>/dev/null || true
+	fi
+	[[ "${_orch_poll_cycle_exit_seen}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_seen="unknown"
+	[[ "${_orch_poll_cycle_exit_processed}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_processed="unknown"
+	if [ "${_orch_poll_cycle_exit_code}" != "0" ]; then
+		_orch_poll_cycle_exit_reason="error"
+	elif [ "${_orch_poll_cycle_exit_seen}" = "0" ]; then
+		_orch_poll_cycle_exit_reason="no_projects"
+	fi
+	echo "ORCH_POLL_CYCLE_SUMMARY elapsed_ms=${_orch_poll_cycle_exit_elapsed} projects_seen=${_orch_poll_cycle_exit_seen} projects_processed=${_orch_poll_cycle_exit_processed} sleep_ms=${_orch_poll_cycle_exit_sleep} exit_code=${_orch_poll_cycle_exit_code} terminal_reason=${_orch_poll_cycle_exit_reason}" 2>/dev/null || true
+	return 0
+}
+
+_orch_poll_cycle_install_exit_trap()
+{
+	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" = "true" ]; then
+		trap '_orch_poll_cycle_on_exit "$?" || true' EXIT
+	fi
+}
+
+_ORCH_POLL_CYCLE_START_MS="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
+_ORCH_POLL_CYCLE_PROJECTS_SEEN="unknown"
+_ORCH_POLL_CYCLE_PROJECTS_PROCESSED="unknown"
+_ORCH_POLL_CYCLE_PROJECT_NUM=""
+_ORCH_POLL_CYCLE_PROJECT_START_MS=""
+_ORCH_POLL_CYCLE_EMITTED="false"
+_ORCH_POLL_CYCLE_ENABLED="false"
+_ORCH_POLL_CYCLE_SLEEP_LEDGER=""
+_ORCH_POLL_CYCLE_SLEEP_CMD="sleep"
+if [ "${BASH_SOURCE[0]:-}" = "${0:-}" ]; then
+	_ORCH_POLL_CYCLE_ENABLED="true"
+	_ORCH_POLL_CYCLE_SLEEP_LEDGER="$(mktemp "${TMPDIR:-/tmp}/orch_poll_cycle_sleep.XXXXXX" 2>/dev/null || true)"
+	_ORCH_POLL_CYCLE_SLEEP_CMD="_orch_poll_cycle_sleep"
+fi
+_orch_poll_cycle_install_exit_trap || true
+# --- ORCH_POLL_CYCLE_SUMMARY helpers (end) ---
+
 # ---------------------------------------------------------------
 # Helper: Telegram (tracked via tg_helpers.sh)
 # ---------------------------------------------------------------
@@ -2146,7 +2293,7 @@ _record_merge_conflict_telemetry()
 		fi
 		if git rev-parse --verify --quiet "refs/remotes/origin/${branch}" >/dev/null 2>&1; then
 			if ! git worktree add --quiet -B "${branch}" "${wt}" "refs/remotes/origin/${branch}" 2>/dev/null; then
-				sleep 1
+				"${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
 				continue
 			fi
 			worktree_registry_register "$(basename -- "${wt}")" "${wt}" "${branch}" "project-${project}" "orchestrate-poll"
@@ -2180,7 +2327,7 @@ _record_merge_conflict_telemetry()
 		fi
 		if [ "${push_rc}" -eq 2 ] && [ "${attempt}" -lt 3 ]; then
 			# Push race; sleep briefly and retry with fresh fetch.
-			sleep 1
+			"${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
 			continue
 		fi
 		return 0
@@ -2750,6 +2897,33 @@ AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL
 # auto-approval (see _plan_heal_counterfactual_check). On by default; `false`
 # turns it off, any other value is treated as `true` with a warning.
 HEAL_COUNTERFACTUAL_GATE_ENABLED="${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}"
+
+# Issue #8808: stale auto-close of held run-sourced heal issues (see
+# _heal_stale_close_check). On by default; `false` turns it off, any other
+# value is treated as `true` with a warning (checked at the call).
+HEAL_STALE_AUTO_CLOSE_ENABLED="${HEAL_STALE_AUTO_CLOSE_ENABLED:-true}"
+HEAL_STALE_GREEN_RUNS="${HEAL_STALE_GREEN_RUNS:-5}"
+if ! [[ "${HEAL_STALE_GREEN_RUNS}" =~ ^[0-9]{1,6}$ ]] || [ "$(( 10#${HEAL_STALE_GREEN_RUNS} ))" -lt 1 ]; then
+  echo "::warning::HEAL_STALE_GREEN_RUNS must be a positive integer; defaulting to 5"
+  HEAL_STALE_GREEN_RUNS="5"
+fi
+HEAL_STALE_GREEN_RUNS="$(( 10#${HEAL_STALE_GREEN_RUNS} ))"
+# One runs read returns at most 100 runs (green runs + 10), so cap at 90.
+if [ "${HEAL_STALE_GREEN_RUNS}" -gt 90 ]; then
+  echo "::warning::HEAL_STALE_GREEN_RUNS above 90 cannot be met; using 90"
+  HEAL_STALE_GREEN_RUNS="90"
+fi
+HEAL_STALE_MIN_AGE_HOURS="${HEAL_STALE_MIN_AGE_HOURS:-24}"
+if ! [[ "${HEAL_STALE_MIN_AGE_HOURS}" =~ ^[0-9]{1,6}$ ]]; then
+  echo "::warning::HEAL_STALE_MIN_AGE_HOURS must be a non-negative integer; defaulting to 24"
+  HEAL_STALE_MIN_AGE_HOURS="24"
+fi
+HEAL_STALE_MIN_AGE_HOURS="$(( 10#${HEAL_STALE_MIN_AGE_HOURS} ))"
+# Tick-local caches: workflow runs keyed `repo|workflow|branch`, run lookups
+# keyed `repo:run_id` (a cached failure is not retried this tick).
+HEAL_STALE_RUNS_CACHE_JSON='{}'
+HEAL_STALE_RUN_LOOKUP_CACHE_JSON='{}'
+HEAL_STALE_CLOSE_OUTCOME=""
 
 # Issue #8809: an UNVERIFIED heal plan that lists only exact tests/ and
 # changelog.d/*.md files inside the verified heal scope is auto-approved (see
@@ -5296,14 +5470,31 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # orchestrator-managed issues whose body declares no branch and whose PR
 # merged into an orchestrator/project-* branch
 # (_pr_json_base_is_target_merge); other bases log rejected=non_target_base.
+# Issue #8955: an ai:check-triage issue's fix PR merges into the head branch
+# of the failing PR its `check-failure-triage:pr=<N>` marker names; that
+# merge is accepted with reason=check_triage_pr_branch
+# (_close_sweep_check_triage_branch, pipeline-authored issues only).
+#
+# Third origin class (issue #8955):
+#   - check_triage: open ai:check-triage issue carrying neither ai:merged nor
+#       ai:ready-to-merge (for example ai:done). No merged PR found is the
+#       normal pending state -> silent skip, as for ready_label. On a
+#       verified merge the sweep applies ai:merged via set_issue_phase_label
+#       (label contract) before closing; a label failure warns
+#       backfill_ai_merged_failed and still closes.
 #
 # Gated by ENABLE_CLOSE_MERGED_ISSUES (default true).
 #
-# API hygiene (CLAUDE.md §15): up to 2 `gh issue list` calls per sweep
+# API hygiene (CLAUDE.md §15): up to 3 `gh issue list` calls per sweep
 # (one per label class) regardless of N issues. Per-issue cost is the
 # existing single _issue_timeline_with_cross_refs_json call (GraphQL-first
 # with fail-open REST fallback) plus, in the ready_label-origin merged-PR
-# case, one `gh issue edit` to backfill ai:merged before close.
+# case, one `gh issue edit` to backfill ai:merged before close. For an
+# ai:check-triage issue whose implementation PR the existing rules rejected,
+# at most one more `pulls/<N>` read for the marker PR (plus the per-tick
+# memoized `user` read). Every open ai:check-triage issue in the third list
+# costs its timeline read each tick, up to 200 issues, even while no fix PR
+# has merged yet.
 close_merged_issues_sweep() {
   if [ "${ENABLE_CLOSE_MERGED_ISSUES}" != "true" ]; then
     echo "Close merged issues sweep disabled by ENABLE_CLOSE_MERGED_ISSUES=${ENABLE_CLOSE_MERGED_ISSUES}."
@@ -5320,13 +5511,22 @@ close_merged_issues_sweep() {
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:merged" \
-    --json number,labels,body \
+    --json number,labels,body,author \
     --limit 200 2>/dev/null || echo "[]")"
   ready_json="$(gh_retry gh issue list \
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:ready-to-merge" \
-    --json number,labels,body \
+    --json number,labels,body,author \
+    --limit 200 2>/dev/null || echo "[]")"
+  # Issue #8955: open ai:check-triage issues (e.g. ai:done) whose fix PR
+  # merged into the failing PR's head branch.
+  local triage_json
+  triage_json="$(gh_retry gh issue list \
+    --repo "${GITHUB_REPOSITORY}" \
+    --state open \
+    --label "ai:check-triage" \
+    --json number,labels,body,author \
     --limit 200 2>/dev/null || echo "[]")"
 
   # Build a single deduplicated list of {number, labels, origin} entries.
@@ -5335,15 +5535,18 @@ close_merged_issues_sweep() {
   local issues_json
   issues_json="$(jq -c -n \
     --argjson merged "${merged_json:-[]}" \
-    --argjson ready "${ready_json:-[]}" '
+    --argjson ready "${ready_json:-[]}" \
+    --argjson triage "${triage_json:-[]}" '
       def normalize($origin):
         map(
           select(type == "object" and (.number | type == "number"))
-          | {number: .number, labels: (.labels // []), body: (.body // ""), origin: $origin}
+          | {number: .number, labels: (.labels // []), body: (.body // ""), author: (.author.login? // ""), origin: $origin}
         );
       ($merged | normalize("merged_label")) as $m
       | ($ready | normalize("ready_label")) as $r
-      | ($m + ($r | map(select(.number as $n | ($m | map(.number) | index($n)) == null))))
+      | ($m + ($r | map(select(.number as $n | ($m | map(.number) | index($n)) == null)))) as $mr
+      | ($triage | normalize("check_triage")) as $t
+      | ($mr + ($t | map(select(.number as $n | ($mr | map(.number) | index($n)) == null))))
     ' 2>/dev/null || echo "[]")"
 
   local count
@@ -5352,6 +5555,9 @@ close_merged_issues_sweep() {
   merged_count="$(echo "${merged_json}" | jq 'length' 2>/dev/null || echo "0")"
   ready_count="$(echo "${ready_json}" | jq 'length' 2>/dev/null || echo "0")"
   echo "Found ${merged_count} open issue(s) with ai:merged and ${ready_count} with ai:ready-to-merge (deduped: ${count})."
+  local triage_count
+  triage_count="$(echo "${triage_json}" | jq 'length' 2>/dev/null || echo "0")"
+  echo "Found ${triage_count} open issue(s) with ai:check-triage (merged into the deduped list)."
 
   if [ "${count}" -eq 0 ]; then
     return 0
@@ -5384,6 +5590,9 @@ close_merged_issues_sweep() {
   local sweep_pr_fetch_failed sweep_non_target_seen sweep_partial_delivery_reason _sweep_pd_rc
   local _sweep_issue_body _sweep_is_managed _sweep_declared_branch _sweep_declared_parsed
   local _sweep_base_log _sweep_declared_log _sweep_non_target_note
+  local _sweep_triage_branch _sweep_triage_parsed _sweep_target_ok
+  local _sweep_triage_rc _sweep_cand_head_repo _sweep_cand_head_ref _sweep_cand_bound
+  local _sweep_triage_fetch_failed
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -5447,6 +5656,9 @@ close_merged_issues_sweep() {
     fi
     _sweep_declared_branch=""
     _sweep_declared_parsed=false
+    _sweep_triage_branch=""
+    _sweep_triage_parsed=false
+    _sweep_triage_fetch_failed=false
 
     merged_pr_num=""
     sweep_pr_fetch_failed=false
@@ -5465,7 +5677,50 @@ close_merged_issues_sweep() {
           _sweep_declared_branch="$(printf '%s' "${_sweep_issue_body}" | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py extract-integration-branch 2>/dev/null | head -n 1 || echo "")"
           _sweep_declared_parsed=true
         fi
+        _sweep_target_ok=false
         if _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}"; then
+          _sweep_target_ok=true
+        else
+          # Issue #8955: only after the existing rules rejected the merge,
+          # resolve the ai:check-triage marker PR's head branch once per issue.
+          # Like issue_pr_status.yml, the candidate must have a same-repository
+          # head bound to this issue (ai/issue-<n>, optional -/ suffix).
+          _sweep_cand_head_repo="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.head.repo.full_name // ""' 2>/dev/null || echo "")"
+          _sweep_cand_head_ref="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+          _sweep_cand_bound=false
+          if [ -n "${GITHUB_REPOSITORY:-}" ] && [ "${_sweep_cand_head_repo}" = "${GITHUB_REPOSITORY}" ] \
+              && [[ "${_sweep_cand_head_ref}" =~ ^ai/issue-${issue_num}([-/].*)?$ ]]; then
+            _sweep_cand_bound=true
+          fi
+          if [ "${_sweep_cand_bound}" = "true" ] && [ "${_sweep_triage_parsed}" != "true" ]; then
+            _sweep_triage_rc=0
+            _close_sweep_check_triage_branch "${issue_num}" \
+              "$(echo "${issues_json}" | jq -c --argjson i "${idx}" '.[$i].labels // []' 2>/dev/null || echo "[]")" \
+              "${_sweep_issue_body}" \
+              "$(echo "${issues_json}" | jq -r --argjson i "${idx}" '.[$i].author // ""' 2>/dev/null || echo "")" || _sweep_triage_rc=$?
+            _sweep_triage_branch="${_CLOSE_SWEEP_TRIAGE_BRANCH}"
+            _sweep_triage_parsed=true
+            if [ "${_sweep_triage_rc}" = "2" ]; then
+              # Transient marker-PR read failure: defer like a failed candidate
+              # fetch, and do not log this candidate as rejected=non_target_base.
+              sweep_pr_fetch_failed=true
+              _sweep_triage_fetch_failed=true
+              echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=check_triage_pr_fetch_failed"
+              continue
+            fi
+          fi
+          if [ "${_sweep_cand_bound}" = "true" ] && [ "${_sweep_triage_fetch_failed}" = "true" ]; then
+            # A later bound candidate of the same issue: the marker PR read
+            # already failed this tick, so the triage rule was not checked.
+            echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=check_triage_pr_fetch_failed"
+            continue
+          fi
+          if [ "${_sweep_cand_bound}" = "true" ] && [ -n "${_sweep_triage_branch}" ] \
+              && _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}" "${_sweep_triage_branch}"; then
+            _sweep_target_ok=true
+          fi
+        fi
+        if [ "${_sweep_target_ok}" = "true" ]; then
           # Issue #7657: a bound partial-delivery PR keeps its issue open;
           # issue_pr_status.yml restarts clarify for the deferred items.
           if [ "${_sweep_is_managed}" != "true" ]; then
@@ -5508,9 +5763,10 @@ close_merged_issues_sweep() {
         skipped_count=$((skipped_count + 1))
         continue
       fi
-      if [ "${origin}" = "ready_label" ]; then
-        # Normal pending state for ai:ready-to-merge. No alert — the
-        # label is not a contract that a merged PR exists yet.
+      if [ "${origin}" = "ready_label" ] || [ "${origin}" = "check_triage" ]; then
+        # Normal pending state for ai:ready-to-merge (and, issue #8955, for
+        # an in-flight ai:check-triage issue). No alert — the label is not a
+        # contract that a merged PR exists yet.
         echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} no_merged_pr_found non_target_base_seen=${sweep_non_target_seen} — pending, leaving open."
         skipped_count=$((skipped_count + 1))
         continue
@@ -5536,6 +5792,11 @@ close_merged_issues_sweep() {
       ensure_label_exists "ai:merged" >/dev/null 2>&1 || true
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         --add-label "ai:merged" --remove-label "ai:ready-to-merge" >/dev/null 2>&1 \
+        || echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} backfill_ai_merged_failed — proceeding to close anyway."
+    elif [ "${origin}" = "check_triage" ]; then
+      # Issue #8955: apply ai:merged through the label contract so phase
+      # labels such as ai:done are removed before the close.
+      set_issue_phase_label "${issue_num}" "ai:merged" >/dev/null 2>&1 \
         || echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} backfill_ai_merged_failed — proceeding to close anyway."
     fi
 
@@ -7157,6 +7418,185 @@ resolve_security_pass_fix_successor() {
   return 1
 }
 
+# resolve_review_blocked_reissue_successor <closed_issue_num>
+#
+# Find the replacement issue that the review pipeline's review-blocked
+# judge (scripts/review_rb_judge.sh, `close_and_reissue`) opened for a
+# wave issue it closed.
+#
+# Why this exists: the poller's own review-blocked judge re-points wave
+# state when it reissues, but the review_autofix judge only writes body
+# markers.  Nothing mapped its reissue into wave state, so the closed
+# predecessor read as closed-without-merge and the wave judge opened a
+# second redo for the same work.  Project #8969: #8970 was reissued as
+# #8994 at 13:23Z on 2026-11-07, the poller marked #8970 closed at 13:31Z,
+# and the wave judge opened duplicate #8995 at 13:34Z.  Both PRs (#9003,
+# #9005) built Phase 1; #9003 merged and #9005 was left conflicting.
+#
+# Match rules (all required), read from the closed issue's REST timeline
+# `cross-referenced` events (the reissue body names `#<closed>`, so the
+# reference is recorded there):
+#   - the source is an issue (not a PR) in this repository, numbered
+#     above the closed issue;
+#   - it carries `ai:orchestrator-managed` (only collaborators and the
+#     pipeline can label, so forged body markers alone are not enough);
+#   - its body has the exact lines `- Tracking issue: #<TRACKING_NUM>` and
+#     `- Type: review-blocked-reissue`, and a line starting
+#     `- Replaces: #<closed>` followed by a space or end of line.
+# The highest matching number wins.  A reissue of a reissue is followed on
+# a later tick, once the adopted successor itself reads as closed.
+#
+# API cost (§15): one paginated REST `GET issues/<n>/timeline`, issued only
+# for a current-wave issue that is closed with no merged implementation PR.
+# The per-tick timeline read in the reconcile loop goes through
+# gh_issue_timeline_with_cross_refs, whose GraphQL shape keeps only the
+# number of an Issue source (no body, labels or state), so it cannot
+# identify a reissue.  Once adopted, the predecessor leaves the wave and
+# is never read again.
+#
+# Args:
+#   closed_issue_num — the closed wave issue number recorded in state
+# Stdout:
+#   on a match, one compact JSON object:
+#   {"number": <n>, "state": "open"|"closed", "labels": [<name>, ...]}
+# Returns:
+#   0 — successor found (JSON on stdout)
+#   1 — lookup succeeded and no successor exists
+#   2 — lookup inconclusive (API or parse failure); callers keep state as
+#       it is and retry next tick (fail open)
+resolve_review_blocked_reissue_successor() {
+  local closed_issue_num="$1"
+  local rb_reissue_timeline_file rb_reissue_successor_json
+
+  [[ "${closed_issue_num}" =~ ^[0-9]+$ ]] || return 2
+  [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]] || return 2
+
+  rb_reissue_timeline_file="${RUNTIME_DIR}/rb_reissue_timeline_${TRACKING_NUM}_${closed_issue_num}.json"
+  rm -f "${rb_reissue_timeline_file}"
+  if ! gh_retry_to_file "${rb_reissue_timeline_file}" gh api --paginate \
+    "repos/${GITHUB_REPOSITORY}/issues/${closed_issue_num}/timeline?per_page=100"; then
+    rm -f "${rb_reissue_timeline_file}"
+    return 2
+  fi
+  if [ ! -s "${rb_reissue_timeline_file}" ]; then
+    rm -f "${rb_reissue_timeline_file}"
+    return 2
+  fi
+  if ! rb_reissue_successor_json="$(jq -sc \
+    --arg tracking_marker "- Tracking issue: #${TRACKING_NUM}" \
+    --arg type_marker "- Type: review-blocked-reissue" \
+    --arg replaces_prefix "- Replaces: #${closed_issue_num}" \
+    --arg repo_suffix "/repos/${GITHUB_REPOSITORY}" \
+    --argjson closed_issue "${closed_issue_num}" '
+      def body_lines: (.body // "") | split("\n") | map(rtrimstr("\r"));
+      if length == 0 or (all(.[]; type == "array") | not) then
+        error("timeline pagination output must contain JSON arrays")
+      else
+        [
+          .[][]
+          | select(.event == "cross-referenced")
+          | .source.issue
+          | select(type == "object")
+          | select(.pull_request == null)
+          | select((.number | type) == "number" and .number > $closed_issue)
+          | select(((.repository_url // "") | ascii_downcase | endswith($repo_suffix | ascii_downcase)))
+          | select(any((.labels // [])[]; (.name? // .) == "ai:orchestrator-managed"))
+          | . as $issue
+          | ($issue | body_lines) as $lines
+          | select(($lines | index($tracking_marker)) != null)
+          | select(($lines | index($type_marker)) != null)
+          | select(any($lines[]; . == $replaces_prefix or startswith($replaces_prefix + " ")))
+          | {
+              number: $issue.number,
+              state: (if $issue.state == "closed" then "closed" else "open" end),
+              labels: [($issue.labels // [])[] | (.name? // .) | select(type == "string")]
+            }
+        ]
+        | max_by(.number) // empty
+      end
+    ' "${rb_reissue_timeline_file}" 2>/dev/null)"; then
+    rm -f "${rb_reissue_timeline_file}"
+    return 2
+  fi
+  rm -f "${rb_reissue_timeline_file}"
+  if [ -n "${rb_reissue_successor_json}" ]; then
+    printf '%s\n' "${rb_reissue_successor_json}"
+    return 0
+  fi
+  return 1
+}
+
+# adopt_review_blocked_reissue_successor <closed_issue_num> <successor_num>
+#
+# Re-point the current-wave entry of a closed issue at its review-blocked
+# reissue, the same writes the poller's own close_and_reissue arm makes:
+# `.issue_number_map[<local_id>]` and the wave entry's `github_issue`, with
+# status reset to `pending` so this tick's check-wave-status reads the
+# successor's labels.  Writes STATE_FILE only; the caller persists it.
+#
+# Returns 1 when no non-terminal-merged entry in the current wave holds
+# <closed_issue_num>, and 3 when <successor_num> is already tracked by any
+# wave entry or issue_number_map value (no double mapping).  An
+# `orphan-rb-<successor>` entry the orphan sweep injected into the current
+# wave does not count as tracked: adoption removes it, so the successor keeps the original local id.
+# Returns 2 on a state read/write failure.
+adopt_review_blocked_reissue_successor() {
+  local closed_issue_num="$1"
+  local successor_num="$2"
+  local rb_reissue_local_id
+
+  [[ "${closed_issue_num}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${successor_num}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${WAVE_IDX:-}" =~ ^[0-9]+$ ]] || return 2
+
+  if ! rb_reissue_local_id="$(jq -r \
+    --argjson wi "${WAVE_IDX}" \
+    --argjson closed_issue "${closed_issue_num}" \
+    --argjson successor "${successor_num}" '
+      if (
+        [(.waves // []) | to_entries[] | .key as $k | .value.issues[]?
+          | select(($k == $wi and .id == ("orphan-rb-" + ($successor | tostring))) | not)
+          | .github_issue | tostring] | index($successor | tostring)
+      ) != null then "__rb_reissue_already_tracked__"
+      elif (
+        [(.issue_number_map // {}) | to_entries[] | .value | tostring] | index($successor | tostring)
+      ) != null then "__rb_reissue_already_tracked__"
+      else
+        [.waves[$wi].issues[]?
+          | select((.github_issue | tostring) == ($closed_issue | tostring))
+          | select((.status // "") != "merged" and (.status // "") != "skipped")
+          | .id
+          | select(type == "string" and length > 0)
+        ] | first // empty
+      end
+    ' "${STATE_FILE}" 2>/dev/null)"; then
+    return 2
+  fi
+  [ -n "${rb_reissue_local_id}" ] || return 1
+  [ "${rb_reissue_local_id}" != "__rb_reissue_already_tracked__" ] || return 3
+
+  if ! jq --arg lid "${rb_reissue_local_id}" \
+    --argjson wi "${WAVE_IDX}" \
+    --argjson successor "${successor_num}" \
+    --argjson now "$(date +%s)" '
+      .waves[$wi].issues |= map(select(.id != ("orphan-rb-" + ($successor | tostring))))
+      | .issue_number_map[$lid] = $successor
+      | (.waves[$wi].issues[] | select(.id == $lid)) |= (
+          .github_issue = $successor
+          | .status = "pending"
+          | .last_seen_phase = ""
+          | .status_since_ts = $now
+          | .stall_recovery_count = 0
+        )
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
+    rm -f "${STATE_FILE}.tmp"
+    return 2
+  fi
+  mv "${STATE_FILE}.tmp" "${STATE_FILE}" || return 2
+  printf '%s\n' "${rb_reissue_local_id}"
+  return 0
+}
+
 security_pass_closed_fix_failure() {
   local issue_number="$1"
 
@@ -8617,7 +9057,7 @@ security_pass_exhaustion_judge() {
     fi
     echo "::warning::Security-pass exhaustion judge attempt ${attempt} for tracking issue #${TRACKING_NUM} returned no usable verdict (every remaining finding needs exactly one valid decision, and fail cannot be mixed with non-fail actions)."
     if [ -z "${MOCK_SECURITY_PASS_JUDGE_JSON:-}" ]; then
-      sleep $(( 8 * attempt ))
+      "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" $(( 8 * attempt ))
     fi
   done
   if [ "${judge_success}" != "true" ]; then
@@ -9748,6 +10188,22 @@ evaluate_sync_superseded_by_main() {
   fi
 
   SYNC_SUPERSEDED_AFFECTED_PATHS_JSON="$(printf '%s\n' "${affected_paths[@]}" | jq -Rsc 'split("\n") | map(select(length > 0)) | unique')"
+
+  # Refresh both refs before comparing them. The job-start fetch can predate
+  # the child-PR states read above from the API: a PR that merged in between
+  # counts as terminal while the stale integration ref still equals the
+  # default branch, so the path diff below reads as clean and the final
+  # merge is skipped for good (fun-token-multi-chain project #739, PR #741).
+  local superseded_fetch_err=""
+  if ! superseded_fetch_err="$(git fetch --no-tags origin \
+    "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" \
+    "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" 2>&1 >/dev/null)"; then
+    SYNC_SUPERSEDED_CONFIDENT="false"
+    # One line of git's error, URL credentials and workflow-command prefixes removed.
+    superseded_fetch_err="$(printf '%s\n' "${superseded_fetch_err}" | grep -v '^[[:space:]]*$' | tail -n 1 | sed -E 's#://[^/@[:space:]]*@#://***@#g; s/::/: :/g' | cut -c1-300 || true)"
+    echo "  [superseded-check] Unable to refresh ${default_branch}/${integration_branch} refs (${superseded_fetch_err:-no error output}); not marking superseded." >&2
+    return 0
+  fi
 
   if ! default_ref="$(resolve_branch_analysis_ref "${default_branch}")"; then
     SYNC_SUPERSEDED_CONFIDENT="false"
@@ -11607,14 +12063,14 @@ _refresh_integration_resolver_tooling() {
         "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
         2>/dev/null; then
       echo "::warning::${log_prefix} git fetch failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
-      [ "${attempt}" -lt 3 ] && sleep 1 && continue
+      [ "${attempt}" -lt 3 ] && "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1 && continue
       return 0
     fi
 
 	if ! git worktree add --quiet --detach "${wt}" \
 	     "refs/remotes/origin/${integration_branch}" 2>/dev/null; then
 	  echo "::warning::${log_prefix} git worktree add failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
-	  [ "${attempt}" -lt 3 ] && sleep 1 && continue
+	  [ "${attempt}" -lt 3 ] && "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1 && continue
 	  return 0
 	fi
 	worktree_registry_register "$(basename -- "${wt}")" "${wt}" "refs/remotes/origin/${integration_branch}" "tracking-${TRACKING_NUM:-0}" "orchestrate-poll"
@@ -11856,7 +12312,7 @@ _refresh_integration_resolver_tooling() {
         # Push race (non-fast-forward).  Refetch and retry; matches
         # the pattern in _record_merge_conflict_telemetry.
         if [ "${attempt}" -lt 3 ]; then
-          sleep 1
+          "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 1
           continue
         fi
         echo "::warning::${log_prefix} push race exhausted; proceeding to dispatch with current tip."
@@ -16741,11 +17197,9 @@ The latest validation run reported \`raw_status=harness_error\`, so the orchestr
   # the outcome, so skip the recovery budget and go straight to
   # terminal failure with a clear note.
   local _deterministic_class=""
-  if printf '%s' "${reason}" | grep -qE 'AI_VALIDATION_FAILURE_CLASS:deterministic_[a-z_]+'; then
-    _deterministic_class="$(printf '%s' "${reason}" \
-      | grep -oE 'AI_VALIDATION_FAILURE_CLASS:deterministic_[a-z_]+' \
-      | head -n 1 \
-      | sed 's/^AI_VALIDATION_FAILURE_CLASS://')"
+  local _deterministic_marker_re='AI_VALIDATION_FAILURE_CLASS:(deterministic_[a-z_]+)'
+  if [[ "${reason}" =~ ${_deterministic_marker_re} ]]; then
+    _deterministic_class="${BASH_REMATCH[1]}"
     echo "Validation failed deterministically (class=${_deterministic_class}); skipping recovery budget (current=${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS})."
     jq --arg reason "${reason}" --arg dclass "${_deterministic_class}" --arg raw_status "${validation_raw_status}" \
       '.status = "failed" |
@@ -18739,6 +19193,204 @@ _heal_counterfactual_hold_notify()
   return 0
 }
 
+# Issue #8808: close a held run-sourced heal issue whose failing workflow
+# stopped failing. Called from the heal_counterfactual_hold branch of
+# _plan_auto_approval_gate before the hold notice, in the main shell so the
+# tick-local caches persist. workflow_failure_heal.py heal-stale-decision
+# decides from the batched details map entry (body, labels, author,
+# created_at, linked_pr), the gate's comment snapshot and one cached
+# `actions/workflows/<file>/runs` read per (source repo, workflow, branch).
+# Issues filed before the workflow= body marker resolve the workflow with one
+# cached `actions/runs/<id>` read of the heal-scope marker's first run.
+# Audited calls: the batched details map carries no run data and
+# STALL_MANAGED_LINKED_PR_CACHE only PR state, so these reads are new; only
+# held heal issues reach them. Every error keeps the issue open. On close it
+# posts one ai:heal-stale-close:v1 comment (none when a trusted one exists),
+# PATCHes state=closed/state_reason=completed (labels untouched) and sends
+# a Telegram DEBUG (the pipeline handled it). Sets HEAL_STALE_CLOSE_OUTCOME (closed|kept|skipped) and
+# always logs one HEAL_STALE_CLOSE line. Always returns 0.
+# Args: <issue_num> <details_map_json> <comments_json> <login> <phase>
+_heal_stale_close_check()
+{
+  local issue_num="$1"
+  local details_map_json="$2"
+  local comments_json="$3"
+  local login="$4"
+  # $5 (<phase>) is accepted for the caller's context; the log line omits it.
+  local flag_norm="" heal_py="" outcome="kept" reason="" green_runs="0"
+  local stale_issue_file="" stale_comments_file="" stale_runs_file="" stale_linked_file="" stale_run_file=""
+  local target_json="" src_repo="" workflow_base="" stale_branch="" fb_repo="" fb_run=""
+  local lookup_key="" lookup_json="" runs_key="" runs_json="" decide_json="" decision="" per_page=""
+  local comment_body="" anchor="" linked_args=()
+
+  HEAL_STALE_CLOSE_OUTCOME="skipped"
+  # sed, not xargs: xargs fails on an unmatched quote in the flag value.
+  flag_norm="$(printf '%s' "${HEAL_STALE_AUTO_CLOSE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm="true"
+  case "${flag_norm}" in
+    false)
+      echo "HEAL_STALE_CLOSE issue=${issue_num} outcome=skipped reason=disabled green_runs=0"
+      return 0
+      ;;
+    ""|true) ;;
+    *) echo "::warning::HEAL_STALE_AUTO_CLOSE_ENABLED has invalid value; treating as true" ;;
+  esac
+  heal_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/workflow_failure_heal.py"
+  stale_issue_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_stale_issue.XXXXXX" 2>/dev/null || true)"
+  stale_comments_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_stale_comments.XXXXXX" 2>/dev/null || true)"
+  stale_runs_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_stale_runs.XXXXXX" 2>/dev/null || true)"
+  stale_linked_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_stale_linked.XXXXXX" 2>/dev/null || true)"
+  stale_run_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_stale_run.XXXXXX" 2>/dev/null || true)"
+  # One pass; each `break` ends the check with outcome/reason set.
+  while :; do
+    if [ "${HEAL_CF_GATE_REASON:-}" = "heal_route_unknown" ]; then
+      outcome="skipped"; reason="heal_route_unknown"; break
+    fi
+    if [ ! -f "${heal_py}" ] || [ -z "${stale_issue_file}" ] || [ -z "${stale_comments_file}" ] \
+      || [ -z "${stale_runs_file}" ] || [ -z "${stale_linked_file}" ] || [ -z "${stale_run_file}" ]; then
+      reason="decision_unavailable"; break
+    fi
+    if ! printf '%s' "${details_map_json:-{\}}" | jq -ce --arg n "${issue_num}" '
+        .[$n]
+        | select(type == "object" and .comments_available == true)
+        | select((.body | type) == "string")
+        | {number: ($n | tonumber), state: (.state // ""), body: .body, labels: (.labels // []),
+           user: {login: (.author_login // "")}, author_association: (.author_association // ""),
+           created_at: (.created_at // null)}
+      ' > "${stale_issue_file}" 2>/dev/null; then
+      outcome="skipped"; reason="details_unavailable"; break
+    fi
+    printf '%s' "${comments_json:-[]}" | jq -c 'if type == "array" then . else [] end' > "${stale_comments_file}" 2>/dev/null \
+      || printf '[]' > "${stale_comments_file}"
+    target_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${heal_py}" heal-stale-decision --stage target \
+      --issue-json "${stale_issue_file}" 2>/dev/null)" || target_json=""
+    if ! printf '%s' "${target_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      reason="decision_unavailable"; break
+    fi
+    reason="$(printf '%s' "${target_json}" | jq -r '.reason // ""' 2>/dev/null)" || reason="decision_unavailable"
+    if [ "${reason}" = "not_run_sourced" ]; then
+      outcome="skipped"; break
+    fi
+    src_repo="$(printf '%s' "${target_json}" | jq -r '.source_repo // "" | strings' 2>/dev/null)" || src_repo=""
+    workflow_base="$(printf '%s' "${target_json}" | jq -r '.workflow // "" | strings' 2>/dev/null)" || workflow_base=""
+    stale_branch="$(printf '%s' "${target_json}" | jq -r '.branch // "" | strings' 2>/dev/null)" || stale_branch=""
+    fb_repo="$(printf '%s' "${target_json}" | jq -r '.fallback_run.repo // "" | strings' 2>/dev/null)" || fb_repo=""
+    fb_run="$(printf '%s' "${target_json}" | jq -r '.fallback_run.run_id // "" | strings' 2>/dev/null)" || fb_run=""
+    if [ -n "${reason}" ]; then
+      break
+    fi
+    if ! [[ "${src_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+      reason="source_unknown"; break
+    fi
+    if { [ -z "${workflow_base}" ] || [ -z "${stale_branch}" ]; } \
+      && [[ "${fb_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] && [[ "${fb_run}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+      lookup_key="${fb_repo}:${fb_run}"
+      if printf '%s' "${HEAL_STALE_RUN_LOOKUP_CACHE_JSON:-{\}}" | jq -e --arg k "${lookup_key}" 'has($k)' >/dev/null 2>&1; then
+        lookup_json="$(printf '%s' "${HEAL_STALE_RUN_LOOKUP_CACHE_JSON}" | jq -c --arg k "${lookup_key}" '.[$k]' 2>/dev/null)" || lookup_json=""
+      else
+        if gh_retry gh api "repos/${fb_repo}/actions/runs/${fb_run}" > "${stale_run_file}" 2>/dev/null; then
+          lookup_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${heal_py}" heal-stale-decision --stage resolve \
+            --run-json "${stale_run_file}" 2>/dev/null)" || lookup_json=""
+        fi
+        printf '%s' "${lookup_json}" | jq -e 'type == "object"' >/dev/null 2>&1 \
+          || lookup_json='{"workflow":null,"branch":null,"reason":"runs_unavailable"}'
+        HEAL_STALE_RUN_LOOKUP_CACHE_JSON="$(printf '%s' "${HEAL_STALE_RUN_LOOKUP_CACHE_JSON:-{\}}" \
+          | jq -c --arg k "${lookup_key}" --argjson v "${lookup_json}" '. + {($k): $v}' 2>/dev/null)" \
+          || HEAL_STALE_RUN_LOOKUP_CACHE_JSON='{}'
+      fi
+      [ -n "${workflow_base}" ] || workflow_base="$(printf '%s' "${lookup_json}" | jq -r '.workflow // "" | strings' 2>/dev/null)" || workflow_base=""
+      [ -n "${stale_branch}" ] || stale_branch="$(printf '%s' "${lookup_json}" | jq -r '.branch // "" | strings' 2>/dev/null)" || stale_branch=""
+      if [ -z "${workflow_base}" ] || [ -z "${stale_branch}" ]; then
+        reason="$(printf '%s' "${lookup_json}" | jq -r '.reason // "workflow_unknown" | strings' 2>/dev/null)" || reason="workflow_unknown"
+        [ -n "${reason}" ] || reason="workflow_unknown"
+        break
+      fi
+    fi
+    if ! [[ "${workflow_base}" =~ ^[A-Za-z0-9_.-]+\.ya?ml$ ]] || [[ "${workflow_base}" == *..* ]] \
+      || ! [[ "${stale_branch}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] || [[ "${stale_branch}" == *..* ]]; then
+      reason="workflow_unknown"; break
+    fi
+    runs_key="${src_repo}|${workflow_base}|${stale_branch}"
+    if printf '%s' "${HEAL_STALE_RUNS_CACHE_JSON:-{\}}" | jq -e --arg k "${runs_key}" 'has($k)' >/dev/null 2>&1; then
+      runs_json="$(printf '%s' "${HEAL_STALE_RUNS_CACHE_JSON}" | jq -c --arg k "${runs_key}" '.[$k]' 2>/dev/null)" || runs_json="null"
+    else
+      per_page=$(( HEAL_STALE_GREEN_RUNS + 10 ))
+      [ "${per_page}" -le 100 ] || per_page=100
+      # A non-object run entry fails the projection, so the runs read as
+      # unavailable (fail open) instead of being dropped.
+      runs_json="$(gh_retry gh api -X GET "repos/${src_repo}/actions/workflows/${workflow_base}/runs" \
+        -f branch="${stale_branch}" -f event=push -f status=completed -F per_page="${per_page}" 2>/dev/null \
+        | jq -c 'select(type == "object" and ((.workflow_runs | type) == "array"))
+          | {total_count: (.total_count // null), workflow_runs: [.workflow_runs[]
+              | {id, html_url, head_sha, head_branch, event, status, conclusion, created_at}]}' 2>/dev/null)" || runs_json=""
+      [ -n "${runs_json}" ] || runs_json="null"
+      HEAL_STALE_RUNS_CACHE_JSON="$(printf '%s' "${HEAL_STALE_RUNS_CACHE_JSON:-{\}}" \
+        | jq -c --arg k "${runs_key}" --argjson v "${runs_json}" '. + {($k): $v}' 2>/dev/null)" \
+        || HEAL_STALE_RUNS_CACHE_JSON='{}'
+    fi
+    if [ "${runs_json}" = "null" ] || [ -z "${runs_json}" ]; then
+      reason="runs_unavailable"; break
+    fi
+    printf '%s' "${runs_json}" > "${stale_runs_file}"
+    # Linked PR: an open ai/issue-<n> PR from the details map wins (it can be
+    # linked with `Refs`, which linked_pr omits); then the batched details map
+    # linked_pr, then the managed linked-PR cache; no entry in either keeps
+    # the issue (linked_pr_unknown). An unreadable timeline keeps it too.
+    # No new call.
+    if printf '%s' "${details_map_json:-{\}}" | jq -e --arg n "${issue_num}" '.[$n].open_issue_branch_pr == "unknown"' >/dev/null 2>&1; then
+      :
+    elif printf '%s' "${details_map_json:-{\}}" | jq -e --arg n "${issue_num}" '.[$n].open_issue_branch_pr | type == "object"' >/dev/null 2>&1; then
+      printf '%s' "${details_map_json}" | jq -c --arg n "${issue_num}" '.[$n].open_issue_branch_pr' > "${stale_linked_file}" 2>/dev/null \
+        && linked_args=(--linked-pr-json "${stale_linked_file}")
+    elif printf '%s' "${details_map_json:-{\}}" | jq -e --arg n "${issue_num}" '.[$n] | has("linked_pr")' >/dev/null 2>&1; then
+      printf '%s' "${details_map_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr' > "${stale_linked_file}" 2>/dev/null \
+        && linked_args=(--linked-pr-json "${stale_linked_file}")
+    elif printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE:-{\}}" | jq -e --arg n "${issue_num}" 'type == "object" and has($n)' >/dev/null 2>&1; then
+      printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq -c --arg n "${issue_num}" '.[$n]' > "${stale_linked_file}" 2>/dev/null \
+        && linked_args=(--linked-pr-json "${stale_linked_file}")
+    fi
+    decide_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${heal_py}" heal-stale-decision --stage decide \
+      --issue-json "${stale_issue_file}" --comments-json "${stale_comments_file}" --runs-json "${stale_runs_file}" \
+      "${linked_args[@]}" --pipeline-login "${login}" --plan-comment "${HEAL_CF_GATE_PLAN_COMMENT:-unknown}" \
+      --workflow "${workflow_base}" --branch "${stale_branch}" --green-runs "${HEAL_STALE_GREEN_RUNS:-5}" \
+      --min-age-hours "${HEAL_STALE_MIN_AGE_HOURS:-24}" --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null)" || decide_json=""
+    decision="$(printf '%s' "${decide_json}" | jq -r '.decision // "" | strings' 2>/dev/null)" || decision=""
+    case "${decision}" in
+      close|keep|skip) ;;
+      *) reason="decision_unavailable"; break ;;
+    esac
+    reason="$(printf '%s' "${decide_json}" | jq -r '.reason // "" | strings' 2>/dev/null)" || reason=""
+    green_runs="$(printf '%s' "${decide_json}" | jq -r '.green_runs // 0' 2>/dev/null)" || green_runs="0"
+    if [ "${decision}" = "skip" ]; then
+      outcome="skipped"; break
+    fi
+    [ "${decision}" = "close" ] || break
+    if ! printf '%s' "${decide_json}" | jq -e '.marker_present == true' >/dev/null 2>&1; then
+      comment_body="$(printf '%s' "${decide_json}" | jq -r '.comment_body // "" | strings' 2>/dev/null)" || comment_body=""
+      if [ -z "${comment_body}" ] \
+        || ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${comment_body}" >/dev/null 2>&1; then
+        reason="comment_failed"; break
+      fi
+    fi
+    if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" \
+      -f state=closed -f state_reason=completed >/dev/null 2>&1; then
+      # The next tick sees the trusted marker and only retries the close.
+      reason="close_failed"; break
+    fi
+    outcome="closed"
+    anchor="$(printf '%s' "${decide_json}" | jq -r '.anchor // "" | strings' 2>/dev/null | tr -cd '0-9TZ:-' | cut -c1-25)" || anchor=""
+    tg_notify_issue "${issue_num}" "Heal issue closed: ${workflow_base} green on ${stale_branch} for ${green_runs//[!0-9]/} push runs since ${anchor:-unknown}." "DEBUG" || true
+    break
+  done
+  rm -f "${stale_issue_file}" "${stale_comments_file}" "${stale_runs_file}" "${stale_linked_file}" "${stale_run_file}" 2>/dev/null || true
+  reason="$(printf '%s' "${reason}" | tr -cd 'a-z_' | cut -c1-80)"
+  [ -n "${reason}" ] || reason="decision_unavailable"
+  green_runs="$(printf '%s' "${green_runs}" | tr -cd '0-9' | cut -c1-6)"
+  [ -n "${green_runs}" ] || green_runs="0"
+  HEAL_STALE_CLOSE_OUTCOME="${outcome}"
+  echo "HEAL_STALE_CLOSE issue=${issue_num} outcome=${outcome} reason=${reason} green_runs=${green_runs}"
+  return 0
+}
+
 # Issue #6769: hold automatic /approved posts from stall recovery for plans
 # that list automation paths (.github/, .claude/, scripts/, prompts/,
 # workflow-templates/). The plan is the newest comment carrying the
@@ -18923,7 +19575,13 @@ ${HEAL_TEST_ONLY_GATE_MARKER}" >/dev/null 2>&1; then
     # Issue #8249: the issue keeps its phase and no recovery attempt counts.
     echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=hold result=${HEAL_CF_GATE_RESULT:-missing} reason=${HEAL_CF_GATE_REASON:-heal_counterfactual_check_unavailable} issue=${issue_num}"
     echo "STALL_SKIP issue=${issue_num} reason=heal_counterfactual_hold phase=${phase} action=none"
-    _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
+    # Issue #8808: a held run-sourced heal issue whose workflow is green again
+    # is closed instead; a just-closed issue gets no hold notice.
+    HEAL_STALE_CLOSE_OUTCOME=""
+    _heal_stale_close_check "${issue_num}" "${details_map_json}" "${comments_json}" "${gate_login}" "${phase}" || true
+    if [ "${HEAL_STALE_CLOSE_OUTCOME:-}" != "closed" ]; then
+      _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
+    fi
     return 1
   fi
   if [ "${gate_reason}" = "path_not_granted" ] && [ "${gate_replannable}" = "true" ] \
@@ -21358,7 +22016,7 @@ invoke_stall_judge() {
         judge_success="true"
         break
       fi
-      sleep $(( 8 * attempt ))
+      "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" $(( 8 * attempt ))
     done
   fi
 
@@ -21651,6 +22309,7 @@ _fetch_standalone_pipeline_label_issues_graphql() {
 # /comments and /timeline round-trips with ceil(N / batch_size) GraphQL
 # calls.  Returns a JSON object keyed by stringified issue number:
 #   { "123": {"state": "open|closed",
+#             "created_at": "ISO8601"|null,
 #             "labels": ["ai:clarification"],
 #             "comments": [{"id":N,"body":"...","created_at":"..."},...],
 #             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,
@@ -21728,6 +22387,7 @@ _fetch_candidate_issue_details_graphql() {
           number
           title
           state
+          createdAt
           body
           author { login }
           authorAssociation
@@ -21735,6 +22395,7 @@ _fetch_candidate_issue_details_graphql() {
           labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
+            pageInfo { hasPreviousPage }
             nodes {
               ... on CrossReferencedEvent {
                 willCloseTarget
@@ -21784,6 +22445,7 @@ _fetch_candidate_issue_details_graphql() {
           key: (.value.number | tostring),
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
+            created_at: (.value.createdAt // null),
             body: .value.body,
             title: (.value.title // ""),
             author_login: (.value.author.login // ""),
@@ -21799,6 +22461,23 @@ _fetch_candidate_issue_details_graphql() {
               author_association: (.authorAssociation // ""),
               user: {login: (.author.login // "")}
             }],
+            # Issue #8808: an open same-repo PR whose head is ai/issue-<n>,
+            # whatever its link keyword (`Refs` links never set
+            # willCloseTarget). "unknown" when the timeline was not returned,
+            # or when it holds more than the last 50 cross-references and none
+            # of them matched (an older fix PR could be past the window).
+            open_issue_branch_pr: (
+              (.value.number | tostring) as $num
+              | (.value.timelineItems.pageInfo.hasPreviousPage? == true) as $timeline_truncated
+              | if ((.value.timelineItems.nodes? | type) == "array") then
+                  ([ .value.timelineItems.nodes[]? | (.source // null)
+                     | select(type == "object") | select(.__typename == "PullRequest")
+                     | select((.repository.nameWithOwner // "") == $repo)
+                     | select(.state == "OPEN" and (.headRefName // "") == ("ai/issue-" + $num))
+                     | {number: .number, state: .state, head_ref: .headRefName} ] | first // null)
+                  | if . == null and $timeline_truncated then "unknown" else . end
+                else "unknown" end
+            ),
             linked_pr: (
               [
                 (.value.timelineItems.nodes // [])[]?
@@ -22277,6 +22956,7 @@ _pr_json_is_partial_delivery() {
 # early.  GitHub itself only auto-closes on default-branch merges.
 #
 # Args: <issue_num> <pr_json> <default_branch> <declared_branch> <is_managed>
+#       [check_triage_branch]
 # Accepts (rc=0, sets _TARGET_MERGE_REASON) when:
 #   - .base.ref equals the default branch            -> default_branch
 #   - .base.ref equals the issue's declared branch   -> declared_integration_branch
@@ -22285,6 +22965,12 @@ _pr_json_is_partial_delivery() {
 #     body (its branch may live only on the tracking issue), and .base.ref
 #     is an `orchestrator/project-*` branch (same rule as issue_pr_status.yml)
 #                                                    -> managed_no_child_metadata
+#   - issue #8955: the optional sixth argument is the already-resolved head
+#     branch of the failing PR an ai:check-triage issue names
+#     (_close_sweep_check_triage_branch), and .base.ref equals it
+#                                                    -> check_triage_pr_branch
+#     Callers that pass five arguments (standalone stall recovery) keep the
+#     old rule. This function makes no API calls.
 # Anything else, including an empty or unparseable base, returns 1 (fail
 # closed: the caller's next step closes the issue).  Refs compare exactly.
 _TARGET_MERGE_REASON=""
@@ -22294,6 +22980,7 @@ _pr_json_base_is_target_merge() {
   local default_branch="$3"
   local declared_branch="$4"
   local is_managed="$5"
+  local check_triage_branch="${6:-}"
   _TARGET_MERGE_REASON=""
   [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
   if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
@@ -22317,7 +23004,60 @@ _pr_json_base_is_target_merge() {
     _TARGET_MERGE_REASON="managed_no_child_metadata"
     return 0
   fi
+  if [ -n "${check_triage_branch}" ] && [ "${_target_base_ref}" = "${check_triage_branch}" ]; then
+    _TARGET_MERGE_REASON="check_triage_pr_branch"
+    return 0
+  fi
   return 1
+}
+
+# _close_sweep_check_triage_branch <issue_num> <labels_json> <body> <author>
+# — issue #8955. Resolve the head branch of the failing PR an ai:check-triage
+# issue names (`<!-- check-failure-triage:pr=<N> -->`) into
+# _CLOSE_SWEEP_TRIAGE_BRANCH (empty when the rule does not apply). Called
+# without a subshell so the per-tick unblock_trusted_login memo is kept.
+# Trust rules: the issue carries ai:check-triage, its author equals the
+# pipeline login (case-insensitive), it has exactly one marker
+# (orchestrate_lib.py check-triage-target-pr), and the marker PR has a
+# same-repository head; the branch is `.head.ref` from the API, never issue
+# text. API budget (CLAUDE.md §14): at most one `pulls/<N>` read
+# (_fetch_pr_json) per candidate issue, made only after the existing
+# target-merge rules rejected the merge, plus the memoized `user` read.
+# Every failure leaves the result empty (fail closed). Returns 2 (after a
+# rejected=check_triage_pr_fetch_failed line) when the marker PR read failed,
+# so the caller defers the issue like a failed candidate fetch; 1 otherwise.
+# The caller resolves it only for a candidate PR with a same-repository
+# ai/issue-<n> head, the binding issue_pr_status.yml requires.
+_CLOSE_SWEEP_TRIAGE_BRANCH=""
+_close_sweep_check_triage_branch() {
+  local issue_num="$1"
+  local labels_json="$2"
+  local body="$3"
+  local author="$4"
+  local _triage_login _triage_pr _triage_pr_json _triage_head_repo _triage_head_ref
+  _CLOSE_SWEEP_TRIAGE_BRANCH=""
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "${labels_json:-[]}" | jq -e '[.[]? | if type == "object" then (.name // "") else . end] | index("ai:check-triage") != null' >/dev/null 2>&1 || return 1
+  [ -f scripts/orchestrate_lib.py ] || return 1
+  # Main shell (no subshell) keeps the per-tick memo; a failed `user` read may
+  # raise the shared once-per-tick identity alert and then fails closed below.
+  unblock_trusted_login >/dev/null
+  _triage_login="${UNBLOCK_TRUSTED_LOGIN}"
+  [ -n "${_triage_login}" ] || return 1
+  _triage_pr="$(printf '%s' "${body}" | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py check-triage-target-pr \
+    --labels-json "${labels_json:-[]}" --author "${author}" --pipeline-login "${_triage_login}" 2>/dev/null | head -n 1 || echo "")"
+  [[ "${_triage_pr}" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+  _triage_pr_json="$(_fetch_pr_json "${_triage_pr}")"
+  if [ -z "${_triage_pr_json}" ] || [ "${_triage_pr_json}" = "{}" ]; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_marker_pr=${_triage_pr} rejected=check_triage_pr_fetch_failed"
+    return 2
+  fi
+  _triage_head_repo="$(printf '%s' "${_triage_pr_json}" | jq -r '.head.repo.full_name // ""' 2>/dev/null || echo "")"
+  _triage_head_ref="$(printf '%s' "${_triage_pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+  [ -n "${_triage_head_repo}" ] && [ "${_triage_head_repo}" = "${GITHUB_REPOSITORY}" ] || return 1
+  [ -n "${_triage_head_ref}" ] || return 1
+  _CLOSE_SWEEP_TRIAGE_BRANCH="${_triage_head_ref}"
+  return 0
 }
 
 # _close_sweep_log_ref <value> <empty_placeholder> — print a ref for a log
@@ -24681,7 +25421,7 @@ PY
               break
             fi
             if [ "${_std_attempt}" -lt 4 ]; then
-              sleep "${_std_backoff_sleeps[${_std_attempt}]}"
+              "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" "${_std_backoff_sleeps[${_std_attempt}]}"
             fi
           done
         fi
@@ -26747,7 +27487,7 @@ _runtime_blocker_dispatch_eligible()
 		--state-file "${STATE_FILE}" \
 		--local-id "${local_id}" \
 		--candidate-details-json "${candidate_truth_json}" 2>"${blocker_err_file}")"; then
-			blocker_stderr="$(tr '\n' ' ' < "${blocker_err_file}" | sed 's/[[:space:]]\+/ /g' | cut -c1-300)"
+			blocker_stderr="$(tr '\n' ' ' < "${blocker_err_file}" | sed 's/[[:space:]]\+/ /g' | cut -c1-300 || true)"
 		rm -f "${blocker_err_file}"
 		echo "::warning::[runtime-blocker] blocker_check.py failed for ${local_id}; failing open.${blocker_stderr:+ stderr=${blocker_stderr}}"
 		return 0
@@ -26852,6 +27592,7 @@ else
   TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 fi
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+if [[ "${COUNT}" =~ ^[0-9]+$ ]]; then _ORCH_POLL_CYCLE_PROJECTS_SEEN="${COUNT}"; _ORCH_POLL_CYCLE_PROJECTS_PROCESSED=0; fi || true
 FEATURE_SWEEP_DONE="false"
 # Smoke-gate fixture projects in this tick; tg_notify stays silent for them
 # whatever TRACKING_NUM currently names (Q42: A).
@@ -26871,6 +27612,7 @@ write_state_snapshot_actions_runs_export || true
 
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
+  _orch_poll_cycle_project_begin "${TRACKING_NUM}" || true
   TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
   unset FORCE_MERGE_LABEL_EVENT_JSON_CACHE
   unset _INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE
@@ -29285,6 +30027,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # with PERSIST_ORCH_CONTEXT_ENABLED, never persisted (PR_STATES_JSON unchanged).
   PERSIST_ORCH_MERGED_PRS_JSON='{}'
   RECONCILE_LABELS_CHANGED=false
+  RB_REISSUE_ADOPTION_CANDIDATES=()
+  RB_REISSUE_ADOPTION_STATE_CHANGED=false
   for inum in ${ISSUE_NUMS}; do
     if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
       continue
@@ -29340,7 +30084,108 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       RECONCILE_LABELS_CHANGED=true
       LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" --argjson labels "${AFTER_LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
     fi
+
+    # A closed issue with no merged PR may have been reissued by the review
+    # pipeline's review-blocked judge; see resolve_review_blocked_reissue_successor.
+    # Merged, implementation-failed (own reissue path) and skipped issues are left alone.
+    if [ "${ISSUE_STATE}" = "closed" ] && [ "${PR_MERGED}" != "true" ] \
+      && ! printf '%s' "${AFTER_LABELS}" | jq -e 'index("ai:merged") != null or index("ai:implementation-failed") != null' >/dev/null 2>&1 \
+      && jq -e --argjson wi "${WAVE_IDX}" --arg gh "${inum}" \
+        'any(.waves[$wi].issues[]?; (.github_issue | tostring) == $gh and (.status // "") != "merged" and (.status // "") != "skipped")' \
+        "${STATE_FILE}" >/dev/null 2>&1; then
+      _rb_reissue_rc=0
+      _rb_reissue_json="$(resolve_review_blocked_reissue_successor "${inum}")" || _rb_reissue_rc=$?
+      if [ "${_rb_reissue_rc}" -eq 0 ]; then
+        RB_REISSUE_ADOPTION_CANDIDATES+=("${inum}"$'\t'"${_rb_reissue_json}")
+      elif [ "${_rb_reissue_rc}" -eq 2 ]; then
+        echo "RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${inum} outcome=inconclusive successor=none"
+      fi
+      unset _rb_reissue_rc _rb_reissue_json
+    fi
   done
+
+  # Adopt review-blocked reissues found above before wave status, stall
+  # recovery or the wave judge read the closed predecessor as a failure.
+  for _rb_reissue_candidate in ${RB_REISSUE_ADOPTION_CANDIDATES[@]+"${RB_REISSUE_ADOPTION_CANDIDATES[@]}"}; do
+    _rb_reissue_closed="${_rb_reissue_candidate%%$'\t'*}"
+    _rb_reissue_json="${_rb_reissue_candidate#*$'\t'}"
+    _rb_reissue_num="$(printf '%s' "${_rb_reissue_json}" | jq -r '.number // empty' 2>/dev/null || true)"
+    [[ "${_rb_reissue_num}" =~ ^[0-9]+$ ]] || continue
+    _rb_reissue_adopt_rc=0
+    _rb_reissue_local_id="$(adopt_review_blocked_reissue_successor "${_rb_reissue_closed}" "${_rb_reissue_num}")" || _rb_reissue_adopt_rc=$?
+    if [ "${_rb_reissue_adopt_rc}" -ne 0 ]; then
+      if [ "${_rb_reissue_adopt_rc}" -eq 1 ]; then
+        echo "RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=skipped successor=${_rb_reissue_num} reason=no_wave_entry"
+      elif [ "${_rb_reissue_adopt_rc}" -eq 3 ]; then
+        echo "RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=skipped successor=${_rb_reissue_num} reason=already_tracked"
+      else
+        echo "::warning::RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=error successor=${_rb_reissue_num} reason=state_write_failed"
+      fi
+      continue
+    fi
+    echo "RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=adopted successor=${_rb_reissue_num} local_id=${_rb_reissue_local_id}"
+    add_healing_note "Issue #${_rb_reissue_closed}: review-blocked reissue #${_rb_reissue_num} adopted for \`${_rb_reissue_local_id}\` (rb_reissue_adopted)"
+    # Feed this tick's wave-status read from the timeline payload; the full
+    # label/PR reconcile for the successor runs on the next tick.
+    _rb_reissue_issue_nums=""
+    for _rb_reissue_inum in ${ISSUE_NUMS}; do
+      # An adopted orphan-rb-<successor> entry was removed; drop its number.
+      [ "${_rb_reissue_inum}" != "${_rb_reissue_num}" ] || continue
+      if [ "${_rb_reissue_inum}" = "${_rb_reissue_closed}" ]; then
+        _rb_reissue_inum="${_rb_reissue_num}"
+      fi
+      _rb_reissue_issue_nums="${_rb_reissue_issue_nums} ${_rb_reissue_inum}"
+    done
+    ISSUE_NUMS="${_rb_reissue_issue_nums}"
+    # check-wave-status reads PR truth by issue number.  Without an entry, a
+    # closed successor whose implementation PR merged before ai:merged was
+    # applied would read as closed-without-merge on this tick.
+    _rb_reissue_pr_inconclusive=false
+    # An existing {state:"unknown", merged:false} entry (an orphan-rb entry the
+    # reconcile loop read, possibly after a failed lookup) is not authoritative:
+    # look the PR up again so a failed read cannot read as closed-without-merge.
+    if ! printf '%s' "${PR_STATES_JSON}" | jq -e --arg key "${_rb_reissue_num}" 'has($key) and ((.[$key].state // "unknown") != "unknown" or .[$key].merged == true)' >/dev/null 2>&1; then
+      _rb_reissue_pr_state="unknown"
+      _rb_reissue_pr_merged="false"
+      _rb_reissue_pr_inconclusive=false
+      if printf '%s' "${_rb_reissue_json}" | jq -e '.state == "closed" and (.labels | index("ai:merged") == null)' >/dev/null 2>&1; then
+        if _rb_reissue_prs="$(_issue_cross_ref_pr_numbers_unique "${_rb_reissue_num}" 2>/dev/null)"; then
+          for _rb_reissue_pr in ${_rb_reissue_prs}; do
+            [[ "${_rb_reissue_pr}" =~ ^[0-9]+$ ]] || continue
+            _rb_reissue_pr_json="$(_fetch_pr_json "${_rb_reissue_pr}")"
+            if [ -z "${_rb_reissue_pr_json}" ] || [ "${_rb_reissue_pr_json}" = "{}" ]; then
+              _rb_reissue_pr_inconclusive=true
+              continue
+            fi
+            _pr_json_is_issue_implementation_pr "${_rb_reissue_num}" "${_rb_reissue_pr_json}" || continue
+            _rb_reissue_pr_state="$(_jq_field "${_rb_reissue_pr_json}" '.state' 'open|closed|merged')"
+            _rb_reissue_pr_merged="$(_jq_field "${_rb_reissue_pr_json}" '.merged_at != null' 'true|false')"
+            [ "${_rb_reissue_pr_merged}" != "true" ] || break
+          done
+        else
+          _rb_reissue_pr_inconclusive=true
+        fi
+      fi
+      [ "${_rb_reissue_pr_merged}" != "true" ] || _rb_reissue_pr_inconclusive=false
+      if [ "${_rb_reissue_pr_inconclusive}" != "true" ]; then
+        PR_STATES_JSON="$(printf '%s' "${PR_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" --arg state "${_rb_reissue_pr_state:-unknown}" --arg merged "${_rb_reissue_pr_merged:-false}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || printf '%s' "${PR_STATES_JSON}")"
+      fi
+    fi
+    LABELS_JSON="$(printf '%s' "${LABELS_JSON}" | jq -c --arg key "${_rb_reissue_num}" --argjson succ "${_rb_reissue_json}" '. + {($key): $succ.labels}' 2>/dev/null || printf '%s' "${LABELS_JSON}")"
+    ISSUE_STATES_JSON="$(printf '%s' "${ISSUE_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" --argjson succ "${_rb_reissue_json}" '. + {($key): $succ.state}' 2>/dev/null || printf '%s' "${ISSUE_STATES_JSON}")"
+    # A failed PR lookup must not read as merged:false (closed-without-merge
+    # would let the wave judge open a duplicate redo).  Treat the successor as
+    # open for this tick only; the next tick's reconcile reads its real state.
+    if [ "${_rb_reissue_pr_inconclusive:-false}" = "true" ]; then
+      echo "::warning::RB_REISSUE_ADOPTION tracking_issue=${TRACKING_NUM} closed_issue=${_rb_reissue_closed} outcome=inconclusive successor=${_rb_reissue_num} reason=successor_pr_lookup_failed"
+      ISSUE_STATES_JSON="$(printf '%s' "${ISSUE_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" '. + {($key): "open"}' 2>/dev/null || printf '%s' "${ISSUE_STATES_JSON}")"
+    fi
+    RB_REISSUE_ADOPTION_STATE_CHANGED=true
+  done
+  if [ "${RB_REISSUE_ADOPTION_STATE_CHANGED}" = "true" ]; then
+    post_state_comment || true
+  fi
+  unset _rb_reissue_candidate _rb_reissue_closed _rb_reissue_json _rb_reissue_num _rb_reissue_adopt_rc _rb_reissue_local_id _rb_reissue_issue_nums _rb_reissue_inum _rb_reissue_pr _rb_reissue_prs _rb_reissue_pr_json _rb_reissue_pr_state _rb_reissue_pr_merged _rb_reissue_pr_inconclusive
 
   # ---------------------------------------------------------------
   # Update issue phase timestamps for stall tracking
@@ -30754,7 +31599,7 @@ ${FOLLOWUP_BLOCK_REASON}"
             break
           fi
           if [ "${attempt}" -lt 2 ]; then
-            sleep 10
+            "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 10
           fi
         done
       fi
@@ -31960,9 +32805,6 @@ ${RB_FIX_DESC}
       fi
 
       echo "  Issue #${if_issue} has implementation-failed (no-op state=${OBSERVED_NOOP_COUNT}, ancestors=${ANCESTOR_NOOP_COUNT}, cap=${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
-
-      # Increment no-op counter before re-issuing
-      bump_impl_noop_count "${IF_LOCAL_ID}"
     else
       echo "  Issue #${if_issue} has implementation-failed (${IF_MODE}; blockers resolved). Closing and re-issuing..."
     fi
@@ -31982,22 +32824,23 @@ ${RB_FIX_DESC}
       IF_BODY=""
     fi
 
+    # BUG-002 (analysis/workflow-optimization-2026-10-07-2.md): a failed
+    # read left the title empty, the replacement create then failed, and the
+    # source had already been closed, so the task was lost. Defer with no
+    # mutation (no label, close, no-op counter or state change); the next
+    # poll cycle retries the read.
+    if [ -z "${IF_ISSUE_JSON}" ] || [ -z "${IF_TITLE}" ] || [ "${IF_TITLE}" = "null" ]; then
+      echo "::warning::IMPL_FAILED_REISSUE issue=${if_issue} outcome=deferred reason=source_unreadable"
+      continue
+    fi
+
     sync_implementation_fixup_blockers "${if_issue}" "${IF_LOCAL_ID}" "${WAVE_IDX}" "${IF_COMMENTS_JSON}" || true
     if [ "${SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED:-false}" = "true" ]; then
       IMPL_FAILED_STATE_CHANGED=true
     fi
 
-    # Close the failed issue
-    ensure_label_exists "ai:closed"
-    gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-      --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
-    if [ "${IF_MODE}" = "post-codex-validation" ]; then
-      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-        -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this source task is being re-issued with blocker-sequenced guidance." 2>/dev/null || true
-    else
-      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-        -c "Closing: implementation produced no changes. Re-issuing with additional guidance." 2>/dev/null || true
-    fi
+    # The source is closed only after the replacement is confirmed (see the
+    # confirmed-create branch below), so a failed create leaves it retryable.
 
     # Create replacement issue with extra guidance
     if [ "${IF_MODE}" = "post-codex-validation" ]; then
@@ -32047,23 +32890,65 @@ REISSUE_EOF
       --body "${NEW_BODY}" \
       --label "ai:clarification" \
       --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
+    # Reset per iteration so a value from an earlier if_issue can never
+    # confirm a failed create.
+    NEW_ISSUE_NUM=""
     if [ -n "${NEW_ISSUE_URL}" ]; then
       NEW_ISSUE_URL_CLEAN="$(printf '%s\n' "${NEW_ISSUE_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
       NEW_ISSUE_NUM="$(basename "${NEW_ISSUE_URL_CLEAN%%[?#]*}")"
+    fi
+    # Confirmed create: only now rewrite state, bump the no-op counter, and
+    # relabel/close the source (BUG-002).
+    if [[ "${NEW_ISSUE_NUM}" =~ ^[0-9]+$ ]]; then
       echo "  Created replacement issue #${NEW_ISSUE_NUM} for failed #${if_issue}."
 
       # Update state file: replace the old issue number with the new one
       # (impl_noop_count is preserved on the issue entry since we only
       # change github_issue, not the issue object itself)
-      if [[ "${NEW_ISSUE_NUM}" =~ ^[0-9]+$ ]]; then
-        jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
-          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      # One bounded retry narrows the window in which a transient write
+      # failure leaves the replacement untracked in state.
+      IF_STATE_REWRITE_OK=false
+      for _ in 1 2; do
+        if jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+          IF_STATE_REWRITE_OK=true
+          break
+        fi
+        rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      done
+      if [ "${IF_STATE_REWRITE_OK}" != "true" ]; then
+        # The replacement exists, so the source is still closed below;
+        # leaving it open would create another replacement every cycle.
+        echo "::warning::IMPL_FAILED_REISSUE issue=${if_issue} outcome=state_update_failed new_issue=${NEW_ISSUE_NUM}"
       fi
+
+      # Increment the no-op counter only after the replacement is confirmed,
+      # so a failed create does not spend MAX_IMPL_NOOP_REISSUES. The counter
+      # is keyed by local_id, so the github_issue rewrite above is harmless.
+      if [ "${IF_MODE}" = "no-op-implementation" ]; then
+        bump_impl_noop_count "${IF_LOCAL_ID}"
+      fi
+
+      # Close the failed issue
+      ensure_label_exists "ai:closed"
+      gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+        --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+      if [ "${IF_MODE}" = "post-codex-validation" ]; then
+        gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this source task was re-issued as #${NEW_ISSUE_NUM} with blocker-sequenced guidance." 2>/dev/null || true
+      else
+        gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: implementation produced no changes. Re-issued as #${NEW_ISSUE_NUM} with additional guidance." 2>/dev/null || true
+      fi
+      echo "IMPL_FAILED_REISSUE issue=${if_issue} outcome=reissued new_issue=${NEW_ISSUE_NUM} mode=${IF_MODE}"
 
       tg_notify "Re-issued implementation-failed issue #${if_issue} as #${NEW_ISSUE_NUM}: ${IF_TITLE}"$'\n'"Old issue: $(_gh_url "issues/${if_issue}")"$'\n'"New issue: $(_gh_url "issues/${NEW_ISSUE_NUM}")" "DEBUG"
       IMPL_FAILED_STATE_CHANGED=true
     else
       echo "::warning::Could not create replacement issue for #${if_issue}."
+      # The source keeps ai:implementation-failed and the state is untouched,
+      # so the next poll cycle selects it again and retries the create.
+      echo "IMPL_FAILED_REISSUE issue=${if_issue} outcome=deferred reason=create_failed"
     fi
   done < <(echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "implementation-failed") | .github_issue')
 
@@ -32934,7 +33819,7 @@ ${PR_DIFF}
     fi
     judge_silent_rounds=$((judge_silent_rounds + 1))
     if [ "${attempt}" -lt "${max_attempts}" ]; then
-      sleep $(( 10 * attempt + RANDOM % 10 ))
+      "${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" $(( 10 * attempt + RANDOM % 10 ))
     fi
   done
 
@@ -33511,7 +34396,7 @@ The next poll tick will re-run the gate against the cleaned state. If an underly
 
             _gate_fp_file=""
             _gate_log_file=""
-            trap 'rm -f "${_gate_fp_file:-}" "${_gate_log_file:-}" 2>/dev/null || true' EXIT
+            trap '_orch_poll_cycle_exit_rc=$?; rm -f "${_gate_fp_file:-}" "${_gate_log_file:-}" 2>/dev/null || true; _orch_poll_cycle_on_exit "${_orch_poll_cycle_exit_rc}" || true' EXIT
             _gate_fp_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_fp.XXXXXX")"
             _gate_log_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_log.XXXXXX")"
             jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${_gate_fp_file}"
@@ -33537,6 +34422,7 @@ The next poll tick will re-run the gate against the cleaned state. If an underly
             fi
             rm -f "${_gate_fp_file}" "${_gate_log_file}" 2>/dev/null || true
             trap - EXIT
+            _orch_poll_cycle_install_exit_trap || true
           else
             echo "::warning::Wave-dispatch gate: could not resolve a fresh verification ref for integration branch '${_gate_integration_branch}'; gate fails open and dispatch proceeds."
           fi
@@ -33687,6 +34573,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       ;;
   esac
 done
+_orch_poll_cycle_project_flush || true
 
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   run_standalone_stall_recovery

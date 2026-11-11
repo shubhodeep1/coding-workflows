@@ -683,6 +683,116 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	final_state = json.loads(json_line)
 	assert final_state["final_merge_status"] == "superseded-by-main"
 
+
+# --- evaluate_sync_superseded_by_main ref refresh ------------------------
+# fun-token-multi-chain project #739: the poller's checkout fetched branch
+# refs before wave PR #741 merged into orchestrator/project-739. The API then
+# reported the PR as merged, but the stale local integration ref still equalled
+# main, so the path diff read as clean and the branch was marked superseded.
+# The final merge into main was then skipped for good.
+
+_SUPERSEDED_GIT_ENV = {
+	"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+	"GIT_CONFIG_GLOBAL": "/dev/null",
+	"GIT_CONFIG_NOSYSTEM": "1",
+	"GIT_AUTHOR_NAME": "t",
+	"GIT_AUTHOR_EMAIL": "t@example.invalid",
+	"GIT_COMMITTER_NAME": "t",
+	"GIT_COMMITTER_EMAIL": "t@example.invalid",
+}
+
+
+def _superseded_git(cwd: Path, *args: str) -> None:
+	env = dict(_SUPERSEDED_GIT_ENV, HOME=str(cwd))
+	subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, env=env)
+
+
+def _superseded_bash_function(script: str, signature: str) -> str:
+	start = script.index(signature)
+	end = script.index("\n}\n", start) + 3
+	return script[start:end]
+
+
+def _run_superseded_check(tmp_path: Path, *, child_lands_on: str, origin_gone: bool = False) -> str:
+	"""Clone first, then land the child PR's file on ``child_lands_on``
+	("integration" or "both") in origin, so the clone's refs are stale. Run
+	evaluate_sync_superseded_by_main in the clone and return its two flags."""
+	origin = tmp_path / "origin.git"
+	seed = tmp_path / "seed"
+	clone = tmp_path / "clone"
+	_superseded_git(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+	_superseded_git(tmp_path, "init", "-q", "-b", "main", str(seed))
+	(seed / "README.md").write_text("base\n", encoding="utf-8")
+	_superseded_git(seed, "add", ".")
+	_superseded_git(seed, "commit", "-qm", "base")
+	_superseded_git(seed, "remote", "add", "origin", str(origin))
+	_superseded_git(seed, "push", "-q", "origin", "main", "main:orchestrator/project-1")
+	_superseded_git(tmp_path, "clone", "-q", str(origin), str(clone))
+	(seed / "monitor.ts").write_text("export {}\n", encoding="utf-8")
+	_superseded_git(seed, "add", ".")
+	_superseded_git(seed, "commit", "-qm", "child pr")
+	_superseded_git(seed, "push", "-q", "origin", "main:orchestrator/project-1")
+	if child_lands_on == "both":
+		_superseded_git(seed, "push", "-q", "origin", "main")
+	if origin_gone:
+		subprocess.run(["rm", "-rf", str(origin)], check=True)
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps({"waves": [{"issues": [{"github_issue": 740}]}]}), encoding="utf-8")
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	functions = "\n".join(
+		_superseded_bash_function(script, signature)
+		for signature in (
+			"_jq_field()\n{",
+			"resolve_branch_analysis_ref() {",
+			"evaluate_sync_superseded_by_main() {",
+		)
+	)
+	harness = textwrap.dedent(
+		"""\
+		set -u
+		STATE_FILE="$1"
+		GITHUB_REPOSITORY=o/r
+		_issue_cross_ref_pr_numbers_unique() { echo 741; }
+		_fetch_pr_json() { echo '{"state":"closed","merged_at":"2026-11-08T11:54:34Z"}'; }
+		gh_retry() { echo '[{"filename":"monitor.ts"}]'; }
+		merge_tree_conflict_paths_json() { echo '[]'; }
+		"""
+	) + functions + textwrap.dedent(
+		"""
+		cd "$2"
+		evaluate_sync_superseded_by_main orchestrator/project-1 main
+		echo "by_main=${SYNC_SUPERSEDED_BY_MAIN} confident=${SYNC_SUPERSEDED_CONFIDENT}"
+		"""
+	)
+	env = dict(_SUPERSEDED_GIT_ENV, HOME=str(tmp_path))
+	result = subprocess.run(
+		["bash", "-c", harness, "harness", str(state_file), str(clone)],
+		capture_output=True, text=True, env=env, check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	return result.stdout.strip().splitlines()[-1]
+
+
+def test_superseded_check_refreshes_stale_integration_ref(tmp_path):
+	"""A child PR that merged after the job-start fetch must not make the
+	integration branch look superseded by main."""
+	assert _run_superseded_check(tmp_path, child_lands_on="integration") == "by_main=false confident=true"
+
+
+def test_superseded_check_still_detects_real_supersede(tmp_path):
+	"""When main already carries the child PR's paths, the branch is still
+	superseded, using the refreshed refs."""
+	assert _run_superseded_check(tmp_path, child_lands_on="both") == "by_main=true confident=true"
+
+
+def test_superseded_check_fetch_failure_is_not_confident(tmp_path):
+	"""If the refs cannot be refreshed, the check never marks the branch
+	superseded and reports itself not confident."""
+	assert _run_superseded_check(
+		tmp_path, child_lands_on="integration", origin_gone=True
+	) == "by_main=false confident=false"
+
+
 # SHELL-001: the check_integration_branch_staleness clock-read cases live in
 # tests/test_orchestrate_integration_staleness_clock.py and are collected here,
 # since CI already runs this file and ci.yml was outside that issue's file

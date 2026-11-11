@@ -2496,7 +2496,7 @@ def test_validate_decomposition_rejects_empty_path_in_files_touched():
 def test_validate_decomposition_caps_files_touched_length():
 	data = _make_decomposition(issues=[
 		{"id": "a", "title": "T", "body": "b", "priority": 1,
-		 "files_touched": [f"f{i}.py" for i in range(51)]},
+			"files_touched": [f"f{i}.py" for i in range(51)]},
 	])
 	try:
 		orchestrate_lib.validate_decomposition(data)
@@ -3281,6 +3281,48 @@ def test_unrouted_ignores_claude_code_status_notes():
 	assert _unrouted(_unrouted_issue([plain]))[0]["comment_id"] == 7
 
 
+def test_unrouted_ignores_unblock_judge_status_notes():
+	# fun-token-multi-chain#821: the judge's unmarked "belongs in the harness"
+	# note, posted a second after its verdict comment, was flagged twice.
+	import unblock_actions
+	# Every opening must still appear in the note text unblock_actions posts,
+	# so a reworded note fails here instead of paging the operator again.
+	source = Path(unblock_actions.__file__).read_text(encoding="utf-8").lower()
+	for prefix in orchestrate_lib._UNROUTED_PIPELINE_PREFIXES:
+		assert prefix in source, prefix
+	verdict = _unrouted_comment(2, "## Unblock judge: `operator_step` (round 1)\n\n<!-- ai:unblock:v1 item=7 -->", 20)
+	for index, call in enumerate((
+		lambda: unblock_actions._harness_ops(
+			{"item": 7, "stop": "blocked", "labels": ["ai:blocked"], "kind": "issue", "tracking": 0},
+			{"instructions": "Change the implement workflow.", "reason": "Wrong checkout.", "fingerprint": ""},
+			{"reason": "target_repo", "harness_paths": [], "project_paths": []}),
+		lambda: unblock_actions._untrusted_pr_ops({"item": 7}, "reissue"),
+	)):
+		bodies = [op["body"] for op in call() if op.get("op") == "comment"]
+		assert bodies, index
+		for body in bodies:
+			assert _unrouted(_unrouted_issue([verdict, _unrouted_comment(3, body, 19.98)], [("ai:blocked", 120)])) == [], body
+	for body in (
+		"The unblock judge has no verdicts left for this security finding. It stays open until a linked fix is merged.\n\nWhy: x",
+		"Next attempt, per the unblock judge: retry with the cache cleared",
+		"This security finding stays open: its finding marker could not be carried.",
+		"This pull request stays open: its linked issue's security finding marker could not be carried.",
+		"Superseded: owning PR #5 merged with its required checks passing at head `abc`. No re-issue was created.",
+	):
+		assert _unrouted(_unrouted_issue([_unrouted_comment(3, body, 20)])) == [], body
+	# A judge note after a human reply does not hide that reply.
+	answer = _unrouted_comment(4, "Pick option B.", 40)
+	note = _unrouted_comment(5, "The unblock judge found this work belongs in `o/r` (the shared workflow harness).", 30)
+	assert _unrouted(_unrouted_issue([answer, note])) == [
+		{"issue": 7, "comment_id": 4, "reason": "no_command", "age_minutes": 40}]
+	# A human reply that opens with the bare "stays open" words still counts.
+	for index, body in enumerate(("This security finding stays open until B lands.", "This pull request stays open; use B.")):
+		assert _unrouted(_unrouted_issue([_unrouted_comment(8 + index, body, 20)]))[0]["comment_id"] == 8 + index
+	# A human who merely mentions the judge is still a human reply.
+	plain = _unrouted_comment(6, "I think the unblock judge found this work belongs in the harness; use B.", 20)
+	assert _unrouted(_unrouted_issue([plain]))[0]["comment_id"] == 6
+
+
 def test_unrouted_bookkeeping_after_a_reply_does_not_hide_it():
 	answer = _unrouted_comment(2, "Pick option B.", 40)
 	cleanup = _unrouted_comment(3, "<!-- tg_cleanup:1 -->", 30)
@@ -3338,6 +3380,84 @@ def test_extract_integration_branch_cli_reads_body_from_stdin() -> None:
 		assert proc.stdout.strip() == expected, (body, proc.stdout)
 		if not expected:
 			assert proc.stdout == ""
+
+
+# ---------------------------------------------------------------------------
+# Issue #8955: check_triage_target_branch / check-triage-target-pr.
+# ---------------------------------------------------------------------------
+
+_TRIAGE_BODY = "<!-- check-failure-triage:pr=5038 -->\nCheck failed.\n\n---\n\nDiagnosis.\n"
+
+
+def test_check_triage_target_branch_accepts_trusted_issue() -> None:
+	fn = orchestrate_lib.check_triage_target_branch
+	assert fn(_TRIAGE_BODY, ["ai:check-triage"], "pipeline-bot", "pipeline-bot") == 5038
+	assert fn(_TRIAGE_BODY, [{"name": "ai:check-triage"}, {"name": "ai:done"}], "Pipeline-Bot", "pipeline-bot") == 5038
+	assert fn("   <!-- check-failure-triage:pr=7 -->  \r\nx", ["ai:check-triage"], "bot", "bot") == 7
+
+
+def test_check_triage_target_branch_rejects_untrusted_or_malformed() -> None:
+	fn = orchestrate_lib.check_triage_target_branch
+	assert fn(_TRIAGE_BODY, ["ai:done"], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY, [], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY, "ai:check-triage", "bot", "bot") is None
+	assert fn(_TRIAGE_BODY, [42, None], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY, ["ai:check-triage"], "someone", "bot") is None
+	assert fn(_TRIAGE_BODY, ["ai:check-triage"], "", "") is None
+	assert fn(_TRIAGE_BODY, ["ai:check-triage"], "bot", "") is None
+	assert fn("No marker\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("", ["ai:check-triage"], "bot", "bot") is None
+	assert fn(None, ["ai:check-triage"], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY + "<!-- check-failure-triage:pr=5038 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY + "<!-- check-failure-triage:pr=99 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("<!-- check-failure-triage:pr=abc -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("<!-- check-failure-triage:pr=0 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("<!-- check-failure-triage:pr=012 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("    <!-- check-failure-triage:pr=12 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("text <!-- check-failure-triage:pr=12 -->\n", ["ai:check-triage"], "bot", "bot") is None
+
+
+def test_check_triage_marker_pattern_matches_resolution_gate() -> None:
+	import check_triage_resolution
+
+	assert orchestrate_lib.CHECK_TRIAGE_PR_MARKER_RE.pattern == check_triage_resolution.PR_MARKER_RE.pattern
+
+
+def test_check_triage_target_branch_ignores_fenced_marker_copies() -> None:
+	import check_triage_resolution
+
+	fn = orchestrate_lib.check_triage_target_branch
+	body = _TRIAGE_BODY + "```\n<!-- check-failure-triage:pr=5038 -->\n```\n~~~~\n<!-- check-failure-triage:pr=9 -->\n~~~~\n"
+	assert fn(body, ["ai:check-triage"], "bot", "bot") == 5038
+	for sample in (body, _TRIAGE_BODY, "a\n```\nb\n~~~\nc\n```\nd\n", "```\nunclosed\n"):
+		assert orchestrate_lib._check_triage_lines_outside_fences(sample) == check_triage_resolution._lines_outside_fences(sample)
+
+
+def _run_check_triage_target_pr_cli(body: str, *extra: str) -> subprocess.CompletedProcess:
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	return subprocess.run(
+		["python3", str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "check-triage-target-pr", *extra],
+		input=body, check=False, capture_output=True, text=True, env=env, cwd=str(REPO_ROOT),
+	)
+
+
+def test_check_triage_target_pr_cli_prints_number_or_nothing() -> None:
+	ok = _run_check_triage_target_pr_cli(
+		_TRIAGE_BODY, "--labels-json", '["ai:check-triage"]', "--author", "Bot", "--pipeline-login", "bot",
+	)
+	assert ok.returncode == 0, ok.stderr
+	assert ok.stdout == "5038\n"
+	for extra in (
+		("--labels-json", "not json", "--author", "bot", "--pipeline-login", "bot"),
+		("--labels-json", '["ai:done"]', "--author", "bot", "--pipeline-login", "bot"),
+		("--labels-json", '["ai:check-triage"]', "--author", "other", "--pipeline-login", "bot"),
+		("--labels-json", '{"name": "ai:check-triage"}', "--author", "bot", "--pipeline-login", "bot"),
+		(),
+	):
+		proc = _run_check_triage_target_pr_cli(_TRIAGE_BODY, *extra)
+		assert proc.returncode == 0, (extra, proc.stderr)
+		assert proc.stdout == "", (extra, proc.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -3675,7 +3795,7 @@ def test_render_expected_files_section_has_no_allowlist():
 		staged_file.write_text("scripts/a.py\n", encoding="utf-8")
 		guard = subprocess.run(
 			[sys.executable, str(REPO_ROOT / "scripts" / "files_touched_scope_guard.py"),
-			 "--issue-body-file", str(body_file), "--staged-file", str(staged_file)],
+				"--issue-body-file", str(body_file), "--staged-file", str(staged_file)],
 			capture_output=True, text=True, check=False,
 		)
 		assert guard.returncode == 10, (guard.returncode, guard.stdout, guard.stderr)

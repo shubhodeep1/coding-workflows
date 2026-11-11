@@ -24,6 +24,12 @@ A failed job whose checkout step could not fetch (HTTP 408 / RPC failure,
 issue #8671) and that ran nothing after checkout is re-run once too (reason
 `checkout_fetch`), again with no extra API calls;
 CI_CHECKOUT_FETCH_RERUN_ENABLED=false turns that class off.
+A run whose only failed job is the `lint` aggregate, naming only jobs GitHub
+abandoned (reported `cancelled`, with no failure annotation other than the
+runner-shutdown text or "The operation was canceled.", issue #9146), is
+re-run once too (reason `abandoned`). Its annotation reads for those named
+jobs count against MAX_FAILED_JOBS_CLASSIFIED, so the worst cases above are
+unchanged; CI_ABANDONED_JOB_RERUN_ENABLED=false turns that class off.
 """
 
 from __future__ import annotations
@@ -113,6 +119,26 @@ def checkout_fetch_rerun_enabled(raw: str | None) -> bool:
 		print("::warning::CI_CHECKOUT_FETCH_RERUN_ENABLED is not true or false; "
 			"checkout-fetch CI re-runs are off", file=sys.stderr)
 	return False
+
+
+def abandoned_job_rerun_enabled(raw: str | None) -> bool:
+	# Off switch for the abandoned-job class only (issue #9146), parsed like
+	# CI_CHECKOUT_FETCH_RERUN_ENABLED. The raw value is never echoed.
+	value = (raw or "").lower()
+	if value in ("", "true"):
+		return True
+	if value != "false":
+		print("::warning::CI_ABANDONED_JOB_RERUN_ENABLED is not true or false; "
+			"abandoned-job CI re-runs are off", file=sys.stderr)
+	return False
+
+
+def shutdown_only_annotations(annotations: list[dict]) -> bool:
+	# Q2 "medium" rule (issue #9146): every failure annotation is the runner
+	# shutdown text or the exact cancel companion; none at all also counts.
+	# A timeout-minutes cancellation leaves its own annotation and fails this.
+	return all(item["message"].startswith(RUNNER_SHUTDOWN_PREFIX)
+		or item["message"].strip() == SHUTDOWN_COMPANION_MESSAGE for item in annotations)
 
 
 def job_failed_at_checkout(job: dict) -> bool:
@@ -328,8 +354,8 @@ def failure_annotations(repo: str, check_run_id: int) -> list[dict]:
 
 
 def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: bool = True,
-		checkout_fetch_enabled: bool = True) -> str:
-	"""Return "shutdown", "action_resolution", "checkout_fetch", "genuine", or "unverified".
+		checkout_fetch_enabled: bool = True, abandoned_job_enabled: bool = True) -> str:
+	"""Return "shutdown", "action_resolution", "checkout_fetch", "abandoned", "genuine", or "unverified".
 
 	Fail closed: only a run whose every failed job was killed by a runner
 	shutdown or, when enabled, failed before any step ran with only
@@ -339,8 +365,15 @@ def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: 
 	"shutdown". When enabled, a job whose checkout step failed to fetch
 	(nothing ran after it, only fetch-error annotations, issue #8671) also
 	counts; any run with such a job, mixed only with the other classes, is
-	"checkout_fetch". No extra API reads. Annotation text is never logged;
-	it can be written by a PR's own steps.
+	"checkout_fetch". Those classes make no extra API reads. When enabled
+	and the `lint` aggregate is the only failed job, every non-success job
+	it names is `cancelled` (GitHub reports an abandoned job that way,
+	issue #9146) and each has only shutdown or "The operation was
+	canceled." failure annotations (or none), the run is "abandoned". That
+	class reads annotations for at most MAX_FAILED_JOBS_CLASSIFIED -
+	len(failed) named cancelled jobs, checked before any extra read, so the
+	per-run and per-tick worst cases are unchanged. Annotation text is never
+	logged; it can be written by a PR's own steps.
 	"""
 	try:
 		jobs = list_run_jobs(repo, run_id)
@@ -353,6 +386,10 @@ def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: 
 		action_resolution_ids: set[int] = set()
 		checkout_fetch_ids: set[int] = set()
 		aggregate_annotations: list[list[dict]] = []
+		# Named cancelled jobs, keyed by id so matrix keys matching the same
+		# job twice are read once (issue #9146). Collected only; the
+		# non-empty shutdown_ids paths below ignore it.
+		aggregate_cancelled: dict[int, dict] = {}
 		for job in failed:
 			check_run_id = int(CHECK_RUN_URL_PATTERN.search(job["check_run_url"])[1])
 			annotations = failure_annotations(repo, check_run_id)
@@ -400,8 +437,21 @@ def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: 
 				if not named or any(job["id"] not in shutdown_ids and job["conclusion"] != "cancelled"
 						for job in named):
 					return "genuine"
+				for job in named:
+					if job["conclusion"] == "cancelled" and job["id"] not in shutdown_ids:
+						aggregate_cancelled[job["id"]] = job
 		if not shutdown_ids:
-			return "unverified"
+			# Every failed job is the `lint` aggregate: any other failed job
+			# already returned "genuine" or joined shutdown_ids.
+			if not abandoned_job_enabled or not aggregate_cancelled:
+				return "unverified"
+			if len(failed) + len(aggregate_cancelled) > MAX_FAILED_JOBS_CLASSIFIED:
+				return "unverified"
+			for job in aggregate_cancelled.values():
+				check_run_id = int(CHECK_RUN_URL_PATTERN.search(job["check_run_url"])[1])
+				if not shutdown_only_annotations(failure_annotations(repo, check_run_id)):
+					return "genuine"
+			return "abandoned"
 		if checkout_fetch_ids:
 			return "checkout_fetch"
 		return "action_resolution" if action_resolution_ids == shutdown_ids else "shutdown"
@@ -409,7 +459,8 @@ def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: 
 		return "unverified"
 
 def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str,
-		action_resolution_enabled: bool = True, checkout_fetch_enabled: bool = True) -> None:
+		action_resolution_enabled: bool = True, checkout_fetch_enabled: bool = True,
+		abandoned_job_enabled: bool = True) -> None:
 	# One malformed item makes the enumerated set incomplete: do not infer
 	# that the remaining entries are the only open PRs on a shared head.
 	if any(not isinstance(pr, dict) or not positive_number(pr.get("number"))
@@ -518,14 +569,14 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 				continue
 			classified += 1
 			verdict = classify_runner_shutdown(repo, run_id, action_resolution_enabled=action_resolution_enabled,
-				checkout_fetch_enabled=checkout_fetch_enabled)
+				checkout_fetch_enabled=checkout_fetch_enabled, abandoned_job_enabled=abandoned_job_enabled)
 			if verdict == "genuine":
 				decision(number, sha, run_id, "skip", "other_conclusion")
-			elif verdict not in ("shutdown", "action_resolution", "checkout_fetch"):
+			elif verdict not in ("shutdown", "action_resolution", "checkout_fetch", "abandoned"):
 				decision(number, sha, run_id, "skip", "runner_shutdown_unverified")
 			elif rerun_failed_jobs(repo, run_id):
 				decision(number, sha, run_id, "rerun",
-					verdict if verdict in ("action_resolution", "checkout_fetch") else "runner_shutdown")
+					verdict if verdict in ("action_resolution", "checkout_fetch", "abandoned") else "runner_shutdown")
 			else:
 				decision(number, sha, run_id, "skip", "rerun_refused")
 		elif rerun_failed_jobs(repo, run_id):
@@ -552,6 +603,8 @@ def main() -> None:
 			os.environ.get("CI_ACTION_RESOLUTION_RERUN_ENABLED")),
 		checkout_fetch_enabled=checkout_fetch_rerun_enabled(
 			os.environ.get("CI_CHECKOUT_FETCH_RERUN_ENABLED")),
+		abandoned_job_enabled=abandoned_job_rerun_enabled(
+			os.environ.get("CI_ABANDONED_JOB_RERUN_ENABLED")),
 	)
 
 
