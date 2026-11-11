@@ -4521,19 +4521,20 @@ def run_single_file_step_judge(step_run: str, files: dict[int, dict[str, str]]) 
 		)
 
 
-def run_single_file_step_body(step_run: str, fake_modules: list[str], tmp: str) -> subprocess.CompletedProcess:
+def run_single_file_step_body(step_run: str, fake_modules: list[str], tmp: str, prelude: str = "") -> subprocess.CompletedProcess:
 	"""Run the whole single-file step body with fake modules.
 
 	The module array points at `fake_modules`, temp files go to `tmp`, and
 	the 30s heartbeat interval becomes 0.2s. Everything else is the shipped
-	shell, run the way GitHub runs a bash step.
+	shell, run the way GitHub runs a bash step. `prelude` is shell placed
+	before the body (for example a fake `date` function).
 	"""
 	array_line = SINGLE_FILE_STEP_ARRAY_RE.search(step_run).group(0)
 	script = step_run.replace(array_line, "sf_modules=(" + " ".join(fake_modules) + ")")
 	script = script.replace("/tmp/single_file_step_", f"{tmp}/single_file_step_")
 	if "sleep 30 " not in script:
 		raise AssertionError("heartbeat interval `sleep 30 ` not found in the single-file step body")
-	script = script.replace("sleep 30 ", "sleep 0.2 ")
+	script = prelude + script.replace("sleep 30 ", "sleep 0.2 ")
 	return subprocess.run(
 		["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
 		capture_output=True,
@@ -4639,6 +4640,29 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 		module = SINGLE_FILE_MODULES[0]
 		self.assertIn(f"CI_SUBTEST_END subtest={module} elapsed_ms=1000 rc=1\n", result.stdout)
 		self.assertIn(f"::error::single-file module tests failed: {module}\n", result.stdout)
+
+	def test_full_body_elapsed_ignores_a_short_date_reading(self) -> None:
+		# ubuntu-26.04's `date +%s%3N` sometimes returned a reading a digit
+		# short, so a heartbeat printed a negative elapsed_ms. The step reads
+		# bash's EPOCHREALTIME first, so a bad `date` cannot do that.
+		with tempfile.TemporaryDirectory(prefix="test_sf_clock_") as tmp:
+			markers = Path(tmp, "markers")
+			markers.mkdir()
+			fakes = []
+			for n in range(3):
+				fake = Path(tmp, f"fake_module_{n}.py")
+				fake.write_text(SINGLE_FILE_FAKE_MODULE.format(markers=str(markers), n=n, rc=0), encoding="utf-8")
+				fakes.append(str(fake))
+			count_file = Path(tmp, "date_calls")
+			prelude = (
+				f"date() {{ echo x >> '{count_file}'; "
+				f"if [ \"$(wc -l < '{count_file}')\" -eq 1 ]; then echo 1700000000900; else echo 170000000010; fi; }}\n"
+			)
+			result = run_single_file_step_body(self.run, fakes, tmp, prelude=prelude)
+			out = result.stdout
+			self.assertEqual(result.returncode, 0, out + result.stderr)
+			self.assertRegex(out, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=\d+\n")
+			self.assertEqual(len(re.findall(r"CI_SUBTEST_END subtest=\S+ elapsed_ms=\d+ rc=0\n", out)), 3, out)
 
 	def test_full_body_overlaps_modules_and_fails_closed(self) -> None:
 		for failing in (1, None):
