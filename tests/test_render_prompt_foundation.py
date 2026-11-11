@@ -151,6 +151,24 @@ def _run_render_prompt_py(
 	)
 
 
+def test_render_prompt_py_help_strings_are_valid_format_strings() -> None:
+	# Python 3.14 argparse checks every help string with `%` formatting when the
+	# argument is added, so one bare `%` crashed every render_prompt.py call
+	# (clarify, plan and review) on ubuntu-26.04 runners. `--help` runs the same
+	# check on older Pythons, so this guards the 3.12 CI job too.
+	proc = subprocess.run(
+		[sys.executable, str(RENDER_PROMPT_PY), "--help"],
+		cwd=str(REPO_ROOT),
+		env=_base_env(),
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert "--skip-syntax-validation" in proc.stdout
+	assert "{%...%}" in proc.stdout
+
+
 def test_output_contract_reference_includes_status_update_cadence() -> None:
 	reference_text = _load_reference_text("output-contract.txt")
 	assert "Emit one short preamble sentence (≤20 words) before each tool-call batch" in reference_text
