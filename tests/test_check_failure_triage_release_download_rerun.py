@@ -241,6 +241,16 @@ class ReleaseDownloadRerunGateTests(unittest.TestCase):
 		self.assertNotIn(RUN_GET, calls)
 		self.assertNotIn(RERUN_POST, calls)
 
+	def test_unverified_pr_skips_the_gate_before_any_read(self) -> None:
+		proc, _outputs, calls = _collect({5: FOUNDRY}, extra={"MOCK_PR_FAIL": "1"})
+		self.assertIn("RELEASE_DOWNLOAD_RERUN outcome=skip reason=pr_unverified", proc.stdout)
+		self.assertNotIn(RUN_GET, calls)
+		self.assertNotIn(RERUN_POST, calls)
+
+	def test_full_page_of_100_jobs_is_read(self) -> None:
+		proc, outputs, calls = _collect({5: FOUNDRY}, jobs=_jobs_payload([5], list(range(1000, 1099))))
+		self._assert_rerun(proc, outputs, calls)
+
 	def test_unparseable_or_foreign_details_url_is_filed(self) -> None:
 		for url in ("https://example.com/not-a-run", "https://github.com/other/repo/actions/runs/1", f"{RUN_URL}/job/9"):
 			with self.subTest(url=url):

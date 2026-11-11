@@ -479,7 +479,9 @@ RELEASE_DOWNLOAD_RERUN_WORKFLOW_ID=""
 # Returns 0 when the annotations JSON array in $1 shows a github.com release
 # download that failed with HTTP 502/503/504. Annotation text is untrusted: it
 # is only pattern-matched here, never executed or used as a value. The
-# patterns live in this one place.
+# patterns live in this one place. A full per_page=100 page is accepted: the
+# match is an any(), so a match on a truncated page is also a match on the
+# whole list.
 triage_release_download_classify()
 {
 	local rd_status_re='\b50[234]\b'
@@ -493,7 +495,7 @@ triage_release_download_classify()
 		--arg codeql_failure_re "${rd_codeql_failure_re}" \
 		--arg codeql_url_re "${rd_codeql_url_re}" \
 		--arg codeql_status_re "${rd_codeql_status_re}" '
-		if type == "array" and length < 100
+		if type == "array" and length <= 100
 			and all(.[]; type == "object" and (.message | type) == "string" and (.annotation_level | type) == "string")
 		then
 			[.[] | select(.annotation_level == "failure")] as $failures
@@ -518,6 +520,12 @@ triage_release_download_rerun_gate()
 	fi
 	if [ "${HISTORICAL_MODE}" = "true" ]; then
 		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=historical_mode"
+		return 0
+	fi
+	# A failed PR read leaves HEAD_REPO_FULL_NAME empty and skips the fork
+	# guard; the re-run POST is a write, so it needs a verified same-repo head.
+	if [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=pr_unverified"
 		return 0
 	fi
 	rd_url_re='^https://[^/]+/([^/]+/[^/]+)/actions/runs/([1-9][0-9]*)(/job/([1-9][0-9]*))?/?$'
@@ -572,7 +580,7 @@ triage_release_download_rerun_gate()
 		rd_jobs_json="$(gh_retry gh api -X GET "repos/${REPO}/actions/runs/${rd_run}/attempts/1/jobs" -f per_page=100 2>/dev/null || true)"
 		if [ -z "${rd_jobs_json}" ] || ! rd_ids="$(printf '%s' "${rd_jobs_json}" | jq -r '
 			if type == "object" and (.jobs | type) == "array" and (.total_count | type) == "number"
-				and .total_count == (.jobs | length) and .total_count < 100
+				and .total_count == (.jobs | length) and .total_count <= 100
 				and all(.jobs[]; type == "object" and .status == "completed"
 					and (.conclusion | type) == "string"
 					and (.check_run_url | type) == "string"
