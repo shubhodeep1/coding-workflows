@@ -225,6 +225,8 @@ class ActionlintTarballCacheContract(unittest.TestCase):
 		key = str(with_block.get("key") or "")
 		self.assertIn("env.ACTIONLINT_VERSION", key)
 		self.assertIn("env.ACTIONLINT_SHA256", key)
+		# The `-v<N>` suffix is the documented lever for evicting a bad entry.
+		self.assertRegex(key, r"-v\d+$", "cache key must end in a -v<N> eviction suffix")
 		self.assertIn("ACTIONLINT_CACHE_DIR", str(with_block.get("path") or ""))
 		self.assertNotIn("restore-keys", with_block)
 
