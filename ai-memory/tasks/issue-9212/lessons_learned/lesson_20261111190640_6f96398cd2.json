@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-11T19:06:40Z",
+  "issue_number": 9212,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/ci.yml:543; cited_path=.github/workflows/ci.yml; files_touched=agents.d/9212-review-gate-supersede.md, changelog.d/9212-review-gate-supersede.md, scripts/pr_checks_lib.sh, tests/test_pr_checks_lib_required_filter.py.",
+  "phase": "review_autofix",
+  "pr_number": 9262,
+  "record_id": "lesson_20261111190640_6f96398cd2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    "agents.d/9212-review-gate-supersede.md",
+    "changelog.d/9212-review-gate-supersede.md",
+    "scripts/pr_checks_lib.sh",
+    "tests/test_pr_checks_lib_required_filter.py"
+  ]
+}
