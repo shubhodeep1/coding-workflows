@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The repo matches the question. `review_head_checkout_now_ms` (`scripts/review_autofix_step_checkout_pr_head_branch.sh:40-43`) still calls `date +%s%3N` first. `_orch_poll_cycle_now_ms` (`scripts/orchestrate_poll_process.sh:38-46`) already reads bash's `EPOCHREALTIME` first and only then falls back to `date`. No open PR touches this script, so this issue should fix it. GITHUB FACTS show that open PR #9246 (base `main`) already covers the closed-reader failure in `tests/test_gh_retry_stdout_isolation.py`. Fixing it here too (B) would duplicate that work and conflict with it. Option C would leave `main` broken and would put a fix on the orchestrator integration branch, which this pipeline does not target. The planner should therefore not act on PR #9246 at all.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Q1 is a letter decision. For the planner, Option A means:\n- In `scripts/review_autofix_step_checkout_pr_head_branch.sh`, change `review_head_checkout_now_ms` to read `EPOCHREALTIME` first, the same way `_orch_poll_cycle_now_ms` does in `scripts/orchestrate_poll_process.sh` (lines 36-56). Keep `date +%s%3N` as the fallback, and keep the function name and the output contract the same.\n- Leave the `^[0-9]+$` check and the `na` fallback in `review_head_checkout_elapsed_ms` unchanged.\n- Add a contract test in `tests/test_review_checkout_head_diagnostics.py`. It should check that the timing values come from `EPOCHREALTIME`, so `fetch_ms` and `switch_ms` are whole numbers even when `date +%s%3N` is stubbed to return bad or decreasing values. The existing `test_head_moved_after_switch_reports_skipped_stale` must pass unchanged.\n- Add a `changelog.d` entry.\n- Do not edit `tests/test_gh_retry_stdout_isolation.py` or the closed-reader steps in `.github/workflows/ci.yml`; PR #9246 covers those.\n- Target `main`. CI on #8307 goes green once this fix and PR #9246 are both on main and the integration branch picks them up.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "f0d7025a545e9b1e520abbfee5fa9e4815a0015b0edd5c7f5738a5b4267b9069",
+  "lineage": {
+    "issue_number": 9256,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43040990636",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43040990636",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9256"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261111145429_63acf02b01",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9256,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43040990636"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9256",
+  "timestamps": {
+    "created_at": "2026-11-11T14:54:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
