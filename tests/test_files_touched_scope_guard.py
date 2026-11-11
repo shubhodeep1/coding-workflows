@@ -2330,11 +2330,21 @@ def test_plan_grant_only_unverified_paths_still_hold_replannable() -> None:
 		code, record, body = _run_grant_cli(plan, _pipeline_meta())
 		assert code == 30 and body is None, record
 		if denied is None:
-			# The directory token still holds the plan; never approved.
-			assert record["decision"] == "hold", record
+			# The directory token still holds the plan; never approved. With
+			# no exact protected file left, the #8339 rule (unchanged) is not
+			# replannable, as before #9130.
+			assert record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+			assert record["denied_paths"] == ["scripts/"] and "replannable" not in record, record
 			continue
 		assert record["reason"] == "plan_path_not_grantable" and record["replannable"] is True, record
 		assert record["denied_paths"] == denied
+	# A directory token beside an exact file and an unverified path: the
+	# #8339 re-plan still follows (path_not_granted, replannable), and the
+	# grant is never written without the unverified path.
+	code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/`\n- `scripts/a.sh`\n- `bin/deploy`\n",
+		_pipeline_meta())
+	assert code == 30 and body is None, record
+	assert record["reason"] == "path_not_granted" and record["replannable"] is True, record
 	with tempfile.TemporaryDirectory() as td:
 		root = Path(td)
 		(root / "scripts").mkdir()
@@ -2355,6 +2365,8 @@ def test_plan_grant_decorated_or_joined_listings_never_drop_silently() -> None:
 		("- [x] __`bin/deploy`__\n", ["bin/deploy"]),
 		("- (new) `bin/deploy`\n", ["bin/deploy"]),
 		("1. `bin/deploy`, `public/CNAME` and `newdir/tool`\n", ["bin/deploy", "public/CNAME", "newdir/tool"]),
+		("| `bin/deploy` | new deploy script |\n", ["bin/deploy"]),
+		("- [`public/CNAME`](public/CNAME)\n", ["public/CNAME"]),
 	):
 		plan = "## Files likely to change\n- `scripts/a.sh`\n" + line
 		assert guard.extract_plan_file_path_sets(plan) == (["scripts/a.sh"], expected), line

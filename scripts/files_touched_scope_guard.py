@@ -972,8 +972,10 @@ _PLAN_BULLET_LISTING_REST_RE = re.compile(r"^\s*$|^\s+(?:[\u2014\u2013]|-+\s|\(|
 # between listed files (`,`, `;`, `&`, `+`, `and`, `or`, closing emphasis).
 # Without these, `- **`bin/deploy`**`, `- [ ] `public/CNAME`` or the second
 # file of `- `bin/deploy`, `public/CNAME`` would read as prose and, with no
-# planning root (the poller), be left out of the grant silently.
-_PLAN_LISTING_DECORATION_RE = re.compile(r"^(?:[\s*_]|\[[ xX]\]|\([^()\n`]{0,40}\))*$")
+# planning root (the poller), be left out of the grant silently. A leading
+# table pipe (`| `bin/deploy` | new |`) and a link's opening bracket
+# (`- [`public/CNAME`](public/CNAME)`) are decoration too.
+_PLAN_LISTING_DECORATION_RE = re.compile(r"^(?:[\s*_|\[]|\[[ xX]\]|\([^()\n`]{0,40}\))*$")
 _PLAN_LISTING_JOINER_RE = re.compile(r"^(?:[\s,;&+*_]|\band\b|\bor\b)*$", re.IGNORECASE)
 
 
