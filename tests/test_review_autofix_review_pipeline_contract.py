@@ -9532,37 +9532,46 @@ def _load_review_workspace_module(module_name: str):
 	return module
 
 
-def test_review_isolation_admits_chatgpt_pool_config_behind_flag(monkeypatch, capsys) -> None:
-	"""PR #9112 / issue #9111: .github/ai/chatgpt_pool.json is admitted behind an on-by-default off switch."""
+def test_review_isolation_admits_chatgpt_pool_config_behind_flag() -> None:
+	"""PR #9112 / issue #9111: .github/ai/chatgpt_pool.json is admitted behind an on-by-default off switch.
+
+	No pytest fixtures: main() runs this file under plain python3 in CI.
+	"""
 	module = _load_review_workspace_module("review_workspace_chatgpt_pool_flag")
 	flag = "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED"
 	assert module.CHATGPT_POOL_CONFIG_FLAG == flag
-	monkeypatch.delenv(flag, raising=False)
-	assert module.allowed(".github/ai/chatgpt_pool.json")
-	for value in ("", "true", "TRUE", "True"):
-		monkeypatch.setenv(flag, value)
-		assert module.allowed(".github/ai/chatgpt_pool.json"), value
-		# Every other .github/ai/ path stays rejected, including a case variant.
-		assert not module.allowed(".github/ai/other.json")
-		assert not module.allowed(".github/ai/WORKFLOW.md")
-		assert not module.allowed(".github/ai/ChatGPT_pool.json")
-		assert not module.allowed(".github/ai/chatgpt_pool.json/x")
-		assert module.allowed(".github/ai/claude_engine.json")
-	for value in ("false", "False", "FALSE"):
-		monkeypatch.setenv(flag, value)
-		assert not module.allowed(".github/ai/chatgpt_pool.json"), value
-		assert module.allowed(".github/ai/claude_engine.json")
-		assert not module.allowed(".github/ai/other.json")
-	assert capsys.readouterr().err == ""
-	module._chatgpt_pool_config_flag_warned = False
-	monkeypatch.setenv(flag, "maybe")
-	assert not module.allowed(".github/ai/chatgpt_pool.json")
-	assert not module.allowed(".github/ai/chatgpt_pool.json")
-	err = capsys.readouterr().err
-	assert err == "::warning::REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED has an unrecognised value; .github/ai/chatgpt_pool.json stays out of the review sandbox\n"
-	assert "maybe" not in err
-	monkeypatch.setenv(flag, " true ")
-	assert not module.allowed(".github/ai/chatgpt_pool.json")
+	with mock.patch.dict(os.environ):
+		os.environ.pop(flag, None)
+		assert module.allowed(".github/ai/chatgpt_pool.json")
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			for value in ("", "true", "TRUE", "True"):
+				os.environ[flag] = value
+				assert module.allowed(".github/ai/chatgpt_pool.json"), value
+				# Every other .github/ai/ path stays rejected, including a case variant.
+				assert not module.allowed(".github/ai/other.json")
+				assert not module.allowed(".github/ai/WORKFLOW.md")
+				assert not module.allowed(".github/ai/ChatGPT_pool.json")
+				assert not module.allowed(".github/ai/chatgpt_pool.json/x")
+				assert module.allowed(".github/ai/claude_engine.json")
+			for value in ("false", "False", "FALSE"):
+				os.environ[flag] = value
+				assert not module.allowed(".github/ai/chatgpt_pool.json"), value
+				assert module.allowed(".github/ai/claude_engine.json")
+				assert not module.allowed(".github/ai/other.json")
+		assert stderr.getvalue() == ""
+		module._chatgpt_pool_config_flag_warned = False
+		os.environ[flag] = "maybe"
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			assert not module.allowed(".github/ai/chatgpt_pool.json")
+			assert not module.allowed(".github/ai/chatgpt_pool.json")
+		err = stderr.getvalue()
+		assert err == "::warning::REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED has an unrecognised value; .github/ai/chatgpt_pool.json stays out of the review sandbox\n"
+		assert "maybe" not in err
+		os.environ[flag] = " true "
+		with contextlib.redirect_stderr(io.StringIO()):
+			assert not module.allowed(".github/ai/chatgpt_pool.json")
 
 
 def test_review_isolation_transfers_new_chatgpt_pool_config() -> None:
