@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Changes in this area have included tests for purge safety, untrusted-input contracts, collection checks, and failure behavior. When modifying log collection or analysis, preserve explicit safeguards and test how unsafe inputs and failures are handled.",
+  "fingerprint": "e3b66c26e0aaf15102934f0dd59c6b1603914d03530a4b72392e149b2d0bfcdb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42937280023",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42937280023",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8808",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8880",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8955",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8974",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9183",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8812",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8883",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8968",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8986",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9185"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261111011950_fadb033bfa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Treat workflow-log analysis as a security-sensitive path with explicit safety checks.",
+  "timestamps": {
+    "created_at": "2026-11-11T01:19:50Z",
+    "promoted_at": "2026-11-11T01:20:27Z",
+    "superseded_at": null
+  }
+}
