@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: DERIVE_FROM_REPO\n\nRATIONALE:\nQ1: None of options A\u2013D matches what the repo says about the Python 3.14 breakage. The fix for that breakage (`changelog.d/9200-ubuntu-2604-render-prompt-and-ci-fixes.md`) changed exactly two CI tests. One is `tests/test_render_prompt_foundation.py`, which `.github/workflows/ci.yml` runs at line 2401 inside the `tests-release-and-log-analysis` job (lines 2126\u20132488). The other is `tests/test_codex_isolated_exec.py`, which ci.yml runs at line 3004 inside the `orchestrate-poll` job (lines 2489\u20133420). Those are the \"two CI jobs\" in the follow-up, so the answer is option E with that pair, worked out from the repo rather than taken from a guessed letter. Option A names jobs that run neither test. Option D would grow the fallback to every argparse script that any CI test calls, which the issue's wording (\"those two CI jobs\") does not support.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml: job `tests-release-and-log-analysis` (starts line 2126) and job `orchestrate-poll` (starts line 2489). Read only; the issue forbids editing this file.\n    - changelog.d/9200-ubuntu-2604-render-prompt-and-ci-fixes.md: names the two tests the Python 3.14 fix changed and says `scripts/render_prompt.py` was the only bad help string found.\n    - tests/test_render_prompt_foundation.py, lines 154\u2013169: the pattern to copy. The test is actually named `test_render_prompt_py_help_strings_are_valid_format_strings`, not `..._are_well_formed` as the issue says. It runs `[sys.executable, <script>, \"--help\"]` with `cwd=REPO_ROOT`, `env=_base_env()`, `capture_output=True`, `timeout=60` and asserts `returncode == 0`, `proc.stderr`.\n  steps:\n    - Do steps 1 and 2 of the issue as written: search `scripts/` and `.github/scripts/` for `add_argument(... help=...)` text with a `%` that is neither `%%` nor a valid `%(name)s`, escape it as `%%`, and add a `--help` exit-0 test for each script changed.\n    - Only if no bad strings are found (step 3): list the test files that the `run:` steps of `tests-release-and-log-analysis` and `orchestrate-poll` in ci.yml call. From those tests, collect the scripts under `scripts/` or `.github/scripts/` that use argparse and that the tests run as a subprocess or import.\n    - For each script collected (skip `scripts/render_prompt.py`, which already has a test), add a test under `tests/` that runs the script with `--help` and asserts exit code 0, copying the pattern above. Put the new tests in a file those two jobs already run, or in a new test file that a test those jobs already run picks up, so ci.yml stays untouched.\n    - Do not edit .github/workflows/ci.yml, change any `python-version` pin, or skip or loosen any test.\n  replaces_acceptance_criterion: Step 3's unresolved \"scripts that tests in those two CI jobs call\" becomes \"argparse scripts called by the tests that the `tests-release-and-log-analysis` and `orchestrate-poll` jobs in ci.yml run\".\n  equivalence_argument: These are the only two ci.yml jobs that run the tests the Python 3.14 fix changed (`test_render_prompt_foundation.py` at line 2401, `test_codex_isolated_exec.py` at line 3004). They are the jobs that matched the follow-up's \"two CI jobs\", and the `--help` tests guard the same code paths that broke.\n  reversibility: The new tests only add files or functions under `tests/`. If a human names a different pair later, the tests can be moved or more added without touching production scripts.",
+  "fingerprint": "9cb66e211c63edb9568cafcc67f28afa2b93f7518757d8511ee7733554df2b67",
+  "lineage": {
+    "issue_number": 9269,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43051943864",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43051943864",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9269"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261111162107_91eda5df5c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9269,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43051943864"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9269",
+  "timestamps": {
+    "created_at": "2026-11-11T16:21:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
