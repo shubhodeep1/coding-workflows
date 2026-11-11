@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Should this fix also cover the group 1 failure, `test_four_failed_fetches_report_transport_5xx_and_keep_retry_policy`, which the issue's affected-files list leaves out?\nChoices:\nA) Yes. Apply the same monotonic-clock change to `review_head_checkout_now_ms` in `scripts/review_autofix_step_checkout_pr_head_branch.sh`: read `/proc/uptime`, and fall back to the current `date` path if that fails. Also clamp negative results in `review_head_checkout_elapsed_ms` to `0` so `fetch_ms` and `switch_ms` keep the `<n|na>` contract, where `na` means only \"never started\". Add contract tests that lock the clamp behaviour. (RECOMMENDED)\nB) No. Limit this issue to `.github/workflows/ci.yml` and `tests/test_ci_poll_test_sharding.py` as filed. Group 1 is handled separately, by re-running the job or by a separate triage issue.\nC) Only loosen the test. Change `tests/test_review_checkout_head_diagnostics.py:208` to accept `na` and leave the script alone.\n**Note:** C weakens the telemetry contract instead of fixing the root cause. Picking it also leaves the clock bug in the script.\nQ2: How should this fix handle open PR #9246, which already touches the same heartbeat clock in `.github/workflows/ci.yml` and `tests/test_ci_poll_test_sharding.py`?\nChoices:\nA) Go ahead regardless. Make the smallest self-contained edit here, and let normal merge-conflict handling sort out any overlap with #9246, #9274 or #9277 if they land first. (RECOMMENDED)\nB) Treat #9246 as the fix for group 3. If Q1 is A, this issue covers only the checkout-head script; if Q1 is B, it closes as a duplicate.\nC) Wait until #9246 merges, then re-check whether any part of this failure is still left.",
+  "fingerprint": "207cdf609316dc7544fe42f5264e2fc65f69df4523f1ee47efef045a3fdcdcf9",
+  "lineage": {
+    "issue_number": 9294,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43079719041",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43079719041",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111185406_734f410702",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9294,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43079719041"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9294 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T18:54:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
