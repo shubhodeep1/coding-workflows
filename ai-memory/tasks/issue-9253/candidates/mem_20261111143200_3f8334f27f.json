@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should this failure be resolved, given that open PR #9246 already targets this exact test?\nChoices:\nA) Make no separate code change. Rely on #9246 merging into main and the integration sync bringing it into `orchestrator/project-8969`, then re-run CI on PR #8971. Close this issue as a duplicate of #9246. (RECOMMENDED)\nB) Make a separate, minimal fix on this issue's own PR now, independent of #9246. This accepts the risk of a merge conflict with #9246.\nC) Re-run the failed job only, treating it as environmental. **Note:** the probe output shows the failure repeats on every ubuntu-26.04 run, so a plain re-run will most likely fail again.\nQ2: If you chose Q1:B, where should the fix go?\nChoices:\nA) Test only: change the reader in the test so it really closes before the output is delivered, either a reader that closes stdin straight away (the probe's `cat_closed=141` case) or a payload larger than any enlarged pipe buffer. Keep the assertion that the status is non-zero and the command is not re-run. Do not change `gh_retry` in `scripts/gh_helpers.sh`. (RECOMMENDED)\nB) Product code: change the replay in `scripts/gh_helpers.sh` (lines 1228-1231) so a closed reader is reported as a non-zero status, even when the runner's `cat` buffers the whole output without error. Leave the test unchanged.\nC) Both A and B.\n**Note:** ignore Q2 if you chose Q1:A or Q1:C.",
+  "fingerprint": "76e84cf0f8d84c4ba7a288d4f67e8679f75d526abfaf99458162854a7c326f52",
+  "lineage": {
+    "issue_number": 9253,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43038283727",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43038283727",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111143200_3f8334f27f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9253,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43038283727"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9253 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T14:32:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
