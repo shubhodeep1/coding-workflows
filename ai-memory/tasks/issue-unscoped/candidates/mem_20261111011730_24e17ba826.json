@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "When changing workflow behavior or its helper scripts, add or update targeted tests that capture the expected contract, such as failure handling, payload fallback, or recovery behavior. Several merged changes touched workflow definitions and scripts alongside dedicated tests.",
+  "fingerprint": "2b16c33fe067abfb8c21a83d8f88d2893ab4d9328795ec4da93c634b46d145ae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42937280023",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42937280023",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8808",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8880",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8955",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8974",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9183",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8812",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8883",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8968",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8986",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9185"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261111011730_24e17ba826",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow and script changes are commonly paired with focused contract tests.",
+  "timestamps": {
+    "created_at": "2026-11-11T01:17:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
