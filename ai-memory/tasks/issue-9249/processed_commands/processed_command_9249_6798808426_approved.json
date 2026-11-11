@@ -5,13 +5,27 @@
   "entry_id": "processed_command_9249_6798808426_approved",
   "issue_number": 9249,
   "metadata": {
+    "branch": "ai/issue-9249",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/review_autofix.yml",
+      "agents.d/9249-rb-judge-crash-alert.md",
+      "changelog.d/9249-rb-judge-crash-alert.md",
+      "scripts/review_autofix_step_post_review_blocked_comment.sh",
+      "tests/test_review_autofix_rb_judge_crash_alert.py"
+    ],
+    "issue_number": 9249,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9249",
+    "pr_number": 9276,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9276",
+    "run_attempt": "1",
+    "run_id": "43040945106",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43040945106"
   },
   "run_attempt": 1,
   "run_id": "43040945106",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-11T15:04:42Z",
+  "status": "completed",
+  "timestamp": "2026-11-11T15:48:05Z",
   "workflow": "implement"
 }
