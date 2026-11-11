@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:640-642 (also 3697-3698 per z-ai_glm-5_3-flash) | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The comment above `_TRACEBACK_CONTEXT_MAX_LINES` / `_TRACEBACK_SCAN_MAX_LINES` (and the docstring at 3697-3698, per z-ai_glm-5_3-flash) still says a traceback with no exception line yet \"is followed on to that line only\", but the forward walk now also keeps indented continuation lines, blank lines and a chain marker.\n  WHY: There is no runtime failure, but the stale text could mislead a maintainer into reverting the walk and reintroducing the dropped chain marker. All four reviewers rated it NIT.\n- PR metadata (body line 1 \"Fixes #2734\", commit message #2 \"resolved: #2734\") | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR body and commit messages use auto-close keywords against `ai:orchestrator-tracking` issue #2734, which violates CLAUDE.md \u00a719 and \u00a721.\n  WHY: Merging would auto-close the tracking issue and stop the orchestrator dispatching later waves. Severity is BLOCKER in the source. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash checked and found this text is only fixture output in the lint test log, because the PR uses `Refs #9190, Refs #9200`. They dropped the finding as unverifiable.\n- .github/workflows/ci.yml:(check-runs `tests-hooks-and-orchestrator` and `lint`, run 43074283773, job 130709939858) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: CI is red on `tests-hooks-and-orchestrator` (and `lint`, which only aggregates it), and the failure cannot be mapped to any hunk in the PR diff.\n  WHY: The failure blocks merge, and the root cause is beyond the truncated log tail. Severity is MAJOR in both sources. Confidence is 4 from gemini and 2 from glm. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 could not map the failure to the diff and did not report it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal.py:642 | severity=NIT | confidence=4\n  PROBLEM: The comment above `_TRACEBACK_CONTEXT_MAX_LINES` / `_TRACEBACK_SCAN_MAX_LINES` is stale: it says \"followed on to that line only\", but the forward walk (lines ~3729-3744) also keeps indented continuation lines, blank lines and a chain marker.\n  WHY: It does not fail at runtime, but a maintainer could revert the walk to the earlier behaviour that dropped the chain marker.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- PR metadata (body line 1 \"Fixes #2734\", commit message #2 \"resolved: #2734\") | severity=BLOCKER | confidence=5\n  PROBLEM: PR metadata uses auto-close keywords against `ai:orchestrator-tracking` issue #2734, which violates CLAUDE.md \u00a719 and \u00a721.\n  WHY: On merge, GitHub would auto-close the tracking issue and the orchestrator would stop dispatching later waves.\n- scripts/workflow_failure_heal.py:640-642 | severity=NIT | confidence=4\n  PROBLEM: The comment above `_TRACEBACK_CONTEXT_MAX_LINES` / `_TRACEBACK_SCAN_MAX_LINES` wrongly says a traceback \"is followed on to that line only\".\n  WHY: The code now also keeps continuation lines and chain markers, so the comment is stale and misleading.\n- .github/workflows/ci.yml:(check-run `tests-hooks-and-orchestrator` and `lint`) | severity=MAJOR | confidence=4\n  PROBLEM: The CI pipeline is red and the failure is not explained by the PR diff. `lint` fails because other jobs did not succeed.\n  WHY: The PR cannot merge until CI passes. The root cause needs the full log of run 43074283773, job 130709939858.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py:640-642 | severity=NIT | confidence=4\n  PROBLEM: The third comment line still says \"a traceback with no exception line yet is followed on to that line only\", but the forward walk at lines 3732-3744 also keeps indented continuation lines, blank lines and a chain marker. The comment at lines 3729-3731 and the docstring at lines 3691-3693 document the new behaviour.\n  WHY: It does not fail at runtime, but a maintainer could \"fix\" the walk to match the stale summary and reintroduce the bug the last run removed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_failure_heal.py:640-642 and 3697-3698 | severity=NIT | confidence=4\n  PROBLEM: The constants comment and the docstring sentence both still say a traceback with no exception line yet \"is followed on to that line only\" / \"is followed on to that line\". The walk at lines 3732-3744 now also keeps blank lines, indented continuation lines and the `_TRACEBACK_CHAIN_RE` chain marker after the exception line.\n  WHY: There is no runtime failure. The older descriptions contradict the walk's own comment (lines 3729-3731), so a maintainer could revert the walk and reintroduce the regression covered by `test_filter_log_keeps_the_chain_marker_after_a_traceback_longer_than_the_scan_window`.\n- .github/workflows/ci.yml:(check-runs `tests-hooks-and-orchestrator` and `lint`, head f2d4a288, run 43074283773, job 130709939858) | severity=MAJOR | confidence=2\n  PROBLEM: CI is red on this head across repeated runs and `lint` only aggregates `tests-hooks-and-orchestrator`. The failure is not mappable to any hunk in the PR diff, and the `##[error]` lines in the log tail are the lint test's fixture output.\n  WHY: The failing step is beyond the truncated log tail and no code path in the diff explains it. The pre-push gate attributed `tests/test_workflow_checkout_integration_ref_audit.py` to this change, but the working tree passes the cited assertion, so that attribution is suspect.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0ab7d2f002bc0110243b123852ea937b4f2d631287a1496fe3ebbc66eac436cc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9219,
+    "run_id": "43074284313",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43074284313",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111210240_6c03499fd2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9219,
+    "run_id": "43074284313"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T21:02:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
