@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which confirmed CI failures should this issue's PR fix?\nChoices:\nA) Both confirmed failures: make `gh_retry` return non-zero when the successful attempt's output can't be delivered (fixing `scripts/gh_helpers.sh`, not weakening `tests/test_gh_retry_stdout_isolation.py`), and make the no-docker-bin setup in `test_missing_docker_fails_closed_and_never_runs_host_codex` skip a target that already exists even when it points at a missing file. (RECOMMENDED)\nB) Only the `gh_retry` failure. Leave `tests/test_codex_isolated_exec.py` to open PR #9293 (issue #9286).\nC) No code change. Close this issue as a duplicate of #9246/#9293 and re-run CI on `ai/issue-9255` once they're on the default branch.\n**Note:** C makes Q2 irrelevant.\nQ2: Should the `date +%s%3N` read at `scripts/orchestrate_poll_process.sh:39` (the heartbeat clock the issue body suspects) also switch to `EPOCHREALTIME`, the way PR #9274 did for `review_autofix_step_checkout_pr_head_branch.sh`?\nChoices:\nA) No. The traceback shows a different `orchestrate-poll (2)` failure, so leave line 39 alone and keep scope to the confirmed failures. (RECOMMENDED)\nB) Yes. Harden line 39 with `EPOCHREALTIME` first and `date` as the fallback, plus a regression test, in the same PR.\n**Note:** B together with Q1:C contradicts \"no code change\" and would need re-clarification.",
+  "fingerprint": "f785e760da31fccaf731d5c4d0959316fd5134faa430aed689befb2d9c924194",
+  "lineage": {
+    "issue_number": 9301,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43083404497",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43083404497",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111192131_4c4b8d7137",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9301,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43083404497"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9301 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T19:21:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
