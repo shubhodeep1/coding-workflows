@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:798-808 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The agents.md \"Workflow architecture\" paragraph (\"one deterministic exception: the merged-PR guard hook\") and the variable-table row at agents.md:4994 (`CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED`) now say the template merge covers only `pr_merge_status_guard.py`. This change extends it to every paired live hook, and the fragment mechanism can only append to a section, so it cannot correct that text.\n  WHY: Agents reading agents.md will route conflicts in the other paired hooks to the manual-merge / `sandbox_path_host_only` path, and README.md:188 now disagrees. Source severity was NIT.\n- .github/workflows/ci.yml:2886, 2921, 2951-2956 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: Elapsed-time telemetry subtracts two wall-clock readings with no lower clamp, so a backward clock step yields a negative `elapsed_ms` (observed `elapsed_ms=-10` and `elapsed_ms=-612`). This fails the strict assertion at tests/test_ci_poll_test_sharding.py:3663 (`elapsed_ms=\\d+`) in `test_full_body_overlaps_modules_and_fails_closed`.\n  WHY: The `orchestrate-poll (1)` shard and the aggregate `lint` job fail, keeping the PR red. The file is outside the PR diff, and clamping to `>= 0` or accepting `-?\\d+` resolves it. Severity disagreement: minimax_minimax-m3 said MAJOR, openai_gpt-6-luna said NIT. The highest, MAJOR, is mapped to high.\n- .github/workflows/ci.yml:519-938 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `tests-hooks-and-orchestrator` job is red on this head, and the failing step cannot be named from the truncated log. The pre-push gate lists `tests/test_review_merge_train.py` and `tests/test_implement_post_codex_recovery.py` as inherited failures on the merge-base.\n  WHY: Neither module is reachable from this diff, so this is a main-side failure, recorded so it is not chased as a regression. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.md:798-808 | severity=NIT | confidence=4\n  PROBLEM: Both the \"Workflow architecture\" paragraph (\"one deterministic exception: the merged-PR guard hook\") and the variable-table row at agents.md:4994 are now false. The fragment `agents.d/9008-guard-hook-merge-prepush-pair.md` can only append to the end of a section, not correct text inside it.\n  WHY: An agent reading agents.md will route conflicts in the other paired hooks to the manual-merge / `sandbox_path_host_only` path the change removed, and README.md:188 disagrees.\n- .github/workflows/ci.yml:2954 (and identical unclamped heartbeat subtraction at ci.yml:2921) | severity=MAJOR | confidence=4\n  PROBLEM: Elapsed-time telemetry is an unclamped difference of wall-clock readings, so a backward clock step yields a negative value. This fails the strict `elapsed_ms=\\d+` assertion at tests/test_ci_poll_test_sharding.py:3663, while line 3655 already accepts `-?\\d+`.\n  WHY: `test_full_body_overlaps_modules_and_fails_closed` fails, `orchestrate-poll (1)` exits 1, and the aggregate `lint` job fails. The file is outside the PR diff, so this is a main-side fix.\n- .github/workflows/ci.yml:519-938 | severity=NIT | confidence=3\n  PROBLEM: The `tests-hooks-and-orchestrator` job is red, and the failing step cannot be named from the truncated log tail.\n  WHY: The pre-push gate lists `tests/test_review_merge_train.py` and `tests/test_implement_post_codex_recovery.py` as inherited failures on the merge-base, so this is a main-side failure.\n- HARDENING_SUGGESTIONS (2 related items): (1) scripts/review_conflict_prepare.sh lines 32-36 vs 353-355 and 357-359: the \"Failure modes\" header omits the new malformed-`GUARD_HOOK_TEMPLATE_PAIRS` exit-1; suggested fix is to add one bullet. (2) scripts/review_conflict_prepare.sh lines 353 and 358: the `::error::` annotations interpolate `${_ghm_pair}` without the `%`/`\\r` escaping used at lines 965-971; suggested fix is to pipe through the same sed escaping. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2886, 2951-2956 | severity=NIT | confidence=4\n  PROBLEM: The failed `orchestrate-poll (1)` check reported `elapsed_ms=-10`. The workflow subtracts wall-clock timestamps without guarding against a backward clock adjustment.\n  WHY: A backward clock step produces a negative `elapsed_ms`, which fails the test's nonnegative elapsed-time assertion and makes the CI check fail. The workflow is outside the PR diff.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "18cbe4c4085a24da3133805866f841f369ae1c7a001edcc93458a1ccd4195b9f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9011,
+    "run_id": "43090136198",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43090136198",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111214129_8add70a817",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9011,
+    "run_id": "43090136198"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T21:41:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
