@@ -213,7 +213,8 @@ def test_cycle_summary_sweep_only_exit_reports_unknown_projects():
 	rc, summaries, projects = _run("exit 0")
 	assert rc == 0 and projects == []
 	elapsed, seen, processed, _, code, reason = _fields(summaries[0])
-	assert elapsed.isdigit() and (seen, processed, code, reason) == ("unknown", "unknown", "0", "completed")
+	# A real wall-clock step backwards reports elapsed as unknown (#9237).
+	assert (elapsed.isdigit() or elapsed == "unknown") and (seen, processed, code, reason) == ("unknown", "unknown", "0", "completed")
 
 
 def test_cycle_summary_no_projects():
@@ -238,9 +239,9 @@ def test_cycle_summary_counts_projects_and_prints_project_timing():
 	assert _fields(summaries[0])[1:3] == ("3", "2")
 	assert _fields(summaries[0])[5] == "completed"
 	assert len(projects) == 2
-	assert re.fullmatch(r"ORCH_POLL_PROJECT_TIMING tracking_issue=11 elapsed_ms=\d+", projects[0]), projects
+	assert re.fullmatch(r"ORCH_POLL_PROJECT_TIMING tracking_issue=11 elapsed_ms=(?:\d+|unknown)", projects[0]), projects
 	# A non-numeric tracking number never reaches the log line.
-	assert re.fullmatch(r"ORCH_POLL_PROJECT_TIMING tracking_issue=unknown elapsed_ms=\d+", projects[1]), projects
+	assert re.fullmatch(r"ORCH_POLL_PROJECT_TIMING tracking_issue=unknown elapsed_ms=(?:\d+|unknown)", projects[1]), projects
 
 
 def test_cycle_summary_flushes_pending_project_on_mid_project_exit():
