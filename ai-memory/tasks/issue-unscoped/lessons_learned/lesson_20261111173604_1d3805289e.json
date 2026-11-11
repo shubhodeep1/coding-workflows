@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-11T17:36:04Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=.github/workflows/ci.yml:3198; cited_path=other scripts that read `date +%s%3N` (reviewer_2 named no paths); files_touched=.github/workflows/ci.yml, tests/test_ci_poll_test_sharding.py, tests/test_gh_retry_stdout_isolation.py.",
+  "phase": "review_autofix",
+  "pr_number": 9246,
+  "record_id": "lesson_20261111173604_1d3805289e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "other scripts that read `date +%s%3N` (reviewer_2 named no paths)",
+    ".github/workflows/ci.yml",
+    "tests/test_ci_poll_test_sharding.py",
+    "tests/test_gh_retry_stdout_isolation.py"
+  ]
+}
