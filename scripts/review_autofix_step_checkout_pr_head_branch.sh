@@ -54,7 +54,7 @@ review_head_checkout_now_ms()
   fi
   review_head_checkout_now_value="$(date +%s 2>/dev/null || true)"
   if [[ "${review_head_checkout_now_value}" =~ ^[0-9]+$ ]]; then
-    printf '%s' "$(( review_head_checkout_now_value * 1000 ))"
+    printf '%s' "$(( 10#${review_head_checkout_now_value} * 1000 ))"
   fi
   return 0
 }
