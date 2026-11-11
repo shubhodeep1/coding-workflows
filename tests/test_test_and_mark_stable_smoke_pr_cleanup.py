@@ -70,7 +70,13 @@ def test_smoke_cleanup_closes_late_pr_when_pr_number_empty() -> None:
 	fallback = body[else_branch:close_issue]
 	# Every still-active run of this issue is cancelled, not only the newest
 	# one: a newer completed run must not hide an older queued run.
-	assert "actions/workflows/implement.yml/runs?per_page=100${LATE_IMPL_CREATED_FILTER}" in fallback
+	# implement.yml is workflow_call-only and owns no runs, so the lookup
+	# pages the repo-wide listing with Phase 3b's "Implement" name match.
+	assert "actions/workflows/implement.yml/runs" not in fallback
+	assert "actions/runs?per_page=100&page=${LATE_IMPL_PAGE}${LATE_IMPL_CREATED_FILTER}" in fallback
+	assert "for LATE_IMPL_PAGE in 1 2 3 4 5 6 7 8 9 10; do" in fallback
+	assert 'select((.name // "") | test("Implement"; "i"))' in fallback
+	assert "::warning::Implement run lookup failed for issue #${ISSUE_NUMBER}" in fallback
 	assert 'LATE_IMPL_CREATED_FILTER="&created=>${IMPL_CREATED_AFTER_INPUT}"' in fallback
 	assert "select(.display_title == env.ISSUE_TITLE)" in fallback
 	assert 'select(.status != "completed")' in fallback
@@ -98,6 +104,10 @@ def test_alt_model_cleanup_cancels_scoped_implement_runs() -> None:
 	body = _run_body(step)
 	assert "select(.display_title == env.ALT_ISSUE_TITLE)" in body
 	assert "select(.id > ${PRE_IMPLEMENT:-0})" in body
+	assert "actions/workflows/implement.yml/runs" not in body
+	assert "actions/runs?per_page=100&page=${ALT_IMPL_PAGE}" in body
+	assert "for ALT_IMPL_PAGE in 1 2 3 4 5; do" in body
+	assert "all(.workflow_runs[]; .id > ${PRE_IMPLEMENT:-0})" in body
 	assert body.index("/cancel") < body.index("pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1")
 
 
@@ -111,6 +121,9 @@ def test_decompose_cleanup_closes_project_prs_before_branch_delete() -> None:
 	assert max(base_lookup, head_lookup, child_lookup) < close < delete
 	assert 'PROJECT_BRANCH="orchestrator/project-${TRACKING_NUMBER}"' in body
 	assert "::warning::Could not delete branch ${PROJECT_BRANCH} after 3 attempts" in body
+	# A missing ref ends the loop without the warning.
+	probe = body.index('git/ref/heads/${PROJECT_BRANCH}"')
+	assert delete < probe < body.index("already absent") < body.index("::warning::Could not delete branch")
 
 
 _FAKE_GH = textwrap.dedent("""\
@@ -156,6 +169,56 @@ def test_decompose_cleanup_executes_against_fake_gh() -> None:
 		assert sorted(closed[3:]) == ["21", "22", "23"], closed
 		delete_idx = next(i for i, c in enumerate(calls) if "git/refs/heads/orchestrator/project-7" in c and "-X DELETE" in c)
 		assert all(calls.index(c) < delete_idx for c in closes)
+
+
+_FAKE_RUNS_GH = textwrap.dedent("""\
+	#!/usr/bin/env bash
+	printf '%s\\n' "$*" >> "${FAKE_DIR}/calls"
+	case "$*" in
+		*"actions/runs?per_page=100&page=1&"*)
+			# A full page of newer runs, none of them ours.
+			jq -n '{workflow_runs: [range(100) | {id: (900 - .), name: "Internal: AI Implement", display_title: "other", status: "queued"}]}'
+			exit 0 ;;
+		*"actions/runs?per_page=100&page=2&"*)
+			jq -n --arg t "$ISSUE_TITLE" '{workflow_runs: [
+				{id: 41, name: "Internal: AI Implement", display_title: $t, status: "pending"},
+				{id: 40, name: "Internal: AI Implement", display_title: $t, status: "completed"},
+				{id: 39, name: "Internal: AI Plan", display_title: $t, status: "queued"}]}'
+			exit 0 ;;
+		*"/cancel"*) exit 0 ;;
+		*"pulls?state=open&head="*) exit 0 ;;
+	esac
+	exit 1
+	""")
+
+
+def test_smoke_cleanup_cancels_a_caller_run_past_page_one() -> None:
+	body = _run_body(_step(_wf(), "- name: Cleanup test artifacts"))
+	start = body.index('elif [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then')
+	fallback = body[start:body.index("# Close issue", start)]
+	script = "set -euo pipefail\nif false; then :\n" + fallback + "\n"
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		gh = bin_dir / "gh"
+		gh.write_text(_FAKE_RUNS_GH, encoding="utf-8")
+		gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+			"FAKE_DIR": str(root),
+			"TEST_REPO": "o/r",
+			"ISSUE_NUMBER": "12",
+			"ISSUE_TITLE": "[E2E Smoke Test] canary",
+			"IMPL_CREATED_AFTER_INPUT": "2026-11-01T00:00:00Z",
+			"GITHUB_RUN_ID": "1",
+		}
+		proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
+		assert proc.returncode == 0, proc.stdout + proc.stderr
+		calls = (root / "calls").read_text(encoding="utf-8").splitlines()
+		cancels = [c for c in calls if "/cancel" in c]
+		assert cancels == ["api -X POST repos/o/r/actions/runs/41/cancel"], calls
+		assert not [c for c in calls if "implement.yml/runs" in c]
 
 
 def main() -> int:

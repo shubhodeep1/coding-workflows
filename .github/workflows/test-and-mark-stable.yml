@@ -3745,8 +3745,18 @@ jobs:
               if [ -n "${IMPL_CREATED_AFTER_INPUT:-}" ]; then
                 LATE_IMPL_CREATED_FILTER="&created=>${IMPL_CREATED_AFTER_INPUT}"
               fi
-              LATE_IMPL_RUN_IDS="$(gh api "repos/${TEST_REPO}/actions/workflows/implement.yml/runs?per_page=100${LATE_IMPL_CREATED_FILTER}" \
-                --jq '[.workflow_runs[] | select(.display_title == env.ISSUE_TITLE) | select(.status != "completed") | .id] | .[]' 2>/dev/null || true)"
+              # implement.yml is workflow_call-only and owns no runs (they are
+              # filed under internal-implement.yml / ai-implement.yml), so list
+              # the repo-wide runs with Phase 3b's "Implement" name match, newest
+              # first, up to 10 pages; stop at a short or failed page.
+              LATE_IMPL_RUN_IDS=""
+              for LATE_IMPL_PAGE in 1 2 3 4 5 6 7 8 9 10; do
+                LATE_IMPL_PAGE_JSON="$(gh api "repos/${TEST_REPO}/actions/runs?per_page=100&page=${LATE_IMPL_PAGE}${LATE_IMPL_CREATED_FILTER}" 2>/dev/null)" \
+                  && printf '%s' "${LATE_IMPL_PAGE_JSON}" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1 \
+                  || { echo "::warning::Implement run lookup failed for issue #${ISSUE_NUMBER} (page ${LATE_IMPL_PAGE})"; break; }
+                LATE_IMPL_RUN_IDS+=" $(printf '%s' "${LATE_IMPL_PAGE_JSON}" | jq -r '.workflow_runs[] | select((.name // "") | test("Implement"; "i")) | select(.display_title == env.ISSUE_TITLE) | select(.status != "completed") | .id' 2>/dev/null || true)"
+                [ "$(printf '%s' "${LATE_IMPL_PAGE_JSON}" | jq -r '.workflow_runs | length' 2>/dev/null || echo 0)" -ge 100 ] 2>/dev/null || break
+              done
               for LATE_IMPL_RUN_ID in ${LATE_IMPL_RUN_IDS}; do
                 [[ "${LATE_IMPL_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || continue
                 if gh api -X POST "repos/${TEST_REPO}/actions/runs/${LATE_IMPL_RUN_ID}/cancel" >/dev/null 2>&1; then
@@ -4868,6 +4878,12 @@ jobs:
                 echo "  deleted branch ${PROJECT_BRANCH}"
                 break
               fi
+              # A ref that is not there (never pushed, or already gone) is no failure.
+              PROJECT_BRANCH_PROBE_ERR="$(gh api "repos/${TEST_REPO}/git/ref/heads/${PROJECT_BRANCH}" 2>&1 >/dev/null || true)"
+              if [[ "${PROJECT_BRANCH_PROBE_ERR}" == *"HTTP 404"* ]]; then
+                echo "  branch ${PROJECT_BRANCH} already absent"
+                break
+              fi
               if [ "${attempt}" -eq 3 ]; then
                 echo "::warning::Could not delete branch ${PROJECT_BRANCH} after 3 attempts"
                 break
@@ -5488,8 +5504,18 @@ jobs:
           # lookup below cannot see yet (#8346). Scoped to runs newer than
           # the pre-create snapshot whose display_title is this issue's title.
           if [ -n "${ALT_ISSUE_TITLE:-}" ] && [[ "${PRE_IMPLEMENT:-0}" =~ ^[0-9]+$ ]]; then
-            ALT_ACTIVE_IMPL_IDS=$(gh api "repos/${TEST_REPO}/actions/workflows/implement.yml/runs?per_page=20" \
-              --jq "[.workflow_runs[] | select(.id > ${PRE_IMPLEMENT:-0}) | select(.display_title == env.ALT_ISSUE_TITLE) | select(.status != \"completed\") | .id] | .[]" 2>/dev/null || echo "")
+            # implement.yml is workflow_call-only and owns no runs, so page the
+            # repo-wide listing (name match "Implement", like Phase 3b), newest
+            # first, up to 5 pages; stop at a short or failed page, or one that
+            # reaches the pre-create snapshot id.
+            ALT_ACTIVE_IMPL_IDS=""
+            for ALT_IMPL_PAGE in 1 2 3 4 5; do
+              ALT_IMPL_PAGE_JSON=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=100&page=${ALT_IMPL_PAGE}" 2>/dev/null) \
+                && printf '%s' "${ALT_IMPL_PAGE_JSON}" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1 \
+                || { echo "::warning::Implement run lookup failed for issue #${ISSUE_NUMBER} (page ${ALT_IMPL_PAGE})"; break; }
+              ALT_ACTIVE_IMPL_IDS+=" $(printf '%s' "${ALT_IMPL_PAGE_JSON}" | jq -r ".workflow_runs[] | select(.id > ${PRE_IMPLEMENT:-0}) | select((.name // \"\") | test(\"Implement\"; \"i\")) | select(.display_title == env.ALT_ISSUE_TITLE) | select(.status != \"completed\") | .id" 2>/dev/null)"
+              printf '%s' "${ALT_IMPL_PAGE_JSON}" | jq -e "(.workflow_runs | length) >= 100 and all(.workflow_runs[]; .id > ${PRE_IMPLEMENT:-0})" >/dev/null 2>&1 || break
+            done
             for RUN_ID_TO_CANCEL in ${ALT_ACTIVE_IMPL_IDS}; do
               [[ "${RUN_ID_TO_CANCEL}" =~ ^[1-9][0-9]*$ ]] || continue
               gh api -X POST "repos/${TEST_REPO}/actions/runs/${RUN_ID_TO_CANCEL}/cancel" >/dev/null 2>&1 \

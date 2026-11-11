@@ -222,6 +222,8 @@ def test_alt_model_cleanup_cancels_only_this_issues_active_implement_runs() -> N
 	assert "PRE_IMPLEMENT: ${{ steps.create.outputs.pre_implement_run_id }}" in step
 	assert "select(.display_title == env.ALT_ISSUE_TITLE)" in step
 	assert 'select(.status != \\"completed\\")' in step
+	assert "actions/workflows/implement.yml/runs" not in step
+	assert "actions/runs?per_page=100&page=${ALT_IMPL_PAGE}" in step
 	assert step.index("/actions/runs/${RUN_ID_TO_CANCEL}/cancel") < step.index('close_with_retry "pulls" "${PR_NUMBER}"')
 
 
