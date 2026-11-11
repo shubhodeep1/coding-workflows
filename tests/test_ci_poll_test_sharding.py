@@ -4521,12 +4521,13 @@ def run_single_file_step_judge(step_run: str, files: dict[int, dict[str, str]]) 
 		)
 
 
-def run_single_file_step_body(step_run: str, fake_modules: list[str], tmp: str) -> subprocess.CompletedProcess:
+def run_single_file_step_body(step_run: str, fake_modules: list[str], tmp: str, *, prelude: str = "") -> subprocess.CompletedProcess:
 	"""Run the whole single-file step body with fake modules.
 
 	The module array points at `fake_modules`, temp files go to `tmp`, and
 	the 30s heartbeat interval becomes 0.2s. Everything else is the shipped
-	shell, run the way GitHub runs a bash step.
+	shell, run the way GitHub runs a bash step. `prelude` is shell put before
+	the body, for example a function that shadows `date`.
 	"""
 	array_line = SINGLE_FILE_STEP_ARRAY_RE.search(step_run).group(0)
 	script = step_run.replace(array_line, "sf_modules=(" + " ".join(fake_modules) + ")")
@@ -4534,6 +4535,8 @@ def run_single_file_step_body(step_run: str, fake_modules: list[str], tmp: str) 
 	if "sleep 30 " not in script:
 		raise AssertionError("heartbeat interval `sleep 30 ` not found in the single-file step body")
 	script = script.replace("sleep 30 ", "sleep 0.2 ")
+	if prelude:
+		script = prelude.rstrip("\n") + "\n" + script
 	return subprocess.run(
 		["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
 		capture_output=True,
@@ -4671,6 +4674,49 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 				self.assertIn(error_line, out)
 				self.assertIn(f"| ::error::forged {failing}", out)
 				self.assertNotIn("CI_SUBTEST_HEARTBEAT", out[out.rindex(error_line):])
+
+	def test_clock_reads_epochrealtime_before_date(self) -> None:
+		# Issue #9315: on ubuntu-26.04 runners `date +%s%3N` (Rust coreutils)
+		# gave readings that went backwards, so the step printed negative
+		# elapsed_ms. The clock reads bash's EPOCHREALTIME first, the same as
+		# _orch_poll_cycle_now_ms in scripts/orchestrate_poll_process.sh, and
+		# keeps `date` only as the fallback for bash < 5.
+		clock = SINGLE_FILE_STEP_CLOCK_RE.search(self.run)
+		self.assertIsNotNone(clock)
+		line = clock.group(0)
+		self.assertIn("EPOCHREALTIME", line)
+		self.assertIn("date +%s%3N", line)
+		self.assertLess(line.index("EPOCHREALTIME"), line.index("date +%s%3N"))
+
+	def test_full_body_elapsed_ignores_a_date_clock_that_goes_backwards(self) -> None:
+		# Modelled on test_cycle_summary_elapsed_ignores_a_date_clock_that_goes_backwards
+		# (tests/test_orchestrate_poll_cycle_summary.py). `date` is shadowed by
+		# a clock that goes down by 100 ms on every call. The count lives in a
+		# file because `date` runs inside $(...) and background subshells. The
+		# step-start read is the first call, so on the old `date` clock every
+		# heartbeat and END elapsed_ms would be negative.
+		with tempfile.TemporaryDirectory(prefix="test_sf_body_clock_") as tmp:
+			markers = Path(tmp, "markers")
+			markers.mkdir()
+			fakes = []
+			for n in range(3):
+				fake = Path(tmp, f"fake_module_{n}.py")
+				fake.write_text(SINGLE_FILE_FAKE_MODULE.format(markers=str(markers), n=n, rc=0), encoding="utf-8")
+				fakes.append(str(fake))
+			calls = Path(tmp, "fake_date_calls")
+			prelude = (
+				"date() { "
+				f"echo x >> '{calls}'; "
+				f"local fake_date_n; fake_date_n=\"$(wc -l < '{calls}')\"; "
+				"echo \"$(( 1700000010000 - fake_date_n * 100 ))\"; "
+				"}\n"
+			)
+			result = run_single_file_step_body(self.run, fakes, tmp, prelude=prelude)
+			out = result.stdout
+			self.assertEqual(result.returncode, 0, out + result.stderr)
+			self.assertRegex(out, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=\d+\n")
+			self.assertEqual(len(re.findall(r"CI_SUBTEST_END subtest=\S+ elapsed_ms=\d+ rc=0\n", out)), 3, out)
+			self.assertNotIn("elapsed_ms=-", out)
 
 if __name__ == "__main__":
 	unittest.main()
