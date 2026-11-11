@@ -5,13 +5,24 @@
   "entry_id": "processed_command_9214_6798487577_approved",
   "issue_number": 9214,
   "metadata": {
+    "branch": "ai/issue-9214",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/9214-ci-wiring-part2-to-release-job.md",
+      "tests/test_ci_poll_test_sharding.py"
+    ],
+    "issue_number": 9214,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9214",
+    "pr_number": 9268,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9268",
+    "run_attempt": "1",
+    "run_id": "43038705768",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43038705768"
   },
   "run_attempt": 1,
   "run_id": "43038705768",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-11T14:31:08Z",
+  "status": "completed",
+  "timestamp": "2026-11-11T15:15:29Z",
   "workflow": "implement"
 }
