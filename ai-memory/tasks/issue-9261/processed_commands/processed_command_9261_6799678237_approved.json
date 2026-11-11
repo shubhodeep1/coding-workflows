@@ -5,13 +5,26 @@
   "entry_id": "processed_command_9261_6799678237_approved",
   "issue_number": 9261,
   "metadata": {
+    "branch": "ai/issue-9261",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/9261-prompt-invalid-utf8.md",
+      "scripts/gh_helpers.sh",
+      "scripts/render_prompt.py",
+      "tests/test_prompt_invalid_utf8.py"
+    ],
+    "issue_number": 9261,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9261",
+    "pr_number": 9283,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9283",
+    "run_attempt": "1",
+    "run_id": "43047025053",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43047025053"
   },
   "run_attempt": 1,
   "run_id": "43047025053",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-11T15:49:20Z",
+  "status": "completed",
+  "timestamp": "2026-11-11T16:28:25Z",
   "workflow": "implement"
 }
