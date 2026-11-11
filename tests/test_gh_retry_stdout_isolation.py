@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -264,6 +265,77 @@ def _closed_pipe_diagnostics(tmp_path: Path, env: dict[str, str]) -> str:
 	)
 	proc = subprocess.run(["bash", "-c", probe], env=env, capture_output=True, text=True, timeout=60)
 	return (proc.stdout + proc.stderr).strip()
+
+
+CLOSED_READER_BODY = (
+	"gh_retry gh api repos/o/r | head -c 1 > /dev/null\n"
+	'echo "rc=${PIPESTATUS[0]}"'
+)
+
+
+def test_closed_reader_status_does_not_depend_on_external_cat(tmp_path: Path) -> None:
+	"""Issue #9225: Rust coreutils' cat (ubuntu-26.04) exits 0 on a closed pipe.
+
+	A shim ``cat`` that always exits 0 stands in for it; gh_retry must still
+	report the undelivered output as a non-zero status on any host.
+	"""
+	real_cat = shutil.which("cat")
+	assert real_cat, "cat not found on PATH"
+	env = _setup(tmp_path, [("x" * (1024 * 1024), "", 0)])
+	shim_dir = tmp_path / "cat_shim"
+	shim_dir.mkdir()
+	shim = shim_dir / "cat"
+	shim.write_text(
+		f'#!/usr/bin/env bash\n"{real_cat}" "$@" 2>/dev/null\nexit 0\n', encoding="utf-8",
+	)
+	shim.chmod(0o755)
+	env["PATH"] = f"{shim_dir}{os.pathsep}{env['PATH']}"
+	result = _run(tmp_path, env, CLOSED_READER_BODY)
+	assert _calls(tmp_path) == 1, result.stderr
+	rc_line = result.stdout.strip()
+	assert rc_line.startswith("rc=") and rc_line != "rc=0", (rc_line, result.stderr)
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_closed_reader_with_sigpipe_ignored_reports_nonzero(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [("x" * (1024 * 1024), "", 0)])
+	result = _run(tmp_path, env, "trap '' PIPE\n" + CLOSED_READER_BODY)
+	assert _calls(tmp_path) == 1, result.stderr
+	rc_line = result.stdout.strip()
+	assert rc_line.startswith("rc=") and rc_line != "rc=0", (rc_line, result.stderr)
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_success_replay_preserves_trailing_newlines_byte_exact(tmp_path: Path) -> None:
+	# Inner and trailing newlines, a CR, a literal backslash, a tab and
+	# printf format specifiers, which must all come through unchanged.
+	payload = "a\n\n  b\\n\tc\r\n%s %d\n\n\n"
+	env = _setup(tmp_path, [(payload, "", 0)])
+	out_file = tmp_path / "out.bin"
+	piped_file = tmp_path / "piped.bin"
+	result = _run(
+		tmp_path,
+		env,
+		f"gh_retry gh api repos/o/r > '{out_file}'; echo \"rc=$?\"\n"
+		f"gh_retry gh api repos/o/r | {{ cat > '{piped_file}'; }}; echo \"rc=${{PIPESTATUS[0]}}\"",
+	)
+	assert result.stdout == "rc=0\nrc=0\n", result.stderr
+	expected = payload.encode("utf-8")
+	assert out_file.read_bytes() == expected
+	assert piped_file.read_bytes() == expected
+	assert _calls(tmp_path) == 2
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_success_replay_with_nul_byte_falls_back_to_cat(tmp_path: Path) -> None:
+	payload = "before\x00after\n"
+	env = _setup(tmp_path, [(payload, "", 0)])
+	out_file = tmp_path / "out.bin"
+	result = _run(tmp_path, env, f"gh_retry gh api repos/o/r > '{out_file}'; echo \"rc=$?\"")
+	assert result.stdout.strip() == "rc=0", result.stderr
+	assert out_file.read_bytes() == payload.encode("utf-8")
+	assert _calls(tmp_path) == 1
+	assert _leftover_temp_files(tmp_path) == []
 
 
 def _inline_gh_retry(step_name: str) -> str:
