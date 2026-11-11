@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the fix go, given that `gh_retry`'s comment (`scripts/gh_helpers.sh:1196-1198`) promises \"If the successful attempt's output cannot be delivered (the reader closed the pipe), the copy's non-zero status is returned and the command is not re-run\", and that promise is currently broken on ubuntu-26.04 runners?\nChoices:\n- A: Fix the helper. Change the successful-attempt copy in `gh_retry`, and the matching copy in `gh_retry_to_file` if it has the same problem, so that an undelivered output returns non-zero whichever coreutils is installed. Keep the documented contract and the test's `rc != 0` assertion as they are. Planning picks the copy method. (RECOMMENDED)\n- B: Fix only the test. Leave `scripts/gh_helpers.sh` unchanged, change the test to require only that the command is not re-run (`_calls == 1`), and accept `rc=0` when `cat` is uutils. The non-zero-status part of the comment would be reworded as best-effort. This is a smaller change but weakens what the contract guarantees in production.\nSources:\n- [uutils/coreutils #8919: SIGPIPE handling is missing in many utilities](https://github.com/uutils/coreutils/issues/8919)\n- [safeinsights/canopycms #1106: uutils cat reported 0 with input unread (Ubuntu 26.04)](https://github.com/safeinsights/canopycms/issues/1106)\n- [FRIKKern/barkpark PR #25075: pipefail self-test uses GNU cat when the box's cat is uutils](https://github.com/FRIKKern/barkpark/pull/25075)\n- [michakraus/ResearchHarness PR #81: stub's large diff dies of SIGPIPE without GNU cat](https://github.com/michakraus/ResearchHarness/pull/81)",
+  "fingerprint": "f35b980eb198497f4dde1992561e2e46353035da4224115b4df247457f99ff71",
+  "lineage": {
+    "issue_number": 9258,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43041618188",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43041618188",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111145132_2d271d8e4f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9258,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43041618188"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9258 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T14:51:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
