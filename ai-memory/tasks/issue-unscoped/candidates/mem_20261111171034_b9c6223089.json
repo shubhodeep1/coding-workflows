@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py::4669 | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: orchestrate-poll shard 3 fails the assertion requiring `elapsed_ms=\\d+` because a negative elapsed_ms (`elapsed_ms=-94`) was produced by run_single_file_step_body's wall-clock subtraction.\n  WHY: The reviewer says the failure is inherited from the merge-base and outside this PR's diff, but it fails the lint aggregate and blocks merge. The source gives severity as MAJOR, mapped here to high.\n- scripts/verify_integration_fingerprints.py:1624-1626 | severity=high | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: orchestrate-poll shard 1 fails closed and refuses the [ai-merge-resolve] commit because resolver output reverted a sub-issue's intentional deletion (must_not_contain pattern `gh\\ api\\ \\-H` reappeared in .github/workflows/implement.yml for issue #1059 / PR #1066).\n  WHY: The reviewer says the failure is inherited and unrelated to the diff, but it fails the PR's lint aggregate and blocks merge. The source gives severity as MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ci_poll_test_sharding.py::4669 | severity=MAJOR | confidence=4\n  PROBLEM: orchestrate-poll shard 3 on the head SHA failed this assertion because a negative elapsed_ms was produced (`CI_SUBTEST_END ... elapsed_ms=-94`); the shard job fails, and the PR's lint job fails because it requires all `needs` jobs green.\n  WHY: The merge cannot go green while this inherited (merge-base, per the pre-push gate) failure persists. It is outside this PR's diff, so the editor must classify it inherited rather than patch it here.\n- scripts/verify_integration_fingerprints.py:1624-1626 | severity=MAJOR | confidence=3\n  PROBLEM: orchestrate-poll shard 1 fails closed and refuses the [ai-merge-resolve] commit because resolver output reverted a sub-issue's intentional deletion (must_not_contain pattern `gh\\ api\\ \\-H` reappeared in .github/workflows/implement.yml for issue #1059 / PR #1066).\n  WHY: The PR head cannot reach a green lint job while this inherited failure persists. Nothing in this PR's three changed files participates in that resolver path.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d523e08a6963c4d8f96be03c87c07bc615bf8fea67f47a7547ad6101950b2b9b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9264,
+    "run_id": "43043631379",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43043631379",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111171034_b9c6223089",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9264,
+    "run_id": "43043631379"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-11T17:10:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
