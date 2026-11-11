@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Should this issue also fix the `tests-hooks-and-orchestrator` failure (`test_closed_reader_does_not_rerun_a_successful_command`)? It lives in `scripts/gh_helpers.sh` (`gh_retry`), outside the listed affected files, and the job log points to the runner image's `cat` exiting 0 on a closed pipe, so it probably fails on any branch, not just PR #9011.\nChoices:\n- A: Yes. Fix it here alongside the guard-hook pair fix, so PR #9011's CI goes fully green. (RECOMMENDED)\n- B: No. Fix only the guard-hook pair (`tests-promote-stall-and-review`) here, and track the `gh_retry` failure in a separate issue.\n- C: No code change for it. Treat it as a runner-image problem and re-run CI after `main` fixes it.\nQ2: If the `gh_retry` failure is in scope (Q1:A), which behaviour should hold when the reader closes the pipe before all output is sent?\nChoices:\n- A: Keep the current test as it is: the command is not re-run, and `gh_retry` returns non-zero. Make the output re-send detect the closed pipe whichever version of `cat` the runner has. (RECOMMENDED)\n- B: Change the test to accept exit status 0 when the runner's `cat` hides the closed pipe, and keep only the \"not re-run\" check.\n**Note:** only applies with Q1:A. Ignore it for Q1:B or Q1:C.\nQ3: For `test_guard_hook_pairs_mirror_paired_live_copies`, which check should ship? The issue says not to weaken it to a subset check. The current version requires the registry pairs first, in order, and then allows extra `.claude/hooks/*` entries whose template file exists.\nChoices:\n- A: Bring the branch up to date with `main` (all 5 pairs in `PAIRED_LIVE_COPIES`) and go back to strict, same-order equality with `GUARD_HOOK_TEMPLATE_PAIRS`. (RECOMMENDED)\n- B: Keep the current check (registry pairs first, then extra entries that follow the `workflow-templates/<live path>` naming).\n- C: Strict equality, and shorten `GUARD_HOOK_TEMPLATE_PAIRS` to whatever the branch's registry lists (no `main` sync).",
+  "fingerprint": "aa607fad782275dd054f18c29b59d019f1d97c6bc16c094110d92954ca4d3a7b",
+  "lineage": {
+    "issue_number": 9298,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43081638092",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43081638092",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111191007_396363ad5c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9298,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43081638092"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9298 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T19:10:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
