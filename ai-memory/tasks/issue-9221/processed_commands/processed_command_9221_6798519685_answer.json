@@ -1,0 +1,14 @@
+{
+  "actor": "shubhodeep1",
+  "command": "answer",
+  "comment_id": 6798519685,
+  "entry_id": "processed_command_9221_6798519685_answer",
+  "issue_number": 9221,
+  "metadata": {},
+  "run_attempt": 1,
+  "run_id": "43038915138",
+  "schema_version": "processed_command_entry.v1",
+  "status": "claimed",
+  "timestamp": "2026-11-11T14:33:08Z",
+  "workflow": "plan"
+}
