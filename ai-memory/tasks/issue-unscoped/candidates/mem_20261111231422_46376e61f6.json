@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:543-813 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `tests-hooks-and-orchestrator` check failed on PR head 72ada0ae1a74bb476cc0fbae1b5a1d41173df214, which turns the aggregate `lint` job red. The captured log tail stops inside `tests/test_lint_pr_body_auto_close.py` output and shows no failing assertion, traceback or exit-code line.\n  WHY: The red required check blocks merge, and the failure cannot be mapped to the PR diff without the full log of job 130730575802 or a re-run. Severity disagreement: openai_gpt-6-luna=BLOCKER (critical), anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash=MAJOR (high), google_gemini-3_1-flash-lite stated no severity. Confidence disagreement: 5 from gemini and luna, 2 from sonnet and glm.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cIf `${GITHUB_EVENT_NAME}` is `pull_request` or `pull_request_target` and `${GITHUB_EVENT_PATH}` is a readable file, read `.pull_request.head.sha`.\u201d\n  expected_change_site: `scripts/workflow_failure_heal_autofix_report.sh`, run-head selection.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The run-head selection at lines 366\u2013375 accepts only `GITHUB_EVENT_NAME=pull_request`. The test at `tests/test_workflow_failure_heal.py:5277\u20135278` checks that `pull_request_target` keeps the PR head instead of using the event head.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:job `tests-hooks-and-orchestrator` (line 543); last visible step \"PR body auto-close lint unit tests\" (lines 806-813, `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py`) | severity=MAJOR | confidence=2\n  PROBLEM: The check-run `tests-hooks-and-orchestrator` failed on head 72ada0ae1a74bb476cc0fbae1b5a1d41173df214, so the `lint` aggregate is red. The log tail stops inside the lint unit test output. The `##[error][lint_pr_body_auto_close] ... #2734` lines are fixture output. The tail has no failing assertion, traceback or exit-code line. The test does not read any file this PR touches, and the PR's changed tests run in `tests-heal-plan-and-validation`, which passed.\n  WHY: The required CI gate stays red until someone finds the failing step from the full log of job 130730575802 or a re-run. Editing PR code would not fix it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:Job lint / Job tests-hooks-and-orchestrator | confidence=5\n  PROBLEM: CI check-runs failed on the PR head, blocking the merge gate.\n  WHY: The aggregate CI failure blocks merge. The failing step cannot be mapped to the PR's diff from the captured log tail and may be an infrastructure issue or a flaky test.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:`tests-hooks-and-orchestrator` job, line 543; PR check run 43080236530 | severity=BLOCKER | confidence=5\n  PROBLEM: The PR\u2019s `tests-hooks-and-orchestrator` check failed, which fails the aggregate `lint` check. The log tail shows no failing assertion or final test result.\n  WHY: CI reports a failed check on this PR head, so the merge gate stays red. The failing assertion has to be found in the complete job log.\n- TASK_GAP\n  Requirement: \u201cIf `${GITHUB_EVENT_NAME}` is `pull_request` or `pull_request_target` and `${GITHUB_EVENT_PATH}` is a readable file, read `.pull_request.head.sha`.\u201d\n  Expected change site: `scripts/workflow_failure_heal_autofix_report.sh`, run-head selection.\n  Evidence of absence: The run-head selection at lines 366\u2013375 accepts only `GITHUB_EVENT_NAME=pull_request`. The test at `tests/test_workflow_failure_heal.py:5277\u20135278` explicitly checks that `pull_request_target` keeps the PR head, rather than using the event head as the issue\u2019s approach specifies.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:job `tests-hooks-and-orchestrator` (run 43080236530, job 130730575802), aggregated by the `lint` job at .github/workflows/ci.yml:543-813 | severity=MAJOR | confidence=2\n  PROBLEM: PR head 72ada0ae1a74bb476cc0fbae1b5a1d41173df214 is red on `tests-hooks-and-orchestrator` and therefore on `lint`. The log tail ends partway through `python3 tests/test_lint_pr_body_auto_close.py` output (8 of 22 PASS lines visible; the `#2734` error lines are fixture output) and has no failing assertion or exit-code line. Neither blamed test (tests/test_review_autofix_provider_outage_contract.py:121-127, tests/test_workflow_checkout_integration_ref_audit.py:82-88) reads a file this PR touches.\n  WHY: The failing assertion is beyond the captured log tail and cannot be mapped to the diff. The red required check blocks merge.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e3a0c543b4928b391594a92a29f153db7b3697c6381419ab88a3297bc0963245",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9278,
+    "run_id": "43099426481",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43099426481",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111231422_46376e61f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9278,
+    "run_id": "43099426481"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T23:14:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
