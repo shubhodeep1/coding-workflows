@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Should this fix also make the heartbeat assertion at `tests/test_ci_poll_test_sharding.py:4662` (`elapsed_ms=\\d+`) accept negative values (`-?\\d+`)? That would match the `CI_SUBTEST_END` assertion at line 4661, which already allows a sign. The issue says to do this only if a rerun fails again, but the pipeline cannot rerun and decide. Open PRs #9057 and #9268 also edit this test file.\nChoices:\n- A: Yes. Change only the line 4662 regex to `-?\\d+` in this PR, and leave the shipped step body in `ci.yml` untouched. (RECOMMENDED)\n- B: No. Treat it as a one-off flake, change only the `ci.yml` wiring, and rely on a rerun.\nQ2: A comment shows the `tests-hooks-and-orchestrator` failure is `tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command` on line 242. On the Rust-coreutils (uutils) runner, `gh_retry`'s internal `cat` exits 0 (`inner_cat=0`) after the reader closes the pipe, so the undelivered output is reported as `rc=0`. PR #9273 did not cause this, and the issue's affected files list only `ci.yml`. Should this fix address it?\nChoices:\n- A: No. Keep this issue to the CI wiring (plus Q1), and leave the `gh_retry` closed-pipe behaviour on ubuntu-26.04 to a separate issue or the existing runner-breakage work (commit a638db8). (RECOMMENDED)\n- B: Yes. Also harden `gh_retry`'s closed-reader detection in the shared helper so it reports a non-zero status on uutils `cat`, and keep the test assertion strict.\n- C: Yes, but only in the test: skip or relax the assertion when the diagnostics detect uutils `cat`. **Note:** this weakens the check that undelivered output is reported as a failure.",
+  "fingerprint": "c73811a645e2afd76d3a8838068b5ebe392a55d50b6cf425fac9e4492d8979ec",
+  "lineage": {
+    "issue_number": 9300,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43082253870",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43082253870",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111191600_d9f5a88d82",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9300,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43082253870"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9300 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T19:16:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
