@@ -5559,17 +5559,38 @@ case "${DIAG_STATUS}" in
     # duplicate. Fail-open on list/jq failure so a transient API blip
     # does not block legitimate fix-up creation.
     EXISTING_FIXUP_NUM=""
-    DEDUPE_LIST_JSON="$(gh_retry gh issue list \
+    # Dedupe lookup bound (BUG-003): `gh issue list` paginates internally
+    # up to this many open managed issues; --limit below reads it.
+    FIXUP_DEDUPE_LIST_LIMIT=1000
+    # Record lookup / parse outcome so a failed or unparsable lookup is
+    # distinguishable from a confirmed miss in the log. Still fail-open.
+    # Warnings carry only tracker/cycle/count/limit, never issue bodies.
+    FIXUP_DEDUPE_LOOKUP_OK=true
+    if ! DEDUPE_LIST_JSON="$(gh_retry gh issue list \
       --repo "${GITHUB_REPOSITORY}" \
       --state open \
       --label "ai:orchestrator-managed" \
-      --limit 200 \
-      --json number,body 2>/dev/null || true)"
+      --limit "${FIXUP_DEDUPE_LIST_LIMIT}" \
+      --json number,body 2>/dev/null)"; then
+      FIXUP_DEDUPE_LOOKUP_OK=false
+      DEDUPE_LIST_JSON=""
+      echo "::warning::Fix-up dedupe lookup failed for tracker #${TRACKING_ISSUE_RAW} (cycle ${VALIDATION_CYCLE}); proceeding with fix-up creation (fail-open)."
+    fi
     if [ -n "${DEDUPE_LIST_JSON}" ]; then
-      EXISTING_FIXUP_NUM="$(printf '%s' "${DEDUPE_LIST_JSON}" | jq -r \
+      if ! EXISTING_FIXUP_NUM="$(printf '%s' "${DEDUPE_LIST_JSON}" | jq -r \
         --arg lid "Local ID: \`${CONSOLIDATED_LOCAL_ID}\`" \
         --arg trk "Tracking issue: #${TRACKING_ISSUE_RAW}" \
-        '[.[] | select(((.body // "") as $b | ($b | contains($lid)) and ($b | contains($trk))))] | .[0].number // empty' 2>/dev/null || true)"
+        '[.[] | select(((.body // "") as $b | ($b | contains($lid)) and ($b | contains($trk))))] | .[0].number // empty' 2>/dev/null)"; then
+        FIXUP_DEDUPE_LOOKUP_OK=false
+        EXISTING_FIXUP_NUM=""
+        echo "::warning::Fix-up dedupe response could not be parsed for tracker #${TRACKING_ISSUE_RAW} (cycle ${VALIDATION_CYCLE}); proceeding with fix-up creation (fail-open)."
+      fi
+      if [ "${FIXUP_DEDUPE_LOOKUP_OK}" = "true" ] && [ -z "${EXISTING_FIXUP_NUM}" ]; then
+        FIXUP_DEDUPE_LIST_COUNT="$(printf '%s' "${DEDUPE_LIST_JSON}" | jq -r 'length' 2>/dev/null || true)"
+        if [[ "${FIXUP_DEDUPE_LIST_COUNT}" =~ ^[0-9]+$ ]] && [ "${FIXUP_DEDUPE_LIST_COUNT}" -ge "${FIXUP_DEDUPE_LIST_LIMIT}" ]; then
+          echo "::warning::Fix-up dedupe lookup returned ${FIXUP_DEDUPE_LIST_COUNT} issues (limit ${FIXUP_DEDUPE_LIST_LIMIT}); an older matching fix-up may be outside the window; proceeding."
+        fi
+      fi
     fi
     if [ -n "${EXISTING_FIXUP_NUM}" ] && [[ "${EXISTING_FIXUP_NUM}" =~ ^[0-9]+$ ]]; then
       echo "Dedupe: open fix-up issue #${EXISTING_FIXUP_NUM} already exists for tracker #${TRACKING_ISSUE_RAW} at cycle ${VALIDATION_CYCLE}; skipping create."

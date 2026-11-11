@@ -1082,7 +1082,7 @@ def test_wrapper_mounts_node_modules_read_only_on_both_trees(tmp_path):
 	assert f"src={node_modules.resolve()},dst=/baseline/node_modules,readonly" in run_line
 
 
-# --- run --tests-file (issue #8461) -----------------------------------------
+# --- run --tests-only (issue #8461) -----------------------------------------
 
 TF_PR_A = "def test_ok():\n\tpass\n\n\ndef test_new_break():\n\tassert False\n\n\ndef test_old_break():\n\tassert False\n"
 TF_BASE_A = "def test_ok():\n\tpass\n\n\ndef test_new_break():\n\tpass\n\n\ndef test_old_break():\n\tassert False\n"
@@ -1097,7 +1097,7 @@ def _tests_file_run(tmp_path: Path, root: Path, lines: str | bytes, baseline: Pa
 	else:
 		listing.write_text(lines, encoding="utf-8")
 	out = tmp_path / "result.json"
-	argv = ["run", "--repo-root", str(root), "--changed-files-file", str(changed_file), "--tests-file", str(listing),
+	argv = ["run", "--repo-root", str(root), "--changed-files-file", str(changed_file), "--tests-only", str(listing),
 		"--timeout-minutes", "2", "--shards", "2", "--out", str(out)]
 	if baseline is not None:
 		argv += ["--baseline-tree", str(baseline)]
@@ -1139,7 +1139,7 @@ def test_tests_file_bypasses_select_tests(tmp_path, monkeypatch):
 	root = _repo(tmp_path, {"tests/test_ok.py": "", "lib/zz.py": "import os\n", "tests/test_ci_wires_every_test_file.py": ""})
 
 	def boom(*args, **kwargs):
-		raise AssertionError("select_tests must not run with --tests-file")
+		raise AssertionError("select_tests must not run with --tests-only")
 
 	monkeypatch.setattr(gate, "select_tests", boom)
 	result = _tests_file_run(tmp_path, root, "tests/test_ok.py\n", changed="M\tlib/zz.py\nA\ttests/test_new.py\n")
@@ -1232,11 +1232,11 @@ def test_wrapper_passes_tests_file_read_only(tmp_path):
 	).replace("__CAP__", str(capture)), encoding="utf-8")
 	listing = tmp_path / "list, with comma.txt"
 	listing.write_text("tests/test_a.py::test_x\n", encoding="utf-8")
-	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-file", str(listing))
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-only", str(listing))
 	assert proc.returncode == 0, proc.stderr
 	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
 	assert gate.re.search(r"type=bind,src=\S+/tests\.txt,dst=/gate/tests\.txt,readonly", run_line)
-	assert "--tests-file /gate/tests.txt" in run_line
+	assert "--tests-only /gate/tests.txt" in run_line
 	assert "--changed-files-file /results/changed.txt" in run_line
 	assert "comma" not in run_line
 	for flag in ("--network none", "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges"):
@@ -1253,7 +1253,7 @@ def test_wrapper_without_tests_file_adds_no_mount_or_flag(tmp_path):
 	proc, _ = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
 	assert proc.returncode == 0, proc.stderr
 	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
-	assert "/gate/tests.txt" not in run_line and "--tests-file" not in run_line
+	assert "/gate/tests.txt" not in run_line and "--tests-only" not in run_line
 
 
 @pytest.mark.parametrize("kind,reason", [
@@ -1281,7 +1281,7 @@ def test_wrapper_rejects_bad_tests_file(tmp_path, kind, reason):
 		Path(value).write_bytes(b"#" * 262145)
 	else:
 		value = ""
-	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-file", value)
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-only", value)
 	assert proc.returncode == 0
 	result = json.loads((out / "result.json").read_text(encoding="utf-8"))
 	assert result["status"] == "unverified" and result["reason"] == reason
@@ -1314,13 +1314,13 @@ def test_tests_file_empty_value_never_falls_back_to_selection(tmp_path, monkeypa
 	root = _repo(tmp_path, {"tests/test_ok.py": ""})
 
 	def boom(*args, **kwargs):
-		raise AssertionError("an empty --tests-file must not run the selection")
+		raise AssertionError("an empty --tests-only must not run the selection")
 
 	monkeypatch.setattr(gate, "select_tests", boom)
 	changed = tmp_path / "changed.txt"
 	changed.write_text("M\ttests/test_ok.py\n", encoding="utf-8")
 	out = tmp_path / "result.json"
-	assert gate.main(["run", "--repo-root", str(root), "--changed-files-file", str(changed), "--tests-file", "", "--timeout-minutes", "2", "--out", str(out)]) == 0
+	assert gate.main(["run", "--repo-root", str(root), "--changed-files-file", str(changed), "--tests-only", "", "--timeout-minutes", "2", "--out", str(out)]) == 0
 	result = json.loads(out.read_text(encoding="utf-8"))
 	assert result["ran"] == []
 	assert result["unverified"] == [{"item": "tests_file", "reason": "tests_file_unreadable"}]
@@ -1372,17 +1372,38 @@ def test_tests_file_names_ignored_by_whole_file_runners_are_unverified(tmp_path)
 	units, unverified = gate.plan_units(override, {"affected_tests": [{"path": "tests/test_a.py", "reasons": ["tests_file"], "functions": ["test_x"]}]})
 	assert [u["id"] for u in units] == ["prepush_test_command"]
 	assert unverified == [{"item": "tests/test_a.py", "reason": "tests_file_names_ignored"}]
-	# Without --tests-file the selection's functions keep the old behaviour.
+	# Without --tests-only the selection's functions keep the old behaviour.
 	assert gate.plan_units(script, {"affected_tests": [{"path": "tests/test_m.py", "reasons": [], "functions": ["test_x"]}]})[1] == []
 
 
 def test_wrapper_trailing_tests_file_without_value_is_a_usage_error(tmp_path):
 	worktree = _worktree(tmp_path)
 	env, log = _wrapper_env(tmp_path)
-	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-file")
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-only")
 	assert proc.returncode == 0
 	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["reason"] == "usage_error"
 	assert not log.exists()
+
+
+@pytest.mark.parametrize("flag", ["--tests-file", "--expect-baseline-fail-file"])
+def test_wrapper_trailing_done_check_option_without_value_is_a_usage_error(tmp_path, flag):
+	# A trailing option used to loop forever in the parser (shift 2 failed).
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, flag)
+	assert proc.returncode == 0
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["reason"] == "usage_error"
+	assert not log.exists()
+
+
+def test_wrapper_empty_done_check_value_is_logged_as_rejected(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-file", "")
+	assert proc.returncode == 0, proc.stderr
+	assert "reason=tests_file_rejected" in proc.stderr + proc.stdout
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert "--tests-file" not in run_line and "dst=/inputs" not in run_line
 
 
 TF_PR_MIXED = "def test_added():\n\tpass\n\n\ndef test_old_break():\n\tassert False\n"
@@ -1508,6 +1529,44 @@ def test_run_cli_reads_the_target_files(tmp_path):
 	data = json.loads(out.read_text(encoding="utf-8"))
 	assert data["acceptance"] == {} and {"item": "tests_file", "reason": "tests_file_unreadable"} in data["unverified"]
 	assert data["status"] == "unverified"
+
+
+def test_run_cli_tests_file_adds_done_check_targets_to_the_selection(tmp_path):
+	# `--tests-file` (issue #8427 P3) adds to the affected-test selection;
+	# only `--tests-only` replaces it. The #8436 merge had `--tests-file`
+	# replace it, so a done-check skipped the change's own affected tests.
+	root = _repo(tmp_path, {"tests/test_a.py": "def test_ok():\n\tpass\n", "tests/test_b.py": "def test_ok():\n\tpass\n"})
+	changed, targets, out = tmp_path / "changed.txt", tmp_path / "tests.txt", tmp_path / "result.json"
+	changed.write_text("M\ttests/test_a.py\n", encoding="utf-8")
+	targets.write_text("tests/test_b.py\n", encoding="utf-8")
+	assert gate.main(["run", "--repo-root", str(root), "--changed-files-file", str(changed), "--tests-file", str(targets),
+		"--timeout-minutes", "2", "--out", str(out)]) == 0
+	data = json.loads(out.read_text(encoding="utf-8"))
+	# The selected test and the done-check target both ran (plus static checks).
+	assert sorted(r for r in data["ran"] if r.startswith("tests/")) == ["tests/test_a.py", "tests/test_b.py"]
+	assert data["acceptance"] == {"tests/test_b.py": {"head": "pass", "base": "not_run"}}
+	assert gate.main(["run", "--repo-root", str(root), "--changed-files-file", str(changed), "--tests-only", str(targets),
+		"--timeout-minutes", "2", "--out", str(out)]) == 0
+	assert json.loads(out.read_text(encoding="utf-8"))["ran"] == ["tests/test_b.py"]
+
+
+def test_wrapper_tests_file_is_a_done_check_input_not_a_test_list(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	listing = tmp_path / "tests.txt"
+	listing.write_text("tests/test_a.py\n", encoding="utf-8")
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-file", str(listing))
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert "--tests-file /inputs/tests.txt" in run_line and "dst=/inputs,readonly" in run_line
+	assert "/gate/tests.txt" not in run_line and "--tests-only" not in run_line
+	# A bad done-check file is logged and the run goes ahead, unlike --tests-only.
+	second = tmp_path / "second"
+	second.mkdir()
+	proc, out = _run_wrapper_with(second, worktree, env, "--tests-file", str(tmp_path / "missing.txt"))
+	assert proc.returncode == 0, proc.stderr
+	assert "reason=tests_file_rejected" in proc.stderr + proc.stdout
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "pass"
 
 
 def test_done_check_baseline_rerun_gets_the_floored_deadline(tmp_path, monkeypatch):
