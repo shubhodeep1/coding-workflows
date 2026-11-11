@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The renderer fix and its `--help` regression test are already on `main`. What should this issue deliver?\nChoices:\nA. Add only the cross-script guard under `tests/**`: one new parametrized test that imports each of the 35 `scripts/*.py` modules defining `build_parser()` and asserts `build_parser().format_help()` does not raise. Also add a `changelog.d/*.md` entry. No changes to `scripts/render_prompt.py` (RECOMMENDED)\nB. No code change: close this issue as already fixed by a638db8, along with duplicates #9234, #9238 and #9244, and leave PR #9245 for maintainers to close. Getting the fix to consumers then depends only on the next `stable` release.",
+  "fingerprint": "7bc3682a54e0c12962cb38831d0ced7bd21a8cb4747ccf583dfdfc4242372dd2",
+  "lineage": {
+    "issue_number": 9247,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43034969553",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43034969553",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111141117_d20412f8d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9247,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43034969553"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9247 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T14:11:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
