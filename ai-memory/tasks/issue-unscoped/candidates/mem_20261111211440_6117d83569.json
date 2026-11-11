@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:575 (job `tests-hooks-and-orchestrator`; ci.yml:869 merge-train step; aggregation ci.yml:3498-3523) | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The required `tests-hooks-and-orchestrator` job fails (check-run 130745334019, run 43084526304), which keeps the `lint` aggregate red.\n  WHY: Severity disagreement: openai_gpt-6-luna rated it BLOCKER at confidence 5; the other two rated it MAJOR at confidence 2 and tied it to inherited `tests/test_review_merge_train.py` failures not caused by this PR's hunks. The failing step is not shown in the log tail.\n- .github/workflows/ci.yml:308-324 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `sha256sum -c -` and `tar` run whether the download was skipped (cache hit) or done, so the structure is brittle if the directory or file is missing or empty.\n  WHY: The step would fail if `mkdir` or `cd` failed or the tarball were absent. The reviewer rated it NIT.\n- .github/workflows/ci.yml:326-328 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A cached tarball that is empty or corrupt makes `sha256sum` fail instead of triggering a re-download.\n  WHY: The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml (job `tests-hooks-and-orchestrator`, check-run 130745334019, run 43084526304; step at ci.yml:845/869) | severity=MAJOR | confidence=2\n  PROBLEM: The job failed, so `lint` is red. The log tail stops in `tests/test_lint_pr_body_auto_close.py` fixture output, and the next step runs `tests/test_review_merge_train.py`, which the pre-push gate lists as an inherited failure.\n  WHY: The diff does not touch the files involved, so the failure most likely comes from the base branch. The failing step is unconfirmed.\n- HARDENING: ci.yml:336 `Install actionlint` cache-hit branch. A bad cached tarball fails every later run until the `-v1` suffix is bumped by hand. Suggested fix: on a failed check, `rm -f \"${tarball}\"` and fall through to the curl loop (about 5 lines). HARDENING_RISK_SCORE: 1\n- All other categories: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:308-324 | severity=NIT | confidence=3\n  PROBLEM: `sha256sum -c -` and `tar` run whether the download succeeded or was skipped, so the structure is brittle.\n  WHY: If `mkdir` or `cd` fails or the directory is empty, `sha256sum` could run on an empty or missing file and fail the step.\n- .github/workflows/ci.yml:326-328 | severity=NIT | confidence=2\n  PROBLEM: An empty cached tarball (for example a partial write) makes `sha256sum` fail.\n  WHY: The step should re-download if the cached file is corrupted.\n- TASK_GAP:\n  Requirement: \"Cache the actionlint tarball in the `static-checks` job with `actions/cache@v5`. The key combines the pinned version and sha256.\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The reviewer says the implementation correctly adds the cache step and meets all requirements, so no gap exists.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:575 (`tests-hooks-and-orchestrator` job; required-job aggregation at lines 3498-3523) | severity=BLOCKER | confidence=5\n  PROBLEM: The current PR check run reports `tests-hooks-and-orchestrator` failed, and the `lint` job requires it to succeed.\n  WHY: `CI / lint` stays red on the reviewed head. The log tail does not identify the failing step, so the failure cannot be tied to a changed hunk.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:869-966 (step \"Merge-train and gh_helpers rate-limit tests\"; aggregate gate ci.yml:3476-3489; run 43084526304, job 130745334019, head 3a8f44e) | severity=MAJOR | confidence=2\n  PROBLEM: The required `tests-hooks-and-orchestrator` job fails, keeping `lint` red. The log tail ends in the passing lint fixture step, and the next step runs `tests/test_review_merge_train.py`. The pre-push gate lists those failures as inherited from the merge-base.\n  WHY: `static-checks` and `orchestrate-poll` pass, so no changed hunk runs in the failing job. The failure needs the full job log or a re-run.\n- HARDENING: ci.yml:336-337 `Install actionlint` cache-hit branch. A corrupt cached tarball fails every later run until the `-v1` suffix is bumped by hand. Suggested fix: after a failed check, `rm -f \"${tarball}\"` and re-enter the curl loop (about 6 lines). HARDENING_RISK_SCORE: 1\n- The reviewer checked the `assertRegex(key, r\"-v\\d+$\")` assertion at `tests/test_ci_actionlint_cache.py:228-229` and found no defect.\n- All other categories: NONE.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f459bfa1fe18a48e52f3a386fd8a9f32ded2e37d97a5a68f7bab3c554ad75bc8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9057,
+    "run_id": "43084526647",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43084526647",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111211440_6117d83569",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9057,
+    "run_id": "43084526647"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T21:14:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
