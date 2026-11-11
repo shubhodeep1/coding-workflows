@@ -377,7 +377,10 @@ def _workflow() -> str:
 
 def test_capture_sites_use_the_paged_lookup() -> None:
 	wf = _workflow()
-	assert wf.count('find_latest_scoped_run_field "${TEST_REPO}"') == 3
+	# Three e2e-smoke-test capture sites plus the alt-model deadline's
+	# title-scoped Clarify lookup (#9223).
+	assert wf.count('find_latest_scoped_run_field "${TEST_REPO}"') == 4
+	assert wf.count('find_latest_scoped_run_field "${TEST_REPO}" "${ALT_CREATED_AFTER}" "Clarif" "${ALT_ISSUE_TITLE}" id') == 1
 	# Clarify and Implement scope by the smoke issue's title, like Plan does.
 	assert wf.count('"${name_re}" "${ISSUE_TITLE:-}" "id"') == 2
 	for step_id in ("wait-clarify", "wait-implement"):

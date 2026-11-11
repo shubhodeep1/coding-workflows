@@ -975,6 +975,20 @@ jobs:
             exit 1
           }
 
+          # Prints the run ID of the last trusted comment (owner, member,
+          # collaborator or github-actions[bot]) starting with $1 whose Run: URL
+          # is in this repo; empty otherwise (#9223).
+          clarify_failure_comment_run_id() {
+            printf '%s' "${CLARIFY_COMMENTS_JSON}" | jq -r --arg repo "${TEST_REPO}" --arg prefix "$1" '[.[]? | objects
+              | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR" or .user.login? == "github-actions[bot]")
+              | (.body // "") | strings | select(startswith($prefix))
+              | capture("Run: https://github\\.com/(?<r>[^/ ]+/[^/ ]+)/actions/runs/(?<id>[0-9]{1,20})")
+              | select(.r == $repo) | .id] | last // ""' 2>/dev/null || echo ""
+          }
+          CLARIFY_COMMENTS_JSON=""
+          CLARIFY_FAILURE_CHECKED_ID=""
+          CLARIFY_CANCELLED_RUN_ID=""
+
           while true; do
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
@@ -1019,9 +1033,10 @@ jobs:
               exit 1
             fi
 
-            # Check for failure: look for error comments from bot
-            LAST_BOT_COMMENT=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=5&direction=desc" \
-              --jq '[.[] | select(.user.login == "github-actions[bot]")] | .[0].body // ""' || echo "")
+            # Check for failure: look for error comments from bot. The list is
+            # oldest first, so read 100 to see clarify's own failure comment (#9223).
+            CLARIFY_COMMENTS_JSON=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" || echo "")
+            LAST_BOT_COMMENT=$(printf '%s' "$CLARIFY_COMMENTS_JSON" | jq -r '[.[]? | objects | select(.user.login? == "github-actions[bot]")] | .[0].body // ""' 2>/dev/null || echo "")
             if echo "$LAST_BOT_COMMENT" | grep -qi "failed\|error\|clarification.*needed"; then
               if echo "$LAST_BOT_COMMENT" | grep -qi "clarification.*needed\|NEEDS_CLARIFICATION"; then
                 echo "::error::Clarify phase requested human clarification — test issue may not be clear enough"
@@ -1030,9 +1045,35 @@ jobs:
               fi
             fi
 
+            # Clarify's own failure comment (posted with GH_PAT): fail fast only
+            # when it names the newest scoped Clarify run (#9223). Bodies are
+            # untrusted: only a numeric run ID of this repo is read, never echoed.
+            CLARIFY_FAILURE_RUN_ID=$(clarify_failure_comment_run_id "AI clarification workflow failed for ")
+            CLARIFY_CANCELLED_RUN_ID=$(clarify_failure_comment_run_id "AI clarification workflow was cancelled/timed out for ")
+            if [[ "$CLARIFY_FAILURE_RUN_ID" =~ ^[0-9]+$ ]] && [ "$CLARIFY_FAILURE_RUN_ID" != "$CLARIFY_FAILURE_CHECKED_ID" ]; then
+              CLARIFY_FAILURE_CHECKED_ID="$CLARIFY_FAILURE_RUN_ID"
+              CLARIFY_LATEST_RUN_ID=$(capture_run_id "Clarif")
+              if [[ "$CLARIFY_LATEST_RUN_ID" =~ ^[0-9]+$ ]] && [ "$CLARIFY_LATEST_RUN_ID" = "$CLARIFY_FAILURE_RUN_ID" ]; then
+                echo "::error::Clarify phase failed — pipeline failure comment on issue #${ISSUE_NUMBER} (Clarify run: https://github.com/${TEST_REPO}/actions/runs/${CLARIFY_LATEST_RUN_ID})"
+                echo "status=clarify_failed" >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+              [[ "$CLARIFY_LATEST_RUN_ID" =~ ^[0-9]+$ ]] || CLARIFY_LATEST_RUN_ID="unknown"
+              echo "  ⚠ Clarify failure comment names run ${CLARIFY_FAILURE_RUN_ID}; newer Clarify run ${CLARIFY_LATEST_RUN_ID} exists — still waiting"
+            fi
+
             # Inactivity timeout
             if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
-              echo "::error::Clarify phase stalled — no activity for ${PHASE_TIMEOUT} minutes"
+              CLARIFY_STALL_RUN_ID=$(capture_run_id "Clarif")
+              if [[ "$CLARIFY_STALL_RUN_ID" =~ ^[0-9]+$ ]]; then
+                CLARIFY_STALL_NOTE=" (Clarify run: https://github.com/${TEST_REPO}/actions/runs/${CLARIFY_STALL_RUN_ID})"
+              else
+                CLARIFY_STALL_NOTE=" (no non-skipped Clarify run titled '${ISSUE_TITLE}' found)"
+              fi
+              if [[ "$CLARIFY_CANCELLED_RUN_ID" =~ ^[0-9]+$ ]]; then
+                CLARIFY_STALL_NOTE+=" (cancelled Clarify run: https://github.com/${TEST_REPO}/actions/runs/${CLARIFY_CANCELLED_RUN_ID})"
+              fi
+              echo "::error::Clarify phase stalled — no activity for ${PHASE_TIMEOUT} minutes${CLARIFY_STALL_NOTE}"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               exit 1
             fi
@@ -5214,14 +5255,19 @@ jobs:
           BODY+=$'- Only modify `tests/e2e_smoke_canary.txt`.\n'
           BODY+=$'- This is fully specified — **no clarification is needed**.\n'
           BODY+="- Note: this run uses \`${ALT_EDITOR_MODEL}\` as the editor model override."
+          ALT_CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
             -f title="${TITLE}" -f body="${BODY}" --jq '.number')
           echo "issue_number=${NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "created_after=${ALT_CREATED_AT}" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
 
       - name: Wait for clarify→plan→implement (alt-model)
         id: wait
         env:
           ISSUE_NUMBER: ${{ steps.create.outputs.issue_number }}
+          ALT_ISSUE_TITLE: ${{ steps.create.outputs.title }}
+          ALT_CREATED_AFTER: ${{ steps.create.outputs.created_after }}
         run: |
           set -euo pipefail
           DEADLINE=$(( $(date +%s) + 4500 ))
@@ -5283,7 +5329,18 @@ jobs:
             fi
             sleep 20
           done
-          echo "::error::Alt-model run timed out before reaching review stage"
+          # Name this issue's Clarify run (title-scoped; an empty title would
+          # turn the filter off, so look up only with both values set) (#9223).
+          ALT_CLARIFY_RUN_NOTE=""
+          if [ -n "${ALT_ISSUE_TITLE:-}" ] && [ -n "${ALT_CREATED_AFTER:-}" ]; then
+            ALT_CLARIFY_RUN_ID=$( . ./scripts/comprehensive_test_and_release_gh_api.sh && find_latest_scoped_run_field "${TEST_REPO}" "${ALT_CREATED_AFTER}" "Clarif" "${ALT_ISSUE_TITLE}" id 10 ) || ALT_CLARIFY_RUN_ID=""
+            if [[ "${ALT_CLARIFY_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              ALT_CLARIFY_RUN_NOTE=" (Clarify run: https://github.com/${TEST_REPO}/actions/runs/${ALT_CLARIFY_RUN_ID})"
+            else
+              ALT_CLARIFY_RUN_NOTE=" (no non-skipped Clarify run titled '${ALT_ISSUE_TITLE}' found)"
+            fi
+          fi
+          echo "::error::Alt-model run timed out before reaching review stage${ALT_CLARIFY_RUN_NOTE}"
           exit 1
 
       - name: Capture alt-model phase run ids
