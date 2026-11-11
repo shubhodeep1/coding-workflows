@@ -8441,7 +8441,9 @@ def parse_check_triage_affected_files(text: Any) -> dict[str, Any]:
 # once (attempt 1 only) instead of filing a triage issue. One documented,
 # word-boundary-anchored alternation; only failed[i].log_tail text is scanned.
 CHECK_TRIAGE_TRANSIENT_SIGNATURE_RE = re.compile(
-	r"\bHTTP\b[^\n]*\b5\d\d\b"           # HTTP status line or "HTTP error 503"
+	# Case-sensitive "HTTP" plus a version or a space, so the "http" of a
+	# "http://" URL next to an unrelated number is not a signature.
+	r"(?-i:\bHTTP(?:/[\d.]+)?\s)[^\n]*\b5\d\d\b"  # HTTP status line or "HTTP error 503"
 	r"|\b50[234] Gateway\b"                # 502/504 Gateway ...
 	r"|\bGateway Time-?out\b"              # Gateway Timeout / Gateway Time-out
 	r"|\btimed out\b"                      # "operation timed out"

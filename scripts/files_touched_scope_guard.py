@@ -933,6 +933,31 @@ def _plan_tree_regular_file(repo_root: str, path: str) -> bool:
 		return False
 
 
+def _plan_tree_real_dir(repo_root: str, name: str) -> bool:
+	"""True only when ``name`` (one path segment) is a real directory, not a
+	symlink, directly inside ``repo_root``. Errors are False."""
+	if not repo_root or not name or name in {".", ".."} or "/" in name or name.lower() == ".git":
+		return False
+	try:
+		return stat.S_ISDIR(os.lstat(os.path.join(os.path.realpath(repo_root), name)).st_mode)
+	except (OSError, ValueError):
+		return False
+
+
+# A bare bullet token is the listed file when nothing follows it or a
+# separator does (`- bin/deploy — new script`, `- bin/deploy (new)`), or it
+# ends with `:` / `,` / `;`. Prose (`- and/or the helper`) never matches.
+_PLAN_BULLET_LISTING_REST_RE = re.compile(r"^\s*$|^\s+(?:[\u2014\u2013]|-+\s|\(|:)")
+
+
+def _plan_bullet_token_is_listing(line: str, bullet: "re.Match[str]") -> bool:
+	"""True when a bullet's first token is the item the bullet lists (issue #9130)."""
+	token = bullet.group(1)
+	if token.endswith((":", ",", ";")):
+		return True
+	return bool(_PLAN_BULLET_LISTING_REST_RE.match(line[bullet.end(1):]))
+
+
 def extract_plan_file_paths(plan_text: str, repo_root: str = "") -> list[str]:
 	"""Exact file paths a plan's Files section lists (empty without a section).
 
@@ -950,8 +975,11 @@ def extract_plan_file_path_sets(plan_text: str, repo_root: str = "") -> tuple[li
 	``paths`` is extract_plan_file_paths's list, plus nested extensionless
 	files verified as regular files under ``repo_root``. ``ungrantable`` lists
 	the nested extensionless tokens that could not be verified (a directory, a
-	missing path, or no ``repo_root``); only backticked or protected-path
-	tokens count, so a prose bullet word never holds a plan. With
+	missing path, or no ``repo_root``). Only a token the line lists counts (its
+	leading backticked span, a bare bullet token followed by nothing or a
+	separator, or a protected-path token); a later backticked span counts only
+	when ``repo_root`` has its first segment as a directory, so a prose word or
+	reference (`origin/main`, `actions/checkout@v5`) never holds a plan. With
 	PLAN_GRANT_TREE_FILE_CHECK_ENABLED off both behave as before (empty list).
 	"""
 	section = _plan_files_section(plan_text or "")
@@ -979,21 +1007,30 @@ def extract_plan_file_path_sets(plan_text: str, repo_root: str = "") -> tuple[li
 				skip_indent = None
 			else:
 				continue
-		candidates = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
+		# Issue #9130: only the token a line lists (its leading backticked
+		# span, or a bare bullet token followed by nothing or a separator)
+		# holds the plan when it cannot be verified. A backticked span later
+		# in the line (`actions/checkout@v5`, `origin/main`) is prose unless
+		# the planning root has its first segment as a directory.
+		bullet = _PLAN_GRANT_BULLET_RE.match(line)
+		content_start = bullet.start(1) if bullet else len(line) - len(line.lstrip())
+		leading_span = line[content_start:content_start + 1] == "`"
+		candidates = [(raw, index == 0 and leading_span, index > 0 or not leading_span)
+			for index, raw in enumerate(_PLAN_GRANT_BACKTICK_RE.findall(line))]
 		# The bullet's first token counts even when the line also has
 		# backticked spans (`- README.md — use `parse()``): otherwise a
 		# non-path span would drop the listed file from the grant.
-		bullet = _PLAN_GRANT_BULLET_RE.match(line)
 		if bullet:
-			candidates.append((bullet.group(1), False))
-		candidates.extend((match.group(1), True) for match in _PLAN_PATH_TOKEN_RE.finditer(line))
-		for raw, strong in candidates:
+			candidates.append((bullet.group(1), _plan_bullet_token_is_listing(line, bullet), False))
+		candidates.extend((match.group(1), True, False) for match in _PLAN_PATH_TOKEN_RE.finditer(line))
+		for raw, strong, prose_span in candidates:
 			path = _plan_grant_path(raw)
 			if not path and tree_check:
 				candidate = _plan_grant_extensionless_candidate(raw)
 				if candidate and root and _plan_tree_regular_file(root, candidate):
 					path = candidate
-				elif candidate and strong and candidate not in ungrantable:
+				elif candidate and candidate not in ungrantable and (strong or (prose_span
+						and root and _plan_tree_real_dir(root, candidate.split("/", 1)[0]))):
 					ungrantable.append(candidate)
 			if path and path not in seen:
 				seen.add(path)
@@ -1072,7 +1109,7 @@ def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: ob
 	``pipeline_login`` turn on the auto-heal companion paths through
 	auto_heal_companions_allowed, as the implement guard does (#8956).
 	``planning_root`` also checks nested extensionless files that are regular
-	files in that checkout (issue #9130).
+	files in that checkout; an unverified one is compared as listed (issue #9130).
 	"""
 	if _issue_on_heal_route(issue_body, labels):
 		return []
@@ -1080,7 +1117,10 @@ def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: ob
 	if not allowlist:
 		return []
 	companions = auto_heal_companions_allowed(issue_body, author_login, pipeline_login)
-	return [path for path in extract_plan_file_paths(plan_text, planning_root)
+	# Issue #9130: an unverified extensionless path the plan lists is compared
+	# too, so a list that misses it holds here instead of at implement.
+	plan_paths, ungrantable = extract_plan_file_path_sets(plan_text, planning_root)
+	return [path for path in plan_paths + ungrantable
 		if not path_in_scope(path, allowlist, own_fragment_issue=issue_number,
 			allow_auto_heal_companions=companions)]
 
@@ -1194,13 +1234,27 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 				else:
 					decision, reason = PLAN_DECISION_HOLD, PIPELINE_PLAN_TOO_LARGE_REASON
 					plan_path_count = len(plan_paths)
-			elif plan_paths:
+			elif plan_paths or ungrantable_plan_paths:
 				proposed_body = build_pipeline_plan_grant_body(metadata.get("body") or "", plan_paths)
 				proposed_grant = build_automation_grant(dict(metadata, body=proposed_body), pipeline_login,
 					fetch_origin if repo else None)
 				proposed = evaluate_plan_auto_approval(protected, proposed_grant, flag_enabled=flag_on,
 					allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
-				if proposed[0] == PLAN_DECISION_APPROVE and ungrantable_plan_paths:
+				# Issue #9130: would the grant approve if the unverified
+				# paths could be granted? In memory only, never written; the
+				# origin reads are cached, so this makes no extra API call.
+				# It covers a plan whose only exact files are unverified and a
+				# protected one (`scripts/deploy`) the proposal denies.
+				ungrantable_would_approve = False
+				if ungrantable_plan_paths and proposed[0] != PLAN_DECISION_APPROVE:
+					counter_body = build_pipeline_plan_grant_body(metadata.get("body") or "",
+						plan_paths + ungrantable_plan_paths)
+					counter_grant = build_automation_grant(dict(metadata, body=counter_body), pipeline_login,
+						fetch_origin if repo else None)
+					ungrantable_would_approve = evaluate_plan_auto_approval(protected, counter_grant,
+						flag_enabled=flag_on, allow_workflow_edits=allow_workflow_edits,
+						issue_number=issue_number)[0] == PLAN_DECISION_APPROVE
+				if ungrantable_plan_paths and (proposed[0] == PLAN_DECISION_APPROVE or ungrantable_would_approve):
 					# Never approve a grant that omits a listed file (#9130);
 					# one re-plan follows (the poller's #8339 flow).
 					decision, reason, denied = PLAN_DECISION_HOLD, PLAN_PATH_NOT_GRANTABLE_REASON, ungrantable_plan_paths

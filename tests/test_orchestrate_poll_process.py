@@ -28403,6 +28403,9 @@ def test_managed_plan_path_not_grantable_hold_replans_once() -> None:
 	labels = result["issues"]["10"]["labels"]
 	assert "ai:planning" in labels and "ai:awaiting-approval" not in labels, labels
 	assert len(_replan_answer_bodies(result, "10")) == 1, log
+	# The planner is told the real cause, not "a directory or glob token".
+	answer = _replan_answer_bodies(result, "10")[0]
+	assert "could not be verified as a regular file" in answer and "directory or glob token" not in answer, answer
 	assert _replan_hold_bodies(result, "10") == [], log
 	assert ("AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=plan_path_not_grantable "
 		"outcome=replan issue=10") in log

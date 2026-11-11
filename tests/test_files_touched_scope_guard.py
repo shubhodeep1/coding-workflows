@@ -1645,9 +1645,19 @@ def test_plan_gate_replannable_for_exact_allowlist_and_globs() -> None:
 
 
 def test_plan_gate_replannable_absent_when_not_only_placeholder_tokens() -> None:
+	# Issue #9130 (Q4:A): an unverified nested extensionless path such as
+	# `scripts/lib` on a pipeline plan grant now holds as plan_path_not_grantable
+	# with replannable, whether it is missing or a directory in the root.
+	lib_plan = "## Files likely to change\n- `scripts/lib`\n- `scripts/a.sh`\n"
+	_code, record, _ = _run_grant_cli(lib_plan, _pipeline_meta())
+	assert record["reason"] == "plan_path_not_grantable" and record["denied_paths"] == ["scripts/lib"], record
+	assert record["replannable"] is True, record
+	with tempfile.TemporaryDirectory() as td:
+		(Path(td) / "scripts" / "lib").mkdir(parents=True)
+		_code, record, _ = _run_grant_cli(lib_plan, _pipeline_meta(), planning_root=td)
+		assert record["reason"] == "plan_path_not_grantable" and record["replannable"] is True, record
 	cases = [
 		# Exact-looking denied paths.
-		("## Files likely to change\n- `scripts/lib`\n- `scripts/a.sh`\n", _pipeline_meta()),
 		("## Files likely to change\n- `scripts/a.sh`\n- `scripts/b.sh`\n", _owner_meta("scripts/a.sh")),
 		# A mix of exact and directory tokens denied.
 		("## Files likely to change\n- `scripts/a.sh`\n- `scripts/b.sh`\n- `scripts/`\n", _owner_meta("scripts/a.sh")),
@@ -2274,7 +2284,95 @@ def test_plan_files_outside_files_touched_sees_tree_verified_files() -> None:
 		_planning_tree(Path(td))
 		body = _body("scripts/deploy_site.sh", "public/CNAME", "README.md")
 		assert guard.plan_files_outside_files_touched(_TREE_PLAN, body, planning_root=td) == ["bin/deploy"]
-		assert guard.plan_files_outside_files_touched(_TREE_PLAN, body) == []
+		# Without a root the unverified paths are still compared, so a list
+		# that misses one holds here instead of at implement.
+		assert guard.plan_files_outside_files_touched(_TREE_PLAN, body) == ["bin/deploy"]
+		covered = _body("scripts/deploy_site.sh", "public/CNAME", "bin/deploy", "README.md")
+		assert guard.plan_files_outside_files_touched(_TREE_PLAN, covered) == []
+
+
+def test_plan_grant_prose_spans_after_the_listed_file_never_hold() -> None:
+	plan = ("## Files likely to change\n"
+		"- `scripts/a.sh` — pin `actions/checkout@v5`, mirror from `origin/main` for `owner/repo`\n"
+		"- `README.md` (`application/json` example)\n")
+	assert guard.extract_plan_file_path_sets(plan) == (["scripts/a.sh", "README.md"], [])
+	code, record, body = _run_grant_cli(plan, _pipeline_meta())
+	assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+	with tempfile.TemporaryDirectory() as td:
+		_planning_tree(Path(td))
+		assert guard.extract_plan_file_path_sets(plan, td) == (["scripts/a.sh", "README.md"], [])
+		# A later span whose first segment is a real directory of the root is
+		# a file reference: it is granted when it exists, held when it does not.
+		prose = "## Files likely to change\n- `scripts/a.sh` — also update `bin/deploy` and `bin/missing`\n"
+		assert guard.extract_plan_file_path_sets(prose, td) == (["scripts/a.sh", "bin/deploy"], ["bin/missing"])
+
+
+def test_plan_grant_bare_bullet_path_holds_when_unverified() -> None:
+	plan = "## Files likely to change\n- scripts/a.sh\n- bin/deploy — new deploy script\n- public/CNAME\n- and/or the helper\n"
+	assert guard.extract_plan_file_path_sets(plan) == (["scripts/a.sh"], ["bin/deploy", "public/CNAME"])
+	code, record, body = _run_grant_cli(plan, _pipeline_meta())
+	assert record["reason"] == "plan_path_not_grantable" and record["replannable"] is True, record
+	assert record["denied_paths"] == ["bin/deploy", "public/CNAME"] and body is None
+	with tempfile.TemporaryDirectory() as td:
+		_planning_tree(Path(td))
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), planning_root=td)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		assert guard.extract_files_touched(body)[:3] == ["scripts/a.sh", "bin/deploy", "public/CNAME"]
+
+
+def test_plan_grant_only_unverified_paths_still_hold_replannable() -> None:
+	# A protected extensionless path the proposal cannot grant, and a plan
+	# whose only exact files are unverified, both hold as replannable.
+	for plan, denied in (
+		("## Files likely to change\n- `scripts/deploy`\n", ["scripts/deploy"]),
+		("## Files likely to change\n- `scripts/`\n- `bin/deploy`\n", None),
+	):
+		code, record, body = _run_grant_cli(plan, _pipeline_meta())
+		assert code == 30 and body is None, record
+		if denied is None:
+			# The directory token still holds the plan; never approved.
+			assert record["decision"] == "hold", record
+			continue
+		assert record["reason"] == "plan_path_not_grantable" and record["replannable"] is True, record
+		assert record["denied_paths"] == denied
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "scripts").mkdir()
+		(root / "scripts" / "deploy").write_text("#!/bin/sh\n", encoding="utf-8")
+		code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/deploy`\n", _pipeline_meta(),
+			planning_root=td)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		assert guard.extract_files_touched(body)[0] == "scripts/deploy"
+
+
+# Replay of the consumer fun-token-multi-chain #771 shape (#9126 / #9130): a
+# static site plan that lists the Pages config files next to an extensionless
+# file under the same nested public directory. The consumer's plan text is not
+# available here; the paths are the ones this repository recorded for #771.
+_PLAN_771 = """Implementation Plan
+
+## Files likely to change
+- `scripts/deploy_lobby.sh` — build and publish the lobby frontend
+- `lobby-frontend/public/_headers` — security headers
+- `lobby-frontend/public/_redirects` — SPA fallback
+- `lobby-frontend/public/CNAME` — custom domain
+"""
+
+
+def test_plan_grant_replays_the_771_plan_with_the_planning_root() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		public = Path(td) / "lobby-frontend" / "public"
+		public.mkdir(parents=True)
+		for name in ("_headers", "_redirects", "CNAME"):
+			(public / name).write_text("x\n", encoding="utf-8")
+		code, record, body = _run_grant_cli(_PLAN_771, _pipeline_meta(), planning_root=td)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		assert guard.extract_files_touched(body)[:4] == ["scripts/deploy_lobby.sh", "lobby-frontend/public/_headers",
+			"lobby-frontend/public/_redirects", "lobby-frontend/public/CNAME"]
+		assert "lobby-frontend/public/" not in guard.extract_files_touched(body)
+	code, record, body = _run_grant_cli(_PLAN_771, _pipeline_meta())
+	assert record["reason"] == "plan_path_not_grantable" and record["denied_paths"] == ["lobby-frontend/public/CNAME"]
+	assert record["replannable"] is True and body is None
 
 
 def _run_all() -> int:

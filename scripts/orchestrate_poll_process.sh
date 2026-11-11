@@ -19435,6 +19435,8 @@ _plan_auto_approval_gate()
   local gate_replan_since=""
   local gate_replan_recent=""
   local gate_replan_landed="false"
+  local gate_replan_cause=""
+  local gate_replan_tg=""
 
   guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
   if [ ! -f "${guard_py}" ]; then
@@ -19617,9 +19619,19 @@ ${HEAL_TEST_ONLY_GATE_MARKER}" >/dev/null 2>&1; then
         --add-label 'ai:planning' --remove-label 'ai:awaiting-approval' >/dev/null 2>&1; then
         echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=${gate_reason} outcome=replan_label_failed issue=${issue_num}"
       else
+        # Issue #9130: the planner reads this /answer, so it names the real
+        # cause; a plan_path_not_grantable hold is an exact extensionless file
+        # that could not be verified, not a placeholder or directory token.
+        if [ "${gate_reason}" = "plan_path_not_grantable" ]; then
+          gate_replan_cause="listed an extensionless path that could not be verified as a regular file in the planning checkout (it may be missing, new, or a directory), and such a path is never granted without that check. Re-planning once. The earlier clarification answers still apply. Keep every file the task needs, listed as its exact repository path in backticks. If an extensionless file must be created, say so on its line. If the new plan is held again, it goes to a maintainer."
+          gate_replan_tg="Stall recovery: plan held by an extensionless path that could not be verified as a file (plan_path_not_grantable); re-planning once."
+        else
+          gate_replan_cause="listed a directory or glob token (for example from placeholder text), and such a token can never be granted exactly. Re-planning once. The earlier clarification answers still apply. List only exact file paths in that section, with no placeholder text. If the new plan is held again, it goes to a maintainer."
+          gate_replan_tg="Stall recovery: plan held only by directory or glob tokens; re-planning once."
+        fi
         gate_replan_body="/answer
 
-_Orchestrator stall recovery: the plan's \"Files likely to change\" section listed a directory or glob token (for example from placeholder text), and such a token can never be granted exactly. Re-planning once. The earlier clarification answers still apply. List only exact file paths in that section, with no placeholder text. If the new plan is held again, it goes to a maintainer._
+_Orchestrator stall recovery: the plan's \"Files likely to change\" section ${gate_replan_cause}_
 
 ${gate_replan_marker}"
         gate_replan_since="$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
@@ -19641,7 +19653,7 @@ ${gate_replan_marker}"
         if [ "${gate_replan_landed}" = "true" ]; then
           phase_cap_note_dispatch "ai:planning"
           echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=${gate_reason} outcome=replan issue=${issue_num}"
-          tg_notify_issue "${issue_num}" "Stall recovery: plan held only by directory or glob tokens; re-planning once." "DEBUG" || true
+          tg_notify_issue "${issue_num}" "${gate_replan_tg}" "DEBUG" || true
         else
           # Put the issue back in ai:awaiting-approval so the next tick retries
           # the whole re-plan with its marker; without the marker a plain
