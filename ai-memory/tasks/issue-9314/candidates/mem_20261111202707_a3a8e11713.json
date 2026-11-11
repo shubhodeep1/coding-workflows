@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The checkout shows the fix was never made. The test file and the changelog fragment are present, but `scripts/render_prompt.py:182` (`load_prompt`) still decodes strictly. The persona read at line 681 and the contract read at line 959 still catch only `OSError`, so `UnicodeDecodeError` gets through, and `_embed_input_file` (`scripts/gh_helpers.sh:2828-2846`) still runs a plain `head -c \"${_head_bytes}\"` with no UTF-8 trim. So option B's claim that the tests pass on head cannot be right, and A is the smallest change that makes the code match `tests/test_prompt_invalid_utf8.py`. Option C would widen the PR to six unrelated test files on unverified claims from the pre-push summary. Binding scope note: `test_render_prompt_sh_invalid_utf8_exits_zero` (tests lines 73-97) runs through `scripts/render_prompt.sh`. Its `collect_prompt_placeholders` helper decodes strictly at line 195 (`pathlib.Path(sys.argv[1]).read_text(encoding=\"utf-8\")`), so it gets the same `errors=\"replace\"` change and `scripts/render_prompt.sh` joins the affected files.\nQ2: GITHUB FACTS show PR #9246 is open and unmerged and already targets the closed-reader test. Fixing that test here would duplicate it and cause conflicts. The `switch_ms=na` failure is in `scripts/review_autofix_step_checkout_pr_head_branch.sh`, a runner-image timing problem that has nothing to do with this PR's UTF-8 change. Leaving both out keeps the PR focused on the regression it caused. Since Q1 is A and not B, this issue still gets a concrete code change.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/render_prompt.py: `load_prompt` (line 178-184), `load_phase_c_persona_prefixes` persona read (line 680-686), `_load_contract_payload` (line 957-961)\n    - scripts/render_prompt.sh: `collect_prompt_placeholders` decode at line 195\n    - scripts/gh_helpers.sh: `_embed_input_file` truncation branch (lines 2822-2847)\n    - tests/test_prompt_invalid_utf8.py: acceptance tests; must not be changed\n    - changelog.d/9261-prompt-invalid-utf8.md: describes the intended behaviour\n  steps:\n    - In `load_prompt`, read with `encoding=\"utf-8\", errors=\"replace\"`.\n    - In `collect_prompt_placeholders` (render_prompt.sh line 195), read with `errors=\"replace\"` so the wrapper still finds placeholders next to invalid bytes.\n    - In the persona read, add `except UnicodeDecodeError` that raises `PromptLoadError` and includes `persona_source_path` in the message.\n    - In `_load_contract_payload`, add `except UnicodeDecodeError` that raises `ContractLoadError` and includes `contract_path` in the message.\n    - In `_embed_input_file`, after `_head_bytes` is final (head mode, or after the diff-boundary walk-back), look at the last 1-3 bytes before the cut, for example with `head -c \"${_head_bytes}\" | tail -c 3 | od -An -tu1`. If the last lead byte (0xC0-0xDF needs 2 bytes, 0xE0-0xEF needs 3, 0xF0-0xF7 needs 4) starts a sequence that does not finish inside the cut, lower `_head_bytes` by the number of bytes from that lead byte to the cut. Use the trimmed value for `head -c`, the TRUNCATED marker and `_emit_bytes`. Leave cuts that land on a character boundary unchanged.\n    - Run `tests/test_prompt_invalid_utf8.py`, then the `tests-hooks-and-orchestrator` and `orchestrate-poll` CI step test sets that cover render_prompt and gh_helpers.\n  replaces_acceptance_criterion: none\n  equivalence_argument: none needed; this implements the behaviour the existing tests and changelog describe.\n  reversibility: The changes are local edits to three files. Reverting them restores strict decoding and byte-exact truncation.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None.",
+  "fingerprint": "6a01585311bca5fde36d61f77da790a66a49329ac674d148716eb64222f8516a",
+  "lineage": {
+    "issue_number": 9314,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43094153810",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43094153810",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9314"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261111202707_a3a8e11713",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9314,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43094153810"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9314",
+  "timestamps": {
+    "created_at": "2026-11-11T20:27:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
