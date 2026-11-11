@@ -2197,6 +2197,23 @@ class CheckFailureTriageBaseTrackedTests(unittest.TestCase):
 		self.assertEqual(outputs.get("ready"), "true")
 		self.assertEqual(tracked, {})
 
+	def test_missing_note_metadata_files_as_before(self) -> None:
+		# An empty head SHA leaves the note step nothing to post, so the
+		# failure must be filed per PR rather than silently dropped.
+		proc, outputs, _metadata, _calls, tracked = self._collect(
+			TRACKED_BASE, [_heal_issue(9215)], CHECK_TRIAGE_HEAD_SHA="",
+		)
+		self.assertIn(
+			"CHECK_TRIAGE base_tracked outcome=fail_open reason=metadata_write_failed heal_issue=9215 base=main pr=17",
+			proc.stdout,
+		)
+		self.assertNotIn("skip reason=base_failure_tracked", proc.stdout)
+		self.assertNotIn("no_open_heal_issue", proc.stdout)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure", proc.stdout)
+		self.assertNotIn("base_failure_tracked", outputs)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(tracked, {})
+
 	def test_gate_does_not_apply_outside_its_scope(self) -> None:
 		cases = (
 			# Not the default branch (an integration branch inherits main's failure).

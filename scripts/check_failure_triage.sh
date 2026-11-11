@@ -1370,16 +1370,18 @@ else
 					if [ -n "${GITHUB_OUTPUT:-}" ]; then
 						echo "base_failure_tracked=${base_gate_heal_issue}" >> "${GITHUB_OUTPUT}"
 					fi
-				else
-					rm -f "${TRIAGE_BASE_TRACKED_FILE}"
+					log "skip reason=base_failure_tracked heal_issue=${base_gate_heal_issue} workflow=${base_gate_workflow_path} base=${BASE_REF} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+					if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+						triage_report_routing_unverified
+					fi
+					exit 0
 				fi
-				log "skip reason=base_failure_tracked heal_issue=${base_gate_heal_issue} workflow=${base_gate_workflow_path} base=${BASE_REF} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
-				if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
-					triage_report_routing_unverified
-				fi
-				exit 0
-			fi
-			if [ "${base_gate_heal_lookup_ok}" = "true" ]; then
+				# Without the note metadata (no valid head SHA, or a failed write)
+				# the note step cannot add the PR to the heal issue, so skipping
+				# would drop the failure. File the per-PR issue as before.
+				rm -f "${TRIAGE_BASE_TRACKED_FILE}"
+				log "base_tracked outcome=fail_open reason=metadata_write_failed heal_issue=${base_gate_heal_issue} base=${BASE_REF} pr=${PR_NUMBER}"
+			elif [ "${base_gate_heal_lookup_ok}" = "true" ]; then
 				log "base_tracked outcome=file reason=no_open_heal_issue workflow=${base_gate_workflow_path} base=${BASE_REF} pr=${PR_NUMBER}"
 			fi
 		fi
