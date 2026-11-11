@@ -3726,15 +3726,22 @@ def _traceback_context_indices(lines: list[str]) -> set[int]:
 		# prints hundreds of uncollapsed frames): walk on over the remaining
 		# frames to the exception line so it and the innermost frames are kept.
 		# cursor only moves forward and index = cursor below, so this is linear.
+		# The walk classifies lines as the window scan does, so the
+		# continuation lines and chain marker after that exception line are
+		# kept too (a chained traceback's link is not lost).
 		if not exception_seen and cursor == scan_end:
 			while cursor < total:
 				content = _LOG_TIMESTAMP_RE.sub("", lines[cursor])
-				if _TRACEBACK_HEADER_RE.search(content) or _TRACEBACK_CHAIN_RE.match(content.strip()):
+				if _TRACEBACK_HEADER_RE.search(content):
 					break
-				block.append(cursor)
+				if not content.strip() or content[:1].isspace() or _TRACEBACK_CHAIN_RE.match(content.strip()):
+					block.append(cursor)
+				elif not exception_seen:
+					block.append(cursor)
+					exception_seen = True
+				else:
+					break
 				cursor += 1
-				if content.strip() and not content[:1].isspace():
-					break
 		while block and not _LOG_TIMESTAMP_RE.sub("", lines[block[-1]]).strip():
 			block.pop()
 		kept.update(block[-_TRACEBACK_CONTEXT_MAX_LINES:])

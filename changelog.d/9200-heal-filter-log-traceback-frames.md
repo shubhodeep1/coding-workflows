@@ -6,7 +6,7 @@ On 10 and 11 November 2026 every AI Plan and review prompt render crashed with a
 | The numbers that matter | Value |
 | --- | --- |
 | Lines kept after one traceback header | at most 30 (the innermost ones when the traceback is longer) |
-| Lines scanned per traceback | at most 400, then only on to the exception line if it has not appeared yet |
+| Lines scanned per traceback | at most 400, then on to the exception line (and a chain marker after it) if it has not appeared yet |
 | Kept lines of the plan run 42929246385 traceback | 33 of 34 (only a trailing blank line dropped; both `ValueError` lines kept) |
 | New GitHub API calls | 0 |
 
@@ -14,6 +14,6 @@ What this means for operators: a heal issue for a Python crash now quotes the ex
 
 ### For contributors
 
-The extra lines also reach `error_signature`. Its `^\s*\w+Error:` bucket only decides the fingerprint when the log has no `##[error]` or `*_FAILED` line, so a traceback outside the 400-line tail of such a log now adds its exception line to the signature. The overall `max_lines` / `max_bytes` cut of `filter_log` is unchanged. Tests: `test_filter_log_keeps_chained_traceback_frames_and_exception_lines_outside_tail`, `test_filter_log_keeps_the_innermost_lines_of_a_long_traceback` and `test_filter_log_keeps_the_exception_line_of_a_traceback_longer_than_the_scan_window` in `tests/test_workflow_failure_heal.py`.
+The extra lines also reach `error_signature`. Its `^\s*\w+Error:` bucket only decides the fingerprint when the log has no `##[error]` or `*_FAILED` line, so a traceback outside the 400-line tail of such a log now adds its exception line to the signature. The overall `max_lines` / `max_bytes` cut of `filter_log` is unchanged. Tests: `test_filter_log_keeps_chained_traceback_frames_and_exception_lines_outside_tail`, `test_filter_log_keeps_the_innermost_lines_of_a_long_traceback`, `test_filter_log_keeps_the_exception_line_of_a_traceback_longer_than_the_scan_window` and `test_filter_log_keeps_the_chain_marker_after_a_traceback_longer_than_the_scan_window` in `tests/test_workflow_failure_heal.py`.
 
 Refs #9190, Refs #9200.
