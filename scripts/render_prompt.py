@@ -179,8 +179,14 @@ def load_prompt(prompt_path: Path) -> str:
 	if not prompt_path.is_file():
 		raise PromptLoadError(f"Prompt file not found: {prompt_path}")
 	try:
-		return _normalize_prompt_text(prompt_path.read_text(encoding="utf-8"))
-	except OSError as exc:
+		# Prompt files can embed untrusted content (raw PR diff, comment text,
+		# head -c truncated file bodies). A stray or split multi-byte sequence
+		# there must not crash the render with an uncaught UnicodeDecodeError
+		# (#9180 reviewers_failed, heal #9261), so undecodable bytes become
+		# U+FFFD. UnicodeDecodeError is still caught defensively and mapped to
+		# PromptLoadError so main() reports a clean, path-bearing error.
+		return _normalize_prompt_text(prompt_path.read_text(encoding="utf-8", errors="replace"))
+	except (OSError, UnicodeDecodeError) as exc:
 		raise PromptLoadError(f"Unable to read prompt file '{prompt_path}': {exc}") from exc
 
 
@@ -683,6 +689,12 @@ def load_phase_c_persona_prefixes(prompt_path: Path | None) -> dict[str, str]:
 		raise PromptLoadError(
 			f"Unable to read persona source '{persona_source_path}': {exc}"
 		) from exc
+	except UnicodeDecodeError as exc:
+		# Trusted JSON config: stay strict, but fail with a clean path-bearing
+		# error instead of an uncaught traceback.
+		raise PromptLoadError(
+			f"Unable to decode persona source '{persona_source_path}' as UTF-8: {exc}"
+		) from exc
 	except json.JSONDecodeError as exc:
 		raise PromptLoadError(
 			f"Invalid JSON persona source '{persona_source_path}' at line {exc.lineno}, column {exc.colno}: {exc.msg}"
@@ -959,6 +971,12 @@ def _load_contract_payload(contract_path: Path) -> dict[str, Any]:
 		contract_text = contract_path.read_text(encoding="utf-8")
 	except OSError as exc:
 		raise ContractLoadError(f"Unable to read contract '{contract_path}': {exc}") from exc
+	except UnicodeDecodeError as exc:
+		# Trusted contract config: stay strict, but fail with a clean
+		# path-bearing error instead of an uncaught traceback.
+		raise ContractLoadError(
+			f"Unable to decode contract '{contract_path}' as UTF-8: {exc}"
+		) from exc
 
 	if yaml is not None:
 		try:

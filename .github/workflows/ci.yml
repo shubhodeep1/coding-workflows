@@ -879,6 +879,7 @@ jobs:
             set +e
             PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
               tests/test_gh_helpers_parse_reset_header.py \
+              tests/test_prompt_invalid_utf8.py \
               tests/test_gh_retry_stdout_isolation.py \
               tests/test_gh_retry_permanent_auth_failures.py \
               tests/test_gh_retry_final_stderr_redaction.py \

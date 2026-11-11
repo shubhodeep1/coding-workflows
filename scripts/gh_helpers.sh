@@ -2840,7 +2840,51 @@ _embed_input_file()
 				_head_bytes="${_boundary}"
 			fi
 		fi
-		head -c "${_head_bytes}" "${_path}"
+		# A plain byte cut can split a multi-byte UTF-8 character, and the
+		# dangling lead byte crashed every reviewer's render_prompt pass
+		# (PR #9180 reviewers_failed, heal #9261).  Drop any trailing
+		# incomplete sequence (at most 3 bytes) so the emitted bytes, the
+		# TRUNCATED marker and the budget accounting all use the same
+		# count.  Fail open: on any python3 failure keep the original cut.
+		if [ "${_head_bytes}" -gt 0 ] 2>/dev/null; then
+			local _utf8_trimmed_bytes
+			_utf8_trimmed_bytes="$(PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${_path}" "${_head_bytes}" 2>/dev/null <<'PY'
+import sys
+
+path = sys.argv[1]
+n = int(sys.argv[2])
+start = max(0, n - 3)
+with open(path, "rb") as handle:
+	handle.seek(start)
+	tail = handle.read(n - start)
+result = n
+for index in range(len(tail) - 1, -1, -1):
+	byte = tail[index]
+	if byte < 0x80:
+		break
+	if byte >= 0xC0:
+		if byte < 0xE0:
+			need = 2
+		elif byte < 0xF0:
+			need = 3
+		elif byte < 0xF8:
+			need = 4
+		else:
+			break
+		offset = start + index
+		if offset + need > n:
+			result = offset
+		break
+print(result)
+PY
+)" || _utf8_trimmed_bytes=""
+			if [[ "${_utf8_trimmed_bytes}" =~ ^[0-9]+$ ]] && [ "${_utf8_trimmed_bytes}" -le "${_head_bytes}" ]; then
+				_head_bytes="${_utf8_trimmed_bytes}"
+			fi
+		fi
+		if [ "${_head_bytes}" -gt 0 ] 2>/dev/null; then
+			head -c "${_head_bytes}" "${_path}"
+		fi
 		printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s) ...]\n' \
 			"${_size}" "${_head_bytes}" "${_mode}" "${_cap}" "${_budget_remaining}"
 		_emit_bytes="${_head_bytes}"
