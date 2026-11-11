@@ -487,7 +487,9 @@ triage_release_download_classify()
 	local rd_status_re='\b50[234]\b'
 	local rd_release_url_re='https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/releases/(latest/)?download/'
 	local rd_codeql_failure_re='Unable to download and extract CodeQL CLI: Unexpected HTTP response: 50[234]'
-	local rd_codeql_url_re='github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/releases/download/'
+	# Anchored to the https://github.com/ host like rd_release_url_re, so an
+	# evilgithub.com/... URL or a github.com/... path segment does not match.
+	local rd_codeql_url_re='https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/releases/download/'
 	local rd_codeql_status_re='HTTP status code: 50[234]'
 	jq -e \
 		--arg status_re "${rd_status_re}" \

@@ -178,6 +178,15 @@ class ReleaseDownloadRerunGateTests(unittest.TestCase):
 	def test_codeql_failure_without_the_release_url_warning_is_filed(self) -> None:
 		self._assert_normal_path(*_collect({7: CODEQL[:1]}), "not_release_download")
 
+	def test_codeql_failure_with_a_non_github_host_url_is_filed(self) -> None:
+		for url in (
+			"https://evilgithub.com/github/codeql-action/releases/download/codeql-bundle-v2.26.2/codeql-bundle-linux64.tar.zst",
+			"https://example.com/mirror/github.com/github/codeql-action/releases/download/codeql-bundle-v2.26.2/b.tar.zst",
+		):
+			with self.subTest(url=url):
+				warning = {"annotation_level": "warning", "message": f"Failed to download and extract the bundle from {url}. HTTP status code: 504."}
+				self._assert_normal_path(*_collect({7: [CODEQL[0], warning]}), "not_release_download")
+
 	def test_three_matching_failed_jobs_are_rerun_with_one_post(self) -> None:
 		proc, outputs, calls = _collect({11: CODEQL, 12: CODEQL, 13: FOUNDRY})
 		self._assert_rerun(proc, outputs, calls)
