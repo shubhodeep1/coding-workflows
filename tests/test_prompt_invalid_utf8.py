@@ -73,10 +73,14 @@ def test_render_prompt_cli_invalid_utf8_exits_zero(tmp_path: Path) -> None:
 def test_render_prompt_sh_invalid_utf8_exits_zero(tmp_path: Path) -> None:
 	if not RENDER_PROMPT_SH.is_file():
 		pytest.skip("scripts/render_prompt.sh not present")
-	body = _write_body(tmp_path)
+	body = tmp_path / "body.txt"
+	# An env-derived placeholder next to the invalid bytes: the wrapper's
+	# collect_prompt_placeholders helper must still discover it.
+	body.write_bytes(INVALID_BODY + b"Probe: {{UTF8_HEAL_PROBE_VALUE}}\n")
 	env = _env(tmp_path)
 	env["RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED"] = "1"
 	env["RENDER_PROMPT_SKIP_SYNTAX_VALIDATION"] = "1"
+	env["UTF8_HEAL_PROBE_VALUE"] = "probe-substituted"
 	result = subprocess.run(
 		["bash", str(RENDER_PROMPT_SH), str(body)],
 		capture_output=True,
@@ -85,13 +89,12 @@ def test_render_prompt_sh_invalid_utf8_exits_zero(tmp_path: Path) -> None:
 		check=False,
 	)
 	stderr = result.stderr.decode("utf-8", errors="replace")
-	# render_prompt.sh's collect_prompt_placeholders helper does its own
-	# strict read and may still log a decode traceback on stderr; it runs in
-	# a process substitution, so it cannot fail the render. The contract
-	# pinned here is the production one: exit 0 with U+FFFD in the output.
+	stdout = result.stdout.decode("utf-8")
 	assert result.returncode == 0, stderr
-	assert "Traceback" not in result.stdout.decode("utf-8")
-	assert "�" in result.stdout.decode("utf-8")
+	assert "Traceback" not in stderr
+	assert "Traceback" not in stdout
+	assert "�" in stdout
+	assert "Probe: probe-substituted" in stdout
 
 
 def _import_render_prompt():

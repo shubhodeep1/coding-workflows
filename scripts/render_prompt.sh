@@ -192,7 +192,10 @@ import pathlib
 import re
 import sys
 
-text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+# Placeholder names are ASCII, so replacing undecodable bytes in untrusted
+# embedded content (#9180 reviewers_failed, heal #9261) cannot change which
+# names are found; a strict decode here dropped every env-derived placeholder.
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 for name in sorted(set(re.findall(r"\{\{([A-Za-z0-9_]+)\}\}", text))):
 	print(name)
 PY
