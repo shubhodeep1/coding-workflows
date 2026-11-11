@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_pr_check_runs_context.py:408-414 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The `_select_log_tail_window` docstring's first sentence still says the window ends at the \"first\" `##[error]` line, but the code (lines 424-436) ends it at the LAST runner exit line and uses the first `##[error]` only as a fallback.\n  WHY: No runtime failure (NIT); the docstring contradicts itself, README.md:163 and agents.md:1827 (which say \"last\"), and misleads readers. Confidence ranged 3-4 across reviewers.\n- .github/workflows/ci.yml:job tests-hooks-and-orchestrator | severity=high | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: CI job `tests-hooks-and-orchestrator` fails on the PR head (run 43050739857), and `lint` fails only because it aggregates that job; the snapshot log tail was captured with the old first-`##[error]` rule, so the real failing assertion is not visible.\n  WHY: The failure is unresolved on the reviewed head and blocks the merge gate (rated MAJOR by this reviewer). Other reviewers examined the same failure and declined to report it because it cannot be mapped to the diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/collect_pr_check_runs_context.py:408-410 | severity=low | confidence=3\n  PROBLEM: The `_select_log_tail_window` docstring's first sentence still says the window \"ends at the first one\", while the code at lines 424-436 ends it at the last runner exit line (`LOG_TAIL_STEP_EXIT_MARKER`) and uses the first `##[error]` only as a fallback.\n  WHY: No runtime failure; the wording is inconsistent with the code, tests and docs (NIT).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/collect_pr_check_runs_context.py:408-414 | severity=low | confidence=4\n  PROBLEM: The docstring's first sentence says the window ends at the \"first\" `##[error]` line (issue #8799), but the implemented rule (lines 424-436) ends it at the LAST `##[error]Process completed with exit code` line, with the first `##[error]` only as a fallback.\n  WHY: No runtime failure (NIT); the docstring contradicts itself, README.md:163 and agents.md:1827.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:job tests-hooks-and-orchestrator | severity=high | confidence=3\n  PROBLEM: CI job `tests-hooks-and-orchestrator` fails on the PR head c6173090044db3d827eae9415aa046a4db9a1f13 (run 43050739857), and `lint` fails only as its aggregate; the log tail comes from the old collector rule, so the real failing assertion cannot be mapped to this PR's files.\n  WHY: CI on the head SHA fails, so the PR cannot satisfy its merge gate (reviewer rated it MAJOR).\n- scripts/collect_pr_check_runs_context.py:408-410 | severity=low | confidence=4\n  PROBLEM: The docstring's first sentence still states the pre-#9179 rule (\"ends at the first one\"), while the code at lines 424-436 uses the LAST `##[error]Process completed with exit code` line.\n  WHY: No runtime failure (NIT); the stale sentence misleads future readers about the anchor rule.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ece76c6b47f496c2ddb06fed5b842d81dc53dfe828f2eb39879a952827fb9e93",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9218,
+    "run_id": "43077372762",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43077372762",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111213012_bdc55dc014",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9218,
+    "run_id": "43077372762"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T21:30:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
