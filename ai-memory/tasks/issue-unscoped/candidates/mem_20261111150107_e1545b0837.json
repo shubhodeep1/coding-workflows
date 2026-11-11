@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:813 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The tests-hooks-and-orchestrator job failed in/after the tests/test_lint_pr_body_auto_close.py step with no failing test name or summary in the log, and the failure cannot be attributed to the PR's changed hunks.\n  WHY: The aggregate lint gate fails because it requires this job, so the PR cannot merge. Severity disagreement: sonnet=MAJOR (conf 2), luna=BLOCKER (conf 5), glm=MAJOR (conf 4); highest used. glm notes that the later step running the modified tests/test_gh_retry_stdout_isolation.py (ci.yml:882) never started.\n- PR Description and Commit Messages | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR body, title, and commit messages are claimed to contain auto-close keywords (Fixes, resolved) referencing the ai:orchestrator-tracking issue #2734.\n  WHY: This would violate \u00a719/\u00a721 and could close the tracking issue. Disputed by anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash, who found the text is fixture data in tests/test_lint_pr_body_auto_close.py and the PR body uses only Refs.\n- tests/test_lint_pr_body_auto_close.py:518-526 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The main() test runner catches only Exception, so a BaseException such as SystemExit kills the run with no failure diagnostics.\n  WHY: This could cause a red CI job with no named failure. gemini rated it MAJOR (conf 3) and glm listed it as a hardening suggestion (risk 3). sonnet rejected it as untouched by this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Replace auto-close keywords (Fixes, Closes, Resolves) referencing ai:orchestrator-tracking issues with 'Refs' or 'Related to' in PR body, title, and commit messages.\n  expected_change_site: PR Title, PR Description, and Commit Messages\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The current PR description uses 'Fixes #2734' (line 1), and commit message #2 uses 'resolved' referencing #2734. Disputed by other reviewers as fixture data.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:543 (job tests-hooks-and-orchestrator; step at 813) | severity=MAJOR | confidence=2\n  PROBLEM: The check-run on head 97646edc reports tests-hooks-and-orchestrator: failure, which makes lint fail. The log tail ends at the tests/test_lint_pr_body_auto_close.py step (ci.yml:813) with no failing test name. The failing step could not be identified, and the PR change was neither shown to cause nor ruled out as the cause.\n  WHY: Unattributed. The lint gate fails only because it needs this job. The full job log (130568150246) is needed.\n- Rejected items: the claim of auto-close keywords in the PR body or commits (the text is a fixture, and the PR uses Refs), and the except Exception runner at tests/test_lint_pr_body_auto_close.py:518-526 (untouched by this PR).\n- All other categories: NONE. The task completeness check found no gaps.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- PR Description and Commit Messages (PR Title/Body, Commit Message #2) | severity=BLOCKER | confidence=5\n  PROBLEM: The PR body, title, and commit messages contain auto-close keywords (Fixes, resolved) referencing the ai:orchestrator-tracking issue #2734.\n  WHY: This violates CLAUDE.md \u00a719 and \u00a721, causing the linting test to fail, and would close the tracking issue if force-merged.\n- tests/test_lint_pr_body_auto_close.py (main() runner function) | severity=MAJOR | confidence=3\n  PROBLEM: The test runner catches only Exception, letting BaseException (such as SystemExit) propagate silently.\n  WHY: The test job could fail with exit code 1 and no failed tests shown.\n- TASK_GAP:\n  Requirement: Replace auto-close keywords (Fixes, Closes, Resolves) referencing ai:orchestrator-tracking issues with 'Refs' or 'Related to' in PR body, title, and commit messages.\n  Expected change site: PR Title, PR Description, and Commit Messages.\n  Evidence of absence: The current PR description uses 'Fixes #2734' (line 1), and commit message #2 uses 'resolved' referencing #2734.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:813 | severity=BLOCKER | confidence=5\n  PROBLEM: The check run reports the tests-hooks-and-orchestrator job failed while executing tests/test_lint_pr_body_auto_close.py. The log ends after lint diagnostics with no test summary or cause.\n  WHY: The job exits non-zero and leaves the required CI gate red. The failure is not attributable to a changed hunk from the evidence provided.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:806-813 (downstream 837-889) | severity=MAJOR | confidence=4\n  PROBLEM: Job 130568150246 died mid-step in the \"PR body auto-close lint unit tests\" step. The log tail ends at 14:16:50.7686051Z after two ::error::[lint_pr_body_auto_close] lines, with no FAIL line, no summary and no \"Process completed\" message. The ::error:: lines are the expected fixture output of test_main_exit_codes, not a real \u00a719 violation, which refutes the gemini claim. The later step (ci.yml:837-889, with the modified test at ci.yml:882) never ran, so the second fix is unverified. No diff hunk touches this step, so the termination cannot be attributed to the PR. It is likely an external kill or a truncated log.\n  WHY: The aggregate lint gate (job 130588716941) fails because it requires this job, so the PR cannot merge, and the unexplained death hides whether the changed closed-reader test passes.\n- Hardening: tests/test_lint_pr_body_auto_close.py main() runner loop, lines 518-526. Catch BaseException (re-raising KeyboardInterrupt, printing FAIL <name>: <repr(e)> for SystemExit), about 4 lines changed. HARDENING_RISK_SCORE: 3.\n- Task completeness: NONE. All PR deliverables are present.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "97bb1fd2735b845a466ff260451da523eddd1dfbff0892dc0316239cbca7538a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9246,
+    "run_id": "43034050227",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43034050227",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111150107_e1545b0837",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9246,
+    "run_id": "43034050227"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T15:01:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
