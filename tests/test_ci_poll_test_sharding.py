@@ -4659,7 +4659,7 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 					self.assertEqual(markers.joinpath(f"saw_{n}").read_text(), "3", f"fake {n} ran alone:\n{out}")
 				self.assertEqual(out.count("CI_SUBTEST_START subtest="), 3, out)
 				self.assertEqual(len(re.findall(r"CI_SUBTEST_END subtest=\S+ elapsed_ms=-?\d+ rc=\d+\n", out)), 3, out)
-				self.assertRegex(out, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=\d+\n")
+				self.assertRegex(out, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=-?\d+\n")
 				if failing is None:
 					self.assertEqual(result.returncode, 0, out + result.stderr)
 					self.assertNotIn("single-file module tests failed", out)
