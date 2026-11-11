@@ -81,7 +81,33 @@ def test_review_utility_roles_never_start_host_opencode() -> None:
 	allowlist = next(line for line in sandbox.splitlines() if line.startswith('case "${claude_role}" in REVIEW_EDITOR|'))
 	for role in ("SUMMARISER", "BEHAVIOURAL_SMOKE", "JUDGE_INTERIM"):
 		assert f"|{role}" in allowlist, role
-	assert "WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM)" in sandbox
+	# The read-only `case` arm is checked as a role set, not an exact ordered
+	# string, so adding the next read-only role (PANEL_REVIEWER broke the old
+	# substring, issue #9313) does not break this test, while dropping any
+	# required role still does. The arm is the line that starts with
+	# `WAVE_JUDGE|` and ends with `)`; the mount arm that also starts with
+	# `WAVE_JUDGE|` carries a body on the same line and so is not matched.
+	sandbox_lines = [line.strip() for line in sandbox.splitlines()]
+	read_only_arm_indexes = [
+		index for index, line in enumerate(sandbox_lines)
+		if line.startswith("WAVE_JUDGE|") and line.endswith(")")
+	]
+	assert len(read_only_arm_indexes) == 1, f"expected one read-only WAVE_JUDGE| case arm, found {len(read_only_arm_indexes)}"
+	arm_index = read_only_arm_indexes[0]
+	read_only_roles = set(sandbox_lines[arm_index][:-1].split("|"))
+	for role in (
+		"WAVE_JUDGE",
+		"STALL_JUDGE",
+		"INTEGRATION_JUDGE",
+		"SECURITY_JUDGE",
+		"SUMMARISER",
+		"BEHAVIOURAL_SMOKE",
+		"JUDGE_INTERIM",
+		"PANEL_REVIEWER",
+	):
+		assert role in read_only_roles, role
+	assert arm_index + 1 < len(sandbox_lines), "read-only case arm has no body"
+	assert sandbox_lines[arm_index + 1] == '[ "${claude_access}" = read ] || exit 2 ;;', sandbox_lines[arm_index + 1]
 	assert '"SUMMARISER", "BEHAVIOURAL_SMOKE", "JUDGE_INTERIM"}' in sandbox
 	assert 'if [ "${claude_role}" = JUDGE_INTERIM ] && [ "${engine}" != codex ]; then' in sandbox
 
@@ -133,6 +159,7 @@ def main() -> int:
 	test_summariser_uses_isolated_reviewer_opencode_config()
 	test_summariser_does_not_mutate_shared_codex_config()
 	test_reviewer_role_denies_edits_and_allows_read_bash()
+	test_review_utility_roles_never_start_host_opencode()
 	print("OK: summariser OpenCode reviewer-role config contract assertions hold")
 	return 0
 

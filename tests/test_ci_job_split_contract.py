@@ -163,6 +163,30 @@ class SystemPythonJobTest(unittest.TestCase):
 		self.assertIn("'NR % total == n'", shard_step["run"])
 		self.assertIn('-v n="${shard_index}" -v total="${shard_total}"', shard_step["run"])
 
+	def test_system_python_shard_keeps_default_tmpdir(self) -> None:
+		"""Regression guard for run 43053071771 (issue #9313).
+
+		A TMPDIR under RUNNER_TEMP made pytest's tmp_path long enough to push
+		the heal tests' broker socket past the 108-byte AF_UNIX limit. Only a
+		RUNNER_TEMP-based TMPDIR is rejected: a future short `/tmp/...` TMPDIR
+		would keep socket paths short and stays allowed.
+		"""
+		shard_step = self._steps()["System-Python test shard"]
+		self.assertNotIn("RUNNER_TEMP", str(shard_step.get("env", {}).get("TMPDIR", "")))
+		for line in shard_step["run"].splitlines():
+			code = line.strip()
+			if code.startswith("#") or "TMPDIR=" not in code:
+				continue
+			with self.subTest(line=code):
+				self.assertNotIn("RUNNER_TEMP", code)
+
+	def test_system_python_shard_count_fits_the_job_budget(self) -> None:
+		# Run 43053071771: 12 shards took 13-17 minutes of pytest each and most
+		# were cancelled at the 20-minute budget, so the count must not drop
+		# back below 24.
+		shards = _ci_jobs()[self.SYSTEM_PYTHON_JOB_ID]["strategy"]["matrix"]["system-python-shard"]
+		self.assertGreaterEqual(len(shards), 24)
+
 	def test_runtime_python_jobs_gate_lint_and_feed_budget_watch(self) -> None:
 		jobs = _ci_jobs()
 		for job_id in (self.SYSTEM_PYTHON_JOB_ID, self.SANDBOX_PYTHON_JOB_ID):
