@@ -46,6 +46,9 @@ def _run(
 	pr_json: str = "{}",
 	jq_fail_uri_encode: bool = False,
 	env: dict[str, str] | None = None,
+	statuses_json: str = "{}",
+	statuses_fail: bool = False,
+	calls_log: str = "",
 ):
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
@@ -66,7 +69,12 @@ set -uo pipefail
 {jq_wrapper}
 gh_retry() {{ "$@"; }}
 _safe_gh_jq() {{
+  if [ -n "${{GH_CALLS_LOG:-}}" ]; then printf '%s\n' "$*" >> "${{GH_CALLS_LOG}}"; fi
   case "$*" in
+    *"/statuses"*)
+      if [ "${{STATUSES_FAIL:-0}}" = "1" ]; then return 1; fi
+      printf '%s' "${{STATUSES_JSON}}"
+      ;;
     *"/protection"*)
       if [ -n "${{PROT_EXPECT_PATH:-}}" ] && [ "$*" != "${{PROT_EXPECT_PATH}}" ]; then
         printf '%s' ''
@@ -87,6 +95,9 @@ source {str(LIB)!r}
 		"RUNS_JSON": runs_json,
 		"PROT_JSON": prot_json,
 		"PR_JSON": pr_json,
+		"STATUSES_JSON": statuses_json,
+		"STATUSES_FAIL": "1" if statuses_fail else "0",
+		"GH_CALLS_LOG": calls_log,
 	}
 	if env:
 		full_env.update(env)
@@ -829,6 +840,230 @@ def test_ci_check_default_applies_only_to_bases_ci_runs_on() -> None:
 	# No `lint` check-run in the listing: the side channel names the required
 	# check and reports it absent; the gate result itself is unchanged.
 	assert (gate, name, state) == ("0:ok", "lint", "absent"), (gate, name, state)
+
+
+# ---------------------------------------------------------------------------
+# Review-gate supersede (issue #9212): a newer `ai-review/head-gate` success
+# for the exact head SHA drops the newest failed `review / gate` check-run.
+# ---------------------------------------------------------------------------
+
+
+SUP_SHA = "295a8507" + "0" * 32
+SUP_OTHER_SHA = "1" * 40
+SUP_ARGS = f'9168 "{SUP_SHA}" "main"'
+
+
+def _sup_gate_run(conclusion: str = "failure", *, check_id: int = 7001,
+		completed_at: str = "2026-11-09T01:38:05Z", run_id: str = "42736609134") -> dict:
+	return {
+		"id": check_id,
+		"name": "review / gate",
+		"status": "completed",
+		"conclusion": conclusion,
+		"started_at": "2026-11-09T01:38:02Z",
+		"completed_at": completed_at,
+		"details_url": f"https://github.com/owner/repo/actions/runs/{run_id}/job/1",
+	}
+
+
+def _sup_green_runs() -> list[dict]:
+	return [
+		{"id": 6001, "name": "lint", "status": "completed", "conclusion": "success",
+			"details_url": "https://github.com/owner/repo/actions/runs/500/job/2"},
+	]
+
+
+def _sup_status(state: str = "success", *, created_at: str = "2026-11-10T00:02:41Z",
+		sha: str = SUP_SHA, status_id: int = 1, context: str = "ai-review/head-gate") -> dict:
+	return {
+		"id": status_id,
+		"url": f"https://api.github.com/repos/owner/repo/statuses/{sha}",
+		"state": state,
+		"context": context,
+		"created_at": created_at,
+		"updated_at": created_at,
+	}
+
+
+def _sup(
+	runs: list[dict],
+	statuses: list[dict] | None = None,
+	*,
+	args: str = SUP_ARGS,
+	statuses_fail: bool = False,
+	env: dict[str, str] | None = None,
+) -> tuple[int, str, list[str], list[str]]:
+	"""Run the gate with stdout discarded (as _pr_wait_for_required_checks
+	does) and return (rc, reason, PR_CHECKS_GATE_SUPERSEDED lines, gh calls)."""
+	import tempfile
+
+	with tempfile.TemporaryDirectory() as tmp:
+		calls_log = str(Path(tmp) / "calls.log")
+		Path(calls_log).write_text("")
+		body = (
+			f'_pr_checks_completed {args} >/dev/null; rc=$?; '
+			'printf "RESULT=%s\\n" "${rc}:${PR_CHECKS_LAST_REASON}" >&2'
+		)
+		res = _run(
+			body,
+			runs_json=_page(runs),
+			statuses_json=json.dumps(statuses if statuses is not None else []),
+			statuses_fail=statuses_fail,
+			calls_log=calls_log,
+			env={**REPO_ENV, **(env or {})},
+		)
+		calls = Path(calls_log).read_text().splitlines()
+	assert res.returncode == 0, res.stderr
+	result = [ln for ln in res.stderr.splitlines() if ln.startswith("RESULT=")]
+	assert len(result) == 1, res.stderr
+	rc_str, _, reason = result[0][len("RESULT="):].partition(":")
+	lines = [ln for ln in res.stderr.splitlines() if ln.startswith("PR_CHECKS_GATE_SUPERSEDED ")]
+	return int(rc_str), reason, lines, calls
+
+
+def _status_calls(calls: list[str]) -> list[str]:
+	return [c for c in calls if "/statuses" in c]
+
+
+def test_review_gate_failure_superseded_by_newer_head_gate_status() -> None:
+	rc, reason, lines, calls = _sup(_sup_green_runs() + [_sup_gate_run()], [_sup_status()])
+	assert (rc, reason) == (0, "ok"), (rc, reason, lines)
+	assert len(lines) == 1, lines
+	line = lines[0]
+	assert "outcome=superseded" in line, line
+	assert f"pr=9168 head={SUP_SHA} failed_run=42736609134 check_run=7001" in line, line
+	assert "status_created_at=2026-11-10T00:02:41Z" in line, line
+	status_calls = _status_calls(calls)
+	assert status_calls == [f"repos/owner/repo/commits/{SUP_SHA}/statuses?per_page=100"], calls
+
+
+def test_review_gate_supersede_pr_9168_regression() -> None:
+	"""PR #9168: the first review run's gate failed at 01:38 on a rate limit;
+	re-dispatched runs posted ai-review/head-gate=success at 00:02 the next
+	day. Before #9212 the merge was refused forever."""
+	runs = [
+		{"id": 6001, "name": "lint", "status": "completed", "conclusion": "success",
+			"details_url": "https://github.com/owner/repo/actions/runs/42736600000/job/2"},
+		{"id": 6002, "name": "Lint PR body for auto-close keywords against orchestrator-tracking issues",
+			"status": "completed", "conclusion": "success"},
+		_sup_gate_run(),
+	]
+	statuses = [
+		_sup_status(created_at="2026-11-10T00:02:41Z", status_id=3),
+		{**_sup_status("pending", created_at="2026-11-09T23:31:00Z", status_id=2)},
+		{**_sup_status("success", created_at="2026-11-09T00:10:00Z", status_id=4, context="other/ctx")},
+	]
+	rc, reason, lines, _ = _sup(runs, statuses)
+	assert (rc, reason) == (0, "ok"), (rc, reason, lines)
+	assert len(lines) == 1 and "outcome=superseded" in lines[0], lines
+	# Default required set: the 2-arg legacy "*" mode is covered separately.
+
+
+def test_review_gate_failed_without_head_gate_status_blocks() -> None:
+	rc, reason, lines, _ = _sup(_sup_green_runs() + [_sup_gate_run()], [])
+	assert (rc, reason) == (1, "blocking"), (rc, reason)
+	assert len(lines) == 1 and "outcome=skip reason=no_head_gate_status" in lines[0], lines
+
+
+def test_review_gate_failed_head_gate_not_success_blocks() -> None:
+	cases = [
+		[_sup_status("pending")],
+		[_sup_status("failure")],
+		[_sup_status("error")],
+		# An older success followed by a newer pending: the newest decides.
+		[_sup_status("pending", created_at="2026-11-10T00:05:00Z", status_id=2), _sup_status(status_id=1)],
+	]
+	for statuses in cases:
+		rc, reason, lines, _ = _sup(_sup_green_runs() + [_sup_gate_run()], statuses)
+		assert (rc, reason) == (1, "blocking"), (statuses, rc, reason)
+		assert len(lines) == 1 and "reason=status_not_success" in lines[0], (statuses, lines)
+
+
+def test_review_gate_failed_success_not_newer_blocks() -> None:
+	for created_at in ("2026-11-09T01:30:00Z", "2026-11-09T01:38:05Z"):
+		rc, reason, lines, _ = _sup(_sup_green_runs() + [_sup_gate_run()], [_sup_status(created_at=created_at)])
+		assert (rc, reason) == (1, "blocking"), (created_at, rc, reason)
+		assert len(lines) == 1 and "reason=status_not_newer" in lines[0], (created_at, lines)
+
+
+def test_review_gate_failed_success_for_other_sha_blocks() -> None:
+	rc, reason, lines, _ = _sup(_sup_green_runs() + [_sup_gate_run()], [_sup_status(sha=SUP_OTHER_SHA)])
+	assert (rc, reason) == (1, "blocking"), (rc, reason)
+	assert len(lines) == 1 and "reason=status_sha_mismatch" in lines[0], lines
+
+
+def test_review_gate_failed_unparseable_timestamp_blocks() -> None:
+	rc, reason, lines, _ = _sup(_sup_green_runs() + [_sup_gate_run()], [_sup_status(created_at="yesterday")])
+	assert (rc, reason) == (1, "blocking"), (rc, reason)
+	assert len(lines) == 1 and "reason=unparseable_timestamp" in lines[0], lines
+
+
+def test_review_gate_supersede_status_read_failed_keeps_blocking() -> None:
+	rc, reason, lines, calls = _sup(_sup_green_runs() + [_sup_gate_run()], [_sup_status()], statuses_fail=True)
+	assert (rc, reason) == (1, "blocking"), (rc, reason)
+	assert len(lines) == 1 and "outcome=skip reason=status_read_failed" in lines[0], lines
+	assert len(_status_calls(calls)) == 1, calls
+	# A non-array payload is a failed read too.
+	res_rc, res_reason, res_lines, _ = _sup(_sup_green_runs() + [_sup_gate_run()], None, statuses_fail=False,
+		env={"STATUSES_JSON": "{}"})
+	assert (res_rc, res_reason) == (1, "blocking"), (res_rc, res_reason)
+	assert any("reason=status_read_failed" in ln for ln in res_lines), res_lines
+
+
+def test_review_gate_passed_issues_no_statuses_read() -> None:
+	rc, reason, lines, calls = _sup(_sup_green_runs() + [_sup_gate_run("success")], [_sup_status()])
+	assert (rc, reason) == (0, "ok"), (rc, reason)
+	assert lines == [] and _status_calls(calls) == [], (lines, calls)
+	# A failed gate that is not in the required set does not block today, so
+	# no statuses read either.
+	rc, reason, lines, calls = _sup(_sup_green_runs() + [_sup_gate_run()], [_sup_status()],
+		env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"})
+	assert (rc, reason) == (0, "ok"), (rc, reason)
+	assert lines == [] and _status_calls(calls) == [], (lines, calls)
+
+
+def test_review_gate_superseded_but_other_required_check_failed_blocks() -> None:
+	runs = [
+		{"id": 6001, "name": "lint", "status": "completed", "conclusion": "failure"},
+		_sup_gate_run(),
+	]
+	rc, reason, lines, _ = _sup(runs, [_sup_status()])
+	assert (rc, reason) == (1, "blocking"), (rc, reason)
+	assert len(lines) == 1 and "outcome=superseded" in lines[0], lines
+
+
+def test_review_gate_short_head_sha_skips_without_statuses_read() -> None:
+	rc, reason, lines, calls = _sup(_sup_green_runs() + [_sup_gate_run()], [_sup_status()], args='9168 "abc1234" "main"')
+	assert (rc, reason) == (1, "blocking"), (rc, reason)
+	assert len(lines) == 1 and "reason=short_head_sha" in lines[0], lines
+	assert _status_calls(calls) == [], calls
+
+
+def test_review_gate_supersede_applies_in_legacy_star_mode() -> None:
+	rc, reason, lines, _ = _sup(_sup_green_runs() + [_sup_gate_run()], [_sup_status()], args=f'9168 "{SUP_SHA}"')
+	assert (rc, reason) == (0, "ok"), (rc, reason, lines)
+	assert len(lines) == 1 and "outcome=superseded" in lines[0], lines
+
+
+def test_review_gate_supersede_drops_only_newest_failed_run() -> None:
+	"""An older failed gate run next to a newer failed one keeps blocking:
+	only the newest run can be superseded."""
+	runs = _sup_green_runs() + [
+		_sup_gate_run(check_id=7000, completed_at="2026-11-09T01:00:00Z", run_id="42736600001"),
+		_sup_gate_run(check_id=7001),
+	]
+	rc, reason, lines, _ = _sup(runs, [_sup_status()])
+	assert (rc, reason) == (1, "blocking"), (rc, reason)
+	assert len(lines) == 1 and "check_run=7001" in lines[0] and "outcome=superseded" in lines[0], lines
+
+
+def test_review_gate_self_run_newest_is_not_evaluated() -> None:
+	"""When the newest gate run is the caller's own job it is excluded
+	already; no statuses read is made for it."""
+	runs = _sup_green_runs() + [_sup_gate_run(run_id="999")]
+	rc, reason, lines, calls = _sup(runs, [_sup_status()], env={"PR_CHECKS_SELF_RUN_ID": "999"})
+	assert (rc, reason) == (0, "ok"), (rc, reason)
+	assert lines == [] and _status_calls(calls) == [], (lines, calls)
 
 
 def main() -> int:

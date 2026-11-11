@@ -80,6 +80,14 @@
 #                            (_pr_wait_for_required_checks passes the
 #                            AUTO_MERGE_WAIT_WORKFLOWS run ids on the head).
 #                            Unset: match by name and head SHA only.
+#   PR_CHECKS_GATE_SUPERSEDED — stderr log line (not a variable) written by
+#                            _pr_checks_completed when the newest failed
+#                            `review / gate` check-run on the head is checked
+#                            against the `ai-review/head-gate` commit status
+#                            (issue #9212): outcome=superseded when a newer
+#                            success status for the exact head SHA drops it
+#                            from the blocking set, outcome=skip reason=<token>
+#                            otherwise (the check-run keeps blocking).
 
 # Built-in default required-check set. Defined set-if-unset so a caller
 # that already declared it (the orchestrator does, near
@@ -220,6 +228,31 @@ _pr_required_check_names_for_base()
 # The check-runs API call uses --paginate --slurp so commits with >100
 # check-runs don't hide failures on later pages.
 #
+# Review-gate supersede (issue #9212). A re-dispatched review run's own
+# `review / gate` check-run attaches to the commit the workflow runs on
+# (`main`), not to the PR head, so it never supersedes a gate job that
+# failed on the head in the PR's first review run (PR #9168: run
+# 42736609134 died on a rate limit in 3 seconds and every later green
+# review was refused with reason=required_checks_failed). When `review /
+# gate` counts as blocking (legacy "*" mode, or it is in the required set)
+# and its NEWEST check-run on the head completed with a conclusion other
+# than success/neutral/skipped, the gate reads the head's commit statuses
+# (one conditional `GET commits/<sha>/statuses?per_page=100`, first page,
+# newest first; no call at all when the gate did not fail) and drops that
+# one check-run from the blocking count only when the newest status with
+# context ${REVIEW_HEAD_GATE_CONTEXT:-ai-review/head-gate} has state
+# success, names the full 40-hex head SHA, and was created strictly after
+# the check-run's completed_at. Every other case keeps blocking. Each
+# evaluation logs one `PR_CHECKS_GATE_SUPERSEDED pr=<n> head=<sha>
+# failed_run=<actions run id|unknown> check_run=<id> ... outcome=superseded
+# status_created_at=<ts>` or `... outcome=skip reason=<token>` line to
+# STDERR, because _pr_wait_for_required_checks discards this function's
+# stdout and that is the auto-merge path PR #9168 was stuck on. Skip
+# reasons: short_head_sha, status_read_failed, no_head_gate_status,
+# status_not_success, status_sha_mismatch, status_not_newer,
+# unparseable_timestamp. PR_CHECKS_LAST_REASON values, PENDING/TOTAL and
+# the CI side channel are unaffected.
+#
 # Usage:  _pr_checks_completed <PR_NUMBER> [<HEAD_SHA>] [<BASE_REF>]
 #   HEAD_SHA optional: when omitted, fetched from the PR.
 #   BASE_REF optional: callers that pass it (even as "") opt into the
@@ -336,6 +369,112 @@ _pr_checks_completed()
 		return 0
 	fi
 
+	# Review-gate supersede (issue #9212; see the comment above this
+	# function). The check name is fixed on purpose (not an env var) so the
+	# relaxation stays narrow: one check name, one commit, a verdict newer
+	# than the failure.
+	local gate_sup_check_name="review / gate"
+	local gate_sup_drop_id=""
+	local gate_sup_countable="false"
+	if [ "${required_names_csv}" = "*" ]; then
+		gate_sup_countable="true"
+	elif jq -n -e --arg names "${required_names_csv}" --arg n "${gate_sup_check_name}" '
+		($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) | index($n) != null
+	' >/dev/null 2>&1; then
+		gate_sup_countable="true"
+	fi
+	if [ "${gate_sup_countable}" = "true" ]; then
+		# Newest `review / gate` run (same ordering as _newer_than, chosen
+		# before the self-run exclusion), emitted only when it failed.
+		local gate_sup_failed=""
+		gate_sup_failed="$(printf '%s' "${check_runs_json}" | jq -r --arg n "${gate_sup_check_name}" --arg self_run "${self_run}" '
+			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
+			(
+				if (type == "array") then [.[]? | select(type == "object") | (.check_runs // [])[]]
+				elif (type == "object" and (.check_runs | type == "array")) then .check_runs
+				else null end
+			) as $runs |
+			if ($runs == null) then empty
+			else
+				[$runs[] | select(type == "object" and .name == $n)] as $g |
+				if ($g | length) == 0 then empty
+				else
+					($g | max_by([(.id // 0), (.started_at // "")])) as $r |
+					if ($r.status == "completed")
+						and (($r.conclusion // "") as $c | ($c != "success" and $c != "neutral" and $c != "skipped"))
+						and (($r.id | type) == "number")
+						and ((($r.completed_at // "") | type) == "string") and (($r.completed_at // "") != "")
+						and (($r | _is_self_check_run) | not)
+					then
+						"\($r.id)\t\($r.completed_at)\t\(([($r.details_url // "") | tostring | capture("/actions/runs/(?<id>[0-9]+)(/|$)") | .id] | first) // "unknown")"
+					else empty end
+				end
+			end
+		' 2>/dev/null | tail -n1)"
+		if [ -n "${gate_sup_failed}" ]; then
+			local gate_sup_check_id="" gate_sup_failed_at="" gate_sup_run_id="" gate_sup_reason="" gate_sup_created_at=""
+			IFS=$'\t' read -r gate_sup_check_id gate_sup_failed_at gate_sup_run_id <<< "${gate_sup_failed}"
+			[[ "${gate_sup_run_id}" =~ ^[0-9]+$ ]] || gate_sup_run_id="unknown"
+			if ! [[ "${gate_sup_check_id}" =~ ^[0-9]+$ ]]; then
+				# Unusable id: the drop could not target the run, keep blocking.
+				gate_sup_reason="status_read_failed"
+			elif ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+				# The status must name the full head SHA; a short or odd SHA
+				# also never reaches the URL below.
+				gate_sup_reason="short_head_sha"
+			else
+				# §14: no statuses read exists on this path to reuse. The only
+				# other statuses read in this file is the combined
+				# `commits/<sha>/status` in _pr_ruleset_required_check_blockers,
+				# a separate helper the orchestrator calls only on
+				# mergeable_state=blocked; there is no cycle-local statuses
+				# cache. The list endpoint returns statuses newest first, so
+				# the first page holds the newest head-gate status; a miss
+				# keeps blocking (no_head_gate_status).
+				local gate_sup_statuses_json="" gate_sup_decision=""
+				if gate_sup_statuses_json="$(gh_retry _safe_gh_jq "repos/${repo}/commits/${head_sha}/statuses?per_page=100" 2>/dev/null)"; then
+					gate_sup_decision="$(printf '%s' "${gate_sup_statuses_json}" | jq -r \
+						--arg ctx "${REVIEW_HEAD_GATE_CONTEXT:-ai-review/head-gate}" \
+						--arg sha "${head_sha}" --arg failed_at "${gate_sup_failed_at}" '
+						if (type != "array") then "skip\tstatus_read_failed"
+						else
+							[.[] | select(type == "object" and .context == $ctx)] as $s |
+							if ($s | length) == 0 then "skip\tno_head_gate_status"
+							else
+								($s | max_by([(.created_at // ""), (.id // 0)])) as $st |
+								if ($st.state != "success") then "skip\tstatus_not_success"
+								elif (((($st.url // "") | tostring) | endswith("/statuses/" + $sha)) | not) then "skip\tstatus_sha_mismatch"
+								else
+									(try ([($st.created_at | fromdateiso8601), ($failed_at | fromdateiso8601)]) catch null) as $ts |
+									if ($ts == null) then "skip\tunparseable_timestamp"
+									elif ($ts[0] > $ts[1]) then "superseded\t\($st.created_at)"
+									else "skip\tstatus_not_newer" end
+								end
+							end
+						end
+					' 2>/dev/null | tail -n1)"
+				fi
+				case "${gate_sup_decision}" in
+					superseded$'\t'*)
+						gate_sup_created_at="${gate_sup_decision#superseded$'\t'}"
+						gate_sup_drop_id="${gate_sup_check_id}"
+						;;
+					skip$'\t'no_head_gate_status|skip$'\t'status_not_success|skip$'\t'status_sha_mismatch|skip$'\t'status_not_newer|skip$'\t'unparseable_timestamp)
+						gate_sup_reason="${gate_sup_decision#skip$'\t'}"
+						;;
+					*)
+						gate_sup_reason="status_read_failed"
+						;;
+				esac
+			fi
+			if [ -n "${gate_sup_drop_id}" ]; then
+				echo "PR_CHECKS_GATE_SUPERSEDED pr=${pr_number} head=${head_sha} failed_run=${gate_sup_run_id} check_run=${gate_sup_check_id} status_created_at=${gate_sup_created_at} outcome=superseded" >&2
+			else
+				echo "PR_CHECKS_GATE_SUPERSEDED pr=${pr_number} head=${head_sha} failed_run=${gate_sup_run_id} check_run=${gate_sup_check_id:-unknown} outcome=skip reason=${gate_sup_reason:-status_read_failed}" >&2
+			fi
+		fi
+	fi
+
 	# Self-run exclusion predicate (jq): a check-run hosted by the current
 	# GitHub Actions run is never counted as blocking. $self_run="" makes
 	# the predicate always false, so the exclusion is a no-op for callers
@@ -344,7 +483,7 @@ _pr_checks_completed()
 	local incomplete
 	if [ "${required_names_csv}" = "*" ]; then
 		# Legacy fail-closed-on-any-failure behaviour (with self-run exclusion).
-		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg self_run "${self_run}" --arg ci "${PR_CHECKS_LAST_CI_NAME:-none}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" "${PR_CHECKS_JQ_SUPERSEDE_DEFS}"'
+		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg self_run "${self_run}" --arg gate_drop_id "${gate_sup_drop_id}" --arg ci "${PR_CHECKS_LAST_CI_NAME:-none}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" "${PR_CHECKS_JQ_SUPERSEDE_DEFS}"'
 			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
 			def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)));
 			(
@@ -358,7 +497,7 @@ _pr_checks_completed()
 			) as $runs |
 			if ($runs == null) then empty
 			else
-				[$runs | _mark_superseded | .[] | select(_is_pending and (_is_self_check_run | not))] | length
+				[$runs | _mark_superseded | .[] | select(_is_pending and (_is_self_check_run | not)) | select(($gate_drop_id == "") or (((.id // "") | tostring) != $gate_drop_id))] | length
 			end
 		' 2>/dev/null | tail -n1)"
 	else
@@ -370,7 +509,7 @@ _pr_checks_completed()
 		# failures (Copilot, optional reviewers, CodeQL, etc.) through.
 		# Whitespace around comma-separated tokens is trimmed so operators
 		# can format the env var with spaces after commas.
-		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" --arg self_run "${self_run}" --arg ci "${PR_CHECKS_LAST_CI_NAME:-none}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" "${PR_CHECKS_JQ_SUPERSEDE_DEFS}"'
+		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" --arg self_run "${self_run}" --arg gate_drop_id "${gate_sup_drop_id}" --arg ci "${PR_CHECKS_LAST_CI_NAME:-none}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" "${PR_CHECKS_JQ_SUPERSEDE_DEFS}"'
 			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
 			($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $required |
 			(
@@ -393,6 +532,7 @@ _pr_checks_completed()
 						)
 					)
 					and (_is_self_check_run | not)
+					and (($gate_drop_id == "") or (((.id // "") | tostring) != $gate_drop_id))
 				)] | length
 			end
 		' 2>/dev/null | tail -n1)"
