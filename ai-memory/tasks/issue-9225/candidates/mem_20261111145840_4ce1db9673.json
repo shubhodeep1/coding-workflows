@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9225,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9225\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9264\",\"pr_number\":9264,\"branch\":\"ai/issue-9225\",\"run_id\":\"43039241818\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43039241818\",\"changed_files\":[\"changelog.d/9225-gh-retry-closed-reader-builtin-replay.md\",\"scripts/gh_helpers.sh\",\"tests/test_gh_retry_stdout_isolation.py\"]}",
+  "fingerprint": "3f30ce4cb1572467f377085533547ef75ca82f239e725c0039822ba67f3cd371",
+  "lineage": {
+    "issue_number": 9225,
+    "parent_ids": [],
+    "pr_number": 9264,
+    "run_id": "43039241818",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43039241818",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9264"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261111145840_4ce1db9673",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9225,
+    "level": "run",
+    "pr_number": 9264,
+    "run_id": "43039241818"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9225: https://github.com/shubhodeep1/coding-workflows/pull/9264",
+  "timestamps": {
+    "created_at": "2026-11-11T14:58:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
