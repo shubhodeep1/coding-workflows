@@ -2513,8 +2513,8 @@ jobs:
       # subject), so no record is not proof of headroom: if group 0 is
       # flagged next, measure step timings before moving this step again. The
       # step needs only checkout, Python 3.12 and the shared pip install, which
-      # every group has. It now runs in group 0 only, once per CI run. Name
-      # and body unchanged by that move.
+      # every group has. It then ran in group 0 only, once per CI run, until
+      # #9214. Name and body unchanged by that move.
       # Sharded in place, not moved (#9021): orchestrate-poll (0) took 15m15s
       # of its 20 minutes on main (run 42426489708). That run's step timings
       # could not be read, so this is an estimate, not a measurement. The step
@@ -2526,7 +2526,8 @@ jobs:
       # now run across 4 local pytest processes on the runner's 4 cores, as
       # #8150 and #8246 did. Every listed module must collect at least one
       # test, each collected function runs exactly once, and a shard without
-      # exit code 0 fails the step. Name, guard and module set unchanged.
+      # exit code 0 fails the step. Name, guard and module set were unchanged
+      # by that sharding.
       # Moved from orchestrate-poll group 0 to this job: orchestrate-poll (0)
       # took 15m51s of its 20 minutes on main (run 42933243586, budget-watch
       # issue #9214). That run's step timings could not be read, so the pick is

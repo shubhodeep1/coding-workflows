@@ -3801,9 +3801,10 @@ class MovedPollGroupThree9037StepsContractTest(unittest.TestCase):
 
 
 # Issue #9021: orchestrate-poll (0) took 15m15s of its 20 minutes (run
-# 42426489708). The CI wiring guard part 2 step stays in group 0, by name and
-# guard, and splits its test functions across 4 local processes, the way the
-# part 1 step did in #8246. Its module set stays pinned by the #8772 constants.
+# 42426489708). The CI wiring guard part 2 step stayed in group 0, by name and
+# guard, until #9214, and splits its test functions across 4 local processes,
+# the way the part 1 step did in #8246. Its module set stays pinned by the
+# #8772 constants.
 # Issue #9214: orchestrate-poll (0) took 15m51s of its 20 minutes (run
 # 42933243586), so the step moved, name and body unchanged, out of the poll
 # matrix into tests-release-and-log-analysis, where it runs unguarded.
@@ -3875,8 +3876,8 @@ class WiringGuardPartTwoShardingContractTest(unittest.TestCase):
 	"""The wiring guard part 2 step runs its 53 modules in local shards (#9021).
 
 	`orchestrate-poll (0)` took 15m15s of its 20 minutes (run 42426489708).
-	The step stays in group 0, by name and guard, and splits its test
-	functions across 4 processes, the way #8150 and #8246 did. Its module
+	The step stayed in group 0, by name and guard, until #9214, and splits
+	its test functions across 4 processes, the way #8150 and #8246 did. Its module
 	set is pinned by the #8772/#8980 constants. Every listed module must
 	collect at least one test, every test must run exactly once, and a shard
 	that fails or records no exit code must fail the step.
