@@ -9578,7 +9578,9 @@ def test_review_isolation_transfers_new_chatgpt_pool_config() -> None:
 	"""PR #9112 / issue #9111: an editor-created or edited chatgpt_pool.json survives transfer unless the flag is false."""
 	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
 	flag = "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED"
-	for flag_value, existing in ((None, False), ("false", False), (None, True)):
+	# ("false", True): with the switch off, an existing host file stays out of
+	# the sandbox and is never overwritten by an editor write.
+	for flag_value, existing in ((None, False), ("false", False), (None, True), ("false", True)):
 		with tempfile.TemporaryDirectory() as td:
 			root = Path(td)
 			host = root / "host"
@@ -9603,14 +9605,16 @@ def test_review_isolation_transfers_new_chatgpt_pool_config() -> None:
 				)
 
 			assert run("snapshot").returncode == 0
-			assert (source / ".github/ai/chatgpt_pool.json").exists() is existing
+			assert (source / ".github/ai/chatgpt_pool.json").exists() is (existing and flag_value != "false")
 			assert run("refresh").returncode == 0
 			(source / ".github/ai/chatgpt_pool.json").write_text('{"enabled": true}\n')
 			(source / ".github/ai/other.json").write_text("{}\n")
 			result = run("transfer")
 			assert result.returncode == 0, result.stderr
 			assert not (host / ".github/ai/other.json").exists()
-			if flag_value == "false":
+			if flag_value == "false" and existing:
+				assert (host / ".github/ai/chatgpt_pool.json").read_text() == '{"enabled": false}\n'
+			elif flag_value == "false":
 				assert not (host / ".github/ai/chatgpt_pool.json").exists()
 			else:
 				assert (host / ".github/ai/chatgpt_pool.json").read_text() == '{"enabled": true}\n'
