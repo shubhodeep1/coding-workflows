@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: For a non-UTF-8 prompt, how should `render_prompt.sh` behave so that steps 3 and 4 agree?\nChoices:\nA) Stop the script right after the `collect_prompt_placeholders` ERROR line. Its output would be captured where the script can see the failure, and the script exits 1 before calling `render_prompt.py`. stderr gets exactly one `ERROR: collect_prompt_placeholders UnicodeDecodeError: <path>: ...` line, and the step 4 single-ERROR check holds as written. The exit code stays 1, as today, and no fallback path is added. (RECOMMENDED)\nB) Keep the process substitution as it is. stderr gets two ERROR lines: one from `collect_prompt_placeholders`, then one from `render_prompt.py`. The `render_prompt.sh` test is relaxed to \"exit 1, at least one ERROR line naming the file, no `Traceback`\". Only the `render_prompt.py` test keeps the single-ERROR-line check.\nC) Keep the process substitution, and have `collect_prompt_placeholders` print nothing and output no names when it cannot decode the file. `render_prompt.py` then prints the only ERROR line. This drops the step 3 message format and does not follow the spec.",
+  "fingerprint": "5aac81f86ccf9ed83eec1eb8a3111caa1bab1c711118e49c66f26dbc96b1cd72",
+  "lineage": {
+    "issue_number": 9341,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43115886278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43115886278",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111231749_3b85708948",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9341,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43115886278"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9341 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T23:17:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
