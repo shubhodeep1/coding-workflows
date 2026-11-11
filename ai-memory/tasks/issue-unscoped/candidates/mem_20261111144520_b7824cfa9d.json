@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- PR description and commit messages:N/A | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The PR body and a commit message use auto-close keywords (\"Fixes #2734\", \"resolved\") referencing ai:orchestrator-tracking issue #2734. (anthropic_claude-sonnet-5_5 rejected this as a false positive, reading those strings as test-fixture output in the CI log.)\n  WHY: Merging would auto-close the tracking issue and stop orchestrator wave dispatch (CLAUDE.md \u00a719, \u00a721). Reviewers rated it BLOCKER, and that is mapped here to the highest severity, critical.\n- CI / lint checks (orchestrate-poll):N/A | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The integration test jobs `orchestrate-poll` and `tests-hooks-and-orchestrator` failed, and the logs show \"Integration fingerprint verification FAILED \u2014 resolver output regressed merged sub-issue intent\". (anthropic_claude-sonnet-5_5 says these failures cannot be mapped to this JSON-only diff.)\n  WHY: The reviewer says the changes appear to trigger regressions in the orchestrator resolver integration. Rated BLOCKER, mapped to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nNote: this reviewer rejected the cross-pollination BLOCKER about \"Fixes #2734\" as a false positive (ISSUE_CONFIDENCE: 1, SEVERITY: NIT, dropped). The strings come from tests/test_lint_pr_body_auto_close.py fixtures in the CI log, and the PR body and commit do not contain them. It also said the CI failures (tests-hooks-and-orchestrator, orchestrate-poll, lint) cannot be mapped to the JSON-only diff.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- PR description and commit messages:N/A | severity=BLOCKER | confidence=5\n  PROBLEM: The PR body uses \"Fixes #2734\" and a commit message uses \"resolved\" referencing an ai:orchestrator-tracking issue (#2734).\n  WHY: Merging this PR would auto-close tracking issue #2734, killing the orchestrator's state machine and preventing remaining wave dispatches, per CLAUDE.md \u00a719 and \u00a721. This also violates the `lint` check requirements.\n- CI / lint checks (orchestrate-poll):N/A | severity=BLOCKER | confidence=4\n  PROBLEM: Integration test failures occurred (`orchestrate-poll`, `tests-hooks-and-orchestrator`).\n  WHY: Logs show \"Integration fingerprint verification FAILED \u2014 resolver output regressed merged sub-issue intent\". The changes appear to trigger regressions in the orchestrator resolver integration.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- PR metadata (PR body and commit messages; detected by scripts/lint_pr_body_auto_close.py):lint output flags (a) PR body line 1: \"Fixes #2734\" and (b) commit message #2 line 3: \"though each conflict was resolved: #2734 failed\" | severity=BLOCKER | confidence=5\n  PROBLEM: The PR body and a commit message contain auto-close keywords (\"Fixes\", \"resolved\") referencing ai:orchestrator-tracking issue #2734.\n  WHY: Per CLAUDE.md \u00a719 and unattended_system_instructions.md \u00a721, such keywords are forbidden because merging would auto-close the tracking issue and stop remaining wave dispatches. The CI `tests-hooks-and-orchestrator` job exits non-zero on this violation, which propagates as the failing `lint` check. The code change in `analysis/validation-selftest-status.json` is correct. The PR and commit metadata must be reworded to \"Refs #2734\" / \"Related to #2734\", and commit #2 needs a rebase.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "89218214da747883a1643de47e1c5336bc2f1aedd67c630beb3826e6363f5799",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9229,
+    "run_id": "43034532326",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43034532326",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111144520_b7824cfa9d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9229,
+    "run_id": "43034532326"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T14:45:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
