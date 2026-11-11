@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **The review "Checkout PR head branch" step's `REVIEW_HEAD_CHECKOUT` line no longer prints `na` or zero timings when the runner's `date` reading is short or goes backwards.** The step's clock now reads bash's `EPOCHREALTIME` first, as the poller does, and keeps `date` only as the fallback for bash < 5. The line format, field names and enum values are unchanged. Refs #9317.

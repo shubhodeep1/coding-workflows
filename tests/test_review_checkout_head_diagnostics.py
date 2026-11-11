@@ -132,13 +132,13 @@ class Layout:
 		env.update(overrides)
 		return env
 
-	def run(self, *, sourced: bool = False, **overrides: str) -> subprocess.CompletedProcess[str]:
+	def run(self, *, sourced: bool = False, extra_functions: str = "", **overrides: str) -> subprocess.CompletedProcess[str]:
 		self.github_env.write_text("")
 		if sourced:
 			# Mirrors the workflow step: GitHub's bash -eo pipefail shell sources the script file.
-			cmd = ["bash", "-c", FAKE_FUNCTIONS + 'set -eo pipefail; source "$1"', "_", str(SCRIPT_PATH)]
+			cmd = ["bash", "-c", FAKE_FUNCTIONS + extra_functions + 'set -eo pipefail; source "$1"', "_", str(SCRIPT_PATH)]
 		else:
-			cmd = ["bash", "-c", FAKE_FUNCTIONS + review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")]
+			cmd = ["bash", "-c", FAKE_FUNCTIONS + extra_functions + review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")]
 		return subprocess.run(cmd, cwd=self.split, env=self.env(**overrides), capture_output=True, text=True)
 
 
@@ -311,6 +311,40 @@ def test_errexit_abort_in_branch_switch_is_recorded(layout: Layout) -> None:
 	_assert_no_temp_files(layout)
 
 
+def test_elapsed_fields_ignore_a_date_clock_that_goes_backwards(layout: Layout) -> None:
+	# ubuntu-26.04 runners ship Rust coreutils, whose `date +%s%3N` gave short
+	# or backwards readings within one run, so END - START went negative and the
+	# summary printed switch_ms=na (issue #9317). The step now reads bash's
+	# EPOCHREALTIME first; on bash < 5 it falls back to `date` by design, so
+	# there is nothing to test there.
+	probe = subprocess.run(
+		["bash", "--noprofile", "--norc", "-c", '[ -n "${EPOCHREALTIME:-}" ]'],
+		capture_output=True,
+		timeout=30,
+	)
+	if probe.returncode != 0:
+		pytest.skip("bash has no EPOCHREALTIME (bash < 5); the step uses its `date` fallback")
+	date_counter = layout.root / "date_counter"
+	# The counter is a file because the clock runs inside $(...) subshells.
+	# Every call returns a reading 100 ms earlier than the previous one.
+	fake_date = f"""date() {{
+  local fake_date_calls=0
+  if [ -f "{date_counter}" ]; then fake_date_calls="$(cat "{date_counter}")"; fi
+  fake_date_calls=$((fake_date_calls + 1))
+  echo "${{fake_date_calls}}" > "{date_counter}"
+  echo "$((1700000009000 - 100 * fake_date_calls))"
+}}
+"""
+	result = layout.run(extra_functions=fake_date)
+	assert result.returncode == 0, result.stderr
+	_, fields = _summary(result)
+	assert (fields["stage"], fields["outcome"]) == ("done", "ok")
+	assert fields["fetch_ms"].isdigit(), fields
+	assert fields["switch_ms"].isdigit(), fields
+	assert not date_counter.exists() or date_counter.read_text().strip() == ""
+	_assert_no_temp_files(layout)
+
+
 def test_script_contract_is_additive() -> None:
 	text = SCRIPT_PATH.read_text()
 	assert len(re.findall(r"^\s*trap ", text, re.MULTILINE)) == 1
@@ -318,6 +352,7 @@ def test_script_contract_is_additive() -> None:
 	assert text.index("trap 'review_head_checkout_on_exit") < text.index('HEAD_REF="$(jq')
 	assert "fetch_max_attempts=4" in text and "fetch_backoff=2" in text
 	assert "date +%s%3N" in text
+	assert "EPOCHREALTIME" in text
 	handler = text[text.index("review_head_checkout_on_exit()"):text.index("REVIEW_HEAD_CHECKOUT_START_MS=")]
 	assert "exit " not in handler
 	assert "REVIEW_CHECKOUT_SHA=" not in text
