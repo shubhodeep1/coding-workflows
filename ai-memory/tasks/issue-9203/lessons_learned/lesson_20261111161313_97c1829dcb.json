@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-11-11T16:13:13Z",
+  "issue_number": 9203,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 007 as out-of-scope; anchor=agents.d/stuck-states-p2b-implement-support-scripts.md:12-19; cited_path=agents.d/stuck-states-p2b-implement-support-scripts.md; files_touched=.github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p10-operator-step-resolve.md, changelog.d/stuck-states-p10-operator-step-resolve.md, prompts/_templates/mode-activation-verify.txt, prompts/mode-activation-verify.txt, scripts/activation_verify.sh, scripts/operator_step_issue.py, tests/test_activation_verify.py, tests/test_operator_step_issue.py.",
+  "phase": "review_autofix",
+  "pr_number": 9259,
+  "record_id": "lesson_20261111161313_97c1829dcb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.d/stuck-states-p2b-implement-support-scripts.md",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/stuck-states-p10-operator-step-resolve.md",
+    "changelog.d/stuck-states-p10-operator-step-resolve.md",
+    "prompts/_templates/mode-activation-verify.txt",
+    "prompts/mode-activation-verify.txt",
+    "scripts/activation_verify.sh",
+    "scripts/operator_step_issue.py",
+    "tests/test_activation_verify.py",
+    "tests/test_operator_step_issue.py"
+  ]
+}
