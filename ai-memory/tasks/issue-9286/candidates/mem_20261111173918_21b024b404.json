@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Open PRs #9246 and #9275 already appear to fix these two failures. What should this issue (#9286) do?\nChoices:\nA) Fix both failures here regardless, and accept the likely merge conflicts with #9246 and #9275.\nB) Fix only `test_missing_docker_fails_closed_and_never_runs_host_codex` (skip links whose name already exists, dangling links included). Leave the closed-reader failure to #9246.\nC) Change no code. Treat both failures as base-branch problems covered by #9246 and #9275, record that, and re-run PR #9263's CI once they merge. (RECOMMENDED)\nQ2: If this issue does fix `test_closed_reader_does_not_rerun_a_successful_command` (Q1:A), where should the fix go? (Ignore this question if you chose Q1:B or Q1:C.)\nChoices:\nA) Fix `gh_retry` / `gh_retry_to_file` in `scripts/gh_helpers.sh` so that output it cannot deliver to a closed reader still returns non-zero on ubuntu-26.04, without re-running the command. The test's contract stays as it is. (RECOMMENDED)\nB) Relax the test so it accepts `rc=0` when the reader closes the pipe. This weakens the documented \"undelivered output is reported as non-zero\" contract (`gh_helpers.sh` lines 1197\u20131198).\nC) Mark the test skipped or xfail on runners whose `cat` does not report EPIPE. **Note:** the triage issue says not to disable or skip failing tests.",
+  "fingerprint": "2e8a7f3dbc5860e0f71399d1daf749056f8303a90925b704e22d3fe66ee753f7",
+  "lineage": {
+    "issue_number": 9286,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43069087675",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43069087675",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111173918_21b024b404",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9286,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43069087675"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9286 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T17:39:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
