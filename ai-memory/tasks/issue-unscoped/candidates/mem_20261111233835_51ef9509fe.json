@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:543-548, 806-813 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `tests-hooks-and-orchestrator` check fails on the PR head and turns the `lint` aggregate red. The available log ends in the \"PR body auto-close lint unit tests\" step, so the failing step is not shown.\n  WHY: The merge gate stays red and the failure cannot be attributed to the PR's changed files from the available evidence. Severity differs by reviewer: openai_gpt-6-luna said MAJOR and z-ai_glm-5_3-flash gave none, so I used the highest and mapped MAJOR to high. anthropic_claude-sonnet-5_5 saw the same failure but did not report it as a defect.\n- tests/test_scripts_build_parser_help.py:171-174 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `test_guard_flags_bare_percent_in_subcommand_help_string` accepts two error-message shapes (RuntimeError or ValueError) depending on the Python version.\n  WHY: The reviewer judged this correct for 3.12/3.13 vs 3.14 compatibility and rated it a NIT, so it is not a defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_scripts_build_parser_help.py:171-174 | severity=low | confidence=5\n  PROBLEM: `test_guard_flags_bare_percent_in_subcommand_help_string` accepts two possible error message shapes (RuntimeError or ValueError) depending on the Python version.\n  WHY: This is correct for cross-version compatibility (3.12/3.13 vs 3.14). The implementation handles the ambiguity by checking for both variants, so the test is robust.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:543-548, 806-813 | severity=high | confidence=4\n  PROBLEM: The check fails on this PR head. The available log ends during the test step after fixture-generated annotations, without showing the failing assertion or the cause.\n  WHY: The failed job makes the `lint` aggregate fail, leaving the CI gate red. The failure cannot be attributed to the changed files from the available evidence.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_scripts_build_parser_help.py:167-169 | confidence=4\n  PROBLEM: None in the last-run change itself. Both accepted error shapes are reachable, and the dead-code removal at 134-144 is correct.\n  WHY: It does not fail at runtime; both assertions hold on 3.11 and 3.14 behavior.\n- .github/workflows/ci.yml:543 | confidence=3\n  PROBLEM: The `tests-hooks-and-orchestrator` check fails on head SHA d426f0708f1aa31a4225b9be465317004a034c51 and turns the `lint` aggregate red. The log tail ends inside `tests/test_lint_pr_body_auto_close.py` output, where the `##[error][lint_pr_body_auto_close]` lines are expected fixture output. The failing step is past the log cutoff and cannot be mapped to any of the four PR-touched files.\n  WHY: The merge gate stays red, and without the full log for job 130775051839 or a re-run the failing step cannot be localized.\n- HARDENING: tests/test_scripts_build_parser_help.py:61-69 (`_format_help_with_subparsers`)\n  PROBLEM: `sub.format_help()` return values are discarded, so an empty subcommand help text is never flagged. The top-level text gets a non-empty check at line 112.\n  WHY: Suggested fix: capture each sub's returned text and append a failure when it is not a non-empty string (about 3 lines). HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9c3c64cebec528290c76aa4a493ef872d31157e84d3b636ed311cbb3d5a446c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9270,
+    "run_id": "43093131360",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43093131360",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111233835_51ef9509fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9270,
+    "run_id": "43093131360"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T23:38:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
