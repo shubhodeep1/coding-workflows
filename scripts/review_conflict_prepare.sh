@@ -33,6 +33,7 @@
 #   - Exits 1 if merge replay fails for non-conflict reasons, or template missing.
 #   - Exits 1 if a manifest conflict cannot be resolved before sandbox dispatch.
 #   - Exits 1 if integration-sync state author identity cannot be verified.
+#   - Exits 1 if a GUARD_HOOK_TEMPLATE_PAIRS entry is malformed (expected exactly one live|template separator).
 #   - Exits 0 + clears MERGE_CONFLICT when merge replay produces no unmerged paths.
 
 set -euo pipefail
