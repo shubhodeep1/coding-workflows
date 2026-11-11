@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Open PR #9246 already targets this same \"closed-reader test\" failure on ubuntu-26.04. How should this triage issue relate to it?\nChoices:\nA) Treat this issue as a duplicate of #9246: don't change any code here, and once #9246 merges, update PR #8960's branch from the default branch and re-run CI. (RECOMMENDED)\nB) Fix it independently in this issue's own PR, even though it may conflict with or duplicate #9246.\nC) Re-run CI on PR #8960 only, treating it as a runner flake, and change no code.\n**Note:** C does not fix the cause. uutils `cat` returns 0 every time on ubuntu-26.04, so the test will fail on every run there, not now and then.\nQ2: If code changes here (Q1:B, or if #9246 is closed without merging), where should the fix go?\nChoices:\nA) Fix `gh_retry` in `scripts/gh_helpers.sh`, including the copies the contract tests check (the inline review_autofix copies and `gh_retry_to_file` if it resends output the same way). When it resends the saved output, a closed reader should give a non-zero status no matter which `cat` the runner has. Keep the test's assertion as it is. (RECOMMENDED)\nB) Change only the test so it accepts `rc=0` when the runner's `cat` is uutils coreutils.\nC) Pin the `tests-hooks-and-orchestrator` job in `.github/workflows/ci.yml` to an older runner image (for example `ubuntu-24.04`) instead of `ubuntu-latest`.\n**Note:** B weakens the test, which the issue explicitly forbids (\"Do not loosen the test\"). It would also leave production `gh_retry` callers reporting success when their output was never delivered.",
+  "fingerprint": "cbf720bbc387a9901159689408228d082cdf7f0296429a52d3c64f6f8afe67ec",
+  "lineage": {
+    "issue_number": 9329,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43099520751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43099520751",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111210806_2b3a13eb72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9329,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43099520751"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9329 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T21:08:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
