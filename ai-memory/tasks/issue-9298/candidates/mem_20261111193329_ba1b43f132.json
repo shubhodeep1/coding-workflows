@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: REFRAME\n\nRATIONALE:\nQ1: The issue's \"Suggested fix\" step 5 puts this in scope: it says to re-run `tests-hooks-and-orchestrator` and, if it still fails, fix the test its log names. That test is `tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command` (line 228). This lineage is generation 1 of 3. If the job stays red, the PR gets another triage issue, so leaving this failure out (B or C) only moves the work into a new cycle. The fix is in `scripts/gh_helpers.sh` `gh_retry`, lines 1227-1231. There `cat \"${stdout_file}\" || _gh_retry_replay_rc=$?` is the only place the closed pipe is noticed, so if `cat` exits 0 on a closed reader, `gh_retry` returns 0.\nQ2: The test's comment states the intended behaviour: a successful command must not run again, and output that was never delivered is reported as a non-zero status. Under option B a caller could not tell that its reader lost data. So the test stays as written. The re-send in `gh_retry` must return non-zero when the reader has gone, whether or not the runner's `cat` reports it (for example because SIGPIPE was ignored when the process started, or because that `cat` build swallows EPIPE). It must still run the command exactly once and leave no temp files.\nQ3: The checkout is the PR branch (`ai/issue-9008` @ c8b51d4). It has `GUARD_HOOK_TEMPLATE_PAIRS` with all 5 pairs (`scripts/review_conflict_prepare.sh:236-242`), `PAIRED_LIVE_COPIES` with only 2 (`scripts/review_untrusted_workspace.py:76-79`), and a relaxed test (`tests/test_conflict_guard_hook_template_merge.py:471-480`) that allows extra entries after the registry pairs. The issue forbids that kind of weakening, so B is out. C would fail again on the PR-merged-into-main tree, where the registry has 5 pairs. Option A needs a merge of `main`, and this pipeline can only edit files and open one PR, not merge branches. So the plan gets A's strict check by editing files: the branch's registry is made to list the same 5 pairs in the same order as `main`. That order can be read from the CI log in the issue.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ3:\n  strategy: reframe\n  inputs:\n    - scripts/review_untrusted_workspace.py (`PAIRED_LIVE_COPIES`, lines 71-79)\n    - scripts/review_conflict_prepare.sh (`GUARD_HOOK_TEMPLATE_PAIRS`, lines 231-242; `_conflict_prepare_guard_hook_template_merge`, lines 243-345)\n    - tests/test_conflict_guard_hook_template_merge.py (`test_guard_hook_pairs_mirror_paired_live_copies`, lines 443-483)\n    - The order of `main`'s registry, taken from the CI log in the issue (run 43043101567): pr_merge_status_guard.py, prepush_affected_tests.py, gh_api_write_guard.py, pr_watch_guard.py, session-start.sh. Pytest reports the first extra item at index 2 as gh_api_write_guard.py, followed by pr_watch_guard.py and session-start.sh.\n    - Templates that exist in the checkout: workflow-templates/.claude/hooks/{gh_api_write_guard.py,pr_watch_guard.py,session-start.sh}\n  steps:\n    - In `scripts/review_untrusted_workspace.py`, add three entries to `PAIRED_LIVE_COPIES` after the two existing ones, in this order: `.claude/hooks/gh_api_write_guard.py` -> `workflow-templates/.claude/hooks/gh_api_write_guard.py`, `.claude/hooks/pr_watch_guard.py` -> `workflow-templates/.claude/hooks/pr_watch_guard.py`, `.claude/hooks/session-start.sh` -> `workflow-templates/.claude/hooks/session-start.sh`. Keep the existing entries and comments unchanged, and add a one-line comment saying these entries mirror `main`'s registry so the PR-head and merge-into-main trees match.\n    - Leave `GUARD_HOOK_TEMPLATE_PAIRS` in `scripts/review_conflict_prepare.sh` as it is. It already lists the 5 pairs in that order, which matches what its comment at lines 231-233 promises.\n    - In `test_guard_hook_pairs_mirror_paired_live_copies`, replace the prefix-plus-extras block (the comment at lines 471-475 and the asserts at lines 476-480) with the strict check `assert pairs == expected, (pairs, expected)`. Keep the uniqueness, `pairs[0] == (LIVE, TEMPLATE)` and `(PREPUSH_LIVE, PREPUSH_TEMPLATE) in pairs` assertions.\n    - Confirm that `_conflict_prepare_guard_hook_template_merge` already handles the non-Python, mode-100755 `session-start.sh`. It accepts modes 100644 and 100755 (lines 281-287 and 306-312) and checks the executable bit (lines 338-342). If a test covering a 100755 pair does not exist yet, add one to `tests/test_conflict_guard_hook_template_merge.py`.\n    - Run the affected suites on the branch: `tests/test_conflict_guard_hook_template_merge.py`, `tests/test_review_conflict_resolve_sandbox_only.py`, and any tests that import `review_untrusted_workspace`. A grep found no test that pins `PAIRED_LIVE_COPIES` to exactly two entries; only line 1099 checks one key.\n    - Fallback: if adding the three entries breaks branch tests that depend on `main`-only support code, do not weaken the contract test and do not change any live `.claude/hooks/**` file. Keep the test's current version (option B) and record the reason in the PR body.\n    - Update the `agents.d/9008-guard-hook-merge-prepush-pair.md` fragment so it names all five pairs and the strict same-order contract. Edit the fragment only; never edit `agents.md` directly.\n  replaces_acceptance_criterion: \"Merge the current default branch into `ai/issue-9008` so the branch has `main`'s `PAIRED_LIVE_COPIES`\" (issue Suggested fix, step 1; Q3 option A's \"bring the branch up to date with main\").\n  equivalence_argument: The contract test needs registry and array to be equal and in the same order on every tree CI checks. With the registry change, the PR-head tree has 5 pairs on both sides, and the merge-into-main tree does too, because both sides add the same entries in the same order, so the merge produces the same registry. That gives the strict equality option A wanted without relaxing the test. Once PR #9011 merges into `main`, which already has these entries, runtime behaviour is unchanged.\n  reversibility: The change is three dict entries and one assertion. If a person later prefers a real `main` sync, merging `main` into the branch resolves to the same registry, so this change can be dropped then or kept with no effect. Going back to option B means restoring lines 471-480 of the test.\n\nSETUP REQUIRED: none.",
+  "fingerprint": "29f1efea7ccec4741e3c2eb75340b0a94037c9122a25d8f77298997b40c73cd7",
+  "lineage": {
+    "issue_number": 9298,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43084590529",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43084590529",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9298"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261111193329_ba1b43f132",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9298,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43084590529"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9298",
+  "timestamps": {
+    "created_at": "2026-11-11T19:33:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
