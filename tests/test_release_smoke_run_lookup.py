@@ -480,6 +480,33 @@ def test_phase7_run_listings_all_go_through_the_retry_helper() -> None:
 	assert wf.count('echo "status=lookup_failed" >> "$GITHUB_OUTPUT"') >= 3
 
 
+
+# The clarify-wait cases (issue #9223) live in
+# tests/test_test_and_mark_stable_clarify_wait.py and are collected here,
+# since CI already runs this file and ci.yml was outside that issue's file
+# grant. A name clash would hide a test, so it fails loudly.
+def _collect_clarify_wait_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"test_and_mark_stable_clarify_wait_cases",
+		Path(__file__).resolve().parent / "test_test_and_mark_stable_clarify_wait.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 15, f"only {collected} clarify-wait cases collected"
+
+
+_collect_clarify_wait_cases()
+
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	for test in tests:

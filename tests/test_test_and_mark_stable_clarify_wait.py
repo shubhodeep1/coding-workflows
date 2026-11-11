@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
-import yaml
+try:
+	import yaml
+except ModuleNotFoundError:  # PyYAML is optional: tests/test_release_smoke_run_lookup.py
+	yaml = None  # collects these cases and must still import where PyYAML is absent.
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -61,8 +65,77 @@ def _doc() -> dict:
 	return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
+def _scalar(value: str) -> str:
+	value = value.strip()
+	if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+		return value[1:-1]
+	return value
+
+
+def _indent(line: str) -> int:
+	return len(line) - len(line.lstrip(" "))
+
+
+def _parse_step_lines(item: list[str], key_indent: int) -> dict:
+	"""Read the plain scalars, ``|`` block scalars and one-level mappings of a
+	step, which is all the steps these tests read use."""
+	step: dict = {}
+	i = 0
+	while i < len(item):
+		line = item[i]
+		stripped = line.strip()
+		i += 1
+		if not stripped or stripped.startswith("#") or _indent(line) != key_indent:
+			continue
+		key, _, value = stripped.partition(":")
+		value = value.strip()
+		block: list[str] = []
+		while i < len(item) and (not item[i].strip() or _indent(item[i]) > key_indent):
+			block.append(item[i])
+			i += 1
+		if value == "|":
+			body = [b for b in block]
+			while body and not body[-1].strip():
+				body.pop()
+			cut = min((_indent(b) for b in body if b.strip()), default=0)
+			step[key] = "\n".join(b[cut:] for b in body) + "\n"
+		elif value:
+			step[key] = _scalar(value)
+		else:
+			mapping: dict[str, str] = {}
+			for entry in block:
+				entry_text = entry.strip()
+				if not entry_text or entry_text.startswith("#"):
+					continue
+				sub_key, _, sub_value = entry_text.partition(":")
+				mapping[sub_key.strip()] = _scalar(sub_value)
+			step[key] = mapping
+	return step
+
+
+def _steps_without_yaml(job: str) -> list[dict]:
+	lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+	start = lines.index(f"  {job}:")
+	end = next((n for n in range(start + 1, len(lines)) if re.match(r"^  [^ #]", lines[n])), len(lines))
+	job_lines = lines[start + 1:end]
+	steps_at = next(n for n, line in enumerate(job_lines) if line == "    steps:")
+	items: list[list[str]] = []
+	item_indent = None
+	for line in job_lines[steps_at + 1:]:
+		if line.strip() and _indent(line) <= 4:
+			break
+		match = re.match(r"^( *)- (.*)$", line)
+		if match and (item_indent is None or len(match.group(1)) == item_indent):
+			item_indent = len(match.group(1))
+			items.append([" " * (item_indent + 2) + match.group(2)])
+		elif items:
+			items[-1].append(line)
+	return [_parse_step_lines(item, item_indent + 2) for item in items]
+
+
 def _step(job: str, step_id: str) -> dict:
-	for step in _doc()["jobs"][job]["steps"]:
+	steps = _doc()["jobs"][job]["steps"] if yaml is not None else _steps_without_yaml(job)
+	for step in steps:
 		if step.get("id") == step_id:
 			return step
 	raise AssertionError(f"{job}/{step_id} not found")
@@ -173,6 +246,38 @@ def test_cancelled_comment_does_not_fail_fast_and_is_named_at_timeout() -> None:
 	stall = [e for e in _error_lines(log) if "Clarify phase stalled" in e]
 	assert stall and "no non-skipped Clarify run titled" in stall[0], log
 	assert "(cancelled Clarify run: https://github.com/owner/repo/actions/runs/555)" in stall[0], log
+
+
+def test_cancelled_comment_for_newest_run_fails_fast() -> None:
+	body = f"AI clarification workflow was cancelled/timed out for https://github.com/{TEST_REPO}/issues/{ISSUE_NUMBER}. Run: https://github.com/{TEST_REPO}/actions/runs/555"
+	rc, outputs, log = _run_wait_clarify([_comment(body, association="MEMBER")], [_run(555, conclusion="cancelled")], phase_timeout="60")
+	assert rc == 1, log
+	assert outputs.get("status") == "clarify_failed", outputs
+	assert any("Clarify phase failed" in e and "https://github.com/owner/repo/actions/runs/555" in e for e in _error_lines(log)), log
+
+
+def test_failure_comment_repo_match_ignores_case() -> None:
+	rc, outputs, log = _run_wait_clarify([_comment(_failed_body("777", repo="Owner/Repo"))], [_run(777)], phase_timeout="60")
+	assert rc == 1, log
+	assert outputs.get("status") == "clarify_failed", outputs
+
+
+def test_failure_comment_with_empty_run_lookup_does_not_claim_a_newer_run() -> None:
+	rc, outputs, log = _run_wait_clarify([_comment(_failed_body("777"))], [])
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert "newer Clarify run unknown" not in log, log
+	assert "found to compare it with" in log, log
+
+
+def test_newest_bot_comment_is_the_one_checked() -> None:
+	comments = [
+		_comment("Starting clarify", association="NONE", login="github-actions[bot]"),
+		_comment("Clarification is needed: NEEDS_CLARIFICATION", association="NONE", login="github-actions[bot]"),
+	]
+	rc, outputs, log = _run_wait_clarify(comments, [], phase_timeout="60")
+	assert rc == 1, log
+	assert outputs.get("status") == "clarification_needed", outputs
 
 
 def test_timeout_names_found_clarify_run() -> None:

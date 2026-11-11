@@ -983,11 +983,14 @@ jobs:
               | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR" or .user.login? == "github-actions[bot]")
               | (.body // "") | strings | select(startswith($prefix))
               | capture("Run: https://github\\.com/(?<r>[^/ ]+/[^/ ]+)/actions/runs/(?<id>[0-9]{1,20})")
-              | select(.r == $repo) | .id] | last // ""' 2>/dev/null || echo ""
+              | select((.r | ascii_downcase) == ($repo | ascii_downcase)) | .id] | last // ""' 2>/dev/null || echo ""
           }
           CLARIFY_COMMENTS_JSON=""
+          # Space-separated run IDs whose failure comment was already compared
+          # with the newest scoped Clarify run.
           CLARIFY_FAILURE_CHECKED_ID=""
           CLARIFY_CANCELLED_RUN_ID=""
+          CLARIFY_FAILURE_LOOKUP_MISSES=0
 
           while true; do
             NOW=$(date +%s)
@@ -1034,9 +1037,10 @@ jobs:
             fi
 
             # Check for failure: look for error comments from bot. The list is
-            # oldest first, so read 100 to see clarify's own failure comment (#9223).
+            # oldest first, so read 100 to see clarify's own failure comment and
+            # take the last (newest) bot comment (#9223).
             CLARIFY_COMMENTS_JSON=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" || echo "")
-            LAST_BOT_COMMENT=$(printf '%s' "$CLARIFY_COMMENTS_JSON" | jq -r '[.[]? | objects | select(.user.login? == "github-actions[bot]")] | .[0].body // ""' 2>/dev/null || echo "")
+            LAST_BOT_COMMENT=$(printf '%s' "$CLARIFY_COMMENTS_JSON" | jq -r '[.[]? | objects | select(.user.login? == "github-actions[bot]")] | .[-1].body // ""' 2>/dev/null || echo "")
             if echo "$LAST_BOT_COMMENT" | grep -qi "failed\|error\|clarification.*needed"; then
               if echo "$LAST_BOT_COMMENT" | grep -qi "clarification.*needed\|NEEDS_CLARIFICATION"; then
                 echo "::error::Clarify phase requested human clarification — test issue may not be clear enough"
@@ -1045,22 +1049,31 @@ jobs:
               fi
             fi
 
-            # Clarify's own failure comment (posted with GH_PAT): fail fast only
-            # when it names the newest scoped Clarify run (#9223). Bodies are
-            # untrusted: only a numeric run ID of this repo is read, never echoed.
+            # Clarify's own failed or cancelled/timed-out comment (posted with
+            # GH_PAT): fail fast only when it names the newest scoped Clarify run
+            # (#9223). Bodies are untrusted: only a numeric run ID of this repo is
+            # read, never echoed. An empty run lookup is retried on later polls,
+            # up to 3 times, before the comment counts as checked.
             CLARIFY_FAILURE_RUN_ID=$(clarify_failure_comment_run_id "AI clarification workflow failed for ")
             CLARIFY_CANCELLED_RUN_ID=$(clarify_failure_comment_run_id "AI clarification workflow was cancelled/timed out for ")
-            if [[ "$CLARIFY_FAILURE_RUN_ID" =~ ^[0-9]+$ ]] && [ "$CLARIFY_FAILURE_RUN_ID" != "$CLARIFY_FAILURE_CHECKED_ID" ]; then
-              CLARIFY_FAILURE_CHECKED_ID="$CLARIFY_FAILURE_RUN_ID"
+            for CLARIFY_COMMENT_RUN_ID in "$CLARIFY_FAILURE_RUN_ID" "$CLARIFY_CANCELLED_RUN_ID"; do
+              [[ "$CLARIFY_COMMENT_RUN_ID" =~ ^[0-9]+$ ]] || continue
+              [[ " ${CLARIFY_FAILURE_CHECKED_ID} " == *" ${CLARIFY_COMMENT_RUN_ID} "* ]] && continue
               CLARIFY_LATEST_RUN_ID=$(capture_run_id "Clarif")
-              if [[ "$CLARIFY_LATEST_RUN_ID" =~ ^[0-9]+$ ]] && [ "$CLARIFY_LATEST_RUN_ID" = "$CLARIFY_FAILURE_RUN_ID" ]; then
+              if ! [[ "$CLARIFY_LATEST_RUN_ID" =~ ^[0-9]+$ ]]; then
+                CLARIFY_FAILURE_LOOKUP_MISSES=$((CLARIFY_FAILURE_LOOKUP_MISSES + 1))
+                [ "$CLARIFY_FAILURE_LOOKUP_MISSES" -lt 3 ] || CLARIFY_FAILURE_CHECKED_ID+=" ${CLARIFY_COMMENT_RUN_ID}"
+                echo "  ⚠ Clarify failure comment names run ${CLARIFY_COMMENT_RUN_ID}; no non-skipped Clarify run titled '${ISSUE_TITLE}' found to compare it with — still waiting"
+                continue
+              fi
+              CLARIFY_FAILURE_CHECKED_ID+=" ${CLARIFY_COMMENT_RUN_ID}"
+              if [ "$CLARIFY_LATEST_RUN_ID" = "$CLARIFY_COMMENT_RUN_ID" ]; then
                 echo "::error::Clarify phase failed — pipeline failure comment on issue #${ISSUE_NUMBER} (Clarify run: https://github.com/${TEST_REPO}/actions/runs/${CLARIFY_LATEST_RUN_ID})"
                 echo "status=clarify_failed" >> "$GITHUB_OUTPUT"
                 exit 1
               fi
-              [[ "$CLARIFY_LATEST_RUN_ID" =~ ^[0-9]+$ ]] || CLARIFY_LATEST_RUN_ID="unknown"
-              echo "  ⚠ Clarify failure comment names run ${CLARIFY_FAILURE_RUN_ID}; newer Clarify run ${CLARIFY_LATEST_RUN_ID} exists — still waiting"
-            fi
+              echo "  ⚠ Clarify failure comment names run ${CLARIFY_COMMENT_RUN_ID}; newer Clarify run ${CLARIFY_LATEST_RUN_ID} exists — still waiting"
+            done
 
             # Inactivity timeout
             if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
