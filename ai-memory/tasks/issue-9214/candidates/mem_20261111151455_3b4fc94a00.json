@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9214,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9214\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9268\",\"pr_number\":9268,\"branch\":\"ai/issue-9214\",\"run_id\":\"43038705768\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43038705768\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/9214-ci-wiring-part2-to-release-job.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "c447b860b4fbd6638f7df098097dcf602274639696621fe18bc0af4cabd09c82",
+  "lineage": {
+    "issue_number": 9214,
+    "parent_ids": [],
+    "pr_number": 9268,
+    "run_id": "43038705768",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43038705768",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9268"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261111151455_3b4fc94a00",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9214,
+    "level": "run",
+    "pr_number": 9268,
+    "run_id": "43038705768"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9214: https://github.com/shubhodeep1/coding-workflows/pull/9268",
+  "timestamps": {
+    "created_at": "2026-11-11T15:14:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
