@@ -162,7 +162,11 @@ def test_guard_flags_bare_percent_in_subcommand_help_string() -> None:
 		failures = _build_parser_help_failures(_discover_build_parser_scripts(directory))
 	assert sys.path == saved_sys_path, "the guard leaked sys.path entries"
 	assert len(failures) == 1, failures
-	assert failures[0].startswith("bad_sub_help.py: RuntimeError: tool render: "), failures
+	assert failures[0].startswith("bad_sub_help.py: "), failures
+	# Python 3.14 rejects the help string in `add_argument`, inside
+	# build_parser(), so the subcommand wrapper's RuntimeError only shows before 3.14.
+	if sys.version_info < (3, 14):
+		assert failures[0].startswith("bad_sub_help.py: RuntimeError: tool render: "), failures
 
 
 def main() -> int:

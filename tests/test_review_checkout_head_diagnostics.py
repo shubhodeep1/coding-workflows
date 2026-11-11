@@ -271,6 +271,9 @@ def test_fetch_and_switch_ms_ignore_a_date_clock_that_goes_backwards(layout: Lay
 	# ubuntu-26.04's `date +%s%3N` gave readings that went backwards within a
 	# run, so END - START went negative and the timing fields printed `na`.
 	# The clock reads bash's EPOCHREALTIME first, so a bad `date` cannot do that.
+	# Bash older than 5 has no EPOCHREALTIME and still uses the `date` fallback.
+	if subprocess.run(["bash", "-c", '[[ -n "${EPOCHREALTIME:-}" ]]'], check=False).returncode != 0:
+		pytest.skip("this bash has no EPOCHREALTIME (bash < 5), so the clock falls back to `date`")
 	date_calls = layout.root / "date_calls"
 	# A file counter, because the clock calls `date` inside $(...) subshells.
 	prelude = (
