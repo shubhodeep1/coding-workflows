@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Acceptance\nACCEPTANCE: check lint\nACCEPTANCE: post-merge none: this is a data-only canary file on the orchestrator integration branch, and no workflow reads it after merge\n\n## Functions or modules to implement\nNone. This is a data-only edit. On planning ref `orchestrator/project-9207` (HEAD `255d482430ba3ae98c1800e4223c145ed5522526`) the file currently reads:\n```\nstatus: ok\ndecompose-run: 41445772297\n```\nReplace line 2 so that the file is exactly:\n```\nstatus: ok\ndecompose-run: 42930970244\n```\nThere must be exactly two lines, each ending in LF, including a trailing newline after line 2. Line 1 does not change and nothing is added.\n\n## Data structures affected\nOnly the text content of `tests/e2e_smoke_canary_b.txt`.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace line 2 in place\n- Chosen: overwrite the second line with `decompose-run: 42930970244` and keep line 1 and the trailing newline.\n- Alternatives considered: adding the new run ID as a third line. The issue forbids this.\n- Why: the issue's acceptance criteria require exactly two lines with this content.\n\n## Security considerations\nNo trust boundary, endpoint, secret or money path is involved. The change is static text in a test fixture. The only checked file reference is `tests/test_review_conflict_resolve_smoke_deterministic.py`, which mentions the filename in a comment and does not check the file's content.\n\n## Risks and edge cases\n- Open PRs #8786, #8368 and #8304 also touch this file. They are separate smoke runs and do not deliver this issue's content, so a merge conflict is possible but not blocking. The integration branch content wins.\n- The editor must not drop the trailing newline or add CRLF line endings.\n- Conflict check: the issue's statement of the current content matches the file on the planning ref.\n\n## Testing considerations\n- `wc -l tests/e2e_smoke_canary_b.txt` must print `2`.\n- `cat -A tests/e2e_smoke_canary_b.txt` must show `status: ok$` and `decompose-run: 42930970244$`.\n- `git diff --stat` must show only this file changed.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue asks for one exact content change to one file and allows no other changes. No helper or new code is needed, and the complete option is the same as the minimal one.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[{\"name\":\"lint\"}],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this is a data-only canary file on the orchestrator integration branch, and no workflow reads it after merge\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "90dc3532434440ee9b1e0d761290f55fb08ea97817f5b6f34703a3f1d5d5129c",
+  "lineage": {
+    "issue_number": 9211,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43033537181",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43033537181",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9211"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261111141512_4392ff6966",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9211,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43033537181"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9211",
+  "timestamps": {
+    "created_at": "2026-11-11T14:15:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
