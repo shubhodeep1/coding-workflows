@@ -343,6 +343,13 @@ _ghm_resolved=false
 _ghm_defer_commit=false
 _ghm_resolved_paths=""
 for _ghm_pair in "${GUARD_HOOK_TEMPLATE_PAIRS[@]}"; do
+  case "${_ghm_pair}" in
+    ?*\|?*) ;;
+    *)
+      echo "::error::Guard-hook template merge: malformed GUARD_HOOK_TEMPLATE_PAIRS entry '${_ghm_pair}' (expected live|template)."
+      exit 1
+      ;;
+  esac
   _ghm_pair_live="${_ghm_pair%%|*}"
   _ghm_pair_tpl="${_ghm_pair#*|}"
   if [ "${_resolver_allowlist_count}" -le 0 ] \
