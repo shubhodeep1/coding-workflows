@@ -225,14 +225,25 @@ def test_stdout_buffer_mktemp_failure_does_not_run_the_command(tmp_path: Path) -
 	assert _leftover_temp_files(tmp_path) == []
 
 
+def _output_larger_than_any_pipe() -> int:
+	"""Bytes that cannot fit in a pipe even after the writer enlarges it."""
+	try:
+		pipe_max = int(Path("/proc/sys/fs/pipe-max-size").read_text(encoding="utf-8").strip())
+	except (OSError, ValueError):
+		pipe_max = 1024 * 1024
+	return max(8 * 1024 * 1024, 4 * pipe_max)
+
+
 def test_closed_reader_does_not_rerun_a_successful_command(tmp_path: Path) -> None:
-	# 1 MiB of output into a reader that takes one byte and exits: the reader
-	# goes away long before the output is written. The command already
-	# succeeded, so it must not be run again; the undelivered output is
-	# reported as a non-zero status. The reader is bash's own `read -n 1`, not
-	# `head -c 1`: Rust coreutils' head (ubuntu-26.04) reads its whole input
-	# before exiting, so the pipe never closed early and the copy returned 0.
-	big = "x" * (1024 * 1024)
+	# More output than any pipe holds, into a reader that takes one byte and
+	# exits: the reader goes away before the output is written. The command
+	# already succeeded, so it must not be run again; the undelivered output is
+	# reported as a non-zero status. The size matters: Rust coreutils' cat
+	# (ubuntu-26.04) grows its stdout pipe to pipe-max-size (1 MiB by default)
+	# and splices up to 1 MiB in one call, so a 1 MiB output landed in the pipe
+	# whole and the copy returned 0 before the reader left. That is ordinary
+	# pipe behaviour, not a gh_retry defect.
+	big = "x" * _output_larger_than_any_pipe()
 	env = _setup(tmp_path, [(big, "", 0)])
 	result = _run(
 		tmp_path,
