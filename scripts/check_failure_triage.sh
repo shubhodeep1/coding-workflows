@@ -47,8 +47,13 @@
 #                                            (default "Check Failure Triage")
 #   CHECK_TRIAGE_TRUSTED_SUPPORT_DIR          trusted prompt root (required for diagnosis)
 #   CHECK_TRIAGE_STAGE                        all (default), collect, diagnose, route,
-#                                             or supersede (close the stale issue the
-#                                             collect stage recorded, issue #8671)
+#                                             supersede (close the stale issue the
+#                                             collect stage recorded, issue #8671), or
+#                                             base-tracked-note (note a skipped PR on
+#                                             the heal issue that tracks its base failure)
+#   CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED    "false" files a per-PR issue even when the
+#                                             default branch fails the same workflow and
+#                                             an open heal issue tracks it (default true)
 #   CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED      "false" keeps a blocked triage issue from an
 #                                             older PR head as a duplicate instead of
 #                                             superseding it (default true; issue #8671)
@@ -454,6 +459,20 @@ esac
 SUPERSEDE_OLD_ISSUE=""
 SUPERSEDE_OLD_HEAD=""
 SUPERSEDE_NEW_HEAD=""
+# Skip a PR's CI failure that the default branch already has when an open
+# workflow-heal issue tracks that workflow there (issues #9224, #9228, #9230,
+# #9231 and #9232 were all filed for the ubuntu-26.04 breakage heal issue
+# #9215 already tracked). Parsed like CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED.
+TRIAGE_BASE_TRACKED_SKIP_ENABLED=true
+case "$(printf '%s' "${CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+	''|true) ;;
+	false) TRIAGE_BASE_TRACKED_SKIP_ENABLED=false ;;
+	*)
+		TRIAGE_BASE_TRACKED_SKIP_ENABLED=false
+		echo "::warning::CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED is not true or false; failures the default branch already has are triaged per PR"
+		;;
+esac
+TRIAGE_BASE_TRACKED_FILE="${RUNTIME_DIR}/triage_base_tracked.json"
 PR_CHECK_RUNS_CONTEXT_FILE="${RUNTIME_DIR}/pr_check_runs_context.txt"
 # Historical mode (#7093): triage one already-finished CI run of a PR that is
 # no longer open. Only the pr_not_open skip (closed PRs), the dedup scope
@@ -494,7 +513,7 @@ if [ -z "${TRUSTED_SUPPORT_DIR}" ] ||
 	exit 1
 fi
 case "${TRIAGE_STAGE}" in
-	all|collect|diagnose|route|supersede|supersede-check) ;;
+	all|collect|diagnose|route|supersede|supersede-check|base-tracked-note) ;;
 	*) log "error invalid_stage"; exit 1 ;;
 esac
 
@@ -637,6 +656,73 @@ triage_upstream_send()
 	fi
 	return 0
 }
+
+# triage_base_failure_heal_issue <workflow path> <branch>
+#
+# Prints the number of the oldest open ai:workflow-heal issue that tracks a
+# failed run of <workflow path> on <branch> in this repository, or nothing.
+# A match needs a trusted author (OWNER/MEMBER/COLLABORATOR), the run-sourced
+# header `<!-- workflow-failure-heal:source=<repo>#run -->` as its fourth line,
+# `<!-- workflow-failure-heal:workflow=<path> -->` among its first seven lines
+# (scripts/workflow_failure_heal.py compose_issue_body) and the exact line
+# "- **Target branch:** `<branch>`". API cost: one REST read (first page,
+# 100 issues). Returns 1 when that read fails, so the caller files as before.
+triage_base_failure_heal_issue()
+{
+	local heal_workflow_path="$1" heal_branch="$2" heal_listing=""
+	if ! heal_listing="$(gh_retry gh api -X GET "repos/${REPO}/issues" \
+		-f state=open -f labels=ai:workflow-heal -f sort=created -f direction=asc -F per_page=100 2>/dev/null)"; then
+		return 1
+	fi
+	printf '%s' "${heal_listing}" | jq -r \
+		--arg source "<!-- workflow-failure-heal:source=${REPO}#run -->" \
+		--arg workflow "<!-- workflow-failure-heal:workflow=${heal_workflow_path} -->" \
+		--arg target "- **Target branch:** \`${heal_branch}\`" '
+		if type != "array" then error("not_an_array") else . end
+		| [ .[]
+			| select(.pull_request == null)
+			| select((.author_association // "") as $a | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a))
+			| select(
+				([(.body // "") | split("\n")[] | rtrimstr("\r")]) as $l
+				| ($l[3] // "") == $source
+				and ($l[0:7] | index($workflow)) != null
+				and ($l | index($target)) != null)
+			| .number ]
+		| first // empty' 2>/dev/null || return 1
+}
+
+if [ "${TRIAGE_STAGE}" = "base-tracked-note" ]; then
+	# Runs in the workflow's "Note PR failure on its base-branch heal issue" step
+	# with the Issues-scoped token, after the collect stage skipped a failure the
+	# default branch already has (skip reason=base_failure_tracked). Posts one
+	# comment on that heal issue so it counts the PR. Never fatal.
+	if [ ! -s "${TRIAGE_BASE_TRACKED_FILE}" ]; then
+		log "op=base_tracked_note outcome=skip reason=metadata_missing"
+		exit 0
+	fi
+	note_heal_issue="$(jq -r '.heal_issue // "" | tostring' "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null || echo '')"
+	note_pr="$(jq -r '.pr_number // "" | tostring' "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null || echo '')"
+	note_head="$(jq -r '.head_sha // "" | tostring' "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null || echo '')"
+	note_run="$(jq -r '.run_id // "" | tostring' "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null || echo '')"
+	note_branch="$(jq -r '.base_ref // "" | tostring' "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null || echo '')"
+	note_workflow="$(jq -r '.workflow_path // "" | tostring' "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null || echo '')"
+	if ! [[ "${note_heal_issue}" =~ ^[1-9][0-9]{0,9}$ ]] || ! [[ "${note_pr}" =~ ^[1-9][0-9]{0,9}$ ]] ||
+		! [[ "${note_head}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${note_run}" =~ ^[1-9][0-9]{0,19}$ ]] ||
+		! [[ "${note_branch}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${note_branch}" == *..* ]] ||
+		! [[ "${note_workflow}" =~ ^\.github/workflows/[A-Za-z0-9_.-]{1,100}\.ya?ml$ ]] || [[ "${note_workflow}" == *..* ]]; then
+		log "op=base_tracked_note outcome=skip reason=metadata_invalid"
+		exit 0
+	fi
+	note_body="<!-- ${MARKER_PREFIX}base-tracked pr=${note_pr} head=${note_head} run=${note_run} -->"
+	note_body+=$'\n'
+	note_body+="\`${note_workflow}\` also failed on PR #${note_pr} (head \`${note_head:0:12}\`, run ${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${note_run}). The newest run of that workflow on \`${note_branch}\` fails too, so check-failure triage opened no separate issue for the PR."
+	if gh_retry gh api "repos/${REPO}/issues/${note_heal_issue}/comments" -f body="${note_body}" >/dev/null 2>&1; then
+		log "op=base_tracked_note outcome=posted heal_issue=${note_heal_issue} pr=${note_pr}"
+	else
+		log "op=base_tracked_note outcome=failed heal_issue=${note_heal_issue} pr=${note_pr}"
+	fi
+	exit 0
+fi
 
 if [ "${TRIAGE_STAGE}" = "supersede-check" ]; then
 	# Runs in the workflow's post step before it creates the new issue, with
@@ -1174,12 +1260,23 @@ elif ! [[ "${BASE_REF}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${BASE_REF}" == *.
 else
 	base_gate_conclusion=""
 	base_gate_reason=""
+	base_gate_run_id=""
+	base_gate_workflow_path=""
 	if [ -z "${CHECK_RUN_ID}" ]; then
 		# workflow_run triage: the check name is the workflow name.
 		base_gate_run_id="$(printf '%s' "${CHECK_DETAILS_URL}" | sed -n 's#^https://[^/]*/[^/]*/[^/]*/actions/runs/\([0-9][0-9]*\).*#\1#p' | head -n 1)"
 		base_gate_workflow_id=""
 		if [[ "${base_gate_run_id}" =~ ^[0-9]+$ ]]; then
-			base_gate_workflow_id="$(gh_retry gh api "repos/${REPO}/actions/runs/${base_gate_run_id}" --jq '.workflow_id // ""' 2>/dev/null || true)"
+			# The same read also returns the run's workflow file (`.path`), which
+			# the tracked-failure skip below matches against heal issues.
+			base_gate_run_meta="$(gh_retry gh api "repos/${REPO}/actions/runs/${base_gate_run_id}" --jq '[(.workflow_id // "" | tostring), (.path // "")] | join(" ")' 2>/dev/null || true)"
+			base_gate_workflow_id="${base_gate_run_meta%% *}"
+			if [[ "${base_gate_run_meta}" == *" "* ]]; then
+				base_gate_workflow_path="${base_gate_run_meta#* }"
+			fi
+			if ! [[ "${base_gate_workflow_path}" =~ ^\.github/workflows/[A-Za-z0-9_.-]{1,100}\.ya?ml$ ]] || [[ "${base_gate_workflow_path}" == *..* ]]; then
+				base_gate_workflow_path=""
+			fi
 		fi
 		if [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then
 			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&event=push&per_page=1" \
@@ -1233,6 +1330,47 @@ else
 			triage_report_routing_unverified
 		fi
 		exit 0
+	fi
+	# The default branch fails the same workflow and an open heal issue already
+	# tracks it (#9215 tracked the ubuntu-26.04 breakage while five PRs got
+	# their own triage issues, each blocked on the same fix PR). A per-PR issue
+	# would only wait for that fix, so file none; the workflow's note step adds
+	# the PR to the heal issue. Only a completed `failure` counts, only on the
+	# default branch, and only for a workflow_run triage, whose run read above
+	# names the workflow file. A failed heal-issue read files as before.
+	if [ "${TRIAGE_BASE_TRACKED_SKIP_ENABLED}" = "true" ] && [ "${base_gate_conclusion}" = "failure" ] && [ -n "${base_gate_workflow_path}" ]; then
+		base_gate_default_branch="$(printf '%s' "${PR_JSON}" | jq -r '.base.repo.default_branch // ""' 2>/dev/null || true)"
+		if [ -n "${base_gate_default_branch}" ] && [ "${BASE_REF}" = "${base_gate_default_branch}" ]; then
+			base_gate_heal_issue=""
+			base_gate_heal_lookup_ok=true
+			if ! base_gate_heal_issue="$(triage_base_failure_heal_issue "${base_gate_workflow_path}" "${BASE_REF}")"; then
+				base_gate_heal_issue=""
+				base_gate_heal_lookup_ok=false
+				log "base_tracked outcome=fail_open reason=heal_lookup_failed base=${BASE_REF} pr=${PR_NUMBER}"
+			fi
+			if [[ "${base_gate_heal_issue}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+				if [[ "${HEAD_SHA,,}" =~ ^[0-9a-f]{40}$ ]] && jq -n \
+					--arg heal_issue "${base_gate_heal_issue}" --arg pr_number "${PR_NUMBER}" \
+					--arg head_sha "${HEAD_SHA,,}" --arg run_id "${base_gate_run_id}" \
+					--arg base_ref "${BASE_REF}" --arg workflow_path "${base_gate_workflow_path}" \
+					'{heal_issue: $heal_issue, pr_number: $pr_number, head_sha: $head_sha, run_id: $run_id, base_ref: $base_ref, workflow_path: $workflow_path}' \
+					> "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null; then
+					if [ -n "${GITHUB_OUTPUT:-}" ]; then
+						echo "base_failure_tracked=${base_gate_heal_issue}" >> "${GITHUB_OUTPUT}"
+					fi
+				else
+					rm -f "${TRIAGE_BASE_TRACKED_FILE}"
+				fi
+				log "skip reason=base_failure_tracked heal_issue=${base_gate_heal_issue} workflow=${base_gate_workflow_path} base=${BASE_REF} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+				if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+					triage_report_routing_unverified
+				fi
+				exit 0
+			fi
+			if [ "${base_gate_heal_lookup_ok}" = "true" ]; then
+				log "base_tracked outcome=file reason=no_open_heal_issue workflow=${base_gate_workflow_path} base=${BASE_REF} pr=${PR_NUMBER}"
+			fi
+		fi
 	fi
 	log "base_gate outcome=file base=${BASE_REF} base_conclusion=${base_gate_conclusion:-unknown}${base_gate_reason:+ reason=${base_gate_reason}} pr=${PR_NUMBER}"
 fi

@@ -254,6 +254,9 @@ jobs:
       CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED || 'true' }}
       # Issue #8671: supersede a blocked triage issue from an older PR head.
       CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED: ${{ vars.CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED || 'true' }}
+      # Skip a failure the default branch already has when an open heal issue
+      # tracks that workflow there; the PR is noted on the heal issue instead.
+      CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED: ${{ vars.CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED || 'true' }}
       # Issue #8265: a failure whose fix is only in unmodified upstream-managed
       # files goes upstream as one heal report instead of a consumer issue.
       CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED || 'true' }}
@@ -634,6 +637,21 @@ jobs:
           CHECK_TRIAGE_HISTORICAL_RUN_ID: ${{ inputs.historical_run_id }}
           CHECK_TRIAGE_HISTORICAL_JOB_ID: ${{ inputs.historical_job_id }}
           CHECK_TRIAGE_HISTORICAL_REPRO_DIR: ${{ inputs.historical_repro_artifact_prefix != '' && format('{0}/historical_repro', env.RUNTIME_DIR) || '' }}
+        run: |
+          set -euo pipefail
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
+          bash scripts/check_failure_triage.sh
+
+      # The collect stage filed no issue because the default branch fails the
+      # same workflow and an open heal issue tracks it (skip
+      # reason=base_failure_tracked). Add the PR to that heal issue with the
+      # Issues-scoped token. Never fails the job.
+      - name: Note PR failure on its base-branch heal issue
+        if: ${{ steps.collect_triage.outputs.base_failure_tracked != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
+          CHECK_TRIAGE_STAGE: base-tracked-note
         run: |
           set -euo pipefail
           cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
