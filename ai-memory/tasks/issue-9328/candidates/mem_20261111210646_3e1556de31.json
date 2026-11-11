@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The cause is outside PR #9279 and is already targeted by open PR #9246 (and touched by #9264 and #9316). What should this issue deliver?\nChoices:\nA) Make its own fix on a new branch from the default branch for the closed-reader failure on ubuntu-26.04, and leave PR #9279's files untouched. (RECOMMENDED)\nB) Make no code change. Record that #9279 is not at fault and that the fix depends on #9246 merging, then close this issue as a duplicate of #9246 once #9279's CI is re-run after that merge.\nC) Put the closed-reader fix on PR #9279's branch (`ai/issue-9252`) so that PR goes green on its own.\n**Note:** with B, Q2 does not apply.\nQ2: If code changes (Q1 A or C), where should the fix go? The test must not be weakened: the test says leftover output a reader never received must be reported as non-zero.\nChoices:\nA) Production fix in `gh_retry`'s success-path replay (`scripts/gh_helpers.sh`, around line 1229). Write the output in a way that detects the closed pipe (EPIPE or SIGPIPE) without relying on how the host's `cat` exits, so the contract also holds on uutils coreutils. Keep any inline `gh_retry()` copies in `review_autofix.yml` steps the same where they replay the same way. (RECOMMENDED)\nB) CI-only fix: make the `tests-hooks-and-orchestrator` merge-train step run the test with GNU `cat`/`head` (for example via PATH). Production `gh_retry` stays as it is, and on ubuntu-26.04 it would still return 0 when a reader closes early.\nC) Mark the test as an expected failure (xfail) or skip it when the host's `cat` is uutils, and open a follow-up issue for the production behaviour.",
+  "fingerprint": "077a2154325fa504a11b3719381e99052d1c92177a245c74cd3b96e40f9b7838",
+  "lineage": {
+    "issue_number": 9328,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43099499049",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43099499049",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111210646_3e1556de31",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9328,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43099499049"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9328 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T21:06:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
