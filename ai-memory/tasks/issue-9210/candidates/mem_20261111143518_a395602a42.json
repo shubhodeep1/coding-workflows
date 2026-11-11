@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan for #9210: update the second line of the e2e smoke canary\n\nPlanning ref: `orchestrator/project-9207` at `255d482430ba3ae98c1800e4223c145ed5522526` (Integration branch mismatch: false).\n\nThe file currently holds `status: ok` and `decompose-run: 41445772297`, each line ending in a newline. That matches the issue. `tests/test_e2e_editor_smoke_canary.py` does not pin either line, so no test needs to change.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_e2e_editor_smoke_canary.py\nACCEPTANCE: post-merge none: data-only canary file with no post-merge workflow dependency\n\n## Functions or modules to implement\nNone. Replace the whole file with exactly these two lines, each ending in a newline:\n```\nstatus: ok\ndecompose-run: 42930970244\n```\n\n## Data structures affected\nOnly the content of the canary file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file\n- Chosen: write the two exact lines, keeping the trailing newline.\n- Alternatives considered: edit only line 2 in place.\n- Why: overwriting the file guarantees exactly two lines. No other file changes, so the `files_touched` scope is respected.\n\n## Security considerations\nNo trust boundary, endpoint, secret or money surface is touched. The run ID is a plain number taken from the issue.\n\n## Risks and edge cases\n- Three open smoke PRs (#8786, #8368, #8304) also touch this file and could conflict on merge later. That is out of scope here.\n- Do not add a third line, a missing final newline or CRLF line endings.\n\n## Testing considerations\n- Check the file with `cat -A tests/e2e_smoke_canary.txt`: the output should be exactly `status: ok$` and `decompose-run: 42930970244$`.\n- Check `wc -l` returns 2.\n- Run `tests/test_e2e_editor_smoke_canary.py`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for exactly one change, replacing the second line of one data file, and allows no other file to change. No helper or code is involved, so Hold Scope is the complete and minimal option.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"data-only canary file with no post-merge workflow dependency\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_e2e_editor_smoke_canary.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "5995a56ec3d75c6d514268851abff89c71be63b6e151aa8705795c6ab92cfe5d",
+  "lineage": {
+    "issue_number": 9210,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43038891372",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43038891372",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9210"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261111143518_a395602a42",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9210,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43038891372"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9210",
+  "timestamps": {
+    "created_at": "2026-11-11T14:35:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
