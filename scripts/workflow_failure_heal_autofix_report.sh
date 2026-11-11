@@ -86,6 +86,17 @@
 #                                          PR_ISSUE_COMMENTS_FILE lead run_refs, so the intake
 #                                          reads the failed runs' logs (the identical-failure cap
 #                                          sets it; its own run has no failed job)
+#   REPORT_RUN_HEAD_SHA                    the failed run's own head SHA (default empty; a test
+#                                          override). Used only when it is 40 hex; otherwise the
+#                                          head comes from the pull_request event file
+#
+# The payload's head_sha is the failed run's own head (issue #9250): the
+# REPORT_RUN_HEAD_SHA override, else `.pull_request.head.sha` of
+# GITHUB_EVENT_PATH when GITHUB_EVENT_NAME is pull_request and the event's PR
+# number is PR_NUMBER, else the PR's current head. A PR head that moved while
+# the run was going would otherwise fail the intake's verify_run head check;
+# the intake still binds the older head to the PR through its compare
+# (--head-ancestor) check. No API call: the event file is already on disk.
 #
 # Ownership facts for the intake's self-inflicted routing ride in the payload:
 # base_branch (the PR JSON's base.ref), script_ref (REPORT_WRAPPER_SHA),
@@ -337,6 +348,37 @@ if [ -z "${PR_JSON_FILE}" ] || ! jq -e 'type == "object" and (.number != null)' 
 	fi
 fi
 
+# --- Run head (issue #9250) ---------------------------------------------------------
+
+# The failed run's own head, so the intake's verify_run (run.head_sha ==
+# payload.head_sha) holds even when the PR head moved during the run. Both
+# sources are untrusted: 40 lowercase hex only, and the intake re-checks the
+# value against the run object and the PR head's ancestry. Only when the staged
+# helper knows --run-head-sha (an older copy would reject it and the report
+# would be lost). pull_request_target is left out: that run's head is the base
+# branch, not the PR head.
+RUN_HEAD_SHA=""
+RUN_HEAD_SOURCE="none"
+if grep -q 'run-head-sha' "${HEAL_PY}" 2>/dev/null; then
+	if [ -n "${REPORT_RUN_HEAD_SHA:-}" ]; then
+		RUN_HEAD_OVERRIDE="$(printf '%s' "${REPORT_RUN_HEAD_SHA}" | tr '[:upper:]' '[:lower:]')"
+		if [[ "${RUN_HEAD_OVERRIDE}" =~ ^[0-9a-f]{40}$ ]]; then
+			RUN_HEAD_SHA="${RUN_HEAD_OVERRIDE}"
+			RUN_HEAD_SOURCE="override"
+		fi
+	fi
+	if [ -z "${RUN_HEAD_SHA}" ] && [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ] \
+		&& [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "${GITHUB_EVENT_PATH}" ] && [ -r "${GITHUB_EVENT_PATH}" ]; then
+		RUN_HEAD_EVENT_SHA="$(jq -r '.pull_request.head.sha // ""' "${GITHUB_EVENT_PATH}" 2>/dev/null | head -1 | tr '[:upper:]' '[:lower:]' || echo "")"
+		RUN_HEAD_EVENT_PR="$(jq -r '.pull_request.number // ""' "${GITHUB_EVENT_PATH}" 2>/dev/null | head -1 || echo "")"
+		if [[ "${RUN_HEAD_EVENT_SHA}" =~ ^[0-9a-f]{40}$ ]] && [ "${RUN_HEAD_EVENT_PR}" = "${PR}" ]; then
+			RUN_HEAD_SHA="${RUN_HEAD_EVENT_SHA}"
+			RUN_HEAD_SOURCE="event"
+		fi
+	fi
+fi
+PR_HEAD_SHA_FOR_LOG="$(jq -r '.head.sha // ""' "${PR_JSON_FILE}" 2>/dev/null | head -1 | tr -cd '0-9a-fA-F' || echo "")"
+
 # --- Build, validate, dispatch ----------------------------------------------------
 
 PAYLOAD_FILE="${REPORT_DIR}/payload.json"
@@ -388,6 +430,9 @@ fi
 if [ -n "${REPEATED_FAILURE_REASON}" ]; then
 	BUILD_ARGS+=(--repeated-failure-reason "${REPEATED_FAILURE_REASON}")
 fi
+if [ -n "${RUN_HEAD_SHA}" ]; then
+	BUILD_ARGS+=(--run-head-sha "${RUN_HEAD_SHA}")
+fi
 if ! python3 "${HEAL_PY}" build-autofix-payload "${BUILD_ARGS[@]}" > "${PAYLOAD_FILE}" 2> "${REPORT_DIR}/build_error.txt"; then
 	log "skip reason=payload_build_failed pr=${PR} detail=$(head -c 200 "${REPORT_DIR}/build_error.txt" | tr '\n' ' ')"
 	exit 0
@@ -431,5 +476,5 @@ if ! gh_retry gh api -X POST "repos/${UPSTREAM_REPO}/dispatches" --input "${DISP
 	log "skip reason=dispatch_denied pr=${PR} failure=${FAILURE_REASON} streak=${STREAK} upstream=${UPSTREAM_REPO} detail=$(head -c 300 "${DISPATCH_ERROR_FILE}" | tr '\n' ' ')"
 	exit 0
 fi
-log "dispatched pr=${PR} failure=${FAILURE_REASON} streak=${STREAK} workflow=${WORKFLOW_NAME} wrapper_sha=${WRAPPER_SHA:-none} upstream=${UPSTREAM_REPO} streak_author_filter=${STREAK_AUTHOR_FILTER}"
+log "dispatched pr=${PR} failure=${FAILURE_REASON} streak=${STREAK} workflow=${WORKFLOW_NAME} wrapper_sha=${WRAPPER_SHA:-none} upstream=${UPSTREAM_REPO} streak_author_filter=${STREAK_AUTHOR_FILTER} run_head=${RUN_HEAD_SHA:-none} run_head_source=${RUN_HEAD_SOURCE} pr_head=${PR_HEAD_SHA_FOR_LOG:-none}"
 exit 0
