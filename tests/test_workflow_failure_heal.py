@@ -6746,18 +6746,70 @@ def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_withou
 	assert "issues_created" not in _state_after
 
 
-def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
-	# A heal issue (#6413-style, in this repository) whose plan run fails with
-	# the failure it was filed for: the pipeline cannot run its own fix.
+def _run_heal_self_escalation_intake(labels: list[str] | None) -> tuple[subprocess.CompletedProcess[str], dict, str, list[str]]:
+	"""Run the intake for heal issue #42 failing its own plan run.
+
+	*labels* become the report payload's issue labels (``None`` drops the
+	payload's ``labels`` field entirely). Returns the intake result, the
+	fake-gh state, the heal fingerprint and every ``level|text`` line the
+	stubbed ``tg_send_msg`` recorded.
+	"""
 	first, _state_first, _ = _run_intake(_phase_payload(repo=SELF_REPO), _plan_intake_state(repo=SELF_REPO), diagnosis=DIAG_WORKFLOW_DEFECT)
 	fp = re.search(r"fingerprint fp=([0-9a-f]{64})", first.stdout).group(1)
 	heal_issue = _sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")
-	body = heal_issue["body"]
-	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=body, labels=["ai:planning", heal.HEAL_LABEL]))
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=heal_issue["body"], labels=labels or []))
+	if labels is None:
+		payload.pop("labels", None)
 	state = _plan_intake_state(repo=SELF_REPO, heal_issues=[heal_issue])
-	result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	tg_dir = Path(tempfile.mkdtemp(prefix="heal-tg-"))
+	try:
+		def setup(tmp: Path, work: Path) -> None:
+			(work / "scripts" / "tg_helpers.sh").write_text(
+				f'tg_send_msg() {{ printf \'%s|%s\\n\' "${{2:-}}" "$1" >> {str(tg_dir / "calls.txt")!r}; }}\n', encoding="utf-8")
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=setup)
+		calls_file = tg_dir / "calls.txt"
+		calls = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+	finally:
+		shutil.rmtree(tg_dir, ignore_errors=True)
+	return result, state_after, fp, calls
+
+
+def _heal_self_escalation_alerts(calls: list[str]) -> list[str]:
+	return [line for line in calls if line.startswith("CRITICAL|") and "heal issue" in line and "failed its own plan run" in line]
+
+
+def test_intake_heal_self_escalation_alerts_once() -> None:
+	# Issue #9248: heal issue #9200 sent a CRITICAL alert on each of its four
+	# self-failures. Once the payload shows the escalated label, a repeat still
+	# re-adds the label, logs `escalate` and posts the occurrence, but replaces
+	# the alert with a stable `escalate_repeat ... alert=suppressed` line.
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(["ai:planning", heal.HEAL_LABEL, heal.ESCALATED_LABEL])
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert f"WORKFLOW_HEAL escalate_repeat reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed alert=suppressed" in result.stdout
+	assert not [line for line in calls if line.startswith("CRITICAL|")], calls
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])
+	# Fail open: with no label list in the payload the alert is sent as before.
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(None)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert "escalate_repeat" not in result.stdout
+	assert len(_heal_self_escalation_alerts(calls)) == 1, calls
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+
+
+def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
+	# A heal issue (#6413-style, in this repository) whose plan run fails with
+	# the failure it was filed for: the pipeline cannot run its own fix. The
+	# first escalation sends exactly one CRITICAL alert (issue #9248).
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(["ai:planning", heal.HEAL_LABEL])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert "escalate_repeat" not in result.stdout
+	assert len(_heal_self_escalation_alerts(calls)) == 1, calls
+	assert len([line for line in calls if line.startswith("CRITICAL|")]) == 1, calls
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=_sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")["body"], labels=["ai:planning", heal.HEAL_LABEL]))
 	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
 	assert "issues_created" not in state_after
 	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])

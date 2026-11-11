@@ -1,0 +1,8 @@
+<!-- changelog: fixed -->
+- **A heal issue that keeps failing its own run now sends one CRITICAL alert, not one per failure.** The workflow-failure heal intake alerts on the first `heal_issue_failed_itself` escalation only, and stall recovery stops retrying issues labelled `ai:workflow-heal-escalated`.
+
+Heal issue #9200 failed its own run four times (intake runs 42941022862, 42962925657, 42972869748 and 42983450090), and each intake labelled it `ai:workflow-heal-escalated` again and sent another CRITICAL Telegram alert. The intake now reads the issue's labels from the report payload it already has (no new API call). When the label is already there, it still re-adds the label, posts the occurrence and logs the unchanged `WORKFLOW_HEAL escalate reason=heal_issue_failed_itself` line, then logs `WORKFLOW_HEAL escalate_repeat reason=heal_issue_failed_itself ... alert=suppressed` instead of alerting. A missing or unreadable label list fails open and alerts as before. `ai:workflow-heal-escalated` is also added to the orchestrator's stall-recovery latch labels (`STALL_RECOVERY_LATCH_LABELS` in `scripts/orchestrate_lib.py`), so stall recovery no longer retries or auto-answers such an issue.
+
+What this means for operators: expect one CRITICAL alert per escalated heal issue; later self-failures show up only as `escalate_repeat ... alert=suppressed` log lines and occurrence comments. Stall recovery now pauses every `ai:workflow-heal-escalated` issue, including ones escalated by the heal lineage cap, and logs `STALL_SKIP ... reason=human_gated_latch label=ai:workflow-heal-escalated` until a human removes the label. Two intakes running at the same moment may still both alert.
+
+Refs #9200.

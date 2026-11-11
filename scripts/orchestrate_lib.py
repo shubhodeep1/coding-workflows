@@ -1605,9 +1605,17 @@ DEDICATED_HANDLER_PHASES: set[str] = {
 # The guard that latches these labels already posted the human-facing
 # comment and CRITICAL alert, so stall recovery must pause exactly like
 # it does for ai:needs-human until a human removes the latch.
+# ai:workflow-heal-escalated (issue #9248) is latched too: the workflow
+# failure heal intake sets it when a heal issue's own clarify / plan /
+# implement run fails the way the issue was filed for, or when the heal
+# lineage cap is hit.  Retrying such an issue only re-runs the failing
+# phase and adds another occurrence, so stall recovery pauses until a
+# human removes the label.  Appended last so first-match results for
+# the existing labels do not change.
 STALL_RECOVERY_LATCH_LABELS: tuple[str, ...] = (
 	"ai:destructive-blocked",
 	"ai:scope-blocked",
+	"ai:workflow-heal-escalated",
 )
 
 
@@ -2565,9 +2573,9 @@ def detect_stalls(
 		if "ai:needs-human" in labels:
 			continue
 		if stall_recovery_latch_label(labels) is not None:
-			# Human-gated latch (ai:destructive-blocked / ai:scope-blocked):
-			# implement.yml refuses every redispatch until a human removes
-			# it, so any recovery action here is a guaranteed no-op loop.
+			# Human-gated latch (any STALL_RECOVERY_LATCH_LABELS entry):
+			# the latch holds until a human removes it, so any recovery
+			# action here is a guaranteed no-op (or failing) loop.
 			# detect_stall_latched_issues() reports these for logging.
 			continue
 		phase = determine_phase(labels)

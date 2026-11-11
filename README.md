@@ -2139,8 +2139,14 @@ through `clarify → plan → implement → review`.
   when the failing issue is itself a heal issue. When a heal issue's own run
   fails with the fingerprint the issue was filed for, the pipeline cannot run
   its fix: the intake records the occurrence, labels the issue
-  `ai:workflow-heal-escalated`, sends a CRITICAL Telegram alert and logs
-  `WORKFLOW_HEAL escalate reason=heal_issue_failed_itself`. The reporter never
+  `ai:workflow-heal-escalated`, logs
+  `WORKFLOW_HEAL escalate reason=heal_issue_failed_itself` and sends a
+  CRITICAL Telegram alert on the first escalation only. When the report's
+  issue labels already include `ai:workflow-heal-escalated`, a repeat logs
+  `WORKFLOW_HEAL escalate_repeat ... alert=suppressed` instead of alerting
+  (a missing label list fails open and alerts). Stall recovery then pauses
+  the issue (`STALL_SKIP ... reason=human_gated_latch
+  label=ai:workflow-heal-escalated`) until a human removes the label. The reporter never
   fails the job; log lines are prefixed `WORKFLOW_HEAL_PHASE_REPORT`. Issues
   #6413, #6373 and #6392 failed planning four times each on 2026-10-05 and
   never reached heal, because only escalation labels did.
