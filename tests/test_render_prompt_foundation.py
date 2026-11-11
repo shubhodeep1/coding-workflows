@@ -1316,6 +1316,35 @@ def test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt() -> Non
 	assert identity_proc.stderr.strip() == "IDENTITY_REINJECT_PARSE_FAIL: mode-malformed reason=metadata_extract_failed"
 
 
+def test_render_prompt_py_help_strings_are_well_formed() -> None:
+	# argparse expands help text with %-formatting. Python 3.14 checks every help string in add_argument(), so a bare
+	# `%` (like `{%...%}`) made build_parser() raise "badly formed help string" and every render_prompt.sh call fail.
+	# format_help() expands them all on every supported Python version.
+	script = (
+		"import importlib.util, sys\n"
+		f"spec = importlib.util.spec_from_file_location('render_prompt', {str(RENDER_PROMPT_PY)!r})\n"
+		"module = importlib.util.module_from_spec(spec)\n"
+		"assert spec.loader is not None\n"
+		"sys.modules['render_prompt'] = module\n"
+		"spec.loader.exec_module(module)\n"
+		"print(module.build_parser().format_help())\n"
+	)
+	env = _base_env()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	proc = subprocess.run([sys.executable, "-c", script], env=env, text=True, capture_output=True, timeout=60)
+	assert proc.returncode == 0, proc.stderr
+	help_text = " ".join(proc.stdout.split())
+	assert "{%...%}" in help_text, help_text
+
+
+def test_render_prompt_py_help_exits_zero() -> None:
+	env = _base_env()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	proc = subprocess.run([sys.executable, str(RENDER_PROMPT_PY), "--help"], env=env, text=True, capture_output=True, timeout=60)
+	assert proc.returncode == 0, proc.stderr
+	assert "--skip-syntax-validation" in proc.stdout
+
+
 def main() -> int:
 	test_output_contract_reference_includes_status_update_cadence()
 	test_render_prompt_sh_renders_implement_contract_defaults_and_env_values()
@@ -1341,6 +1370,8 @@ def main() -> int:
 	test_render_prompt_py_resolves_standalone_include_for_trusted_templates()
 	test_render_prompt_py_uses_checked_in_persona_source()
 	test_apply_phase_c_persona_prefix_accepts_legacy_mode_name_only_call()
+	test_render_prompt_py_help_strings_are_well_formed()
+	test_render_prompt_py_help_exits_zero()
 	test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legacy_body()
 	test_render_prompt_py_enables_phase_c_persona_prefix_by_default()
 	test_render_prompt_py_treats_blank_persona_env_value_as_disabled()
