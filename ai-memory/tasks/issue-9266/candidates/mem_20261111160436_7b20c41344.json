@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: REFRAME\nQ2: B\nQ3: A\n\nRATIONALE:\nQ1: A can't be used. It needs someone to paste the traceback from the consumer run log, which isn't in the repository, and the data-provision guard rules out options that depend on external data nobody can supply. C delivers nothing and asks for the issue to be closed, which the pipeline can't do. B has the right aim: make the next failure name what crashed. But it puts the ERR trap in `scripts/run_plan_codex.sh`, which is outside this issue's allowed scope (see Q2). So this issue keeps B's diagnostic goal and moves it into the \"Run Codex planning\" step body in `.github/workflows/plan.yml` (lines 1960-1982), which is in scope.\nQ2: The scope is enforced, so an answer can't widen it. The plan gate only approves paths inside the verified `ai:workflow-heal-scope:v1` marker (`scripts/files_touched_scope_guard.py:1171-1177`), and the implement preflight (`scripts/implement_heal_preflight.sh`) refuses an issue whose body was edited. Choosing A would just leave the plan held or refused. The work therefore stays within `.github/workflows/plan.yml`, `tests/**`, `changelog.d/*.md`, plus this issue's own `agents.d/<N>-*.md` fragment, which `heal_own_agents_fragment_entry` (`files_touched_scope_guard.py:1189-1194`) adds automatically.\nQ3: GITHUB FACTS show PR #9219 open against `main`, titled \"fix(heal): keep Python traceback frames and exception lines in filter_log\". That is exactly Fix 2. `scripts/workflow_failure_heal.py` is also outside this issue's scope. #9219 covers only Fix 2, and the plan.yml diagnostic here doesn't depend on it, so this issue isn't blocked on #9219 and adds no steps that act on it.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - .github/workflows/plan.yml, step \"Run Codex planning\" (lines 1960-1982). Its last command is the bare `bash scripts/run_plan_codex.sh`.\n    - scripts/workflow_failure_heal.py `_SOFT_LOG_PATTERNS` (lines 616-621). Both `::error::` and `\\b[A-Z][A-Z0-9_]*_(?:FAILED|...)\\b` match, so a line carrying both survives `filter_log` (line 3659) even outside the 400-line tail.\n    - scripts/run_plan_codex.sh (line 2: `set -euo pipefail`). Read only; do not modify.\n    - Exception-line regex from the issue's Fix 2: `^\\s*[A-Za-z_][\\w.]*(Error|Exception|Exit|Interrupt|Warning)\\b`\n  steps:\n    - In the \"Run Codex planning\" `run:` body of `.github/workflows/plan.yml`, leave the heal-route block (lines 1973-1981) and its `::error::Heal route classification failed` line exactly as they are. Change only how `bash scripts/run_plan_codex.sh` is invoked.\n    - Run `scripts/run_plan_codex.sh` with stdout unchanged and stderr still going to the job log. Also copy stderr to a `mktemp` file under `${RUNNER_TEMP}`, for example `{ bash scripts/run_plan_codex.sh 2>&1 1>&3 3>&- | tee \"${stderr_copy}\" >&2; } 3>&1`. Run it under `set +e` and read the script's exit code from `PIPESTATUS[0]`, then restore `set -e`. Don't depend on `pipefail` being set: the step uses the default `bash -e` shell.\n    - If the exit code is non-zero, find the last line in the stderr copy that matches the exception-line regex. Reduce it to one line: strip CR/LF and other control characters, encode `%`, `\\r` and `\\n` the way GitHub workflow commands require, and cut it to 300 characters. Then print exactly one line to stderr: `::error::RUN_PLAN_CODEX_FAILED rc=<rc> exception=<line or none>`.\n    - Always delete the stderr copy, and exit with the script's original exit code. A success stays a success, a failure stays the same failure, and the log still shows the full stderr. No env var is added or renamed.\n    - Add a contract test under `tests/`, for example `tests/test_plan_run_codex_failure_diagnostic.py`:\n      - Read the step body from plan.yml and assert it still contains the unchanged heal-route command and `bash scripts/run_plan_codex.sh`.\n      - Run the wrapper snippet in a temporary directory with a stub `scripts/run_plan_codex.sh`. The stub prints a chained traceback (\"Traceback...\", \"During handling of the above exception...\", \"Traceback...\", `KeyError: 'x'`) and exits 3. Assert the exit code is 3, the full traceback still reaches stderr, and exactly one `::error::RUN_PLAN_CODEX_FAILED rc=3 exception=KeyError: 'x'` line is printed.\n      - Run it again with a stub that exits 0, and assert there is no `RUN_PLAN_CODEX_FAILED` line and the exit code is 0.\n      - Run it again with a stub that exits 1 but prints no exception line, and assert `exception=none`.\n      - Assert `_SOFT_LOG_PATTERNS.search()` matches the emitted line.\n    - Add a `changelog.d/*.md` fragment describing the new plan-step failure diagnostic.\n    - Register the new `RUN_PLAN_CODEX_FAILED` log prefix in this issue's own fragment, `agents.d/<issue-number>-plan-codex-failure-diagnostic.md`, under `<!-- agents: section=\"Stable log prefixes (contractual)\" -->` (the bullet plus a `LOG_PREFIX.name=RUN_PLAN_CODEX_FAILED` line). Don't edit `agents.md` directly.\n    - Check `wc -c .github/workflows/plan.yml` and confirm it stays under 480,000 bytes (\u00a724). If the change would cross that, stop and report it rather than splitting the workflow, because `scripts/` is out of scope.\n    - Say in the plan that the plan-run crash on tele-funtoken-msg-scoring#5216 is not fixed by this issue and its root cause is still unknown. Once this diagnostic and PR #9219 ship in a release the consumer picks up, the next failure will log the exception, and the next heal generation can fix the helper it names.\n  replaces_acceptance_criterion: \"Fix the Python helper that crashes in 'Run Codex planning' so it fails closed with an ::error:: line\" (Q1:A), and \"ERR trap in scripts/run_plan_codex.sh printing RUN_PLAN_CODEX_FAILED line=... rc=...\" (Q1:B).\n  equivalence_argument: B's goal is that the next failure names the failing command in a line the heal intake keeps. A step-level line that carries the exit code and the actual exception text gives at least as much information as B's line number and exit code, and `_SOFT_LOG_PATTERNS` matches it, so the intake keeps it even without PR #9219. It also stays inside the verified heal scope, so the plan can be approved without a human. The crash itself can't be fixed honestly without the exception, and the fix constraints forbid inventing a fix.\n  reversibility: The change only adds a line on failure and preserves the exit code and stderr exactly. Reverting means restoring the single `bash scripts/run_plan_codex.sh` line and deleting the new test, changelog and agents.d fragment. A later heal generation, whose scope will be built from the named helper, can still change `scripts/run_plan_codex.sh` or the crashing helper directly.",
+  "fingerprint": "a55776b67bf46a840494345fdaa25e25fb517747a401624e40d7e46e5e287cce",
+  "lineage": {
+    "issue_number": 9266,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43047266099",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43047266099",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9266"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261111160436_7b20c41344",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9266,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43047266099"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9266",
+  "timestamps": {
+    "created_at": "2026-11-11T16:04:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
