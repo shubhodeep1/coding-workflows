@@ -4593,6 +4593,7 @@ jobs:
           if [ "${_judge_exit}" -ne 0 ]; then
             echo "::warning::review_rb_judge.sh exited ${_judge_exit} — degrading to ai:review-blocked recovery path"
             echo "rb_judge_status=failed" >> "$GITHUB_OUTPUT"
+            echo "rb_judge_exit_code=${_judge_exit}" >> "$GITHUB_OUTPUT"
           else
             echo "rb_judge_status=ok" >> "$GITHUB_OUTPUT"
           fi
@@ -4787,11 +4788,14 @@ jobs:
             --run-id "${{ github.run_id }}"
 
       - name: Post review-blocked comment on PR (autofix exhaustion)
+        id: rb_blocked_comment
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
+          RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
+          AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
           AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
           AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
@@ -5453,6 +5457,10 @@ jobs:
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
           JUDGE_MERGE_STATUS: ${{ steps.rb_judge.outputs.judge_merge_status }}
           JUDGE_REISSUE_CREATED: ${{ steps.rb_judge.outputs.judge_reissue_created }}
+          RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
+          RB_JUDGE_EXIT_CODE: ${{ steps.rb_judge.outputs.rb_judge_exit_code }}
+          AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
+          RB_BLOCKED_REPEAT: ${{ steps.rb_blocked_comment.outputs.rb_judge_crash_repeat }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
@@ -5604,6 +5612,31 @@ jobs:
               *)
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations)\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
             esac
+          fi
+          # Issue #9249: a judge crash (or llm_failed*/json_parse_failed*)
+          # before autofix ran out is not autofix exhaustion. Same condition
+          # as scripts/review_autofix_step_post_review_blocked_comment.sh; a
+          # repeat for the same head and reason (its marker) is logged only.
+          JUDGE_CRASH_REASON=""
+          if [ "${JUDGE_HANDLED}" != "true" ] && [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]] && [[ "${MAX_AUTOFIX_ITERATIONS:-}" =~ ^[0-9]+$ ]] && [ "${AUTOFIX_ITERATION}" -lt "${MAX_AUTOFIX_ITERATIONS}" ]; then
+            if [ "${RB_JUDGE_STATUS:-}" = "failed" ]; then
+              JUDGE_CRASH_REASON="judge_crashed"
+            elif [[ "${JUDGE_SKIP_REASON:-}" == llm_failed* || "${JUDGE_SKIP_REASON:-}" == json_parse_failed* ]]; then
+              JUDGE_CRASH_REASON="unknown"
+              [[ ! "${JUDGE_SKIP_REASON}" =~ ^[a-z0-9_]+$ ]] || JUDGE_CRASH_REASON="${JUDGE_SKIP_REASON}"
+            fi
+          fi
+          if [ -n "${JUDGE_CRASH_REASON}" ]; then
+            JUDGE_CRASH_DETAIL="${JUDGE_CRASH_REASON}"
+            if [ "${JUDGE_CRASH_REASON}" = "judge_crashed" ] && [[ "${RB_JUDGE_EXIT_CODE:-}" =~ ^[0-9]+$ ]]; then
+              JUDGE_CRASH_DETAIL="exit ${RB_JUDGE_EXIT_CODE}"
+            fi
+            MSG="$(printf 'PR review blocked — review-blocked judge failed (%s; %s autofix commits, max %s)\nNo autofix exhaustion: the judge itself could not complete. Needs a look at the run log' "${JUDGE_CRASH_DETAIL}" "${AUTOFIX_ITERATION}" "${MAX_AUTOFIX_ITERATIONS}")"
+            if [ "${RB_BLOCKED_REPEAT:-}" = "true" ]; then
+              echo "RB_JUDGE_CRASH_ALERT pr=${PR_NUMBER} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${JUDGE_CRASH_REASON} repeat=true level=SUPPRESSED"
+              exit 0
+            fi
+            echo "RB_JUDGE_CRASH_ALERT pr=${PR_NUMBER} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${JUDGE_CRASH_REASON} repeat=false level=${JUDGE_ALERT_LEVEL}"
           fi
           MSG+=$'\n'
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"

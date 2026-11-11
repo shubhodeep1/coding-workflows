@@ -102,7 +102,54 @@ Run: ${RUN_URL}
 EOF
 )"
 
-if ! gh api "repos/${AUTOFIX_STEP_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null; then
+# Issue #9249: a judge crash (RB_JUDGE_STATUS=failed) or a failed model
+# call (llm_failed* / json_parse_failed*) before autofix ran out is not
+# autofix exhaustion. The condition matches the "Telegram review-blocked
+# judge decision" step in review_autofix.yml. For such a crash the comment
+# carries a per-head marker; when a comment by the token's own identity
+# already has the same marker, the duplicate POST is skipped and
+# rb_judge_crash_repeat=true tells the alert step to log only. Every read
+# or parse failure fails open: the comment is posted and repeat=false.
+RB_JUDGE_CRASH_REASON=""
+RB_JUDGE_CRASH_REPEAT="false"
+if [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]] && [[ "${MAX_AUTOFIX_ITERATIONS:-}" =~ ^[0-9]+$ ]] && [ "${AUTOFIX_ITERATION}" -lt "${MAX_AUTOFIX_ITERATIONS}" ]; then
+	if [ "${RB_JUDGE_STATUS:-}" = "failed" ]; then
+		RB_JUDGE_CRASH_REASON="judge_crashed"
+	elif [[ "${JUDGE_SKIP_REASON:-}" == llm_failed* || "${JUDGE_SKIP_REASON:-}" == json_parse_failed* ]]; then
+		RB_JUDGE_CRASH_REASON="unknown"
+		[[ ! "${JUDGE_SKIP_REASON}" =~ ^[a-z0-9_]+$ ]] || RB_JUDGE_CRASH_REASON="${JUDGE_SKIP_REASON}"
+	fi
+fi
+if [ -n "${RB_JUDGE_CRASH_REASON}" ] && [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+	RB_JUDGE_CRASH_MARKER="<!-- rb-judge-crash:v1 head=${AUTOFIX_FAILURE_HEAD_SHA} reason=${RB_JUDGE_CRASH_REASON} -->"
+	BODY+=$'\n\n'"${RB_JUDGE_CRASH_MARKER}"
+	# API audit (§14): this step has no comment snapshot (the gate job's is
+	# in another job), so the newest page is read through tg_helpers.sh,
+	# only on judge-crash runs.
+	if [ -f "${SUPPORT_SCRIPTS_DIR:-}/tg_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" \
+		&& type _tg_newest_comments_json >/dev/null 2>&1 && type _tg_tracking_author_login >/dev/null 2>&1; then
+		_tg_tracking_author_login
+		rb_judge_crash_login="${_TG_TRACKING_AUTHOR_CURRENT:-github-actions[bot]}"
+		if rb_judge_crash_comments="$(_tg_newest_comments_json "${PR_NUMBER}")"; then
+			rb_judge_crash_count="$(printf '%s' "${rb_judge_crash_comments}" | jq -r --arg login "${rb_judge_crash_login}" --arg marker "${RB_JUDGE_CRASH_MARKER}" \
+				"${_TG_TRACKING_JQ_DEFS}"'[.[]? | select(tg_trusted($login) and (.body | contains($marker)))] | length' 2>/dev/null)" || rb_judge_crash_count=""
+			if [[ "${rb_judge_crash_count}" =~ ^[0-9]+$ ]]; then
+				[ "${rb_judge_crash_count}" -lt 1 ] || RB_JUDGE_CRASH_REPEAT="true"
+			else
+				echo "::warning::rb-judge-crash dedupe could not parse the comments of PR #${PR_NUMBER}; posting"
+			fi
+		else
+			echo "::warning::rb-judge-crash dedupe read failed for PR #${PR_NUMBER}; posting"
+		fi
+	else
+		echo "::warning::rb-judge-crash dedupe unavailable (tg_helpers.sh missing from the support bundle) for PR #${PR_NUMBER}; posting"
+	fi
+fi
+echo "rb_judge_crash_repeat=${RB_JUDGE_CRASH_REPEAT}" >> "${GITHUB_OUTPUT:-/dev/null}"
+
+if [ "${RB_JUDGE_CRASH_REPEAT}" = "true" ]; then
+	echo "Review-blocked comment for this judge crash (head ${AUTOFIX_FAILURE_HEAD_SHA}, reason ${RB_JUDGE_CRASH_REASON}) already exists on PR #${PR_NUMBER}; not posting a duplicate."
+elif ! gh api "repos/${AUTOFIX_STEP_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null; then
   echo "::warning::Failed to post review-blocked comment on PR #${PR_NUMBER}."
 fi
 

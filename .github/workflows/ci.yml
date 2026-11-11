@@ -625,7 +625,7 @@ jobs:
       - name: Telegram alert levels page only when a person must act
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_alert_levels_human_only.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_alert_levels_human_only.py tests/test_review_autofix_rb_judge_crash_alert.py
 
       - name: Memory maintenance extraction contract tests
         run: |
