@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:575-1084 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Job `tests-hooks-and-orchestrator` (run 43042694949, job 130598386556) failed on the PR head, which turns the `lint` aggregate (lines 3492-3523) red, and the failing step cannot be identified from the log tail.\n  WHY: The `lint` aggregate requires every needed job to succeed, so the PR cannot merge. Severity disagreement: sonnet-5_5 and glm-5_3-flash said MAJOR, gemini and luna said BLOCKER (highest used). Sonnet, glm and minimax say the failure is not attributable to this change, and minimax says it is inherited from the merge-base.\n- tests/test_ci_actionlint_cache.py:test_checksum_not_gated_on_cache_miss | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Reported as a NIT for completeness: the `fi` depth-tracking walk and the `open_blocks == 0` assertion are correct, and the reviewer said no fix is needed.\n  WHY: The test is sound for the current `run:` body.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_ci_actionlint_cache.py:test_checksum_not_gated_on_cache_miss | severity=NIT | confidence=5\n  PROBLEM: None. The nesting walk and the `open_blocks == 0` check are correct. Reported for completeness.\n  WHY: The test is sound for the current `run:` body.\n- .github/workflows/ci.yml:575-1084 | severity=MAJOR | confidence=2\n  PROBLEM: The failure of job `tests-hooks-and-orchestrator` (run 43042694949, job 130598386556) cannot be mapped to a step or to this diff.\n  WHY: The log tail is anchored on fixture output from a passing step. The real failing step is later, probably the merge-train shards at lines 869-966. The reviewer recommends re-running the job and reading the full log.\n- HARDENING (risk score 1): no change needed for either of the two items below.\n  - .github/workflows/ci.yml, `Install actionlint` step: cache hit status is not logged, but the existing log lines already distinguish a hit from a miss.\n  - .github/workflows/ci.yml, `Restore actionlint tarball cache` step: a hard failure of the cache action would fail the job, but this is not demonstrated.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:tests-hooks-and-orchestrator job | severity=BLOCKER | confidence=4\n  PROBLEM: The job is failing on the PR head, which makes the PR unmergeable.\n  WHY: The `lint` aggregate requires this job to succeed. The log tail does not identify the failing step.\n- HARDENING (2 items):\n  - .github/workflows/ci.yml, `Install actionlint` step: log the cache hit status. Risk score 1, about 1 line.\n  - .github/workflows/ci.yml, `Restore actionlint tarball cache` step: add `continue-on-error: true`. Risk score 2, about 1 line.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- (No findings reported.) The reviewer found no issues under any checklist lens.\n- Cross-cutting note: the `tests-hooks-and-orchestrator` failure is inherited from the merge-base, and the PR diff touches no file the job reads. The deletion of the 7 fragments is out of scope for the issue but defensible.\n- HARDENING (3 items):\n  - .github/workflows/ci.yml:315-320, `Restore actionlint tarball cache`: add `continue-on-error: true`. Risk score 2.\n  - .github/workflows/ci.yml:322-376, `Install actionlint`: echo the cache-hit output. Risk score 1.\n  - tests/test_ci_actionlint_cache.py:218-229, `test_cache_step_uses_actions_cache_v5`: assert the `-v\\d+$` key suffix. No risk score given.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:575; 3498-3523 | severity=BLOCKER | confidence=5\n  PROBLEM: `tests-hooks-and-orchestrator` failed on the PR head, and the `lint` aggregate depends on it and exits nonzero.\n  WHY: Run 43042694949 leaves the `lint` check failing. The log tail does not identify the failing step, so the cause cannot be attributed to the cache changes.\n- HARDENING (1 item): .github/workflows/ci.yml:315-320, `Restore actionlint tarball cache`: add `continue-on-error: true`. Risk score 2, about 1 line.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:575-1084; 3492-3522 | severity=MAJOR | confidence=3\n  PROBLEM: PR head 71bb8401e9500c811661569c07a24ea2be999e6c is red because `tests-hooks-and-orchestrator` failed (run 43042694949, job 130598386556), and the `lint` aggregate fails with it. The failing step cannot be identified from the log tail, which ends inside the passing \"PR body auto-close lint unit tests\" step.\n  WHY: The PR cannot go green until the failing step is identified or the job is re-run. It is not attributable to the cache change, because `orchestrate-poll` and `static-checks` succeeded on the same head.\n- HARDENING (2 items):\n  - .github/workflows/ci.yml:315-320, `Restore actionlint tarball cache`: log the cache-hit output in the install step, for example at ci.yml:337. Risk score 1, about 1 line.\n  - tests/test_ci_actionlint_cache.py:227-239, `test_cache_step_uses_actions_cache_v5`: assert the `-v\\d+$` suffix with `assertRegex`. Risk score 1, about 1 line.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "dbbb5be42b563f8f0d84b8ac9c18ffb49dc97c53dae6a923267c3b6efe0c0e08",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9057,
+    "run_id": "43065530395",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43065530395",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111190724_c1c35b5df3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9057,
+    "run_id": "43065530395"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T19:07:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
