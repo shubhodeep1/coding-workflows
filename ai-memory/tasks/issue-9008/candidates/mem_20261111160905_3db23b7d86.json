@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1 Which live/template pairs should the guard-hook template merge loop in `scripts/review_conflict_prepare.sh` cover, now that `PAIRED_LIVE_COPIES` has 5 entries?\nChoices:\n- A: All 5 pairs, in `PAIRED_LIVE_COPIES` order (`pr_merge_status_guard.py` first, then `prepush_affected_tests.py`, then `gh_api_write_guard.py`, `pr_watch_guard.py` and `session-start.sh`). The parity test checks that the shell list matches the dict exactly. (RECOMMENDED)\n- B: Only the 2 pairs the issue names (`pr_merge_status_guard.py` and `prepush_affected_tests.py`). The parity test then checks only that these 2 are the first entries of `PAIRED_LIVE_COPIES`, in order, and the other 3 hooks still fail closed on conflict as they do today.\n- C: Read `PAIRED_LIVE_COPIES` at runtime from `review_untrusted_workspace.py` instead of keeping a list in the shell script. This covers all 5 pairs and any added later, but it gives the trusted host step a runtime dependency on the support script being staged.",
+  "fingerprint": "6b67b9aaa18f9f19a082894b6bd9944b7c5f2cc7f93c8423502d2f55a8f3c710",
+  "lineage": {
+    "issue_number": 9008,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43049906523",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43049906523",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111160905_3db23b7d86",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9008,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43049906523"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9008 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T16:09:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
