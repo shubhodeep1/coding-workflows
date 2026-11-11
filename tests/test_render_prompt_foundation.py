@@ -754,6 +754,22 @@ def test_render_prompt_py_skip_syntax_validation_allows_embedded_diff_tokens() -
 	assert "{{WORKFLOW_EDIT_RESTRICTION}}" not in proc.stdout
 
 
+def test_render_prompt_py_help_text_renders_literal_percent_tokens() -> None:
+	# argparse treats "%" in help text as a format code. An unescaped
+	# "{%...%}" made Python 3.14 reject the parser at startup, so every
+	# render_prompt.py call (clarify, plan, review) crashed before rendering.
+	# --help expands every help string, so it catches this on any Python.
+	proc = subprocess.run(
+		[sys.executable, str(RENDER_PROMPT_PY), "--help"],
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "{%...%}" in proc.stdout
+
+
 def test_render_prompt_sh_skips_syntax_validation_when_env_opt_in_set() -> None:
 	# render_prompt.sh must forward the opt-out to render_prompt.py when
 	# RENDER_PROMPT_SKIP_SYNTAX_VALIDATION is truthy (the reviewer/editor
@@ -1356,6 +1372,7 @@ def main() -> int:
 	test_render_prompt_py_identity_recall_reports_canonical_prompt_missing_details()
 	test_render_prompt_py_identity_recall_reports_render_failure_details()
 	test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt()
+	test_render_prompt_py_help_text_renders_literal_percent_tokens()
 	print("OK: render prompt foundation assertions hold")
 	return 0
 
