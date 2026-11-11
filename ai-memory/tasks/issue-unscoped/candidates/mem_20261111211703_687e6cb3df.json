@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3519-3523 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: CI run 43055935175 reports `tests-hooks-and-orchestrator` and `orchestrate-poll (2)` as failed, and the supplied log tails do not identify the failing steps, so their causes remain undiagnosed.\n  WHY: The aggregate `lint` check (`Require every CI job to succeed`) exits non-zero when either required job fails, leaving CI red. The available evidence does not tie these failures to the changed code. The reviewer gave severity MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:3519-3523 | severity=MAJOR | confidence=5\n  PROBLEM: CI run 43055935175 reports `tests-hooks-and-orchestrator` and `orchestrate-poll (2)` as failed. The supplied log tails do not identify the failing steps, so their causes remain undiagnosed.\n  WHY: The aggregate `lint` check exits non-zero when either required job fails, leaving CI red. The available evidence does not tie these failures to the changed code.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "4fa19ff96cf68ff449720fb6a26d27b1907310c766a9f80a94f01e02d46deffa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9260,
+    "run_id": "43055935345",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43055935345",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111211703_687e6cb3df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9260,
+    "run_id": "43055935345"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-11T21:17:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
