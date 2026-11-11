@@ -857,6 +857,10 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || github.token }}
+          # Issue #8963 (§23.E): keep GH_PAT out of .git/config while the
+          # Codex steps run; the steps that fetch or push set a one-shot
+          # credential helper that reads GH_TOKEN from their env.
+          persist-credentials: false
 
       - name: Resolve AI engine
         id: ai_engine
@@ -1454,6 +1458,11 @@ jobs:
         env:
           REPORT_RETENTION_DAYS: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS || '30' }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          # One-shot credential helper (§23.E): the checkout does not persist
+          # credentials, so git reads GH_TOKEN from this step's env only.
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: '!f() { printf "username=x-access-token\npassword=%s\n" "${GH_TOKEN}"; }; f'
           # Same trusted-marker set the promote cycle and poller use, so the
           # purge keeps every doc a trusted marker names.
           COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
@@ -1742,6 +1751,10 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || github.token }}
+          # Issue #8963 (§23.E): keep GH_PAT out of .git/config while the
+          # Codex steps run; the steps that fetch or push set a one-shot
+          # credential helper that reads GH_TOKEN from their env.
+          persist-credentials: false
 
       - name: Resolve AI engine
         id: ai_engine
@@ -1875,6 +1888,11 @@ jobs:
       - name: Sync latest report from target branch
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          # One-shot credential helper (§23.E): the checkout does not persist
+          # credentials, so git reads GH_TOKEN from this step's env only.
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: '!f() { printf "username=x-access-token\npassword=%s\n" "${GH_TOKEN}"; }; f'
           REPORT_BRANCH: ${{ needs.analyze-commit-notify.outputs.report_branch }}
         run: |
           set -euo pipefail
@@ -2218,6 +2236,11 @@ jobs:
         if: steps.audit.outputs.audit_status == 'completed'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          # One-shot credential helper (§23.E): the checkout does not persist
+          # credentials, so git reads GH_TOKEN from this step's env only.
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: '!f() { printf "username=x-access-token\npassword=%s\n" "${GH_TOKEN}"; }; f'
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
           REPORT_BRANCH: ${{ needs.analyze-commit-notify.outputs.report_branch }}
         run: |
@@ -2352,6 +2375,10 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || github.token }}
+          # Issue #8963 (§23.E): keep GH_PAT out of .git/config while the
+          # Codex steps run; the steps that fetch or push set a one-shot
+          # credential helper that reads GH_TOKEN from their env.
+          persist-credentials: false
 
       - name: Resolve AI engine
         id: ai_engine
@@ -2477,6 +2504,11 @@ jobs:
       - name: Sync latest report from target branch
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          # One-shot credential helper (§23.E): the checkout does not persist
+          # credentials, so git reads GH_TOKEN from this step's env only.
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: '!f() { printf "username=x-access-token\npassword=%s\n" "${GH_TOKEN}"; }; f'
           REPORT_BRANCH: ${{ needs.analyze-commit-notify.outputs.report_branch }}
         run: |
           set -euo pipefail
@@ -2819,6 +2851,11 @@ jobs:
         if: steps.api_redundancy.outputs.api_redundancy_status == 'completed'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          # One-shot credential helper (§23.E): the checkout does not persist
+          # credentials, so git reads GH_TOKEN from this step's env only.
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: '!f() { printf "username=x-access-token\npassword=%s\n" "${GH_TOKEN}"; }; f'
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
           REPORT_BRANCH: ${{ needs.analyze-commit-notify.outputs.report_branch }}
         run: |
@@ -2960,4 +2997,10 @@ jobs:
           PURGED_DOCS: ${{ needs.analyze-commit-notify.outputs.purged_docs }}
           AUDIT_STATUS: ${{ needs.deep-audit.outputs.audit_status }}
           API_REDUNDANCY_STATUS: ${{ needs.api-redundancy.outputs.api_redundancy_status }}
+          # The *_status outputs are set before the section push step runs;
+          # the job result says whether the section reached the run branch.
+          DEEP_AUDIT_RESULT: ${{ needs.deep-audit.result }}
+          API_REDUNDANCY_RESULT: ${{ needs.api-redundancy.result }}
+          # A dispatch from a non-default ref fails closed (run_context_invalid).
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
         run: bash scripts/workflow_log_analysis_deliver_report.sh

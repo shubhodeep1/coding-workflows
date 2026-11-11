@@ -571,6 +571,82 @@ def test_section_step_without_report_branch_pushes_nothing() -> None:
 		assert "## Deep audit" not in _git(tmp / "origin.git", env, "show", f"{RUN_BRANCH}:{REPORT}")
 
 
+# --- review follow-ups: credentials, default branch, paths, section results --
+
+GIT_HELPER_ENV = (
+	"GIT_CONFIG_COUNT: '1'",
+	"GIT_CONFIG_KEY_0: credential.helper",
+	"GIT_CONFIG_VALUE_0: '!f() { printf \"username=x-access-token\\npassword=%s\\n\" \"${GH_TOKEN}\"; }; f'",
+)
+
+
+def test_pushing_jobs_do_not_persist_credentials_and_use_one_shot_helper() -> None:
+	for job_id in ("analyze-commit-notify", "deep-audit", "api-redundancy", "deliver-report"):
+		job = _job_block(job_id)
+		checkout = job.split("      - name: Checkout repository\n", 1)[1].split("\n      - name: ", 1)[0]
+		assert "persist-credentials: false" in checkout, job_id
+	wf = _wf()
+	sync_marker = "      - name: Sync latest report from target branch\n"
+	blocks = [_step_block(name) for name in COMMIT_STEPS]
+	blocks += [b.split("\n      - name: ", 1)[0] for b in wf.split(sync_marker)[1:]]
+	assert len(blocks) == 5
+	for block in blocks:
+		env = block.split("        run: |\n", 1)[0]
+		assert "GH_TOKEN: ${{ secrets.GH_PAT || github.token }}" in env
+		for line in GIT_HELPER_ENV:
+			assert line in env, line
+	deliver = _job_block("deliver-report")
+	assert "DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}" in deliver
+	assert "DEEP_AUDIT_RESULT: ${{ needs.deep-audit.result }}" in deliver
+	assert "API_REDUNDANCY_RESULT: ${{ needs.api-redundancy.result }}" in deliver
+
+
+def test_delivery_fails_closed_on_non_default_ref() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env = _delivery_sandbox(tmp, {})
+		proc = _deliver(tmp, dict(env, DEFAULT_BRANCH="trunk"))
+		out = _out(proc)
+		assert proc.returncode == 1
+		assert "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=failed reason=run_context_invalid" in out
+		assert (tmp / "gh.log").read_text(encoding="utf-8") == ""
+		proc = _deliver(tmp, dict(env, DEFAULT_BRANCH="main"))
+		assert proc.returncode == 0, _out(proc)
+		assert "outcome=pr_opened" in proc.stdout
+
+
+def test_delivery_rejects_run_branch_with_unexpected_paths() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env = _delivery_sandbox(tmp, {})
+		seed = tmp / "seed"
+		_git(seed, env, "checkout", "-q", RUN_BRANCH)
+		_write(seed, "scripts/evil.sh", "echo pwned\n")
+		_git(seed, env, "add", "-A")
+		_git(seed, env, "commit", "-q", "-m", "stray path")
+		_git(seed, env, "push", "-q", "origin", f"HEAD:refs/heads/{RUN_BRANCH}")
+		proc = _deliver(tmp, env)
+		out = _out(proc)
+		assert proc.returncode == 1
+		assert f"WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=failed reason=unexpected_paths branch={RUN_BRANCH}" in out
+		assert "pr create" not in (tmp / "gh.log").read_text(encoding="utf-8")
+
+
+def test_delivery_body_does_not_claim_sections_of_failed_jobs() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env = _delivery_sandbox(tmp, {})
+		env.update({
+			"AUDIT_STATUS": "completed", "DEEP_AUDIT_RESULT": "failure",
+			"API_REDUNDANCY_STATUS": "completed", "API_REDUNDANCY_RESULT": "success",
+		})
+		proc = _deliver(tmp, env)
+		assert proc.returncode == 0, _out(proc)
+		body = (tmp / "body.md").read_text(encoding="utf-8")
+		assert "Deep audit section: not confirmed (job failure)" in body
+		assert "API redundancy section: completed" in body
+
+
 def main() -> int:
 	for name, func in sorted(globals().items()):
 		if name.startswith("test_") and callable(func):

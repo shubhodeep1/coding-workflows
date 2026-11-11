@@ -19,6 +19,11 @@
 #   PURGED_DOCS            space-separated docs the purge deleted (optional)
 #   AUDIT_STATUS           deep-audit status (optional)
 #   API_REDUNDANCY_STATUS  API-redundancy status (optional)
+#   DEEP_AUDIT_RESULT      needs.deep-audit.result (optional; the status
+#                          output is set before the section push runs)
+#   API_REDUNDANCY_RESULT  needs.api-redundancy.result (optional)
+#   DEFAULT_BRANCH         repository default branch (optional; when set and
+#                          different from GITHUB_REF_NAME, fail closed)
 #   GITHUB_REF_TYPE / GITHUB_REF_NAME / GITHUB_REPOSITORY / GITHUB_RUN_ID
 #
 # GitHub API calls: 1 paginated `GET pulls?state=open&base=<base>` (fails
@@ -71,6 +76,13 @@ TARGET_BRANCH="${GITHUB_REF_NAME:-}"
 if ! [[ "${TARGET_BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]] \
 	|| ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] \
 	|| ! [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
+	wla_deliver_fail run_context_invalid
+fi
+# The report PR must target the default branch. The run branch forks from the
+# dispatched ref, so swapping --base would carry unrelated commits: a dispatch
+# from any other ref fails closed instead. An empty DEFAULT_BRANCH skips this.
+if [ -n "${DEFAULT_BRANCH:-}" ] && [ "${DEFAULT_BRANCH}" != "${TARGET_BRANCH}" ]; then
+	echo "Report delivery runs only on the default branch (ref '${TARGET_BRANCH}' is not the default branch)."
 	wla_deliver_fail run_context_invalid
 fi
 REPORT_BRANCH="${REPORT_BRANCH:-}"
@@ -173,6 +185,20 @@ if ! git worktree add --detach "${worktree_dir}" "${run_ref}" >"${work_tmp}/work
 	wla_deliver_fail worktree_failed "branch=${REPORT_BRANCH}"
 fi
 
+# The run branch is written after LLM-driven steps: it may only change
+# analysis docs (the report, its renames and purged docs). Compare it with
+# the trusted checkout it forks from; an uncomputable diff also fails closed.
+changed_paths_file="${work_tmp}/changed-paths.txt"
+if ! git diff --no-renames --name-only HEAD "${run_ref}" >"${changed_paths_file}" 2>/dev/null; then
+	wla_deliver_fail unexpected_paths "branch=${REPORT_BRANCH}"
+fi
+while IFS= read -r changed_path; do
+	if ! [[ "${changed_path}" =~ ${WLA_DELIVER_DOC_RE} ]]; then
+		echo "Run branch changes a path outside the analysis docs: ${changed_path}"
+		wla_deliver_fail unexpected_paths "branch=${REPORT_BRANCH}"
+	fi
+done <"${changed_paths_file}"
+
 # A rerun after an earlier rename: the rename commit names the new path.
 if ! git cat-file -e "${run_ref}:${REPORT_FILE}" 2>/dev/null; then
 	renamed_path="$(git log -1 --format=%B "${run_ref}" | sed -nE 's/^Report-file: (.*)$/\1/p' | tail -n 1)"
@@ -225,6 +251,18 @@ wla_deliver_status()
 		printf 'not run'
 	fi
 }
+wla_deliver_section_status()
+{
+	# $1 = section status output, $2 = the section job's result. The status is
+	# set before the section push, so only a successful job confirms it.
+	if [ -z "${2:-}" ] || [ "${2}" = "success" ]; then
+		wla_deliver_status "${1:-}"
+	elif [[ "${2}" =~ ^[a-z_]+$ ]]; then
+		printf 'not confirmed (job %s)' "$2"
+	else
+		printf 'not confirmed'
+	fi
+}
 purged_listed=()
 purged_extra=0
 for purged_doc in ${PURGED_DOCS:-}; do
@@ -243,8 +281,8 @@ body_file="${work_tmp}/body.md"
 	if [ -n "${renamed_from}" ]; then
 		echo "- Renamed from \`${renamed_from}\`, which is already taken on \`${TARGET_BRANCH}\` or another open report branch."
 	fi
-	echo "- Deep audit section: $(wla_deliver_status "${AUDIT_STATUS:-}")"
-	echo "- API redundancy section: $(wla_deliver_status "${API_REDUNDANCY_STATUS:-}")"
+	echo "- Deep audit section: $(wla_deliver_section_status "${AUDIT_STATUS:-}" "${DEEP_AUDIT_RESULT:-}")"
+	echo "- API redundancy section: $(wla_deliver_section_status "${API_REDUNDANCY_STATUS:-}" "${API_REDUNDANCY_RESULT:-}")"
 	echo ""
 	if [ "${#purged_listed[@]}" -gt 0 ]; then
 		echo "Older analysis docs deleted by the retention purge (each one is already listed in \`analysis/recommendation-processing-report.md\`):"
