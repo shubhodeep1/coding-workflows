@@ -349,6 +349,10 @@ _ghm_defer_commit=false
 _ghm_resolved_paths=""
 for _ghm_pair in "${GUARD_HOOK_TEMPLATE_PAIRS[@]}"; do
   case "${_ghm_pair}" in
+    *\|*\|*)
+      echo "::error::Guard-hook template merge: malformed GUARD_HOOK_TEMPLATE_PAIRS entry '${_ghm_pair}' (expected exactly one live|template separator)."
+      exit 1
+      ;;
     ?*\|?*) ;;
     *)
       echo "::error::Guard-hook template merge: malformed GUARD_HOOK_TEMPLATE_PAIRS entry '${_ghm_pair}' (expected live|template)."
