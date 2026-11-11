@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **The orchestrator poller no longer prints a negative `elapsed_ms`.** `ORCH_POLL_CYCLE_SUMMARY` and `ORCH_POLL_PROJECT_TIMING` in `scripts/orchestrate_poll_process.sh` now print `elapsed_ms=unknown` when the wall clock (`EPOCHREALTIME`) steps back during a run and the end reading falls before the start, instead of a negative number that broke the summary line's format. Refs #9243.

@@ -185,6 +185,30 @@ def test_cycle_summary_elapsed_ignores_a_date_clock_that_goes_backwards(tmp_path
 	assert _fields(summaries[0])[0].isdigit(), summaries[0]
 
 
+def test_cycle_summary_reports_unknown_elapsed_when_start_is_in_the_future():
+	# EPOCHREALTIME is wall-clock time; a backward clock step puts the start
+	# after the end reading. The summary must say unknown, never a negative.
+	rc, summaries, _ = _run("_ORCH_POLL_CYCLE_START_MS=99999999999999\nexit 0")
+	assert rc == 0
+	assert len(summaries) == 1
+	assert _fields(summaries[0])[0] == "unknown", summaries[0]
+
+
+def test_project_timing_reports_unknown_elapsed_when_start_is_in_the_future():
+	body = (
+		"_ORCH_POLL_CYCLE_PROJECTS_SEEN=1\n_ORCH_POLL_CYCLE_PROJECTS_PROCESSED=0\n"
+		"_orch_poll_cycle_project_begin 42 || true\n"
+		"_ORCH_POLL_CYCLE_PROJECT_START_MS=99999999999999\n"
+		"_orch_poll_cycle_project_flush || true\n"
+	)
+	rc, summaries, projects = _run(body)
+	assert rc == 0
+	assert projects == ["ORCH_POLL_PROJECT_TIMING tracking_issue=42 elapsed_ms=unknown"], projects
+	# The cycle's own elapsed value is independent of the project's.
+	assert len(summaries) == 1
+	assert _fields(summaries[0])[0].isdigit(), summaries[0]
+
+
 def test_cycle_summary_sweep_only_exit_reports_unknown_projects():
 	rc, summaries, projects = _run("exit 0")
 	assert rc == 0 and projects == []

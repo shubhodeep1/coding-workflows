@@ -74,7 +74,7 @@ _orch_poll_cycle_sleep()
 
 _orch_poll_cycle_project_flush()
 {
-	local _orch_poll_cycle_flush_num="" _orch_poll_cycle_flush_now="" _orch_poll_cycle_flush_elapsed="unknown"
+	local _orch_poll_cycle_flush_num="" _orch_poll_cycle_flush_now="" _orch_poll_cycle_flush_elapsed="unknown" _orch_poll_cycle_flush_delta=""
 	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ] || [ -z "${_ORCH_POLL_CYCLE_PROJECT_NUM:-}" ]; then
 		return 0
 	fi
@@ -82,7 +82,12 @@ _orch_poll_cycle_project_flush()
 	[[ "${_orch_poll_cycle_flush_num}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_flush_num="unknown"
 	_orch_poll_cycle_flush_now="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
 	if [[ "${_orch_poll_cycle_flush_now}" =~ ^[0-9]+$ ]] && [[ "${_ORCH_POLL_CYCLE_PROJECT_START_MS:-}" =~ ^[0-9]+$ ]]; then
-		_orch_poll_cycle_flush_elapsed="$(( _orch_poll_cycle_flush_now - _ORCH_POLL_CYCLE_PROJECT_START_MS ))"
+		_orch_poll_cycle_flush_delta="$(( _orch_poll_cycle_flush_now - _ORCH_POLL_CYCLE_PROJECT_START_MS ))"
+		# EPOCHREALTIME is wall-clock time, so a backward clock step can put the
+		# end reading before the start; print `unknown` rather than a negative.
+		if (( _orch_poll_cycle_flush_delta >= 0 )); then
+			_orch_poll_cycle_flush_elapsed="${_orch_poll_cycle_flush_delta}"
+		fi
 	fi
 	# Clear first so a failed write can never print the same project twice.
 	_ORCH_POLL_CYCLE_PROJECT_NUM=""
@@ -113,7 +118,7 @@ _orch_poll_cycle_on_exit()
 	local _orch_poll_cycle_exit_code="${1:-}" _orch_poll_cycle_exit_now="" _orch_poll_cycle_exit_elapsed="unknown"
 	local _orch_poll_cycle_exit_sleep="unknown" _orch_poll_cycle_exit_ledger="${_ORCH_POLL_CYCLE_SLEEP_LEDGER:-}"
 	local _orch_poll_cycle_exit_seen="${_ORCH_POLL_CYCLE_PROJECTS_SEEN:-unknown}" _orch_poll_cycle_exit_processed="${_ORCH_POLL_CYCLE_PROJECTS_PROCESSED:-unknown}"
-	local _orch_poll_cycle_exit_reason="completed"
+	local _orch_poll_cycle_exit_reason="completed" _orch_poll_cycle_exit_delta=""
 	# Subshells never emit; the main shell emits exactly once.
 	if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" != "true" ] || [ "${BASHPID:-$$}" != "$$" ] || [ "${_ORCH_POLL_CYCLE_EMITTED:-false}" = "true" ]; then
 		return 0
@@ -123,7 +128,11 @@ _orch_poll_cycle_on_exit()
 	_orch_poll_cycle_project_flush || true
 	_orch_poll_cycle_exit_now="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
 	if [[ "${_orch_poll_cycle_exit_now}" =~ ^[0-9]+$ ]] && [[ "${_ORCH_POLL_CYCLE_START_MS:-}" =~ ^[0-9]+$ ]]; then
-		_orch_poll_cycle_exit_elapsed="$(( _orch_poll_cycle_exit_now - _ORCH_POLL_CYCLE_START_MS ))"
+		_orch_poll_cycle_exit_delta="$(( _orch_poll_cycle_exit_now - _ORCH_POLL_CYCLE_START_MS ))"
+		# Wall-clock readings can step backwards; keep `unknown` for a negative.
+		if (( _orch_poll_cycle_exit_delta >= 0 )); then
+			_orch_poll_cycle_exit_elapsed="${_orch_poll_cycle_exit_delta}"
+		fi
 	fi
 	if [ -n "${_orch_poll_cycle_exit_ledger}" ] && [ -f "${_orch_poll_cycle_exit_ledger}" ] && [ -r "${_orch_poll_cycle_exit_ledger}" ]; then
 		_orch_poll_cycle_exit_sleep="$(awk 'BEGIN { total = 0; bad = 0 } /^[0-9]+$/ { total += $0; next } { bad = 1 } END { if (bad) print "unknown"; else printf "%.0f\n", total }' "${_orch_poll_cycle_exit_ledger}" 2>/dev/null || true)"
