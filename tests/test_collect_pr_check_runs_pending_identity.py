@@ -735,6 +735,19 @@ def test_partial_first_line_is_never_the_runner_exit_anchor():
 	body = mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=True).split("\n", 1)[1]
 	assert body == "next\n##[error]other\nlast"
 
+
+def test_last_runner_exit_line_wins_over_a_tolerated_steps_exit_line():
+	# A continue-on-error step prints its own exit line before the step that
+	# fails the job; the window must end at the later one.
+	data = (
+		"##[error]Process completed with exit code 2.\n"
+		+ "\n".join(f"step two {n}" for n in range(10))
+		+ "\nAssertionError: real failure\n##[error]Process completed with exit code 1.\ncleanup\n"
+	).encode("utf-8")
+	body = mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=False).split("\n", 1)[1]
+	assert body.endswith("AssertionError: real failure\n##[error]Process completed with exit code 1.\ncleanup")
+	assert body.startswith("##[error]Process completed with exit code 2.\n")
+
 if __name__ == "__main__":
 	import pytest
 

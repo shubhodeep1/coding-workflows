@@ -43,7 +43,8 @@ LOG_TAIL_STEP_ERROR_MARKER = "##[error]"
 # The runner's own line for a failed run step. Test output that prints
 # "::error::" also shows up as "##[error]" in the log, so the first
 # "##[error]" can come from a passing test's expected output. On PR #9180 that
-# hid the real failure from every review autofix run (issue #9179).
+# hid the real failure from every review autofix run (issue #9179). The last
+# such line is used, since a continue-on-error step prints one too.
 LOG_TAIL_STEP_EXIT_MARKER = "##[error]Process completed with exit code"
 LOG_TAIL_STEP_ERROR_AFTER_LINES = 5
 FAILURE_CONCLUSIONS = {"failure", "timed_out", "action_required", "cancelled", "stale", "startup_failure"}
@@ -407,9 +408,10 @@ def _select_log_tail_window(out: bytes, *, log_tail_bytes: int, partial_start: b
 	When the scan holds a step-level ``##[error]`` line, the window ends at the
 	first one (plus up to 5 following lines) and is trimmed from the front to
 	``log_tail_bytes`` bytes and ``LOG_TAIL_LINES`` lines (issue #8799). The
-	runner's ``##[error]Process completed with exit code`` line wins over any
-	earlier ``##[error]`` line, which may be a test's printed output (issue
-	#9179); without one, the first ``##[error]`` line is the anchor as before.
+	runner's last ``##[error]Process completed with exit code`` line wins over
+	any other ``##[error]`` line, which may be a test's printed output (issue
+	#9179) or a tolerated continue-on-error step's exit line; without one, the
+	first ``##[error]`` line is the anchor as before.
 	Otherwise the window is the pre-#8799 one: the last ``log_tail_bytes``
 	bytes, last ``LOG_TAIL_LINES`` lines. A ``log_tail_anchor:`` line names the
 	window kind; it is informational and not counted in the byte budget.
@@ -419,17 +421,19 @@ def _select_log_tail_window(out: bytes, *, log_tail_bytes: int, partial_start: b
 	decoded = _redact_log_text(out.decode("utf-8", errors="replace"))
 	out = decoded.encode("utf-8")
 	lines = decoded.splitlines()
-	anchor: int | None = None
-	for marker in (LOG_TAIL_STEP_EXIT_MARKER, LOG_TAIL_STEP_ERROR_MARKER):
-		for index, line in enumerate(lines):
-			# A partial range may start mid-line; that fragment is never an anchor.
-			if index == 0 and partial_start:
-				continue
-			if marker in line:
-				anchor = index
-				break
-		if anchor is not None:
-			break
+	exit_anchor: int | None = None
+	first_error_anchor: int | None = None
+	for index, line in enumerate(lines):
+		# A partial range may start mid-line; that fragment is never an anchor.
+		if index == 0 and partial_start:
+			continue
+		if LOG_TAIL_STEP_EXIT_MARKER in line:
+			# The last exit line wins: an earlier one can come from a tolerated
+			# continue-on-error step that did not fail the job.
+			exit_anchor = index
+		elif first_error_anchor is None and LOG_TAIL_STEP_ERROR_MARKER in line:
+			first_error_anchor = index
+	anchor = exit_anchor if exit_anchor is not None else first_error_anchor
 	if anchor is None:
 		tail = out[-log_tail_bytes:] if len(out) > log_tail_bytes else out
 		tail_lines = tail.decode("utf-8", errors="replace").splitlines()
