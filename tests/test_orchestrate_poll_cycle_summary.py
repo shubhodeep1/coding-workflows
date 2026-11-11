@@ -157,6 +157,50 @@ def test_cycle_summary_preserves_errexit_failure_status():
 	assert _fields(summaries[0])[4:] == ("1", "error")
 
 
+def test_cycle_summary_elapsed_ignores_a_date_clock_that_goes_backwards(tmp_path):
+	# ubuntu-26.04's `date +%s%3N` gave readings that went backwards within a
+	# run, so elapsed_ms printed negative and failed the summary regex. The
+	# clock reads bash's EPOCHREALTIME first, so a bad `date` cannot do that.
+	harness = tmp_path / "harness.sh"
+	harness.write_text(
+		"set -euo pipefail\n"
+		# A file counter, because the clock calls `date` inside $(...) subshells.
+		f"_fake_date_count_file='{tmp_path / 'date_calls'}'\n"
+		"date() { echo x >> \"${_fake_date_count_file}\"; "
+		"if [ \"$(wc -l < \"${_fake_date_count_file}\")\" -eq 1 ]; then echo 1700000000900; else echo 1700000000100; fi; }\n"
+		+ _helper_block()
+		+ "\nexit 0\n",
+		encoding="utf-8",
+	)
+	result = subprocess.run(
+		["bash", str(harness)],
+		capture_output=True,
+		text=True,
+		check=False,
+		env={"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp_path)},
+	)
+	assert result.returncode == 0, result.stderr
+	summaries = [line for line in result.stdout.splitlines() if line.startswith("ORCH_POLL_CYCLE_SUMMARY")]
+	assert len(summaries) == 1, result.stdout
+	assert _fields(summaries[0])[0].isdigit(), summaries[0]
+
+
+def test_cycle_summary_negative_elapsed_reports_unknown():
+	# Any wall clock (EPOCHREALTIME included) can step backwards; a negative
+	# difference is reported as `unknown`, never as a negative number.
+	body = (
+		"_orch_poll_cycle_project_begin 7 || true\n"
+		"_ORCH_POLL_CYCLE_PROJECT_START_MS=99999999999999\n"
+		"_ORCH_POLL_CYCLE_START_MS=99999999999999\n"
+		"exit 0\n"
+	)
+	rc, summaries, projects = _run(body)
+	assert rc == 0
+	assert len(summaries) == 1
+	assert _fields(summaries[0])[0] == "unknown", summaries[0]
+	assert projects == ["ORCH_POLL_PROJECT_TIMING tracking_issue=7 elapsed_ms=unknown"]
+
+
 def test_cycle_summary_sweep_only_exit_reports_unknown_projects():
 	rc, summaries, projects = _run("exit 0")
 	assert rc == 0 and projects == []

@@ -35,7 +35,14 @@ set -euo pipefail
 # no ledger file and no extra stdout lines.
 _orch_poll_cycle_now_ms()
 {
-	local _orch_poll_cycle_now_value=""
+	local _orch_poll_cycle_now_value="" _orch_poll_cycle_now_realtime="${EPOCHREALTIME:-}"
+	# Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
+	# coreutils) gave readings that went backwards within a run, which printed
+	# negative elapsed_ms. `date` stays as the fallback for bash < 5.
+	if [[ "${_orch_poll_cycle_now_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+		printf '%s' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
+		return 0
+	fi
 	_orch_poll_cycle_now_value="$(date +%s%3N 2>/dev/null || true)"
 	if [[ "${_orch_poll_cycle_now_value}" =~ ^[0-9]{13,}$ ]]; then
 		printf '%s' "${_orch_poll_cycle_now_value}"
@@ -76,6 +83,8 @@ _orch_poll_cycle_project_flush()
 	_orch_poll_cycle_flush_now="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
 	if [[ "${_orch_poll_cycle_flush_now}" =~ ^[0-9]+$ ]] && [[ "${_ORCH_POLL_CYCLE_PROJECT_START_MS:-}" =~ ^[0-9]+$ ]]; then
 		_orch_poll_cycle_flush_elapsed="$(( _orch_poll_cycle_flush_now - _ORCH_POLL_CYCLE_PROJECT_START_MS ))"
+		# A wall-clock step backwards gives a negative difference; report unknown.
+		[[ "${_orch_poll_cycle_flush_elapsed}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_flush_elapsed="unknown"
 	fi
 	# Clear first so a failed write can never print the same project twice.
 	_ORCH_POLL_CYCLE_PROJECT_NUM=""
@@ -117,6 +126,8 @@ _orch_poll_cycle_on_exit()
 	_orch_poll_cycle_exit_now="$(_orch_poll_cycle_now_ms 2>/dev/null || true)"
 	if [[ "${_orch_poll_cycle_exit_now}" =~ ^[0-9]+$ ]] && [[ "${_ORCH_POLL_CYCLE_START_MS:-}" =~ ^[0-9]+$ ]]; then
 		_orch_poll_cycle_exit_elapsed="$(( _orch_poll_cycle_exit_now - _ORCH_POLL_CYCLE_START_MS ))"
+		# A wall-clock step backwards gives a negative difference; report unknown.
+		[[ "${_orch_poll_cycle_exit_elapsed}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_elapsed="unknown"
 	fi
 	if [ -n "${_orch_poll_cycle_exit_ledger}" ] && [ -f "${_orch_poll_cycle_exit_ledger}" ] && [ -r "${_orch_poll_cycle_exit_ledger}" ]; then
 		_orch_poll_cycle_exit_sleep="$(awk 'BEGIN { total = 0; bad = 0 } /^[0-9]+$/ { total += $0; next } { bad = 1 } END { if (bad) print "unknown"; else printf "%.0f\n", total }' "${_orch_poll_cycle_exit_ledger}" 2>/dev/null || true)"
