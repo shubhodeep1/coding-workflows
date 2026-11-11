@@ -158,18 +158,21 @@ def test_cycle_summary_preserves_errexit_failure_status():
 
 
 def test_cycle_summary_elapsed_ignores_a_date_clock_that_goes_backwards(tmp_path):
-	# ubuntu-26.04's `date +%s%3N` gave readings that went backwards within a
-	# run, so elapsed_ms printed negative and failed the summary regex. The
-	# clock reads bash's EPOCHREALTIME first, so a bad `date` cannot do that.
+	# Issue #9237: a wall clock that steps backwards gave elapsed_ms=-882 and
+	# failed the summary regex. Unsetting EPOCHREALTIME forces the `date`
+	# fallback; every `date` reading is 100 ms earlier than the one before, so
+	# both the project and the cycle difference are negative and must be
+	# reported as `unknown`.
 	harness = tmp_path / "harness.sh"
 	harness.write_text(
 		"set -euo pipefail\n"
+		"unset EPOCHREALTIME\n"
 		# A file counter, because the clock calls `date` inside $(...) subshells.
 		f"_fake_date_count_file='{tmp_path / 'date_calls'}'\n"
 		"date() { echo x >> \"${_fake_date_count_file}\"; "
-		"if [ \"$(wc -l < \"${_fake_date_count_file}\")\" -eq 1 ]; then echo 1700000000900; else echo 1700000000100; fi; }\n"
+		"echo \"$(( 1700000001000 - $(wc -l < \"${_fake_date_count_file}\") * 100 ))\"; }\n"
 		+ _helper_block()
-		+ "\nexit 0\n",
+		+ "\n_orch_poll_cycle_project_begin 7 || true\nexit 0\n",
 		encoding="utf-8",
 	)
 	result = subprocess.run(
@@ -180,9 +183,14 @@ def test_cycle_summary_elapsed_ignores_a_date_clock_that_goes_backwards(tmp_path
 		env={"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp_path)},
 	)
 	assert result.returncode == 0, result.stderr
-	summaries = [line for line in result.stdout.splitlines() if line.startswith("ORCH_POLL_CYCLE_SUMMARY")]
+	lines = result.stdout.splitlines()
+	summaries = [line for line in lines if line.startswith("ORCH_POLL_CYCLE_SUMMARY")]
+	projects = [line for line in lines if line.startswith("ORCH_POLL_PROJECT_TIMING")]
 	assert len(summaries) == 1, result.stdout
-	assert _fields(summaries[0])[0].isdigit(), summaries[0]
+	assert _fields(summaries[0])[0] == "unknown", summaries[0]
+	assert projects == ["ORCH_POLL_PROJECT_TIMING tracking_issue=7 elapsed_ms=unknown"], result.stdout
+	# The stub really was the clock: start, project start, flush and exit.
+	assert len((tmp_path / "date_calls").read_text(encoding="utf-8").splitlines()) == 4
 
 
 def test_cycle_summary_negative_elapsed_reports_unknown():

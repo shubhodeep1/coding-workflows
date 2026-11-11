@@ -36,9 +36,10 @@ set -euo pipefail
 _orch_poll_cycle_now_ms()
 {
 	local _orch_poll_cycle_now_value="" _orch_poll_cycle_now_realtime="${EPOCHREALTIME:-}"
-	# Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
-	# coreutils) gave readings that went backwards within a run, which printed
-	# negative elapsed_ms. `date` stays as the fallback for bash < 5.
+	# Bash's own clock first (no fork); `date` stays as the fallback for
+	# bash < 5. Both read the wall clock, which can step backwards (#9237 saw
+	# elapsed_ms=-882), so the negative-difference guards in the flush and
+	# exit helpers, not this clock choice, keep elapsed_ms at \d+|unknown.
 	if [[ "${_orch_poll_cycle_now_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
 		printf '%s' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
 		return 0
