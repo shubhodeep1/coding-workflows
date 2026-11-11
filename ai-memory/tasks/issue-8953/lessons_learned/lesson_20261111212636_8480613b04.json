@@ -1,0 +1,28 @@
+{
+  "discovered_at": "2026-11-11T21:26:36Z",
+  "issue_number": 8953,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 008 as out-of-scope; anchor=tests/test_agents_fragment_contract.py:1-1; cited_path=tests/test_agents_fragment_contract.py, tests/test_changelog_fragment_contract.py, tests/test_gh_api_write_guard.py (pre-push gate harness classification); files_touched=.github/workflows/review_autofix_sweep.yml, .github/workflows/test-and-mark-stable.yml, README.md, agents.d/8953-smoke-pr-cleanup.md, changelog.d/8953-close-stranded-smoke-prs.md, scripts/orchestrate_poll_process.sh, tests/test_ci_wires_every_test_file.py, tests/test_orchestrate_judge_tracking_closed_guard.py, tests/test_review_autofix_sweep_merge_queued_skip.py, tests/test_review_autofix_sweep_smoke_pr_backstop.py, tests/test_review_autofix_sweep_zero_candidate_fast_exit.py, tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py, tests/test_test_and_mark_stable_orchestrate_child_count.py, tests/test_test_and_mark_stable_smoke_pr_cleanup.py.",
+  "phase": "review_autofix",
+  "pr_number": 8960,
+  "record_id": "lesson_20261111212636_8480613b04",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_agents_fragment_contract.py, tests/test_changelog_fragment_contract.py, tests/test_gh_api_write_guard.py (pre-push gate harness classification)",
+    "tests/test_agents_fragment_contract.py",
+    ".github/workflows/review_autofix_sweep.yml",
+    ".github/workflows/test-and-mark-stable.yml",
+    "README.md",
+    "agents.d/8953-smoke-pr-cleanup.md",
+    "changelog.d/8953-close-stranded-smoke-prs.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_orchestrate_judge_tracking_closed_guard.py",
+    "tests/test_review_autofix_sweep_merge_queued_skip.py",
+    "tests/test_review_autofix_sweep_smoke_pr_backstop.py",
+    "tests/test_review_autofix_sweep_zero_candidate_fast_exit.py",
+    "tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py",
+    "tests/test_test_and_mark_stable_orchestrate_child_count.py",
+    "tests/test_test_and_mark_stable_smoke_pr_cleanup.py"
+  ]
+}
