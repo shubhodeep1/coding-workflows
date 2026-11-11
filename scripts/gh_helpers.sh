@@ -1196,6 +1196,9 @@ gh_api_retry()
 # succeeds writes nothing to stdout and returns 1. If the successful
 # attempt's output cannot be delivered (the reader closed the pipe),
 # the copy's non-zero status is returned and the command is not re-run.
+# The copy uses bash's builtin printf in a subshell, not cat, so a closed
+# reader gives a non-zero status whichever cat is installed: the
+# ubuntu-26.04 runner's cat exited 0 there (issue #9227).
 #
 # Usage:
 #   gh_retry gh api repos/owner/repo/issues
@@ -1226,7 +1229,22 @@ gh_retry()
 	while [ "${attempt}" -le "${max_attempts}" ]; do
 		if "$@" >"${stdout_file}" 2>"${stderr_file}"; then
 			local _gh_retry_replay_rc=0
-			cat "${stdout_file}" || _gh_retry_replay_rc=$?
+			# Replay with builtin printf, not cat (issue #9227): the
+			# ubuntu-26.04 runner's cat exited 0 after the reader closed the
+			# pipe. The subshell takes the SIGPIPE (141) or EPIPE (1), so the
+			# caller's shell survives, both temp files are removed and the
+			# command is not re-run. Chunks split at NUL keep the output
+			# byte-exact (NULs, backslashes, trailing newlines).
+			(
+				_gh_retry_replay_chunk=""
+				while IFS= read -r -d '' _gh_retry_replay_chunk; do
+					builtin printf '%s\0' "${_gh_retry_replay_chunk}" || exit "$?"
+				done
+				if [ -n "${_gh_retry_replay_chunk}" ]; then
+					builtin printf '%s' "${_gh_retry_replay_chunk}" || exit "$?"
+				fi
+				exit 0
+			) < "${stdout_file}" || _gh_retry_replay_rc=$?
 			rm -f "${stderr_file}" "${stdout_file}"
 			return "${_gh_retry_replay_rc}"
 		fi

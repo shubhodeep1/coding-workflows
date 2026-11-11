@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -603,3 +604,51 @@ def test_summary_unknown_flag_never_logs_dash_prefixed_value(tmp_path: Path) -> 
 	assert out == "gh issue create (flags: --project --title)"
 	assert "PRIVATE_SENTINEL" not in out
 	assert _summary(tmp_path, "gh", "api", "--paginate", "--slurp", "repos/o/r/x") == "gh api repos/o/r/x (flags: --paginate --slurp)"
+
+
+# --- Issue #9227: the replay status must not depend on cat. -----------------
+# ubuntu-26.04 runners ship a cat that exits 0 after its reader closes the
+# pipe, so gh_retry's replay (then `cat file`) reported rc=0 there.
+
+
+def test_closed_reader_status_does_not_depend_on_cat_exit_status(tmp_path: Path) -> None:
+	big = "x" * (1024 * 1024)
+	env = _setup(tmp_path, [(big, "", 0)])
+	real_cat = shutil.which("cat")
+	assert real_cat, "no cat on PATH"
+	fake_cat = tmp_path / "bin" / "cat"
+	# Behaves like the runner's cat: SIGPIPE ignored and always exit 0 once
+	# every argument is a readable file. Exits 1 otherwise, so the fake gh's
+	# `cat "${count_file}" 2>/dev/null || echo 0` still counts calls.
+	fake_cat.write_text(
+		"#!/usr/bin/env bash\n"
+		'for arg in "$@"; do\n'
+		'\t[ -f "${arg}" ] && [ -r "${arg}" ] || exit 1\n'
+		"done\n"
+		"trap '' PIPE\n"
+		f"'{real_cat}' \"$@\" 2>/dev/null\n"
+		"exit 0\n",
+		encoding="utf-8",
+	)
+	fake_cat.chmod(0o755)
+	result = _run(
+		tmp_path,
+		env,
+		"gh_retry gh api repos/o/r | head -c 1 > /dev/null\n"
+		'echo "rc=${PIPESTATUS[0]}"',
+	)
+	assert _calls(tmp_path) == 1, result.stderr
+	rc_line = result.stdout.strip()
+	assert rc_line.startswith("rc=") and rc_line != "rc=0", (rc_line, result.stderr)
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_replay_keeps_nul_bytes_and_trailing_newlines(tmp_path: Path) -> None:
+	payload = "a\\b\0c  \n\n\0\0tail\n\n\n"
+	env = _setup(tmp_path, [(payload, "", 0)])
+	result = _run(tmp_path, env, "gh_retry gh api repos/o/r")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == payload
+	assert result.stderr == ""
+	assert _calls(tmp_path) == 1
+	assert _leftover_temp_files(tmp_path) == []
