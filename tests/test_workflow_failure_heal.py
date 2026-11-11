@@ -6746,11 +6746,13 @@ def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_withou
 	assert "issues_created" not in _state_after
 
 
-def _run_heal_self_escalation_intake(labels: list[str] | None) -> tuple[subprocess.CompletedProcess[str], dict, str, list[str]]:
+def _run_heal_self_escalation_intake(labels: list[str] | None, *, raw_labels: object = None) -> tuple[subprocess.CompletedProcess[str], dict, str, list[str]]:
 	"""Run the intake for heal issue #42 failing its own plan run.
 
 	*labels* become the report payload's issue labels (``None`` drops the
-	payload's ``labels`` field entirely). Returns the intake result, the
+	payload's ``labels`` field entirely). A non-``None`` *raw_labels* is
+	written to the payload's ``labels`` field verbatim instead, so a
+	malformed value can be injected. Returns the intake result, the
 	fake-gh state, the heal fingerprint and every ``level|text`` line the
 	stubbed ``tg_send_msg`` recorded.
 	"""
@@ -6758,7 +6760,9 @@ def _run_heal_self_escalation_intake(labels: list[str] | None) -> tuple[subproce
 	fp = re.search(r"fingerprint fp=([0-9a-f]{64})", first.stdout).group(1)
 	heal_issue = _sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")
 	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=heal_issue["body"], labels=labels or []))
-	if labels is None:
+	if raw_labels is not None:
+		payload["labels"] = raw_labels
+	elif labels is None:
 		payload.pop("labels", None)
 	state = _plan_intake_state(repo=SELF_REPO, heal_issues=[heal_issue])
 	tg_dir = Path(tempfile.mkdtemp(prefix="heal-tg-"))
@@ -6797,6 +6801,15 @@ def test_intake_heal_self_escalation_alerts_once() -> None:
 	assert "escalate_repeat" not in result.stdout
 	assert len(_heal_self_escalation_alerts(calls)) == 1, calls
 	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+	# Fail open on a malformed label list too: a bare string (not a list) and
+	# object entries are not a readable label list, so the alert is still sent.
+	for malformed in (heal.ESCALATED_LABEL, [{"name": heal.ESCALATED_LABEL}], {"name": heal.ESCALATED_LABEL}):
+		result, state_after, fp, calls = _run_heal_self_escalation_intake(None, raw_labels=malformed)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+		assert "escalate_repeat" not in result.stdout, malformed
+		assert len(_heal_self_escalation_alerts(calls)) == 1, (malformed, calls)
+		assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
 
 
 def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:

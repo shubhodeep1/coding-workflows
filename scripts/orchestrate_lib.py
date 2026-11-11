@@ -1608,7 +1608,9 @@ DEDICATED_HANDLER_PHASES: set[str] = {
 # ai:workflow-heal-escalated (issue #9248) is latched too: the workflow
 # failure heal intake sets it when a heal issue's own clarify / plan /
 # implement run fails the way the issue was filed for, or when the heal
-# lineage cap is hit.  Retrying such an issue only re-runs the failing
+# lineage cap is hit, and post-merge verification
+# (workflow_failure_heal_verify.sh) sets it when a heal fix did not hold
+# for the second time.  Retrying such an issue only re-runs the failing
 # phase and adds another occurrence, so stall recovery pauses until a
 # human removes the label.  Appended last so first-match results for
 # the existing labels do not change.
