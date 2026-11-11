@@ -2231,7 +2231,9 @@ class CheckFailureTriageBaseTrackedTests(unittest.TestCase):
 		self.assertFalse(any("labels=ai:workflow-heal" in call for call in calls))
 
 
-def _run_base_tracked_note(tracked: dict | None, *, post_rc: int = 0) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+def _run_base_tracked_note(
+	tracked: dict | None, *, post_rc: int = 0, existing_first_lines: str = "", list_rc: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
 	with tempfile.TemporaryDirectory(prefix="check-triage-note-") as temp:
 		temp_path = Path(temp)
 		bin_dir = temp_path / "bin"
@@ -2250,6 +2252,9 @@ def _run_base_tracked_note(tracked: dict | None, *, post_rc: int = 0) -> tuple[s
 			bin_dir / "gh",
 			"#!/usr/bin/env bash\n"
 			'printf \'%s\\n\' "$*" >> "${MOCK_GH_CALLS}"\n'
+			# The marker read (--paginate ... --jq first lines) prints the
+			# comments' first lines; the stub ignores --jq and prints them as given.
+			'if [ "$2" = "--paginate" ]; then printf \'%s\' "${MOCK_EXISTING}"; exit "${MOCK_LIST_RC}"; fi\n'
 			'for arg in "$@"; do case "${arg}" in body=*) printf \'%s\' "${arg#body=}" > "${MOCK_BODY}" ;; esac; done\n'
 			'exit "${MOCK_POST_RC}"\n',
 		)
@@ -2267,6 +2272,8 @@ def _run_base_tracked_note(tracked: dict | None, *, post_rc: int = 0) -> tuple[s
 			"MOCK_GH_CALLS": str(calls_file),
 			"MOCK_BODY": str(body_file),
 			"MOCK_POST_RC": str(post_rc),
+			"MOCK_EXISTING": existing_first_lines,
+			"MOCK_LIST_RC": str(list_rc),
 			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
 		})
 		proc = subprocess.run(
@@ -2288,9 +2295,10 @@ class CheckFailureTriageBaseTrackedNoteTests(unittest.TestCase):
 		proc, calls, body = _run_base_tracked_note(self.TRACKED)
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertIn("CHECK_TRIAGE op=base_tracked_note outcome=posted heal_issue=9215 pr=9180", proc.stdout)
-		# One call; the stub logs its two-line body as two lines.
-		self.assertEqual(sum(call.startswith("api ") for call in calls), 1)
-		self.assertTrue(calls[0].startswith("api repos/owner/repo/issues/9215/comments -f body="))
+		# The marker read, then one post; the stub logs the two-line body as two lines.
+		self.assertEqual(sum(call.startswith("api ") for call in calls), 2)
+		self.assertTrue(calls[0].startswith("api --paginate repos/owner/repo/issues/9215/comments?per_page=100 --jq "))
+		self.assertTrue(calls[1].startswith("api repos/owner/repo/issues/9215/comments -f body="))
 		lines = body.splitlines()
 		self.assertEqual(lines[0], f"<!-- check-failure-triage:base-tracked pr=9180 head={'b' * 40} run=42941636319 -->")
 		self.assertIn("`.github/workflows/ci.yml` also failed on PR #9180 (head `bbbbbbbbbbbb`", body)
@@ -2300,6 +2308,23 @@ class CheckFailureTriageBaseTrackedNoteTests(unittest.TestCase):
 		# pipeline bookkeeping, so the owner-account comment is not a human reply.
 		lib = (REPO_ROOT / "scripts" / "orchestrate_lib.py").read_text(encoding="utf-8")
 		self.assertIn("|workflow-failure-heal:|check-failure-triage:|", lib)
+
+	def test_existing_note_for_the_same_head_and_run_is_not_posted_again(self) -> None:
+		marker = f"<!-- check-failure-triage:base-tracked pr=9180 head={'b' * 40} run=42941636319 -->"
+		proc, calls, body = _run_base_tracked_note(self.TRACKED, existing_first_lines=f"Some reply\n{marker}\n")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE op=base_tracked_note outcome=skip reason=already_noted heal_issue=9215 pr=9180", proc.stdout)
+		self.assertEqual(len(calls), 1)
+		self.assertEqual(body, "")
+		# A note for another run of the same PR does not count.
+		other = marker.replace("run=42941636319", "run=42941636320")
+		proc, calls, _body = _run_base_tracked_note(self.TRACKED, existing_first_lines=other + "\n")
+		self.assertIn("outcome=posted", proc.stdout)
+
+	def test_failed_marker_read_posts_as_before(self) -> None:
+		proc, calls, _body = _run_base_tracked_note(self.TRACKED, list_rc=1)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE op=base_tracked_note outcome=posted heal_issue=9215 pr=9180", proc.stdout)
 
 	def test_post_failure_is_logged_and_not_fatal(self) -> None:
 		proc, _calls, _body = _run_base_tracked_note(self.TRACKED, post_rc=1)

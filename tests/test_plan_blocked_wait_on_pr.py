@@ -71,7 +71,7 @@ def _render(script: str) -> str:
 
 
 class PlanBlockedWaitOnPrTests(unittest.TestCase):
-	def _run(self, reason: str) -> tuple[str, str, str]:
+	def _run(self, reason: str, *, unblock_judge_enabled: str = "true") -> tuple[str, str, str]:
 		with tempfile.TemporaryDirectory() as tmp:
 			root = Path(tmp)
 			scripts_dir = root / "scripts"
@@ -89,6 +89,7 @@ class PlanBlockedWaitOnPrTests(unittest.TestCase):
 				**os.environ,
 				"PATH": f"{bin_dir}:{os.environ['PATH']}",
 				"BLOCKED_REASON": reason,
+				"UNBLOCK_JUDGE_ENABLED": unblock_judge_enabled,
 				"ISSUE_NUMBER": "9215",
 				"ISSUE_URL": "https://github.com/o/r/issues/9215",
 				"PLAN_COMMENT_FILE": str(root / "comment.md"),
@@ -148,6 +149,15 @@ class PlanBlockedWaitOnPrTests(unittest.TestCase):
 			body, tg, _ = self._run(reason)
 			self.assertEqual(body.splitlines()[0], "Planning blocked: human input required.", reason)
 			self.assertTrue(tg.startswith("level=CRITICAL\n"), reason)
+
+	def test_disabled_unblock_judge_keeps_the_human_input_comment_and_critical_page(self) -> None:
+		# With UNBLOCK_JUDGE_ENABLED=false nothing resumes the issue, so the wait
+		# branch must not claim that no action is needed.
+		body, tg, stdout = self._run(WAIT_REASON, unblock_judge_enabled="false")
+		self.assertEqual(body.splitlines()[0], "Planning blocked: human input required.")
+		self.assertNotIn("No action is needed", body)
+		self.assertTrue(tg.startswith("level=CRITICAL\n"), tg)
+		self.assertNotIn("PLAN_BLOCKED_WAIT", stdout)
 
 	def test_wait_comment_keeps_the_automation_prefix(self) -> None:
 		# orchestrate_lib.py skips comments opening with "planning blocked:" when

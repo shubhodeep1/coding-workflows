@@ -2310,6 +2310,9 @@ jobs:
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           BLOCKED_REASON: ${{ steps.parse_plan.outputs.blocked_reason }}
+          # The open-PR wait branch below promises an automatic resume only
+          # while the unblock judge runs (same default as orchestrate_poll.yml).
+          UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -2340,6 +2343,11 @@ jobs:
           plan_blocked_wait_re='^work is delivered by open PR #([1-9][0-9]{0,8}); resume once it is merged$'
           if [[ "${BLOCKED_REASON}" =~ ${plan_blocked_wait_re} ]]; then
             PLAN_BLOCKED_WAIT_PR="${BASH_REMATCH[1]}"
+          fi
+          # With the unblock judge off nothing resumes the issue, so keep the
+          # human-input comment and CRITICAL page.
+          if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
+            PLAN_BLOCKED_WAIT_PR=""
           fi
           if [ -n "${PLAN_BLOCKED_WAIT_PR}" ]; then
             {

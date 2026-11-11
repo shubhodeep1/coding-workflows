@@ -713,7 +713,19 @@ if [ "${TRIAGE_STAGE}" = "base-tracked-note" ]; then
 		log "op=base_tracked_note outcome=skip reason=metadata_invalid"
 		exit 0
 	fi
-	note_body="<!-- ${MARKER_PREFIX}base-tracked pr=${note_pr} head=${note_head} run=${note_run} -->"
+	note_marker="<!-- ${MARKER_PREFIX}base-tracked pr=${note_pr} head=${note_head} run=${note_run} -->"
+	# Skip a note this PR head and run already left (a workflow re-run, or a
+	# gh_retry repeat after a lost response). API cost: the heal issue's comment
+	# pages, read only here; no other call in this stage returns them. A failed
+	# read posts as before.
+	note_existing=""
+	if note_existing="$(gh_retry gh api --paginate "repos/${REPO}/issues/${note_heal_issue}/comments?per_page=100" \
+		--jq '.[] | (.body // "") | split("\n")[0] | rtrimstr("\r")' 2>/dev/null)" &&
+		grep -Fqx -- "${note_marker}" <<<"${note_existing}"; then
+		log "op=base_tracked_note outcome=skip reason=already_noted heal_issue=${note_heal_issue} pr=${note_pr}"
+		exit 0
+	fi
+	note_body="${note_marker}"
 	note_body+=$'\n'
 	note_body+="\`${note_workflow}\` also failed on PR #${note_pr} (head \`${note_head:0:12}\`, run ${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${note_run}). The newest run of that workflow on \`${note_branch}\` fails too, so check-failure triage opened no separate issue for the PR."
 	if gh_retry gh api "repos/${REPO}/issues/${note_heal_issue}/comments" -f body="${note_body}" >/dev/null 2>&1; then
