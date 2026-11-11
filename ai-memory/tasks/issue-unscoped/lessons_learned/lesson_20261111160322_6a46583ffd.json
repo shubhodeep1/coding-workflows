@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-11T16:03:22Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/ci.yml:543; cited_path=.github/workflows/ci.yml; files_touched=changelog.d/9235-render-prompt-help-percent.md, scripts/render_prompt.py, tests/test_render_prompt_foundation.py.",
+  "phase": "review_autofix",
+  "pr_number": 9245,
+  "record_id": "lesson_20261111160322_6a46583ffd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    "changelog.d/9235-render-prompt-help-percent.md",
+    "scripts/render_prompt.py",
+    "tests/test_render_prompt_foundation.py"
+  ]
+}
