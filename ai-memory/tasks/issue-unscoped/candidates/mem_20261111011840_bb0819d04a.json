@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.81,
+  "details": "Changes to clarify or plan prompt behavior have updated both `prompts/mode-*.txt` and the corresponding `prompts/_templates/mode-*.txt`. Check both locations when modifying these prompts, and add tests for the behavior where applicable.",
+  "fingerprint": "ae5df93dd4bc4319d2c27d3cc0a65c5780bdfbb7e7a1dc0c63c3f6a63824a7db",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "42937280023",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "42937280023",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8808",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8880",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8955",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8974",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9183",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8812",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8883",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8968",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8986",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9185"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261111011840_bb0819d04a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep active mode prompts and their templates in sync when changing prompt behavior.",
+  "timestamps": {
+    "created_at": "2026-11-11T01:18:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
