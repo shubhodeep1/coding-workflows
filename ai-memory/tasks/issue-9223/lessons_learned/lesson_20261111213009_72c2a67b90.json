@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-11T21:30:09Z",
+  "issue_number": 9223,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 011 as out-of-scope; anchor=tests/test_lint_pr_body_auto_close.py:458-506; cited_path=tests/test_lint_pr_body_auto_close.py; files_touched=.github/workflows/test-and-mark-stable.yml, changelog.d/9223-release-gate-clarify-stall-diagnostics.md, tests/test_ci_wires_every_test_file.py, tests/test_release_smoke_run_lookup.py, tests/test_test_and_mark_stable_clarify_wait.py.",
+  "phase": "review_autofix",
+  "pr_number": 9273,
+  "record_id": "lesson_20261111213009_72c2a67b90",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_lint_pr_body_auto_close.py",
+    ".github/workflows/test-and-mark-stable.yml",
+    "changelog.d/9223-release-gate-clarify-stall-diagnostics.md",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_release_smoke_run_lookup.py",
+    "tests/test_test_and_mark_stable_clarify_wait.py"
+  ]
+}
