@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The failing test is unrelated to PR #9279, and open PR #9246 appears to fix this exact closed-reader failure. What should this triage issue deliver?\nChoices:\nA) No code change here. Rely on PR #9246 (and #9264) for the fix, then re-run CI on PR #9279 after it merges. Close this issue as a duplicate. (RECOMMENDED)\nB) Fix it in this issue on the default branch, separately from #9246 (accept the risk of overlapping or conflicting with #9246 and #9264).\nC) Fix it on PR #9279's branch (`ai/issue-9252`) so that PR goes green by itself (this widens #9279 beyond its clock-only scope).\n**Note:** Q2 only applies if you pick Q1:B or Q1:C. With Q1:A, ignore Q2.\nQ2: If the fix lands in this issue (Q1:B or Q1:C), which layer should change? The test must not be skipped and its non-zero assertion must not be loosened.\nChoices:\nA) Fix the production replay in `gh_retry` (`scripts/gh_helpers.sh:1227-1231`) so that a reader closing the pipe returns non-zero whichever `cat` the host has (GNU or uutils), as the helper's documented contract already says. Keep the test unchanged. (RECOMMENDED)\nB) Change only the test to use a reader that closes deterministically (for example `( exec 0<&- )`, which the diagnostics show returns 141 under uutils). Leave `gh_retry` as it is, which means the closed-reader rc=0 behaviour stays in production on ubuntu-26.04.\nC) Both A and B.",
+  "fingerprint": "1af6c029254b7939fa6619ad956cd952c33164b6c11799413eb66696b4e24668",
+  "lineage": {
+    "issue_number": 9307,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43086501057",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43086501057",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111194415_8887477328",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9307,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43086501057"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9307 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T19:44:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
