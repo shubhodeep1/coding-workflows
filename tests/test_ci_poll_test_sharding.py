@@ -2464,8 +2464,9 @@ class MovedPromote8771StepsContractTest(unittest.TestCase):
 # 20 minutes (run 42373283876, budget-watch issue #8993): step name -> (target
 # job id, module paths its body names). The run's step timings were not
 # readable; the pick is the heal job's slowest unsplit steps in the planning
-# sandbox, an estimate. The steps go to two jobs so that no single job takes
-# all of them.
+# sandbox, an estimate. #8993 split them across two jobs so that no single job
+# took all of them; #9078 moved the two in tests-hooks-and-orchestrator on, so
+# all three now run in tests-release-and-log-analysis.
 HEAL_8993_SOURCE_JOB_ID = "tests-heal-plan-and-validation"
 HEAL_8993_SETUP_STEP = "Install Python CI dependencies"
 MOVED_HEAL_8993_STEPS = {

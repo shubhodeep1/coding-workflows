@@ -2452,9 +2452,9 @@ jobs:
       # Moved from tests-heal-plan-and-validation, which measured 15m08s of
       # its 20 minutes on main (run 38222993326, issue #7250); static-checks
       # measured about 2 minutes. Step names and bodies are unchanged.
-      # "Regression tests wired by the CI wiring guard (part 1)", moved here
-      # with it, moved on to tests-release-and-log-analysis in #7382, was in
-      # tests-heal-plan-and-validation from #7406 and is in
+      # "Regression tests wired by the CI wiring guard (part 1)", moved to
+      # static-checks with it, moved on to tests-release-and-log-analysis in
+      # #7382, was in tests-heal-plan-and-validation from #7406 and is in
       # tests-promote-stall-and-review since #9018.
       # Moved on from static-checks, which took 11m17s of its 15 minutes on
       # main (run 40954844196, budget-watch issue #8394). The pick is an
@@ -2479,9 +2479,10 @@ jobs:
       # minutes on main (run 42373283876, budget-watch issue #8993). Step
       # timings could not be read; picked as that job's next slowest unsplit
       # steps in the planning sandbox (about 29s and 23s, relative weights
-      # only). This job has the fewest subprocess call sites of the 20-minute
-      # non-matrix jobs (about 221), and nothing has moved into it since #8730
-      # moved its largest unsplit step out. Conflict-dispatch first came to the
+      # only). #8993 put them in tests-hooks-and-orchestrator, which then had
+      # the fewest subprocess call sites of the 20-minute non-matrix jobs (about
+      # 221), and nothing had moved into it since #8730 moved its largest
+      # unsplit step out. Conflict-dispatch first came to the
       # heal job from tests-release-and-log-analysis (#8208). Names and bodies
       # unchanged.
       #
