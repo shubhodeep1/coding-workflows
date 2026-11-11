@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3198 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new `sf_now_ms` relies on `EPOCHREALTIME` (bash 5.0+) and falls back to `date` on older bash; the reviewer concludes the current implementation is correct and safe.\n  WHY: Source severity is NIT; the reviewer notes the design depends on bash internals, but the availability check `\"${EPOCHREALTIME:-}\"` is correct.\n- tests/test_ci_poll_test_sharding.py:4656-4665 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: In `test_full_body_elapsed_ignores_a_short_date_reading`, the fake `date` prelude conflicts with the `sf_now_ms` fallback (`.github/workflows/ci.yml:3198`) on bash < 5, so the heartbeat prints a negative `elapsed_ms` and the `\\d+` assertion fails.\n  WHY: The suite cannot run green under the bash versions the fallback exists for; CI (ubuntu, bash 5) is unaffected. Source severity is NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Seven other scripts still read date +%s%3N, all for timing logs only (...) They decide nothing and are not changed here.\"\n  expected_change_site: N/A (verification of the claim)\n  confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The other seven scripts may also suffer the short `date` reading on ubuntu-26.04 and produce incorrect timing logs. The reviewer says the claim should be verified, and rates this a NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_gh_retry_stdout_isolation.py:`_output_larger_than_any_pipe` | HARDENING_SUGGESTION (no severity stated)\n  PROBLEM: `4 * pipe_max` is unbounded, so a host with a very large `/proc/sys/fs/pipe-max-size` would build a multi-GiB string.\n  WHY: Suggested fix is to cap the size, for example `min(4 * pipe_max, 64 * 1024 * 1024)` (about 1 line). HARDENING_RISK_SCORE: 1.\n- All other checklist sections reported NONE, including TASK COMPLETENESS / INTENT GAPS.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:3198 | severity=NIT | confidence=4\n  PROBLEM: The new `sf_now_ms` implementation uses `BASH_REMATCH` and relies on `EPOCHREALTIME`, which is only available in bash 5.0 and later.\n  WHY: On older bash, `EPOCHREALTIME` is unset and the code falls back to `date`. The reviewer says this is correct per the design and the current implementation is safe.\n- TASK_GAP:\n  Requirement: \"Seven other scripts still read date +%s%3N, all for timing logs only (...) They decide nothing and are not changed here.\"\n  Expected change site: N/A (Documentation / verification of the claim)\n  Evidence of absence: If any of those scripts also suffer from the `ubuntu-26.04` issue (Rust coreutils `date` returning a short reading), they will produce incorrect timing logs. The claim should be verified.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ci_poll_test_sharding.py:4656-4665 | severity=NIT | confidence=3\n  PROBLEM: The test's prelude fake `date` in `test_full_body_elapsed_ignores_a_short_date_reading` contradicts the documented fallback of `sf_now_ms` (`.github/workflows/ci.yml:3198`). On bash < 5 the fallback reads the fake `date`, the heartbeat computes a negative elapsed time, and `assertRegex(out, r\"CI_SUBTEST_HEARTBEAT running=\\S+ elapsed_ms=\\d+\\n\")` fails.\n  WHY: The suite cannot run green under the bash versions the fallback exists for; CI (ubuntu, bash 5) is unaffected.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0078ac4cecf77cbc9a3af282f222cdc5ce5c734073272da93613d02dd43450f3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9246,
+    "run_id": "43044844104",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43044844104",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111173433_ade5600f07",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9246,
+    "run_id": "43044844104"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-11T17:34:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
