@@ -169,6 +169,91 @@ def test_render_prompt_py_help_strings_are_valid_format_strings() -> None:
 	assert "{%...%}" in proc.stdout
 
 
+# Issue #9269 / AD-1: argparse scripts under scripts/ that the tests run by the
+# `tests-release-and-log-analysis` and `orchestrate-poll` jobs in ci.yml call,
+# either as a subprocess or as an import. The list holds each script that
+# contains `ArgumentParser` and whose `<name>.py` path, `import <name>` or
+# `from <name> import` appears in one of those tests. Excluded on purpose:
+# - render_prompt.py: covered by the test above.
+# - verify_release_manifest.py: its parser uses add_help=False and has no
+#   help= strings, so --help exits 2 by design.
+# - scripts named only in tests/test_ci_poll_test_sharding.py, which lists
+#   test-file paths, not script calls.
+ARGPARSE_HELP_SCRIPTS = (
+	"acceptance_check.py",
+	"ai_labels.py",
+	"ai_memory.py",
+	"analyze_workflow_logs.py",
+	"apply_audit_gate_assets.py",
+	"assemble_agents.py",
+	"assemble_changelog.py",
+	"attempt_journal.py",
+	"blocker_check.py",
+	"build_state_snapshot.py",
+	"build_sync_manifest.py",
+	"check_triage_resolution.py",
+	"check_workflow_script_refs.py",
+	"claude_engine.py",
+	"collect_workflow_logs.py",
+	"consolidate_soft_error_reports.py",
+	"cost_audit.py",
+	"evidence_pack.py",
+	"files_touched_scope_guard.py",
+	"lint_pr_body_auto_close.py",
+	"load_workflow_overlay.py",
+	"mcp_handshake_probe.py",
+	"operator_step_issue.py",
+	"orchestrate_lib.py",
+	"orchestrate_state_v2.py",
+	"orphan_fixup_close.py",
+	"partial_delivery.py",
+	"persist_budget.py",
+	"persist_orchestrator.py",
+	"persist_postmerge_verify.py",
+	"plan_superseded_merged_pr.py",
+	"pr_dependency.py",
+	"provider_outage.py",
+	"release_manifest.py",
+	"render_validation_templates.py",
+	"security_dependency.py",
+	"security_pass_skip.py",
+	"slop_scan_local.py",
+	"summarize_unselected_runs.py",
+	"sync_claude_live_copies.py",
+	"targeted_file_context.py",
+	"task_state.py",
+	"unblock_actions.py",
+	"unblock_ledger.py",
+	"unblock_scan.py",
+	"validation_lint.py",
+	"validation_refresh_runner.py",
+	"workflow_failure_heal.py",
+	"workflow_wrapper_refs.py",
+)
+
+
+def test_argparse_scripts_called_by_ci_tests_exit_zero_on_help() -> None:
+	# Python 3.14 argparse checks every help string with `%` formatting when the
+	# argument is added, and `--help` runs the same `%` expansion on the 3.12 CI
+	# job, so a bad help string in any of these scripts fails here.
+	failures: list[str] = []
+	for name in ARGPARSE_HELP_SCRIPTS:
+		script = REPO_ROOT / "scripts" / name
+		assert script.is_file(), f"listed script is missing: {script}"
+		assert "argparse" in script.read_text(encoding="utf-8"), f"listed script no longer uses argparse: {script}"
+		proc = subprocess.run(
+			[sys.executable, str(script), "--help"],
+			cwd=str(REPO_ROOT),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		if proc.returncode != 0 or "usage:" not in proc.stdout:
+			failures.append(f"{name}: rc={proc.returncode} stderr_tail={proc.stderr[-500:]!r}")
+	assert not failures, "\n".join(failures)
+
+
 def test_output_contract_reference_includes_status_update_cadence() -> None:
 	reference_text = _load_reference_text("output-contract.txt")
 	assert "Emit one short preamble sentence (≤20 words) before each tool-call batch" in reference_text
@@ -1335,6 +1420,8 @@ def test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt() -> Non
 
 
 def main() -> int:
+	test_render_prompt_py_help_strings_are_valid_format_strings()
+	test_argparse_scripts_called_by_ci_tests_exit_zero_on_help()
 	test_output_contract_reference_includes_status_update_cadence()
 	test_render_prompt_sh_renders_implement_contract_defaults_and_env_values()
 	test_render_prompt_sh_renders_header_with_empty_repo_learnings()
