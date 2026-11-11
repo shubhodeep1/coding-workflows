@@ -406,7 +406,7 @@ def _select_log_tail_window(out: bytes, *, log_tail_bytes: int, partial_start: b
 	"""Pick the ``failed[i].log_tail`` text from the scanned end of a job log.
 
 	When the scan holds a step-level ``##[error]`` line, the window ends at the
-	first one (plus up to 5 following lines) and is trimmed from the front to
+	anchor line (plus up to 5 following lines) and is trimmed from the front to
 	``log_tail_bytes`` bytes and ``LOG_TAIL_LINES`` lines (issue #8799). The
 	runner's last ``##[error]Process completed with exit code`` line wins over
 	any other ``##[error]`` line, which may be a test's printed output (issue
