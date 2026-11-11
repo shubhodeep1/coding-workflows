@@ -11,6 +11,7 @@ help, so the next bare `%` fails CI instead of production runs.
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import re
 import sys
@@ -58,13 +59,44 @@ def _load_script_module(path: Path):
 	return module
 
 
+def _format_help_with_subparsers(parser: argparse.ArgumentParser) -> str:
+	"""Format `parser`'s help and, recursively, every subcommand parser's help."""
+	text = parser.format_help()
+	seen = {id(parser)}
+	pending = [parser]
+	while pending:
+		for action in pending.pop()._actions:
+			if isinstance(action, argparse._SubParsersAction):
+				for sub in action.choices.values():
+					if id(sub) not in seen:
+						seen.add(id(sub))
+						try:
+							sub.format_help()
+						except Exception as exc:  # noqa: BLE001 - name the subcommand
+							raise RuntimeError(f"{sub.prog}: {type(exc).__name__}: {exc}") from exc
+						pending.append(sub)
+	return text
+
+
 def _build_parser_help_failures(paths: list[Path]) -> list[str]:
+	failures: list[str] = []
+	# Restored afterwards so `_load_script_module`'s sys.path insertions do
+	# not leak into later imports in the same interpreter.
+	saved_sys_path = list(sys.path)
+	try:
+		failures = _collect_build_parser_help_failures(paths)
+	finally:
+		sys.path[:] = saved_sys_path
+	return failures
+
+
+def _collect_build_parser_help_failures(paths: list[Path]) -> list[str]:
 	failures: list[str] = []
 	for path in paths:
 		try:
 			module = _load_script_module(path)
 			parser = module.build_parser()
-			text = parser.format_help()
+			text = _format_help_with_subparsers(parser)
 		except SyntaxError as exc:
 			if sys.version_info < SCRIPTS_MIN_PYTHON:
 				continue
@@ -113,9 +145,30 @@ def test_guard_flags_bare_percent_help_string() -> None:
 	assert failures[0].startswith("bad_help.py: "), failures
 
 
+def test_guard_flags_bare_percent_in_subcommand_help_string() -> None:
+	bad_script = (
+		"import argparse\n\n\n"
+		"def build_parser():\n"
+		"\tparser = argparse.ArgumentParser(prog=\"tool\")\n"
+		"\tsub = parser.add_subparsers(dest=\"command\", required=True)\n"
+		"\trender = sub.add_parser(\"render\")\n"
+		"\trender.add_argument(\"--flag\", action=\"store_true\", help=\"literal {%...%} token\")\n"
+		"\treturn parser\n"
+	)
+	saved_sys_path = list(sys.path)
+	with tempfile.TemporaryDirectory(prefix="bp_help_guard_sub_") as td:
+		directory = Path(td)
+		(directory / "bad_sub_help.py").write_text(bad_script, encoding="utf-8")
+		failures = _build_parser_help_failures(_discover_build_parser_scripts(directory))
+	assert sys.path == saved_sys_path, "the guard leaked sys.path entries"
+	assert len(failures) == 1, failures
+	assert failures[0].startswith("bad_sub_help.py: RuntimeError: tool render: "), failures
+
+
 def main() -> int:
 	test_every_script_build_parser_help_formats()
 	test_guard_flags_bare_percent_help_string()
+	test_guard_flags_bare_percent_in_subcommand_help_string()
 	print("OK: every scripts/*.py build_parser() help text formats")
 	return 0
 
