@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Open PRs #9246, #9264 and #9267 already change `tests/test_gh_retry_stdout_isolation.py` for this ubuntu-26.04 failure. How should this issue handle that overlap?\nChoices:\nA) Make no code change here. Leave the fix to #9246 and only re-run PR #9015's CI once #9246 merges. (RECOMMENDED)\nB) Make an independent fix in this issue, rebased onto whichever of those PRs merges first. Accept the risk of conflicting with them.\nC) Make an independent fix now and ignore the other PRs.\nQ2: If this issue does make a fix (Q1:B or Q1:C), what should change?\nChoices:\nA) Fix the root cause in `gh_retry`: replay the captured stdout in a way that still returns non-zero when the reader closes the pipe, whichever `cat` is installed. Apply this to `scripts/gh_helpers.sh` and to the inline `gh_retry` copies in `review_autofix.yml` that the test file checks. Keep the test's assertion that undelivered output gives a non-zero status. (RECOMMENDED)\nB) Change only the test so it accepts `rc=0` when `cat` is uutils. This drops the guarantee that undelivered output is reported as a failure.\nC) Pin the `tests-hooks-and-orchestrator` job (`.github/workflows/ci.yml:523`) to an older runner image that ships GNU coreutils.\n**Note:** if you choose Q1:A, skip this question. Choosing Q1:A together with an answer here will need re-clarification.",
+  "fingerprint": "64e9844c90748455464ec0943376210fb6ed544ceb0c7f3397abb7bd3d4890ad",
+  "lineage": {
+    "issue_number": 9290,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43073074381",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43073074381",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261111181003_d0be7c9d13",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9290,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43073074381"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9290 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-11T18:10:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
