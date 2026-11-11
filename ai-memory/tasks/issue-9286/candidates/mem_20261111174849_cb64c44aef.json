@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\n\nRATIONALE:\nQ1: Neither open PR is a sure route to the base branch for the missing-docker failure. #9275 targets `ai/issue-9130`, not `main`, so its fix only lands once that stacked branch merges. The cause is visible in the checkout: in `tests/test_codex_isolated_exec.py`, `test_missing_docker_fails_closed_and_never_runs_host_codex` (lines 224-230) guards `target.symlink_to(entry)` with `not target.exists()`. That check is False for a dangling symlink already in `no_docker`, so a duplicate entry raises `FileExistsError`. This happens on runners where `/bin` and `/usr/bin` hold the same names. The fix is a one-line, test-only change: skip a name when the link already exists, dangling links included (`target.is_symlink() or target.exists()`, or `os.path.lexists`). It doesn't weaken what the test asserts, and the fixture never reaches `main` without it. #9246 targets `main` directly and its title says it covers the closed-reader test, so that failure is left to #9246. That avoids clashing edits to `scripts/gh_helpers.sh`. Option A (both here) is rejected for the conflict risk. Option C is rejected because it relies on #9275, whose base is a feature branch.\nQ2: Under Q1:B this issue does not change `test_closed_reader_does_not_rerun_a_successful_command` or `scripts/gh_helpers.sh`. The answer only applies if Q1:A is ever reopened. In that case the fix belongs in `gh_retry` / `gh_retry_to_file`, and the test's contract stays as written (`tests/test_gh_retry_stdout_isolation.py` lines 229-242: one call, non-zero rc). Relaxing the test (B) or skipping it (C) goes against the triage's \"do not disable or skip failing tests\" rule and the documented \"undelivered output is reported as non-zero\" contract.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered. Scope for the planner under Q1:B: edit only `tests/test_codex_isolated_exec.py`, and only the existence guard at lines 228-229, so that a name already present in `no_docker` (dangling or not) is skipped. Keep the rest of the test as it is: the `docker` exclusion, the PATH construction, and the three assertions at lines 233-235. Do not touch `scripts/gh_helpers.sh`, `tests/test_gh_retry_stdout_isolation.py`, PR #9263's branch, or any CI job. Add no steps that comment on, wait for or re-run another PR or workflow.",
+  "fingerprint": "75bbef16ac683bd26b64ab47624b5766e5f029400a75803034b67f457268508a",
+  "lineage": {
+    "issue_number": 9286,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43070187688",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43070187688",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9286"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261111174849_cb64c44aef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9286,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43070187688"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9286",
+  "timestamps": {
+    "created_at": "2026-11-11T17:48:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
