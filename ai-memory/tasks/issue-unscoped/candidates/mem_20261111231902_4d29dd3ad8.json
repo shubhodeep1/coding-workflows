@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:3881-3914 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `WiringGuardPartTwoShardingContractTest` and `wiring_part2_job_step()` use hardcoded job names and legacy constants that are inconsistent with the migration.\n  WHY: The tests check step placement (`tests-release-and-log-analysis` vs `orchestrate-poll`), but the implementation still relies on outdated constants or mapping.\n- .github/workflows/ci.yml:3004-3007 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Comments about where the step was \"Moved from\" are confusing because of the surrounding moved or removed hunks.\n  WHY: This is not a runtime failure, but maintainers could mis-trace the step movement or try to \"restore\" it based on contradictory legacy comments.\n- .github/workflows/ci.yml:2464 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The step \"Regression tests wired by the CI wiring guard (part 2)\" now runs unguarded in `tests-release-and-log-analysis` instead of behind the poll matrix guard `strategy.job-index == 0`.\n  WHY: Reviewer worries it may run in contexts or collide, though the PR claims it runs once per CI run. Other reviewers verified the placement as correct.\n- .github/workflows/ci.yml:tests-hooks-and-orchestrator job (starts at ci.yml:543); failed check run 43078339580 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `tests-hooks-and-orchestrator` check failed, which fails the aggregate `lint` gate. The log tail ends in `tests/test_lint_pr_body_auto_close.py`, so the failing assertion is not visible.\n  WHY: The CI gate stays red and the cause cannot be tied to the diff. Severity disagreement: BLOCKER (openai_gpt-6-luna) vs MAJOR (z-ai_glm-5_3-flash, confidence 3), so the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The slowest CI step \"Regression tests wired by the CI wiring guard (part 2)\" must be moved to tests-release-and-log-analysis without changing its name, body or job timeout, and without creating new jobs.\n  expected_change_site: .github/workflows/ci.yml and tests/test_ci_poll_test_sharding.py\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The contract tests were only partially updated; class docstrings (`MovedPollGroupTwo8772StepsContractTest`, `MovedPollGroupFour8980StepsContractTest`) still reference the poll matrix jobs, and CI contract tests such as `test_agents_fragment_contract.py` are failing.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ci_poll_test_sharding.py:3881-3914 | severity=medium | confidence=4\n  PROBLEM: `WiringGuardPartTwoShardingContractTest` and `wiring_part2_job_step()` use hardcoded job names and legacy constants that are inconsistent with the migration.\n  WHY: The tests check step placement, but the implementation still relies on outdated constants or mapping.\n- .github/workflows/ci.yml:3004-3007 | confidence=3\n  PROBLEM: Comments about where the step was \"Moved from\" are confusing because of the surrounding moved or removed hunks.\n  WHY: This is an operational clarity risk, not a runtime failure.\n- .github/workflows/ci.yml:2464 | confidence=4\n  PROBLEM: The step now runs unguarded in `tests-release-and-log-analysis` instead of behind the poll matrix guard `strategy.job-index == 0`.\n  WHY: It may run for every CI run or in different contexts, wasting resources or colliding if it is not idempotent.\n- TASK_GAP:\n  Requirement: The slowest CI step \"Regression tests wired by the CI wiring guard (part 2)\" must be moved to tests-release-and-log-analysis without changing its name, body or job timeout, and without creating new jobs.\n  Expected change site: .github/workflows/ci.yml and tests/test_ci_poll_test_sharding.py\n  Evidence of absence: The contract tests were only partially updated; class docstrings still reference the poll matrix jobs, and CI contract tests such as `test_agents_fragment_contract.py` are failing.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:`tests-hooks-and-orchestrator` job; failed check run 43078339580 | severity=BLOCKER | confidence=5\n  PROBLEM: The PR head's `tests-hooks-and-orchestrator` check failed, causing the aggregate `lint` check to fail.\n  WHY: The log tail ends during `tests/test_lint_pr_body_auto_close.py` and does not show the failing assertion, so the cause cannot be tied to a code change. The CI gate remains red.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:job `tests-hooks-and-orchestrator` (starts at ci.yml:543); head SHA 224214233ffb11465058f1641acaa17d88407c2f, run 43078339580 | severity=MAJOR | confidence=3\n  PROBLEM: `tests-hooks-and-orchestrator` failed and the merge gate `lint` fails only because of it. The log tail cuts off mid-output of `tests/test_lint_pr_body_auto_close.py`, and the visible `##[error]` lines are that test's own fixtures. `review / codex-agent` also failed with an empty log tail.\n  WHY: The PR diff touches no step of that job, so the failure cannot be mapped to the diff. The pre-push gate's listed failures look like sandbox noise (PyYAML missing) but are unverified. The `lint` gate stays red until the job passes, and a hidden real regression or inherited failure cannot be ruled out.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8a9454573c3ee7821b6ad72f76b359af5563c6ec1046052e72308a2a6d9d5b7c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9268,
+    "run_id": "43099444718",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43099444718",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111231902_4d29dd3ad8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9268,
+    "run_id": "43099444718"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T23:19:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
