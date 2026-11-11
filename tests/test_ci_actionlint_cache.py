@@ -197,6 +197,26 @@ def _single_index(lines: list[str], predicate, label: str) -> int:
 	return matches[0]
 
 
+def _matching_fi_index(lines: list[str], if_index: int) -> int:
+	"""Return the index of the `fi` that closes the `if` at `if_index`.
+
+	The cache-miss branch nests `if ... fi` blocks from the curl retry loop
+	(changelog 9053-actionlint-download-retry-window.md), so the closing `fi`
+	is found by nesting depth. A one-line `if ...; fi` is not supported and
+	makes this fail loudly rather than match the wrong `fi`.
+	"""
+	depth = 0
+	for index in range(if_index, len(lines)):
+		line = lines[index]
+		if line == "if" or line.startswith("if "):
+			depth += 1
+		elif line == "fi":
+			depth -= 1
+			if depth == 0:
+				return index
+	raise AssertionError(f"no fi closes the if at logical line {if_index}")
+
+
 class ActionlintTarballCacheContract(unittest.TestCase):
 	def setUp(self) -> None:
 		self.job = _job()
@@ -243,7 +263,7 @@ class ActionlintTarballCacheContract(unittest.TestCase):
 			self.lines, lambda line: line.startswith('if [ -s "${tarball}" ]'), "cache-hit if"
 		)
 		else_index = _single_index(self.lines, lambda line: line == "else", "else")
-		fi_index = _single_index(self.lines, lambda line: line == "fi", "fi")
+		fi_index = _matching_fi_index(self.lines, if_index)
 		curl_index = self._curl_index()
 		self.assertLess(if_index, else_index)
 		self.assertLess(else_index, curl_index)
