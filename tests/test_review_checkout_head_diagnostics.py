@@ -52,6 +52,9 @@ REAL_GIT = shutil.which("git")
 # git: fails `git fetch` FAKE_GIT_FETCH_FAILURES times with the stderr in
 # FAKE_GIT_FETCH_STDERR_FILE, fails FAKE_GIT_FAIL_SUBCMD, and otherwise
 # delegates to the real git. sleep: records the backoff, never waits.
+# date: the real date unless FAKE_DATE_COUNTER is set; then it counts its calls
+# in that file (the clock runs inside $(...) subshells) and prints a reading
+# that goes backwards (FAKE_DATE_MODE=decreasing) or a non-number (garbage).
 FAKE_FUNCTIONS = """git() {
   if [ "${1:-}" = "fetch" ] && [ -n "${FAKE_GIT_FETCH_COUNTER:-}" ]; then
     local fake_git_failed=0
@@ -72,6 +75,22 @@ sleep() {
   echo "$*" >> "${FAKE_SLEEP_LOG}"
   return 0
 }
+date() {
+  if [ -z "${FAKE_DATE_COUNTER:-}" ]; then
+    command date "$@"
+    return
+  fi
+  local fake_date_calls=0
+  if [ -f "${FAKE_DATE_COUNTER}" ]; then fake_date_calls="$(cat "${FAKE_DATE_COUNTER}")"; fi
+  fake_date_calls=$((fake_date_calls + 1))
+  echo "${fake_date_calls}" > "${FAKE_DATE_COUNTER}"
+  if [ "${FAKE_DATE_MODE:-}" = "garbage" ]; then
+    echo x
+  else
+    echo "$((1800000000000 - fake_date_calls * 1000))"
+  fi
+  return 0
+}
 """
 
 
@@ -88,6 +107,7 @@ class Layout:
 		self.sleep_log = root / "sleep.log"
 		self.fetch_counter = root / "fetch_counter"
 		self.fetch_stderr = root / "fetch_stderr.txt"
+		self.fake_date_counter = root / "date_calls"
 		self.reviewed_sha = ""
 
 	def git(self, *args: str, cwd: Path | None = None) -> str:
@@ -267,6 +287,34 @@ def test_head_moved_after_switch_reports_skipped_stale(layout: Layout) -> None:
 	_assert_no_temp_files(layout)
 
 
+def _bash_has_epochrealtime() -> bool:
+	probe = subprocess.run(["bash", "-c", 'printf %s "${EPOCHREALTIME:-}"'], capture_output=True, text=True)
+	return bool(re.match(r"^[0-9]+[.,][0-9]{6}$", probe.stdout))
+
+
+@pytest.mark.parametrize("date_mode", ["decreasing", "garbage"])
+def test_elapsed_fields_ignore_a_date_clock_that_goes_backwards(layout: Layout, date_mode: str) -> None:
+	# ubuntu-26.04's `date +%s%3N` (Rust coreutils) gave readings that went
+	# backwards within a run, so fetch_ms / switch_ms came out negative and
+	# dropped to `na`. The clock reads bash's EPOCHREALTIME first, so a bad
+	# `date` cannot reach the timing fields.
+	if not _bash_has_epochrealtime():
+		pytest.skip("bash does not provide EPOCHREALTIME (bash < 5)")
+	(layout.seed / "newer.txt").write_text("new head\n")
+	layout.git("add", "newer.txt")
+	layout.git("commit", "-qm", "advanced head")
+	result = layout.run(FAKE_DATE_COUNTER=str(layout.fake_date_counter), FAKE_DATE_MODE=date_mode)
+	assert result.returncode == 0, result.stderr
+	_, fields = _summary(result)
+	assert fields["stage"] == "head_moved_guard"
+	assert fields["fetch_ms"].isdigit(), fields
+	assert fields["switch_ms"].isdigit(), fields
+	assert fields["duration_ms"].isdigit(), fields
+	# EPOCHREALTIME is read first, so the fake `date` never runs.
+	assert not layout.fake_date_counter.exists(), layout.fake_date_counter.read_text()
+	_assert_no_temp_files(layout)
+
+
 def test_head_match_guard_skip_reports_before_fetch(layout: Layout) -> None:
 	layout.payload.write_text(json.dumps({"head": {"sha": "f" * 40}}))
 	result = layout.run()
@@ -318,6 +366,9 @@ def test_script_contract_is_additive() -> None:
 	assert text.index("trap 'review_head_checkout_on_exit") < text.index('HEAD_REF="$(jq')
 	assert "fetch_max_attempts=4" in text and "fetch_backoff=2" in text
 	assert "date +%s%3N" in text
+	clock = text[text.index("review_head_checkout_now_ms()"):text.index("review_head_checkout_classify_fetch_stderr()")]
+	assert "EPOCHREALTIME" in clock
+	assert clock.index("EPOCHREALTIME") < clock.index("date +%s%3N")
 	handler = text[text.index("review_head_checkout_on_exit()"):text.index("REVIEW_HEAD_CHECKOUT_START_MS=")]
 	assert "exit " not in handler
 	assert "REVIEW_CHECKOUT_SHA=" not in text

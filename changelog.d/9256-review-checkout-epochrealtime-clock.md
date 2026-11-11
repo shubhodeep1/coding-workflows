@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Review checkout timings no longer drop to `na` on ubuntu-26.04 runners.** The `REVIEW_HEAD_CHECKOUT` line's `duration_ms`, `fetch_ms` and `switch_ms` fields now read bash's `EPOCHREALTIME` first, with `date +%s%3N` and `date +%s` kept as fallbacks for bash < 5. On ubuntu-26.04 the Rust coreutils `date` gave readings that went backwards within a run, so the elapsed values came out negative and were reported as `na`. The line's format, field names and value domains are unchanged. Refs #9256, Refs #8307.
