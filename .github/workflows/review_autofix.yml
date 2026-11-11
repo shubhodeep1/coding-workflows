@@ -4795,6 +4795,7 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
           RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
+          RB_JUDGE_PROVIDER_UNAVAILABLE: ${{ steps.rb_judge.outputs.rb_judge_provider_unavailable }}
           AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
           AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}

@@ -68,6 +68,7 @@ def test_comment_step_has_id_and_crash_inputs():
 	step = _step(_workflow_text(), COMMENT_STEP_NAME)
 	assert "        id: rb_blocked_comment\n" in step
 	assert "RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}" in step
+	assert "RB_JUDGE_PROVIDER_UNAVAILABLE: ${{ steps.rb_judge.outputs.rb_judge_provider_unavailable }}" in step
 	assert "AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}" in step
 	assert "review_autofix_step_post_review_blocked_comment.sh" in step
 
@@ -270,6 +271,10 @@ def test_non_crash_runs_add_no_marker_and_no_read():
 		{"AUTOFIX_ITERATION": "", "RB_JUDGE_STATUS": "failed"},
 		{"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "merge_conflict"},
 		{"AUTOFIX_FAILURE_HEAD_SHA": "not-a-sha"},
+		# Provider outage (#6633): the alert step skips it, so no marker may
+		# be left to suppress a later real crash alert on the same head.
+		{"RB_JUDGE_PROVIDER_UNAVAILABLE": "true"},
+		{"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "llm_failed", "RB_JUDGE_PROVIDER_UNAVAILABLE": "true"},
 	):
 		out = _run_comment_script(env, comments=[_trusted_comment(_marker(HEAD_A, "judge_crashed"))])
 		assert len(out["comment_posts"]) == 1, env

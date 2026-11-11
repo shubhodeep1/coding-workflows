@@ -110,9 +110,12 @@ EOF
 # already has the same marker, the duplicate POST is skipped and
 # rb_judge_crash_repeat=true tells the alert step to log only. Every read
 # or parse failure fails open: the comment is posted and repeat=false.
+# A provider outage (RB_JUDGE_PROVIDER_UNAVAILABLE=true, issue #6633) is
+# not a crash: the alert step skips it, so it must leave no marker that
+# would later suppress the first alert for a real crash on this head.
 RB_JUDGE_CRASH_REASON=""
 RB_JUDGE_CRASH_REPEAT="false"
-if [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]] && [[ "${MAX_AUTOFIX_ITERATIONS:-}" =~ ^[0-9]+$ ]] && [ "${AUTOFIX_ITERATION}" -lt "${MAX_AUTOFIX_ITERATIONS}" ]; then
+if [ "${RB_JUDGE_PROVIDER_UNAVAILABLE:-}" != "true" ] && [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]] && [[ "${MAX_AUTOFIX_ITERATIONS:-}" =~ ^[0-9]+$ ]] && [ "${AUTOFIX_ITERATION}" -lt "${MAX_AUTOFIX_ITERATIONS}" ]; then
 	if [ "${RB_JUDGE_STATUS:-}" = "failed" ]; then
 		RB_JUDGE_CRASH_REASON="judge_crashed"
 	elif [[ "${JUDGE_SKIP_REASON:-}" == llm_failed* || "${JUDGE_SKIP_REASON:-}" == json_parse_failed* ]]; then
@@ -130,7 +133,8 @@ if [ -n "${RB_JUDGE_CRASH_REASON}" ] && [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[
 		&& type _tg_newest_comments_json >/dev/null 2>&1 && type _tg_tracking_author_login >/dev/null 2>&1; then
 		_tg_tracking_author_login
 		rb_judge_crash_login="${_TG_TRACKING_AUTHOR_CURRENT:-github-actions[bot]}"
-		if rb_judge_crash_comments="$(_tg_newest_comments_json "${PR_NUMBER}")"; then
+		# Read the same repository the POST below writes to.
+		if rb_judge_crash_comments="$(GITHUB_REPOSITORY="${AUTOFIX_STEP_REPOSITORY:-${GITHUB_REPOSITORY:-}}" _tg_newest_comments_json "${PR_NUMBER}")"; then
 			rb_judge_crash_count="$(printf '%s' "${rb_judge_crash_comments}" | jq -r --arg login "${rb_judge_crash_login}" --arg marker "${RB_JUDGE_CRASH_MARKER}" \
 				"${_TG_TRACKING_JQ_DEFS}"'[.[]? | select(tg_trusted($login) and (.body | contains($marker)))] | length' 2>/dev/null)" || rb_judge_crash_count=""
 			if [[ "${rb_judge_crash_count}" =~ ^[0-9]+$ ]]; then
