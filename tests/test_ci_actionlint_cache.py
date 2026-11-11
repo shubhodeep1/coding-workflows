@@ -243,7 +243,20 @@ class ActionlintTarballCacheContract(unittest.TestCase):
 			self.lines, lambda line: line.startswith('if [ -s "${tarball}" ]'), "cache-hit if"
 		)
 		else_index = _single_index(self.lines, lambda line: line == "else", "else")
-		fi_index = _single_index(self.lines, lambda line: line == "fi", "fi")
+		# The download branch has its own nested if/fi blocks, so `fi` is not
+		# unique: find the one that closes the cache-hit `if` by nesting depth.
+		fi_index = -1
+		depth = 0
+		for index in range(if_index, len(self.lines)):
+			line = self.lines[index]
+			if line.startswith("if "):
+				depth += 1
+			elif line == "fi":
+				depth -= 1
+				if depth == 0:
+					fi_index = index
+					break
+		self.assertGreaterEqual(fi_index, 0, "cache-hit if has no matching fi")
 		curl_index = self._curl_index()
 		self.assertLess(if_index, else_index)
 		self.assertLess(else_index, curl_index)
@@ -254,6 +267,10 @@ class ActionlintTarballCacheContract(unittest.TestCase):
 			"sha256sum",
 		)
 		self.assertGreater(checksum_index, fi_index, "sha256sum must run after the if/fi block")
+		open_blocks = sum(1 for line in self.lines[:checksum_index] if line.startswith("if ")) - sum(
+			1 for line in self.lines[:checksum_index] if line == "fi"
+		)
+		self.assertEqual(open_blocks, 0, "sha256sum must not sit inside any if block")
 		tar_index = _single_index(self.lines, lambda line: line.startswith("tar -xzf"), "tar")
 		self.assertGreater(tar_index, checksum_index, "extraction must follow verification")
 
