@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:519-524 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `tests-hooks-and-orchestrator` check failed (run 43043259085), which makes the aggregate `lint` check fail, and the supplied log tail does not show the failing step or tie it to a PR change.\n  WHY: The PR checks stay red until the full job log is used to identify the failure. Severity is MAJOR in both sources, mapped to high. Confidence is 5 from openai_gpt-6-luna and 3 from z-ai_glm-5_3-flash; the highest is used. z-ai_glm-5_3-flash cites the job at ci.yml:519 (not a range) and filed it under CORRECTNESS & LOGIC. openai_gpt-6-luna filed it under ERROR PATHS & EDGE CASES.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:519-524 | severity=MAJOR | confidence=5\n  PROBLEM: The `tests-hooks-and-orchestrator` check failed, causing the aggregate `lint` check to fail. The supplied log tail does not expose the failing test or its cause, so the failure cannot be tied to a specific PR change.\n  WHY: The CI job exits with failure and leaves the PR checks red. The available log is insufficient to identify the underlying failure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:519 | severity=MAJOR | confidence=3\n  PROBLEM: The PR head has a failing `tests-hooks-and-orchestrator` check-run (run 43043259085, job 130600375433), so the PR is not green. The log tail ends inside the `tests/test_lint_pr_body_auto_close.py` step at fixture-emitted `##[error][lint_pr_body_auto_close]` lines, before the step summary line, so the actually failing step is past the truncation.\n  WHY: The job concluded `failure`, and the aggregate `lint` check (job 130633048837) fails because `tests-hooks-and-orchestrator` is in `CI_NEEDS_JSON` with result `failure`. No hunk in this PR is exercised by any step visible in the tail, so the editor needs the full job log (actions:read) to map the failure.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4820b14c7f561293929735bbb43b5444d44365220eb9b65ce54727dedc96de00",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9015,
+    "run_id": "43066102533",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43066102533",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111192146_0ce4d13c08",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9015,
+    "run_id": "43066102533"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T19:21:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
