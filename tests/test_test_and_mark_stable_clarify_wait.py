@@ -270,6 +270,27 @@ def test_failure_comment_with_empty_run_lookup_does_not_claim_a_newer_run() -> N
 	assert "found to compare it with" in log, log
 
 
+def test_failure_and_cancelled_comments_share_one_run_lookup_per_poll() -> None:
+	# Both comments miss the newest-run lookup on the same poll: each logs its
+	# own wait line, and only one capture (5 empty pages) runs before the
+	# timeout's own capture (5 more).
+	cancelled = f"AI clarification workflow was cancelled/timed out for https://github.com/{TEST_REPO}/issues/{ISSUE_NUMBER}. Run: https://github.com/{TEST_REPO}/actions/runs/555"
+	script = _step("e2e-smoke-test", "wait-clarify")["run"].replace("${{ steps.create-issue.outputs.created_after }}", CREATED_AFTER)
+	rc, outputs, calls, log = _execute(script, {
+		"ISSUE_TITLE": ISSUE_TITLE,
+		"PHASE_TIMEOUT": "0",
+		"STUB_LABELS": "ai:clarification",
+		"STUB_COMMENTS": json.dumps([_comment(_failed_body("777")), _comment(cancelled)]),
+		"STUB_RUNS": "[]",
+	})
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert "names run 777; no non-skipped Clarify run" in log, log
+	assert "names run 555; no non-skipped Clarify run" in log, log
+	run_reads = [call for call in calls if len(call) > 1 and "/actions/runs?" in call[1]]
+	assert len(run_reads) == 10, run_reads
+
+
 def test_newest_bot_comment_is_the_one_checked() -> None:
 	comments = [
 		_comment("Starting clarify", association="NONE", login="github-actions[bot]"),

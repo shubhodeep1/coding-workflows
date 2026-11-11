@@ -990,7 +990,9 @@ jobs:
           # with the newest scoped Clarify run.
           CLARIFY_FAILURE_CHECKED_ID=""
           CLARIFY_CANCELLED_RUN_ID=""
-          CLARIFY_FAILURE_LOOKUP_MISSES=0
+          # Empty newest-run lookups per comment run ID, so each comment gets
+          # its own 3 tries and one comment cannot use up another's.
+          declare -A CLARIFY_FAILURE_LOOKUP_MISSES=()
 
           while true; do
             NOW=$(date +%s)
@@ -1053,16 +1055,24 @@ jobs:
             # GH_PAT): fail fast only when it names the newest scoped Clarify run
             # (#9223). Bodies are untrusted: only a numeric run ID of this repo is
             # read, never echoed. An empty run lookup is retried on later polls,
-            # up to 3 times, before the comment counts as checked.
+            # up to 3 times per comment run ID, before that comment counts as
+            # checked.
             CLARIFY_FAILURE_RUN_ID=$(clarify_failure_comment_run_id "AI clarification workflow failed for ")
             CLARIFY_CANCELLED_RUN_ID=$(clarify_failure_comment_run_id "AI clarification workflow was cancelled/timed out for ")
+            # The newest Clarify run is looked up at most once per poll and
+            # shared by both comments.
+            CLARIFY_LATEST_RUN_ID=""
+            CLARIFY_LATEST_RUN_LOOKED_UP=0
             for CLARIFY_COMMENT_RUN_ID in "$CLARIFY_FAILURE_RUN_ID" "$CLARIFY_CANCELLED_RUN_ID"; do
               [[ "$CLARIFY_COMMENT_RUN_ID" =~ ^[0-9]+$ ]] || continue
               [[ " ${CLARIFY_FAILURE_CHECKED_ID} " == *" ${CLARIFY_COMMENT_RUN_ID} "* ]] && continue
-              CLARIFY_LATEST_RUN_ID=$(capture_run_id "Clarif")
+              if [ "$CLARIFY_LATEST_RUN_LOOKED_UP" -eq 0 ]; then
+                CLARIFY_LATEST_RUN_ID=$(capture_run_id "Clarif")
+                CLARIFY_LATEST_RUN_LOOKED_UP=1
+              fi
               if ! [[ "$CLARIFY_LATEST_RUN_ID" =~ ^[0-9]+$ ]]; then
-                CLARIFY_FAILURE_LOOKUP_MISSES=$((CLARIFY_FAILURE_LOOKUP_MISSES + 1))
-                [ "$CLARIFY_FAILURE_LOOKUP_MISSES" -lt 3 ] || CLARIFY_FAILURE_CHECKED_ID+=" ${CLARIFY_COMMENT_RUN_ID}"
+                CLARIFY_FAILURE_LOOKUP_MISSES[$CLARIFY_COMMENT_RUN_ID]=$(( ${CLARIFY_FAILURE_LOOKUP_MISSES[$CLARIFY_COMMENT_RUN_ID]:-0} + 1 ))
+                [ "${CLARIFY_FAILURE_LOOKUP_MISSES[$CLARIFY_COMMENT_RUN_ID]}" -lt 3 ] || CLARIFY_FAILURE_CHECKED_ID+=" ${CLARIFY_COMMENT_RUN_ID}"
                 echo "  ⚠ Clarify failure comment names run ${CLARIFY_COMMENT_RUN_ID}; no non-skipped Clarify run titled '${ISSUE_TITLE}' found to compare it with — still waiting"
                 continue
               fi
