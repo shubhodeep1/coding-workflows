@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A) tests/test_codex_isolated_exec.py, test_missing_docker_fails_closed_and_never_runs_host_codex: skip an entry when the target already exists as a link, using os.path.lexists(target) or target.is_symlink() or target.exists().\"\n  expected_change_site: tests/test_codex_isolated_exec.py, test_missing_docker_fails_closed_and_never_runs_host_codex\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, minimax_minimax-m3]\n  EVIDENCE: The PR diff contains no hunk for this test, so Part A is not carried by this PR. The guard is already on the base ref at tests/test_codex_isolated_exec.py:229-232 (os.path.lexists(target)). Severity NIT per google_gemini-3_1-flash-lite and openai_gpt-6-luna. minimax_minimax-m3 (confidence 3) did not flag it as a gap because the behavior is already satisfied on main.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP (severity=NIT, ISSUE_CONFIDENCE: 5)\n  Requirement: \"A) tests/test_codex_isolated_exec.py, test_missing_docker_fails_closed_and_never_runs_host_codex: skip an entry when the target already exists as a link, using os.path.lexists(target) or target.is_symlink() or target.exists().\"\n  Expected change site: tests/test_codex_isolated_exec.py\n  Evidence of absence: The requirement is not reflected in the PR diff. Although the codebase already satisfies this requirement on the main branch (as confirmed in issue comments), the PR does not carry this deliverable.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (ISSUE_CONFIDENCE: 3)\n  Requirement: Part A of the linked issue (`tests/test_codex_isolated_exec.py`, `test_missing_docker_fails_closed_and_never_runs_host_codex`, skip an entry when the target already exists as a link via `os.path.lexists(target)`).\n  Expected change site: tests/test_codex_isolated_exec.py\n  Evidence of absence: Not represented as a diff hunk in this PR. The `os.path.lexists(target)` guard is already on the default branch at `tests/test_codex_isolated_exec.py:229-232` (`if entry.name != \"docker\" and not os.path.lexists(target):`), so the deliverable is satisfied on `main`. Not flagged as a gap because the behavior is in place. The PR is correctly scoped to the outstanding Part B fix in `scripts/gh_helpers.sh` and the regression test in `tests/test_gh_retry_stdout_isolation.py`.\n- Last-run scope check (no finding): the only change in the last run diff is `changelog.d/9225-gh-retry-closed-reader-builtin-replay.md` line 4. The new wording is verified against `scripts/gh_helpers.sh:1233-1247` and is a documentation correction with no runtime impact.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP (severity=NIT, ISSUE_CONFIDENCE: 5)\n  Requirement: \"A) tests/test_codex_isolated_exec.py, test_missing_docker_fails_closed_and_never_runs_host_codex: skip an entry when the target already exists as a link.\"\n  Expected change site: tests/test_codex_isolated_exec.py, test_missing_docker_fails_closed_and_never_runs_host_codex\n  Evidence of absence: The PR diff contains no hunk for this test, so Part A is not carried by this PR. The current ref already has the `os.path.lexists(target)` guard at line 232.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a42508d50fe7b7ed1e3cf346b89a7973f8e5357d09e4081951986917b7d41a71",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9264,
+    "run_id": "43092744201",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43092744201",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261111221049_76cc1df442",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9264,
+    "run_id": "43092744201"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-11T22:10:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
