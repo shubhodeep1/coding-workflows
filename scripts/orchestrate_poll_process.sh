@@ -35,7 +35,14 @@ set -euo pipefail
 # no ledger file and no extra stdout lines.
 _orch_poll_cycle_now_ms()
 {
-	local _orch_poll_cycle_now_value=""
+	local _orch_poll_cycle_now_value="" _orch_poll_cycle_now_realtime="${EPOCHREALTIME:-}"
+	# Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
+	# coreutils) gave readings that went backwards within a run, which printed
+	# negative elapsed_ms. `date` stays as the fallback for bash < 5.
+	if [[ "${_orch_poll_cycle_now_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+		printf '%s' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
+		return 0
+	fi
 	_orch_poll_cycle_now_value="$(date +%s%3N 2>/dev/null || true)"
 	if [[ "${_orch_poll_cycle_now_value}" =~ ^[0-9]{13,}$ ]]; then
 		printf '%s' "${_orch_poll_cycle_now_value}"
