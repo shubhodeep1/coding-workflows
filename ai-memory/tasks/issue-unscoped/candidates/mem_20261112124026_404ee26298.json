@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1069-1071 | severity=low | confidence=1\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Shared-run lookup handling may add both failure and cancelled comment run IDs to CLARIFY_FAILURE_CHECKED_ID even when they share the same ID, though the reviewer concluded the logic is robust and found no runtime failure.\n  WHY: The reviewer called the dedupe check brittle, then concluded \"The logic seems robust. No runtime failure identified.\" No severity was stated, so low is used for the confidence=1 entry.\n- .github/workflows/ci.yml:2489,3471-3490 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `orchestrate-poll (1)` check (run 43197755515, job 131112979851) fails on this PR head and fails the aggregate `lint` job, but the log tail shows only passing tests and the failure cannot be mapped to the changed code.\n  WHY: The aggregate `lint` job fails whenever `orchestrate-poll` does not succeed, but the cause is unidentified. Both reviewers rated it NIT; glm-5_3-flash gave confidence 3 and luna gave 5, and the higher is kept. glm-5_3-flash gave no file:line, only the check-run reference.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:1069-1071 | confidence=1\n  PROBLEM: Shared-run lookup handling may add both failure and cancelled comment run IDs to `CLARIFY_FAILURE_CHECKED_ID` even when they share the same ID.\n  WHY: The reviewer called the logic brittle, then concluded the check is correct and robust, with no runtime failure identified.\n- TASK_GAP (reported as satisfied, not a gap): Requirement: \"Add a regression test under `tests/` that runs the wait-clarify step against a fake `gh` [...] the step exits 1 with status=clarify_failed and the URL in its error line, without waiting for the timeout.\"\n  Expected change site: tests/test_test_and_mark_stable_clarify_wait.py\n  Evidence of absence: The test `test_failure_comment_for_newest_run_fails_fast` exists and verifies this behavior.\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP (reported as satisfied, not a gap): Requirement: \"On a stall with a findable Clarify run, the timeout error line contains that run's URL.\"\n  Expected change site: tests/test_test_and_mark_stable_clarify_wait.py\n  Evidence of absence: The test `test_timeout_names_found_clarify_run` exists and verifies this behavior.\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP (reported as satisfied, not a gap): Requirement: \"Add the same timeout change to the alt-model wait step [...] so its timeout ::error:: also names the Clarify run it found.\"\n  Expected change site: .github/workflows/test-and-mark-stable.yml, step \"Wait for clarify\u2192plan\u2192implement (alt-model)\"\n  Evidence of absence: The diff includes `ALT_CLARIFY_RUN_NOTE` logic and appends it to the `echo \"::error::Alt-model run timed out...\"` line.\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP (reported as satisfied, not a gap): Requirement: \"In .github/workflows/test-and-mark-stable.yml, step 'Phase 1: Wait for clarify to complete', inactivity-timeout branch: [...] Before exiting, call the existing capture_run_id 'Clarif'. If it returns a numeric ID, add the run URL to the ::error:: line\"\n  Expected change site: .github/workflows/test-and-mark-stable.yml, step \"Phase 1: Wait for clarify to complete\", inactivity-timeout branch\n  Evidence of absence: The diff implements this logic using `capture_run_id` and conditionally appending `CLARIFY_STALL_NOTE`.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2489,3471-3490 | severity=low | confidence=5\n  PROBLEM: The `orchestrate-poll (1)` check (run 43197755515, job 131112979851) failed on this PR head, and the log tail does not identify the failing step or test, so the failure cannot be mapped to a defect in the changed code.\n  WHY: The aggregate `lint` job fails whenever `orchestrate-poll` does not succeed; the CI failure is confirmed but its cause is unidentified. The source rated it NIT.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (no diff site; check-run \"orchestrate-poll (1)\", run 43197755515, job 131112979851 on head 567d5266404a9f9e2a4dc5ff9a8eea15804f4592) | severity=low | confidence=3\n  PROBLEM: The orchestrate-poll job fails on this PR head, so the lint aggregate fails. The failing step is beyond the captured log tail and cannot be mapped to any file or line in the diff.\n  WHY: The \"Integration fingerprint verification FAILED\" text is expected fixture output from a passing test, and the changed code does not touch the orchestrate-poll test paths. The source rated it NIT; the next run needs the full job log to localize it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2c52311137df14d16414d8ff7296a8da5c74d6818dd78724774b32310bfe5d8e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9273,
+    "run_id": "43197755604",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43197755604",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112124026_404ee26298",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9273,
+    "run_id": "43197755604"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T12:40:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
