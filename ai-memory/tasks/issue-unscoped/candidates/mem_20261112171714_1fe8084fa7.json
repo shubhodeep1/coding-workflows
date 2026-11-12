@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:543 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: CI job `tests-hooks-and-orchestrator` (check run 130606294464, run 43044946395) is red on head 254b6ba3, and the dependent aggregate `lint` job (130646405646) also fails, but the captured log tail does not show which step failed.\n  WHY: The PR cannot merge green, but none of the four changed files runs in this job and the pre-push gate classifies the failure as inherited from the merge-base, so the failure cannot be tied to this diff and needs a full log read or a rerun; all reviewers rated this NIT.\n- .github/workflows/review_autofix.yml:3643-3650,3709-3713 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The workflow does not pass `REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED` to either the prepare (snapshot) step or the editor/transfer step, so the helper always sees the flag as unset and admits `.github/ai/chatgpt_pool.json` (`scripts/review_untrusted_workspace.py:156-158`, lines 178-180).\n  WHY: Operators cannot use the declared off switch through the normal workflow; rated MAJOR by openai_gpt-6-luna, while anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash explicitly rejected it as out of scope under the issue's files_touched grant and \"Change no other rule\".\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cGate only this new admission behind the env var REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED. It defaults to true, and the value false turns it off.\u201d\n  expected_change_site: `.github/workflows/review_autofix.yml`, the environment mappings for both the step that runs `review_untrusted_sandbox.sh prepare` and the step that runs the editor and transfer path.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff does not change `review_autofix.yml`; the prepare and editor step environment blocks omit the flag; the changelog confirms the workflow does not forward it, so the normal workflow cannot turn off the admission.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:543 (job \"tests-hooks-and-orchestrator\", check run 130606294464, run 43044946395; aggregate \"lint\" job 130646405646) | severity=NIT | confidence=2\n  PROBLEM: The CI check on head 254b6ba3 is red. The 16 KB log tail ends in the tests/test_lint_pr_body_auto_close.py step, whose \"##[error][lint_pr_body_auto_close]\" lines are expected fixture output. The step that actually failed is not in the tail.\n  WHY: The PR cannot merge green, but none of the four changed files runs in this job. tests/test_review_autofix_review_pipeline_contract.py runs at ci.yml line 3387 in a different job, and that job passed. The pre-push gate marks the failure as inherited from the merge-base. The reviewer raised it only so someone reruns the job or reads its full log; it is not a code defect in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:543 (job `tests-hooks-and-orchestrator`, check run 130606294464) | severity=NIT | confidence=3\n  PROBLEM: The job failed on the reviewed head, and the supplied log tail does not identify the failing step or test. The dependent `lint` check also failed.\n  WHY: CI remains red, and the available log does not establish whether the failure is related to this PR's changes.\n- .github/workflows/review_autofix.yml:3643-3650, 3709-3713; scripts/review_untrusted_workspace.py:156-158, 178-180 | severity=MAJOR | confidence=5\n  PROBLEM: The workflow does not pass `REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED` to either the snapshot path or the editor/transfer path. A repository variable alone is not automatically exposed to these steps as an environment variable.\n  WHY: The normal workflow sees the flag as unset and admits `.github/ai/chatgpt_pool.json`, so operators cannot use the declared off switch through the workflow.\n- TASK_GAP\n  Requirement: \u201cGate only this new admission behind the env var REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED. It defaults to true, and the value false turns it off.\u201d\n  Expected change site: `.github/workflows/review_autofix.yml`, the environment mappings for both the step that runs `review_untrusted_sandbox.sh prepare` and the step that runs the editor and transfer path.\n  Evidence of absence: The PR diff does not change `review_autofix.yml`; the prepare and editor step environment blocks omit the flag. The changelog confirms the workflow does not forward it, so the normal workflow cannot turn off the admission.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/tests-hooks-and-orchestrator (CI job, run 43044946395, job 130606294464); failed check-runs `tests-hooks-and-orchestrator` and the dependent aggregate `lint` job 130646405646 on head 254b6ba3 | severity=NIT | confidence=2\n  PROBLEM: CI is red and the PR cannot merge green. The 16 KB log tail ends in the `tests/test_lint_pr_body_auto_close.py` step, whose `##[error][lint_pr_body_auto_close]` lines are expected fixture output, so the step that actually failed is beyond the captured tail. No step of that job (ci.yml lines 543-1073) runs any of the four changed files, the pre-push gate classifies the failure as inherited from the merge-base, and seven consecutive editor passes could not map it to the diff.\n  WHY: It is not a runtime defect in the changed code. The failure is unmapped and needs a full job-log read or a rerun on the next head before any code change is justified.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7ae04ca02fee2581a1f7101bc4dee1b9458d945a45b83805baba1d146bd1a42d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9180,
+    "run_id": "43220863430",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43220863430",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112171714_1fe8084fa7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9180,
+    "run_id": "43220863430"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T17:17:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
