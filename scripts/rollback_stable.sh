@@ -42,9 +42,13 @@
 # that passes every check. When a hold is already active for the current
 # stable version (a re-dispatch after a rollback), a blank target re-confirms
 # that version instead of rolling back further; pass an explicit
-# target_version to go further back.
+# target_version to go further back. An explicit target on the current
+# stable commit is accepted only while the hold is active for exactly that
+# version (a re-run of that rollback); otherwise it is refused as
+# target_not_lower, so no hold is written when nothing was rolled back.
 #
-# API calls: 1 hold read when the target is blank, 1-STABLE_ROLLBACK_MAX_CANDIDATES
+# API calls: 1 hold read when the target is blank or is the current stable
+# commit, 1-STABLE_ROLLBACK_MAX_CANDIDATES
 # release reads, 1-4 hold calls, 4 workflow-run lists per drain poll plus one
 # cancel POST per active run, and one dispatch POST per consumer. Git reads and
 # tag pushes go to `origin` with the checkout credential (GH_PAT).
@@ -266,6 +270,7 @@ check_target()
 }
 
 target_version=""
+target_hold_confirmed=false
 if [ -z "${target_input}" ]; then
 	hold_line="$(hold read || true)"
 	case "${hold_line}" in
@@ -273,6 +278,7 @@ if [ -z "${target_input}" ]; then
 		"active ${current_version}")
 			# Already rolled back to the current version: re-confirm it.
 			target_input="${current_version}"
+			target_hold_confirmed=true
 			;;
 		"active "*) ;;
 		*) refuse hold_unknown ;;
@@ -285,6 +291,17 @@ if [ -n "${target_input}" ]; then
 	set -e
 	if [ "${check_rc}" -ne 0 ]; then
 		refuse "${TARGET_REFUSAL}" "to=${target_input}"
+	fi
+	# The current stable commit is not lower than itself: only a re-run of a
+	# rollback to this version (hold active for it) may proceed. An unreadable
+	# hold is refused as hold_unknown, like the blank-target path.
+	if [ "${TARGET_SHA}" = "${current_sha}" ] && [ "${target_hold_confirmed}" != "true" ]; then
+		explicit_hold_line="$(hold read || true)"
+		case "${explicit_hold_line}" in
+			"active ${target_input}") ;;
+			inactive|"active "*) refuse target_not_lower "to=${target_input}" ;;
+			*) refuse hold_unknown "to=${target_input}" ;;
+		esac
 	fi
 	target_version="${target_input}"
 else
@@ -351,18 +368,33 @@ active_release_run_ids()
 	printf '%s' "${runs_json}" | jq -r '.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | .id | tostring'
 }
 
+# cancel_new_release_runs <workflow_file> <ids>: one cancel POST per run id
+# not yet cancelled by this run (tracked in cancelled_release_run_ids). An id
+# is recorded only after its cancel succeeds, so a failed cancel is retried on
+# the next drain poll.
+cancelled_release_run_ids=" "
+cancel_new_release_runs()
+{
+	local active_id
+	while IFS= read -r active_id; do
+		[[ "${active_id}" =~ ^[0-9]+$ ]] || continue
+		[[ "${cancelled_release_run_ids}" == *" ${active_id} "* ]] && continue
+		echo "Cancelling $1 run ${active_id}."
+		if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${active_id}/cancel" >/dev/null; then
+			cancelled_release_run_ids+="${active_id} "
+		else
+			echo "::warning::Could not cancel $1 run ${active_id}; retrying on the next poll."
+		fi
+	done <<< "$2"
+}
+
 # 5. Stop in-flight releases so none moves the tag forward again.
 if [ "${stable_done}" != "true" ] || [ "${major_done}" != "true" ]; then
 	for release_workflow in "${STABLE_ROLLBACK_RELEASE_WORKFLOWS[@]}"; do
 		if ! active_ids="$(active_release_run_ids "${release_workflow}")"; then
 			finish runs_lookup_failed 1 "workflow=${release_workflow}"
 		fi
-		while IFS= read -r active_id; do
-			[[ "${active_id}" =~ ^[0-9]+$ ]] || continue
-			echo "Cancelling ${release_workflow} run ${active_id}."
-			GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${active_id}/cancel" >/dev/null \
-				|| echo "::warning::Could not cancel ${release_workflow} run ${active_id}; waiting for it to stop."
-		done <<< "${active_ids}"
+		cancel_new_release_runs "${release_workflow}" "${active_ids}"
 	done
 	drain_deadline=$(( $(date +%s) + STABLE_ROLLBACK_CANCEL_WAIT_SECS ))
 	while :; do
@@ -372,6 +404,8 @@ if [ "${stable_done}" != "true" ] || [ "${major_done}" != "true" ]; then
 				finish runs_lookup_failed 1 "workflow=${release_workflow}"
 			fi
 			if [ -n "${active_ids}" ]; then
+				# A run that became active after the first pass is cancelled too.
+				cancel_new_release_runs "${release_workflow}" "${active_ids}"
 				active_count="$(printf '%s\n' "${active_ids}" | grep -c '^[0-9]' || true)"
 				still_active=$((still_active + ${active_count:-0}))
 			fi

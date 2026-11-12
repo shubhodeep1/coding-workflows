@@ -4762,12 +4762,23 @@ Two automations take the operator out of that loop by default:
    (`STABLE_HOLD outcome=cleared version=<v>`). Auto-release and the promote cycle resume on their
    next tick.
 
-Re-running with the same target is safe: it only re-sends the consumer dispatch
-(`outcome=already_rolled_back`), and a blank target after a rollback re-confirms the current
-version instead of going further back. Refusals (`outcome=refused reason=<code>`), `hold_failed`,
-`release_still_running`, `runs_lookup_failed` and `tag_push_failed` exit 1; every failure after the
-hold leaves it active, so re-dispatch once the cause is fixed. To drop a hold without a release,
-commit `"active": false` to `stable-hold.json` on `ai/stable-hold`.
+Re-running with the same target is safe while the hold for that version is still active: it only
+re-sends the consumer dispatch (`outcome=already_rolled_back`), and a blank target re-confirms the
+current version instead of going further back. Once the hold is cleared (by a release, or by hand),
+an explicit target equal to the current version is refused (`reason=target_not_lower`) and a blank
+target rolls `@stable` back one more release. Refusals (`outcome=refused reason=<code>`),
+`hold_failed`, `release_still_running`, `runs_lookup_failed` and `tag_push_failed` exit 1; every
+failure after the hold leaves it active, so re-dispatch once the cause is fixed. To drop a hold
+without a release, commit `"active": false` to `stable-hold.json` on `ai/stable-hold`.
+
+The hold gates only the scheduled `cycle` job of `promote-main-to-stable.yml`. A promote cycle that
+was already in flight at rollback time (an open tracking issue labelled
+`ai:comprehensive-test-pending`) is not gated: when its verifying run is ready to merge, the poller
+dispatches the `promote` job with `target_sha`, which fast-forwards `stable`, runs the release gate,
+and that release clears the hold. The rollback only cancels promote runs that are queued or running
+when it starts. If such a tracking issue is open and the regression may be in its `promote_sha`,
+remove the `ai:comprehensive-test-pending` label from it after rolling back, so the cycle stays
+unpromoted until a human decides.
 
 **The `promote-candidate` branch.** The internal wrappers (`.github/workflows/internal-*.yml`) call
 their reusable workflows at `@promote-candidate`, not `@main`. Between promote cycles
