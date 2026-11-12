@@ -4776,9 +4776,11 @@ was already in flight at rollback time (an open tracking issue labelled
 `ai:comprehensive-test-pending`) is not gated: when its verifying run is ready to merge, the poller
 dispatches the `promote` job with `target_sha`, which fast-forwards `stable`, runs the release gate,
 and that release clears the hold. The rollback cancels promote, release and auto-release runs that
-are queued or running at its start or that become active while it drains (up to
-`STABLE_ROLLBACK_CANCEL_WAIT_SECS`); a promote run the poller dispatches after the rollback has
-finished is not cancelled. If such a tracking issue is open and the regression may be in its `promote_sha`,
+are queued or running at its start or that become active before its last drain poll. The drain
+ends at the first poll that finds no active run; `STABLE_ROLLBACK_CANCEL_WAIT_SECS` only limits how
+long it waits for active runs to stop (`release_still_running` after that). A promote run the
+poller dispatches after the drain ends (while the hold is set again, while the tags move, while
+consumers are notified, or later) is not cancelled. If such a tracking issue is open and the regression may be in its `promote_sha`,
 remove the `ai:comprehensive-test-pending` label from it after rolling back, so the cycle stays
 unpromoted until a human decides.
 
