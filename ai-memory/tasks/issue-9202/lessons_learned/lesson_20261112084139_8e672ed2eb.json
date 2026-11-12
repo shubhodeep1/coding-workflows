@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-12T08:41:39Z",
+  "issue_number": 9202,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=.github/workflows/ci.yml:811-813; cited_path=.github/workflows/ci.yml, tests/test_lint_pr_body_auto_close.py; files_touched=README.md, agents.d/analysis-findings-p6b-bound-marker-searches.md, changelog.d/analysis-findings-p6b-bound-marker-searches.md, scripts/apply_analysis_on_main.sh, scripts/promote_main_cycle.sh, tests/test_apply_analysis_on_main.py, tests/test_promote_main_cycle.py, tests/test_workflow_log_analysis_purge_safety.py.",
+  "phase": "review_autofix",
+  "pr_number": 9265,
+  "record_id": "lesson_20261112084139_8e672ed2eb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml, tests/test_lint_pr_body_auto_close.py",
+    ".github/workflows/ci.yml",
+    "README.md",
+    "agents.d/analysis-findings-p6b-bound-marker-searches.md",
+    "changelog.d/analysis-findings-p6b-bound-marker-searches.md",
+    "scripts/apply_analysis_on_main.sh",
+    "scripts/promote_main_cycle.sh",
+    "tests/test_apply_analysis_on_main.py",
+    "tests/test_promote_main_cycle.py",
+    "tests/test_workflow_log_analysis_purge_safety.py"
+  ]
+}
