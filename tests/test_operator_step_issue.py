@@ -1140,6 +1140,15 @@ def test_operator_step_title_only_step_naming_an_underscore_secret_is_a_human_st
 	assert result["ticked"] == [] and result["skipped"] == {"not_release": 1} and fake.closed == []
 
 
+@pytest.mark.parametrize("title", ["Sync npmToken to stable", "Publish apiKey to stable", "Sync the githubSecret to stable"])
+def test_operator_step_title_only_step_naming_a_camelcase_secret_is_a_human_step(title: str) -> None:
+	# A secret name inside a camelCase identifier must still make the step a human step.
+	human = {"title": title, "instructions": "Set it in the repository settings."}
+	assert not writer._is_release_entry(writer.render_entry("pr-7", "s", [human], RELEASE_SHA))
+	# Release titles without a secret name still pass.
+	assert writer._is_release_entry(writer.render_entry("pr-7", "s", [{"title": "Promote main to stable", "instructions": "x"}], RELEASE_SHA))
+
+
 def test_operator_step_upsert_recheck_failure_exits_3_with_the_entry_posted(
 		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	number = _tracker(fake)

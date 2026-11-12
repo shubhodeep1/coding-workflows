@@ -676,9 +676,11 @@ def _is_release_entry(body: str) -> bool:
 		# for a step that has no dormant line, so a human step such as "Sync the
 		# DEPLOY_TOKEN secret to the stable environment" (dormant `DEPLOY_TOKEN`)
 		# is never ticked. `dormant_until` is optional, so a title-only step also
-		# must not name a secret, token, variable, setting or similar.
+		# must not name a secret, token, variable, setting or similar. A `_` goes
+		# in at each camelCase boundary first, so `npmToken` or `apiKey` count too.
 		RELEASE_CONDITION_RE.match(dormant)
-		or (not dormant and RELEASE_STEP_TITLE_RE.match(title) and not HUMAN_OBJECT_TITLE_RE.search(title))
+		or (not dormant and RELEASE_STEP_TITLE_RE.match(title)
+			and not HUMAN_OBJECT_TITLE_RE.search(re.sub(r"(?<=[a-z])(?=[A-Z])", "_", title)))
 		for title, dormant in steps
 	)
 
