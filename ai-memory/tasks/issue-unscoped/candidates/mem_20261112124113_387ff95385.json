@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh:396-407 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `_ghm_pair_listed` check followed by `unset _ghm_pair` is brittle and logically disconnected from the loop that decides whether a pair is processed.\n  WHY: A leaked `_ghm_pair` loop variable could be misread; the reviewer calls this not critical but logically questionable in merge-conflict resolution (source severity NIT).\n- scripts/review_conflict_prepare.sh:391 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flat-lite]\n  PROBLEM: `return 1` in `_conflict_prepare_guard_hook_template_merge` logs \"Guard-hook template merge: no pair resolved\" without distinguishing an already-logged per-pair failure from a general failure to resolve any conflict.\n  WHY: An operator cannot tell whether the failure was expected (all pairs refused) or unexpected (e.g. a stage failure) (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_prepare.sh:396-407 | severity=NIT | confidence=3\n  PROBLEM: The `_ghm_pair_listed` check followed by `unset _ghm_pair` is brittle and logically disconnected from the loop that decides whether a pair is processed.\n  WHY: A leaked `_ghm_pair` loop variable could be misread; the reviewer calls this not critical but logically questionable.\n- scripts/review_conflict_prepare.sh:391 | severity=NIT | confidence=3\n  PROBLEM: `return 1` in `_conflict_prepare_guard_hook_template_merge` logs \"Guard-hook template merge: no pair resolved\" without distinguishing an already-logged per-pair failure from a general failure.\n  WHY: An operator cannot tell whether the failure was expected (all pairs refused) or unexpected.\n- TASK_GAP entries (4 related items, all reported as present/satisfied, severity=NIT, confidence=5):\n  Requirement: Generalise `_conflict_prepare_guard_hook_template_merge` in `scripts/review_conflict_prepare.sh` to loop over every paired live hook. Evidence of absence: Present \u2014 lines 357-392 loop over `GUARD_HOOK_TEMPLATE_PAIRS`.\n  Requirement: Keep `GUARD_HOOK_LIVE_PATH` / `GUARD_HOOK_TEMPLATE_PATH`, the `Guard-hook template merge:` log text, the `CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED` kill switch, and the deferred integration-sync commit. Evidence of absence: Present \u2014 lines 226-227, 362, 332, 934.\n  Requirement: Remove the strict xfail marker from `test_prepush_hook_integration_sync_conflict_is_resolved_from_template`. Evidence of absence: Present \u2014 decorator removed.\n  Requirement: Leave the conditional marker on `test_prepush_hook_pair_is_listed_in_paired_live_report` as is. Evidence of absence: Present \u2014 test unchanged; comment at line 1053-1055 updated.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bfa74b6e85b3ed038a3bf4b4f22239a8b3e4cac9b37997b11da2d1a5355b4cb9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9010,
+    "run_id": "43133118055",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43133118055",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112124113_387ff95385",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9010,
+    "run_id": "43133118055"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T12:41:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
