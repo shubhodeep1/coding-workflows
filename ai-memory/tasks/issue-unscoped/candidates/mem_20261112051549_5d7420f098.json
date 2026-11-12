@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: For `tests-hooks-and-orchestrator`, \"find the failing step in the full job log before changing code\" and fix the specific contract test the PR broke without weakening it.\n  expected_change_site: `.github/workflows/ci.yml`, job `tests-hooks-and-orchestrator`, and the specific failing contract test\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The job was cancelled and the log tails are empty, so no failing step can be identified; the diff changes only tests/test_ci_job_split_contract.py and tests/test_summarize_reviewer_consensus_sandbox_pin.py, with no fix mapped to this job. Severity disagreement: sonnet=NIT (deferred, cannot be diagnosed), gemini=BLOCKER, luna=MAJOR; highest is BLOCKER.\n- requirement: The acceptance table requires `tests/test_summarize_reviewer_consensus_sandbox_pin.py::test_review_utility_roles_never_start_host_opencode` to be red-on-base (rows read \"unmet (passes on base)\", \"unmet\", \"not run\" for the sandbox-pin test, `SystemPythonJobTest` and the `tests-system-python` check).\n  expected_change_site: CI results / `tests/test_summarize_reviewer_consensus_sandbox_pin.py`, `test_review_utility_roles_never_start_host_opencode`\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The diff updates the role assertion, registers the test in `main()`, and adds the TMPDIR and 24-shard guards, but the criterion stays unmet because the test passes on base and CI was cancelled before the targets ran. Sonnet treats this as a gate-status artefact, not missing code. Severity: NIT in both.\n- requirement: The `gh_retry` closed-reader failure on ubuntu-26.04 is deferred to a separate in-flight runner-image fix.\n  expected_change_site: none\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The PR description cites this deferral explicitly, so the reviewer says it is not a gap. Severity: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: For `tests-hooks-and-orchestrator`, \"find the failing step in the full job log before changing code\" and fix the specific contract test the PR broke without weakening it.\nExpected change site: the failing contract test, if one exists.\nEvidence of absence: The job was cancelled and the log tails are empty. No failing step can be identified. The linked issue calls the cause \"inconclusive\", and the owner comment leaves the remaining red jobs to PR #9246. It is deferred and cannot be diagnosed, so it is not a missing implementation.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n\nTASK_GAP:\nRequirement: The acceptance rows read \"unmet (passes on base)\", \"unmet\" and \"not run\" for the sandbox-pin test, `SystemPythonJobTest` and the `tests-system-python` check.\nExpected change site: CI results, not code.\nEvidence of absence: The diff contains the assertion update, `main()` registration, TMPDIR guard and 24-shard guard those rows target. The status values record that CI was cancelled before the targets could run on this head. The \"passes on base\" annotation is expected, because the stale assertion was already fixed on the stacked base branch. These are gate-status artefacts, not missing code.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n\nTASK_GAP:\nRequirement: The `gh_retry` closed-reader failure on ubuntu-26.04 is deferred to a separate in-flight runner-image fix.\nExpected change site: none.\nEvidence of absence: The PR description cites this deferral explicitly, so it is not a gap.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 1\n\nHARDENING_SUGGESTIONS:\n- tests/test_ci_job_split_contract.py, `test_system_python_shard_keeps_default_tmpdir`: the guard rejects only the `runner_temp` and `runner.temp` spellings and would not catch a literal `/home/runner/work/_temp` value. Not a defect today. Optionally also assert the step-level `TMPDIR` value does not start with `/home/runner/work` (1 line).\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: Fix CI failure on PR #9280, including specifically identifying and fixing the failing step in `tests-hooks-and-orchestrator`, and meeting all acceptance criteria for CI to pass.\nExpected change site: `.github/workflows/ci.yml` (for overall CI/timeout management), `tests-hooks-and-orchestrator` (for the specific failing test).\nEvidence of absence: The PR diff fixes several identified issues (TMPDIR socket path, shard count, stale assertion), but CI remains broken/cancelled, and the `tests-hooks-and-orchestrator` failure has not been mapped to a specific test failure or resolved.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n\nHARDENING_SUGGESTIONS:\n- tests/test_ci_job_split_contract.py, `test_system_python_shard_keeps_default_tmpdir`: the guard rejects only the `runner_temp` and `runner.temp` spellings. Optionally also reject `str.startswith(\"/home/runner/work\")` on the step-level `env.TMPDIR` value (2 lines).\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"For tests-hooks-and-orchestrator, find the failing step in the full job log\" and \"Fix the specific contract test the PR broke, and do not weaken the test.\"\nExpected change site: `.github/workflows/ci.yml`, job `tests-hooks-and-orchestrator`, and the specific failing contract test.\nEvidence of absence: The PR diff changes only `tests/test_ci_job_split_contract.py` and `tests/test_summarize_reviewer_consensus_sandbox_pin.py`; it contains no investigation or fix for that job. The check-run context reports the job as cancelled, with no log identifying a failing step. The PR description defers only the `gh_retry` closed-reader failure, not this requirement.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n\nTASK_GAP:\nRequirement: The PR description's acceptance table requires `tests/test_summarize_reviewer_consensus_sandbox_pin.py::test_review_utility_roles_never_start_host_opencode` to be a red-on-base test.\nExpected change site: `tests/test_summarize_reviewer_consensus_sandbox_pin.py`, `test_review_utility_roles_never_start_host_opencode`.\nEvidence of absence: The PR description marks this criterion unmet because the test passes on base. The diff updates the role assertion and registers the test in `main()`, but the criterion remains unmet.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n\nHARDENING_SUGGESTIONS:\nNONE\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a631cd06704e2ad00748dc954593eeda036c0256e206ce5165bf6fa071677956",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9338,
+    "run_id": "43158193068",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43158193068",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112051549_5d7420f098",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9338,
+    "run_id": "43158193068"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T05:15:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
