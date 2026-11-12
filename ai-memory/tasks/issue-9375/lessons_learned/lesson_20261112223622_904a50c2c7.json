@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-12T22:36:22Z",
+  "issue_number": 9375,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=scripts/review_rb_judge.sh:511-538; cited_path=scripts/review_rb_judge.sh; files_touched=changelog.d/9375-review-head-checkout-clock.md, scripts/review_autofix_step_checkout_pr_head_branch.sh, tests/test_review_checkout_head_diagnostics.py.",
+  "phase": "review_autofix",
+  "pr_number": 9383,
+  "record_id": "lesson_20261112223622_904a50c2c7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/review_rb_judge.sh",
+    "changelog.d/9375-review-head-checkout-clock.md",
+    "scripts/review_autofix_step_checkout_pr_head_branch.sh",
+    "tests/test_review_checkout_head_diagnostics.py"
+  ]
+}
