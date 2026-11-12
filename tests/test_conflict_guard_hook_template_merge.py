@@ -382,6 +382,30 @@ def test_prepush_hook_integration_sync_conflict_is_resolved_from_template() -> N
 		_assert_resolved_from_template(repo, live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
 
 
+# ------------------------------------------ remaining paired hooks (#9298)
+
+# The other live hooks with a template twin. session-start.sh is a shell
+# script at mode 100755: the merge compares blob ids and index modes only, so
+# a non-Python hook resolves the same way (issue #9298, suggested fix step 3).
+OTHER_PAIRED_HOOKS = ("gh_api_write_guard.py", "pr_watch_guard.py", "session-start.sh")
+
+
+def test_other_paired_hooks_are_resolved_from_template() -> None:
+	for name in OTHER_PAIRED_HOOKS:
+		live_rel, template_rel = f".claude/hooks/{name}", f"workflow-templates/.claude/hooks/{name}"
+		tmpdir, tmp, repo = _with_repo(live_rel=live_rel, template_rel=template_rel)
+		with tmpdir:
+			region = _guard_and_union_region(_prepare_text()) + _hook_only_commit_region(_prepare_text())
+			result, github_env, _ = _run(repo, tmp, region=region)
+			out = result.stdout + result.stderr
+			assert result.returncode == 0, (name, out)
+			assert "Guard-hook template merge: resolved " + live_rel in result.stdout, out
+			assert "REGION_FELL_THROUGH" not in result.stdout, out
+			assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
+			_assert_resolved_from_template(repo, live_rel=live_rel, template_rel=template_rel)
+			assert _git(repo, "ls-files", "-s", "--", live_rel).stdout.split()[0] == "100755"
+
+
 def _make_dual_conflict(repo: Path) -> None:
 	"""Leave ``repo`` mid-merge with both paired live hooks conflicted in step with their templates."""
 	pairs = ((LIVE, TEMPLATE), (PREPUSH_LIVE, PREPUSH_TEMPLATE))
