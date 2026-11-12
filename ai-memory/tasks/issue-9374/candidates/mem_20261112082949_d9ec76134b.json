@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: This issue duplicates the open ubuntu-26.04 fix in PR #9345 (heal issue #9215). What should this issue deliver?\nChoices:\nA) No new code. Treat this issue as a duplicate of #9215 / PR #9345. Once #9345 merges, update PR #9352's branch from `main` and re-run CI. Re-triage only if the same tests still fail on a green `main`. (RECOMMENDED)\nB) Make a standalone fix on `main` for both tests, separate from #9345:\n   - Use a bash-native millisecond clock in `review_head_checkout_now_ms`. Keep the `date +%s%3N` fallback, because `test_script_contract_is_additive` (`tests/test_review_checkout_head_diagnostics.py:320`) requires that text.\n   - Make the closed-reader test use a reader that really closes its stdin, without weakening the `gh_retry` non-zero-status contract.\n   - Accept that this may conflict with #9345, #9246 and #9370, which touch the same areas.\nC) Same as B, but only for whichever test #9345 does not already cover (scope determined at planning time against #9345's diff).\n   **Note:** C depends on #9345's diff, which is not in this checkout. If #9345 changes before merge, C may need re-clarification.",
+  "fingerprint": "8d1f13a6c89813c5102b6c31a54e58b8d83c4bb263d379874d7d9f7a1bd3602f",
+  "lineage": {
+    "issue_number": 9374,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43182460845",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43182460845",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261112082949_d9ec76134b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9374,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43182460845"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9374 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-12T08:29:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
