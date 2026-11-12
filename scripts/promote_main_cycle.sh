@@ -21,6 +21,11 @@
 #
 # Decision order (every exit is a logged, stable prefix):
 #   PROMOTE_CYCLE_SKIPPED reason=disabled
+#   PROMOTE_CYCLE_SKIPPED reason=stable_hold_active to=<v>  rollback-stable.yml rolled the
+#                                                           stable tag back; only a deliberate
+#                                                           release clears the hold (#9342)
+#   PROMOTE_CYCLE_SKIPPED reason=stable_hold_unknown        the hold could not be read; fail
+#                                                           closed before any guard or freeze
 #   PROMOTE_CYCLE_SKIPPED reason=another_run_active         a previous cycle job is still running
 #   PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight            a labelled tracking issue is open
 #   PROMOTE_CYCLE_SKIPPED reason=no_code_changes            nothing but non-code paths changed
@@ -105,6 +110,9 @@
 #                                       pinned mode off
 #   PROMOTE_CYCLE_FREEZE_MAX_SECS       default 172800; age reported for a stale
 #                                       promote-cycle-frozen tag
+#   STABLE_HOLD_BRANCH / STABLE_HOLD_FILE  read by scripts/stable_hold.sh (defaults
+#                                       ai/stable-hold, stable-hold.json); the hold
+#                                       read is 1 contents GET per run (§14)
 #
 # Operator-step drain (plan item 4d): whenever the `stable` tag resolves, the
 # cycle first runs `operator_step_issue.py tick` with the tag's commit, before
@@ -692,6 +700,21 @@ pin_freeze()
 if ! is_truthy "${PROMOTE_CYCLE_ENABLED}"; then
 	skip_cycle disabled
 fi
+
+# 0. Stable rollback hold (#9342): before guard 1 and any pinned-mode freeze,
+#    so a held cycle never leaves a frozen tag behind. `unknown`, a failing
+#    or missing helper and any unexpected output all skip (fail closed).
+stable_hold_line="$(bash "${SCRIPT_DIR}/stable_hold.sh" read || true)"
+case "${stable_hold_line}" in
+	inactive) ;;
+	"active "*)
+		stable_hold_to="${stable_hold_line#active }"
+		[[ "${stable_hold_to}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || skip_cycle stable_hold_unknown
+		echo "::warning::A stable rollback hold is active (stable rolled back to ${stable_hold_to}); a deliberate release clears it."
+		skip_cycle stable_hold_active "to=${stable_hold_to}"
+		;;
+	*) skip_cycle stable_hold_unknown ;;
+esac
 
 # 1. Another cycle job still running (the schedule fired while a previous
 #    tick waits on its smoke gate): skip, do not queue behind it.

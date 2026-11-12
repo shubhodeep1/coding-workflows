@@ -19,7 +19,7 @@ TAG_COMMIT = "2" * 40
 OLD_BASELINE = "3" * 40
 
 MOCK_GH = r'''#!/usr/bin/env python3
-import json, os, sys
+import base64, json, os, sys
 from pathlib import Path
 state_path = Path(os.environ["MOCK_GH_STATE"])
 state = json.loads(state_path.read_text())
@@ -45,6 +45,17 @@ if args[:1] == ["api"]:
         if not a.startswith("-") and path is None:
             path = a
         i += 1
+    if "/contents/stable-hold.json" in path:
+        # Stable rollback hold (#9342); default: no hold branch (inactive).
+        hold = state.get("stable_hold", "inactive")
+        if hold == "inactive":
+            save(); sys.stderr.write("gh: Not Found (HTTP 404)\n"); sys.exit(1)
+        if hold == "unknown":
+            save(); sys.stderr.write("HTTP 503: Service Unavailable\n"); sys.exit(1)
+        doc = {"schema": "stable_hold.v1", "active": True, "to_version": "v1.45.0", "from_version": "v1.46.0"}
+        if hold == "malformed":
+            doc["schema"] = "other"
+        respond({"sha": "a" * 40, "encoding": "base64", "content": base64.b64encode(json.dumps(doc).encode()).decode()})
     # Pinned mode (phase 3): promote-candidate branch and promote-cycle-frozen tag.
     if path.endswith("/branches/promote-candidate"):
         pin = state.get("pin_branch", "missing")
@@ -802,6 +813,8 @@ def _pinned_repo(tmp: Path, *, wrappers_pinned: bool = True, support_pinned: boo
 	workflows.mkdir(parents=True)
 	script = repo / "scripts" / "promote_main_cycle.sh"
 	script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+	# The stable-hold read (#9342) runs from the script's own directory.
+	(repo / "scripts" / "stable_hold.sh").write_text((SCRIPT.parent / "stable_hold.sh").read_text(encoding="utf-8"), encoding="utf-8")
 	(workflows / "internal-review.yml").write_text("jobs:\n  r:\n    uses: o/r/.github/workflows/review_autofix.yml@promote-candidate\n", encoding="utf-8")
 	ref = "main" if not wrappers_pinned else "promote-candidate"
 	(workflows / "internal-plan.yml").write_text(f"jobs:\n  p:\n    uses: o/r/.github/workflows/plan.yml@{ref}\n", encoding="utf-8")
@@ -1078,3 +1091,34 @@ def test_stable_branch_compare_keeps_the_tag_change_log() -> None:
 		proc, _final, _ = _run(Path(tmp), state)
 	assert "  scripts/x.sh" in proc.stdout
 	assert "  scripts/y.sh" not in proc.stdout
+
+
+def test_stable_hold_active_skips_cycle() -> None:
+	# rollback-stable.yml moved the tag back (#9342): no guard runs, nothing
+	# is frozen, no gate is dispatched until a deliberate release clears it.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"stable_hold": "active", "pin_branch": "protected"})
+	assert proc.returncode == 0, proc.stderr
+	assert "PROMOTE_CYCLE_SKIPPED reason=stable_hold_active to=v1.45.0" in proc.stdout
+	assert "outcome=skipped:stable_hold_active" in final["github_output"]
+	assert len(final["calls"]) == 1 and "/contents/stable-hold.json?ref=ai%2Fstable-hold" in final["calls"][0][1]
+	assert not final.get("dispatches") and not final.get("tag_objects_created")
+
+
+def test_stable_hold_unknown_skips_cycle() -> None:
+	for hold in ("unknown", "malformed"):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final, _ = _run(Path(tmp), {"stable_hold": hold}, env={"GH_RETRY_MAX_ATTEMPTS": "1"})
+		assert proc.returncode == 0, proc.stderr
+		assert "PROMOTE_CYCLE_SKIPPED reason=stable_hold_unknown" in proc.stdout, hold
+		assert "outcome=skipped:stable_hold_unknown" in final["github_output"], hold
+		assert not final.get("dispatches"), hold
+
+
+def test_stable_hold_inactive_keeps_existing_behaviour() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS})
+	assert proc.returncode == 0, proc.stderr
+	assert "stable_hold" not in proc.stdout
+	assert "/contents/stable-hold.json" in final["calls"][0][1]
+	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout
