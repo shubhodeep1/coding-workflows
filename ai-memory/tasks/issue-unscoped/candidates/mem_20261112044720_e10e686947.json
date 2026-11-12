@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:548-813 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The required CI rollup is red on PR head 61d845a. Check-run tests-hooks-and-orchestrator (130810227544) failed, and the `lint` rollup (130831602621) failed because of it; no reviewer has found the step that actually failed.\n  WHY: A red required check blocks merging. The log tail ends partway through the \"PR body auto-close lint unit tests\" step (lines 806-813), and its `##[error] ... #2734` lines are fixture output, with no failing assertion after them. The cause may be a later step, the 20-minute job timeout (line 548) or a runner fault, so the editor should re-run the job or read each step's conclusion. Severities disagree: google_gemini-3_1-flash-lite rated MAJOR (used here as high); anthropic_claude-sonnet-5_5, openai_gpt-6-luna and z-ai_glm-5_3-flash rated NIT and say this PR's changes do not cause the failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:job tests-hooks-and-orchestrator (timeout-minutes: 20 at line 548). The failing check-run is 130810227544, and the log tail ends in the step \"PR body auto-close lint unit tests\" at lines 806-813 (`python3 tests/test_lint_pr_body_auto_close.py`). The rollup check `lint` (130831602621) fails only because of this job. | severity=NIT | confidence=2\n  PROBLEM: The required CI rollup is red on head 61d845ac, and the step that actually failed has not been found. The log tail is a window around the first `##[error]` line, whose `#2734` lines are expected fixture stdout from tests/test_lint_pr_body_auto_close.py, a file this PR does not change. The only changed file that runs in this job, tests/test_plan_clarify_blocked_output.py (ci.yml:1041), was checked against plan.yml lines 2305-2370 and nothing in it would make the job fail.\n  WHY: Merging is held while a required check is red. The cause is likely a later step in the job or the 20-minute limit. The editor should read each step's conclusion in job 130810227544 or re-run the job before calling the failure unrelated. No code change in this PR's files is indicated.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:806-813 (job tests-hooks-and-orchestrator) | severity=MAJOR | confidence=4\n  PROBLEM: The required CI rollup is red on PR head 61d845a: check-run tests-hooks-and-orchestrator (130810227544) failed, and lint (130831602621) failed because of it.\n  WHY: This prevents merging. Earlier passes judged it unrelated to this PR (the failure is in a test file this PR does not change), but the CI status on the head is still red.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:`tests-hooks-and-orchestrator`, \u201cPR body auto-close lint unit tests\u201d step, lines 806\u2013813; the job has a 20-minute timeout at line 548. | severity=NIT | confidence=4\n  PROBLEM: The PR-head check run for `tests-hooks-and-orchestrator` failed, which left the `lint` rollup failed. The provided log tail ends during this test step and shows neither a final test result nor a failing assertion.\n  WHY: The required CI check is red and blocks the PR's CI gate. The available log does not show whether the test failed or the job ended for another reason, so the cause is still unknown.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:job `tests-hooks-and-orchestrator` (timeout-minutes: 20 at ci.yml:548); failing step runs tests/test_lint_pr_body_auto_close.py at ci.yml:813; `lint` at check-run 130831602621 fails only because it rolls up that job | severity=NIT | confidence=3\n  PROBLEM: The required CI check is red on head 61d845a and the root cause is still not established. The `##[error][lint_pr_body_auto_close] ... #2734` lines are that test's own fixture output (tests/test_lint_pr_body_auto_close.py:71 and :489). The log ends mid-step with no failing assertion, and no file in LAST RUN CHANGED FILES runs before the failing step.\n  WHY: The merge gate holds while the required check is red. The tail is cut off before the real failing step, so the cause could equally be the 20-minute timeout or a runner fault. The editor should re-run check-run 130810227544 or read each step's conclusion. This is a re-surface for investigation, not a new defect from the last run.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c4ac60b9b8074cb0e88e7c2cfcc8f673a141691b9501f56c571dacc5cef0380c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9125,
+    "run_id": "43155563659",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43155563659",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112044720_e10e686947",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9125,
+    "run_id": "43155563659"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T04:47:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
