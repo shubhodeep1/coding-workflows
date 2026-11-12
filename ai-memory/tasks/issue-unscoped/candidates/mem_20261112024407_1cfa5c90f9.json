@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:lint aggregate job (run 43138780333) | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `lint` check on the PR head failed because every needed job's result was `cancelled`, so the \"lint passes\" acceptance item is unmet; the reviewer also found that the pre-push gate's 8 attributed test failures involve scaffolding the diff never touches.\n  WHY: No code path in the diff produces these failures; CI was cancelled before running. The source rated it NIT (severity=low here).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"For group 1: open the full log of job 130601698006, read the `orchestrate-poll shard N failing tests:` annotation, and reproduce that test locally against this PR's `scripts/gh_helpers.sh`. If no shard names a failing test, or the test also fails on `main`, re-run the job and treat the failure as flaky.\"\n  expected_change_site: Group 1 failure diagnosis and verification; the affected orchestrate-poll test or `scripts/gh_helpers.sh` if reproduction identifies a defect.\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR has no group 1 log diagnosis, reproduction or rerun evidence, and changes neither `scripts/gh_helpers.sh` nor an orchestrate-poll test. AD-1 attributes group 1 to `scripts/review_autofix_step_checkout_pr_head_branch.sh`, which `review_autofix.yml` invokes, not the orchestrate-poll shard that failed. (anthropic_claude-sonnet-5_5 notes in passing that group 1 was handled via the checkout-script fix under AD-1, but did not report it as a gap.)\n- requirement: \"Expected outcome: Both timers use a monotonic clock and clamp negative durations to 0. Tests state the non-negative contract, and `lint` passes.\"\n  expected_change_site: CI validation for the PR head.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The check-run context has no successful `lint` result. The only `lint` run failed because its prerequisite jobs were cancelled, so this acceptance criterion is unverified.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \u201cFor group 1: open the full log of job 130601698006, read the `orchestrate-poll shard N failing tests:` annotation, and reproduce that test locally against this PR's `scripts/gh_helpers.sh`. If no shard names a failing test, or the test also fails on `main`, re-run the job and treat the failure as flaky.\u201d\n  Expected change site: Group 1 failure diagnosis and verification; the affected orchestrate-poll test or `scripts/gh_helpers.sh` if reproduction identifies a defect.\n  Evidence of absence: The PR contains no group 1 log diagnosis, reproduction, or rerun evidence, and changes neither `scripts/gh_helpers.sh` nor an orchestrate-poll test for group 1. The PR description\u2019s AD-1 attributes group 1 to `scripts/review_autofix_step_checkout_pr_head_branch.sh`, but that script is invoked by `review_autofix.yml`, not the orchestrate-poll shard that failed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP: Requirement: \u201cExpected outcome: Both timers use a monotonic clock and clamp negative durations to 0. Tests state the non-negative contract, and `lint` passes.\u201d\n  Expected change site: CI validation for the PR head.\n  Evidence of absence: The provided check-run context has no successful `lint` result. The only `lint` run failed because its prerequisite jobs were cancelled, so this acceptance criterion remains unverified.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:lint aggregate job (run 43138780333, head f4eba30ab1191818eacb216a80bb4e02bd9554da) | severity=low (source: NIT) | confidence=4\n  PROBLEM: The `lint` check on the PR head failed with `CI jobs that did not succeed: static-checks, tests-hooks-and-orchestrator, ...`, and every named need's result is `cancelled` (job 130927128232 log). The aggregate guard reacted to the cancellation, not to a test or code failure. The implement-phase pre-push gate attributed 8 failures to this change, but all 8 test scaffolding the diff never touches, and the assertions hold in this checkout.\n  WHY: No code path in the diff can produce these failures; the acceptance item \"lint passes\" is unmet only because CI was cancelled before running, so the PR cannot merge until a clean CI run completes.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b509eba4b69c6e68e3eb506ddd5f0e861afe1ba5a09ec013bcd10b9f146d6488",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9323,
+    "run_id": "43133036985",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43133036985",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112024407_1cfa5c90f9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9323,
+    "run_id": "43133036985"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T02:44:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
