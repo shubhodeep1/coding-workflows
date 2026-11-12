@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_render_prompt_foundation.py:172-252 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The comment claims `--help` runs the same `%` expansion on the 3.12 CI job, but a top-level `--help` on 3.12 does not render subparser help strings, so a bad `%` in a subparser help would not be caught.\n  WHY: The comment overstates the coverage of test_argparse_scripts_called_by_ci_tests_exit_zero_on_help, which could hide subparser help regressions until the Python 3.14 job runs. All four reviewers rated this NIT, so severity is mapped to low.\n- tests/test_ci_poll_test_sharding.py:4662 | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The HEARTBEAT regex `elapsed_ms=\\d+` rejects negative elapsed_ms values, while the adjacent END-event regex on line 4661 accepts them with `-?\\d+`. This fails test_full_body_overlaps_modules_and_fails_closed.\n  WHY: A backward clock step produces a negative elapsed_ms, which turns the orchestrate-poll job and the aggregate lint check red. The reviewer says the failure is inherited from the merge-base and the file is not touched by this PR. Severity MAJOR is mapped to high.\n- .github/workflows/ci.yml:543 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The tests-hooks-and-orchestrator job failed on the PR head, but the log tail does not show the failing step, and the visible `::error::` lines are fixture-intentional output from test_lint_pr_body_auto_close.py.\n  WHY: The failure cannot be attributed to this diff. The job does not run the PR's only changed file. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_render_prompt_foundation.py: comment at the top of test_argparse_scripts_called_by_ci_tests_exit_zero_on_help | severity=NIT | confidence=4\n  PROBLEM: The comment claims `--help` runs the same `%` expansion on the 3.12 CI job, but top-level `--help` on 3.12 does not expand subparser help strings in scripts like orchestrate_lib.py, ai_memory.py and workflow_failure_heal.py.\n  WHY: Nothing breaks today, but the overstated comment could hide a subparser help-string regression until the Python 3.14 job runs.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_render_prompt_foundation.py:234-236 | severity=NIT | confidence=4\n  PROBLEM: The comment claims `--help` runs the same `%` expansion on the 3.12 CI job. On 3.12 argparse does not validate help strings as %-format strings, and a bad `%` in a subparser help (for example the orchestrate_lib.py `p_check`/`p_render`/`p_stalls` subparsers) would not be caught.\n  WHY: The test only catches 3.14-style bad-help failures on a 3.14 interpreter, so the comment overstates the guarantee on the 3.12 CI.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_render_prompt_foundation.py:237-252 | severity=NIT | confidence=4\n  PROBLEM: The comment says the test checks the same `%` expansion on the 3.12 CI job, but top-level help does not format subparser argument help strings on 3.12. scripts/orchestrate_lib.py defines subparsers at line 4668 and child arguments with help strings at lines 4675-4679.\n  WHY: A malformed help string on a subcommand can pass this test on the pinned 3.12 CI jobs, leaving that class of regression undetected there.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_render_prompt_foundation.py:172-182, 235 (evidence scripts/orchestrate_lib.py:4668-4833 and scripts/ai_memory.py:2375-2630) | severity=NIT | confidence=4\n  PROBLEM: The comment overstates 3.12 coverage, because subparser `help=` strings are never rendered by a top-level `--help` on 3.12. They are validated only on 3.14, at add_argument time.\n  WHY: This is a wording defect only. A future reader may assume subparser help strings are guarded on 3.12 and skip a 3.14-specific guard.\n- tests/test_ci_poll_test_sharding.py:4662 (`self.assertRegex(out, r\"CI_SUBTEST_HEARTBEAT running=\\S+ elapsed_ms=\\d+\\n\")`) vs line 4661 | severity=MAJOR | confidence=4\n  PROBLEM: The HEARTBEAT regex rejects negative elapsed_ms, while the END-event regex on line 4661 accepts them with `-?`. The CI run shows heartbeats with elapsed_ms=-655, -449, -243, -38 and -19, which fail test_full_body_overlaps_modules_and_fails_closed.\n  WHY: Any backward clock step produces a negative elapsed_ms that does not match `\\d+`. This turns the orchestrate-poll job and the aggregate lint check red. The failure is inherited from the merge-base and the file is not in this PR's diff.\n- .github/workflows/ci.yml:543 (job `tests-hooks-and-orchestrator`; failed check-run on head 2502f3e25c3d169d1af1595b3ebf1831b86c44b0) | severity=NIT | confidence=2\n  PROBLEM: The required job failed on the PR head, but its log tail ends inside tests/test_lint_pr_body_auto_close.py fixture-intentional `::error::` output, so the failing step cannot be identified. The job does not run the PR's only changed file.\n  WHY: The failure is not attributable to this diff on current evidence.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ebedbca6a1b2880c4d96a44a689e8c9610139e5f5078021905207409eae707ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9287,
+    "run_id": "43103419023",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43103419023",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112005923_3d92516ce4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9287,
+    "run_id": "43103419023"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T00:59:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
