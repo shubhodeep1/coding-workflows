@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-12T04:43:25Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=analysis/validation-selftest-status.json:1-14; cited_path=CI check-runs `lint`, `tests-hooks-and-orchestrator`, `orchestrate-poll (2)` (no file in the diff); files_touched=analysis/validation-selftest-status.json.",
+  "phase": "review_autofix",
+  "pr_number": 9229,
+  "record_id": "lesson_20261112044325_333c093a7e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "CI check-runs `lint`, `tests-hooks-and-orchestrator`, `orchestrate-poll (2)` (no file in the diff)",
+    "analysis/validation-selftest-status.json"
+  ]
+}
