@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:jobs `tests-hooks-and-orchestrator` (line 543) and `orchestrate-poll` (line 2489) | severity=high | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: Two CI jobs (`tests-hooks-and-orchestrator`, `orchestrate-poll`; jobs 130796135823 and 130796136396, aggregate `lint` job 130809735661) fail on head 00546da, and the failing step is not visible in the truncated log tails.\n  WHY: Neither reviewer could map the failure to the diff, which is comment-only and touches no workflow YAML, but the PR stays red until the full logs are inspected. Severity disagreement: NIT (confidence 2) vs MAJOR (confidence 3), so the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description \"## Testing\" claims the pre-push gate had \"0 failures caused by this change\" and that both new scan-window tests are covered.\n  expected_change_site: PR description text (no in-repo change site); tests/test_workflow_failure_heal.py is present\n  confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The current gate reports 1 failure \"caused by this change\" (`tests/test_workflow_checkout_integration_ref_audit.py`), but that test reads only `.github/workflows/*.yml` (tests/test_workflow_checkout_integration_ref_audit.py:15-16), which this PR does not modify. The gate classification looks wrong rather than the delivery incomplete, and no code-level gap was found.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:jobs `tests-hooks-and-orchestrator` and `orchestrate-poll` | severity=NIT | confidence=2\n  PROBLEM: Both jobs failed on head 00546da, so the `lint` aggregate reports \"CI jobs that did not succeed: tests-hooks-and-orchestrator, orchestrate-poll\". The failing step is not visible in either `log_tail`.\n  WHY: The failure could not be mapped to the diff. The visible `##[error]` lines are deliberate fixture output from `tests/test_lint_pr_body_auto_close.py`. The full job logs are needed to confirm the cause. It is raised so the failing check is not silently dropped.\n- Other categories: NONE. The last autofix run changed only comments and a docstring in `scripts/workflow_failure_heal.py`. There is no linked issue and no task gaps. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:jobs `tests-hooks-and-orchestrator` (line 543) and `orchestrate-poll` (line 2489) | severity=MAJOR | confidence=3\n  PROBLEM: Two CI jobs fail on the PR head (jobs 130796135823 and 130796136396, aggregate `lint` job 130809735661) and keep the PR red. The failing step is not visible in the provided log tails.\n  WHY: The PR cannot merge with required CI failing. The root cause is not in the last-run diff, but it remains unidentified because no round has inspected the full job logs.\n- TASK_GAP:\n  Requirement: PR description \"## Testing\" claims the pre-push gate had \"0 failures caused by this change\" and that both new scan-window tests are covered.\n  Expected change site: none required in-repo (PR description text); delivery in tests/test_workflow_failure_heal.py is present.\n  Evidence of absence: The current gate reports 1 failure \"caused by this change\" (`tests/test_workflow_checkout_integration_ref_audit.py`), but that test reads only `.github/workflows/*.yml` (tests/test_workflow_checkout_integration_ref_audit.py:15-16), which this PR never modifies. The gate classification appears wrong rather than the delivery incomplete.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "87d8ea99d0a3bf22264f499facad2f078ebdd498be472ad418cb9007eedf9236",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9219,
+    "run_id": "43102169094",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43102169094",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112002446_304316d5b3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9219,
+    "run_id": "43102169094"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T00:24:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
