@@ -159,6 +159,79 @@ def _host_basename(src: str) -> str | None:
 	return tail
 
 
+# Mount/install sources that are a launch script's runtime argument, with the
+# callers that pass it. ("variable", name): the caller passes "${name}" and
+# assigns it from `_ai_engine_py support-file --name <file>`; ("names", file):
+# the caller names that host file. Any other bare-variable source fails the
+# host-file check instead of being skipped.
+ARGUMENT_SOURCED_VARIABLES: dict[tuple[str, str], tuple[tuple[str, str, str], ...]] = {
+	("scripts/codex_isolated_exec.sh", "claude_guard_hook"): (
+		("scripts/ai_engine.sh", "variable", "guard_hook"),
+	),
+	("scripts/prepush_test_gate_run.sh", "module_real"): (
+		("scripts/heal_reproduce.sh", "names", "prepush_affected_tests.py"),
+		("scripts/implement_step_prepush_test_gate.sh", "names", "prepush_affected_tests.py"),
+		("scripts/review_autofix_step_prepush_test_gate.sh", "names", "prepush_affected_tests.py"),
+	),
+}
+
+_CLAUDE_ENGINE = REPO_ROOT / "scripts" / "claude_engine.py"
+
+
+def _source_variable(src: str) -> str | None:
+	"""Name of a bare `${name}` (or `$(realpath "${name}")`) source, else None."""
+	cleaned = re.sub(r"^\$\(realpath\s+\"?|\"?\)$", "", src.strip()).strip('"')
+	match = re.fullmatch(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", cleaned)
+	return match.group(1) if match else None
+
+
+def _support_file_basename(name: str) -> str | None:
+	"""Basename `scripts/claude_engine.py support-file --name <name>` returns."""
+	text = _CLAUDE_ENGINE.read_text(encoding="utf-8")
+	entry = re.search(r'^\t"' + re.escape(name) + r'":\s*([A-Z_][A-Z0-9_]*),', text, re.MULTILINE)
+	if entry is None:
+		return None
+	constant = re.search(r"^" + entry.group(1) + r"\s*=\s*(.+)$", text, re.MULTILINE)
+	parts = re.findall(r'"([^"]+)"', constant.group(1)) if constant else []
+	return parts[-1] if parts else None
+
+
+def _support_file_variable_basename(script: str, variable: str) -> str | None:
+	text = (REPO_ROOT / script).read_text(encoding="utf-8")
+	match = re.search(r"\b" + re.escape(variable) + r'="\$\(_ai_engine_py support-file --name ([A-Za-z0-9_-]+)\)"', text)
+	return _support_file_basename(match.group(1)) if match else None
+
+
+def resolve_host_basenames(script: str, src: str) -> tuple[list[str], str]:
+	"""Host basenames a mount/install source resolves to, or ([], reason)."""
+	basename = _host_basename(src)
+	if basename is not None:
+		return [basename], ""
+	variable = _source_variable(src)
+	if variable is None:
+		return [], f"source {src!r} in {script} is neither a path nor a bare variable"
+	resolved = _support_file_variable_basename(script, variable)
+	if resolved is not None:
+		return [resolved], ""
+	callers = ARGUMENT_SOURCED_VARIABLES.get((script, variable))
+	if not callers:
+		return [], (
+			f"${{{variable}}} in {script} is not assigned from `_ai_engine_py support-file` and is not listed "
+			"in ARGUMENT_SOURCED_VARIABLES"
+		)
+	basenames: list[str] = []
+	for caller, kind, value in callers:
+		text = (REPO_ROOT / caller).read_text(encoding="utf-8")
+		if kind == "variable":
+			resolved = _support_file_variable_basename(caller, value) if f'"${{{value}}}"' in text else None
+		else:
+			resolved = value if value in text else None
+		if resolved is None:
+			return [], f"{caller} no longer passes a resolvable {kind} {value!r} for ${{{variable}}} in {script}"
+		basenames.append(resolved)
+	return basenames, ""
+
+
 def covering_tests_for_family(family: str) -> list[str]:
 	return sorted({test for entry in SANDBOX_PYTHON_ENTRY_POINTS.values() if family in entry["families"] for test in entry["tests"]})
 
@@ -196,11 +269,27 @@ class RegistryCoverageTest(unittest.TestCase):
 		found = scan_entry_points()
 		for path, entry in sorted(SANDBOX_PYTHON_ENTRY_POINTS.items()):
 			for script, src in found.get(path, []):
-				basename = _host_basename(src) if src else None
-				if basename is None:
+				if not src:
+					# A `python3 /x.py` run site carries no host source.
 					continue
 				with self.subTest(entry_point=path, script=script):
-					self.assertEqual(basename, Path(entry["host"]).name)
+					basenames, reason = resolve_host_basenames(script, src)
+					self.assertTrue(basenames, reason)
+					for basename in basenames:
+						self.assertEqual(basename, Path(entry["host"]).name)
+
+	def test_variable_sources_resolve_or_fail(self) -> None:
+		self.assertEqual(
+			resolve_host_basenames("scripts/clarify_isolated_run.sh", '$(realpath "${guard_hook}")'),
+			(["gh_api_write_guard.py"], ""),
+		)
+		self.assertEqual(
+			resolve_host_basenames("scripts/codex_isolated_exec.sh", "${claude_guard_hook}")[0],
+			["gh_api_write_guard.py"],
+		)
+		basenames, reason = resolve_host_basenames("scripts/clarify_isolated_run.sh", "${unknown_source}")
+		self.assertEqual(basenames, [])
+		self.assertIn("ARGUMENT_SOURCED_VARIABLES", reason)
 
 	def test_no_stale_registry_entries(self) -> None:
 		found = scan_entry_points()
