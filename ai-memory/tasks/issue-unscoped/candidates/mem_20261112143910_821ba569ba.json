@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_rb_judge_crash_alert.py:239-272 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: test_untrusted_author_marker_still_posts (line 239) and test_different_head_or_reason_posts (line 271) use the bare marker as the comment body, so the tightened dedupe filter in scripts/review_autofix_step_post_review_blocked_comment.sh:143 (`endswith(\"\\n\" + $marker)`) rejects those bodies before the `tg_trusted($login)` check or the head/reason check runs, and both tests pass for the wrong reason.\n  WHY: Removing `tg_trusted()` or loosening the marker comparison would leave both tests green, so the marker-spoofing guard has no test; if that guard regressed, any PR commenter could suppress the first CRITICAL judge-crash page. Minimal fix: build the bodies as \"blocked\\n\\n\" + _marker(...) (2 lines). Severity disagreement: sonnet-5_5, minimax-m3 and glm-5_3-flash rated MAJOR (mapped to high here), gpt-6-luna rated NIT, gemini gave no severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_autofix_rb_judge_crash_alert.py:239, 271 | severity=MAJOR | confidence=5\n  PROBLEM: Line 239, test_untrusted_author_marker_still_posts: comments = [_trusted_comment(_marker(HEAD_A, \"judge_crashed\"), login=\"mallory\")]. Line 271, test_different_head_or_reason_posts: for body in (_marker(HEAD_B, \"judge_crashed\"), _marker(HEAD_A, \"llm_failed\")). The new dedupe filter in scripts/review_autofix_step_post_review_blocked_comment.sh (line 143), `select(tg_trusted($login) and (.body | sub(\"\\\\s+\\\\z\"; \"\") | endswith(\"\\n\" + $marker)))`, never matches these bare-marker bodies. The tests therefore no longer check the author check (scripts/tg_helpers.sh lines 265-274) or the head/reason check.\n  WHY: The guard against marker spoofing no longer has a test. If it regressed, a commenter could post \"text\\n\\n<!-- rb-judge-crash:v1 head=H reason=judge_crashed -->\", which sets rb_judge_crash_repeat=true and skips the POST. The \"Telegram review-blocked judge decision\" step would then log level=SUPPRESSED and exit 0 without sending the first CRITICAL page. Hardening suggestion (same fix): use \"blocked\\n\\n\" + _marker(...) at line 239 and line 271, 2 lines changed. HARDENING_RISK_SCORE: 2.\n- Not counted as gaps: (1) dedupe on the security-pass-only path is a known residual, logged repeat=unchecked and documented in agents.d/9249-rb-judge-crash-alert.md; (2) tests/test_review_autofix_step_scripts_contract.py and tests/test_workflow_file_size_limit.py are marked \"unmet\" in the acceptance table but also fail on the merge-base.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_rb_judge_crash_alert.py:test_untrusted_author_marker_still_posts (line 239) and test_different_head_or_reason_posts (line 271) | confidence=5\n  PROBLEM: The tests use a bare marker as the comment body for the dedupe check. The filter in scripts/review_autofix_step_post_review_blocked_comment.sh expects `\\n` + marker at the end of the body.\n  WHY: The filter rejects the malformed body before the trust or head/reason checks run, so the tests give a false-positive pass that hides possible dedupe failures. Hardening suggestion: build the body as \"blocked\\n\\n\" + _marker(...), 2 lines changed. HARDENING_RISK_SCORE: 2.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_rb_judge_crash_alert.py:lines 239 and 271 | severity=MAJOR | confidence=5\n  PROBLEM: Both tests pass a bare marker as the body (`_trusted_comment(_marker(HEAD_A, \"judge_crashed\"), login=\"mallory\")` at line 239; `_marker(HEAD_B, \"judge_crashed\")` and `_marker(HEAD_A, \"llm_failed\")` at line 271). The filter at scripts/review_autofix_step_post_review_blocked_comment.sh:143 requires `endswith(\"\\n\" + $marker)`, so these bodies are rejected before `tg_trusted()` or the head/reason comparison runs. The tests assert `repeat=false` and `comment_posts == 1` and stay green for the wrong reason.\n  WHY: Under the previous filter, `endswith($marker)`, these checks did run. Now removing `tg_trusted()` would not break either test, so a regression could let an untrusted commenter suppress the first CRITICAL judge-crash page. Fix: build the body as `\"blocked\\n\\n\" + _marker(...)`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_autofix_rb_judge_crash_alert.py:239 and 271-272 | severity=NIT | confidence=5\n  PROBLEM: These negative dedupe cases use a bare marker as the body, but the filter in scripts/review_autofix_step_post_review_blocked_comment.sh:143 requires a newline right before the marker. The cases therefore never reach the author, head, or reason checks.\n  WHY: Removing the trusted-author condition or breaking the head/reason comparison would not make these tests fail. Such a regression could let an untrusted or mismatched marker suppress an alert without any test catching it. HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_autofix_rb_judge_crash_alert.py:line 239 (`test_untrusted_author_marker_still_posts`) and line 271 (`test_different_head_or_reason_posts`) | severity=MAJOR | confidence=5\n  PROBLEM: The filter at scripts/review_autofix_step_post_review_blocked_comment.sh:143 was tightened to `endswith(\"\\n\" + $marker)`, but these tests still feed bare-marker bodies. After `sub(\"\\\\s+\\\\z\"; \"\")` those bodies can never match, so they are rejected before `tg_trusted($login)` or the head/reason comparison runs. The fixtures should mirror the step's `\"blocked\\n\\n\" + marker` shape.\n  WHY: The shipped script does not fail at runtime. The problem is a lost negative-path guard on a security-relevant suppression mechanism: if `tg_trusted()` were removed or the marker comparison loosened, both tests would stay green while marker spoofing becomes live. Fix: 2 lines, HARDENING_RISK_SCORE: 2. Reported under SECURITY & INPUT VALIDATION.\n- Task completeness: NONE. All issue deliverables are present, including the CI wiring at .github/workflows/ci.yml:628. The \"unmet\" acceptance rows (`tests/test_review_autofix_step_scripts_contract.py`, `tests/test_workflow_file_size_limit.py`) are failures inherited from the merge-base.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7e97c77d056a7c71fc36a350e35ac4a4fda85ffb0ae320ba3f81779c6a939fba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9276,
+    "run_id": "43146576904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43146576904",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112143910_821ba569ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9276,
+    "run_id": "43146576904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T14:39:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
