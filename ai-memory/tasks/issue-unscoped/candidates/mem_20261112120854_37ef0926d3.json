@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cBoth values are positive integers, defaulted inside the script. An invalid value warns and falls back to the default.\u201d\n  expected_change_site: `scripts/apply_analysis_on_main.sh`, validation of `APPLY_ANALYSIS_MAX_CANDIDATES` and `APPLY_ANALYSIS_MAX_MARKER_SEARCHES`.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: Lines 154\u2013156 accept only values matching `^[1-9][0-9]{0,5}$`. A positive integer such as `1000000` is therefore warned about and replaced with the default, despite the requirement specifying no upper bound; the README rows do not document this limit.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cBoth values are positive integers, defaulted inside the script. An invalid value warns and falls back to the default.\u201d\n  Expected change site: `scripts/apply_analysis_on_main.sh`, validation of `APPLY_ANALYSIS_MAX_CANDIDATES` and `APPLY_ANALYSIS_MAX_MARKER_SEARCHES`.\n  Evidence of absence: Lines 154\u2013156 accept only values matching `^[1-9][0-9]{0,5}$`. A positive integer such as `1000000` is therefore warned about and replaced with the default, despite the requirement specifying no upper bound; the README rows do not document this limit.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1920ef69c40be65c4cefbef44d78e27382418a0fcb2306633c265ba9757868a4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9265,
+    "run_id": "43188780765",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43188780765",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112120854_37ef0926d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9265,
+    "run_id": "43188780765"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T12:08:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
