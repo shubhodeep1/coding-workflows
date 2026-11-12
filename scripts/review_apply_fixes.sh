@@ -1923,6 +1923,9 @@ esac
 editor_prompt_rendered="$(mktemp)"
 (
   cd "${SUPPORT_ROOT_DIR}"
+  # The render needs no GitHub credential; drop it from this subshell so no
+  # placeholder in the untrusted body can reach it (security finding #9399).
+  unset GH_TOKEN GITHUB_TOKEN
   # The editor heredoc itself uses no `{{SEMBLE_PREFETCH}}`, but
   # targeted_file_context.py can inline judge-prompt templates verbatim
   # into the editor prompt body. Set SEMBLE_PREFETCH="" so any inlined

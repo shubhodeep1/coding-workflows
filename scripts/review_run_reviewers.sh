@@ -3041,6 +3041,9 @@ _cleanup_prompt_budget
 reviewer_prompt_rendered="$(mktemp)"
 (
   cd "${SUPPORT_ROOT_DIR}"
+  # The render needs no GitHub credential; drop it from this subshell so no
+  # placeholder in the untrusted body can reach it (security finding #9399).
+  unset GH_TOKEN GITHUB_TOKEN
   # The reviewer body has already embedded the raw PR diff, comments and
   # check-run context above. That untrusted content can carry literal
   # {{...}} / {%...%} tokens (e.g. a diff that documents the prompt-templating
@@ -3210,6 +3213,8 @@ prepare_reviewer_prompt_for_model() {
   # not trigger include-assembly and hard-fail the render (run 29182737982).
   if ! (
     cd "${SUPPORT_ROOT_DIR:-.}"
+    # No GitHub credential is needed to render (security finding #9399).
+    unset GH_TOKEN GITHUB_TOKEN
     RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 MODEL_FAMILY_OVERLAY="${overlay_text}" bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${model_prompt_file}"
   ) > "${model_prompt_rendered_file}"; then
     rm -f "${model_prompt_file}" "${model_prompt_rendered_file}"

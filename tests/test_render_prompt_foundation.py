@@ -1422,6 +1422,207 @@ def test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt() -> Non
 	assert identity_proc.stderr.strip() == "IDENTITY_REINJECT_PARSE_FAIL: mode-malformed reason=metadata_extract_failed"
 
 
+# Env-secret guard cases (security finding #9399). render_prompt.sh used to
+# resolve every {{NAME}} token from the environment; reviewer/editor bodies embed
+# raw PR diff and comment text, so a PR author could add `{{GH_TOKEN}}` and get
+# the PAT rendered into the prompt. These cases pin the guards: untrusted bodies
+# get no env lookup, trusted templates never resolve secret-like names,
+# render_prompt.py drops secret-like --var names, and the reviewer/editor render
+# subshells unset GH_TOKEN/GITHUB_TOKEN. They live here (not in a separate test
+# file) because CI already runs this file and the untrusted-workspace snapshot
+# filter drops any path whose name contains "secret".
+REVIEW_RUN_REVIEWERS_SH = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+REVIEW_APPLY_FIXES_SH = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
+
+SECRET_SENTINEL = "sentinel-secret-9399"
+PLAIN_SENTINEL = "plain-leak-9399"
+UNTRUSTED_FLAG_VARS = ("RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED", "RENDER_PROMPT_SKIP_SYNTAX_VALIDATION")
+
+
+def _guard_base_env() -> dict[str, str]:
+	env = os.environ.copy()
+	env.pop("UNATTENDED_IDENTITY_REINJECT_ENABLED", None)
+	env.pop("PROMPT_PRELUDE_REFACTOR_ENABLED", None)
+	env.pop("WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON", None)
+	for flag_name in UNTRUSTED_FLAG_VARS:
+		env.pop(flag_name, None)
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env["PROMPT_PERSONA_PREFIX_ENABLED"] = "false"
+	env["GH_TOKEN"] = SECRET_SENTINEL
+	return env
+
+
+def _run_render_sh(prompt_path: Path, env: dict[str, str], cwd: Path) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["bash", str(RENDER_PROMPT_SH), str(prompt_path)],
+		cwd=cwd,
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+
+def _assert_untrusted_body_has_no_env_lookup(flag_names: tuple[str, ...]) -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		body = tmp_path / "reviewer_prompt_body.txt"
+		body.write_text(
+			"diff line {{GH_TOKEN}}\n"
+			"other line {{PLAIN_VAR}}\n"
+			"{{SERENA_TOOL_HINTS}}\n",
+			encoding="utf-8",
+		)
+		env = _guard_base_env()
+		env["PLAIN_VAR"] = PLAIN_SENTINEL
+		env["SERENA_TOOL_HINTS"] = "serena-hint-9399"
+		for flag_name in flag_names:
+			env[flag_name] = "1"
+		result = _run_render_sh(body, env, tmp_path)
+		assert result.returncode == 0, result.stderr
+		assert SECRET_SENTINEL not in result.stdout, result.stdout
+		assert SECRET_SENTINEL not in result.stderr, result.stderr
+		assert PLAIN_SENTINEL not in result.stdout, result.stdout
+		assert "{{GH_TOKEN}}" in result.stdout, result.stdout
+		assert "{{PLAIN_VAR}}" in result.stdout, result.stdout
+		assert "serena-hint-9399" in result.stdout, result.stdout
+
+
+def test_untrusted_body_with_both_flags_skips_env_lookup() -> None:
+	_assert_untrusted_body_has_no_env_lookup(UNTRUSTED_FLAG_VARS)
+
+
+def test_untrusted_body_with_skip_syntax_flag_only_skips_env_lookup() -> None:
+	_assert_untrusted_body_has_no_env_lookup(("RENDER_PROMPT_SKIP_SYNTAX_VALIDATION",))
+
+
+def test_untrusted_body_with_already_assembled_flag_only_skips_env_lookup() -> None:
+	_assert_untrusted_body_has_no_env_lookup(("RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED",))
+
+
+def test_untrusted_body_still_renders_model_family_overlay() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		body = tmp_path / "reviewer_prompt_body.txt"
+		body.write_text("body {{GH_TOKEN}}\n{{MODEL_FAMILY_OVERLAY}}\n", encoding="utf-8")
+		env = _guard_base_env()
+		env["MODEL_FAMILY_OVERLAY"] = "overlay-text-9399"
+		for flag_name in UNTRUSTED_FLAG_VARS:
+			env[flag_name] = "1"
+		result = _run_render_sh(body, env, tmp_path)
+		assert result.returncode == 0, result.stderr
+		assert "overlay-text-9399" in result.stdout, result.stdout
+		assert SECRET_SENTINEL not in result.stdout, result.stdout
+
+
+def test_trusted_render_denies_secret_like_names_and_keeps_plain_names() -> None:
+	secret_values = {
+		"GH_TOKEN": SECRET_SENTINEL,
+		"OPENROUTER_API_KEY": "sentinel-openrouter-9399",
+		"TG_BOT_SECRET": "sentinel-tg-9399",
+		"GH_PAT": "sentinel-pat-9399",
+		"gh_token": "sentinel-lower-9399",
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		template = tmp_path / "secret-guard-probe.txt"
+		template.write_text(
+			"".join(f"value {{{{{name}}}}}\n" for name in secret_values)
+			+ "learnings {{REPO_LEARNINGS}}\n",
+			encoding="utf-8",
+		)
+		env = _guard_base_env()
+		env.update(secret_values)
+		env["REPO_LEARNINGS"] = "learnings-9399"
+		result = _run_render_sh(template, env, tmp_path)
+		assert result.returncode == 0, result.stderr
+		for name, value in secret_values.items():
+			assert value not in result.stdout, (name, result.stdout)
+			assert value not in result.stderr, (name, result.stderr)
+			assert f"{{{{{name}}}}}" in result.stdout, (name, result.stdout)
+			assert name in result.stderr, (name, result.stderr)
+		assert "learnings learnings-9399" in result.stdout, result.stdout
+
+
+def test_trusted_prelude_assembly_path_keeps_env_lookup() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		templates_dir = tmp_path / "prompts" / "_templates"
+		templates_dir.mkdir(parents=True)
+		template = templates_dir / "secret-guard-prelude-probe.txt"
+		template.write_text("plain {{PLAIN_VAR}}\nsecret {{GH_TOKEN}}\n", encoding="utf-8")
+		env = _guard_base_env()
+		env["PROMPT_PRELUDE_REFACTOR_ENABLED"] = "true"
+		env["PLAIN_VAR"] = "plain-value-9399"
+		result = _run_render_sh(template, env, tmp_path)
+		assert result.returncode == 0, result.stderr
+		assert "plain plain-value-9399" in result.stdout, result.stdout
+		assert SECRET_SENTINEL not in result.stdout, result.stdout
+		assert "{{GH_TOKEN}}" in result.stdout, result.stdout
+
+
+def test_render_prompt_py_ignores_secret_like_var() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		template = tmp_path / "secret-guard-py-probe.txt"
+		template.write_text("secret {{GH_TOKEN}}\nkey {{OPENROUTER_API_KEY}}\nplain {{PLAIN_VAR}}\n", encoding="utf-8")
+		result = subprocess.run(
+			[
+				sys.executable,
+				str(RENDER_PROMPT_PY),
+				str(template),
+				"--var",
+				f"GH_TOKEN={SECRET_SENTINEL}",
+				"--var",
+				"OPENROUTER_API_KEY=sentinel-openrouter-9399",
+				"--var",
+				"PLAIN_VAR=plain-value-9399",
+			],
+			cwd=tmp_path,
+			env=_guard_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert result.returncode == 0, result.stderr
+		assert SECRET_SENTINEL not in result.stdout, result.stdout
+		assert SECRET_SENTINEL not in result.stderr, result.stderr
+		assert "sentinel-openrouter-9399" not in result.stdout, result.stdout
+		assert "sentinel-openrouter-9399" not in result.stderr, result.stderr
+		assert "secret {{GH_TOKEN}}" in result.stdout, result.stdout
+		assert "plain plain-value-9399" in result.stdout, result.stdout
+		assert "GH_TOKEN" in result.stderr, result.stderr
+
+
+def _assert_unset_precedes_render_invocations(script_path: Path, expected_invocations: int) -> None:
+	lines = script_path.read_text(encoding="utf-8").splitlines()
+	invocation_indexes = [
+		index
+		for index, line in enumerate(lines)
+		if "render_prompt.sh\"" in line
+		and "RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1" in line
+		and not line.lstrip().startswith("#")
+	]
+	assert len(invocation_indexes) == expected_invocations, (script_path, invocation_indexes)
+	for invocation_index in invocation_indexes:
+		found_unset = False
+		for index in range(invocation_index - 1, -1, -1):
+			stripped = lines[index].strip()
+			if stripped == "unset GH_TOKEN GITHUB_TOKEN":
+				found_unset = True
+			if stripped == "(" or re.search(r"\bif ! \($", stripped):
+				break
+		assert found_unset, f"{script_path.name}:{invocation_index + 1} render subshell keeps GH_TOKEN"
+
+
+def test_reviewer_render_subshells_unset_github_credentials() -> None:
+	_assert_unset_precedes_render_invocations(REVIEW_RUN_REVIEWERS_SH, 2)
+
+
+def test_editor_render_subshell_unsets_github_credentials() -> None:
+	_assert_unset_precedes_render_invocations(REVIEW_APPLY_FIXES_SH, 1)
+
+
 def main() -> int:
 	test_output_contract_reference_includes_status_update_cadence()
 	test_render_prompt_sh_renders_implement_contract_defaults_and_env_values()
@@ -1462,6 +1663,15 @@ def main() -> int:
 	test_render_prompt_py_identity_recall_reports_canonical_prompt_missing_details()
 	test_render_prompt_py_identity_recall_reports_render_failure_details()
 	test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt()
+	test_untrusted_body_with_both_flags_skips_env_lookup()
+	test_untrusted_body_with_skip_syntax_flag_only_skips_env_lookup()
+	test_untrusted_body_with_already_assembled_flag_only_skips_env_lookup()
+	test_untrusted_body_still_renders_model_family_overlay()
+	test_trusted_render_denies_secret_like_names_and_keeps_plain_names()
+	test_trusted_prelude_assembly_path_keeps_env_lookup()
+	test_render_prompt_py_ignores_secret_like_var()
+	test_reviewer_render_subshells_unset_github_credentials()
+	test_editor_render_subshell_unsets_github_credentials()
 	print("OK: render prompt foundation assertions hold")
 	return 0
 

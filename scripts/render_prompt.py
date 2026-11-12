@@ -41,6 +41,36 @@ FALSEY_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on", "y"})
 IDENTITY_RECALL_TEMPLATE_FILE_NAME = "_identity_recall.txt"
 ROLE_GOAL_LINE_RE = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$")
+# Security finding #9399: placeholder values for these names (and the
+# suffix/prefix/substring rules in _is_secret_like_variable_name) are never
+# rendered, so a `{{GH_TOKEN}}` token embedded in an untrusted PR diff cannot
+# pull a credential into the prompt even when an older staged render_prompt.sh
+# still passes it as --var. Keep in sync with
+# render_prompt_env_name_is_secret_like in scripts/render_prompt.sh.
+SECRET_LIKE_VARIABLE_EXACT_NAMES = frozenset({
+	"GH_TOKEN",
+	"GITHUB_TOKEN",
+	"GH_PAT",
+	"FUNTOKEN_IO_CF",
+	"FT_GAMES_CF",
+	"ACTIONS_RUNTIME_URL",
+	"ACTIONS_RESULTS_URL",
+	"ACTIONS_CACHE_URL",
+	"ACTIONS_ID_TOKEN_REQUEST_URL",
+})
+SECRET_LIKE_VARIABLE_SUFFIXES = (
+	"_TOKEN",
+	"_KEY",
+	"_SECRET",
+	"_SECRETS",
+	"_PAT",
+	"_PASSWORD",
+	"_PASSWD",
+	"_CREDENTIAL",
+	"_CREDENTIALS",
+)
+SECRET_LIKE_VARIABLE_PREFIXES = ("SECRET_", "SECRETS_", "ACTIONS_ID_TOKEN", "ACTIONS_RUNTIME")
+SECRET_LIKE_VARIABLE_SUBSTRINGS = ("SECRET", "PASSWORD")
 
 
 class RenderPromptError(Exception):
@@ -334,6 +364,34 @@ def resolve_mode_name(prompt_path: Path, legacy_mode_name: str | None) -> str:
 	if not mode_name:
 		raise CliValueError(f"Unable to resolve mode name for prompt '{prompt_path}'")
 	return mode_name
+
+
+def _is_secret_like_variable_name(name: str) -> bool:
+	normalized_name = name.strip().upper()
+	if not normalized_name:
+		return False
+	if normalized_name in SECRET_LIKE_VARIABLE_EXACT_NAMES:
+		return True
+	if normalized_name.endswith(SECRET_LIKE_VARIABLE_SUFFIXES):
+		return True
+	if normalized_name.startswith(SECRET_LIKE_VARIABLE_PREFIXES):
+		return True
+	return any(fragment in normalized_name for fragment in SECRET_LIKE_VARIABLE_SUBSTRINGS)
+
+
+def _drop_secret_like_variables(values: dict[str, str]) -> dict[str, str]:
+	kept_values: dict[str, str] = {}
+	for variable_name, variable_value in values.items():
+		if _is_secret_like_variable_name(variable_name):
+			# Name only, never the value (security finding #9399).
+			print(
+				f"WARNING: render_prompt.py: ignoring secret-like variable {variable_name}; "
+				"its placeholder stays literal",
+				file=sys.stderr,
+			)
+			continue
+		kept_values[variable_name] = variable_value
+	return kept_values
 
 
 def parse_cli_variables(entries: list[str]) -> dict[str, str]:
@@ -1384,6 +1442,7 @@ def main(argv: list[str] | None = None) -> int:
 			sys.stdout.write(prompt_text)
 			return 0
 		provided_values = parse_cli_variables(args.variables)
+		provided_values = _drop_secret_like_variables(provided_values)
 		legacy_env_values = collect_legacy_env_values()
 		contract_path = discover_contract_path(prompt_path, mode_name)
 		if contract_path is not None:

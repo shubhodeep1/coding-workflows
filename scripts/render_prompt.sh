@@ -320,12 +320,68 @@ if ! _render_placeholder_names="$(collect_prompt_placeholders "${PLACEHOLDER_SOU
 	exit 1
 fi
 
-while IFS= read -r placeholder_name; do
-	[ -n "${placeholder_name}" ] || continue
-	if [ "${!placeholder_name+x}" = "x" ]; then
-		append_render_var "${placeholder_name}" "${!placeholder_name}"
-	fi
-done <<< "${_render_placeholder_names}"
+# Security finding #9399 (render-prompt-env-indirection-secret-leak): the loop
+# below resolves every {{NAME}} token in the prompt from the environment via
+# bash indirection. Reviewer/editor bodies embed raw PR diff and comment text,
+# so a PR author could add `{{GH_TOKEN}}` and get the PAT rendered into the
+# prompt (and into python's argv). Two guards:
+#  1. Untrusted bodies -- marked by the caller with
+#     RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED or RENDER_PROMPT_SKIP_SYNTAX_VALIDATION
+#     -- get no environment lookup at all. Only the four built-ins passed above
+#     (and REFERENCE_* files hydrated by render_prompt.py) are substituted; any
+#     other token stays literal. The decision uses the caller's env vars only,
+#     never INPUT_ALREADY_ASSEMBLED_FLAG_ADDED, because the trusted
+#     PROMPT_PRELUDE_REFACTOR_ENABLED assembly path sets that flag too.
+#  2. Trusted templates keep the lookup (prompts rely on undeclared names such
+#     as REPO_LEARNINGS), but secret-like names are never resolved. Warnings
+#     print the name only, never the value.
+render_prompt_env_name_is_secret_like()
+{
+	local candidate_name="${1^^}"
+
+	case "${candidate_name}" in
+		GH_TOKEN|GITHUB_TOKEN|GH_PAT|FUNTOKEN_IO_CF|FT_GAMES_CF|ACTIONS_RUNTIME_URL|ACTIONS_RESULTS_URL|ACTIONS_CACHE_URL|ACTIONS_ID_TOKEN_REQUEST_URL)
+			return 0
+			;;
+		*_TOKEN|*_KEY|*_SECRET|*_SECRETS|*_PAT|*_PASSWORD|*_PASSWD|*_CREDENTIAL|*_CREDENTIALS)
+			return 0
+			;;
+		SECRET_*|SECRETS_*|ACTIONS_ID_TOKEN*|ACTIONS_RUNTIME*)
+			return 0
+			;;
+		*SECRET*|*PASSWORD*)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+PLACEHOLDER_ENV_LOOKUP_ENABLED=true
+case "${RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED:-}" in
+	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		PLACEHOLDER_ENV_LOOKUP_ENABLED=false
+		;;
+esac
+case "${RENDER_PROMPT_SKIP_SYNTAX_VALIDATION:-}" in
+	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		PLACEHOLDER_ENV_LOOKUP_ENABLED=false
+		;;
+esac
+
+if [ "${PLACEHOLDER_ENV_LOOKUP_ENABLED}" = "true" ]; then
+	while IFS= read -r placeholder_name; do
+		[ -n "${placeholder_name}" ] || continue
+		if render_prompt_env_name_is_secret_like "${placeholder_name}"; then
+			if [ "${!placeholder_name+x}" = "x" ]; then
+				echo "WARNING: render_prompt.sh: not resolving secret-like placeholder ${placeholder_name} from the environment" >&2
+			fi
+			continue
+		fi
+		if [ "${!placeholder_name+x}" = "x" ]; then
+			append_render_var "${placeholder_name}" "${!placeholder_name}"
+		fi
+	done <<< "${_render_placeholder_names}"
+fi
 
 if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
 	"${RENDER_ARGS[@]}"
