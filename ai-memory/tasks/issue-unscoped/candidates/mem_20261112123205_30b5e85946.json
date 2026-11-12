@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, the \"Validation self-test unit tests\" step in the static-checks job (relocation to the job with the most headroom)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The step remains in static-checks (.github/workflows/ci.yml lines 546-547), the body was rewritten into four concurrent lanes rather than moved unchanged, and the workflow comments at lines 520-525 say \"Overlapped in place, not moved\". Severity disagreement: sonnet-5_5 rated it NIT with confidence 2 and called it a documented deviation chosen by the approved plan, while gemini and luna rated it MAJOR with confidence 5.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, the \"Validation self-test unit tests\" step relocated out of `static-checks`.\nEvidence of absence: The step stays in `static-checks`, and the workflow comment says \"Overlapped in place, not moved\". The body is rewritten into four concurrent lanes instead of being moved unchanged. The approved plan chose this deliberately. This is a documented deviation from the issue's wording, not a missing deliverable. The speedup is an estimate.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n\nHARDENING_SUGGESTIONS:\n- file: `.github/workflows/ci.yml`\n- location: fixed `/tmp/validation_selftest_step_*` paths\n- issue: A fixed /tmp prefix could collide on a non-ephemeral self-hosted runner. The step runs on ubuntu-latest, where it cannot.\n- suggested minimal fix: none needed now. If the runner type changes, use `mktemp -d` under RUNNER_TEMP.\n- estimated lines changed: 0\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\nExpected change site: .github/workflows/ci.yml; the \"Validation self-test unit tests\" step should be relocated to the job with the most headroom.\nEvidence of absence: The step remains in the static-checks job. The PR implements an in-place four-lane overlap rather than moving the step.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nHARDENING_SUGGESTIONS:\n- File: .github/workflows/ci.yml\n- Location: Validation self-test unit tests step\n- Issue: The fixed path `/tmp/validation_selftest_step_*` for temporary files could conflict with concurrent processes or leave stale artifacts.\n- Suggested minimal fix: Use `mktemp -d` under `${RUNNER_TEMP}`.\n- Estimated lines changed: 5-10\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nNote: the reviewer reported no task gap. It recorded that the issue asks for a move, but the approved plan on #9362 chose an in-place overlap, which the diff follows. No hardening suggestions.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, the static-checks job's \"Validation self-test unit tests\" step and its destination CI job.\nEvidence of absence: The step remains in static-checks at .github/workflows/ci.yml lines 546-547. Its sequential commands were replaced with four concurrent lanes rather than moved unchanged. Comments at lines 520-525 say \"Overlapped in place, not moved.\"\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nNote: the reviewer reported no task gap. It re-adjudicated the \"move\" requirement as not a gap, because the approved plan chose the in-place four-lane overlap and the hard constraints are met (ci.yml:53-61, 517-703).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d6af0f5d4d60ed085ca2b62e96625f1af72901ada638fe966948a46161258711",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9368,
+    "run_id": "43194026879",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43194026879",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112123205_30b5e85946",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9368,
+    "run_id": "43194026879"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T12:32:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
