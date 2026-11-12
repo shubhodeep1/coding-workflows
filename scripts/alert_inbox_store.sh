@@ -93,7 +93,7 @@ verdict="$(jq -r \
 	else $p.record as $r
 	| if (str_re($r.id; "\\A[0-9a-f]{32}\\z") | not) then "id"
 	elif (str_re($r.captured_at; "\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z\\z") | not) then "captured_at"
-	elif ([$r.level] | inside(["WARNING","ERROR","CRITICAL"]) | not) or ($r.level | type) != "string" then "level"
+	elif ($r.level | type) != "string" or (($r.level == "WARNING" or $r.level == "ERROR" or $r.level == "CRITICAL") | not) then "level"
 	elif (str_re($r.source_repo; "\\A[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}\\z") | not) then "source_repo"
 	elif ($r.source_repo != $self_repo and (any($consumers[]; . == $r.source_repo) | not)) then "source_repo_not_allowed"
 	elif (capped($r.workflow; 200) | not) then "workflow"
@@ -117,12 +117,18 @@ source_repo="$(jq -r '.client_payload.record.source_repo' "${STORE_EVENT}")"
 run_id="$(jq -r '.client_payload.record.run_id' "${STORE_EVENT}")"
 
 # captured_at must be a real UTC instant that round-trips, within 24 h ago .. 5 min ahead.
-epoch_ms="$(date -u -d "${captured_at}" +%s%3N 2>/dev/null)" || _alert_inbox_reject captured_at
-roundtrip="$(date -u -d "${captured_at}" +%Y-%m-%dT%H:%M:%S.%3NZ 2>/dev/null)" || _alert_inbox_reject captured_at
-if [ "${roundtrip}" != "${captured_at}" ] || ! [[ "${epoch_ms}" =~ ^[0-9]{1,16}$ ]]; then
+# `date` only ever sees whole seconds: the fractional part is parsed differently
+# across date implementations (CI run 43255940833 rejected fresh timestamps on
+# ubuntu-26.04), so milliseconds are taken from the regex-checked string itself.
+captured_secs="$(date -u -d "${captured_at:0:19}Z" +%s 2>/dev/null)" || _alert_inbox_reject captured_at
+roundtrip="$(date -u -d "${captured_at:0:19}Z" +%Y-%m-%dT%H:%M:%S 2>/dev/null)" || _alert_inbox_reject captured_at
+if [ "${roundtrip}" != "${captured_at:0:19}" ] || ! [[ "${captured_secs}" =~ ^[0-9]{1,13}$ ]]; then
 	_alert_inbox_reject captured_at
 fi
-now_ms="$(date -u +%s%3N)"
+epoch_ms=$((10#${captured_secs} * 1000 + 10#${captured_at:20:3}))
+now_secs="$(date -u +%s)"
+[[ "${now_secs}" =~ ^[0-9]{1,13}$ ]] || _alert_inbox_fail clock
+now_ms=$((now_secs * 1000))
 if [ "${epoch_ms}" -lt $((now_ms - 86400000)) ]; then
 	_alert_inbox_reject captured_at_stale
 fi
@@ -246,7 +252,9 @@ while true; do
 				if ! _alert_inbox_ensure_branch; then
 					_alert_inbox_fail "branch_bootstrap_http_${HTTP_CODE}"
 				fi
-				if [ "${BRANCH_CREATED}" -eq 1 ]; then
+				# A 404 PUT with the branch present now means a concurrent intake
+				# created it in between (per-run concurrency groups): retry once.
+				if [ "${BRANCH_CREATED}" -eq 1 ] || [ "${put_code}" = "404" ]; then
 					continue
 				fi
 			fi

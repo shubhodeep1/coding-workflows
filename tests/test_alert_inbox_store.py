@@ -135,6 +135,9 @@ REJECTIONS = [
 	(_payload(_record(captured_at="2026-13-45T10:00:00.000Z")), "captured_at"),
 	(_payload(_record(level="DEBUG")), "level"),
 	(_payload(_record(level=3)), "level"),
+	(_payload(_record(level="")), "level"),
+	(_payload(_record(level="ERR")), "level"),
+	(_payload(_record(level="WARN")), "level"),
 	(_payload(_record(source_repo="a/b/c", run_url="https://github.com/a/b/c/actions/runs/777")), "source_repo"),
 	(_payload(_record(source_repo="evil/repo")), "source_repo_not_allowed"),
 	(_payload(_record(source_repo="../x")), "source_repo_not_allowed"),
@@ -251,6 +254,28 @@ def test_existing_path_is_a_duplicate(tmp_path: Path) -> None:
 	assert "ALERT_INBOX store outcome=duplicate reason=exists" in result.stderr
 	assert _seq(calls) == ["PUT contents", "GET contents_get"]
 	assert calls[1]["url"].endswith("?ref=ai/alert-inbox")
+
+
+def test_leading_zero_milliseconds_are_decimal(tmp_path: Path) -> None:
+	ts = _iso()[:20] + "089Z"
+	result, calls = _store(tmp_path, _payload(_record(captured_at=ts)))
+	assert result.returncode == 0, result.stderr
+	epoch_ms = int(datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()) * 1000 + 89
+	assert f"/{epoch_ms}-shubhodeep1-coding-workflows-777-01234567.json" in calls[0]["url"]
+
+
+def test_404_with_concurrently_created_branch_retries_once(tmp_path: Path) -> None:
+	result, calls = _store(tmp_path, _payload(), {"contents": [[404, '{"message":"Branch not found"}']]})
+	assert result.returncode == 0, result.stderr
+	assert "ALERT_INBOX store outcome=stored reason=ok" in result.stderr
+	assert _seq(calls) == ["PUT contents", "GET contents_get", "GET ref_get", "PUT contents"]
+
+
+def test_second_404_after_branch_check_fails(tmp_path: Path) -> None:
+	result, calls = _store(tmp_path, _payload(), {"contents": [[404, "{}"], [404, "{}"]]})
+	assert result.returncode == 1
+	assert "ALERT_INBOX store outcome=failed reason=http_404" in result.stderr
+	assert _seq(calls) == ["PUT contents", "GET contents_get", "GET ref_get", "PUT contents", "GET contents_get"]
 
 
 def test_unexplained_422_with_existing_branch_fails(tmp_path: Path) -> None:
