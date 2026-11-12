@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-12T02:24:34Z",
+  "issue_number": 9179,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/ci.yml:543, 3479; cited_path=.github/workflows/ci.yml; files_touched=changelog.d/unblock-9112-r1-review-sandbox-chatgpt-pool-config.md, scripts/review_apply_fixes.sh, scripts/review_untrusted_workspace.py, tests/test_review_autofix_review_pipeline_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 9180,
+  "record_id": "lesson_20261112022434_80d0b9f018",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    "changelog.d/unblock-9112-r1-review-sandbox-chatgpt-pool-config.md",
+    "scripts/review_apply_fixes.sh",
+    "scripts/review_untrusted_workspace.py",
+    "tests/test_review_autofix_review_pipeline_contract.py"
+  ]
+}
