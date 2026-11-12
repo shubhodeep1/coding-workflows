@@ -2754,6 +2754,25 @@ else
   SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE="false"
 fi
 
+# Automatic resume of a project parked by final-merge exhaustion (issue
+# #8984 / #9320).  After MAX_FINAL_MERGE_ATTEMPTS failed merges the project
+# went to status=failed + ai:blocked and every later tick logged "Project
+# already failed, skipping." even once the blocker cleared:
+# shubhodeep1/fun-token-multi-chain#579 parked on 2026-10-26 when final PR
+# #596 failed the workflow-integrity check, #596 went green and clean on
+# 2026-10-30 after the v1.41.0 sync, and a person merged it by hand on
+# 2026-11-02.  With the switch on, a project whose state records
+# `final_merge_failure_kind=final_merge_exhausted` is retried once per final
+# PR head SHA (`final_merge_auto_resume_head_shas`) when that PR is open,
+# mergeable/clean, its required checks are green, its head is the validated
+# SHA, and the integration branch is still ahead of the default branch.
+# `false` restores the park-until-a-human behaviour.
+if is_truthy "${FINAL_MERGE_AUTO_RESUME_ENABLED:-true}"; then
+  FINAL_MERGE_AUTO_RESUME_ENABLED="true"
+else
+  FINAL_MERGE_AUTO_RESUME_ENABLED="false"
+fi
+
 # One-shot recovery of projects whose validation run failed with
 # raw_status=harness_error after the poller dispatched the integration
 # branch's own validation wrapper (issue #7138). Pollers before that fix sent
@@ -11070,6 +11089,187 @@ project_is_validation_origin_terminal_failure() {
 		|| has_label "${tracking_labels}" "ai:harness-broken"
 }
 
+# FINAL_MERGE_AUTO_RESUME (issue #8984): one-line skip log for
+# maybe_auto_resume_final_merge_exhaustion.
+_final_merge_auto_resume_skip() {
+	local skip_reason="$1"
+	local skip_detail="${2:-}"
+	echo "FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} outcome=skip reason=${skip_reason}${skip_detail:+ detail=${skip_detail}}"
+	return 1
+}
+
+# maybe_auto_resume_final_merge_exhaustion — retry the final merge of a
+# project parked by final-merge exhaustion once its blocker has cleared
+# (issue #8984; incident shubhodeep1/fun-token-multi-chain#579 / #596).
+#
+# Runs from the terminal-state block for status=failed only.  Returns 0 only
+# when the project was moved back to status=validating with ai:validated and
+# a fresh final-merge budget; the caller then retries through
+# mark_validation_complete, so every existing gate (security pass, history,
+# readiness, required checks, head-bound merge, comprehensive promotion)
+# still applies.  Every other outcome prints exactly one skip line and
+# returns 1 with the state untouched (fail closed).  One retry per final PR
+# head SHA, recorded in `final_merge_auto_resume_head_shas`.
+#
+# §14 API audit: the terminal block fetches no PR or check-run data for
+# failed projects (only compute_cycle_integration_ahead_by, and only for
+# ai:force-merge), so nothing could be reused.  The checks below run only
+# for projects carrying the exhaustion marker; the first four make no API
+# call and a head already retried stops after the single PR read.  Calls:
+# 1 PR read, the required-checks gate (branch protection + check-runs), and
+# the default-branch + compare reads of compute_cycle_integration_ahead_by.
+maybe_auto_resume_final_merge_exhaustion() {
+	local fmar_failure_kind=""
+	local fmar_validated_sha=""
+	local fmar_final_pr=""
+	local fmar_pr_json=""
+	local fmar_pr_number=""
+	local fmar_pr_state=""
+	local fmar_pr_merged=""
+	local fmar_pr_draft=""
+	local fmar_head_sha=""
+	local fmar_base_ref=""
+	local fmar_mergeable=""
+	local fmar_mergeable_state=""
+	local fmar_checks_reason=""
+
+	if [ "${FINAL_MERGE_AUTO_RESUME_ENABLED:-true}" != "true" ]; then
+		_final_merge_auto_resume_skip "disabled"
+		return 1
+	fi
+	if ! fmar_failure_kind="$(jq -r '.final_merge_failure_kind // ""' "${STATE_FILE}" 2>/dev/null)"; then
+		fmar_failure_kind=""
+	fi
+	if [ "${fmar_failure_kind}" != "final_merge_exhausted" ]; then
+		_final_merge_auto_resume_skip "not_final_merge_exhausted"
+		return 1
+	fi
+	fmar_validated_sha="$(jq -r '.validation_last_passed_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+	if ! [[ "${fmar_validated_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		_final_merge_auto_resume_skip "validation_not_recorded"
+		return 1
+	fi
+	fmar_final_pr="$(jq -r '.final_merge_pr // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+	if ! [[ "${fmar_final_pr}" =~ ^[0-9]+$ ]]; then
+		_final_merge_auto_resume_skip "lookup_failed" "no_final_pr"
+		return 1
+	fi
+
+	fmar_pr_json="$(_fetch_pr_json "${fmar_final_pr}")"
+	if ! printf '%s' "${fmar_pr_json}" | jq -e 'type == "object" and (.number | type == "number") and (.state | type == "string")' >/dev/null 2>&1; then
+		_final_merge_auto_resume_skip "lookup_failed" "pr_read"
+		return 1
+	fi
+	fmar_pr_number="$(printf '%s' "${fmar_pr_json}" | jq -r '.number' 2>/dev/null || echo "")"
+	fmar_pr_state="$(printf '%s' "${fmar_pr_json}" | jq -r '.state' 2>/dev/null || echo "")"
+	fmar_pr_merged="$(printf '%s' "${fmar_pr_json}" | jq -r '(.merged == true) or ((.merged_at // null) != null)' 2>/dev/null || echo "")"
+	fmar_pr_draft="$(printf '%s' "${fmar_pr_json}" | jq -r '.draft == true' 2>/dev/null || echo "")"
+	if [ "${fmar_pr_number}" != "${fmar_final_pr}" ]; then
+		_final_merge_auto_resume_skip "lookup_failed" "pr_read"
+		return 1
+	fi
+	if [ "${fmar_pr_merged}" = "true" ]; then
+		_final_merge_auto_resume_skip "pr_not_open" "merged"
+		return 1
+	fi
+	if [ "${fmar_pr_state}" != "open" ]; then
+		_final_merge_auto_resume_skip "pr_not_open" "closed"
+		return 1
+	fi
+	if [ "${fmar_pr_draft}" != "false" ]; then
+		_final_merge_auto_resume_skip "pr_not_open" "draft"
+		return 1
+	fi
+	fmar_head_sha="$(printf '%s' "${fmar_pr_json}" | jq -r '.head.sha // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+	if ! [[ "${fmar_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		_final_merge_auto_resume_skip "lookup_failed" "head_sha"
+		return 1
+	fi
+	if jq -e --arg h "${fmar_head_sha}" '(.final_merge_auto_resume_head_shas // []) | (type == "array") and (index($h) != null)' "${STATE_FILE}" >/dev/null 2>&1; then
+		_final_merge_auto_resume_skip "already_resumed_on_head"
+		return 1
+	fi
+	# A head that moved after validation passed was never validated; never
+	# merge it on the strength of an older pass.
+	if [ "${fmar_head_sha}" != "${fmar_validated_sha}" ]; then
+		_final_merge_auto_resume_skip "validation_not_recorded" "head_moved"
+		return 1
+	fi
+	fmar_mergeable="$(printf '%s' "${fmar_pr_json}" | jq -r 'if .mergeable == null then "unknown" else (.mergeable | tostring) end' 2>/dev/null || echo "unknown")"
+	fmar_mergeable_state="$(printf '%s' "${fmar_pr_json}" | jq -r '.mergeable_state // ""' 2>/dev/null || echo "")"
+	if [ "${fmar_mergeable}" = "unknown" ]; then
+		_final_merge_auto_resume_skip "not_mergeable" "unknown"
+		return 1
+	fi
+	if [ "${fmar_mergeable}" != "true" ] || [ "${fmar_mergeable_state}" != "clean" ]; then
+		_final_merge_auto_resume_skip "not_mergeable" "${fmar_mergeable_state:-unknown}"
+		return 1
+	fi
+	fmar_base_ref="$(printf '%s' "${fmar_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+	if [ -z "${fmar_base_ref}" ]; then
+		_final_merge_auto_resume_skip "lookup_failed" "base_ref"
+		return 1
+	fi
+	if ! declare -F _pr_checks_completed >/dev/null 2>&1; then
+		_final_merge_auto_resume_skip "lookup_failed" "checks"
+		return 1
+	fi
+	# Three arguments: only the base branch's required checks count.
+	if ! _pr_checks_completed "${fmar_final_pr}" "${fmar_head_sha}" "${fmar_base_ref}"; then
+		fmar_checks_reason="${PR_CHECKS_LAST_REASON:-query_failed}"
+		case "${fmar_checks_reason}" in
+			query_failed|unresolved_head_sha)
+				_final_merge_auto_resume_skip "lookup_failed" "checks"
+				;;
+			*)
+				_final_merge_auto_resume_skip "checks_not_green" "${fmar_checks_reason}"
+				;;
+		esac
+		return 1
+	fi
+	compute_cycle_integration_ahead_by
+	if ! [[ "${CWS_AHEAD_BY:-}" =~ ^[0-9]+$ ]]; then
+		_final_merge_auto_resume_skip "lookup_failed" "compare"
+		return 1
+	fi
+	if [ "${CWS_AHEAD_BY}" -eq 0 ]; then
+		_final_merge_auto_resume_skip "not_ahead"
+		return 1
+	fi
+
+	# Every check passed.  The merge gate in finalize_integration_merge_if_needed
+	# needs ai:validated; that phase label also drops ai:blocked and
+	# ai:needs-human (same issue_phase group).
+	if ! set_tracking_phase_label "ai:validated"; then
+		_final_merge_auto_resume_skip "lookup_failed" "label_write"
+		return 1
+	fi
+	if ! { jq --arg h "${fmar_head_sha}" '
+		.status = "validating"
+		| .final_merge_status = "pending"
+		| .final_merge_attempt_count = 0
+		| .final_merge_failure_kind = null
+		| .final_merge_auto_resume_head_shas = (((((.final_merge_auto_resume_head_shas // []) | if type == "array" then . else [] end) | map(select(. != $h))) + [$h]) | .[-20:])
+	' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+		rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+		echo "::warning::FINAL_MERGE_AUTO_RESUME could not write state for project #${TRACKING_NUM}; restoring ai:blocked."
+		set_tracking_phase_label "ai:blocked" || true
+		_final_merge_auto_resume_skip "lookup_failed" "state_write"
+		return 1
+	fi
+	TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c 'map(select(. != "ai:blocked" and . != "ai:needs-human")) + ["ai:validated"] | unique' 2>/dev/null || echo '["ai:validated"]')"
+	echo "FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} outcome=resumed final_pr=${fmar_final_pr} head_sha=${fmar_head_sha}"
+	post_state_comment || true
+	post_tracking_comment "<!-- final-merge-auto-resume:${fmar_head_sha} -->
+## 🔁 Final integration merge retried automatically
+
+The final PR #${fmar_final_pr} is open, mergeable (\`clean\`), its required checks are green, and its head \`${fmar_head_sha}\` is the SHA that passed runtime validation, so the poller reset the final-merge budget and is retrying the merge through the normal validation-complete path.
+
+The poller retries automatically once per final PR head SHA. If this retry also fails, the project parks again until the PR's head changes or a person intervenes. Set \`FINAL_MERGE_AUTO_RESUME_ENABLED=false\` to keep exhausted projects parked." || true
+	tg_notify "Project #${TRACKING_NUM}: final merge retried automatically (final PR #${fmar_final_pr} green and clean at ${fmar_head_sha:0:7})." "DEBUG" || true
+	return 0
+}
+
 maybe_apply_force_merge_bypass() {
 	local final_pr="$1"
 	local integration_branch="$2"
@@ -17382,8 +17582,22 @@ mark_validation_complete() {
     # Budget exhausted — refuse to mark complete and escalate to a human.
     _final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
     _final_err="$(jq -r '.final_merge_error // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
-    jq '.status = "failed"
-        | .final_merge_status = "failed"' \
+    # Issue #8984: record why the project failed and the final PR head at
+    # that moment, so FINAL_MERGE_AUTO_RESUME can tell this park apart from
+    # every other `failed` state.  §14: reuse the PR JSON this function
+    # already fetched for the security pass; otherwise one PR read, once per
+    # exhaustion (never per tick).
+    local _exhausted_pr_json="${_security_final_pr_json}"
+    local _exhausted_head_sha=""
+    if [ -z "${_exhausted_pr_json}" ] && [[ "${_final_pr}" =~ ^[0-9]+$ ]]; then
+      _exhausted_pr_json="$(_fetch_pr_json "${_final_pr}")"
+    fi
+    _exhausted_head_sha="$(printf '%s' "${_exhausted_pr_json:-}" | jq -r 'if type == "object" then (.head.sha // "") else "" end' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+    [[ "${_exhausted_head_sha}" =~ ^[0-9a-f]{40}$ ]] || _exhausted_head_sha=""
+    jq --arg sha "${_exhausted_head_sha}" '.status = "failed"
+        | .final_merge_status = "failed"
+        | .final_merge_failure_kind = "final_merge_exhausted"
+        | .final_merge_failure_head_sha = $sha' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     _final_status="failed"
     post_state_comment || true
@@ -17417,6 +17631,7 @@ Manual intervention required: resolve the blocking condition on the final PR (me
      | .validation_failure_class = null
      | .validation_last_raw_status = "pass"
      | .final_merge_attempt_count = 0
+     | .final_merge_failure_kind = null
      | .final_merge_ineligible_blocked_at_sha = ""
      | .final_merge_ineligible_first_blocked_at_utc = 0
      | .final_merge_ineligible_alert_sent_for_sha = ""' \
@@ -29528,6 +29743,19 @@ The poller will resume processing on the next cycle."
           compute_cycle_integration_ahead_by
           maybe_apply_force_merge_bypass "${_terminal_force_merge_final_pr}" "${CWS_INTEGRATION_BRANCH}" "${CWS_AHEAD_BY}" || true
         fi
+      fi
+      # Issue #8984: a project parked by final-merge exhaustion gets one
+      # automatic retry per final PR head once its blocker has cleared.
+      if [ "${PROJECT_STATUS}" = "failed" ] && maybe_auto_resume_final_merge_exhaustion; then
+        PROJECT_STATUS="validating"
+        VALIDATION_CYCLE="$(jq -r '.validation_cycle // 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+        if ! [[ "${VALIDATION_CYCLE}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_CYCLE}" -lt 1 ]; then
+          VALIDATION_CYCLE="1"
+        fi
+        LAST_VAL_RAW_STATUS=''
+        LAST_VAL_CONCLUSION=''
+        mark_validation_complete "${VALIDATION_CYCLE}"
+        continue
       fi
     fi
     echo "Project already ${PROJECT_STATUS}, skipping."

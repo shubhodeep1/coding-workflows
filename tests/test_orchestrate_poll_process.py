@@ -31748,5 +31748,290 @@ def test_no_automation_reopens_closed_heal_issues() -> None:
 		assert not re.search(r"PATCH[^\n]*state=open|state=open[^\n]*PATCH", text), relative
 
 
+
+# ---------------------------------------------------------------------------
+# Issue #8984: FINAL_MERGE_AUTO_RESUME — a project parked by final-merge
+# exhaustion is retried once per final PR head once its blocker clears
+# (incident shubhodeep1/fun-token-multi-chain#579 / #596).
+# ---------------------------------------------------------------------------
+
+_FMAR_PR = 352
+_FMAR_BRANCH = "orchestrator/project-192"
+
+
+def _final_merge_exhausted_state(**extra: object) -> dict:
+	state = _base_state(status="failed")
+	state.update(
+		{
+			"integration_branch": _FMAR_BRANCH,
+			"validation_cycle": 2,
+			"final_merge_pr": _FMAR_PR,
+			"final_merge_status": "failed",
+			"final_merge_attempt_count": 3,
+			"final_merge_error": "required status check coding-workflows/workflow-integrity failed",
+			"final_merge_failure_kind": "final_merge_exhausted",
+			"final_merge_failure_head_sha": "",
+			"validation_last_passed_sha": "__integration_head__",
+		}
+	)
+	state.update(extra)
+	return state
+
+
+def _final_merge_open_pr(**extra: object) -> dict:
+	pr = {
+		"number": _FMAR_PR,
+		"state": "open",
+		"draft": False,
+		"baseRefName": "main",
+		"headRefName": _FMAR_BRANCH,
+		"headSha": "__integration_head__",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	pr.update(extra)
+	return pr
+
+
+def _fmar_history_payload() -> dict:
+	return _validation_history_payload(
+		integration_sha="__integration_head__",
+		entries=[_extfin_history_entry("passed")],
+	)
+
+
+def _run_final_merge_exhausted_tick(
+	state: dict,
+	*,
+	prs: list[dict] | None = None,
+	env_overrides: dict[str, str] | None = None,
+	tracking_labels: list[str] | None = None,
+	**poller_kwargs: object,
+) -> dict:
+	poller_kwargs.setdefault("compare_ahead_by", 1)
+	# validation passed and was recorded for the parked head.
+	poller_kwargs.setdefault("mock_validation_history_payload", _fmar_history_payload())
+	return _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:blocked"] if tracking_labels is None else tracking_labels,
+		issue_labels={10: ["ai:merged"]},
+		prs=[_final_merge_open_pr()] if prs is None else prs,
+		existing_branches=["main", _FMAR_BRANCH],
+		pull_ref_shas={_FMAR_PR: "__integration_head__"},
+		capture_telegram_calls=True,
+		env_overrides=env_overrides or {},
+		**poller_kwargs,
+	)
+
+
+def _fmar_log(result: dict) -> str:
+	return result["stdout"] + result["stderr"]
+
+
+def _fmar_marker_comments(result: dict) -> list[str]:
+	return [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if "<!-- final-merge-auto-resume:" in comment["body"]
+	]
+
+
+def test_final_merge_auto_resume_retries_green_mergeable_pr() -> None:
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state())
+	head = result["sandbox_sha_aliases"]["__integration_head__"]
+	log = _fmar_log(result)
+	assert f"FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=resumed final_pr={_FMAR_PR} head_sha={head}" in log
+	assert _FMAR_PR in result.get("merged_prs", [])
+	latest = result["latest_state"]
+	assert latest["status"] == "complete"
+	assert latest["final_merge_attempt_count"] == 0
+	assert latest["final_merge_failure_kind"] is None
+	assert latest["final_merge_auto_resume_head_shas"] == [head]
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:blocked" not in result["tracking_labels"]
+	assert "ai:needs-human" not in result["tracking_labels"]
+	markers = _fmar_marker_comments(result)
+	assert len(markers) == 1
+	assert markers[0].startswith(f"<!-- final-merge-auto-resume:{head} -->")
+	assert "FINAL_MERGE_AUTO_RESUME_ENABLED=false" in markers[0]
+	assert "Project already failed, skipping." not in log
+
+
+def test_final_merge_exhaustion_records_failure_kind_and_head_sha() -> None:
+	state = _base_state(status="validating")
+	state.update(
+		{
+			"integration_branch": _FMAR_BRANCH,
+			"validation_cycle": 2,
+			"final_merge_pr": _FMAR_PR,
+			"final_merge_status": "pending",
+			"final_merge_attempt_count": 0,
+			"validation_last_dispatch_ts": 0,
+			"validation_last_dispatch_cycle": 2,
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating", "ai:validated"],
+		validation_workflow_runs=[{
+			"status": "completed",
+			"conclusion": "success",
+			"created_at": "2026-01-01T00:00:00Z",
+			"display_title": "Internal: AI Validate [tracking:192]",
+		}],
+		issue_labels={10: ["ai:merged"]},
+		prs=[_final_merge_open_pr(merge_error="merge refused by branch protection")],
+		existing_branches=["main", _FMAR_BRANCH],
+		pull_ref_shas={_FMAR_PR: "__integration_head__"},
+		compare_ahead_by=1,
+		mock_validation_history_payload=_fmar_history_payload(),
+		capture_telegram_calls=True,
+		env_overrides={"MAX_FINAL_MERGE_ATTEMPTS": "1"},
+	)
+	head = result["sandbox_sha_aliases"]["__integration_head__"]
+	latest = result["latest_state"]
+	assert latest["status"] == "failed", _fmar_log(result)[-4000:]
+	assert latest["final_merge_status"] == "failed"
+	assert latest["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert latest["final_merge_failure_head_sha"] == head
+	assert "ai:blocked" in result["tracking_labels"]
+	assert _FMAR_PR not in result.get("merged_prs", [])
+
+
+def test_final_merge_auto_resume_once_per_head_sha() -> None:
+	first = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(),
+		prs=[_final_merge_open_pr(merge_error="merge refused by branch protection")],
+		env_overrides={"MAX_FINAL_MERGE_ATTEMPTS": "1"},
+	)
+	head = first["sandbox_sha_aliases"]["__integration_head__"]
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=resumed" in _fmar_log(first)
+	first_state = first["latest_state"]
+	# The retry was refused again: the project re-parks with the marker.
+	assert first_state["status"] == "failed"
+	assert first_state["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert first_state["final_merge_auto_resume_head_shas"] == [head]
+	assert "ai:blocked" in first["tracking_labels"]
+	assert _FMAR_PR not in first.get("merged_prs", [])
+
+	# Next tick, same final PR head (each harness run builds a fresh sandbox,
+	# so pin the head to the literal SHA the first tick recorded).
+	second_state = dict(first_state)
+	second_state["validation_last_passed_sha"] = head
+	second = _run_final_merge_exhausted_tick(second_state, prs=[_final_merge_open_pr(headSha=head)])
+	log = _fmar_log(second)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=already_resumed_on_head" in log
+	assert "outcome=resumed" not in log
+	assert "Project already failed, skipping." in log
+	assert _FMAR_PR not in second.get("merged_prs", [])
+	assert second["latest_state"]["status"] == "failed"
+	assert second["tracking_labels"] == ["ai:blocked"]
+	assert not _fmar_marker_comments(second)
+
+
+def _assert_final_merge_auto_resume_skipped(result: dict, expected: str) -> None:
+	log = _fmar_log(result)
+	assert f"FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip {expected}" in log, log[-4000:]
+	assert "outcome=resumed" not in log
+	assert "Project already failed, skipping." in log
+	assert _FMAR_PR not in result.get("merged_prs", [])
+	latest = result["latest_state"]
+	assert latest["status"] == "failed"
+	assert latest["final_merge_attempt_count"] == 3
+	assert latest["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert latest.get("final_merge_auto_resume_head_shas", []) == []
+	assert result["tracking_labels"] == ["ai:blocked"]
+	assert not _fmar_marker_comments(result)
+
+
+def test_final_merge_auto_resume_skip_reasons() -> None:
+	# Red required checks on the PR head (blocked_check_shas takes a literal SHA).
+	red_head = "d" * 40
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(validation_last_passed_sha=red_head),
+		prs=[_final_merge_open_pr(headSha=red_head)],
+		blocked_check_shas=[red_head],
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=checks_not_green detail=blocking")
+	# GitHub reports the PR not cleanly mergeable.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(), prs=[_final_merge_open_pr(mergeable=False, mergeable_state="dirty")]
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=not_mergeable detail=dirty")
+	# Mergeability still computing.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(), prs=[_final_merge_open_pr(mergeable=None, mergeable_state="unknown")]
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=not_mergeable detail=unknown")
+	# Closed PR.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), prs=[_final_merge_open_pr(state="closed")])
+	_assert_final_merge_auto_resume_skipped(result, "reason=pr_not_open detail=closed")
+	# Draft PR.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), prs=[_final_merge_open_pr(draft=True)])
+	_assert_final_merge_auto_resume_skipped(result, "reason=pr_not_open detail=draft")
+	# Failed PR lookup (the fake returns {} for an unknown PR).
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), prs=[])
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=pr_read")
+	# Failed compare lookup.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), compare_ahead_by_force_error=True)
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=compare")
+	# Integration branch no longer ahead of the default branch.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), compare_ahead_by=0)
+	_assert_final_merge_auto_resume_skipped(result, "reason=not_ahead")
+	# Head moved after validation passed.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(), prs=[_final_merge_open_pr(headSha="__advanced_integration_head__")]
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=validation_not_recorded detail=head_moved")
+	# No validation pass recorded.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(validation_last_passed_sha=""))
+	_assert_final_merge_auto_resume_skipped(result, "reason=validation_not_recorded")
+
+
+def test_final_merge_auto_resume_disabled_keeps_project_parked() -> None:
+	for value in ("false", "0", "off"):
+		result = _run_final_merge_exhausted_tick(
+			_final_merge_exhausted_state(), env_overrides={"FINAL_MERGE_AUTO_RESUME_ENABLED": value}
+		)
+		_assert_final_merge_auto_resume_skipped(result, "reason=disabled")
+		assert result.get("pr_get_calls", {}).get(str(_FMAR_PR), 0) == 0, value
+
+
+def test_final_merge_auto_resume_ignores_other_failed_projects() -> None:
+	# Parked before the marker existed, or failed for another reason: untouched.
+	legacy = _final_merge_exhausted_state()
+	legacy.pop("final_merge_failure_kind")
+	legacy.pop("final_merge_failure_head_sha")
+	result = _run_final_merge_exhausted_tick(legacy)
+	log = _fmar_log(result)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=not_final_merge_exhausted" in log
+	assert "outcome=resumed" not in log
+	assert "Project already failed, skipping." in log
+	assert _FMAR_PR not in result.get("merged_prs", [])
+	assert result["latest_state"]["status"] == "failed"
+	assert result["tracking_labels"] == ["ai:blocked"]
+	assert result.get("pr_get_calls", {}).get(str(_FMAR_PR), 0) == 0
+
+	# A validation-failed project never reaches the check at all.
+	validation_failed = _final_merge_exhausted_state(status="validation-failed")
+	result = _run_final_merge_exhausted_tick(validation_failed, tracking_labels=["ai:validation-failed"])
+	log = _fmar_log(result)
+	assert "FINAL_MERGE_AUTO_RESUME" not in log
+	assert "Project already validation-failed, skipping." in log
+	assert result["latest_state"]["status"] == "validation-failed"
+
+	# Security-pass-failed projects keep their own path (engine unchanged).
+	sp_failed = _security_pass_failed_state_for_auto_reset("b" * 40)
+	result = _run_failed_project_tick(sp_failed, {"ORCHESTRATE_ENGINE_SHA": "b" * 40})
+	log = _fmar_log(result)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=not_final_merge_exhausted" in log
+	assert "Project already failed, skipping." in log
+	assert result["latest_state"]["status"] == "failed"
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
