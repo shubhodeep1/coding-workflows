@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:806-813 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The `tests-hooks-and-orchestrator` check (step \"PR body auto-close lint unit tests\" running `tests/test_lint_pr_body_auto_close.py`) failed, and the dependent `lint` check failed with it. The available log ends without a pass or fail verdict, so the cause is unresolved.\n  WHY: The evidence does not tie the failure to a code site in this PR's diff, which does not touch the lint script or its test. Severity is NIT in both sources. Confidence differs: sonnet=2, luna=3. The sonnet reviewer did not cite ci.yml line numbers and recommended re-running CI.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- CI failure (`tests-hooks-and-orchestrator`, and `lint` which depends on it) | severity=low | confidence=2\n  PROBLEM: The `#2734` errors in the log come from fixtures inside `tests/test_lint_pr_body_auto_close.py`, not from this PR's text. The log ends with no pass or fail verdict for that step. The PR does not touch the lint script or its test, so the failure could not be mapped to a code site in the diff. Re-running CI is the next step.\n  WHY: No change in this PR can fix it.\n- All other categories (security, correctness, concurrency, error paths, performance, index contract, naming, trust boundary, task completeness): NONE. The `>= 0` guard is confirmed in both `_orch_poll_cycle_project_flush` and `_orch_poll_cycle_on_exit` in `scripts/orchestrate_poll_process.sh`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:806-813 | severity=low | confidence=3\n  PROBLEM: The `tests-hooks-and-orchestrator` check failed while the \"PR body auto-close lint unit tests\" step ran `tests/test_lint_pr_body_auto_close.py`. The available log ends after diagnostic output without a test-suite result, so the failure remains unresolved.\n  WHY: The failed check causes the dependent `lint` check to fail. The available evidence does not identify a failing assertion or connect the failure to the poller changes.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "d04495162ec1cbf6225639767be2f4bfd02056105d8e4f1e08f33572d67152ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9336,
+    "run_id": "43138992762",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43138992762",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112023837_5287b226ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9336,
+    "run_id": "43138992762"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T02:38:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
