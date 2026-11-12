@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-12T04:49:10Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/ci.yml:1; cited_path=.github/workflows/ci.yml; files_touched=agents.d/9200-heal-filter-log-traceback-frames.md, changelog.d/9200-heal-filter-log-traceback-frames.md, scripts/workflow_failure_heal.py, tests/test_workflow_failure_heal.py.",
+  "phase": "review_autofix",
+  "pr_number": 9219,
+  "record_id": "lesson_20261112044910_d9d13e20d2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    "agents.d/9200-heal-filter-log-traceback-frames.md",
+    "changelog.d/9200-heal-filter-log-traceback-frames.md",
+    "scripts/workflow_failure_heal.py",
+    "tests/test_workflow_failure_heal.py"
+  ]
+}
