@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The plan-step crash on pin 6955fe54 almost certainly comes from the Python 3.14 `render_prompt.py` help-string crash, and commit a638db8 already fixes that on this branch. (The issue text says the crash is specific to #5216, but occurrences on binance-blessings#539/#540 contradict that.) How should the remaining scope proceed?\nChoices:\nA. Treat the remaining scope as fixed by a638db8. The plan records that attribution in a `changelog.d/9266-*.md` note and makes no other code change. As a post-merge check, the next consumer AI Plan run on a release pin that includes a638db8 must pass \"Run Codex planning\". If it fails, the `RUN_PLAN_CODEX_FAILED` line names the real exception and a new heal generation picks it up. (RECOMMENDED)\nB. Do A, and also add a `tests/**` guard that runs `--help` on every argparse-based Python helper that `scripts/run_plan_codex.sh` calls. This catches the same `%` crash elsewhere. If a helper fails the guard, the plan reports it as deferred, because `scripts/` is out of scope.\nC. Don't attribute it to a638db8. Defer everything until a consumer run on a newer pin logs the `RUN_PLAN_CODEX_FAILED ... exception=` line, and plan no change in this issue.",
+  "fingerprint": "584552af5c5a4a2b3ccdb7632bcc4bbf61a7d4bde57b78d38c9cae85c8396a31",
+  "lineage": {
+    "issue_number": 9266,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43259672993",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43259672993",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261112172307_d4b2f807ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9266,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43259672993"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9266 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-12T17:23:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
