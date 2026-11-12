@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-12T04:51:23Z",
+  "issue_number": 9313,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=tests/test_ci_job_split_contract.py:1-300; cited_path=tests-hooks-and-orchestrator CI job (no changed file); files_touched=tests/test_ci_job_split_contract.py, tests/test_summarize_reviewer_consensus_sandbox_pin.py.",
+  "phase": "review_autofix",
+  "pr_number": 9338,
+  "record_id": "lesson_20261112045123_056bad30bf",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests-hooks-and-orchestrator CI job (no changed file)",
+    "tests/test_ci_job_split_contract.py",
+    "tests/test_summarize_reviewer_consensus_sandbox_pin.py"
+  ]
+}
