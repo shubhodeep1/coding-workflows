@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Clarification required\n\nClarification required before planning\n\nQ1 below was posted by the clarify run at 2026-11-12T17:22:47Z. No answer to it has arrived: the only `/answer` in the planning context is the persistence governor's replan note, posted at 17:14:07Z, before Q1 existed. The choice decides whether this issue ships a new test, a changelog note or nothing, so I am not choosing for it. Q1 is restated below with what I could check on the planning ref.\n\n**Planning ref:** `8bce18219ed91ce580f8a4b6a2b687057b58e74e`, branch `heads/stable`. The resolved checkout ref and integration branch are both `stable`, and `Integration branch mismatch: false`.\n\n**Facts checked on the planning ref:**\n- **The diagnostic from PR #9288 is already merged.** `RUN_PLAN_CODEX_FAILED` appears in `.github/workflows/plan.yml`, `tests/test_plan_run_codex_failure_diagnostic.py`, `tests/test_plan_codex_step_extraction.py`, `changelog.d/9266-plan-codex-failure-diagnostic.md` and `agents.d/9266-plan-codex-failure-diagnostic.md`.\n- **The probable crash fix is also here.** Commit a638db8 (#9240, \"render_prompt.py on Python 3.14\") changed the `--skip-syntax-validation` help text in `scripts/render_prompt.py:143-149` so the literal tokens read `{%%...%%}`. Before, they used a bare `%`.\n- **A regression test for it exists.** `tests/test_render_prompt_foundation.py:154-169` (`test_render_prompt_py_help_strings_are_valid_format_strings`) runs `render_prompt.py --help`. Its comment says one bare `%` crashed every `render_prompt.py` call (clarify, plan and review) on ubuntu-26.04 runners.\n- **The failure evidence fits that cause, but is not proof:**\n  - The crash comes about 0.35 s into \"Run Codex planning\", before any model call.\n  - The first Python call in that step is `render_prompt.sh` \u2192 `render_prompt.py`.\n  - Two `Traceback` headers 0.6 ms apart are the shape of a chained exception. Python 3.14 argparse raises such a chain when it rejects a malformed help string (I'm recalling that from CPython; I couldn't check it here).\n  - The plan job uses `runs-on: ubuntu-latest` (`plan.yml:74`).\n  - The same failure occurs on binance-blessings#539 and #540, not only on #5216, which goes against the issue's claim that the input is specific to #5216.\n- **Not proven:** no captured traceback names the crashing helper. Whether the plan job would pass therefore stays unverified until a consumer runs a release pin that contains a638db8.\n- **Other helpers that a broader guard would cover:** `scripts/run_plan_codex.sh` also calls `scripts/attempt_journal.py` (line 306), `scripts/evidence_pack.py` (line 400) and `scripts/evidence_broker.py` (lines 637 and 640). `plan.yml` itself calls `scripts/workflow_failure_heal.py heal-route`. Of these, only `render_prompt.py` has a `--help` guard today.\n- **Scope limit:** only `.github/workflows/plan.yml`, `tests/**`, `changelog.d/*.md` and this issue's own `agents.d/9266-*.md` fragment may change. Nothing under `scripts/` can be edited here.\n\n> **Q1: The likely fix for the remaining crash (a638db8) and its `--help` regression test are already on the planning ref. What should this issue still deliver?**\n>\n> Choices:\n> - **A** \u2014 Add a guard test, `tests/test_plan_step_helpers_help_strings.py`, that runs `--help` on every argparse helper the plan step calls (`render_prompt.py`, `attempt_journal.py`, `evidence_pack.py`, `evidence_broker.py`, `workflow_failure_heal.py`) and asserts exit code 0 with no traceback, plus a `changelog.d/9266-*.md` note that attributes the consumer crash to the Python 3.14 help-string bug fixed in a638db8. If any helper fails the guard, the plan lists it under Deferred scope, because `scripts/` is out of scope. After merge, the next consumer AI Plan run on a pin containing a638db8 should pass; if it does not, the `RUN_PLAN_CODEX_FAILED ... exception=` line names the real error for a new heal generation. (RECOMMENDED)\n> - **B** \u2014 Changelog note only, giving the attribution to a638db8 and the same post-merge check as A, with no new test. The existing `render_prompt.py` `--help` test is the only guard.\n> - **C** \u2014 Treat the remaining work as already on the planning ref: plan no edits, and let a new heal generation start only if a consumer run on a newer pin logs a `RUN_PLAN_CODEX_FAILED ... exception=` line.\n>\n> Reply: `Q1: A`\n\nI recommend A because it extends the existing `--help` guard to the four other helpers that run before or around the same step. It adds no dependency, stays within the allowed scope, and costs well under 30 lines. Under \u00a76 of the system instructions (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), that small completeness gain is worth taking.\n\nPLAN_SELF_CHECK: BLOCKER: Q1 (posted 2026-11-12T17:22:47Z) has no answer; the deliverable differs by choice (a new guard test, a changelog note only, or no edit)\nSTATUS: NOT_CLEAR\nReply with:\n/answer",
+  "fingerprint": "96278fcb002f034a4241cf6f0378441c8c145b76922dd069db23ef3156cfbd38",
+  "lineage": {
+    "issue_number": 9266,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43267250550",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43267250550",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9266"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261112175355_ccae95d1e7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9266,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43267250550"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Plan requested re-clarification for issue #9266",
+  "timestamps": {
+    "created_at": "2026-11-12T17:53:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
