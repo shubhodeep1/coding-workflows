@@ -32003,6 +32003,42 @@ def test_final_merge_auto_resume_skip_reasons() -> None:
 	assert result.get("pr_get_calls", {}).get(str(_FMAR_PR), 0) == 0
 
 
+def test_final_merge_auto_resume_state_persist_failure_keeps_project_parked() -> None:
+	# The state comment is the durable copy of the once-per-head ledger: when
+	# it cannot be written the resume is abandoned before any label change.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), fail_issue_comment_post_for=[192])
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=state_persist")
+
+
+def test_final_merge_auto_resume_label_failure_parks_and_spends_head() -> None:
+	# The resumed state was already persisted when the label write fails: the
+	# parked state is restored and re-persisted with the head kept in the
+	# ledger, so later ticks do not re-qualify it (no write/restore churn).
+	first = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), fail_issue_edit_for=[192])
+	head = first["sandbox_sha_aliases"]["__integration_head__"]
+	log = _fmar_log(first)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=lookup_failed detail=label_write" in log, log[-4000:]
+	assert "outcome=resumed" not in log
+	assert "Project already failed, skipping." in log
+	assert _FMAR_PR not in first.get("merged_prs", [])
+	latest = first["latest_state"]
+	assert latest["status"] == "failed"
+	assert latest["final_merge_status"] == "failed"
+	assert latest["final_merge_attempt_count"] == 3
+	assert latest["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert latest["final_merge_auto_resume_head_shas"] == [head]
+	assert first["tracking_labels"] == ["ai:blocked"]
+	assert not _fmar_marker_comments(first)
+
+	second_state = dict(latest)
+	second_state["validation_last_passed_sha"] = head
+	second = _run_final_merge_exhausted_tick(second_state, prs=[_final_merge_open_pr(headSha=head)])
+	log = _fmar_log(second)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=already_resumed_on_head" in log
+	assert "outcome=resumed" not in log
+	assert _FMAR_PR not in second.get("merged_prs", [])
+
+
 def test_final_merge_auto_resume_revalidates_moved_head() -> None:
 	# Issue #9320 item 4: a head change re-enables one automatic retry, but an
 	# unvalidated head is never merged on an older pass: it is re-validated.

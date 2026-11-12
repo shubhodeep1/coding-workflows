@@ -11148,6 +11148,7 @@ maybe_auto_resume_final_merge_exhaustion() {
 	local fmar_revalidate="false"
 	local fmar_phase_label="ai:validated"
 	local fmar_now_ts=""
+	local fmar_label_fail_detail=""
 
 	FINAL_MERGE_AUTO_RESUME_MODE=""
 	if [ "${FINAL_MERGE_AUTO_RESUME_ENABLED:-true}" != "true" ]; then
@@ -11317,11 +11318,23 @@ maybe_auto_resume_final_merge_exhaustion() {
 	# branch waits for a fresh verdict.  Either phase label also drops
 	# ai:blocked and ai:needs-human (same issue_phase group).
 	if ! set_tracking_phase_label "${fmar_phase_label}"; then
-		mv "${fmar_state_backup}" "${STATE_FILE}" 2>/dev/null \
-			|| echo "::warning::FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} could not restore state after label failure"
-		post_state_comment \
-			|| echo "::warning::FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} could not re-persist parked state after label failure"
-		_final_merge_auto_resume_skip "lookup_failed" "label_write"
+		# Restore the parked state but keep this head in the ledger: the
+		# resumed state was already persisted, and dropping the head would
+		# re-qualify it every tick (two state writes plus a queued follow-up
+		# poll per tick while the label write keeps failing).  A label
+		# failure therefore uses up this head's one automatic retry.
+		if ! { jq --arg h "${fmar_head_sha}" '.final_merge_auto_resume_head_shas = (((((.final_merge_auto_resume_head_shas // []) | if type == "array" then . else [] end) | map(select(. != $h))) + [$h]) | .[-200:])' "${fmar_state_backup}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+			rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+			mv "${fmar_state_backup}" "${STATE_FILE}" 2>/dev/null \
+				|| echo "::warning::FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} could not restore state after label failure"
+		fi
+		rm -f "${fmar_state_backup}" 2>/dev/null || true
+		fmar_label_fail_detail="label_write"
+		if ! post_state_comment; then
+			fmar_label_fail_detail="label_write_repersist_failed"
+			echo "::warning::FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} could not re-persist parked state after label failure"
+		fi
+		_final_merge_auto_resume_skip "lookup_failed" "${fmar_label_fail_detail}"
 		return 1
 	fi
 	rm -f "${fmar_state_backup}" 2>/dev/null || true
