@@ -2,8 +2,9 @@
 """Behaviour tests for the "Run Codex planning" failure diagnostic (#9266).
 
 A failed plan step now prints one ``::error::RUN_PLAN_CODEX_FAILED`` line
-naming the runner's last exception, so the heal intake keeps it. The step's
-exit code, stdout and stderr stay unchanged.
+naming the runner's last exception, so the heal intake keeps it. The step
+keeps the runner's exit code and passes its stdout and stderr through
+unchanged, adding only that line to stderr on failure.
 """
 
 from __future__ import annotations
