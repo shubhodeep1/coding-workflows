@@ -2764,9 +2764,11 @@ fi
 # 2026-11-02.  With the switch on, a project whose state records
 # `final_merge_failure_kind=final_merge_exhausted` is retried once per final
 # PR head SHA (`final_merge_auto_resume_head_shas`) when that PR is open,
-# mergeable/clean, its required checks are green, its head is the validated
-# SHA, and the integration branch is still ahead of the default branch.
-# `false` restores the park-until-a-human behaviour.
+# mergeable/clean, its required checks are green, and the integration branch
+# is still ahead of the default branch.  A head equal to the validated SHA
+# goes straight to the merge retry; a head that moved after validation passed
+# is sent back through runtime validation first and merged only once it
+# passes.  `false` restores the park-until-a-human behaviour.
 if is_truthy "${FINAL_MERGE_AUTO_RESUME_ENABLED:-true}"; then
   FINAL_MERGE_AUTO_RESUME_ENABLED="true"
 else
@@ -11267,8 +11269,9 @@ maybe_auto_resume_final_merge_exhaustion() {
 	fi
 
 	# Every check passed.  Write the state first (local file, no label churn
-	# when it fails), then set the phase label; a failed label write restores
-	# the saved state so the project stays parked unchanged.
+	# when it fails) and persist it, then set the phase label; a failed
+	# persist or label write restores the saved state so the project stays
+	# parked unchanged.
 	fmar_state_backup="${STATE_FILE}.fmar.bak"
 	if ! cp "${STATE_FILE}" "${fmar_state_backup}" 2>/dev/null; then
 		rm -f "${fmar_state_backup}" 2>/dev/null || true
@@ -11287,7 +11290,7 @@ maybe_auto_resume_final_merge_exhaustion() {
 		| .final_merge_status = "pending"
 		| .final_merge_attempt_count = 0
 		| .final_merge_failure_kind = null
-		| .final_merge_auto_resume_head_shas = (((((.final_merge_auto_resume_head_shas // []) | if type == "array" then . else [] end) | map(select(. != $h))) + [$h]) | .[-20:])
+		| .final_merge_auto_resume_head_shas = (((((.final_merge_auto_resume_head_shas // []) | if type == "array" then . else [] end) | map(select(. != $h))) + [$h]) | .[-200:])
 		| (if $revalidate == "true" then
 			.validation_last_dispatch_cycle = 0
 			| .validation_last_dispatch_ts = $now
@@ -11299,6 +11302,16 @@ maybe_auto_resume_final_merge_exhaustion() {
 		_final_merge_auto_resume_skip "lookup_failed" "state_write"
 		return 1
 	fi
+	# The persisted state comment is the durable copy of the once-per-head
+	# ledger: persist it before any label change or retry, and fail closed
+	# when that write fails (the reader falls back to the last persisted
+	# state, so resuming anyway could retry the same head every tick).
+	if ! post_state_comment; then
+		mv "${fmar_state_backup}" "${STATE_FILE}" 2>/dev/null \
+			|| echo "::warning::FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} could not restore state after persist failure"
+		_final_merge_auto_resume_skip "lookup_failed" "state_persist"
+		return 1
+	fi
 	# The merge gate in finalize_integration_merge_if_needed needs
 	# ai:validated; a re-validation needs ai:validating so the validating
 	# branch waits for a fresh verdict.  Either phase label also drops
@@ -11306,6 +11319,8 @@ maybe_auto_resume_final_merge_exhaustion() {
 	if ! set_tracking_phase_label "${fmar_phase_label}"; then
 		mv "${fmar_state_backup}" "${STATE_FILE}" 2>/dev/null \
 			|| echo "::warning::FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} could not restore state after label failure"
+		post_state_comment \
+			|| echo "::warning::FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} could not re-persist parked state after label failure"
 		_final_merge_auto_resume_skip "lookup_failed" "label_write"
 		return 1
 	fi
@@ -11317,11 +11332,6 @@ maybe_auto_resume_final_merge_exhaustion() {
 		FINAL_MERGE_AUTO_RESUME_MODE="merge"
 	fi
 	echo "FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} outcome=resumed final_pr=${fmar_final_pr} head_sha=${fmar_head_sha} action=${FINAL_MERGE_AUTO_RESUME_MODE}"
-	# The persisted state comment is the durable copy of the once-per-head
-	# ledger; a lost write must at least be visible.
-	if ! post_state_comment; then
-		echo "::warning::FINAL_MERGE_AUTO_RESUME tracking_issue=${TRACKING_NUM} state not persisted after resume; head ledger may be lost"
-	fi
 	if [ "${fmar_revalidate}" = "true" ]; then
 		post_tracking_comment "<!-- final-merge-auto-resume:${fmar_head_sha} -->
 ## 🔁 Final integration merge: re-validating the new head automatically
