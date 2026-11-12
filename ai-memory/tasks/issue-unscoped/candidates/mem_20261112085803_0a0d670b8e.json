@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3465-3490 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The required `lint` aggregate check fails because its dependency job `tests-hooks-and-orchestrator` failed (run 43102371681, job 130796843371, head 46c3b60a1fb2cc7e0064473b45026e9b1a9fa2bc).\n  WHY: The aggregate exits 1 when any dependency does not succeed, which blocks the required CI gate. The supplied log tail does not show the failing step, so the failure cannot be traced to a PR change. Severities disagree: minimax_minimax-m3 said BLOCKER and openai_gpt-6-luna said MAJOR; the highest is used.\n- .github/workflows/ci.yml:543-813 | severity=high | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The job tests-hooks-and-orchestrator (line 543) failed on head 46c3b60a1fb2cc7e0064473b45026e9b1a9fa2bc, so the required \"lint\" aggregate fails. The log tail ends inside the intentional ::error:: output of test_main_exit_codes and has no \"Process completed with exit code\" line.\n  WHY: \"lint\" is a required check in the default-branch ruleset, so the PR cannot merge. tests/test_lint_pr_body_auto_close.py reads only lint-pr-body-auto-close.yml and implement.yml, so the failure cannot be traced to a PR hunk. The full job log or a rerun on merge-base 255d482430ba3ae98c1800e4223c145ed5522526 is needed.\n- .github/workflows/ci.yml (job `tests-hooks-and-orchestrator`, run 43102371681, job 130796843371) | severity=high | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The required `lint` check fails because `tests-hooks-and-orchestrator` fails. The supplied log tail has no failing step, assertion or \"Process completed with exit code\" line; the fixture `::error::` lines from tests/test_lint_pr_body_auto_close.py:458 are expected output.\n  WHY: `lint` is one of the two checks the default-branch ruleset requires, with no bypass actors, so the PR cannot merge. Finding the failing step needs the full job log or a merge-base rerun at 255d482430ba3ae98c1800e4223c145ed5522526.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cCheckout with the GH_PAT token\u201d for the `deliver-report` job.\n  expected_change_site: `.github/workflows/workflow-log-analysis.yml`, `deliver-report` job\u2019s `Checkout repository` step.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The checkout\u2019s `with` block specifies `fetch-depth` and `persist-credentials`, but no `token`. The GH_PAT is supplied only to the later delivery step\u2019s environment.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:job tests-hooks-and-orchestrator (line 543); last visible step \"PR body auto-close lint unit tests\" (lines 806-813, running tests/test_lint_pr_body_auto_close.py); the required \"lint\" aggregate needs this job | severity=MAJOR | confidence=2\n  PROBLEM: The check-run tests-hooks-and-orchestrator failed on head 46c3b60a1fb2cc7e0064473b45026e9b1a9fa2bc (run 43102371681, job 130796843371), so the required \"lint\" check fails. The log tail ends inside the intentional ::error:: output of test_main_exit_codes and has no \"Process completed with exit code\" line. tests/test_lint_pr_body_auto_close.py reads only .github/workflows/lint-pr-body-auto-close.yml and .github/workflows/implement.yml (lines 188-196, 364-371), so the failure cannot be traced to a PR hunk.\n  WHY: \"lint\" is a required check in the default-branch ruleset, so the PR cannot merge. The next step is to read the full job log or rerun on merge-base 255d482430ba3ae98c1800e4223c145ed5522526. Changing code before then is not justified.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:3476-3490 (the `lint` aggregate that depends on `tests-hooks-and-orchestrator`) | severity=BLOCKER | confidence=2\n  PROBLEM: The required CI check `lint` fails because `tests-hooks-and-orchestrator` fails (run 43102371681, job 130796843371, head 46c3b60a1fb2cc7e0064473b45026e9b1a9fa2bc). The log tail ends after `tests/test_lint_pr_body_auto_close.py::test_main_exit_codes` (lines 458\u2013501) with no failing assertion, traceback or exit-code line. The PR does not touch the lint script or its tests, and the tests pass locally (22/22).\n  WHY: The job runs about 100 test files and the failing step is past the log truncation window. The `lint` aggregate exits 1 and blocks the required CI gate on the default-branch ruleset.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:3465-3490 | severity=MAJOR | confidence=5\n  PROBLEM: The latest check-run context reports `tests-hooks-and-orchestrator` failed, causing the `lint` aggregate to fail.\n  WHY: The aggregate exits 1 whenever any dependency does not succeed. The supplied log tail does not identify the underlying failing step, so this cannot be attributed to a PR change, but the required `lint` check remains failing.\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: \u201cCheckout with the GH_PAT token\u201d for the `deliver-report` job.\n  Expected change site: `.github/workflows/workflow-log-analysis.yml`, `deliver-report` job\u2019s `Checkout repository` step.\n  Evidence of absence: The checkout\u2019s `with` block specifies `fetch-depth` and `persist-credentials`, but no `token`. The GH_PAT is supplied only to the later delivery step\u2019s environment.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml (job `tests-hooks-and-orchestrator`, run 43102371681, job 130796843371) | severity=MAJOR | confidence=2\n  PROBLEM: The required `lint` check fails because `tests-hooks-and-orchestrator` fails, but the log tail has no failing step, assertion or \"Process completed with exit code\" line. The fixture `::error::` lines from tests/test_lint_pr_body_auto_close.py:458 are expected output. The PR does not modify scripts/lint_pr_body_auto_close.py or its test, which passes locally (22/22).\n  WHY: `lint` is one of the two checks the default-branch ruleset requires, with no bypass actors, so the PR cannot merge. The failing step needs the full job log or a merge-base rerun at 255d482430ba3ae98c1800e4223c145ed5522526.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9a838aa9873bd74a153b680d1ac7fee426859187ee7c518ad83e1c005c134dc4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8967,
+    "run_id": "43122828731",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43122828731",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112085803_0a0d670b8e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8967,
+    "run_id": "43122828731"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T08:58:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
