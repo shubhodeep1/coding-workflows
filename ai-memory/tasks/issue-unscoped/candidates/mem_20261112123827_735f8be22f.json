@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:519, 813-831 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The tests-hooks-and-orchestrator job failed on the PR head and the dependent lint aggregate job failed, and the failure cannot be tied to a changed hunk from the captured log tail.\n  WHY: A failing required check keeps the PR unmergeable. Both reviewers rated it MAJOR (mapped to high). z-ai_glm-5_3-flash attributes it to the inherited tests/test_review_merge_train.py failure (step at ci.yml:813) and says it cannot be attributed to this PR's hunks.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:519 (`tests-hooks-and-orchestrator` job); 813-831 (merge-train test step) | severity=MAJOR | confidence=5\n  PROBLEM: The PR-head run reports `tests-hooks-and-orchestrator` failed, and the dependent `lint` job failed. The available log tail does not identify the failing assertion or step, so the failure cannot be tied to a changed hunk.\n  WHY: The failed test job makes the CI check fail and causes the aggregate `lint` check to fail. The underlying failure remains unverified from the provided logs.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:789, 813 (tests-hooks-and-orchestrator job; failed check-runs on head 96bb3bf35480762734e134821d8a42a5db660cc2, job 130808305483, aggregate lint job 130827234969) | severity=MAJOR | confidence=4\n  PROBLEM: The tests-hooks-and-orchestrator job failed on the PR head and the dependent lint job failed. The captured log tail ends inside the test_lint_pr_body_auto_close.py step, and the actually failing step is past the captured tail. The next step runs tests/test_review_merge_train.py, which the pre-push gate classifies as an inherited failure (also failing on the merge-base). The failure cannot be attributed to any hunk in this PR, since the last run changed only a comment line, but it remains an unresolved failing check on this head.\n  WHY: Any required-check gate on lint/tests-hooks-and-orchestrator keeps the PR unmergeable regardless of the code being correct. Resolving it needs the full job log, a CI re-run, or a fix on main, not a change to this diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c698879f30a533a1daca5fe59e3b5ff271c953c62a9751ef8be47619fe856a81",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9011,
+    "run_id": "43133114707",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43133114707",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112123827_735f8be22f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9011,
+    "run_id": "43133114707"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T12:38:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
