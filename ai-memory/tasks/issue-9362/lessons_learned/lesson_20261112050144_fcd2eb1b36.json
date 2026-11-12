@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-12T05:01:44Z",
+  "issue_number": 9362,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 007 as out-of-scope; anchor=tests/test_agents_fragment_contract.py:74-82; cited_path=tests/test_agents_fragment_contract.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_files_touched_scope_guard.py, tests/test_workflow_checkout_integration_ref_audit.py; files_touched=.github/workflows/ci.yml, changelog.d/9362-static-checks-validation-selftest-overlap.md, tests/test_ci_poll_test_sharding.py.",
+  "phase": "review_autofix",
+  "pr_number": 9368,
+  "record_id": "lesson_20261112050144_fcd2eb1b36",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_agents_fragment_contract.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_files_touched_scope_guard.py, tests/test_workflow_checkout_integration_ref_audit.py",
+    "tests/test_agents_fragment_contract.py",
+    ".github/workflows/ci.yml",
+    "changelog.d/9362-static-checks-validation-selftest-overlap.md",
+    "tests/test_ci_poll_test_sharding.py"
+  ]
+}
