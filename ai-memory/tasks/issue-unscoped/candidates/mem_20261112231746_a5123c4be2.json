@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In `.github/workflows/ci.yml`, in the `tests-system-python` shard step, stop pointing `TMPDIR` at `$RUNNER_TEMP`.\"\n  expected_change_site: `.github/workflows/ci.yml`, `tests-system-python` / `System-Python test shard`\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no `.github/workflows/ci.yml` hunk; it changes only test files. The TMPDIR regression guard was added, but the PR diff does not include the workflow change that removes the assignment. (Severity NIT. glm-5_3-flash disagreed and said this is satisfied in the current tree at ci.yml:3536.)\n- requirement: \"Raise `timeout-minutes` \u2026 or add more entries to the `system-python-shard` matrix list.\"\n  expected_change_site: `.github/workflows/ci.yml`, `tests-system-python` matrix or timeout\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna, anthropic_claude-sonnet-5_5]\n  EVIDENCE: The PR diff contains no workflow hunk changing the timeout or shard matrix, and the new test asserts a minimum shard count but does not change the matrix. The current workflow has 24 shards, but that change is not in this PR diff. (Severity NIT. sonnet-5_5 rated it confidence 1 and said it is not a gap because the matrix is already at 24 on the stacked base. glm-5_3-flash also said it is satisfied.)\n- requirement: \"Find the failing step in `tests-hooks-and-orchestrator` before changing code.\"\n  expected_change_site: none identified\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The failing step cannot be identified from the captured log tail. The likely cause is the `gh_retry` closed-reader failure, which the PR description's \"Deferred scope\" leaves to a separate fix. Sonnet reported this as an inference and said it is not a gap. (Severity NIT.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP entries:\n- Requirement: \"Raise `timeout-minutes` (for example to 35), or add more entries to the `system-python-shard` matrix list\" in `ci.yml`.\n  Expected change site: `.github/workflows/ci.yml`, the `tests-system-python` job.\n  Evidence of absence: Not a gap. The matrix already has 24 shards on the stacked base branch, and this PR adds `test_system_python_shard_count_fits_the_job_budget`. The 20-minute timeout stays pinned by the job-budget contract.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- Requirement: In `tests/test_summarize_reviewer_consensus_sandbox_pin.py`, update the stale role-list assertion to include `PANEL_REVIEWER`, preferably as an order-independent role-set check.\n  Expected change site: `tests/test_summarize_reviewer_consensus_sandbox_pin.py`.\n  Evidence of absence: The requirement is satisfied. The test now checks the role set and the arm's body line, and it is registered in `main()`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- Requirement: Find the failing step in `tests-hooks-and-orchestrator` before changing code.\n  Expected change site: none identified.\n  Evidence of absence: The failing step is not identifiable from the captured log tail. The likely cause is the deferred `gh_retry` closed-reader failure, which is an inference. `tests-system-python (12)` is the same deferred test (`tests/test_gh_retry_stdout_isolation.py:242`). Neither is a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP entries:\n- Requirement: \"In `.github/workflows/ci.yml`, in the `tests-system-python` shard step, stop pointing `TMPDIR` at `$RUNNER_TEMP`.\"\n  Expected change site: `.github/workflows/ci.yml`, `tests-system-python` / `System-Python test shard`.\n  Evidence of absence: The PR diff contains no `.github/workflows/ci.yml` hunk; it changes only test files. The TMPDIR regression guard was added, but the PR diff does not include the workflow change that removes the assignment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Raise `timeout-minutes` \u2026 or add more entries to the `system-python-shard` matrix list.\"\n  Expected change site: `.github/workflows/ci.yml`, `tests-system-python` matrix or timeout.\n  Evidence of absence: The PR diff contains no workflow hunk changing the timeout or shard matrix. The new test asserts a minimum shard count but does not change the matrix. The current workflow has 24 shards, but that change is not present in this PR diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n(Deferred items noted by the reviewer, none reported as gaps: the TMPDIR requirement is satisfied at ci.yml:3536 with a regression guard at tests/test_ci_job_split_contract.py:166-192. The timeout/matrix requirement is satisfied by the 24-entry matrix at ci.yml:3447 with a floor test at tests/test_ci_job_split_contract.py:194-199. The `gh_retry` closed-reader failure is deferred by the PR description to PR #9246. The acceptance-table \"unmet/not run\" rows reflect cancelled CI, not a code gap.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cbab400f4232885348dd5e4a92e80e7110602453b0e09cee1e863e412a5b69a3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9338,
+    "run_id": "43269997102",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43269997102",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112231746_a5123c4be2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9338,
+    "run_id": "43269997102"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T23:17:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
