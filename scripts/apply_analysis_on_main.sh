@@ -152,7 +152,7 @@ for apply_analysis_cap_env in APPLY_ANALYSIS_MAX_CANDIDATES:3 APPLY_ANALYSIS_MAX
 	apply_analysis_cap_name="${apply_analysis_cap_env%%:*}"
 	apply_analysis_cap_default="${apply_analysis_cap_env#*:}"
 	if ! [[ "${!apply_analysis_cap_name}" =~ ^[1-9][0-9]{0,5}$ ]]; then
-		printf '::warning::%s must be a positive integer (got %q); using %s.\n' "${apply_analysis_cap_name}" "$(printf '%s' "${!apply_analysis_cap_name}" | cut -c1-40)" "${apply_analysis_cap_default}" >&2
+		printf '::warning::%s must be a positive integer from 1 to 999999 (got %q); using %s.\n' "${apply_analysis_cap_name}" "$(printf '%s' "${!apply_analysis_cap_name}" | cut -c1-40)" "${apply_analysis_cap_default}" >&2
 		printf -v "${apply_analysis_cap_name}" '%s' "${apply_analysis_cap_default}"
 	fi
 done
