@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2575-2585 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The `orchestrate-poll (1)` check failed on the PR head, which turns the `lint` aggregation red. The supplied log tail ends at a passing test, so no failing case is identified or tied to this PR.\n  WHY: `lint` exits 1 whenever a needed job fails, so merge stays blocked. Reviewers rated it NIT; confidence was 1 from anthropic_claude-sonnet-5_5 and 5 from openai_gpt-6-luna, and the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Match a comment whose body starts with 'AI clarification workflow failed for' or 'AI clarification workflow was cancelled/timed out for', whatever its author.\"\n  expected_change_site: `clarify_failure_comment_run_id` in the Phase 1 clarify wait in .github/workflows/test-and-mark-stable.yml\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The helper filters comments to OWNER, MEMBER, COLLABORATOR or `github-actions[bot]` authors (lines 983-984), so comments from other authors are ignored and `test_failure_comment_from_outsider_is_ignored` asserts this. Clarify posts its own comment as OWNER via GH_PAT, so the legitimate case still works. anthropic_claude-sonnet-5_5 treated it as a deliberate security restriction and not a gap (confidence 1). All three rated it NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:2575 (\"Orchestrate poll process unit tests\" step; job `orchestrate-poll (1)` 131112979851, aggregated by `lint` 131142686373) | severity=low (NIT) | confidence=1\n  PROBLEM: The check-run failed on the PR head, which turns `lint` red. The log tail ends at a passing test, and the failure could not be mapped to this PR.\n  WHY: `lint` exits 1 whenever any needed CI job did not succeed.\n- TASK_GAP: Requirement: \"Match a comment whose body starts with 'AI clarification workflow failed for' \u2026 whatever its author.\"\n  Expected change site: `clarify_failure_comment_run_id` in the Phase 1 clarify wait in `.github/workflows/test-and-mark-stable.yml`\n  Evidence of absence: The helper accepts only OWNER, MEMBER, COLLABORATOR or `github-actions[bot]` authors. This is a deliberate restriction pinned by `test_failure_comment_from_outsider_is_ignored`. The reviewer does not treat it as a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- All other sections (security, correctness, concurrency, performance, index-contract, naming, trust-boundary) reported NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Match a comment whose body starts with `AI clarification workflow failed for` or `AI clarification workflow was cancelled/timed out for`, whatever its author.\"\n  Expected change site: .github/workflows/test-and-mark-stable.yml, `clarify_failure_comment_run_id` in the Phase 1 clarify wait\n  Evidence of absence: The helper filters comments to OWNER, MEMBER, COLLABORATOR or `github-actions[bot]` authors. Other authors are ignored, `status=clarify_failed` is not set, and `test_failure_comment_from_outsider_is_ignored` asserts this. The legitimate case still triggers because Clarify posts as OWNER via `GH_PAT`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2577-2585, 3487-3490 | severity=low (NIT) | confidence=5\n  PROBLEM: The `orchestrate-poll (1)` check failed on this PR head, leaving the lint check red. The log tail does not identify the failing test or tie it to this PR's changes.\n  WHY: The failed shard makes the lint aggregation exit 1.\n- TASK_GAP: Requirement: \"Match a comment whose body starts with `AI clarification workflow failed for` or `AI clarification workflow was cancelled/timed out for`, whatever its author.\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, `clarify_failure_comment_run_id` in the Phase 1 clarify wait.\n  Evidence of absence: Lines 983-984 filter comments to OWNER, MEMBER, COLLABORATOR, or `github-actions[bot]` before matching the prefixes. Other authors are ignored, as `test_failure_comment_from_outsider_is_ignored` asserts.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "ce0cdcf54fa766f8fab220280c92436c2d72cab3ea35c855a018da740a729a8c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9273,
+    "run_id": "43220823253",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43220823253",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112171351_253495fe61",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9273,
+    "run_id": "43220823253"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T17:13:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
