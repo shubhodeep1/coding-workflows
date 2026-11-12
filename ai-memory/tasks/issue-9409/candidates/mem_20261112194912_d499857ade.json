@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan for updating `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `main` @ `2a2fa72dd6c2cb7d284e38908e222a5a18d1e971`. The integration branch mismatch line reads `unknown`, not `true`, so it does not block this plan.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_e2e_editor_smoke_canary.py\nACCEPTANCE: post-merge none: this is a content-only change to a smoke canary file and no post-merge workflow depends on it\n\n## Functions or modules to implement\nNone. This is a data-file edit only. Replace the whole file so it holds exactly these three lines, in this order, each ending in a single LF newline:\n\n```\nstatus: ok\nrun_id: alt-43283656910\nupdated-by: ai-pipeline\n```\n\nThe file on the planning ref currently reads `status: ok` / `decompose-run: 41445772297`. Remove the `decompose-run:` line entirely.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Trailing newline and line endings\n- Chosen: LF line endings, with a single trailing newline after `updated-by: ai-pipeline`. The current file uses this convention, which can be confirmed with `cat -A`.\n- Alternatives considered: no trailing newline; CRLF line endings.\n- Why: it matches the existing file's convention and normal POSIX text files, and it adds no extra blank line.\n\n## Security considerations\nNo trust boundaries, endpoints, secrets or money state are touched. The new content is static text taken from the issue and contains no credentials.\n\n## Risks and edge cases\n- `tests/test_e2e_editor_smoke_canary.py` only checks content when its smoke environment variables are set. Otherwise it skips, so local CI does not assert these exact bytes.\n- Several other tests mention this file by name, for example `tests/test_review_autofix_smoke_editor_override.py`. They refer to the path, not to the old `decompose-run` content, so no breakage is expected.\n- Avoid stray whitespace, a BOM, or an extra blank line at the end.\n\n## Testing considerations\n- Check the result with `cat -A tests/e2e_smoke_canary.txt`. It should print exactly three lines, each ending in `$`.\n- Check that `git diff --stat` lists only this file.\n- No new tests are needed.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies the change and limits it to this one file. Under the \u00a76 priorities (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), replacing the content exactly is both the complete option and the minimal one. No further work is needed and nothing is deferred.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this is a content-only change to a smoke canary file and no post-merge workflow depends on it\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_e2e_editor_smoke_canary.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "13620417b00f125f883ef3e8c303422204daa567d5f690e24f74a88b56f0b87b",
+  "lineage": {
+    "issue_number": 9409,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43291689525",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43291689525",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9409"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261112194912_d499857ade",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9409,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43291689525"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9409",
+  "timestamps": {
+    "created_at": "2026-11-12T19:49:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
