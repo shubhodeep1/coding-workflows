@@ -2177,6 +2177,18 @@ class CheckFailureTriageBaseTrackedTests(unittest.TestCase):
 				self.assertEqual(outputs.get("base_failure_tracked"), "9215")
 				self.assertEqual(tracked.get("workflow_path"), ".github/workflows/ci.yml")
 
+	def test_at_sign_inside_the_file_name_is_not_truncated(self) -> None:
+		# Only a trailing "@refs/..." is stripped; "ci.yml@legacy.yml" must not
+		# become ".github/workflows/ci.yml" and match ci.yml's heal issue.
+		for path in (".github/workflows/ci.yml@legacy.yml", ".github/workflows/ci.yml@legacy.yml@refs/heads/main"):
+			with self.subTest(path=path):
+				proc, outputs, _metadata, calls, tracked = self._collect({**TRACKED_BASE, "workflow_path": path}, [_heal_issue(9215)])
+				self.assertNotIn("base_failure_tracked", proc.stdout)
+				self.assertNotIn("base_failure_tracked", outputs)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertFalse(any("labels=ai:workflow-heal" in call for call in calls))
+				self.assertEqual(tracked, {})
+
 	def test_oldest_matching_heal_issue_wins(self) -> None:
 		proc, outputs, _metadata, _calls, _tracked = self._collect(TRACKED_BASE, [_heal_issue(9100), _heal_issue(9215)])
 		self.assertEqual(outputs.get("base_failure_tracked"), "9100")
