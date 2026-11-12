@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-12T00:46:00Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/ci.yml:N/A; cited_path=.github/workflows/ci.yml; files_touched=README.md, agents.md, changelog.d/9179-check-runs-log-anchor-runner-exit-line.md, scripts/collect_pr_check_runs_context.py, tests/test_collect_pr_check_runs_pending_identity.py.",
+  "phase": "review_autofix",
+  "pr_number": 9218,
+  "record_id": "lesson_20261112004600_79fa06f50a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    "README.md",
+    "agents.md",
+    "changelog.d/9179-check-runs-log-anchor-runner-exit-line.md",
+    "scripts/collect_pr_check_runs_context.py",
+    "tests/test_collect_pr_check_runs_pending_identity.py"
+  ]
+}
