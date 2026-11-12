@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_checkout_pr_head_branch.sh:43-44 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The regex `^([0-9]+)[.,]([0-9]{6})$` assumes `EPOCHREALTIME` has exactly 6 decimal places.\n  WHY: A non-match falls back to `date` commands that already showed clock-regression flakiness (source severity MAJOR). Another reviewer (z-ai_glm-5_3-flash) judged this not reportable, since bash `EPOCHREALTIME` is fixed at 6 digits and the fallback is documented design.\n- changelog.d/9375-review-head-checkout-clock.md:1-2 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog fragment duplicates `changelog.d/9252-epochrealtime-ms-clock.md`, and credits this PR with a code change that is already in the base branch.\n  WHY: Both fragments fold into CHANGELOG.md, so the same change is credited twice. There is no runtime effect (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Fix the CI failure on PR #9283 where `orchestrate-poll` fails (possible timeout adjustment in `ci.yml`).\n  expected_change_site: .github/workflows/ci.yml\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff only addresses the `REVIEW_HEAD_CHECKOUT` timing flakiness in the `review_autofix` step, with no change to `.github/workflows/ci.yml`. Two other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) refuted this gap, because the issue says to re-run the job and make no code change for a timeout or flaky shard.\n- requirement: Per the plan grant `files_touched` on issue #9375, hold scope to `scripts/review_autofix_step_checkout_pr_head_branch.sh`, `tests/test_review_checkout_head_diagnostics.py`, `changelog.d/9375-review-head-checkout-clock.md`, and the globs `tests/**`, `changelog.d/*`, `agents.d/*`.\n  expected_change_site: Only files in the plan grant.\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The last run modified `scripts/review_rb_judge.sh` (lines 511-538) and added 36 lines to `tests/test_prompt_invalid_utf8.py`, and neither file is in the plan grant. The change heals #9261, not #9375, and earlier editor runs rejected these edits as out of scope.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_checkout_pr_head_branch.sh:43-44 | severity=MAJOR | confidence=3\n  PROBLEM: The regex `^([0-9]+)[.,]([0-9]{6})$` assumes `EPOCHREALTIME` has exactly 6 decimal places.\n  WHY: If `EPOCHREALTIME` has a different number of decimal places, the regex fails and falls back to the `date` commands, which already showed clock-regression flakiness.\n- changelog.d/9375-review-head-checkout-clock.md:1-2 | severity=NIT | confidence=3\n  PROBLEM: The changelog entry describes a fix already present in the base branch and already covered by `changelog.d/9252-epochrealtime-ms-clock.md`.\n  WHY: There is no runtime failure, but the `CHANGELOG.md` assembler gets redundant entries.\n- TASK_GAP:\n  Requirement: \"Fix the CI failure on PR #9283 where `orchestrate-poll` fails.\" (specifically regarding the possible timeout in `ci.yml`).\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The PR diff only addresses the `REVIEW_HEAD_CHECKOUT` timing flakiness in the `review_autofix` step. It does not address the possible `orchestrate-poll` job timeout that the issue flagged as a candidate for adjustment in `ci.yml`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: Per the plan grant `files_touched` on issue #9375, hold scope to `scripts/review_autofix_step_checkout_pr_head_branch.sh`, `tests/test_review_checkout_head_diagnostics.py`, `changelog.d/9375-review-head-checkout-clock.md`, and the globs `tests/**`, `changelog.d/*`, `agents.d/*`. The PR's stated goal is the EPOCHREALTIME clock order in the checkout step.\n  Expected change site: Only files in the plan grant.\n  Evidence of absence: The last run modified `scripts/review_rb_judge.sh` (lines 511-538, +17/-6 net) and added 36 lines to `tests/test_prompt_invalid_utf8.py`. Neither file is in the plan grant. The added comment says \"heal #9261\", which is base-branch work. The last run's changed files are disjoint from the PR's changed files. Three earlier editor summaries (runs 43189208758, 43220816846, 43246590300) rejected `scripts/review_rb_judge.sh` edits as out of scope. The new test `test_rb_judge_fallback_embed_reports_trimmed_count` targets the same out-of-scope path.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/9375-review-head-checkout-clock.md:1-2 | severity=NIT | confidence=4\n  PROBLEM: The fragment says the script \"now use[s]\" the EPOCHREALTIME-first clock order, but the PR's only hunk in that script rewrites a comment. The behavior predates this PR and `changelog.d/9252-epochrealtime-ms-clock.md:4` already documents it.\n  WHY: No runtime failure, but the same change is credited twice and the release notes mislead operators.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8440a3ca161f0b448f0653d99adfc1c009cb2650f5c976b834c006c2998fbd07",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9383,
+    "run_id": "43282264668",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43282264668",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112223458_55a8179e1a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9383,
+    "run_id": "43282264668"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T22:34:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
