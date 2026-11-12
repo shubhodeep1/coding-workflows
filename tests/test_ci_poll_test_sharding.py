@@ -3408,15 +3408,16 @@ MOVED_POLL_GROUP_TWO_8772_STEPS = {
 	# see MOVED_POLL_GROUP_ZERO_9214_STEPS.
 }
 # The body's first and last module, the module count and the sha256 below pin
-# the step's module set, which #9021's in-place sharding kept.
+# the step's module set, which #9021's in-place sharding kept. #9056 added
+# tests/test_ci_actionlint_cache.py (53 -> 54 modules).
 POLL_GROUP_TWO_8772_BOUNDARY_MODULES = (
 	"tests/test_ai_memory_sync_reference_files.py",
 	"tests/test_workflow_untrusted_input_contract.py",
 )
-POLL_GROUP_TWO_8772_MODULE_COUNT = 53
+POLL_GROUP_TWO_8772_MODULE_COUNT = 54
 # sha256 of the sorted, newline-joined module paths, so swapping an interior
 # module for another one is caught too.
-POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "e6795c8ab682e4d23b64fe87175b904f97ea243d51cd562adf8c2f7831ccc24f"
+POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "7a3ed25f8f1aaca89c28d47d55b31abcfac8fe8fae5096a7796ae615e888dc80"
 
 
 class MovedPollGroupTwo8772StepsContractTest(unittest.TestCase):
@@ -4782,6 +4783,38 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 				self.assertIn(error_line, out)
 				self.assertIn(f"| ::error::forged {failing}", out)
 				self.assertNotIn("CI_SUBTEST_HEARTBEAT", out[out.rindex(error_line):])
+
+	def test_clock_ignores_a_date_that_goes_backwards(self) -> None:
+		# ubuntu-26.04 runners: `date +%s%3N` readings went backwards within a
+		# run and the heartbeat printed elapsed_ms=-601. The shipped clock reads
+		# bash's EPOCHREALTIME first, and `date` is only the bash < 5 fallback.
+		clock_line = SINGLE_FILE_STEP_CLOCK_RE.search(self.run).group(0)
+		with tempfile.TemporaryDirectory(prefix="test_sf_clock_") as tmp:
+			counter = Path(tmp, "date_reading")
+			fake_date = (
+				f"sf_test_counter={str(counter)!r}\n"
+				"date() { local sf_test_reading; sf_test_reading=$(( $(cat \"${sf_test_counter}\") - 800 )); "
+				"echo \"${sf_test_reading}\" > \"${sf_test_counter}\"; echo \"${sf_test_reading}\"; }\n"
+			)
+			for realtime in ("kept", "unset"):
+				with self.subTest(realtime=realtime):
+					counter.write_text("2000000000000\n", encoding="utf-8")
+					unset_line = "unset EPOCHREALTIME\n" if realtime == "unset" else ""
+					script = (
+						f"set -euo pipefail\n{fake_date}{unset_line}{clock_line}\n"
+						"sf_test_first=\"$(sf_now_ms)\"; sleep 0.05; sf_test_second=\"$(sf_now_ms)\"\n"
+						"echo \"first=${sf_test_first} second=${sf_test_second}\"\n"
+					)
+					result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+					self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+					match = re.fullmatch(r"first=(\d+) second=(\d+)\n", result.stdout)
+					self.assertIsNotNone(match, result.stdout + result.stderr)
+					first, second = int(match.group(1)), int(match.group(2))
+					if realtime == "kept":
+						self.assertGreaterEqual(second, first, result.stdout)
+						self.assertNotEqual(first, 1999999999200, "the clock read the fake date, not EPOCHREALTIME")
+					else:
+						self.assertEqual((first, second), (1999999999200, 1999999998400), result.stdout)
 
 if __name__ == "__main__":
 	unittest.main()

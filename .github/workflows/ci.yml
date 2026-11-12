@@ -55,6 +55,15 @@ jobs:
     # was cancelled at its 20-minute timeout on the PR head run 41097621008.
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The actionlint tarball cache key (#9056) reads these values through the
+    # `env` context, so they are set at job level. The `Install actionlint`
+    # step keeps its own copy with the same literals, which
+    # tests/test_ci_actionlint_install_retry.py pins;
+    # tests/test_ci_actionlint_cache.py checks that the two copies match.
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+      ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+      ACTIONLINT_CACHE_DIR: /tmp/actionlint-cache
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -294,6 +303,22 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_agents_md_direct_edits.py \
             --base "$(git rev-parse "${GITHUB_SHA}^1")" --head "${GITHUB_SHA}"
 
+      # The actionlint release download from github.com returned HTTP 504 in
+      # CI runs 35615284953, 42465389350 and 42470227946 (issue #9056), the
+      # last one for longer than the whole retry window. The release tarball
+      # is cached under an exact key (version + sha256, no restore-keys), so
+      # most runs skip the download. The cache contents are untrusted: the
+      # next step verifies the pinned sha256 on every run, hit or miss.
+      # actions/cache saves only when the job succeeds, so a saved entry has
+      # already passed that check. Bump the `-v1` suffix to force out a bad
+      # entry.
+      - name: Restore actionlint tarball cache
+        id: actionlint-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.ACTIONLINT_CACHE_DIR }}
+          key: actionlint-${{ runner.os }}-${{ runner.arch }}-${{ env.ACTIONLINT_VERSION }}-${{ env.ACTIONLINT_SHA256 }}-v1
+
       - name: Install actionlint
         env:
           ACTIONLINT_VERSION: "1.7.12"
@@ -305,42 +330,49 @@ jobs:
           # `uses:` targets, etc.). Pinned to a specific upstream release
           # with sha256 verification for supply-chain safety and reproducible
           # CI (no `bash <(curl ...)` or moving-target `latest` refs).
-          cd /tmp
+          mkdir -p "${ACTIONLINT_CACHE_DIR}"
+          cd "${ACTIONLINT_CACHE_DIR}"
           tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          # Bounded retries cover transient 5xx and connection resets (CI run
-          # 35615284953 failed on an HTTP 504 here). CI run 42465389350
-          # (PR #9038) hit HTTP 504 again and used up the old 1s/2s/4s
-          # exponential backoff in about 7 seconds, so curl now makes up to 5
-          # retries (6 attempts in total) a fixed 15 seconds apart. When each
-          # attempt fails fast, that rides out an outage of about 75 seconds.
-          # `--retry-max-time 300` only caps the total time spent retrying, so
-          # slow attempts (each bounded by `--max-time 120`) get fewer retries.
-          # The sha256 check below still guards integrity. Runs 42465084748
-          # and 42469096786 also failed on 504s after one curl run gave up, so
-          # an outer loop runs curl up to 4 times with a 20-second pause
-          # between runs to ride out a longer outage.
-          actionlint_rc=1
-          for actionlint_attempt in 1 2 3 4; do
-            actionlint_rc=0
-            curl -sSLf --retry 5 --retry-all-errors --retry-delay 15 --retry-max-time 300 \
-              --connect-timeout 20 --max-time 120 -o "${tarball}" \
-              "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}" || actionlint_rc=$?
-            if [ "${actionlint_rc}" -eq 0 ]; then
-              break
+          if [ -s "${tarball}" ]; then
+            echo "actionlint: ${tarball} restored from cache; verifying sha256"
+          else
+            # Bounded retries cover transient 5xx and connection resets (CI run
+            # 35615284953 failed on an HTTP 504 here). CI run 42465389350
+            # (PR #9038) hit HTTP 504 again and used up the old 1s/2s/4s
+            # exponential backoff in about 7 seconds, so curl now makes up to 5
+            # retries (6 attempts in total) a fixed 15 seconds apart. When each
+            # attempt fails fast, that rides out an outage of about 75 seconds.
+            # `--retry-max-time 300` only caps the total time spent retrying, so
+            # slow attempts (each bounded by `--max-time 120`) get fewer retries.
+            # The sha256 check below still guards integrity. Runs 42465084748
+            # and 42469096786 also failed on 504s after one curl run gave up, so
+            # an outer loop runs curl up to 4 times with a 20-second pause
+            # between runs to ride out a longer outage.
+            actionlint_rc=1
+            for actionlint_attempt in 1 2 3 4; do
+              actionlint_rc=0
+              curl -sSLf --retry 5 --retry-all-errors --retry-delay 15 --retry-max-time 300 \
+                --connect-timeout 20 --max-time 120 -o "${tarball}" \
+                "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}" || actionlint_rc=$?
+              if [ "${actionlint_rc}" -eq 0 ]; then
+                break
+              fi
+              echo "actionlint download run ${actionlint_attempt}/4 failed (curl exit ${actionlint_rc})."
+              if [ "${actionlint_attempt}" -lt 4 ]; then
+                sleep 20
+              fi
+            done
+            if [ "${actionlint_rc}" -ne 0 ]; then
+              echo "::error::actionlint download failed after 4 curl runs (curl exit ${actionlint_rc})."
+              exit "${actionlint_rc}"
             fi
-            echo "actionlint download run ${actionlint_attempt}/4 failed (curl exit ${actionlint_rc})."
-            if [ "${actionlint_attempt}" -lt 4 ]; then
-              sleep 20
-            fi
-          done
-          if [ "${actionlint_rc}" -ne 0 ]; then
-            echo "::error::actionlint download failed after 4 curl runs (curl exit ${actionlint_rc})."
-            exit "${actionlint_rc}"
           fi
+          # Runs on a cache hit and on a miss: a corrupt or poisoned cache entry fails closed.
           echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "${tarball}" actionlint
           sudo mv actionlint /usr/local/bin/actionlint
-          rm -f "${tarball}"
+          # The tarball stays in ACTIONLINT_CACHE_DIR so the cache step's
+          # post-job save stores it.
           actionlint -version
 
       - name: Actionlint — reusable workflows and consumer templates
@@ -2556,6 +2588,7 @@ jobs:
             tests/test_branch_rebuild_threshold_decision_log.py
             tests/test_changelog_fragment_contract.py
             tests/test_check_workflow_script_refs.py
+            tests/test_ci_actionlint_cache.py
             tests/test_ci_actionlint_install_retry.py
             tests/test_codex_heartbeat.py
             tests/test_codex_isolated_exec_claude_contract.py
@@ -3211,7 +3244,10 @@ jobs:
           sf_modules=(tests/test_orchestrate_poll_noop_suspicious_recovery.py tests/test_state_snapshot.py tests/test_run_substate_ledger.py)
           rm -f /tmp/single_file_step_*.log /tmp/single_file_step_*.rc \
             /tmp/single_file_step_*.start_ms /tmp/single_file_step_*.end_ms
-          sf_now_ms() { date +%s%3N; }
+          # Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
+          # coreutils) gave readings that went backwards within a run, which
+          # printed negative elapsed_ms. `date` stays as the fallback for bash < 5.
+          sf_now_ms() { if [[ "${EPOCHREALTIME:-}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"; else date +%s%3N; fi; }
           sf_step_start_ms="$(sf_now_ms || true)"
           case "${sf_step_start_ms}" in
             ''|*[!0-9]*)
