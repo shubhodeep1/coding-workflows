@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3465-3490 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Multiple CI check-runs (lint, orchestrate-poll, tests-hooks-and-orchestrator) failed on the PR head, causing the lint aggregate check to fail.\n  WHY: The failures block the PR from meeting merge requirements, though the reviewer notes they may be unrelated to the JSON data diff (source severity=BLOCKER, mapped to critical).\n- (no file:line) | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Four check runs failed on the PR head (lint, orchestrate-poll (2), tests-hooks-and-orchestrator, review / codex-agent), but no link to this diff was found, so they are not reported as defects in this PR.\n  WHY: A data-only change to one JSON file cannot cause them; they should be re-run and the full logs read (source severity=NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- (no file:line) | severity=NIT | confidence=1\n  PROBLEM: Four check runs failed on the PR head (lint, orchestrate-poll (2), tests-hooks-and-orchestrator, review / codex-agent), but no link to this diff was found, so they are not reported as defects.\n  WHY: lint only aggregates its dependencies' results. The two test jobs have truncated logs with no failing assertion. review / codex-agent failed with the review pipeline's own reviewers_failed on an earlier run. A data-only JSON change cannot cause them.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:3465-3490 | severity=BLOCKER | confidence=4\n  PROBLEM: Multiple CI check-runs failed on the PR head, causing the lint aggregate check to fail.\n  WHY: The failing check-runs (lint, orchestrate-poll, tests-hooks-and-orchestrator) block the PR from meeting merge requirements. The reviewer notes the failures may be unrelated to the JSON data diff, but they remain unfixed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "0ec9abf957af28664617219572612f749b4122c25c0a3da34b5acee00f644951",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9229,
+    "run_id": "43201815329",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43201815329",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112153049_5f9572356c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9229,
+    "run_id": "43201815329"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T15:30:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
