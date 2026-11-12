@@ -144,7 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
 			"Skip the strict unsupported-template-syntax gate. Use ONLY when the "
 			"input is an already-assembled prompt body that embeds untrusted "
 			"content (e.g. a reviewer/editor prompt body carrying raw PR-diff or "
-			"comment text with literal {{...}}/{%...%} tokens that must not be "
+			"comment text with literal {{...}}/{%%...%%} tokens that must not be "
 			"treated as prompt-authoring errors). Placeholder substitution still runs."
 		),
 	)
