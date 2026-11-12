@@ -1560,7 +1560,7 @@ _mt_now_ms()
 	else
 		__mt_now_ms_val="$(date -u +%s 2>/dev/null || true)"
 		[[ "${__mt_now_ms_val}" =~ ^[0-9]+$ ]] || __mt_now_ms_val=0
-		printf '%s\n' "$(( __mt_now_ms_val * 1000 ))"
+		printf '%s\n' "$(( 10#${__mt_now_ms_val} * 1000 ))"
 	fi
 }
 

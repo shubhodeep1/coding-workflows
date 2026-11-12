@@ -442,7 +442,7 @@ _resolver_terminal_now_ms() {
   fi
   _rt_s="$(date +%s 2>/dev/null || true)"
   if [[ "${_rt_s}" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "$(( _rt_s * 1000 ))"
+    printf '%s\n' "$(( 10#${_rt_s} * 1000 ))"
     return 0
   fi
   printf '0\n'
