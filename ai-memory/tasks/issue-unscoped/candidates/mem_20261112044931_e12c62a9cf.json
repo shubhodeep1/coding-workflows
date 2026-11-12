@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:(aggregate `lint` job; check-runs on head 8a626347d3632fcdbc5b330ecb779eee482301c4) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: All 21 check-runs on this head are red: 20 of them, including both `lint` runs, are `cancelled`, and the other `lint` run failed only because every job it depends on was cancelled.\n  WHY: The required checks stay red and block the merge, but this looks like a superseded or cancelled CI run, not a defect in the diff; the fix is to re-run CI, not to change code. The source rated it SEVERITY: NIT, mapped here to low, the lowest bucket.\n- scripts/review_autofix_step_post_review_blocked_comment.sh:135-144 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The dedupe check depends on `tg_trusted`, `_TG_TRACKING_JQ_DEFS`, `_tg_newest_comments_json` and `_tg_tracking_author_login`, which come from a dynamically sourced `tg_helpers.sh`, so it can return wrong counts or fail early if the helper's environment (`GITHUB_REPOSITORY`, etc.) is incomplete.\n  WHY: Sourcing shell-defined helpers this way is fragile; if the dedupe check fails, it falls back to posting, which produces a duplicate alert. The reviewer stated no severity, so the lowest bucket is assigned.\n- scripts/review_autofix_step_post_review_blocked_comment.sh:137-151 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The dedupe check reads only the newest page of PR comments, so a marker in an older comment can be pushed off that page by newer comments and not be found.\n  WHY: If the marker is missed, a duplicate alert is posted, for example when crashes across many PRs keep adding new comments. The reviewer stated no severity, so the lowest bucket is assigned.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml (aggregate `lint` job; check-runs on head 8a626347d3632fcdbc5b330ecb779eee482301c4) | severity=NIT | confidence=2\n  PROBLEM: The `lint` job step exits with \"::error::CI jobs that did not succeed: static-checks, tests-hooks-and-orchestrator, tests-heal-plan-and-validation, tests-promote-stall-and-review, tests-release-and-log-analysis, orchestrate-poll\". All 21 check-runs on this head are red: 20 of them, including both `lint` runs, are `cancelled`. The only log available is the aggregate `lint` run's, and it shows no test or step failure caused by this diff.\n  WHY: The required checks stay red, so the PR cannot merge. This looks like a superseded or cancelled CI run rather than a diff defect, so the editor should re-run CI and not change code.\n- The reviewer reported NONE for all other categories, for TASK COMPLETENESS (all deliverables of issue #9249 are present; the two \"unmet\" acceptance rows are inherited from the merge-base), and for HARDENING_SUGGESTIONS. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_post_review_blocked_comment.sh:lines 135-144 | confidence=3\n  PROBLEM: The `tg_trusted` and comment-reader logic relies on `_TG_TRACKING_JQ_DEFS`, and `_tg_newest_comments_json` depends on helpers in a dynamically sourced `tg_helpers.sh`. If those helpers are not fully initialized, or their env vars (`GITHUB_REPOSITORY`, etc.) are not aligned, the dedupe check may return incorrect counts or fail early.\n  WHY: Relying on shell-defined helpers (`_tg_newest_comments_json`, `_tg_tracking_author_login`) from a sourced context is fragile. Incomplete setup makes the dedupe check fail, which falls back to posting and sends a duplicate alert.\n- scripts/review_autofix_step_post_review_blocked_comment.sh:lines 137-151 | confidence=3\n  PROBLEM: The dedupe check reads PR comments with `_tg_newest_comments_json` and filters them with `jq`. With a very large number of comments, or a truncated fetch, the marker may not be found.\n  WHY: Only the newest page of comments is read, so a marker in an older comment can be pushed out of that page by newer comments, and a duplicate alert is posted.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5289c2edd0f0766d4276b715b56f37b6afed32c46a463334b9492f86df2bd53b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9276,
+    "run_id": "43155523941",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43155523941",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112044931_e12c62a9cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9276,
+    "run_id": "43155523941"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T04:49:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
