@@ -839,11 +839,17 @@ def _plan_grant_checkout_state(path: str) -> str:
 	checkout: plan.yml and the poller (orchestrate_poll_process.sh) run the
 	guard from the repository checkout. Only a regular file is ``"file"``; a
 	symlink is never followed and, like a directory or any other type, is
-	``"other"``. Run from anywhere else the answer is ``"missing"`` or
+	``"other"``; a path under a symlinked parent directory is ``"other"`` too,
+	so a grant never reaches through a link. Run from anywhere else the answer is ``"missing"`` or
 	``"other"``, which keeps today's behaviour or holds the plan, and never
 	widens a grant.
 	"""
 	try:
+		parts = path.split("/")
+		for depth in range(1, len(parts)):
+			# os.lstat follows symlinks in parent components; refuse them.
+			if stat.S_ISLNK(os.lstat("/".join(parts[:depth])).st_mode):
+				return "other"
 		mode = os.lstat(path).st_mode
 	except (FileNotFoundError, NotADirectoryError):
 		return "missing"
@@ -1185,7 +1191,8 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 						issue_number=issue_number)[0] == PLAN_DECISION_APPROVE)
 				if proposal_held_by_missing:
 					decision, reason, denied = PLAN_DECISION_HOLD, "path_not_granted", list(missing_paths)
-					replannable = True
+					# Not replannable on the heal route, as below.
+					replannable = not _issue_on_heal_route(metadata.get("body") or "", metadata.get("labels"))
 					missing_hold = True
 				elif proposed[0] == PLAN_DECISION_APPROVE:
 					with open(grant_body_out, "w", encoding="utf-8") as handle:

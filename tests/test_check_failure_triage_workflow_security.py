@@ -2357,7 +2357,7 @@ class CheckFailureTriageHistoricalModeTests(unittest.TestCase):
 		checkout = _step(triage, step_id="checkout_pr_head")
 		self.assertEqual(checkout["continue-on-error"], "${{ inputs.historical_run_id != '' }}")
 		staging = _step(triage, name="Stage workflow support files")["run"]
-		self.assertIn("clarify_openrouter_broker.py workflow_failure_heal.py; do", staging)
+		self.assertIn("clarify_openrouter_broker.py workflow_failure_heal.py ci_cancelled_rerun.py; do", staging)
 		self.assertIn('"${trusted_dir}/scripts/workflow_failure_heal.py"', staging)
 
 

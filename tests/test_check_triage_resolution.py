@@ -840,12 +840,23 @@ def test_open_head_needs_trusted_header_head_sha(tmp_path, monkeypatch):
 
 RERUN_RUNS_KEY = rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?head_sha={PR_HEAD_SHA}&event=pull_request&per_page=1"
 RERUN_CHECKS_KEY = rf"repos/{REPO}/commits/{PR_HEAD_SHA}/check-runs\?check_name=CI&filter=latest&per_page=100"
+RERUN_JOBS_KEY = rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=latest&per_page=100"
+
+
+def _rerun_run(**overrides):
+	# The triaged run itself, re-run on the same head.
+	run = _open_run(id=RUN_ID, head_sha=PR_HEAD_SHA, run_attempt=2,
+		html_url=f"https://github.com/{REPO}/actions/runs/{RUN_ID}")
+	run.update(overrides)
+	return run
 
 
 def _rerun_routes(**overrides):
+	# After the passing re-run the triaged run's latest jobs all succeeded.
 	routes = _open_routes(**{
 		rf"repos/{REPO}/pulls/{PR}": _open_pr(head_sha=PR_HEAD_SHA),
-		RERUN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha=PR_HEAD_SHA, run_attempt=2)]},
+		RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run()]},
+		RERUN_JOBS_KEY: _jobs(BASE_JOBS, id_base=1),
 	})
 	routes.update(overrides)
 	return routes
@@ -865,19 +876,25 @@ def test_open_head_rerun_resolves_on_unchanged_head(tmp_path, monkeypatch):
 	assert "is still open on the same head" in body and "a re-run of the failing check on that head passed" in body
 	assert "has merged" not in body
 	assert body.splitlines()[-1] == f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={PR_HEAD_SHA} -->"
+	assert f"actions/runs/{RUN_ID}" in body
 	assert not any("/compare/" in call[-1] or "branch=main" in call[-1] for call in fake.calls)
 
 
 @pytest.mark.parametrize("overrides", [
-	{RERUN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha=PR_HEAD_SHA, run_attempt=1)]}},
-	{RERUN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha=PR_HEAD_SHA)]}},
-	{RERUN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha=PR_HEAD_SHA, run_attempt="2")]}},
-	{RERUN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha=PR_HEAD_SHA, run_attempt=2, status="in_progress", conclusion=None)]}},
-	{RERUN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha=PR_HEAD_SHA, run_attempt=2, conclusion="failure")]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(run_attempt=1)]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(run_attempt=None)]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(run_attempt="2")]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(status="in_progress", conclusion=None)]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(conclusion="failure")]}},
 	{RERUN_RUNS_KEY: {"workflow_runs": []}},
 	{RERUN_RUNS_KEY: mod.GhApiError("rc=1")},
-	{OPEN_JOBS_KEY: _jobs({"static-checks": "success"}, id_base=1)},
-	{OPEN_JOBS_KEY: mod.GhApiError("rc=1")},
+	# A passing re-run of another run on the same head is not evidence.
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(id=OPEN_RUN_ID)]}, OPEN_JOBS_KEY: _jobs(BASE_JOBS, id_base=1)},
+	# The triaged run's latest attempt still has a failed job.
+	{RERUN_JOBS_KEY: _jobs(PR_JOBS)},
+	{RERUN_JOBS_KEY: _jobs({"static-checks": "cancelled"}, id_base=1)},
+	{RERUN_JOBS_KEY: _jobs({"static-checks": "skipped"}, id_base=1)},
+	{RERUN_JOBS_KEY: {"total_count": 0, "jobs": []}},
 ])
 def test_open_head_rerun_misses_keep_open_head_unchanged(tmp_path, monkeypatch, overrides):
 	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_rerun_routes(**overrides))

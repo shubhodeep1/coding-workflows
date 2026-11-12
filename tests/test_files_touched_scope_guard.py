@@ -2191,11 +2191,13 @@ def test_plan_grant_path_grants_extensionless_checkout_file() -> None:
 		(root / ".env").write_text("X=1\n", encoding="utf-8")
 		(root / "docs" / "sub").mkdir(parents=True)
 		os.symlink("tool", root / "bin" / "link")
+		os.symlink("bin", root / "alias")
 		try:
 			os.chdir(td)
 			assert guard._plan_grant_path("bin/tool") == "bin/tool"
 			assert guard._plan_grant_path("VERSION") == "VERSION"
-			for bad in ("docs/sub", "docs", "bin/link", "bin/missing", "MISSING", ".env", "bin"):
+			# alias/tool reaches bin/tool through a symlinked parent.
+			for bad in ("docs/sub", "docs", "bin/link", "bin/missing", "MISSING", ".env", "bin", "alias/tool"):
 				assert guard._plan_grant_path(bad) == "", bad
 			# Named bare files keep their grant without being in the checkout.
 			assert guard._plan_grant_path("_headers") == "_headers"
@@ -2204,6 +2206,8 @@ def test_plan_grant_path_grants_extensionless_checkout_file() -> None:
 			assert guard._plan_grant_checkout_state("bin/link") == "other"
 			assert guard._plan_grant_checkout_state("docs/sub") == "other"
 			assert guard._plan_grant_checkout_state("bin/missing") == "missing"
+			assert guard._plan_grant_checkout_state("alias/tool") == "other"
+			assert guard._plan_grant_missing_path("alias/new") == ""
 			missing: list[str] = []
 			plan = ("## Files likely to change\n- `bin/tool`\n- `docs/sub`\n- `bin/new`\n- `bin/new`\n"
 				"- `owner/repo`\n- `bin/link`\n")
@@ -2226,6 +2230,11 @@ def test_plan_gate_missing_extensionless_path_hold_is_replannable() -> None:
 		assert code != 0 and record["decision"] == "hold" and record["reason"] == "path_not_granted", record
 		assert record["denied_paths"] == ["scripts/new-tool"] and record.get("replannable") is True, record
 		assert body is None and "pipeline_grant_body" not in record
+		# On the heal route the same hold is not replannable.
+		healed = dict(_pipeline_meta(), labels=[{"name": "ai:workflow-heal"}])
+		code, record, body = _run_grant_cli(plan, healed, cwd=root)
+		assert record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+		assert record["denied_paths"] == ["scripts/new-tool"] and "replannable" not in record and body is None, record
 		# With the file in the checkout the plan gets its pipeline grant.
 		(root / "scripts" / "new-tool").write_text("#!/bin/sh\n", encoding="utf-8")
 		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)

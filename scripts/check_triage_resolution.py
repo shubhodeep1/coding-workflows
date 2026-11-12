@@ -56,8 +56,12 @@ same head passed (the check-triage ``transient-rerun`` stage requests one):
 - check-run triage: every latest run of the exact check name on that head
   completed with ``success``;
   workflow-run triage: the newest ``pull_request`` run of the same workflow on
-  that head completed with ``success``, has ``run_attempt`` above 1, and every
-  failed job name of the triaged run is present exactly once and ``success``.
+  that head is the triaged run itself (same run id), completed with
+  ``success`` and has ``run_attempt`` above 1; its latest jobs are all
+  completed, none failed (``success``, ``skipped`` or ``neutral``) and at
+  least one ``success``. A passing re-run of another run on that head never
+  counts, and the triaged run's latest-attempt failed job names (if any) must
+  each be present exactly once and ``success``.
 Any miss on an unchanged head keeps the reason ``open_head_unchanged``.
 
 Integration-branch rule (issue #8685): a PR merged into
@@ -723,7 +727,9 @@ def _verify_open_head(
 		verdict["evidence_url"] = f"https://github.com/{repo}/commit/{current}"
 		verdict["matched"] = [f"{triage['check_name']}: success"]
 	else:
-		if not verdict["failed_jobs"]:
+		# A passing re-run of the triaged run leaves no failed job in its
+		# latest attempt, so an unchanged head goes on without names (#9387).
+		if not verdict["failed_jobs"] and not same_head:
 			return _fail_head("no_failed_jobs")
 		try:
 			# No status filter: a newer run still in progress must block.
@@ -749,13 +755,25 @@ def _verify_open_head(
 		if same_head and not (type(head_run.get("run_attempt")) is int and head_run["run_attempt"] > 1):
 			# The newest run on the unchanged head is the failed attempt itself.
 			return _fail("open_head_unchanged")
+		if same_head and head_run["id"] != triage.get("run_id"):
+			# Only a re-run of the triaged run itself is evidence for it.
+			return _fail("open_head_unchanged")
 		try:
 			head_jobs = _jobs_of(_gh_api([f"repos/{repo}/actions/runs/{head_run['id']}/jobs?filter=latest&per_page=100"]))
 		except GhApiError:
 			return _fail_head("open_head_run_jobs_unreadable")
 		names = [job["name"] for job in verdict["failed_jobs"]]
-		if not shard_jobs_resolved(names, head_jobs):
+		if names:
+			if not shard_jobs_resolved(names, head_jobs):
+				return _fail_head("failed_jobs_not_resolved")
+		elif not (
+			same_head and head_jobs
+			and all(job.get("status") == "completed" and job.get("conclusion") in ("success", "skipped", "neutral") for job in head_jobs)
+			and any(job.get("conclusion") == "success" for job in head_jobs)
+		):
 			return _fail_head("failed_jobs_not_resolved")
+		else:
+			names = [triage["check_name"]]
 		verdict["evidence_url"] = head_run.get("html_url") if isinstance(head_run.get("html_url"), str) else f"https://github.com/{repo}/actions/runs/{head_run['id']}"
 		verdict["matched"] = [f"{name}: success" for name in names]
 
