@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.73,
+  "details": "Recent orchestration work adds focused tests around payload fallback, stale or waiting states, and routing based on merged-PR metadata, including cases that must refuse or retain the default route. When changing polling or routing logic, cover exceptional inputs and transitions as well as the normal path.",
+  "fingerprint": "17de37cd3aa722deee33f1ff5c34aa2d0427ae723f7327d99a1f92b0943f3fd0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43134972866",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43134972866",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8808",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8880",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8955",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8974",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9183",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8812",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8883",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8968",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8986",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9185"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261112015636_881d52b2a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Orchestration and CI-routing changes need tests for fallback, refusal, and state-transition cases.",
+  "timestamps": {
+    "created_at": "2026-11-12T01:56:36Z",
+    "promoted_at": "2026-11-12T01:57:06Z",
+    "superseded_at": null
+  }
+}
