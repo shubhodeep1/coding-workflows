@@ -78,6 +78,10 @@ def test_smoke_cleanup_closes_late_pr_when_pr_number_empty() -> None:
 	assert 'select((.name // "") | test("Implement"; "i"))' in fallback
 	assert "::warning::Implement run lookup failed for issue #${ISSUE_NUMBER}" in fallback
 	assert 'LATE_IMPL_CREATED_FILTER="&created=>${IMPL_CREATED_AFTER_INPUT}"' in fallback
+	# Same ISO-8601 UTC guard as the alt-model copy, so a malformed value
+	# cannot make every page read fail.
+	assert '[[ "${IMPL_CREATED_AFTER_INPUT:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]' in fallback
+	assert "::warning::Implement run lookup hit the 10-page cap for issue #${ISSUE_NUMBER}" in fallback
 	assert "select(.display_title == env.ISSUE_TITLE)" in fallback
 	assert 'select(.status != "completed")' in fallback
 	assert "find_latest_scoped_run_field" not in fallback
@@ -108,6 +112,7 @@ def test_alt_model_cleanup_cancels_scoped_implement_runs() -> None:
 	assert "actions/runs?per_page=100&page=${ALT_IMPL_PAGE}" in body
 	assert "for ALT_IMPL_PAGE in 1 2 3 4 5; do" in body
 	assert "all(.workflow_runs[]; .id > ${PRE_IMPLEMENT:-0})" in body
+	assert "::warning::Implement run lookup hit the 5-page cap for issue #${ISSUE_NUMBER}" in body
 	assert body.index("/cancel") < body.index("pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1")
 	# implement.yml owns no runs, so the id snapshot is 0; a created=> window
 	# taken before the issue is created bounds the listing instead.

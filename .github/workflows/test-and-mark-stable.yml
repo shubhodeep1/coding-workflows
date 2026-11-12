@@ -3742,7 +3742,7 @@ jobs:
             # ai/issue-<N> PR that already exists. Best effort.
             if [ -n "${ISSUE_TITLE:-}" ]; then
               LATE_IMPL_CREATED_FILTER=""
-              if [ -n "${IMPL_CREATED_AFTER_INPUT:-}" ]; then
+              if [[ "${IMPL_CREATED_AFTER_INPUT:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
                 LATE_IMPL_CREATED_FILTER="&created=>${IMPL_CREATED_AFTER_INPUT}"
               fi
               # implement.yml is workflow_call-only and owns no runs (they are
