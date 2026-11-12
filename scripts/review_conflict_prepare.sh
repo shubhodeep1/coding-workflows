@@ -402,7 +402,9 @@ _ghm_defer_commit=false
 _ghm_resolved_paths=""
 if [ "${_resolver_allowlist_count}" -gt 0 ] \
    && grep -q '^\.claude/hooks/' "${RESOLVER_ALLOWLIST_FILE}"; then
-  _ghm_pairs_file="$(mktemp)"
+  # Under the per-run RUNTIME_DIR (not mktemp's default location) so a
+  # set -e abort cannot leak it; the script's EXIT trap is already taken.
+  _ghm_pairs_file="${RUNTIME_DIR}/guard_hook_template_pairs.tsv"
   _conflict_prepare_guard_hook_pairs "${_ghm_pairs_file}"
   # Read from a file, not a pipe, so the loop's variables survive.
   while IFS=$'\t' read -r _ghm_live _ghm_tpl; do
