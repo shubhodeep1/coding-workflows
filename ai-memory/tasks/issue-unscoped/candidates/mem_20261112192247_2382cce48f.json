@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.sh:195, 304-309 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: collect_prompt_placeholders still reads the prompt with strict `read_text(encoding=\"utf-8\")`, so invalid UTF-8 raises UnicodeDecodeError inside a process substitution and env-supplied placeholders are silently dropped from RENDER_ARGS.\n  WHY: The invalid-UTF-8 fix in load_prompt does not take effect on the production wrapper path, and the new tests call render_prompt.py directly so they do not catch it. Reviewers rated it MAJOR; MAJOR is mapped to high. The one-line fix is outside the issue's files_touched grant.\n- .github/workflows/ci.yml:2401 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new test tests/test_prompt_invalid_utf8.py is reported as failing the CI wire contract check.\n  WHY: The reviewer cites CI failure reports for tests/test_ci_wires_every_test_file.py and other infrastructure tests. The severity is BLOCKER, mapped to critical. Other reviewers disputed the causal link.\n- tests/test_gh_api_write_guard.py:CI failures | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new tests and scripts appear to violate the gh_api_write_guard rules.\n  WHY: CI check-runs for this test are reported as failing. The severity is MAJOR, mapped to high. Other reviewers found no causal path from the diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Create agents.d/<issue-or-pr>-<slug>.md per CLAUDE.md \u00a730.\n  expected_change_site: agents.d/9398-prompt-invalid-utf8.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No agents.d/ fragment is included in the PR diff.\n- requirement: Run pytest on tests/test_prompt_invalid_utf8.py and tests/test_ci_wires_every_test_file.py, and confirm both pass.\n  expected_change_site: tests/test_ci_wires_every_test_file.py (and potentially other infrastructure registry files to satisfy the wiring contract)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR description confirms that tests/test_ci_wires_every_test_file.py and other CI infrastructure tests are failing, so the implementation did not satisfy the contract tests. Severity BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/render_prompt.sh:195, 304-309 | severity=MAJOR | confidence=4\n  PROBLEM: collect_prompt_placeholders reads the prompt with a strict UTF-8 decode, so it raises UnicodeDecodeError on invalid bytes before render_prompt.py runs.\n  WHY: The failure occurs inside a process substitution, so set -e does not abort. Env placeholders are not passed as --var, and the invalid-UTF-8 fix does not reach the wrapper path. The new tests never exercise render_prompt.sh. The fix is one line, `errors=\"replace\"`, and the file is outside the files_touched grant.\n- HARDENING_SUGGESTIONS: scripts/render_prompt.sh line 195, change to `read_text(encoding=\"utf-8\", errors=\"replace\")` (1 line). HARDENING_RISK_SCORE: 3\n- No task gaps reported. Pass-1 TASK_GAPs on tests/test_ci_wires_every_test_file.py and a missing agents.d/ fragment were dropped or not raised. The `tests/test_gh_api_write_guard.py` finding was not raised.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:2401 | severity=BLOCKER | confidence=4\n  PROBLEM: New test `tests/test_prompt_invalid_utf8.py` is failing the CI wire contract check.\n  WHY: The CI failure reports confirm that `tests/test_ci_wires_every_test_file.py` and other infrastructure tests are failing, indicating the test wiring and possibly other repository contracts are not satisfied.\n- tests/test_gh_api_write_guard.py:CI failures | severity=MAJOR | confidence=4\n  PROBLEM: The new tests/scripts appear to violate the `gh_api_write_guard` rules.\n  WHY: CI check-runs for this test are reported as failing, indicating non-compliance with the repository's API-write guard contract.\n- TASK_GAP:\n  Requirement: Create agents.d/<issue-or-pr>-<slug>.md per CLAUDE.md \u00a730.\n  Expected change site: agents.d/9398-prompt-invalid-utf8.md\n  Evidence of absence: No agents.d/ fragment is included in the PR diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP:\n  Requirement: Run pytest on tests/test_prompt_invalid_utf8.py and tests/test_ci_wires_every_test_file.py, and confirm both pass.\n  Expected change site: tests/test_ci_wires_every_test_file.py (and potentially other infrastructure registry files to satisfy the wiring contract)\n  Evidence of absence: The PR description confirms that `tests/test_ci_wires_every_test_file.py` and other CI infrastructure tests are failing, so the implementation did not satisfy the project's contract tests.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/render_prompt.sh:195, 304-309 | severity=MAJOR | confidence=4\n  PROBLEM: collect_prompt_placeholders still reads the prompt with strict UTF-8 decoding. On invalid bytes its process-substitution failure is not propagated, so no dynamically discovered variables reach RENDER_ARGS.\n  WHY: A malformed prompt with required placeholders can still fail rendering with a contract violation. For example, scripts/review_conflict_resolve.sh passes required continuation variables at lines 254-262. The new test invokes render_prompt.py directly and misses this path.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/render_prompt.sh:195, 309 | severity=MAJOR | confidence=4\n  PROBLEM: The production wrapper path still does a strict UTF-8 read in collect_prompt_placeholders. Invalid bytes raise UnicodeDecodeError inside a process substitution, so env-supplied placeholders are dropped from RENDER_ARGS.\n  WHY: Production callers (scripts/review_run_reviewers.sh:3059, scripts/review_apply_fixes.sh:1946) render composed bodies containing raw PR content. validate_contract in scripts/render_prompt.py:1148-1150 then reports missing_required, or literal `{{NAME}}` tokens leak. The new test does not cover the wrapper, and the fix is outside the files_touched grant.\n- HARDENING_RISK_SCORE: 3. No task gaps were raised. The six failing gate tests were treated as sandbox noise, not diff defects.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "463e7e4a9beccc1448f824818dd69ac5a81179ea224f83717159c5eb1d674f35",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9402,
+    "run_id": "43258469575",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43258469575",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112192247_2382cce48f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9402,
+    "run_id": "43258469575"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T19:22:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
