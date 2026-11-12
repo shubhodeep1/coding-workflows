@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:(no line given) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The file was modified in the last autofix run but is not listed in the approved `files_touched` scope for issue #9375.\n  WHY: Out-of-scope modifications can cause unintended side effects, merge conflicts, or unexpected behavior in the orchestrator poller or CI pipelines. (Source severity=MAJOR. Sonnet, minimax and glm reviewers state the file's changes come from the base branch's autofix run (#9261/#9283), not from this PR.)\n- .github/workflows/ci.yml:~543-548, ~813 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: `tests-hooks-and-orchestrator` is red on head b863ceb and the `lint` job fails only as its rollup, but the failing step cannot be identified from the truncated log tail.\n  WHY: None of the PR's three files are exercised by that job's visible steps, and the PR's own test runs in `orchestrate-poll`, which passed. The reviewer lists it as a NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"NEVER use auto-close keywords (close, closes, closed, fix, fixes, fixed, resolve, resolves, resolved, case-insensitive) followed by a reference to an ai:orchestrator-tracking issue.\" (CLAUDE.md \u00a719 / Unattended Instructions \u00a721)\n  expected_change_site: PR body / commit message\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The `tests-hooks-and-orchestrator` CI job failed due to `[lint_pr_body_auto_close]` errors citing auto-close keywords referencing tracking issue #2734 in the PR body and commit message. (Source severity=BLOCKER. glm says the same `##[error][lint_pr_body_auto_close]` lines are expected fixture output from the passing `tests/test_lint_pr_body_auto_close.py`.)\n- requirement: \"Fix the CI failure on PR #9283\". `review_head_checkout_now_ms()` should read `EPOCHREALTIME` first, keep `date +%s%3N` and `date +%s` as fallbacks, and add a regression test that fails on base and passes on head.\n  expected_change_site: scripts/review_autofix_step_checkout_pr_head_branch.sh, tests/test_review_checkout_head_diagnostics.py, changelog.d/9375-review-head-checkout-clock.md\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer reports every deliverable is present in the PR, so there is no real gap (source severity=NIT).\n- requirement: \"File this as its own issue rather than part of this fix\" (the log-triage anchor improvement is deferred to a separate issue)\n  expected_change_site: a new triage issue, separate from this PR\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Not present in this PR, as the issue explicitly defers it. The reviewer reports no gap (source severity=NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh | severity=MAJOR | confidence=4\n  PROBLEM: This file was modified in the last autofix run but is not listed in the approved `files_touched` scope for issue #9375.\n  WHY: Out-of-scope modifications can cause unintended side effects, merge conflicts, or unexpected behavior in the orchestrator poller or CI pipelines. Inherited modifications violate the minimal change set requirement.\n- TASK_GAP | confidence=5 | severity=BLOCKER\n  Requirement: \"NEVER use auto-close keywords (close, closes, closed, fix, fixes, fixed, resolve, resolves, resolved, case-insensitive) followed by a reference to an ai:orchestrator-tracking issue.\" (CLAUDE.md \u00a719 / Unattended Instructions \u00a721)\n  Expected change site: PR body / commit message\n  Evidence of absence: The `tests-hooks-and-orchestrator` CI job failed due to `[lint_pr_body_auto_close]` errors citing auto-close keywords referencing tracking issue #2734 in the PR body and commit message.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP | confidence=5 | severity=NIT\n  Requirement: \"Fix the CI failure on PR #9283\". `review_head_checkout_now_ms()` should read `EPOCHREALTIME` first, keep `date +%s%3N` and `date +%s` as fallbacks, and add a regression test that fails on base and passes on head.\n  Expected change site: `scripts/review_autofix_step_checkout_pr_head_branch.sh` (clock function), `tests/test_review_checkout_head_diagnostics.py` (regression test), `changelog.d/9375-review-head-checkout-clock.md` (fragment).\n  Evidence of absence: Present in the PR. The function reads `${EPOCHREALTIME:-}` first with the same regex as `_orch_poll_cycle_now_ms` in `scripts/orchestrate_poll_process.sh:42`; the new test asserts `fetch_ms`, `switch_ms` and `duration_ms` are digits; the changelog fragment is in place.\n- TASK_GAP | confidence=5 | severity=NIT\n  Requirement: \"File this as its own issue rather than part of this fix\" (the log-triage anchor improvement is deferred)\n  Expected change site: a new triage issue, separate from this PR.\n  Evidence of absence: Not present in this PR, as the issue explicitly defers it. No gap.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:~543-548, ~813 | severity=NIT | confidence=2\n  PROBLEM: `tests-hooks-and-orchestrator` is red on head b863ceb and the `lint` job fails only as its rollup. The truncated log tail shows every visible step passing, and the `##[error][lint_pr_body_auto_close]` lines about #2734 are expected fixture output from the passing `tests/test_lint_pr_body_auto_close.py`.\n  WHY: The failing step cannot be identified from the tail, and none of the PR's three files are exercised by that job's visible steps. The PR's own test runs in `orchestrate-poll`, which passed on this head. No code change is attributable to this diff.\n- scripts/review_rb_judge.sh:524-527 | severity=low | confidence=1\n  PROBLEM: HARDENING_SUGGESTIONS: the backward scan `(data[i] & 0xC0) == 0x80` in the fallback embedder walk-back loop is unbounded. On a file of all continuation bytes it walks to i=0 and emits 0 bytes, which degrades output but does not crash. This is inherited base-branch code, outside this PR's grant.\n  WHY: Suggested fix is to add `and cap - i < 4` on PR #9283 / issue #9261, where the file is in scope (about 1 line). HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "abdd4dbd1ed0a99808b5bd30ec5f8d0237ed9b9f111bb65fb6c2821e0ef7dbbf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9383,
+    "run_id": "43246590300",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43246590300",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112182709_f7d52b0c3d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9383,
+    "run_id": "43246590300"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T18:27:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
