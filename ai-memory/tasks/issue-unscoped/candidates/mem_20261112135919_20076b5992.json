@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3465-3490 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The required `lint` aggregate check is red on head 18c58be219db175b3d5662f316c02a8dadce7009 (run 43085267118) because two jobs it depends on failed: `tests-hooks-and-orchestrator` (job 130747872621) and `orchestrate-poll (1)` (job 130747873570); the captured log tails do not show the failing assertion.\n  WHY: The aggregate step exits nonzero when any job it depends on did not succeed, so auto-merge refuses this head with `required_checks_failed` until someone reads the full logs or re-runs the jobs. All three reviewers rated it MAJOR (mapped here to high). None could tie the failure to code in this PR, and sonnet gave it confidence 2 for that reason.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:line 3489, `echo \"::error::CI jobs that did not succeed: ${ci_unsuccessful_jobs}\"` (`lint` aggregate job of run 43085267118 on head 18c58be219db175b3d5662f316c02a8dadce7009) | severity=MAJOR | confidence=2\n  PROBLEM: The required `lint` check is red because the jobs it depends on, `tests-hooks-and-orchestrator` (job 130747872621) and `orchestrate-poll (1)` (job 130747873570), failed. Neither log tail shows a failing assertion: the `##[error]` lines come from fixtures (the integration-fingerprint fixture, and `tests/test_lint_pr_body_auto_close.py` with `Fixes #2734` / `resolved: #2734`). The `pr_checks_lib.sh` references in tests/test_orchestrate_poll_process.py (the guard at line 27631 onward, and the placeholder-content tests at lines 27719-27841) do not depend on the new supersede block.\n  WHY: The required `lint` aggregate stays red, so auto-merge refuses this head with `required_checks_failed` whether or not the gate logic is correct. The run is from an earlier review cycle and the head has not changed since. Someone needs to re-run the jobs or read the full logs, and no code change in this PR's scope would fix it.\n- Notes: the added test `test_review_gate_supersede_context_matches_head_gate_helper` (tests/test_pr_checks_lib_required_filter.py lines 1069-1075) was verified to pass. Its anchors are present at scripts/review_head_gate.sh line 5 and scripts/pr_checks_lib.sh line 439. The supersede block uses only variables that are defined before it runs, and the allow-all return at lines 367-371 comes before the block.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n- TASK COMPLETENESS / INTENT GAPS: NONE. Every deliverable in issue #9212 was verified present. The two \"unmet (passes on base)\" acceptance rows are a labelling problem in the acceptance harness, not missing work.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- Notes: the last-run test addition was verified to be correct. Every linked-issue deliverable was verified present. The earlier `lint` failure (run 43085267118) was judged not caused by this PR, because the same failures reproduce with the supersede block removed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:`lint` aggregate, lines 3487-3489 | severity=MAJOR | confidence=5\n  PROBLEM: CI run 43085267118 reports `tests-hooks-and-orchestrator` and `orchestrate-poll` failed, leaving the required `lint` check red. The supplied log tails do not identify the underlying failing assertion, so this failure cannot be attributed to a specific PR change.\n  WHY: The aggregate exits nonzero when any dependency job is unsuccessful; the PR remains blocked until the failed jobs are investigated and pass.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:`lint` aggregate step, ~ci.yml:3465-3490 (CI check-run `lint` on head 18c58be, run 43085267118, jobs 130747872621 and 130747873570) | severity=MAJOR | confidence=4\n  PROBLEM: The required `lint` check is red on the current head because the jobs it depends on, `tests-hooks-and-orchestrator` and `orchestrate-poll (1)`, failed. The log tails end with PASS lines plus `##[error]` lines that fixtures print on purpose, from `test_verify_integration_fingerprints_rejects_reappeared_must_not_contain` and `test_lint_pr_body_auto_close.py`. The step that actually failed is beyond the captured tail.\n  WHY: The aggregate `lint` step exits 1 when any job it depends on is not `success`, so the check stays red and blocks auto-merge until the failing step is identified. Four earlier editor runs could not map the failure to the diff, and this PR's changed files load cleanly.\n- Notes: the last-run test (tests/test_pr_checks_lib_required_filter.py:1069-1075) was verified against scripts/review_head_gate.sh:5 and scripts/pr_checks_lib.sh:439. The supersede block in `scripts/pr_checks_lib.sh:373-483` matches the linked issue's narrow rule.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n- TASK COMPLETENESS / INTENT GAPS: NONE. All linked-issue deliverables were verified present. The two \"unmet (passes on base)\" rows are a labelling anomaly in the acceptance harness.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9f3df5f31ee05d53104a9f7785bc0ef49a42ba9cb5ce348d4ad406248687a0f7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9262,
+    "run_id": "43188629228",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43188629228",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112135919_20076b5992",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9262,
+    "run_id": "43188629228"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T13:59:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
