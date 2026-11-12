@@ -836,6 +836,66 @@ def test_open_head_needs_trusted_header_head_sha(tmp_path, monkeypatch):
 	assert result["status"] == "unverified" and result["reason"] == "triage_head_unavailable"
 
 
+# --- re-run on an unchanged open head (issue #9387) --------------------------
+
+RERUN_RUNS_KEY = rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?head_sha={PR_HEAD_SHA}&event=pull_request&per_page=1"
+RERUN_CHECKS_KEY = rf"repos/{REPO}/commits/{PR_HEAD_SHA}/check-runs\?check_name=CI&filter=latest&per_page=100"
+
+
+def _rerun_routes(**overrides):
+	routes = _open_routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _open_pr(head_sha=PR_HEAD_SHA),
+		RERUN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha=PR_HEAD_SHA, run_attempt=2)]},
+	})
+	routes.update(overrides)
+	return routes
+
+
+def test_open_head_rerun_resolves_on_unchanged_head(tmp_path, monkeypatch):
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_rerun_routes(), dry_run=False)
+	assert rc == 0 and result["status"] == "resolved" and result["reason"] == "verified", result
+	assert result["path"] == "open_head_rerun" and result["pr_state"] == "open"
+	assert result["evidence_sha"] == PR_HEAD_SHA and result["triage_head_sha"] == PR_HEAD_SHA
+	assert [w[0][:3] for w in fake.writes] == [
+		["-X", "POST", f"repos/{REPO}/issues/{ISSUE}/comments"],
+		["-X", "POST", f"repos/{REPO}/issues/{ISSUE}/labels"],
+		["-X", "PATCH", f"repos/{REPO}/issues/{ISSUE}"],
+	]
+	body = fake.writes[0][1]["body"]
+	assert "is still open on the same head" in body and "a re-run of the failing check on that head passed" in body
+	assert "has merged" not in body
+	assert body.splitlines()[-1] == f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={PR_HEAD_SHA} -->"
+	assert not any("/compare/" in call[-1] or "branch=main" in call[-1] for call in fake.calls)
+
+
+@pytest.mark.parametrize("overrides", [
+	{RERUN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha=PR_HEAD_SHA, run_attempt=1)]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha=PR_HEAD_SHA)]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha=PR_HEAD_SHA, run_attempt="2")]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha=PR_HEAD_SHA, run_attempt=2, status="in_progress", conclusion=None)]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha=PR_HEAD_SHA, run_attempt=2, conclusion="failure")]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": []}},
+	{RERUN_RUNS_KEY: mod.GhApiError("rc=1")},
+	{OPEN_JOBS_KEY: _jobs({"static-checks": "success"}, id_base=1)},
+	{OPEN_JOBS_KEY: mod.GhApiError("rc=1")},
+])
+def test_open_head_rerun_misses_keep_open_head_unchanged(tmp_path, monkeypatch, overrides):
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_rerun_routes(**overrides))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "open_head_unchanged", result
+	assert "path" not in result
+	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
+
+
+def test_open_head_rerun_check_run_triage(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID))
+	passed = {"total_count": 1, "check_runs": [{"head_sha": PR_HEAD_SHA, "status": "completed", "conclusion": "success"}]}
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=_rerun_routes(**{RERUN_CHECKS_KEY: passed}))
+	assert rc == 0 and result["status"] == "resolved" and result["path"] == "open_head_rerun", result
+	failed = {"total_count": 1, "check_runs": [{"head_sha": PR_HEAD_SHA, "status": "completed", "conclusion": "failure"}]}
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=_rerun_routes(**{RERUN_CHECKS_KEY: failed}))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "open_head_unchanged", result
+
+
 def test_closed_pr_reports_pr_state(tmp_path, monkeypatch):
 	result, _, _ = _gate(tmp_path, monkeypatch, routes=_open_routes(**{rf"repos/{REPO}/pulls/{PR}": _open_pr(state="closed")}))
 	assert result["pr_state"] == "closed"

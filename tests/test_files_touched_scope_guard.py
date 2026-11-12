@@ -1506,7 +1506,11 @@ def test_build_pipeline_plan_grant_body_appends_a_canonical_block() -> None:
 	assert guard.extract_files_touched(body) == ["a/b.py", "tests/**", "changelog.d/*", "agents.d/*"]
 
 
-def _run_grant_cli(plan: str, meta: dict, flag: str = "true", allow_edits: str = "true") -> tuple[int, dict, str | None]:
+def _run_grant_cli(plan: str, meta: dict, flag: str = "true", allow_edits: str = "true",
+	cwd: str | Path | None = None) -> tuple[int, dict, str | None]:
+	# The gate reads extensionless plan paths from its current directory, the
+	# planning checkout (#9387). Without ``cwd`` it runs from the empty temp
+	# dir, so the repository's own files never change these cases.
 	with tempfile.TemporaryDirectory() as td:
 		tdp = Path(td)
 		(tdp / "plan.md").write_text(plan, encoding="utf-8")
@@ -1515,7 +1519,8 @@ def _run_grant_cli(plan: str, meta: dict, flag: str = "true", allow_edits: str =
 		proc = subprocess.run([sys.executable, str(GUARD_SCRIPT), "--plan-auto-approval-gate",
 			"--plan-file", str(tdp / "plan.md"), "--flag-enabled", flag, "--pipeline-login", "pipeline[bot]",
 			"--allow-workflow-edits", allow_edits, "--issue-number", "42", "--issue-meta-file", str(tdp / "meta.json"),
-			"--pipeline-grant-body-out", str(out)], capture_output=True, text=True, check=False)
+			"--pipeline-grant-body-out", str(out)], capture_output=True, text=True, check=False,
+			cwd=str(cwd) if cwd is not None else td)
 		body = out.read_text(encoding="utf-8") if out.exists() and out.stat().st_size else None
 		return proc.returncode, json.loads(proc.stdout), body
 
@@ -2171,6 +2176,73 @@ def test_implement_scope_callers_pass_auto_heal_identity() -> None:
 	assert text.count(export) == 1
 	check = 'if [[ "${pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?$ ]]; then'
 	assert text.index(check) < text.index(export) < text.index(check) + len(check) + 120
+
+
+def test_plan_grant_path_grants_extensionless_checkout_file() -> None:
+	# #9387: an extensionless path is granted only when it is a regular file in
+	# the planning checkout (the current directory); never a directory or a
+	# symlink, and a missing one is reported, not silently dropped.
+	previous = os.getcwd()
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "bin").mkdir()
+		(root / "bin" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+		(root / "VERSION").write_text("1.0\n", encoding="utf-8")
+		(root / ".env").write_text("X=1\n", encoding="utf-8")
+		(root / "docs" / "sub").mkdir(parents=True)
+		os.symlink("tool", root / "bin" / "link")
+		try:
+			os.chdir(td)
+			assert guard._plan_grant_path("bin/tool") == "bin/tool"
+			assert guard._plan_grant_path("VERSION") == "VERSION"
+			for bad in ("docs/sub", "docs", "bin/link", "bin/missing", "MISSING", ".env", "bin"):
+				assert guard._plan_grant_path(bad) == "", bad
+			# Named bare files keep their grant without being in the checkout.
+			assert guard._plan_grant_path("_headers") == "_headers"
+			assert guard._plan_grant_path("public/_redirects") == "public/_redirects"
+			assert guard._plan_grant_checkout_state("bin/tool") == "file"
+			assert guard._plan_grant_checkout_state("bin/link") == "other"
+			assert guard._plan_grant_checkout_state("docs/sub") == "other"
+			assert guard._plan_grant_checkout_state("bin/missing") == "missing"
+			missing: list[str] = []
+			plan = ("## Files likely to change\n- `bin/tool`\n- `docs/sub`\n- `bin/new`\n- `bin/new`\n"
+				"- `owner/repo`\n- `bin/link`\n")
+			assert guard.extract_plan_file_paths(plan, missing_out=missing) == ["bin/tool"]
+			assert missing == ["bin/new"]
+			assert guard.extract_plan_missing_file_paths(plan) == ["bin/new"]
+			# Callers without missing_out see the same paths.
+			assert guard.extract_plan_file_paths(plan) == ["bin/tool"]
+		finally:
+			os.chdir(previous)
+
+
+def test_plan_gate_missing_extensionless_path_hold_is_replannable() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "scripts" / "subdir").mkdir(parents=True)
+		(root / "lib").mkdir()
+		plan = "## Files likely to change\n- `scripts/a.sh`\n- `scripts/new-tool`\n"
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert code != 0 and record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+		assert record["denied_paths"] == ["scripts/new-tool"] and record.get("replannable") is True, record
+		assert body is None and "pipeline_grant_body" not in record
+		# With the file in the checkout the plan gets its pipeline grant.
+		(root / "scripts" / "new-tool").write_text("#!/bin/sh\n", encoding="utf-8")
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		assert body is not None and "  - scripts/new-tool\n" in body
+		# A missing non-protected file under an existing directory holds too.
+		code, record, body = _run_grant_cli("## Files likely to change\n- `lib/run`\n", _owner_meta(), cwd=root)
+		assert record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+		assert record["denied_paths"] == ["lib/run"] and record.get("replannable") is True, record
+		# A directory is never granted and is not replannable.
+		code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n- `scripts/subdir`\n",
+			_pipeline_meta(), cwd=root)
+		assert record["decision"] == "hold" and "replannable" not in record and body is None, record
+		# A prose token whose first segment is not a checkout directory is ignored.
+		code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n- `owner/repo`\n",
+			_pipeline_meta(), cwd=root)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
 
 
 def _run_all() -> int:
