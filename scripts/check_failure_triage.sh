@@ -1286,6 +1286,9 @@ else
 			if [[ "${base_gate_run_meta}" == *" "* ]]; then
 				base_gate_workflow_path="${base_gate_run_meta#* }"
 			fi
+			# A run's `.path` can end in "@<ref>" (".github/workflows/ci.yml@refs/heads/main",
+			# see scripts/review_merge_train.sh); strip it like ci_cancelled_rerun.py does.
+			base_gate_workflow_path="${base_gate_workflow_path%%@*}"
 			if ! [[ "${base_gate_workflow_path}" =~ ^\.github/workflows/[A-Za-z0-9_.-]{1,100}\.ya?ml$ ]] || [[ "${base_gate_workflow_path}" == *..* ]]; then
 				base_gate_workflow_path=""
 			fi

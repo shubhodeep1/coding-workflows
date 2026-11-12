@@ -2167,6 +2167,16 @@ class CheckFailureTriageBaseTrackedTests(unittest.TestCase):
 		self.assertEqual(sum(call.startswith("api repos/owner/repo/actions/runs/1 ") for call in calls), 1)
 		self.assertEqual(sum("labels=ai:workflow-heal" in call for call in calls), 1)
 
+	def test_run_path_ref_suffix_is_stripped(self) -> None:
+		# A run's `.path` can end in "@<ref>"; the suffix must not disable the skip.
+		for suffix in ("@refs/heads/main", "@refs/pull/17/merge"):
+			with self.subTest(suffix=suffix):
+				base = {**TRACKED_BASE, "workflow_path": ".github/workflows/ci.yml" + suffix}
+				proc, outputs, _metadata, _calls, tracked = self._collect(base, [_heal_issue(9215)])
+				self.assertIn("skip reason=base_failure_tracked heal_issue=9215 workflow=.github/workflows/ci.yml base=main", proc.stdout)
+				self.assertEqual(outputs.get("base_failure_tracked"), "9215")
+				self.assertEqual(tracked.get("workflow_path"), ".github/workflows/ci.yml")
+
 	def test_oldest_matching_heal_issue_wins(self) -> None:
 		proc, outputs, _metadata, _calls, _tracked = self._collect(TRACKED_BASE, [_heal_issue(9100), _heal_issue(9215)])
 		self.assertEqual(outputs.get("base_failure_tracked"), "9100")
