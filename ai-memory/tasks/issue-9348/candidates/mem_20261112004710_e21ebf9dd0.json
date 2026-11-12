@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue deliver, given that the failure comes from the test itself on ubuntu-26.04 and several open PRs already target the same test?\nChoices:\nA) No code change. Treat this issue as a duplicate of the open fix (#9345, whose title names the closed-reader test, and/or #9246). Once that fix merges into `main`, update `ai/issue-9326` from `main` and re-run CI. (RECOMMENDED)\nB) Land a test-only fix in a new PR against `main`. Change the reader in `test_closed_reader_does_not_rerun_a_successful_command` so it really closes without reading everything, keep the assertion that the status is non-zero and the command runs once, and leave `scripts/gh_helpers.sh` alone. This may conflict with #9264, #9267 and #9345, which edit the same file.\nC) Add a fix for this test to PR #9335's branch (`ai/issue-9326`) so that PR goes green on its own. This goes against the issue's advice not to work around the failure on that PR, and it will conflict when #9345 or #9246 merges.",
+  "fingerprint": "7139e5f66baa1e3b5f77284333a3e0a8464752e69f936c1577f17246fa00a7fe",
+  "lineage": {
+    "issue_number": 9348,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43125654739",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43125654739",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261112004710_e21ebf9dd0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9348,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43125654739"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9348 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-12T00:47:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
