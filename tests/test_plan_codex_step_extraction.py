@@ -57,7 +57,7 @@ PRE_EXTRACTION_PROMPT_LINES = 270
 # ::error::RUN_PLAN_CODEX_FAILED line on failure and keeps the exit code.
 PLAN_RUNNER_FAILURE_DIAGNOSTIC = (
 	"          # Issue #9266: on failure, name the runner's last exception in one\n"
-	"          # ::error::RUN_PLAN_CODEX_FAILED line; exit code and stderr unchanged.\n"
+	"          # ::error::RUN_PLAN_CODEX_FAILED line; the runner's exit code and output pass through.\n"
 	'          plan_runner_stderr_copy="$(mktemp "${RUNNER_TEMP:-/tmp}/plan-runner-stderr.XXXXXX" 2>/dev/null)" || plan_runner_stderr_copy=""\n'
 	'          if [ -z "${plan_runner_stderr_copy}" ]; then\n'
 	"            exec bash scripts/run_plan_codex.sh\n"
