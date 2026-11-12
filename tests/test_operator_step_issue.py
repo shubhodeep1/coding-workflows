@@ -114,9 +114,20 @@ class FakeGitHub:
 
 
 @pytest.fixture
-def fake(monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
+def fake(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeGitHub:
 	monkeypatch.delenv("NEEDS_HUMAN_DIGEST_ENABLED", raising=False)
 	monkeypatch.delenv("OPERATOR_STEP_AUTO_RESOLVE_ENABLED", raising=False)
+	# _ensure_operator_label reads the label registration next to the writer's
+	# checkout; give it a hermetic one (values mirror scripts/label_helpers.sh) so
+	# these tests do not depend on .github/ai/label_contract.v1.json being present.
+	# tests/test_activation_verify.py covers the real registration.
+	contract_path = tmp_path / ".github/ai/label_contract.v1.json"
+	contract_path.parent.mkdir(parents=True)
+	contract_path.write_text(json.dumps({"labels": {"ai:operator-step": {
+		"color": "fbca04",
+		"description": "Steps only a person can take; the pipeline continues and gated work stays off until they are done",
+	}}}), encoding="utf-8")
+	monkeypatch.setattr(writer, "__file__", str(tmp_path / "scripts" / "operator_step_issue.py"))
 	gh = FakeGitHub()
 	monkeypatch.setattr(writer, "_gh", gh)
 	return gh
@@ -1111,6 +1122,19 @@ def test_operator_step_title_only_step_naming_a_secret_is_a_human_step(fake: Fak
 	assert writer._is_release_entry(writer.render_entry("pr-5", "s", [{"title": "Promote main to stable", "instructions": "x"}], RELEASE_SHA))
 	number = _tracker(fake)
 	_release_entry(fake, number, 10, "pr-5", steps=[human])
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"not_release": 1} and fake.closed == []
+
+
+@pytest.mark.parametrize("title", ["Sync NPM_TOKEN to stable", "Publish API_KEY to the stable environment",
+	"Sync DEPLOY_TOKEN to stable"])
+def test_operator_step_title_only_step_naming_an_underscore_secret_is_a_human_step(fake: FakeGitHub, title: str) -> None:
+	# `_` is a regex word character: the guard must still see TOKEN / KEY inside a SCREAMING_SNAKE name.
+	human = {"title": title, "instructions": "Set it in the repository settings."}
+	assert not writer._is_release_entry(writer.render_entry("pr-6", "s", [human], RELEASE_SHA))
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-6", steps=[human])
 	fake.compare_status[RELEASE_SHA] = "ahead"
 	result = writer.resolve(REPO, BOT)
 	assert result["ticked"] == [] and result["skipped"] == {"not_release": 1} and fake.closed == []

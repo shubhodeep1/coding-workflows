@@ -627,8 +627,10 @@ AUTO_CLOSED_TEXT = (
 )
 # A title-only release step (no dormant line) must not name something only a
 # person can supply: "Publish the DEPLOY_TOKEN secret to stable" stays a human step.
+# Letter-only lookarounds instead of `\b`: `_` is a regex word character, so
+# `\b` never fires inside SCREAMING_SNAKE names such as `NPM_TOKEN` or `API_KEY`.
 HUMAN_OBJECT_TITLE_RE = re.compile(
-	r"\b(?:secrets?|tokens?|credentials?|passwords?|variables?|settings?|permissions?|accounts?|keys?)\b",
+	r"(?<![A-Za-z])(?:secrets?|tokens?|credentials?|passwords?|variables?|settings?|permissions?|accounts?|keys?)(?![A-Za-z])",
 	re.I,
 )
 MAX_RESOLVE_COMPARES = 10
@@ -833,6 +835,9 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 			)
 			if not already_posted:
 				_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={AUTO_CLOSED_MARKER}\n{AUTO_CLOSED_TEXT}"])
+			# Known residual: the fresh read above and this PATCH are not atomic
+			# (the issues API has no conditional update), so a person who reopens
+			# the tracker in the gap between them is overwritten by this close.
 			_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=closed", "-f", "state_reason=completed"])
 			result["closed"] = True
 			reason = "closed"

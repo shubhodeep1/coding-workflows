@@ -812,6 +812,11 @@ activation_main()
 	if [ "${activation_verdict_posted}" != "true" ]; then
 		echo "::warning::Could not post the activation verdict on #${target_issue}."
 		activation_log "mode=${mode} item=${item} outcome=skip reason=verdict_comment_failed"
+		if [ "${activation_operator_unconfirmed}" = "true" ]; then
+			# The end-of-run WARNING is never reached on this path: send it here,
+			# so an entry possibly stranded on a closed tracker still reaches a person.
+			_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} has ${operator_gaps} operator step(s); the operator-step entry was posted, but the ai:operator-step issue could not be confirmed open and the verdict comment could not be posted. Check that the issue is open." "WARNING"
+		fi
 		return 0
 	fi
 

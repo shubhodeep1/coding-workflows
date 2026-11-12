@@ -113,6 +113,10 @@ if "-X" in args and "PATCH" in args:
 				issue["body"] = fields.get("body", "")
 	done("{}")
 if endpoint.endswith("/comments") and method == "POST":
+	if os.environ.get("FAKE_GH_FAIL_VERDICT_POSTS") == "1" and fields.get("body", "").startswith("## Activation:"):
+		# Only the verdict comment POST fails (never the operator-step entry).
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	if state.get("comment_post_failures", 0) < int(os.environ.get("FAKE_GH_FAIL_COMMENT_POSTS", "0") or 0):
 		state["comment_post_failures"] = state.get("comment_post_failures", 0) + 1
 		json.dump(state, open(state_path, "w"))
@@ -823,6 +827,20 @@ def test_operator_tracker_recheck_failure_still_posts_the_verdict(tmp_path: Path
 	assert "ACTIVATION_VERIFY mode=pr item=42 op=operator_issue outcome=warn reason=tracker_recheck_failed" in result.stdout
 	assert "reason=operator_issue_failed" not in result.stdout
 	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=DORMANT source=pr-42 -->")
+
+
+def test_operator_tracker_recheck_failure_warns_even_when_the_verdict_post_fails(tmp_path: Path) -> None:
+	# Exit 3 from upsert, then the verdict comment POST fails too: the
+	# unconfirmed-tracker WARNING must be sent before the early return.
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FAIL_OPERATOR_RECHECK": "1", "FAKE_GH_FAIL_VERDICT_POSTS": "1"})
+	assert result.returncode == 0
+	assert any(comment["body"].startswith("<!-- ai:operator-step:entry key=pr-42 -->") for comment in state["comments"])
+	assert "op=operator_issue outcome=warn reason=tracker_recheck_failed" in result.stdout
+	assert "ACTIVATION_VERIFY mode=pr item=42 outcome=skip reason=verdict_comment_failed" in result.stdout
+	script = VERIFY.read_text(encoding="utf-8")
+	block = script[script.index('reason=verdict_comment_failed"'):]
+	block = block[:block.index("return 0")]
+	assert '"${activation_operator_unconfirmed}" = "true"' in block and '"WARNING"' in block
 
 
 def test_operator_entry_records_the_merge_commit(tmp_path: Path) -> None:
