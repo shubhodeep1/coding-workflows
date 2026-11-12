@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:519-958 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The CI job `tests-hooks-and-orchestrator` fails, which makes the aggregate `lint` check fail. The log tail ends before the failing step, so the failure cannot be mapped to a hunk in this PR.\n  WHY: Severity disagreement: NIT (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) vs MAJOR (google_gemini-3_1-flash-lite, openai_gpt-6-luna); the highest is used. The failure blocks CI, but it may be a flake or already fail on the merge-base.\n- scripts/review_conflict_prepare.sh:355-432 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The temp file `_ghm_pairs_file=\"$(mktemp)\"` is leaked if `set -e` aborts the script between its creation and the explicit `rm -f`.\n  WHY: Source line citations differ (355 from google_gemini-3_1-flash-lite, about 405 from the others), so the range is merged to span both. Only the normal and verification-failure paths clean up. The reviewers rated it NIT or a hardening suggestion (risk score 1).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:519-958 | severity=NIT | confidence=2\n  PROBLEM: Job `tests-hooks-and-orchestrator` is red and the `lint` aggregate fails with it. The log tail ends at deliberate `##[error]` fixture output from `tests/test_lint_pr_body_auto_close.py`, so the failure cannot be mapped to a hunk in this PR.\n  WHY: It does not trace to this diff. It may be a flake or already fail on the merge-base, and it is reported so it is not read as passing.\n- HARDENING: scripts/review_conflict_prepare.sh:~405 | HARDENING_RISK_SCORE=1\n  PROBLEM: `_ghm_pairs_file=\"$(mktemp)\"` leaks if `set -e` aborts before the explicit `rm`.\n  WHY: Suggested fix: create the file under `${RUNTIME_DIR}` or remove it with a trap (1-2 lines).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:(job tests-hooks-and-orchestrator) | severity=MAJOR | confidence=2\n  PROBLEM: The CI job `tests-hooks-and-orchestrator` fails, which blocks the PR and fails the aggregate lint job.\n  WHY: The failing step cannot be identified from the log tail, but it must be resolved for CI to pass.\n- scripts/review_conflict_prepare.sh:355 | severity=NIT | confidence=4\n  PROBLEM: The temp file `_ghm_pairs_file` is not removed on unexpected script termination, such as an error inside the loop under `set -e`.\n  WHY: If the script aborts, the temp file is left on disk and may accumulate.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- HARDENING: scripts/review_conflict_prepare.sh:405 (cleanup at lines 427/432) | HARDENING_RISK_SCORE=1\n  PROBLEM: Under `set -euo pipefail` (line 38), the temp file from `mktemp` leaks if the loop body fails before the explicit `rm -f`. The verification-failure branch at lines 425-429 does clean up, but no trap is installed.\n  WHY: Suggested fix: add `trap 'rm -f -- \"${_ghm_pairs_file:-}\"' RETURN` after the `mktemp`, or write the file under `${RUNTIME_DIR}` (1-2 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:519-524 | severity=MAJOR | confidence=5\n  PROBLEM: The `tests-hooks-and-orchestrator` job failed, which fails the aggregate `lint` check. The log tail does not identify the failing step, so the failure cannot be attributed to a change in this PR.\n  WHY: The job exited with failure and blocks aggregate CI, and the available log ends before the cause.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:519-958 | severity=NIT | confidence=2\n  PROBLEM: Job `tests-hooks-and-orchestrator` is red and the aggregate `lint` fails with it. The log tail ends at deliberate fixture `##[error]` output from `tests/test_lint_pr_body_auto_close.py`, so the failing step lies beyond the tail and cannot be mapped to a hunk in this PR.\n  WHY: No hunk in the PR relates to the job's 58 test modules. It is surfaced as an unmapped CI signal, not a demonstrated defect, and the next step is to read the full log of job 130600375433 or re-run the job.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4f57d4ace6f73bfb77da5f5c9a989a4b83d54a3f5cab291a81a9b3e63a909803",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9015,
+    "run_id": "43165525718",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43165525718",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112094826_3f564b5896",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9015,
+    "run_id": "43165525718"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T09:48:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
