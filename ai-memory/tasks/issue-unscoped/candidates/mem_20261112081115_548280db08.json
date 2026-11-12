@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"No existing identifier, env var or log prefix is renamed or removed.\" (issue #9004 acceptance criteria)\n  expected_change_site: tests/test_conflict_guard_hook_template_merge.py (PREPUSH_GAP_REASON, _xfail_without_pytest, main() expect_fail / XFAIL / XPASS(strict) handling)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: tests/test_conflict_guard_hook_template_merge.py, PREPUSH_GAP_REASON, _xfail_without_pytest, the pytest binding, expect_fail and the XFAIL/XPASS handling in main() were removed. All three reviewers rated it NIT. Other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) judged it not a gap, since these are test-only identifiers removed along with the strict marker.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: \"No existing identifier, env var or log prefix is renamed or removed.\"\n  Expected change site: tests/test_conflict_guard_hook_template_merge.py\n  Evidence of absence: The PR diff removed the test-only identifiers `PREPUSH_GAP_REASON` and `_xfail_without_pytest`, and also removed the `expect_fail` handling from the `main()` function. While these are test-only modifications and standard maintenance, they were not explicitly instructed as part of the task and technically violate the strict identifier immutability rule (\u00a710 of the unattended instructions).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"No existing identifier, env var or log prefix is renamed or removed.\" (issue #9004, acceptance criteria).\n  Expected change site: tests/test_conflict_guard_hook_template_merge.py \u2014 module-level and main() function identifiers.\n  Evidence of absence: The PR diff removes `PREPUSH_GAP_REASON` (module constant) and `_xfail_without_pytest` (test shim); the LAST RUN DIFF further removes the `expect_fail` local in main() along with the XFAIL/XPASS(strict) print branches. These are not required to drop the strict xfail marker, since only the `@pytest.mark.xfail(...)` line on `test_prepush_hook_integration_sync_conflict_is_resolved_from_template` is. The removals are dead-code cleanup that follows from the marker removal, and no test currently sets `pytestmark`, but the acceptance criteria forbid identifier removal.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"No existing identifier, env var or log prefix is renamed or removed.\"\n  Expected change site: `tests/test_conflict_guard_hook_template_merge.py`, including the test-mode xfail support and `main()`.\n  Evidence of absence: The PR diff removes the existing `pytest` binding, `_xfail_without_pytest`, and `PREPUSH_GAP_REASON`; the last-run diff also removes `expect_fail` and the generic XFAIL/XPASS handling in `main()`. Removing the strict marker does not satisfy the separate requirement to preserve existing identifiers.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3c148410bff9243028e756ea8c1dbe6a773434832a2f2ddee8b3c5315e441e16",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9010,
+    "run_id": "43116888180",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43116888180",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112081115_548280db08",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9010,
+    "run_id": "43116888180"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T08:11:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
