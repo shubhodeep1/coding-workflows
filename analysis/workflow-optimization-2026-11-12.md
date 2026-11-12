@@ -422,3 +422,129 @@ The repo already guards interpolated `run:` bodies at 18,000 characters (`tests/
 | Code modularization | `scripts/label_helpers.sh`, `scripts/validate_process.sh`, `scripts/orchestrate_poll_process.sh`, `scripts/review_rb_judge.sh`, `scripts/review_autofix_step_mark_*.sh`, `.github/workflows/review_autofix.yml`, `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/implement.yml`, new `scripts/noop_ancestry_helpers.sh` | Large |
 | Expression size reduction | `.github/workflows/implement.yml`, `.github/workflows/test-and-mark-stable.yml` | Small |
 | Medium/Low fixes | `.github/workflows/implement.yml`, `.github/workflows/ci.yml`, `.github/workflows/update_workflows.yml`, `.github/workflows/review_autofix.yml`, `scripts/orchestrate_poll_process.sh`, `scripts/check_failure_triage.sh` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-11-12)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`**: two calls hit the same endpoint (or one asks for a strict subset of the other's fields), with the same pagination, filters and token. They sit in the same function or step with no write in between, and merging them changes neither error handling nor any cache contract. The implement stage may act on these without further review.
+- **`NEEDS_VERIFICATION`**: the consolidation looks correct, but static reading cannot prove every `SAFE_TO_MERGE` condition. The listed checks must pass first.
+- **`RISKY_SKIP`**: the call sits in a retry, backoff or stall-recovery path, an authentication or identity flow, pagination, a rate-limit-sensitive path, or `orchestrate_poll_process.sh`. Merging it could also change log keys that something else greps for. It is listed for visibility only, needs manual review, and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001** · `NEEDS_VERIFICATION`
+- **Where:** `.github/workflows/review_autofix.yml:945-984`, job `post-merge-validate-dispatch` (784), step "Dispatch standalone validate for orchestrator short-circuit issues". The per-issue call is at line 949.
+- **Calls:** today N (one `gh issue view --json labels` per issue referenced only in the PR body or title). Proposed: ceil(N/25) aliased GraphQL calls, which is 1 for any realistic N.
+- **Endpoint:** GraphQL `repository.issue(number:).labels`, reached through `gh issue view --json labels`.
+- **Evidence:** when the issue numbers come from the body/title fallback, line 938 builds every node with `labels: null`. So each loop pass whose `labels_known` is not `true` makes its own read:
+  ```bash
+  issue_labels="$(gh_retry gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null)"
+  ```
+  These are N independent per-item reads inside one step, which §15 says should be batched.
+- **Proposed fix:** before the `while` loop (945), when any node has `labels == null`, make one aliased query of the form `i<N>: issue(number:<N>){ number labels(first:100){ nodes{ name } } }`. Follow the `_fetch_candidate_issue_details_graphql` pattern in `scripts/orchestrate_poll_process.sh`, or the in-file analogue `_fetch_blocked_issue_routing_graphql` (`orchestrate_poll_process.sh:262-289`). Fill in the `labels` arrays in `issue_nodes_json` from it, so the loop finds `labels_known=true`. If the batch fails, fall back to today's per-issue call.
+- **Safety rationale:** the merge changes error granularity. Today a failed read marks only that one issue unknown (`validation_label_unknown=1; continue`, 955-958), while a failed batch would hit every issue unless the per-issue fallback stays. This path also runs only on the fallback branch, so the step-local condition holds but identical error semantics are not proven.
+- **Downstream signal (verification):**
+  1. Confirm that the per-issue `gh issue view` fallback keeps the per-issue `validation_label_unknown` behaviour and the warning text at 956 when the batch fails.
+  2. Confirm that `tests/test_review_autofix_review_pipeline_contract.py` (post-merge section around 7122-7195) does not pin the exact `gh issue view` line.
+  3. Check `wc -c .github/workflows/review_autofix.yml` against the 480,000-byte guard before inlining more shell. If the file is near the guard, put the helper under `scripts/`.
+
+**MERGE-002** · `RISKY_SKIP`
+- **Where:** `scripts/orchestrate_poll_process.sh:191` (`replay_failed_reclarify_commands`) and `:304` (`detect_unrouted_blocked_comments`). The sweep-only branch calls them one after the other at 356-360.
+- **Calls:** today 2 `GET /rate_limit` per sweep-only tick. Proposed: 1.
+- **Endpoint:** REST `GET /rate_limit`.
+- **Evidence:**
+  ```bash
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || return 0      # 191
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || budget=""     # 304
+  ```
+  Per [GitHub's rate-limit docs](https://docs.github.com/en/rest/rate-limit/rate-limit), "Accessing this endpoint does not count against your REST API rate limit". The saving is therefore one round-trip of latency, not quota.
+- **Proposed fix (manual only):** read the budget once at 356, pass it to both functions, and keep each function's own probe as the fallback when nothing was passed.
+- **Safety rationale:** this is a rate-limit probe inside `orchestrate_poll_process.sh`, so two `RISKY_SKIP` triggers apply. In addition, the second probe deliberately sees the budget after the replay loop's own calls (202/205/241/245).
+- **Downstream signal (manual review):** do not auto-implement. A reviewer must accept a staler budget reading for the unrouted detector, and must confirm that `RECLARIFY_UNROUTED outcome=skip reason=budget_low remaining=…` (306) is emitted exactly as today. The impact is negligible because the endpoint costs no quota.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001** · `NEEDS_VERIFICATION`
+- **Where:**
+  - Gate: `scripts/review_autofix_step_evaluate_gate.sh:193-213` (query 196-202, outputs 1655-1657).
+  - Workflow: `.github/workflows/review_autofix.yml:340-342` (gate outputs), `797-798` (dispatch-job env) and `885-904` (re-query).
+- **Calls:** today 2 identical GraphQL calls for every merged PR that has no `closingIssuesReferences` but has a non-empty title or body. Proposed: 1.
+- **Endpoint:** GraphQL `repository.pullRequest.closingIssuesReferences(first:50){ nodes{ number labels(first:100){ nodes{ name } } } }`. The query string is byte-identical in both places.
+- **Evidence:**
+  - The gate runs the query, sets `post_merge_linked_issues_cache_known="true"` (204) and emits `POST_MERGE_LINKED_ISSUES_JSON='[]'` when the PR closes no issues.
+  - `post_merge_linked_issues_cache_known` is never written to `GITHUB_OUTPUT`. Only `post_merge_pr_text_json`, `post_merge_linked_issues_json` and `post_merge_validate_context_definitely_empty` are (1655-1657).
+  - `…_definitely_empty` is `true` only when the title and body are also blank (208-212), and a GitHub PR title is never blank. So the dispatch job almost always runs and cannot tell "known empty" from "gate lookup failed" (whose default is also `'[]'`, line 30). It therefore repeats the query:
+  ```bash
+  if [ "${issue_nodes_json}" = "[]" ]; then
+    if issue_nodes_json_live="$(gh_retry gh api graphql ... closingIssuesReferences(first: 50) ...
+  ```
+  - The gate's own comment says the handoff exists so the merged-PR path "can reuse the already fetched PR text and linked-issue labels before any live fallback" (189-192).
+- **Proposed fix:**
+  1. In `review_autofix_step_evaluate_gate.sh`, initialise `post_merge_linked_issues_cache_known="false"` beside lines 29-31, and append `echo "post_merge_linked_issues_cache_known=${post_merge_linked_issues_cache_known}" >> "${GITHUB_OUTPUT}"` after 1657.
+  2. Add the job output `post_merge_linked_issues_cache_known: ${{ steps.evaluate.outputs.post_merge_linked_issues_cache_known }}` after `review_autofix.yml:342`.
+  3. Add env `POST_MERGE_LINKED_ISSUES_CACHE_KNOWN: ${{ needs.gate.outputs.post_merge_linked_issues_cache_known }}` after 798.
+  4. Change line 890 to `if [ "${issue_nodes_json}" = "[]" ] && [ "${POST_MERGE_LINKED_ISSUES_CACHE_KNOWN:-false}" != "true" ]; then`.
+
+  The default `false` keeps today's behaviour whenever the output is missing (§8). A failed gate lookup (raw `gh api`, no retry) still gets the retried live lookup.
+- **Safety rationale:** the two calls sit in different jobs (`gate` and `post-merge-validate-dispatch`), so the same-function/step and concurrency-boundary conditions are not met, even though the query, token scope (`GH_PAT`) and PR number are identical.
+- **Downstream signal (verification):**
+  1. Confirm that the live re-query is not meant to pick up closing references added to the merged PR's body between the gate and the dispatch job. Both run in the same workflow run.
+  2. Confirm that the gate step `evaluate` sets the new output on every path, including when `POST_MERGE_DISPATCH != true`.
+  3. Update the post-merge assertions in `tests/test_review_autofix_review_pipeline_contract.py:7122-7153` and `tests/test_review_autofix_phase_transition_contract.py:27-33`.
+  4. Check `wc -c` on `review_autofix.yml` against the 480,000-byte guard.
+
+**REUSE-002** · `RISKY_SKIP`
+- **Where:**
+  - `scripts/review_single_issue_security_pass.sh:369-373` (gate mode).
+  - Producer: `scripts/review_autofix_step_evaluate_gate.sh:338-352` (`GET /user`) and `:1665`.
+  - `.github/workflows/review_autofix.yml:351` (job output), `357` (gate token), `4369-4397` (security-pass step in `codex-agent`, `needs: gate` at 1902; token at 4384), and `5946-5949` (an existing reuse of the same output).
+- **Calls:** today 2 `GET /user` per review run when the gate's marker fetch ran and the security-pass gate step runs. Proposed: 1.
+- **Endpoint:** REST `GET /user`.
+- **Evidence:**
+  - The comment at 369 says "The gate job also probes /user, but its identity is not exported to this job." That is stale: the gate writes `fingerprint_cap_marker_author_login=${gate_marker_author_login}` (1665) and exports it as a job output (351).
+  - `codex-agent` already consumes it for `AUTOFIX_STREAK_AUTHOR_LOGIN` (5949).
+  - Both the gate step (357) and the security-pass step (4384) use `GH_TOKEN: ${{ secrets.GH_PAT || github.token }}`, so they authenticate as the same identity.
+- **Proposed fix (manual only):** pass `SECURITY_PASS_GATE_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}` into the step at 4383-4395. At 370, use `SECURITY_PASS_AUTHOR_LOGIN="${SECURITY_PASS_GATE_AUTHOR_LOGIN:-}"`, then fall back to `gh api user`, then to `SECURITY_PASS_AUTHOR_LOGIN_FALLBACK`. The report-mode read at 615 (`security-audit.yml:488`, a separate workflow) cannot reuse it; leave that read as is.
+- **Safety rationale:** the login authenticates security-pass marker comments, which is an authentication flow and a `RISKY_SKIP` trigger. The data also crosses a job boundary, and the gate output is empty whenever its lazy marker fetch did not run.
+- **Downstream signal (manual review):** a security-aware reviewer must confirm three things:
+  1. A login resolved earlier in the same run is as trustworthy as a fresh read (same token expression, verified above).
+  2. The fallback order keeps the `github-actions[bot]` behaviour when `GH_PAT` is unset.
+  3. The `deterministic-skip-merge` job (1106; security pass at 1159/1213, `needs: gate` at 1107) gets the same treatment or is deliberately left out.
+
+  Also update the stale comment at 369.
+
+**REUSE-003** · `RISKY_SKIP`
+- **Where:** `scripts/check_failure_triage.sh:211-232` (`triage_supersede_old_issue_eligible`; `GET /user` at 215).
+  - Callers in default `CHECK_TRIAGE_STAGE=all` mode (440): `2207` and `2223`→`260`.
+  - Callers in split-stage mode: `662` (`supersede-check`) and `690`→`260` (`supersede`). The workflow runs these as separate processes (`.github/workflows/check_failure_triage.yml:760`, `799`).
+- **Calls:** in `all` mode, 2 `GET /user` per supersede: 2 → 1 with an in-process cache. In the workflow's split-stage mode the saving is 0 without a cross-process handoff.
+- **Endpoint:** REST `GET /user`. The paired `GET /repos/{repo}/issues/{n}` (220) must stay.
+- **Evidence:**
+  ```bash
+  supersede_login="$(gh api user 2>/dev/null | jq -r '.login // ""' 2>/dev/null || true)"
+  ```
+  This runs on every call, although the token's login cannot change within one process. The issue read is intentionally live: "Re-check right before writing: diagnose and route ran since the collect stage, and the old issue may have been resumed or closed meanwhile" (258-259).
+- **Proposed fix (manual only):** add a file-scope `TRIAGE_SUPERSEDE_LOGIN_CACHE` that is set on the first valid read at 215 and reused afterwards. Keep the regex check at 216 and the fail-closed skip.
+- **Safety rationale:** the login authorizes closing another issue (`foreign_author` check, 221-224), which is an identity/authorization flow. The raw, unretried `gh api` is also deliberately fail-closed. Production triage uses split stages, so the realised saving is probably zero.
+- **Downstream signal (manual review):** do not auto-implement. First confirm which callers actually run `CHECK_TRIAGE_STAGE=all`. If none run it in production, drop this finding.
+
+### Dead Calls (DEAD-API-###)
+No findings. I searched `.github/workflows/*.yml` and `scripts/*.sh` for `gh api` / `gh_retry gh api` calls on `repos/...` whose output goes to `>/dev/null 2>&1 || true` and whose exit status is ignored. All 7 matches are comment POSTs (`-f body=…`): `review_autofix.yml:5286, 5369, 5420, 5442`, `orchestrate_poll_process.sh:22124`, `review_autofix_step_post_editor_summary.sh:130` and `review_autofix_step_failure_comment.sh:79`. These are writes, not dead reads. GETs that discard their body elsewhere (for example `check_failure_triage.sh:953/957`) use the exit status as an existence check, so they are consumed.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — this changes `gh_retry`'s retry classification for every caller, i.e. inside a retry loop. I confirmed the 5-attempt premise: `gh label create` is not in `_gh_cmd_is_unsafe_post` (`gh_helpers.sh:849`), so it gets `GH_RETRY_MAX_ATTEMPTS:-5` (1210).
+- API-002: RISKY_SKIP — it edits the retry/backoff loop of `gh_api_json_to_file`. Agreed on substance; it should mirror `gh_retry`'s ordering, where the permanent check comes before the rate-limit check (1243 vs 1252).
+- API-003: RISKY_SKIP — it edits `curl_gh_api`'s retry loop right next to its rate-limit branch. Agreed.
+- API-004: RISKY_SKIP — `HEAL_TRUSTED_AUTHOR` feeds `--trusted-author` (`workflow_failure_heal_intake.sh:2088`), which is an identity flow. Net-new detail: for `phase_failure`, `PHASE_COMMENT_AUTHOR` already equals `PROVENANCE_LOGIN` (1830), so the duplicate read at 2078 happens only for non-`workflow_run`, non-`phase_failure` kinds with a numeric `source_gen` (the 1303-1305 read). The comment at 2076-2077 ("the only other /user read is for self-repo phase reports") is inaccurate. The file never reassigns `GH_TOKEN`, so both reads use the same identity.
+- API-005: RISKY_SKIP — this is a manual retry loop on a rate-limit-sensitive path. Agreed.
+- BATCH-001: RISKY_SKIP — it is in `orchestrate_poll_process.sh` and touches a paginated comments read. Agreed in principle.
+- BATCH-002: RISKY_SKIP — it is in `orchestrate_poll_process.sh`. The live `GET issues/{n}` at 202 re-checks state and label right before the POST at 241, which is race defence. Net-new detail: the existing `_fetch_blocked_issue_routing_graphql` cache cannot serve these issues, because `detect_unrouted_blocked_comments` excludes `ai:reclarify-requeue` (314).
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | MERGE-001, REUSE-001 |
+| RISKY_SKIP | 10 | MERGE-002, REUSE-002, REUSE-003, API-001, API-002, API-003, API-004, API-005, BATCH-001, BATCH-002 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass. The highest-value item for follow-up verification is REUSE-001, which saves one GraphQL call on most merged PRs that close no issues; it needs only a new additive gate output that defaults to `false`.
