@@ -530,25 +530,13 @@ def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	failed = 0
 	for func in test_funcs:
-		expect_fail = any(getattr(mark, "name", "") == "xfail" for mark in getattr(func, "pytestmark", []))
 		try:
 			func()
-		except AssertionError as e:
-			if expect_fail:
-				print(f"  XFAIL  {func.__name__}")
-				continue
-			print(f"  FAIL  {func.__name__}: {e}")
-			failed += 1
-			continue
 		except Exception as e:  # noqa: BLE001
 			print(f"  FAIL  {func.__name__}: {e}")
 			failed += 1
 			continue
-		if expect_fail:
-			print(f"  XPASS(strict)  {func.__name__}")
-			failed += 1
-		else:
-			print(f"  PASS  {func.__name__}")
+		print(f"  PASS  {func.__name__}")
 	print(f"\n{len(test_funcs) - failed} passed, {failed} failed, {len(test_funcs)} total")
 	return 1 if failed else 0
 
