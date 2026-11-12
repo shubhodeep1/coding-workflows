@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:357-373,7339 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: In the CI check-run \"orchestrate-poll (1)\", test_security_pass_cap_converts_low_keep_fixing_to_advisory fails because the poller does not exit within 180s. The poller prints \"Project complete!\" but stays alive until the test helper kills its process group. The dependent \"lint\" check fails as a result.\n  WHY: Both reviewers rated this NIT (mapped to low). Neither could map the failure to any hunk this PR changes. The last-run diff only adds a test, scripts/orchestrate_poll_process.sh is unchanged, and the codex_isolated_exec.sh changes do nothing in this test. Heal issue #9199 is already open. The suggested next step is to re-run the shard and to blame this PR only if it also times out on merge-base 507ba62a.\n- .github CI check-run \"copilot-pull-request-reviewer\" | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The third-party reviewer fails before analysing any code with \"Error: Prompt too big after adding system message ... statusCode 422, errorCode custom_instructions_too_large\". Its custom instructions (AGENTS.md plus CLAUDE.md) are too large.\n  WHY: Rated NIT (mapped to low). The check stays red no matter what this PR changes. This is an infrastructure issue, not a code defect, and no file in this PR causes it.\n- scripts/codex_isolated_exec.sh:179-233 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `sandbox_solc_resolve_versions` uses `uname -m` on the host system to decide whether the architecture is `x86_64`.\n  WHY: Rated NIT (mapped to low). The script may run on a runner whose architecture differs from the build environment or target sandbox container. That could lead to incorrect logic or misleading warnings in the log.\n- scripts/codex_isolated_exec.sh:588-590 (inferred) | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Failures from `retarget_merged_base.sh` (missing helper or lookup failure) are mapped to `branch_lookup_failed`, which may be too aggressive.\n  WHY: Rated NIT (mapped to low). A transient helper failure is reported as `branch_lookup_failed`, which tells the operator to wait for a retry. `branch_missing` would call for a different action, so the mapping hides the real cause.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github CI check-run \"orchestrate-poll (1)\", test tests/test_orchestrate_poll_process.py::test_security_pass_cap_converts_low_keep_fixing_to_advisory | severity=NIT | confidence=2\n  PROBLEM: A required CI check fails on PR head 6ea36343: \"FAIL test_security_pass_cap_converts_low_keep_fixing_to_advisory: poller did not exit within 180s; process group killed\", printed after stdout reached \"Project complete!\". The \"lint\" check fails only because it collects this job's result. The reviewer could not map the failure to any changed hunk.\n  WHY: The poller hangs while exiting, after its work is done, so required CI stays red until the shard is re-run or the hang is fixed outside this PR. #9199 is already open. Re-run the shard, and treat the failure as caused by this PR only if it also times out on merge-base 507ba62a.\n- .github CI check-run \"copilot-pull-request-reviewer\" | severity=NIT | confidence=2\n  PROBLEM: The reviewer fails with \"Error: Prompt too big after adding system message ... statusCode 422, errorCode custom_instructions_too_large\" because the AGENTS.md plus CLAUDE.md custom instructions are too large. No file in this PR causes it.\n  WHY: The check stays red no matter what this PR changes. This is an infrastructure issue, not a code defect.\n- Note: the reviewer verified that test_reissue_helper_switch_is_pinned_against_caller_value is sound. The pin at scripts/resolve_integration_ref.sh line 595 keeps the fixture at exit 0, and the test fails if the pin is removed. Task completeness: NONE, since both PR-title deliverables are present. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/codex_isolated_exec.sh:179-233 | severity=NIT | confidence=3\n  PROBLEM: The `sandbox_solc_resolve_versions` function uses `uname -m` on the host system to decide whether the architecture is `x86_64`.\n  WHY: The check may run on a runner with a different architecture than the build environment or target sandbox container, which could lead to incorrect logic or misleading warnings in the log.\n- scripts/codex_isolated_exec.sh:588-590 (inferred) | severity=NIT | confidence=2\n  PROBLEM: Mapping a missing helper or a lookup failure (from `retarget_merged_base.sh`) to `branch_lookup_failed` may be too aggressive.\n  WHY: A transient helper failure is reported as `branch_lookup_failed`, which leads the operator to wait for a retry. `branch_missing` would imply a different action, so the real cause is hidden.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory() at line 7339; _run_poller_subprocess() raises after its 180-second timeout at lines 357-373 | severity=NIT | confidence=3\n  PROBLEM: The supplied CI run shows this test fails because the poller does not exit within 180 seconds.\n  WHY: The poller prints \"Project complete!\" but stays alive until the test helper kills its process group, which leaves orchestrate-poll and its dependent lint check failing. The supplied evidence does not connect the timeout to the latest test-only change.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1df37b7ff7460d913dee135018056148eed889b1674ba157d45b590e4e99f787",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "43165518900",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43165518900",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112094459_fdb3d1ce09",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "43165518900"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T09:44:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
