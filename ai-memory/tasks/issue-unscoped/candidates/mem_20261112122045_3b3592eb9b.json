@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_post_review_blocked_comment.sh:139-142 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, minimax_minimax-m3]\n  PROBLEM: The dedupe filter `(.body | sub(\"\\\\s+\\\\z\"; \"\") | endswith($marker))` accepts any trusted comment whose body ends with the marker, including one that only quotes the marker as its last text (e.g. `Quoted: <!-- rb-judge-crash:v1 head=<sha> reason=<reason> -->`), not just a standalone marker line.\n  WHY: On a later judge crash with the same head and reason, the script sets `RB_JUDGE_CRASH_REPEAT=true`, skips the blocked-comment POST and suppresses the CRITICAL Telegram alert. Severity disagreement: openai_gpt-6-luna rated it MAJOR (confidence 4). minimax_minimax-m3 rated it NIT (confidence 3) because the linked issue's Risks section accepts marker spoofing (\"A spoof can at most suppress an alert. ACCEPTED.\") and this is narrower than the old `contains` rule. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash raised the same point only as advisory hardening, not as a defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a defect): scripts/review_autofix_step_post_review_blocked_comment.sh line 142, the jq dedupe filter\n  PROBLEM: endswith($marker) also matches a trusted comment whose last text is the marker inline after other text, e.g. \"Quoted: <!-- rb-judge-crash:v1 head=... reason=... -->\". The step itself always writes the marker after a blank line (\"\\n\\n\" at line 128).\n  WHY: Not reported as a defect because only comments by the token's own identity count, editor summaries never end with this marker, and no other code path writes it. Suggested fix: change to endswith(\"\\n\" + $marker), or test(\"(^|\\\\n)\" + ...) with the marker escaped, and add a \"Quoted: <marker>\" test case (about 1 line in the script, about 6 in the test). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_post_review_blocked_comment.sh:jq filter at the dedupe count (post-`sub` line) and the new endswith-based comment block, lines ~139-142 in the LAST RUN DIFF | severity=NIT | confidence=3\n  PROBLEM: The new endswith rule still matches a trusted comment whose body ends with the exact marker text after trailing whitespace is stripped (e.g. an AI editor summary ending \"...see marker `<!-- rb-judge-crash:v1 head=<sha> reason=<reason> -->`\"). The code comment's claim that \"a trusted comment that merely quotes the marker cannot suppress the alert\" is imprecise.\n  WHY: On a later crash with the same head and reason, `endswith($marker)` matches, `RB_JUDGE_CRASH_REPEAT=true` is written, the POST is skipped and the CRITICAL Telegram page is suppressed. The reviewer notes this is within the issue's accepted spoof risk, is narrower than the old `contains` rule and is not a regression.\n- HARDENING_SUGGESTION: jq filter in the dedupe count line (~line 142)\n  PROBLEM: The rule still accepts `prose <!-- rb-judge-crash:v1 head=H reason=R -->`.\n  WHY: Suggested fix: replace `(.body | sub(\"\\\\s+\\\\z\"; \"\") | endswith($marker))` with `(.body | test(\"\\\\n[ \\\\t]*\" + $marker_escaped + \"\\\\s*\\\\z\"))`, pre-escaping `$marker` and keeping fail-open behaviour (3-5 lines). This changes the dedupe contract and needs owner approval rather than an autofix. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_post_review_blocked_comment.sh:142 | severity=MAJOR | confidence=4\n  PROBLEM: The dedupe filter accepts a trusted comment whenever its body ends with the marker, even if the marker is quoted as the final text rather than appearing as a standalone marker line.\n  WHY: A trusted comment ending with `Quoted: <!-- rb-judge-crash:v1 head=<sha> reason=<reason> -->` matches `endswith($marker)`. On a later crash with that head and reason, the script sets `RB_JUDGE_CRASH_REPEAT=true`, and the workflow skips the blocked-comment POST and suppresses the CRITICAL Telegram alert.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a defect): scripts/review_autofix_step_post_review_blocked_comment.sh line 142, the dedupe jq filter (`endswith($marker)`)\n  PROBLEM: A trusted comment whose body merely ends with the marker (e.g. a bot-authored editor summary that quotes it as the final text) still counts as a repeat and suppresses the first CRITICAL judge-crash alert for that head and reason. The filter does not require the marker to start its own line, but the step always writes it after `$'\\n\\n'` (line 128).\n  WHY: Within the issue's accepted risk (\"A spoof can at most suppress an alert. ACCEPTED.\"). Suggested fix: `endswith(\"\\n\" + $marker)`, adjust the trailing-whitespace strip, and add a test case (about 2 lines). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "26564ca9121fb3664cbad4e73e03a0deba27558c1e8c91ac5b8cb40c0bdf448f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9276,
+    "run_id": "43165460785",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43165460785",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112122045_3b3592eb9b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9276,
+    "run_id": "43165460785"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T12:20:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
