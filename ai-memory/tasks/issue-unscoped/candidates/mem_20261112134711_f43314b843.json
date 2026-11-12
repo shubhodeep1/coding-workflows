@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2490-2523 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `orchestrate-poll (1)` matrix job is red on the PR head 65852d68, which fails the aggregate `lint` check, and no diff hunk explains it.\n  WHY: The merge gate stays red and the log tail doesn't show the cause (a timeout or lost runner is possible). Severity disagreement: sonnet-5_5 said NIT (confidence 2), while gemini, gpt-6-luna and glm-5_3-flash said MAJOR (glm confidence 3). The highest severity is used, mapped to high.\n- scripts/review_rb_judge.sh:523-527 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The fallback `_embed_input_file` walk-back loop is unbounded, so on malformed UTF-8 it can drop more than 3 bytes, and it does not drop a dangling lead byte, which differs from the primary trim in scripts/gh_helpers.sh.\n  WHY: This is not a crash, because `render_prompt.py` decodes with `errors=\"replace\"`. It is a budget-hygiene and parity difference. The reviewers rated it NIT, or listed it as a hardening suggestion with risk score 1.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: After truncation, \"drop any trailing incomplete UTF-8 sequence (at most 3 bytes).\"\n  expected_change_site: scripts/review_rb_judge.sh, fallback `_embed_input_file` cut-length calculation\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: Lines 523-526 walk backward over continuation bytes without a 3-byte limit, so a run of malformed continuation bytes at the cutoff can discard the whole capped prefix.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:job `orchestrate-poll`, matrix group `orchestrate-poll (1)` (check-run job 131075210069, run 43186603904) | severity=NIT | confidence=2\n  PROBLEM: The check-run is red on head 65852d68 and cannot be mapped to any diff hunk. The log tail ends mid-pass, and the `##[error]` lines in it are fixture output.\n  WHY: The CI gate is red and the cause is not visible. A job timeout or lost runner is possible, and a re-run or the full log is needed.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:N/A | severity=MAJOR | confidence=4\n  PROBLEM: The aggregate lint check fails because the orchestrate-poll (1) job failed on the PR head. The failure is not attributed to the current changes and is likely a transient CI runner or timeout issue.\n  WHY: The red CI jobs block PR merge.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge.sh:525 | severity=hardening (risk score 1)\n  PROBLEM: The walk-back loop in the fallback heredoc is unbounded, so on malformed input it can drop arbitrarily many bytes. The suggested fix is to add `and (cap - i) < 4` to the loop condition.\n  WHY: This is a budget-hygiene parity fix, not a crash path, because `render_prompt.py:188` decodes with `errors=\"replace\"`.\n- scripts/review_rb_judge.sh:524-526 | severity=hardening (risk score 1)\n  PROBLEM: A stray lead byte at the cut is not explicitly dropped, unlike in the primary trim in scripts/gh_helpers.sh. The suggested fix is a step-back after the loop (about 6 lines).\n  WHY: The render path is safe, so this is parity hygiene.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2490-2523 | severity=MAJOR | confidence=4\n  PROBLEM: The `orchestrate-poll (1)` check failed on the reviewed PR head, leaving the aggregate `lint` check failed.\n  WHY: The job log tail shows passing tests but not the failure cause, so the red required check cannot be attributed to a diff hunk.\n- TASK_GAP: scripts/review_rb_judge.sh | severity=NIT | confidence=4\n  Requirement: After truncation, \"drop any trailing incomplete UTF-8 sequence (at most 3 bytes).\"\n  Expected change site: `scripts/review_rb_judge.sh`, fallback `_embed_input_file` cut-length calculation.\n  Evidence of absence: Lines 523-526 walk backward over continuation bytes without a 3-byte limit, so malformed continuation bytes at the cutoff can discard the whole capped prefix.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:2490 | severity=MAJOR | confidence=3\n  PROBLEM: The `orchestrate-poll (1)` job (run 43186603904, job 131075210069) is red on head 65852d68 and fails the aggregate `lint` check. No diff hunk explains it, and it reproduced on at least two consecutive head runs (43161924278 and 43186603904).\n  WHY: The merge gate stays red. The evidence fits a job timeout or lost runner, but the cause is unconfirmed, and a re-run or the full log is needed before any code change.\n- scripts/review_rb_judge.sh:523-527 | severity=NIT | confidence=4\n  PROBLEM: The fallback walk-back loop is unbounded, so it can walk back past 3 bytes on invalid input. It also does not drop a dangling lead byte, which differs from the primary trim in scripts/gh_helpers.sh:2859-2876.\n  WHY: This is not a crash, because `render_prompt.py` decodes with `errors=\"replace\"`. The impact is cosmetic and limited to a degraded path. The suggested fix is to add `and cap - i < 3` to the loop condition.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ec27d09de7287d39d000cbaad121fa3b6694c0946d29ff37fdde4734595149c2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9283,
+    "run_id": "43186604046",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43186604046",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112134711_f43314b843",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9283,
+    "run_id": "43186604046"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T13:47:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
