@@ -71,7 +71,7 @@ def _render(script: str) -> str:
 
 
 class PlanBlockedWaitOnPrTests(unittest.TestCase):
-	def _run(self, reason: str, *, unblock_judge_enabled: str = "true") -> tuple[str, str, str]:
+	def _run(self, reason: str, *, unblock_judge_enabled: str = "true", unblock_judge_wait_enabled: str = "true") -> tuple[str, str, str]:
 		with tempfile.TemporaryDirectory() as tmp:
 			root = Path(tmp)
 			scripts_dir = root / "scripts"
@@ -90,6 +90,7 @@ class PlanBlockedWaitOnPrTests(unittest.TestCase):
 				"PATH": f"{bin_dir}:{os.environ['PATH']}",
 				"BLOCKED_REASON": reason,
 				"UNBLOCK_JUDGE_ENABLED": unblock_judge_enabled,
+				"UNBLOCK_JUDGE_WAIT_ENABLED": unblock_judge_wait_enabled,
 				"ISSUE_NUMBER": "9215",
 				"ISSUE_URL": "https://github.com/o/r/issues/9215",
 				"PLAN_COMMENT_FILE": str(root / "comment.md"),
@@ -158,6 +159,20 @@ class PlanBlockedWaitOnPrTests(unittest.TestCase):
 		self.assertNotIn("No action is needed", body)
 		self.assertTrue(tg.startswith("level=CRITICAL\n"), tg)
 		self.assertNotIn("PLAN_BLOCKED_WAIT", stdout)
+
+	def test_disabled_judge_waits_keep_the_human_input_comment_and_critical_page(self) -> None:
+		# UNBLOCK_JUDGE_WAIT_ENABLED=false takes `wait` off the judge's menu
+		# (--wait-disabled), so no pr_on_branch hold resumes the issue.
+		for value in ("false", "no"):
+			with self.subTest(value=value):
+				body, tg, stdout = self._run(WAIT_REASON, unblock_judge_wait_enabled=value)
+				self.assertEqual(body.splitlines()[0], "Planning blocked: human input required.")
+				self.assertNotIn("No action is needed", body)
+				self.assertTrue(tg.startswith("level=CRITICAL\n"), tg)
+				self.assertNotIn("PLAN_BLOCKED_WAIT", stdout)
+		body, tg, _ = self._run(WAIT_REASON, unblock_judge_wait_enabled="")
+		self.assertEqual(body.splitlines()[0], "Planning blocked: waiting on open PR #9246.")
+		self.assertTrue(tg.startswith("level=WARNING\n"), tg)
 
 	def test_wait_comment_keeps_the_automation_prefix(self) -> None:
 		# orchestrate_lib.py skips comments opening with "planning blocked:" when

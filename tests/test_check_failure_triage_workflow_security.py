@@ -1310,9 +1310,15 @@ case "$*" in
   "api -X GET repos/owner/repo/issues -f state=open -f labels=ai:workflow-heal -f sort=created -f direction=asc -F per_page=100")
     if [ -n "${MOCK_HEAL_LIST_FAIL:-}" ]; then echo 'gh: Server Error (HTTP 502)' >&2; exit 1; fi
     printf '%s\\n' "${MOCK_HEAL_ISSUES:-[]}" ;;
+  "api repos/owner/repo/actions/runs/1/jobs?filter=latest&per_page=100")
+    if [ -n "${MOCK_PR_JOBS_FAIL:-}" ]; then echo 'gh: Server Error (HTTP 502)' >&2; exit 1; fi
+    printf '%s\\n' "${MOCK_PR_JOBS:-}" ;;
+  "api repos/owner/repo/actions/runs/"*"/jobs?filter=latest&per_page=100")
+    if [ -n "${MOCK_BASE_JOBS_FAIL:-}" ]; then echo 'gh: Server Error (HTTP 502)' >&2; exit 1; fi
+    printf '%s\\n' "${MOCK_BASE_JOBS:-}" ;;
   "api repos/owner/repo/actions/workflows/"*"/runs?branch="*"&event=push&per_page=1 --jq "*)
     [ -n "${MOCK_BASE_CONCLUSION+set}" ] || exit 1
-    printf '%s\\n' "${MOCK_BASE_CONCLUSION}" ;;
+    printf '%s\\n' "${MOCK_BASE_CONCLUSION}${MOCK_BASE_RUN_ID:+ ${MOCK_BASE_RUN_ID}}" ;;
   "api -X GET repos/owner/repo/commits/"*"/check-runs -f check_name="*)
     [ -n "${MOCK_BASE_CHECK_CONCLUSION+set}" ] || exit 1
     printf '%s\\n' "${MOCK_BASE_CHECK_CONCLUSION}" ;;
@@ -1380,6 +1386,8 @@ esac
 			env["MOCK_BASE_WORKFLOW_PATH"] = base["workflow_path"]
 		if "conclusion" in base:
 			env["MOCK_BASE_CONCLUSION"] = base["conclusion"]
+		if "base_run_id" in base:
+			env["MOCK_BASE_RUN_ID"] = base["base_run_id"]
 		if "check_conclusion" in base:
 			env["MOCK_BASE_CHECK_CONCLUSION"] = base["check_conclusion"]
 	env.update(extra_env or {})
@@ -1875,7 +1883,7 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		self.assertNotIn("ready", outputs)
 		self.assertEqual(metadata, {})
 		self.assertIn(
-			"api repos/owner/repo/actions/workflows/9/runs?branch=main&event=push&per_page=1 --jq .workflow_runs[0] | if . == null then \"\" elif .status == \"completed\" then (.conclusion // \"\") else \"pending\" end",
+			"api repos/owner/repo/actions/workflows/9/runs?branch=main&event=push&per_page=1 --jq .workflow_runs[0] | if . == null then \"\" elif .status == \"completed\" then ((.conclusion // \"\") + \" \" + (.id // \"\" | tostring)) else \"pending\" end",
 			calls,
 		)
 
@@ -1980,7 +1988,7 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		# pending newest run reads as "pending", which defers (#7140).
 		source = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
 		self.assertNotIn("&status=completed", source)
-		jq_filter = '.workflow_runs[0] | if . == null then "" elif .status == "completed" then (.conclusion // "") else "pending" end'
+		jq_filter = '.workflow_runs[0] | if . == null then "" elif .status == "completed" then ((.conclusion // "") + " " + (.id // "" | tostring)) else "pending" end'
 		self.assertIn(jq_filter, source)
 		for payload, expected in (
 			({"workflow_runs": [{"status": "in_progress", "conclusion": None}, {"status": "completed", "conclusion": "success"}]}, "pending"),
@@ -2126,7 +2134,22 @@ def _heal_issue(number: int, *, workflow: str = ".github/workflows/ci.yml", bran
 	return issue
 
 
-TRACKED_BASE = {"ref": "main", "default_branch": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml", "conclusion": "failure"}
+TRACKED_BASE = {
+	"ref": "main", "default_branch": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml",
+	"conclusion": "failure", "base_run_id": "2",
+}
+
+
+def _jobs(*jobs: tuple[str, str | None], total: int | None = None) -> str:
+	"""A GET actions/runs/<id>/jobs page holding (name, conclusion) pairs."""
+	return json.dumps({
+		"total_count": len(jobs) if total is None else total,
+		"jobs": [{"name": name, "conclusion": conclusion} for name, conclusion in jobs],
+	})
+
+
+PR_JOBS = _jobs(("lint", "success"), ("tests (ubuntu)", "failure"))
+BASE_JOBS = _jobs(("lint", "success"), ("tests (ubuntu)", "failure"), ("docs", "failure"))
 
 
 class CheckFailureTriageBaseTrackedTests(unittest.TestCase):
@@ -2134,7 +2157,11 @@ class CheckFailureTriageBaseTrackedTests(unittest.TestCase):
 	gets no per-PR triage issue (#9215 and the five issues filed beside it)."""
 
 	def _collect(self, base: dict, heal_issues: list[dict] | None, **env: str):
-		extra = {"MOCK_HEAL_ISSUES": json.dumps(heal_issues if heal_issues is not None else [])}
+		extra = {
+			"MOCK_HEAL_ISSUES": json.dumps(heal_issues if heal_issues is not None else []),
+			"MOCK_PR_JOBS": PR_JOBS,
+			"MOCK_BASE_JOBS": BASE_JOBS,
+		}
 		extra.update(env)
 		calls: list[str] = []
 		tracked: dict = {}
@@ -2166,6 +2193,53 @@ class CheckFailureTriageBaseTrackedTests(unittest.TestCase):
 		# One run read (workflow id and path together) and one heal listing.
 		self.assertEqual(sum(call.startswith("api repos/owner/repo/actions/runs/1 ") for call in calls), 1)
 		self.assertEqual(sum("labels=ai:workflow-heal" in call for call in calls), 1)
+		# One jobs read for the PR run and one for main's newest run (id 2).
+		self.assertIn("api repos/owner/repo/actions/runs/1/jobs?filter=latest&per_page=100", calls)
+		self.assertIn("api repos/owner/repo/actions/runs/2/jobs?filter=latest&per_page=100", calls)
+		self.assertEqual(sum("/jobs?" in call for call in calls), 2)
+
+	def test_pr_job_that_main_runs_green_still_files(self) -> None:
+		# The workflow fails on main, but this PR's failing job passes there: a
+		# PR-specific failure the heal issue does not cover.
+		for pr_jobs in (
+			_jobs(("lint", "failure"), ("tests (ubuntu)", "failure")),
+			_jobs(("lint", "failure")),
+			# No failed job on the PR side: nothing proves the failure is main's.
+			_jobs(("lint", "success")),
+		):
+			with self.subTest(pr_jobs=pr_jobs):
+				proc, outputs, metadata, _calls, tracked = self._collect(TRACKED_BASE, [_heal_issue(9215)], MOCK_PR_JOBS=pr_jobs)
+				self.assertIn(
+					"CHECK_TRIAGE base_tracked outcome=file reason=failed_jobs_differ heal_issue=9215 workflow=.github/workflows/ci.yml base=main pr=17",
+					proc.stdout,
+				)
+				self.assertNotIn("skip reason=base_failure_tracked", proc.stdout)
+				self.assertNotIn("metadata_write_failed", proc.stdout)
+				self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure", proc.stdout)
+				self.assertNotIn("base_failure_tracked", outputs)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(metadata.get("generation"), "1")
+				self.assertEqual(tracked, {})
+
+	def test_unreadable_jobs_file_as_before(self) -> None:
+		for env in (
+			{"MOCK_PR_JOBS_FAIL": "1"},
+			{"MOCK_BASE_JOBS_FAIL": "1"},
+			# A page that does not hold every PR job could hide a distinct failure.
+			{"MOCK_PR_JOBS": _jobs(("tests (ubuntu)", "failure"), total=101)},
+			{"MOCK_PR_JOBS": "not json"},
+		):
+			with self.subTest(env=env):
+				proc, outputs, _metadata, _calls, tracked = self._collect(TRACKED_BASE, [_heal_issue(9215)], **env)
+				self.assertIn("CHECK_TRIAGE base_tracked outcome=fail_open reason=jobs_lookup_failed heal_issue=9215 base=main pr=17", proc.stdout)
+				self.assertNotIn("skip reason=base_failure_tracked", proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(tracked, {})
+		# Without main's run id (an older read shape) the jobs cannot be compared.
+		base = {k: v for k, v in TRACKED_BASE.items() if k != "base_run_id"}
+		proc, outputs, _metadata, _calls, _tracked = self._collect(base, [_heal_issue(9215)])
+		self.assertIn("reason=jobs_lookup_failed", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
 
 	def test_run_path_ref_suffix_is_stripped(self) -> None:
 		# A run's `.path` can end in "@<ref>"; the suffix must not disable the skip.

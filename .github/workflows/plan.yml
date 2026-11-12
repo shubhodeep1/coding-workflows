@@ -2313,6 +2313,9 @@ jobs:
           # The open-PR wait branch below promises an automatic resume only
           # while the unblock judge runs (same default as orchestrate_poll.yml).
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          # The pr_on_branch hold also needs the judge's `wait` verdict, which
+          # UNBLOCK_JUDGE_WAIT_ENABLED=false removes (same default as unblock_judge.yml).
+          UNBLOCK_JUDGE_WAIT_ENABLED: ${{ vars.UNBLOCK_JUDGE_WAIT_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -2349,6 +2352,13 @@ jobs:
           if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
             PLAN_BLOCKED_WAIT_PR=""
           fi
+          # Without the judge's `wait` verdict (scripts/unblock_judge.sh passes
+          # --wait-disabled) no pr_on_branch hold is placed either. Parsed like
+          # unblock_wait_enabled: unset, empty or true keeps waits on.
+          case "${UNBLOCK_JUDGE_WAIT_ENABLED:-true}" in
+            ""|true|TRUE|True) ;;
+            *) PLAN_BLOCKED_WAIT_PR="" ;;
+          esac
           if [ -n "${PLAN_BLOCKED_WAIT_PR}" ]; then
             {
               printf '%s\n' "Planning blocked: waiting on open PR #${PLAN_BLOCKED_WAIT_PR}."

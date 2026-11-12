@@ -691,6 +691,29 @@ triage_base_failure_heal_issue()
 		| first // empty' 2>/dev/null || return 1
 }
 
+# triage_run_failed_job_names <run id>
+#
+# Prints the names of the run's latest-attempt jobs whose conclusion is not
+# success, skipped or neutral, one per line. The tracked-failure skip compares
+# the PR run's list with the default branch run's, so a PR job that main runs
+# green is never folded into main's heal issue. API cost: one REST read (100
+# jobs). Returns 1 when the read fails or the page does not hold every job, so
+# the caller files as before.
+triage_run_failed_job_names()
+{
+	local failed_jobs_run_id="$1" failed_jobs_listing=""
+	[[ "${failed_jobs_run_id}" =~ ^[1-9][0-9]{0,19}$ ]] || return 1
+	if ! failed_jobs_listing="$(gh_retry gh api "repos/${REPO}/actions/runs/${failed_jobs_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)"; then
+		return 1
+	fi
+	printf '%s' "${failed_jobs_listing}" | jq -r '
+		if type != "object" or (.jobs | type) != "array" or (.total_count // 0) > (.jobs | length) then error("incomplete") else . end
+		| .jobs[]
+		| select((.conclusion // "") as $c | ["success", "skipped", "neutral"] | index($c) | not)
+		| (.name // "" | tostring)
+		| select(. != "")' 2>/dev/null || return 1
+}
+
 if [ "${TRIAGE_STAGE}" = "base-tracked-note" ]; then
 	# Runs in the workflow's "Note PR failure on its base-branch heal issue" step
 	# with the Issues-scoped token, after the collect stage skipped a failure the
@@ -1274,6 +1297,7 @@ else
 	base_gate_reason=""
 	base_gate_run_id=""
 	base_gate_workflow_path=""
+	base_gate_base_run_id=""
 	if [ -z "${CHECK_RUN_ID}" ]; then
 		# workflow_run triage: the check name is the workflow name.
 		base_gate_run_id="$(printf '%s' "${CHECK_DETAILS_URL}" | sed -n 's#^https://[^/]*/[^/]*/[^/]*/actions/runs/\([0-9][0-9]*\).*#\1#p' | head -n 1)"
@@ -1297,7 +1321,13 @@ else
 		fi
 		if [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then
 			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&event=push&per_page=1" \
-				--jq '.workflow_runs[0] | if . == null then "" elif .status == "completed" then (.conclusion // "") else "pending" end' 2>/dev/null || true)"
+				--jq '.workflow_runs[0] | if . == null then "" elif .status == "completed" then ((.conclusion // "") + " " + (.id // "" | tostring)) else "pending" end' 2>/dev/null || true)"
+			# A completed run also names its id ("<conclusion> <id>"); the
+			# tracked-failure skip below reads that run's failed jobs.
+			if [[ "${base_gate_conclusion}" == *" "* ]]; then
+				base_gate_base_run_id="${base_gate_conclusion#* }"
+				base_gate_conclusion="${base_gate_conclusion%% *}"
+			fi
 			[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_run"
 		elif [ -z "${CHECK_DETAILS_URL}" ]; then
 			base_gate_reason="details_url_unavailable"
@@ -1366,7 +1396,31 @@ else
 				log "base_tracked outcome=fail_open reason=heal_lookup_failed base=${BASE_REF} pr=${PR_NUMBER}"
 			fi
 			if [[ "${base_gate_heal_issue}" =~ ^[1-9][0-9]{0,9}$ ]]; then
-				if [[ "${HEAD_SHA,,}" =~ ^[0-9a-f]{40}$ ]] && jq -n \
+				# The workflow alone is not enough: a PR job that main runs green
+				# is a PR-specific failure the heal issue does not cover. Skip
+				# only when every job that failed on the PR also failed in main's
+				# newest run; a failed or incomplete jobs read files as before.
+				base_gate_jobs_tracked=false
+				base_gate_pr_failed_jobs=""
+				base_gate_base_failed_jobs=""
+				if base_gate_pr_failed_jobs="$(triage_run_failed_job_names "${base_gate_run_id}")" &&
+					base_gate_base_failed_jobs="$(triage_run_failed_job_names "${base_gate_base_run_id}")"; then
+					if [ -n "${base_gate_pr_failed_jobs}" ]; then
+						base_gate_jobs_tracked=true
+						while IFS= read -r base_gate_pr_failed_job; do
+							if ! grep -Fxq -- "${base_gate_pr_failed_job}" <<<"${base_gate_base_failed_jobs}"; then
+								base_gate_jobs_tracked=false
+								break
+							fi
+						done <<<"${base_gate_pr_failed_jobs}"
+					fi
+					if [ "${base_gate_jobs_tracked}" != "true" ]; then
+						log "base_tracked outcome=file reason=failed_jobs_differ heal_issue=${base_gate_heal_issue} workflow=${base_gate_workflow_path} base=${BASE_REF} pr=${PR_NUMBER}"
+					fi
+				else
+					log "base_tracked outcome=fail_open reason=jobs_lookup_failed heal_issue=${base_gate_heal_issue} base=${BASE_REF} pr=${PR_NUMBER}"
+				fi
+				if [ "${base_gate_jobs_tracked}" = "true" ] && [[ "${HEAD_SHA,,}" =~ ^[0-9a-f]{40}$ ]] && jq -n \
 					--arg heal_issue "${base_gate_heal_issue}" --arg pr_number "${PR_NUMBER}" \
 					--arg head_sha "${HEAD_SHA,,}" --arg run_id "${base_gate_run_id}" \
 					--arg base_ref "${BASE_REF}" --arg workflow_path "${base_gate_workflow_path}" \
@@ -1385,7 +1439,9 @@ else
 				# the note step cannot add the PR to the heal issue, so skipping
 				# would drop the failure. File the per-PR issue as before.
 				rm -f "${TRIAGE_BASE_TRACKED_FILE}"
-				log "base_tracked outcome=fail_open reason=metadata_write_failed heal_issue=${base_gate_heal_issue} base=${BASE_REF} pr=${PR_NUMBER}"
+				if [ "${base_gate_jobs_tracked}" = "true" ]; then
+					log "base_tracked outcome=fail_open reason=metadata_write_failed heal_issue=${base_gate_heal_issue} base=${BASE_REF} pr=${PR_NUMBER}"
+				fi
 			elif [ "${base_gate_heal_lookup_ok}" = "true" ]; then
 				log "base_tracked outcome=file reason=no_open_heal_issue workflow=${base_gate_workflow_path} base=${BASE_REF} pr=${PR_NUMBER}"
 			fi
