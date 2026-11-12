@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-12T20:12:14Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=tests/test_gh_retry_stdout_isolation.py:253-257; cited_path=PR description sentence \"The closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`.\" (not a repository file); files_touched=tests/test_ci_poll_test_sharding.py, tests/test_gh_retry_stdout_isolation.py.",
+  "phase": "review_autofix",
+  "pr_number": 9246,
+  "record_id": "lesson_20261112201214_e8c3d1941c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "PR description sentence \"The closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`.\" (not a repository file)",
+    "tests/test_gh_retry_stdout_isolation.py",
+    "tests/test_ci_poll_test_sharding.py"
+  ]
+}
