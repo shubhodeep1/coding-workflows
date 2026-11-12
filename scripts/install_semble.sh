@@ -14,7 +14,19 @@ semble_install_now_ms()
 		printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
 		return 0
 	fi
-	date +%s%3N
+	local semble_install_now_value=""
+	semble_install_now_value="$(date +%s%3N 2>/dev/null || true)"
+	if [[ "${semble_install_now_value}" =~ ^[0-9]{13,}$ ]]; then
+		printf '%s\n' "${semble_install_now_value}"
+		return 0
+	fi
+	# Whole seconds when `date` has no %3N; 0 when no clock is usable.
+	semble_install_now_value="$(date +%s 2>/dev/null || true)"
+	if [[ "${semble_install_now_value}" =~ ^[0-9]+$ ]]; then
+		printf '%s\n' "$(( 10#${semble_install_now_value} * 1000 ))"
+		return 0
+	fi
+	printf '0\n'
 }
 SEMBLE_INSTALL_START_MS="$(semble_install_now_ms)"
 semble_neutral_dir=""
