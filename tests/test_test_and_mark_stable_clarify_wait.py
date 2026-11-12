@@ -291,6 +291,19 @@ def test_failure_and_cancelled_comments_share_one_run_lookup_per_poll() -> None:
 	assert len(run_reads) == 10, run_reads
 
 
+def test_failure_and_cancelled_comments_naming_one_run_count_once_per_poll() -> None:
+	# Both comments name run 777 and the lookup misses: the ID is charged one
+	# miss on this poll (one wait line), and the timeout still names the
+	# cancelled run.
+	cancelled = f"AI clarification workflow was cancelled/timed out for https://github.com/{TEST_REPO}/issues/{ISSUE_NUMBER}. Run: https://github.com/{TEST_REPO}/actions/runs/777"
+	rc, outputs, log = _run_wait_clarify([_comment(_failed_body("777")), _comment(cancelled)], [])
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert log.count("names run 777; no non-skipped Clarify run") == 1, log
+	stall = [e for e in _error_lines(log) if "Clarify phase stalled" in e]
+	assert stall and "(cancelled Clarify run: https://github.com/owner/repo/actions/runs/777)" in stall[0], log
+
+
 def test_newest_bot_comment_is_the_one_checked() -> None:
 	comments = [
 		_comment("Starting clarify", association="NONE", login="github-actions[bot]"),

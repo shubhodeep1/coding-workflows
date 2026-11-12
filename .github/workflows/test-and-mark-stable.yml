@@ -1063,7 +1063,12 @@ jobs:
             # shared by both comments.
             CLARIFY_LATEST_RUN_ID=""
             CLARIFY_LATEST_RUN_LOOKED_UP=0
-            for CLARIFY_COMMENT_RUN_ID in "$CLARIFY_FAILURE_RUN_ID" "$CLARIFY_CANCELLED_RUN_ID"; do
+            # Both comments naming one run ID count once per poll, so that ID
+            # keeps its full 3 tries; CLARIFY_CANCELLED_RUN_ID stays set for the
+            # timeout note.
+            CLARIFY_CANCELLED_LOOP_RUN_ID="$CLARIFY_CANCELLED_RUN_ID"
+            [ "$CLARIFY_CANCELLED_LOOP_RUN_ID" != "$CLARIFY_FAILURE_RUN_ID" ] || CLARIFY_CANCELLED_LOOP_RUN_ID=""
+            for CLARIFY_COMMENT_RUN_ID in "$CLARIFY_FAILURE_RUN_ID" "$CLARIFY_CANCELLED_LOOP_RUN_ID"; do
               [[ "$CLARIFY_COMMENT_RUN_ID" =~ ^[0-9]+$ ]] || continue
               [[ " ${CLARIFY_FAILURE_CHECKED_ID} " == *" ${CLARIFY_COMMENT_RUN_ID} "* ]] && continue
               if [ "$CLARIFY_LATEST_RUN_LOOKED_UP" -eq 0 ]; then
