@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml (check-runs, not a changed file):the three failed check-runs in the snapshot | severity=low | confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The failing assertion behind the `lint`, `tests-hooks-and-orchestrator` and `orchestrate-poll (1)` check-run failures (run 43104060157) is not visible in the log tails, which stop at fixture output from tests that passed.\n  WHY: None of the failures maps to a file this PR changes, so no code fix can be derived from the snapshot; the reviewer rated it NIT (mapped here to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml (check-runs, not a changed file):the three failed check-runs in the snapshot | severity=NIT | confidence=2\n  PROBLEM: The failing assertion is not visible. Both job log tails stop 5 lines after the first `##[error]` line, at fixture output from tests that passed (`lint_pr_body_auto_close` and `test_verify_integration_fingerprints_rejects_reappeared_must_not_contain`). The snapshot used main's collector, which still anchors on the first `##[error]`.\n  WHY: None of the failures maps to a file this PR changes, so no code fix can be derived from the snapshot. The next snapshot taken with this PR's collector should show the real assertion.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a5c3971d3ec9cdb9ec05e535bd495db8a9e62a4cec6dcced7a2cd19446a1ff78",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9218,
+    "run_id": "43142051065",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43142051065",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112150655_b5eabe5100",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9218,
+    "run_id": "43142051065"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T15:06:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
