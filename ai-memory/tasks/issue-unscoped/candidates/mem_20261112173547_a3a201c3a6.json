@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh:350-361 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `case` statement validating `GUARD_HOOK_TEMPLATE_PAIRS` in `_conflict_prepare_guard_hook_template_merge` does not adequately handle all malformed entries.\n  WHY: Malformed entries could slip through and cause runtime failures when the string is split. Source severity is MAJOR.\n- tests/test_conflict_guard_hook_template_merge.py:396-419 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `_make_dual_conflict` fixture builds the conflict state with manual git manipulation, which may not match the resolution logic in `scripts/review_conflict_prepare.sh`.\n  WHY: The test could pass wrongly or fail with misleading errors. Source severity is MAJOR.\n- scripts/review_conflict_prepare.sh:356 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A malformed `GUARD_HOOK_TEMPLATE_PAIRS` entry triggers `exit 1`, which terminates the whole conflict preparation script.\n  WHY: This is overly aggressive for an authoring bug, since other independent conflict resolutions could otherwise proceed. Source severity is MAJOR.\n- .github/workflows/ci.yml:782-789 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `tests-hooks-and-orchestrator` check run (run 43105695165, job 130808305483) failed, and the log tail ends inside `tests/test_lint_pr_body_auto_close.py` output without showing the failing step. The z-ai review cites the loop at scripts/review_conflict_prepare.sh:351-395 for the same CI failure.\n  WHY: The failed job causes the dependent `lint` check to fail, and the cause cannot be mapped to this PR's diff. Severity disagreement: openai reported BLOCKER at confidence 5, z-ai reported NIT at confidence 2 and judged the failure inherited from the merge-base.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In scripts/review_conflict_prepare.sh, change _conflict_prepare_guard_hook_template_merge so it takes the live and template paths as arguments. Then loop the call site over every live/template pair in scripts/review_untrusted_workspace.py PAIRED_LIVE_COPIES\"\n  expected_change_site: scripts/review_conflict_prepare.sh (GUARD_HOOK_TEMPLATE_PAIRS)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The loop uses `GUARD_HOOK_TEMPLATE_PAIRS` defined inside scripts/review_conflict_prepare.sh instead of fetching `PAIRED_LIVE_COPIES` from scripts/review_untrusted_workspace.py, so the two files can drift.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_prepare.sh:350-361 | severity=MAJOR | confidence=3\n  PROBLEM: The `case` statement in `_conflict_prepare_guard_hook_template_merge` for validating `GUARD_HOOK_TEMPLATE_PAIRS` does not correctly handle all possible malformed entries.\n  WHY: The `*\\|*\\|*` arm catches entries with two or more pipes, but other malformed entries may slip through and cause runtime failures when splitting the string.\n- tests/test_conflict_guard_hook_template_merge.py:396-419 (test_both_paired_hooks_conflicting_are_resolved_in_one_pass) | severity=MAJOR | confidence=3\n  PROBLEM: The test fixture `_make_dual_conflict` creates a conflict state that relies on manual git manipulation, which may not reflect the resolution logic.\n  WHY: If the git state does not match the expected conflict state, the test could pass incorrectly or fail with misleading errors.\n- scripts/review_conflict_prepare.sh:356 | severity=MAJOR | confidence=4\n  PROBLEM: The script uses `exit 1` to terminate if a malformed entry is found in `GUARD_HOOK_TEMPLATE_PAIRS`.\n  WHY: Exiting the whole conflict preparation script over a malformed configuration entry is overly aggressive. It should log a clear error and fail only the guard-hook preparation.\n- TASK_GAP: Requirement: \"In scripts/review_conflict_prepare.sh, change _conflict_prepare_guard_hook_template_merge so it takes the live and template paths as arguments. Then loop the call site over every live/template pair in scripts/review_untrusted_workspace.py PAIRED_LIVE_COPIES\"\n  Expected change site: scripts/review_conflict_prepare.sh\n  Evidence of absence: The loop uses `GUARD_HOOK_TEMPLATE_PAIRS` defined within scripts/review_conflict_prepare.sh instead of dynamically fetching `PAIRED_LIVE_COPIES` from scripts/review_untrusted_workspace.py. This creates a maintenance risk if the two files drift.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:782-789 (failed check run `tests-hooks-and-orchestrator`, run 43105695165, job 130808305483) | severity=BLOCKER | confidence=5\n  PROBLEM: The CI check failed, but the supplied log tail ends during output from `tests/test_lint_pr_body_auto_close.py` and does not identify the failing step. The visible auto-close diagnostics correspond to test inputs.\n  WHY: The failed job causes the dependent `lint` check to fail. The cause cannot be mapped to this PR's changed code from the available log.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_conflict_prepare.sh:351-395 (failed check-run `tests-hooks-and-orchestrator`, run 43105695165, job 130808305483, and dependent `lint`) | severity=NIT | confidence=2\n  PROBLEM: The failing CI job's captured log tail ends inside the `python3 tests/test_lint_pr_body_auto_close.py` step. The `::error::[lint_pr_body_auto_close]` lines shown are that test's own fixture output (tests/test_lint_pr_body_auto_close.py:464 and :489).\n  WHY: The job failure blocks the `lint` aggregate and merge, but it is inherited from the merge-base or a step beyond the captured log, not demonstrable from this diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "62711a6f6beda2bbc454a3c52eb7fa634f265c23f15d49f4ada163c5ee65ad36",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9011,
+    "run_id": "43220872979",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43220872979",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112173547_a3a201c3a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9011,
+    "run_id": "43220872979"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T17:35:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
