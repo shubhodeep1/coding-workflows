@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:543 (job `tests-hooks-and-orchestrator`) | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The `tests-hooks-and-orchestrator` check run failed on head 254b6ba3, and so did the aggregate `lint` check (job 130646405646), because `CI_NEEDS_JSON` lists that job as `failure`; the supplied log tail does not show the failing step.\n  WHY: CI stays red and blocks PR validation, and only the full job log can show the cause. Neither reviewer could tie the failure to the PR's four changed files: the tail ends in passing `tests/test_lint_pr_body_auto_close.py` output, including the `##[error][lint_pr_body_auto_close]` lines that test expects. Severity disagreement: anthropic_claude-sonnet-5_5 rated NIT (confidence 2) and said to rerun the job or read its full log; openai_gpt-6-luna rated BLOCKER (confidence 5). The highest (BLOCKER\u2192critical) is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:job `tests-hooks-and-orchestrator` (failed job 130606294464, run 43044946395). The aggregate `lint` check (job 130646405646) fails only because `CI_NEEDS_JSON` lists that job as `failure`. | severity=NIT | confidence=2\n  PROBLEM: Two checks are red on head 254b6ba3. The 16 KB log tail shows only passing pytest steps and ends in the `tests/test_lint_pr_body_auto_close.py` step; its `##[error][lint_pr_body_auto_close]` lines about #2734 are output that test expects, and the step that actually failed is not in the tail.\n  WHY: The red `lint` aggregate keeps the PR from going green. None of the four changed files appears to run in that job, so this diff has no code fix to make; rerun the job or read its full log, and change this PR only if that log names one of its files.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:`tests-hooks-and-orchestrator` job, line 543 | severity=BLOCKER | confidence=5\n  PROBLEM: The check run for this job failed, and the aggregate `lint` check also failed because of it; the supplied log tail does not identify the failing step or connect the failure to this PR's changed files.\n  WHY: CI remains red and blocks PR validation, and the cause needs investigation from the full job log because the supplied tail is insufficient to identify it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2ecd806ac9e2636422b0d12b3fc6e0458d1af7d906a93bc401447af51de46540",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9180,
+    "run_id": "43142054109",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43142054109",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112151457_cd98a3b465",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9180,
+    "run_id": "43142054109"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T15:14:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
