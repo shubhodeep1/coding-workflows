@@ -225,7 +225,13 @@ def resolve_host_basenames(script: str, src: str) -> tuple[list[str], str]:
 		if kind == "variable":
 			resolved = _support_file_variable_basename(caller, value) if f'"${{{value}}}"' in text else None
 		else:
-			resolved = value if value in text else None
+			# The caller must pass `--module "${var}"` and assign that variable a
+			# path ending in the file; a mention in a comment or log line does not count.
+			passed = re.search(r'--module\s+"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"', text)
+			assigned = passed and re.search(
+				r"\b" + re.escape(passed.group(1)) + r'="(?:[^"\n]*/)?' + re.escape(value) + r'"', text
+			)
+			resolved = value if assigned else None
 		if resolved is None:
 			return [], f"{caller} no longer passes a resolvable {kind} {value!r} for ${{{variable}}} in {script}"
 		basenames.append(resolved)
