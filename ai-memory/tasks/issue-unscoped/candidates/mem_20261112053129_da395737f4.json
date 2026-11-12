@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_render_prompt_foundation.py:236-264 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The NOTE branch added in scripts/render_prompt.sh:314-321 only runs when ASSEMBLED_PROMPT_FILE is non-empty, but the only shell-level non-UTF-8 test forces PROMPT_PRELUDE_REFACTOR_ENABLED=false (tests/test_render_prompt_foundation.py:243), so no test executes the new NOTE path.\n  WHY: No test asserts that the assembled-path failure exits 1, prints exactly one ERROR line, and emits the NOTE, so a regression there would go undetected. The source labelled it SEVERITY: NIT, which is mapped to low.\n- scripts/render_prompt.sh:318-320 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Under `set -u`, expanding `${PROMPT_FILE}` in the new NOTE echo would abort with \"PROMPT_FILE: unbound variable\" if PROMPT_FILE were unset at that site.\n  WHY: This is a hardening suggestion (HARDENING_RISK_SCORE: 1) to use `${PROMPT_FILE:-<unknown>}`. The source gave no severity or confidence, so both values are inferred. z-ai_glm-5_3-flash states that all variables are assigned before use under `set -u`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/render_prompt.sh:318-320\n  PROBLEM: Under `set -u` (line 2: `set -euo pipefail`), expanding `${PROMPT_FILE}` in the new NOTE echo would abort with \"PROMPT_FILE: unbound variable\" if PROMPT_FILE were unset at that site.\n  WHY: The abort would defeat the single-line NOTE and emit a bash error before `exit 1`. Suggested fix: `${PROMPT_FILE:-<unknown>}`, or expand it inside the existing `[ -n \"${ASSEMBLED_PROMPT_FILE}\" ]` guard. This is a hardening suggestion with HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_render_prompt_foundation.py:236-264 | severity=low | confidence=4\n  PROBLEM: The NOTE branch added in scripts/render_prompt.sh:314-321 only runs when ASSEMBLED_PROMPT_FILE is non-empty, but the only shell-level non-UTF-8 test forces PROMPT_PRELUDE_REFACTOR_ENABLED=false (tests/test_render_prompt_foundation.py:243), so no test executes the new NOTE path.\n  WHY: No test asserts that the assembled-path failure exits 1, prints exactly one ERROR line, and emits the NOTE, so a regression there would reach production undetected. The source labelled it SEVERITY: NIT, which is mapped to low.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6c78f67ff3948a44c0a767b2f29bf99efc9f4cd8f8c46c3afb96c6df5330a51a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9356,
+    "run_id": "43158917552",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43158917552",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112053129_da395737f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9356,
+    "run_id": "43158917552"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T05:31:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
