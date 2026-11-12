@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Several merged changes involve `scripts/gh_helpers.sh` or checkout diagnostics and the shared `tests/test_gh_retry_stdout_isolation.py`. When changing GitHub CLI retries, verify that output from failed attempts does not leak into stdout consumed by callers.",
+  "fingerprint": "7360f92a26ba7140043c98718946e83c742939adb37e0b9bd63459e9268299db",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43299081683",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43299081683",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8953",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9203",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9225",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9252",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9376",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8960",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9259",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9264",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9279",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9385"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261112204705_90cfacb95f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep retry-attempt output isolated in GitHub CLI helper scripts.",
+  "timestamps": {
+    "created_at": "2026-11-12T20:47:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
