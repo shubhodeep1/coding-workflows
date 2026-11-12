@@ -30,10 +30,25 @@ _DRIFT_SPEC = importlib.util.spec_from_file_location(
 assert _DRIFT_SPEC is not None and _DRIFT_SPEC.loader is not None
 claude_template_drift = importlib.util.module_from_spec(_DRIFT_SPEC)
 _DRIFT_SPEC.loader.exec_module(claude_template_drift)
-GUARD_PATH = REPO_ROOT / ".claude" / "hooks" / "pr_merge_status_guard.py"
+
+
+def _live_or_twin(live: Path, twin: Path) -> Path:
+	"""Return the live `.claude/` copy, or its template twin when it is absent.
+
+	Review sandboxes snapshot the tree through review_untrusted_workspace.allowed(),
+	which never admits the host-only guard, settings.json or session-start.sh.
+	On the host the hook twins are byte-identical and the live settings are the
+	template plus the live-only allow rules (test_template_copies_are_identical
+	and tests/test_claude_template_live_parity.py enforce that there), so the
+	sandbox exercises the same code instead of failing on a missing file.
+	"""
+	return live if live.is_file() else twin
+
+
 TEMPLATE_GUARD_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "pr_merge_status_guard.py"
-SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
+GUARD_PATH = _live_or_twin(REPO_ROOT / ".claude" / "hooks" / "pr_merge_status_guard.py", TEMPLATE_GUARD_PATH)
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
+SETTINGS_PATH = _live_or_twin(REPO_ROOT / ".claude" / "settings.json", TEMPLATE_SETTINGS_PATH)
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
 # Full §21 text moved out of CLAUDE.md to keep the always-loaded file small.
@@ -387,7 +402,10 @@ def test_slug_extraction_matches_the_bash_implementation_it_mirrors() -> None:
 	and the whitelist is what stops a lookalike host from aiming `gh -R` at an
 	unrelated github.com repo.
 	"""
-	session_start = REPO_ROOT / ".claude" / "hooks" / "session-start.sh"
+	session_start = _live_or_twin(
+		REPO_ROOT / ".claude" / "hooks" / "session-start.sh",
+		REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "session-start.sh",
+	)
 	urls = [
 		"https://github.com/owner/repo.git",
 		"git@github.com:owner/repo.git",
@@ -2452,12 +2470,22 @@ def test_template_copies_are_identical() -> None:
 	"""Consumer repos receive the guard via the workflow-templates/.claude mirror."""
 	# On PR CI only, a template the PR changed (or whose drift its base already
 	# has) waits for the post-merge live-copy sync; CLAUDE.md stays strict.
+	# GUARD_PATH / SETTINGS_PATH may resolve to the twins (_live_or_twin), so
+	# parity reads the live copies directly. A review sandbox snapshot holds
+	# no host-only live copy and no template CLAUDE.md; there only the twins
+	# the other tests run against must exist, and the host and CI, where the
+	# live guard is present, keep every comparison strict.
+	live_guard = REPO_ROOT / ".claude" / "hooks" / "pr_merge_status_guard.py"
+	live_settings = REPO_ROOT / ".claude" / "settings.json"
+	assert TEMPLATE_GUARD_PATH.is_file() and TEMPLATE_SETTINGS_PATH.is_file()
+	if not live_guard.is_file():
+		return
 	pending = claude_template_drift.pending_template_paths(REPO_ROOT)
 	if "hooks/pr_merge_status_guard.py" not in pending:
-		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
+		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == live_guard.read_text(encoding="utf-8")
 	if "settings.json" not in pending:
 		assert claude_template_drift.settings_match_template(
-			TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8"), SETTINGS_PATH.read_text(encoding="utf-8")
+			TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8"), live_settings.read_text(encoding="utf-8")
 		)
 	assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
 
