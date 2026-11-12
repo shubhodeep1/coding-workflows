@@ -11118,7 +11118,11 @@ _final_merge_auto_resume_skip() {
 #                head has passed validation, so an unvalidated head is never
 #                merged on the strength of an older pass.
 # Every other outcome prints exactly one skip line and returns 1 with the
-# state untouched (fail closed).  One automatic retry per final PR head SHA,
+# state untouched (fail closed), except a failed phase-label write: it
+# restores the parked state but keeps the head in
+# `final_merge_auto_resume_head_shas` and re-persists it, so that head's
+# retry is spent and later ticks skip it as already_resumed_on_head.
+# One automatic retry per final PR head SHA,
 # recorded in `final_merge_auto_resume_head_shas` (issue #9320 item 4: a head
 # change re-enables exactly one more retry).
 #
@@ -11271,8 +11275,9 @@ maybe_auto_resume_final_merge_exhaustion() {
 
 	# Every check passed.  Write the state first (local file, no label churn
 	# when it fails) and persist it, then set the phase label; a failed
-	# persist or label write restores the saved state so the project stays
-	# parked unchanged.
+	# persist restores the saved state so the project stays parked unchanged;
+	# a failed label write restores the parked state with this head kept in
+	# the ledger (see the label-failure branch below).
 	fmar_state_backup="${STATE_FILE}.fmar.bak"
 	if ! cp "${STATE_FILE}" "${fmar_state_backup}" 2>/dev/null; then
 		rm -f "${fmar_state_backup}" 2>/dev/null || true
