@@ -2449,6 +2449,12 @@ case "${ACTION}" in
 			# fails open (alert sent). Two intakes racing on the same issue may
 			# both alert; that is accepted.
 			HEAL_SELF_ESCALATED="$(jq -r --arg l "${ESCALATED_LABEL}" '[.labels[]? | if type == "object" then .name else . end] | index($l) != null' "${PAYLOAD_FILE}" 2>/dev/null || echo false)"
+			# validate-payload iterates whatever `labels` holds, so a reported
+			# object such as {"ai:workflow-heal-escalated": true} would survive
+			# as its keys. Only a label array in the raw report counts as
+			# readable; any other shape fails open (alert sent).
+			HEAL_SELF_LABELS_SHAPE="$(jq -r 'if type == "object" then ((.labels | type) == "array") else false end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo false)"
+			[ "${HEAL_SELF_LABELS_SHAPE}" = "true" ] || HEAL_SELF_ESCALATED=false
 			ensure_label_exists "${ESCALATED_LABEL}" "${EXISTING_REPO}" || true
 			gh_retry gh issue edit "${EXISTING}" --repo "${EXISTING_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${EXISTING} repo=${EXISTING_REPO}"
 			log "escalate reason=heal_issue_failed_itself issue=${EXISTING} repo=${EXISTING_REPO} fp=${FP} failure=${FAILURE_REASON}"

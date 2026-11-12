@@ -6805,7 +6805,9 @@ def test_intake_heal_self_escalation_alerts_once() -> None:
 	# object entries are not a readable label list: validate-payload
 	# (workflow_failure_heal.py) keeps only string entries, so the escalated
 	# label never reaches the intake's jq check and the alert is still sent.
-	for malformed in (heal.ESCALATED_LABEL, [{"name": heal.ESCALATED_LABEL}], {"name": heal.ESCALATED_LABEL}):
+	# A dict keyed by the label itself survives validate-payload as its keys,
+	# so the intake also requires the raw report's labels to be an array.
+	for malformed in (heal.ESCALATED_LABEL, [{"name": heal.ESCALATED_LABEL}], {"name": heal.ESCALATED_LABEL}, {heal.ESCALATED_LABEL: True}):
 		result, state_after, fp, calls = _run_heal_self_escalation_intake(None, raw_labels=malformed)
 		assert result.returncode == 0, result.stderr + result.stdout
 		assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
