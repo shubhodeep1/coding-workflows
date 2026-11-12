@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/9214-ci-wiring-part2-to-release-job.md:1-2 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The fragment says \"keeps the step's 53-module set pinned\", but the pinned set is 54 modules (`POLL_GROUP_TWO_8772_MODULE_COUNT = 54` at tests/test_ci_poll_test_sharding.py:3417).\n  WHY: scripts/assemble_changelog.py folds the fragment verbatim into CHANGELOG.md, so the release notes would state the wrong count. No runtime failure. All reviewers rated it NIT. Mapped to low, with no severity disagreement. Line cited as 2 by most reviewers and 1 by minimax_minimax-m3.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/9214-ci-wiring-part2-to-release-job.md:2 | severity=NIT | confidence=4\n  PROBLEM: The fragment gives the wrong module count. `POLL_GROUP_TWO_8772_MODULE_COUNT = 54` at tests/test_ci_poll_test_sharding.py line 3417, and the test asserts 54 at lines 3485, 3682 and 3919. The module array in ci.yml also has 54 entries.\n  WHY: This is wrong text and no runtime path fails. The release notes would state 53 instead of 54.\n- Task completeness: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/9214-ci-wiring-part2-to-release-job.md:2 | severity=NIT | confidence=4\n  PROBLEM: The fragment incorrectly states \"53-module set\", while the implementation pins 54 modules.\n  WHY: Not a runtime failure, but the release notes will be factually incorrect about the size of the sharded module set.\n- Task completeness: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/9214-ci-wiring-part2-to-release-job.md:1 | severity=NIT | confidence=5\n  PROBLEM: The fragment says \"53 modules\" but the `wg2_modules` array in `.github/workflows/ci.yml` lists 54 distinct module paths. The same wrong \"53 modules\" claim is repeated in the migrated comment block in `.github/workflows/ci.yml` (the `#8772` paragraph: \"this step names 53 modules with about 568 test functions\"; the `#8980` paragraph: \"(53 modules, about 568 tests, 134 subprocess call sites)\"; the `#9021` paragraph: \"By AST count it names 53 modules with about 639 test functions\"), and in `tests/test_ci_poll_test_sharding.py` line 3881 (the `WiringGuardPartTwoShardingContractTest` docstring: \"runs its 53 modules in local shards\"). `POLL_GROUP_TWO_8772_MODULE_COUNT` in `tests/test_ci_poll_test_sharding.py` (line 3417) is the canonical count and equals 54.\n  WHY: scripts/assemble_changelog.py folds the fragment verbatim into CHANGELOG.md at release time, so release notes will state the wrong module count. This is a documentation defect, not a runtime failure of the moved step.\n- Task completeness: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/9214-ci-wiring-part2-to-release-job.md:2 | severity=NIT | confidence=5\n  PROBLEM: The PR-new changelog fragment states the step's module set is 53 modules, but the pinned set in the contract test is 54: `POLL_GROUP_TWO_8772_MODULE_COUNT = 54` (tests/test_ci_poll_test_sharding.py:3417), whose adjacent comment records \"#9056 added tests/test_ci_actionlint_cache.py (53 -> 54 modules)\" (line 3412), and the step body in .github/workflows/ci.yml includes tests/test_ci_actionlint_cache.py (line 2591).\n  WHY: No runtime failure, but scripts/assemble_changelog.py folds this fragment verbatim into CHANGELOG.md at release, so the release notes would state a wrong module count.\n- Not re-flagged: the matching stale \"53 modules\" figures in .github/workflows/ci.yml lines 2533/2555 and tests/test_ci_poll_test_sharding.py lines 3401/3607/3877 are pre-existing historical-incident comments, unchanged by the last run.\n- Task completeness: NONE. All deliverables of the linked issue are met.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "95bdc558f6e496f99beeb5a88d7b42c09a28ddef1ed3f207bed7dd4a2f3d52b5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9268,
+    "run_id": "43186467649",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43186467649",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112115236_e18491971f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9268,
+    "run_id": "43186467649"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T11:52:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
