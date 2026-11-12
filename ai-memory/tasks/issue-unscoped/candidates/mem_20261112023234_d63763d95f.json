@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- analysis/validation-selftest-status.json:2-4 | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: No defect found; `consecutive_green_runs` goes from 179 to 180 and `latest_run.generated_at` is 2026-11-11T02:31:46Z, and the JSON is valid (recorded as a NIT).\n  WHY: The reviewer lists it only to record the check; the increment is consistent with `overall_status` \"pass\" and 3 of 3 fixtures passing.\n- .github/workflows/ci.yml:aggregate lint job (3465-3490) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The PR-head CI checks (lint, orchestrate-poll, tests-hooks-and-orchestrator) fail, and the review / codex-agent check also failed because reviewers failed, so the required CI gate stays failing.\n  WHY: The aggregator exits with status 1 when a dependency fails, which blocks merge. Both reviewers rated it BLOCKER; the severity is mapped to critical. They note the logs do not tie the failures to the JSON change.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- analysis/validation-selftest-status.json:lines 2-4 | severity=NIT | confidence=1\n  PROBLEM: No defect found. The file parses as valid JSON, `consecutive_green_runs` goes from 179 to 180, `generated_at` moves forward by one day, and the keys and schema versions are unchanged.\n  WHY: It does not fail. It is listed only to record the check.\n- (CI failures on PR head: `tests-hooks-and-orchestrator`, `orchestrate-poll (2)`, `lint`) No file-level defect reported. The reviewer cannot map the failures to this data-only PR. Visible test results are PASS, and the error-looking messages come from fixtures that trigger them on purpose. `lint` only collects the other jobs' results. Editing `.github/workflows/ci.yml` would be out of scope.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:aggregate lint job | severity=BLOCKER | confidence=5\n  PROBLEM: The PR-head CI checks (lint, orchestrate-poll, tests-hooks-and-orchestrator) are failing, blocking PR merge.\n  WHY: The failures block the required status checks. The JSON data change itself is correct, but the pipeline state is failing, so the PR is unmergeable.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:3465-3490 | severity=BLOCKER | confidence=5\n  PROBLEM: The PR head's checks report failures in tests-hooks-and-orchestrator and orchestrate-poll, and the review / codex-agent check also failed because reviewers failed.\n  WHY: The CI aggregator exits with status 1 when either dependency is unsuccessful, so the required CI gate remains failing. The supplied logs do not tie these failures to the status JSON change.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "dee945aeeeba104f1425ecdeb15b0f837112bc8d5aa3c29f1de7bc004c77722e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9229,
+    "run_id": "43112488149",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43112488149",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112023234_d63763d95f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9229,
+    "run_id": "43112488149"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T02:32:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
