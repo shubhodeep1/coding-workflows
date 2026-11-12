@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should this fix handle the closed-reader failure that breaks on ubuntu-26.04 (`gh_retry` replay via `cat` in `scripts/gh_helpers.sh:1229`)? It is not caused by PR #9356, and open PR #9246 already targets it.\nChoices:\nA) Leave it out of this fix. PR #9246 (or a separate fix on `main`) owns it, and PR #9356 goes green after that lands and `main` is merged into `ai/issue-9341`. This follows the triage note: \"fix it on the base branch, not in this PR\". (RECOMMENDED)\nB) Fix it on `ai/issue-9341` as well: change the `gh_retry` success replay in `scripts/gh_helpers.sh` so a closed reader gives a non-zero status even with uutils `cat`, and keep the test as it is. **Note:** this likely duplicates and conflicts with open PR #9246.\nC) Change only the test (`tests/test_gh_retry_stdout_isolation.py`) so it accepts the ubuntu-26.04 behaviour. **Note:** this weakens the check, which the triage issue says not to do.\nQ2: What should this fix deliver for the missing #9341 work on `ai/issue-9341`?\nChoices:\nA) The whole changelog: in `render_prompt.py`, `load_prompt` handles `UnicodeDecodeError` and `main()` gets a final `except Exception` that prints the named `ERROR:` line. In `render_prompt.sh`, `collect_prompt_placeholders` handles read and decode errors, and the script checks its exit status instead of reading it through `< <(...)`. The three new tests are also added to the test module's `main()` so CI runs them. (RECOMMENDED)\nB) Only add the three tests to `main()`. CI then shows the missing work as failures, and the implementation is left to the #9341 pipeline.\nC) Nothing for #9341. This fix covers only the failing CI check.\n**Note:** Q1:A with Q2:C leaves nothing to implement. Do not choose both.",
+  "fingerprint": "1be31db8f24915119433e4353eb1e765560f18cb74813c4139ecc9626352d83e",
+  "lineage": {
+    "issue_number": 9365,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43141662811",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43141662811",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261112023317_4a65e40ea8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9365,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43141662811"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9365 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-12T02:33:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
