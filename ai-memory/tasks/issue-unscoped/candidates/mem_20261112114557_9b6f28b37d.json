@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION (non-finding, HARDENING_RISK_SCORE: 1) scripts/workflow_failure_heal_intake.sh:line 2457 (after `[ \"${HEAL_SELF_LABELS_SHAPE}\" = \"true\" ] || HEAL_SELF_ESCALATED=false`)\n  PROBLEM: When the raw-shape gate blocks a suppression that would otherwise happen, the CRITICAL alert that follows looks the same as a first escalation, and no log line records that the label list was unreadable.\n  WHY: An operator triaging a repeat alert cannot tell \"malformed labels\" from \"label never set\". The suggested fix is a 2-4 line `log \"warn heal_self_labels_unreadable issue=${EXISTING} repo=${EXISTING_REPO}\"` added when the gate fires, guarded against double-logging.\n- NOTE (non-finding): The pre-push gate lists `tests/test_orchestrate_lib.py` (unnamed test) and `tests/test_review_autofix_provider_outage_contract.py::test_label_contract_and_reporter_skip` as \"caused by this change\", but check-runs on the head SHA report failed_count 0. Neither failure could be mapped to a code site, so no fix was proposed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "99e4e47475b44c9f5d551fa76f1bb6fc42aebede2a0c933470eee2c2fe26a2e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9281,
+    "run_id": "43182396474",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43182396474",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112114557_9b6f28b37d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9281,
+    "run_id": "43182396474"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T11:45:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
