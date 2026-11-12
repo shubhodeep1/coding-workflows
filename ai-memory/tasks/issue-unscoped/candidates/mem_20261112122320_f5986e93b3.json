@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:77-91,129-135 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `(( delta >= 0 ))` guard in `_orch_poll_cycle_project_flush` and `_orch_poll_cycle_on_exit` is called potentially fragile (bashism, handling of an unset variable), though the reviewer says the logic is sound and defaults to `unknown`.\n  WHY: The reviewer concludes the logic matches the requirement to report `unknown` on negative elapsed time, so this is a low-severity observation. Severity was not stated in the source and low is inferred.\n- PR description (PR body) | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The PR body says \"Closes https://github.com/shubhodeep1/coding-workflows/issues/9332\". If #9332 carries `ai:orchestrator-tracking`, merging auto-closes it and halts orchestrator wave dispatch (\u00a719/\u00a721).\n  WHY: Both reviewers rated it MAJOR with confidence 3, and neither could confirm the label; sonnet-5_5 rejected it as unsupported because nothing shows #9332 is a tracking issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:77-91,129-135 | severity=low | confidence=4\n  PROBLEM: The `(( delta >= 0 ))` guard in `_orch_poll_cycle_project_flush` and `_orch_poll_cycle_on_exit` is called potentially fragile (bashism, handling of an unset variable), though the reviewer says the logic is sound and defaults to `unknown`.\n  WHY: The reviewer concludes the logic matches the requirement to report `unknown` on negative elapsed time.\n- TASK_GAP (reported as satisfied, no gap): Requirement: \"Add changelog.d/9243-poller-negative-elapsed-unknown.md.\" | Expected change site: changelog.d/9243-poller-negative-elapsed-unknown.md | Evidence of absence: already in the PR diff, requirement satisfied. | ISSUE_CONFIDENCE: 5\n- TASK_GAP (reported as satisfied, no gap): Requirement: \"Add tests to tests/test_orchestrate_poll_cycle_summary.py: test_cycle_summary_reports_unknown_elapsed_when_start_is_in_the_future ... and test_project_timing_reports_unknown_elapsed_when_start_is_in_the_future.\" | Expected change site: tests/test_orchestrate_poll_cycle_summary.py | Evidence of absence: both tests already in the PR diff, requirement satisfied. | ISSUE_CONFIDENCE: 5\n- TASK_GAP (reported as satisfied, no gap): Requirement: \"Run the whole test file plus tests/test_alert_levels_human_only.py.\" | Expected change site: N/A (CI process) | Evidence of absence: the editor summary confirms 103 tests passed, requirement satisfied. | ISSUE_CONFIDENCE: 5\n- PR description | severity=high (stated as MAJOR) | confidence=3\n  PROBLEM: The PR description says \"Closes https://github.com/shubhodeep1/coding-workflows/issues/9332\". If #9332 is an `ai:orchestrator-tracking` issue, this violates \u00a719/\u00a721 of `CLAUDE.md`.\n  WHY: The consolidator flagged it as a potential issue. Listed under TASK COMPLETENESS with Expected change site: PR Description.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- PR description (PR body) | severity=high (stated as MAJOR) | confidence=3\n  PROBLEM: The PR body uses the \"Closes\" auto-close keyword against issue #9332 in URL form. Per \u00a719/\u00a721, if #9332 carries `ai:orchestrator-tracking`, GitHub will auto-close it on merge.\n  WHY: Auto-closing a tracking issue makes the poller treat the project as complete and stop dispatching waves. The label cannot be confirmed from the prompt, and the fix is otherwise correct.\n- TASK_GAP (reported as satisfied, no gap): Requirement: keep the computed elapsed value only when >= 0 in `_orch_poll_cycle_project_flush` and `_orch_poll_cycle_on_exit`, otherwise leave it as unknown. | Expected change site: scripts/orchestrate_poll_process.sh lines 82-86 and lines 125-127 | Evidence of absence: both changes are present. SATISFIED.\n- TASK_GAP (reported as satisfied, no gap): Requirement: do not change `_orch_poll_cycle_now_ms`, its fallbacks, or SUMMARY_RE, and do not skip any test. | Expected change site: scripts/orchestrate_poll_process.sh `_orch_poll_cycle_now_ms`; tests/test_orchestrate_poll_cycle_summary.py SUMMARY_RE | Evidence of absence: untouched, SUMMARY_RE at tests/test_orchestrate_poll_cycle_summary.py:32-36 is unchanged, no test skipped. SATISFIED.\n- TASK_GAP (reported as satisfied, no gap): Requirement: add the two future-start tests to tests/test_orchestrate_poll_cycle_summary.py. | Expected change site: tests/test_orchestrate_poll_cycle_summary.py | Evidence of absence: both present at lines 188-194 and 197-209. SATISFIED.\n- TASK_GAP (reported as satisfied, no gap): Requirement: add changelog.d/9243-poller-negative-elapsed-unknown.md. | Expected change site: changelog.d/9243-poller-negative-elapsed-unknown.md | Evidence of absence: present, uses `Refs #9243`. SATISFIED.\n- TASK_GAP (reported as satisfied, no gap): Requirement: both new tests must fail on isolated-base and pass after the fix. | Expected change site: tests/test_orchestrate_poll_cycle_summary.py | Evidence of absence: previous editor runs verified both directions. SATISFIED.\n- HARDENING_SUGGESTIONS: scripts/orchestrate_poll_process.sh `_orch_poll_cycle_project_flush` lines 84-91 and `_orch_poll_cycle_on_exit` lines 130-136. The subtraction runs before the `>= 0` check, but both operands are validated integers, so the reviewer says no change is needed (0 lines). HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "360c93ca1358b0abcba0bf965f7b788d10084989606e2b6f8dc2290534e3c207",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9336,
+    "run_id": "43133026374",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43133026374",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112122320_f5986e93b3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9336,
+    "run_id": "43133026374"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T12:23:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
