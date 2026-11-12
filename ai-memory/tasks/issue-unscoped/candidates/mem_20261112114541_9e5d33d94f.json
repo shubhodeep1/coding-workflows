@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:1546-1558 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_mt_now_ms()` lacks the final `date +%s` fallback.\n  WHY: Without EPOCHREALTIME and with a bad `date +%s%3N` reading, no usable clock value is returned. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) refuted this: the on-disk code has the fallback (lines 1556-1563 and 1560-1562).\n- scripts/review_autofix_step_checkout_pr_head_branch.sh:39-52 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `review_head_checkout_now_ms()` lacks the final `date +%s` fallback.\n  WHY: Without EPOCHREALTIME and with a bad `date +%s%3N` reading, no usable clock value is returned. Other reviewers refuted this: lines 55-58 contain the `date +%s` fallback.\n- scripts/review_conflict_resolve.sh:426-438 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_resolver_terminal_now_ms()` lacks the final `date +%s` fallback.\n  WHY: Without EPOCHREALTIME and with a bad `date +%s%3N` reading, no usable clock value is returned. Other reviewers refuted this: lines 441-446 contain the `date +%s` fallback.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description says it \"Cherry-picks #9246's four commits unchanged\", including the `.github/workflows/ci.yml` step timer reading `EPOCHREALTIME`.\n  expected_change_site: .github/workflows/ci.yml, `sf_now_ms`\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: ci.yml is not in the PR changed-files list and has no hunk in the PR diff, but the checkout's ci.yml line 3198 already defines `sf_now_ms()` with the EPOCHREALTIME-first read. The new test `test_full_body_elapsed_ignores_a_short_date_reading` exercises it. Severity NIT (a description-vs-delivery mismatch). minimax_minimax-m3 and z-ai_glm-5_3-flash add that ci.yml has only the raw `date +%s%3N` fallback, with no validation and no `date +%s` tier.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- (No findings reported.)\n- TASK_GAP: Requirement: PR description says it cherry-picks #9246's commits and lists `.github/workflows/ci.yml` (the step timer reads `EPOCHREALTIME`).\n  Expected change site: `.github/workflows/ci.yml`, `sf_now_ms`.\n  Evidence of absence: `ci.yml` has no hunk in the PR diff. However, line 3198 of the head checkout's ci.yml already defines `sf_now_ms()` with the EPOCHREALTIME-first read. The reviewer judged it likely already on the base or landed with the conflict resolution, and not a missing deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n(The reviewer also dropped gemini's three findings as wrong.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_merge_train.sh:1546-1558 | severity=MAJOR | confidence=4\n  PROBLEM: `_mt_now_ms()` lacks the final `date +%s` fallback.\n  WHY: Without EPOCHREALTIME and with a bad `date +%s%3N` reading, no usable clock value is returned.\n- scripts/review_autofix_step_checkout_pr_head_branch.sh:39-52 | severity=MAJOR | confidence=4\n  PROBLEM: `review_head_checkout_now_ms()` lacks the final `date +%s` fallback.\n  WHY: Without EPOCHREALTIME and with a bad `date +%s%3N` reading, no usable clock value is returned.\n- scripts/review_conflict_resolve.sh:426-438 | severity=MAJOR | confidence=4\n  PROBLEM: `_resolver_terminal_now_ms()` lacks the final `date +%s` fallback.\n  WHY: Without EPOCHREALTIME and with a bad `date +%s%3N` reading, no usable clock value is returned.\n- TASK_GAP: Requirement: \"Cherry-picks #9246's four commits unchanged\", specifically mentioning `.github/workflows/ci.yml`.\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: ci.yml is not in the PR changed-files list and has no hunk in the PR diff, so the step timer's EPOCHREALTIME read and fallback logic are not updated in this file.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Cherry-picks #9246's four commits unchanged (`git cherry-pick -x`): the `ci.yml` step timer reads `EPOCHREALTIME`\", and the \"## Changes\" section listing \".github/workflows/ci.yml\" under \"From #9246\".\n  Expected change site: .github/workflows/ci.yml, the `sf_now_ms` timer definition.\n  Evidence of absence: The PR's 11 changed files do not include ci.yml and the full diff has no hunk for it. The on-disk ci.yml at line 3198 already carries the EPOCHREALTIME-first `sf_now_ms()`, so runtime is satisfied. The description's \"four-commit cherry-pick\" claim is misleading. The on-disk timer has no `date +%s` second fallback and no 13-digit validation, and the new test does not catch that.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n(The reviewer also rejected gemini's three findings as not applicable.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Cherry-picks #9246's four commits unchanged,\" including the `.github/workflows/ci.yml` single-file step timer change.\n  Expected change site: `.github/workflows/ci.yml`, `sf_now_ms`.\n  Evidence of absence: ci.yml is not in the PR changed-files list and has no hunk in the PR diff. The checked-out file contains an `EPOCHREALTIME`-first `sf_now_ms()`, but this PR does not carry the described change at that site.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: Requirement: PR Summary states \"Cherry-picks #9246's four commits unchanged (`git cherry-pick -x`): the `ci.yml` step timer reads `EPOCHREALTIME`\", and \"## Changes\" lists \"From #9246: `.github/workflows/ci.yml`, `tests/test_gh_retry_stdout_isolation.py`, `tests/test_ci_poll_test_sharding.py`\".\n  Expected change site: `.github/workflows/ci.yml`, `sf_now_ms`.\n  Evidence of absence: ci.yml is absent from `pr_changed_files.txt` (11 files) and from every hunk in `original_pr_diff.patch`. The tree's ci.yml:3198 has `sf_now_ms()` reading `EPOCHREALTIME` first, with only a raw `date +%s%3N` fallback. This is a description-vs-delivery mismatch, not a functional gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n(The reviewer found no other findings and refuted gemini's three findings against `scripts/review_merge_train.sh:1560-1562`, `scripts/review_conflict_resolve.sh:441-445` and `scripts/review_autofix_step_checkout_pr_head_branch.sh:55-58`.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0656bfe40211dc6267fd1150fff2d7a7056833e213fb2ad97621052a82d6fd44",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9345,
+    "run_id": "43185048489",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43185048489",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112114541_9e5d33d94f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9345,
+    "run_id": "43185048489"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T11:45:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
