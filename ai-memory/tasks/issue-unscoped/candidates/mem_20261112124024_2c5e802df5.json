@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:543, 2489, 3459-3490 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The check runs `lint`, `orchestrate-poll (2)` and `tests-hooks-and-orchestrator` failed on this head, and no reviewer could link any of them to the changed status JSON.\n  WHY: The `lint` job only aggregates the results of its needed jobs, and the log tails do not show the failing assertion, so the jobs need a re-run and full logs. Both reviewers rated it NIT, so there is no severity disagreement. The line references come from openai_gpt-6-luna. anthropic_claude-sonnet-5_5 cited no line numbers, and openai_gpt-6-luna also cited review_autofix.yml:3442.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml (the aggregate `lint` job; failing check runs `lint`, `orchestrate-poll (2)`, `tests-hooks-and-orchestrator`) | severity=NIT | confidence=2\n  PROBLEM: Three check runs failed on this head and none could be mapped to the diff. `lint` only aggregates its needed jobs. The visible `orchestrate-poll (2)` and `tests-hooks-and-orchestrator` log tails show passing tests, and the logged lint errors are fixture output.\n  WHY: The changed file is a data file that these jobs do not read, so no causal link can be shown. A re-run with the full job logs is needed.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:543, 2489, 3459-3490; .github/workflows/review_autofix.yml:3442 | severity=NIT | confidence=2\n  PROBLEM: The check-run context reports failures for tests-hooks-and-orchestrator, orchestrate-poll (2), lint and review / codex-agent on head 6113dcbb. The captured tails do not identify the failing assertion, and none ties the failures to the changed status JSON.\n  WHY: These failures leave the CI aggregate and review check unsuccessful for this head, so the underlying failed jobs need investigating before the PR is treated as green.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "6d930917fcaa59ca42b1583a659b876d33c891a878603a7aceffd08fb3ade631",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9229,
+    "run_id": "43133092667",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43133092667",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112124024_2c5e802df5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9229,
+    "run_id": "43133092667"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T12:40:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
