@@ -297,6 +297,42 @@ def test_render_prompt_py_reports_unexpected_exception_without_traceback() -> No
 	]
 
 
+def test_render_prompt_py_unexpected_exception_escapes_cr_lf() -> None:
+	# The generic `except Exception` branch escapes CR/LF so a multi-line
+	# exception message still yields exactly one stderr line (#9341).
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_unexpected_crlf_") as td:
+		prompt_file = Path(td) / "mode-sample.txt"
+		prompt_file.write_text("Header\nFooter\n", encoding="utf-8")
+		script = (
+			"import importlib.util, sys\n"
+			f"spec = importlib.util.spec_from_file_location('render_prompt', {str(RENDER_PROMPT_PY)!r})\n"
+			"module = importlib.util.module_from_spec(spec)\n"
+			"assert spec.loader is not None\n"
+			"sys.modules['render_prompt'] = module\n"
+			"spec.loader.exec_module(module)\n"
+			"def _boom(*args, **kwargs):\n"
+			"\traise RuntimeError('first\\r\\nsecond\\nthird')\n"
+			"module.apply_workflow_overlay = _boom\n"
+			f"raise SystemExit(module.main([{str(prompt_file)!r}]))\n"
+		)
+		proc = subprocess.run(
+			[sys.executable, "-c", script],
+			cwd=str(REPO_ROOT),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 1, proc.stderr
+	assert proc.stdout == ""
+	assert "Traceback" not in proc.stderr
+	assert proc.stderr.splitlines() == [
+		"ERROR: render_prompt unexpected RuntimeError: first\\r\\nsecond\\nthird "
+		f"(prompt={prompt_file})"
+	]
+
+
 def test_render_prompt_sh_renders_header_with_empty_repo_learnings() -> None:
 	header_compaction_rules = (
 		"<compaction-rules>\n"
