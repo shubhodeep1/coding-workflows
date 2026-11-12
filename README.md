@@ -4775,8 +4775,10 @@ The hold gates only the scheduled `cycle` job of `promote-main-to-stable.yml`. A
 was already in flight at rollback time (an open tracking issue labelled
 `ai:comprehensive-test-pending`) is not gated: when its verifying run is ready to merge, the poller
 dispatches the `promote` job with `target_sha`, which fast-forwards `stable`, runs the release gate,
-and that release clears the hold. The rollback only cancels promote runs that are queued or running
-when it starts. If such a tracking issue is open and the regression may be in its `promote_sha`,
+and that release clears the hold. The rollback cancels promote, release and auto-release runs that
+are queued or running at its start or that become active while it drains (up to
+`STABLE_ROLLBACK_CANCEL_WAIT_SECS`); a promote run the poller dispatches after the rollback has
+finished is not cancelled. If such a tracking issue is open and the regression may be in its `promote_sha`,
 remove the `ai:comprehensive-test-pending` label from it after rolling back, so the cycle stays
 unpromoted until a human decides.
 
