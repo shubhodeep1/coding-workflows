@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1238-1247 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The NUL-byte reconstruction logic in `gh_retry`'s replay loop is fragile and can print a duplicated trailing chunk when the file ends with a NUL byte (`a\\0` becoming `a\\0a`).\n  WHY: Gemini's severity is MAJOR, mapped here to high. The other three reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) traced the case and found it does not reproduce, because `read -d ''` clears the variable on an EOF read with no data.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Skip names that already exist using os.path.lexists (or target.is_symlink() or target.exists()) so broken links are not linked twice.\"\n  expected_change_site: tests/test_codex_isolated_exec.py\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR does not touch tests/test_codex_isolated_exec.py. The PR description says the os.path.lexists part already shipped (Refs #9200), and Gemini could not verify it on the branch. z-ai_glm-5_3-flash found it present at tests/test_codex_isolated_exec.py:232, and the other reviewers accepted it as already shipped.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:1238-1247 | severity=MAJOR | confidence=3\n  PROBLEM: The NUL-byte reconstruction logic in `gh_retry`'s replay loop is fragile and can lead to duplicated output when files end with a NUL byte.\n  WHY: If a file ends in `a\\0`, `read` might leave `_gh_retry_replay_chunk` with `a` after the final iteration, so the post-loop `[ -n ... ]` check prints it twice.\n- TASK_GAP:\n  Requirement: \"Skip names that already exist using os.path.lexists (or target.is_symlink() or target.exists()) so broken links are not linked twice.\" in `tests/test_codex_isolated_exec.py`.\n  Expected change site: tests/test_codex_isolated_exec.py\n  Evidence of absence: The PR description states \"The os.path.lexists part of the same issue already shipped (Refs #9200)\". However, the issue explicitly asks to fix it as part of this PR's scope. The reviewer says it must verify whether this code exists on the current branch (578edc12abe5f94ad8a2677c5203c846cb9b596b).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f19f37c9bcab90276a64063af52148290b841ef9d8d3b777e420dfa0d409f859",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9267,
+    "run_id": "43122666680",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43122666680",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112084213_d994005e12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9267,
+    "run_id": "43122666680"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T08:42:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
