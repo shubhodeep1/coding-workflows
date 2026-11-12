@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:3734-3758 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Forward walk past `_TRACEBACK_SCAN_MAX_LINES` may leave `filter_log` with incomplete context for tracebacks that lack a clear unindented exception line.\n  WHY: The reviewer's own analysis concludes the implementation handles these cases and the fix is logically sound. The source gave no severity, so low is a placeholder.\n- scripts/workflow_failure_heal.py:3730-3759 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The forward walk repeats regex searches (`_TRACEBACK_HEADER_RE.search(content)`) on every line.\n  WHY: The reviewer concluded the cost is negligible and not a performance failure. The source gave no severity, so low is a placeholder.\n- scripts/workflow_failure_heal.py:none | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: Check-runs `lint`, `orchestrate-poll (1)` and `tests-hooks-and-orchestrator` failed on this head, and the failures cannot be tied to any line of this PR.\n  WHY: The truncated log tails show only passing cases and fixture `##[error]` output, and the last run changed only comments. The full logs of jobs 130796135823 and 130796136396 are needed. Both reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal.py:none | severity=NIT | confidence=2\n  PROBLEM: Two CI jobs failed on this head (jobs 130796135823 and 130796136396), and the failure cannot be tied to any line of this PR.\n  WHY: No failing code path from this diff to those jobs was found. The last commit changed only comments, and the full logs are needed.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:3734-3758 | confidence=4\n  PROBLEM: Forward walk past `_TRACEBACK_SCAN_MAX_LINES` may leave `filter_log` with incomplete context for tracebacks that lack a clear unindented exception line.\n  WHY: The reviewer concluded the implementation handles these cases and the fix is logically sound.\n- scripts/workflow_failure_heal.py:3730-3759 | confidence=5\n  PROBLEM: The forward walk repeats regex searches (`_TRACEBACK_HEADER_RE.search(content)`) on every line.\n  WHY: The reviewer concluded the cost is negligible and not a performance failure.\n- TASK_GAP: Requirement: PR description lists 4 tests. Expected change site: PR description and `tests/test_workflow_failure_heal.py`. Evidence of absence: the diff implements exactly these 4 tests, so the requirement is satisfied. | severity=NIT | confidence=5\n- HARDENING_SUGGESTION: `_traceback_context_indices` \u2014 cache `_LOG_TIMESTAMP_RE.sub(\"\", lines[cursor])` in a `content` variable once per loop iteration (about 1 line). HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_failure_heal.py:none | severity=NIT | confidence=2\n  PROBLEM: Three check-runs on the PR head failed (`tests-hooks-and-orchestrator` job 130796135823, `orchestrate-poll (1)` job 130796136396, and the aggregating `lint` job 130809735661), and none could be mapped to any line of this PR.\n  WHY: `lint` only aggregates the other jobs. Both failing jobs' tails show only passing cases and fixture `##[error]` output. The failing step lies past the truncated tails, and the last run changed only comments.\n- TASK_GAP_DEFERRED (not emitted as a gap): The PR description's \"## Changes\" section says two new tests while the diff ships four, all in `tests/test_workflow_failure_heal.py:1137-1215`. Only the description text is stale, and no repository change is required. ISSUE_CONFIDENCE: n/a\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "27ceb1f2f0bc367b448d9642d6a29e89d1ea705c50d60e3000b3cb1b39e6eb64",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9219,
+    "run_id": "43122814476",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43122814476",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112085134_25672dce98",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9219,
+    "run_id": "43122814476"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T08:51:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
