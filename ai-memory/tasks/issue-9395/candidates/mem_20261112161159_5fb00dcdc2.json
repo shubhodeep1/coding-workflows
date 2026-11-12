@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9395,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9395\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9401\",\"pr_number\":9401,\"branch\":\"ai/issue-9395\",\"run_id\":\"43242776857\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43242776857\",\"changed_files\":[\".github/ai/label_contract.v1.json\",\".github/workflows/alert-inbox-intake.yml\",\".github/workflows/ci.yml\",\"README.md\",\"agents.d/alert-triage-phase1-inbox-capture.md\",\"changelog.d/alert-triage-phase1-inbox-capture.md\",\"scripts/alert_inbox_capture.sh\",\"scripts/alert_inbox_store.sh\",\"scripts/label_helpers.sh\",\"scripts/tg_helpers.sh\",\"tests/test_alert_inbox_store.py\",\"tests/test_tg_helpers_alert_inbox.py\",\"tests/test_workflow_checkout_integration_ref_audit.py\"]}",
+  "fingerprint": "c00e5c18db016a7c454c7b789417ea59801a93ee5819207987156e5d9509c201",
+  "lineage": {
+    "issue_number": 9395,
+    "parent_ids": [],
+    "pr_number": 9401,
+    "run_id": "43242776857",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43242776857",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9401"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261112161159_5fb00dcdc2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9395,
+    "level": "run",
+    "pr_number": 9401,
+    "run_id": "43242776857"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9395: https://github.com/shubhodeep1/coding-workflows/pull/9401",
+  "timestamps": {
+    "created_at": "2026-11-12T16:11:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
