@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2489-2522 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The required `orchestrate-poll (1)` check-run (run 43213585983, job 131167076320) fails on head 36461bd, and the dependent `lint` gate fails only because of it (\"CI jobs that did not succeed: orchestrate-poll\"); the log tail does not name a failing test.\n  WHY: Merge stays blocked until the shard passes, but none of the reviewers could link the failure to a PR hunk. Three reviewers point to a likely timeout or flake under the 20-minute shard limit, since no tests/test_orchestrate_poll*.py file references STALL_RECOVERY_LATCH_LABELS or `ai:workflow-heal-escalated`. Severity disagreement: openai_gpt-6-luna rated it MAJOR (mapped to high) and the other three rated it NIT (low), so the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:job `orchestrate-poll` (line 2489), `timeout-minutes: 20` (line 2522); failed check-run \"orchestrate-poll (1)\", run 43213585983, job 131167076320 | severity=NIT | confidence=2\n  PROBLEM: The required orchestrate-poll shard 1 fails on head 36461bd, and the lint gate fails with it. No diff hunk explains the failure, and the log tail shows only PASS events. The `Integration fingerprint verification FAILED ... implement.yml` lines are expected fixture output from a passing test.\n  WHY: This is not a defect in the PR code, because no tests/test_orchestrate_poll*.py file references the latch tuple, the helper or the label. The lint gate stays red until the shard is green, so the editor should rerun it or fetch the full log, since a timeout or flake under the 20-minute limit is most likely.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml (check-run orchestrate-poll (1), job 131167076320):ci.yml orchestrate-poll job, shard 1 | severity=NIT | confidence=2\n  PROBLEM: The PR head's orchestrate-poll (1) check fails, and the dependent lint check fails only because of it (CI_NEEDS_JSON gate). The log tail ends with a passing test and does not name a failing test.\n  WHY: The failure cannot be tied to any hunk. The only reachable PR change is the STALL_RECOVERY_LATCH_LABELS entry read at scripts/orchestrate_poll_process.sh:25024-25026, and tests/test_orchestrate_poll_process.py has no references to it. The 20-minute shard limit and prior runs of 15-19.6 minutes make a timeout or flake plausible.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:`orchestrate-poll` matrix gate, lines 2518-2522 | severity=MAJOR | confidence=5\n  PROBLEM: The PR head's `orchestrate-poll (1)` check completed with failure, and the dependent `lint` check failed because that job did not succeed. The log tail does not identify the failing test or the cause.\n  WHY: The workflow requires every `orchestrate-poll` matrix group to succeed, and this head does not pass that gate. The available evidence does not show that a PR code change caused the failure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml (orchestrate-poll job, shard 1):check-run \"orchestrate-poll (1)\", run 43213585983, job 131167076320 on head 36461bd | severity=NIT | confidence=2\n  PROBLEM: The shard fails on this head, but its log tail ends inside passing tests and names no failing test. The dependent \"lint\" check fails only via the CI_NEEDS_JSON gate.\n  WHY: The diff does not cause the failure. The only reachable change is the STALL_RECOVERY_LATCH_LABELS entry (scripts/orchestrate_lib.py:1617-1621), tests-hooks-and-orchestrator passed, and no tests/test_orchestrate_poll*.py file references the latch. A shard timeout or flake is likely, and the finding is reported only because the required lint gate blocks merge.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7ada5db751266c5e524f799fa15c0eb1e7734d891328bf67972f1f8d5e7b37be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9281,
+    "run_id": "43201799123",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43201799123",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112161717_5056a7662b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9281,
+    "run_id": "43201799123"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T16:17:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
