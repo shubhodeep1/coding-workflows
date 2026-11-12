@@ -1,0 +1,27 @@
+{
+  "discovered_at": "2026-11-12T19:03:26Z",
+  "issue_number": 9395,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 009 as out-of-scope; anchor=.github/workflows/clarify.yml:493; cited_path=.github/workflows/clarify.yml, .github/workflows/plan.yml; files_touched=.github/ai/label_contract.v1.json, .github/workflows/alert-inbox-intake.yml, .github/workflows/ci.yml, README.md, agents.d/alert-triage-phase1-inbox-capture.md, changelog.d/alert-triage-phase1-inbox-capture.md, scripts/alert_inbox_capture.sh, scripts/alert_inbox_store.sh, scripts/label_helpers.sh, scripts/tg_helpers.sh, tests/test_alert_inbox_store.py, tests/test_tg_helpers_alert_inbox.py, tests/test_workflow_checkout_integration_ref_audit.py.",
+  "phase": "review_autofix",
+  "pr_number": 9401,
+  "record_id": "lesson_20261112190326_6ff13e738c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/clarify.yml, .github/workflows/plan.yml",
+    ".github/workflows/clarify.yml",
+    ".github/ai/label_contract.v1.json",
+    ".github/workflows/alert-inbox-intake.yml",
+    ".github/workflows/ci.yml",
+    "README.md",
+    "agents.d/alert-triage-phase1-inbox-capture.md",
+    "changelog.d/alert-triage-phase1-inbox-capture.md",
+    "scripts/alert_inbox_capture.sh",
+    "scripts/alert_inbox_store.sh",
+    "scripts/label_helpers.sh",
+    "scripts/tg_helpers.sh",
+    "tests/test_alert_inbox_store.py",
+    "tests/test_tg_helpers_alert_inbox.py",
+    "tests/test_workflow_checkout_integration_ref_audit.py"
+  ]
+}
