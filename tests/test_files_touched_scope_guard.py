@@ -2387,6 +2387,14 @@ def test_plan_grant_decorated_or_joined_listings_never_drop_silently() -> None:
 		# A second table cell is listed too: granted file, unverified one held.
 		table = "## Files likely to change\n| `bin/deploy` | `newdir/tool` |\n"
 		assert guard.extract_plan_file_path_sets(table, td) == (["bin/deploy"], ["newdir/tool"])
+		# A description cell that opens with a code span is prose, not a listing.
+		described = ("## Files likely to change\n| `scripts/a.sh` | `origin/main` mirror |\n"
+			"| `bin/deploy` | `newdir/legacy` is the old path |\n")
+		assert guard.extract_plan_file_path_sets(described, td) == (["scripts/a.sh", "bin/deploy"], [])
+	described = "## Files likely to change\n| `scripts/a.sh` | `actions/checkout@v5` bump |\n"
+	assert guard.extract_plan_file_path_sets(described) == (["scripts/a.sh"], [])
+	joined = "## Files likely to change\n| `scripts/a.sh` | `bin/deploy`, `public/CNAME` |\n"
+	assert guard.extract_plan_file_path_sets(joined) == (["scripts/a.sh"], ["bin/deploy", "public/CNAME"])
 
 
 def test_plan_files_outside_files_touched_skips_covered_directory_tokens() -> None:

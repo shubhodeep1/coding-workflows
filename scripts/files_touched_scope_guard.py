@@ -1060,6 +1060,12 @@ def extract_plan_file_path_sets(plan_text: str, repo_root: str = "") -> tuple[li
 			# later one when only a joiner separates it from a listed span.
 			listing = bool(_PLAN_LISTING_DECORATION_RE.match(gap)) if index == 0 else (
 				listing and bool(_PLAN_LISTING_JOINER_RE.match(gap)))
+			if listing and index and "|" in gap:
+				# A table cell border joins only a cell that holds nothing but
+				# listed spans; a description cell that opens with a code span
+				# (`| `a.sh` | `origin/main` mirror |`) stays prose (#9130).
+				cell_rest = line[span.end():].split("|", 1)[0]
+				listing = bool(_PLAN_LISTING_JOINER_RE.match(_PLAN_GRANT_BACKTICK_RE.sub("", cell_rest)))
 			candidates.append((span.group(1), listing, not listing))
 			previous_end = span.end()
 		# The bullet's first token counts even when the line also has
