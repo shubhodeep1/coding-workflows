@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.sh:195 (also cited 304-309) | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: `collect_prompt_placeholders` still decodes the assembled prompt strictly with `pathlib.Path(sys.argv[1]).read_text(encoding=\"utf-8\")`, so invalid UTF-8 raises `UnicodeDecodeError` inside a process substitution. The placeholder scan then yields no names, and the render ships with literal `{{NAME}}` tokens.\n  WHY: Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT and z-ai_glm-5_3-flash rated it MAJOR, so the highest is used. The failure is silent, and the file is outside the plan grant's `files_touched`, so it was routed as a follow-up.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/render_prompt.sh:195 | severity=NIT | confidence=4\n  PROBLEM: The bash placeholder scan in `collect_prompt_placeholders` still decodes strictly, so invalid UTF-8 raises `UnicodeDecodeError` inside a process substitution. The render then has literal `{{NAME}}` tokens.\n  WHY: The issue predates the PR. The file is not in the plan grant's `files_touched`, and issue #9398 says \"Make exactly this change\", so it should become a follow-up. Suggested fix: `errors=\"replace\"`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/render_prompt.sh:195, 304-309 | severity=MAJOR | confidence=4\n  PROBLEM: The placeholder scan decodes strictly, and its only caller consumes it through an unchecked process substitution (`done < <(collect_prompt_placeholders ...)` at line 309). With invalid bytes, the scan raises `UnicodeDecodeError` and the loop receives zero placeholder names. Environment values are never appended as `--var`, and the render ships with literal `{{NAME}}` tokens.\n  WHY: `load_prompt` now tolerates invalid UTF-8, so a loud failure became a silent partial render. The file is outside the plan grant's `files_touched`, so it was routed as a follow-up. Hardening suggestions: use `errors=\"replace\"` at line 195, and check the scan result explicitly at lines 304-309.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6ea597f9784385d9ca7b22e1989a80c6c40fb977dde59dce30b12b53bfc5080d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9402,
+    "run_id": "43282034343",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43282034343",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112222603_60c0b407b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9402,
+    "run_id": "43282034343"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T22:26:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
