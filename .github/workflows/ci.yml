@@ -676,6 +676,8 @@ jobs:
               :*|*:|*[!0-9:]*) ;;
               *) vst_elapsed_ms="$((10#${vst_end_ms} - 10#${vst_start_ms}))" ;;
             esac
+            # As in the heartbeat, a clock that steps backwards reads as 0.
+            [ "${vst_elapsed_ms}" -ge 0 ] || vst_elapsed_ms=0
             echo "CI_SUBTEST_END subtest=${vst_path} elapsed_ms=${vst_elapsed_ms} rc=${vst_rc}"
             echo "::group::validation self-test module ${vst_path}"
             # "| " prefix: PR-controlled test output cannot act as a workflow command.

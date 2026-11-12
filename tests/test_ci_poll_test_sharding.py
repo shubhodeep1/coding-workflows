@@ -4963,6 +4963,15 @@ class ValidationSelftestConcurrencyContractTest(unittest.TestCase):
 		self.assertIn(f"CI_SUBTEST_END subtest={path} elapsed_ms=1000 rc=1\n", result.stdout)
 		self.assertIn(f"::error::validation self-test modules failed: {path}\n", result.stdout)
 
+	def test_backwards_clock_end_elapsed_reads_zero(self) -> None:
+		files = self.green()
+		files[3] = {"log": "ok 3\n", "rc": "0\n", "start_ms": "5000\n", "end_ms": "4000\n"}
+		result = run_validation_selftest_judge(self.run, files)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		path = VALIDATION_SELFTEST_COMMANDS[3][1]
+		self.assertIn(f"CI_SUBTEST_END subtest={path} elapsed_ms=0 rc=0\n", result.stdout)
+		self.assertNotIn("elapsed_ms=-", result.stdout)
+
 	def test_full_body_overlaps_lanes_and_fails_closed(self) -> None:
 		# Five fakes: fake 0 is pinned to lane 0, fakes 1-3 head lanes 1-3, and
 		# fake 4 runs after fake 1 in lane 1, so a failing fake 1 must not stop it.
@@ -4984,7 +4993,7 @@ class ValidationSelftestConcurrencyContractTest(unittest.TestCase):
 					self.assertGreaterEqual(int(markers.joinpath(f"saw_{n}").read_text()), 4, f"fake {n} ran without the other lanes:\n{out}")
 				self.assertTrue(markers.joinpath("saw_4").is_file(), out)
 				self.assertEqual(out.count("CI_SUBTEST_START subtest="), 5, out)
-				self.assertEqual(len(re.findall(r"CI_SUBTEST_END subtest=\S+ elapsed_ms=-?\d+ rc=\d+\n", out)), 5, out)
+				self.assertEqual(len(re.findall(r"CI_SUBTEST_END subtest=\S+ elapsed_ms=\d+ rc=\d+\n", out)), 5, out)
 				self.assertRegex(out, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=\d+\n")
 				self.assertRegex(out, rf"subtest={re.escape(fakes[4])} elapsed_ms=\d+ rc=0\n")
 				if failing is None:
