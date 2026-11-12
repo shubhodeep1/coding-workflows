@@ -88,14 +88,15 @@ _semble_index_path()
 
 _semble_now_ms()
 {
-	# Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
-	# coreutils) gave readings that went backwards within a run.
-	local semble_now_realtime="${EPOCHREALTIME:-}"
+	local semble_now_value="" semble_now_realtime="${EPOCHREALTIME:-}"
+	# Bash's own clock first: on ubuntu-26.04 runners (Rust uutils coreutils)
+	# `date +%s%3N` gave readings that went backwards within a run, or
+	# sometimes a reading one digit short (#9240).
+	# `date` stays as the fallback for bash < 5. Always returns 0.
 	if [[ "${semble_now_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
 		printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
 		return 0
 	fi
-	local semble_now_value=""
 	semble_now_value="$(date +%s%3N 2>/dev/null || true)"
 	if [[ "${semble_now_value}" =~ ^[0-9]{13,}$ ]]; then
 		printf '%s\n' "${semble_now_value}"
@@ -108,6 +109,7 @@ _semble_now_ms()
 		return 0
 	fi
 	printf '0\n'
+	return 0
 }
 
 _semble_elapsed_ms()

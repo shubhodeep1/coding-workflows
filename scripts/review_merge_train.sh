@@ -1541,15 +1541,16 @@ _mt_release_stall_alert()
 	return 0
 }
 
-# Epoch milliseconds for elapsed_ms= in MERGE_TRAIN_RELEASE_SUMMARY. GNU date
-# supports %3N; BSD/busybox date may print a literal "3N" or nothing, so any
-# non-integer result falls back to whole seconds * 1000. No API calls.
+# Epoch milliseconds for elapsed_ms= in MERGE_TRAIN_RELEASE_SUMMARY. Bash's
+# own EPOCHREALTIME is read first: on ubuntu-26.04 runners (Rust uutils
+# coreutils) `date +%s%3N` sometimes returned a reading one digit short,
+# which printed negative elapsed_ms (#9240). On bash < 5 `date +%s%3N` is
+# used when it has 13+ digits (BSD/busybox date may print a literal "3N" or
+# nothing); anything else falls back to whole seconds * 1000. No API calls.
 _mt_now_ms()
 {
-	local __mt_now_ms_val _mt_now_ms_realtime="${EPOCHREALTIME:-}"
-	# Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
-	# coreutils) gave readings that went backwards within a run.
-	if [[ "${_mt_now_ms_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+	local __mt_now_ms_val __mt_now_ms_real="${EPOCHREALTIME:-}"
+	if [[ "${__mt_now_ms_real}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
 		printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
 		return 0
 	fi
@@ -1559,7 +1560,7 @@ _mt_now_ms()
 	else
 		__mt_now_ms_val="$(date -u +%s 2>/dev/null || true)"
 		[[ "${__mt_now_ms_val}" =~ ^[0-9]+$ ]] || __mt_now_ms_val=0
-		printf '%s\n' "$(( __mt_now_ms_val * 1000 ))"
+		printf '%s\n' "$(( 10#${__mt_now_ms_val} * 1000 ))"
 	fi
 }
 

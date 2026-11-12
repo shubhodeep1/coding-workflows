@@ -22,15 +22,18 @@
 # SEMBLE_*_AVAILABLE env keys this script writes to GITHUB_ENV.
 
 set -euo pipefail
+
 semble_build_now_ms()
 {
-	# Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
-	# coreutils) gave readings that went backwards within a run.
-	if [[ "${EPOCHREALTIME:-}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+	local semble_build_now_value="" semble_build_now_realtime="${EPOCHREALTIME:-}"
+	# Bash's own clock first: on ubuntu-26.04 runners (Rust uutils coreutils)
+	# `date +%s%3N` gave readings that went backwards within a run, or
+	# sometimes a reading one digit short (#9240).
+	# `date` stays as the fallback for bash < 5. Always returns 0.
+	if [[ "${semble_build_now_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
 		printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
 		return 0
 	fi
-	local semble_build_now_value=""
 	semble_build_now_value="$(date +%s%3N 2>/dev/null || true)"
 	if [[ "${semble_build_now_value}" =~ ^[0-9]{13,}$ ]]; then
 		printf '%s\n' "${semble_build_now_value}"
@@ -43,7 +46,9 @@ semble_build_now_ms()
 		return 0
 	fi
 	printf '0\n'
+	return 0
 }
+
 SEMBLE_BUILD_START_MS="$(semble_build_now_ms)"
 SEMBLE_BUILD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "${SEMBLE_BUILD_SCRIPT_DIR}/emit_event.sh" ]; then

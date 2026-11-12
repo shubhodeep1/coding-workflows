@@ -235,7 +235,8 @@ def test_two_attempts_are_timed(tmp_path):
 
 
 def test_failing_date_still_emits_and_preserves_rc(tmp_path):
-	# No usable clock: bash's own clock off, and `date` failing.
+	# No usable clock at all: EPOCHREALTIME is read before `date` (issue
+	# #9252), so it is unset too, as on bash < 5.
 	body = "unset EPOCHREALTIME\ndate() { return 1; }\n_resolver_terminal_attempt_begin\nexit 5\n"
 	proc = _run(tmp_path, body)
 	assert proc.returncode == 5
