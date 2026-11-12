@@ -226,10 +226,12 @@ def resolve_host_basenames(script: str, src: str) -> tuple[list[str], str]:
 			resolved = _support_file_variable_basename(caller, value) if f'"${{{value}}}"' in text else None
 		else:
 			# The caller must pass `--module "${var}"` and assign that variable a
-			# path ending in the file; a mention in a comment or log line does not count.
-			passed = re.search(r'--module\s+"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"', text)
+			# path ending in the file; a bare mention of the file or a commented-out
+			# line does not count, so full-line comments are dropped first.
+			live = "\n".join(_strip_comment(line) for line in text.splitlines())
+			passed = re.search(r'--module\s+"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"', live)
 			assigned = passed and re.search(
-				r"\b" + re.escape(passed.group(1)) + r'="(?:[^"\n]*/)?' + re.escape(value) + r'"', text
+				r"\b" + re.escape(passed.group(1)) + r'="(?:[^"\n]*/)?' + re.escape(value) + r'"', live
 			)
 			resolved = value if assigned else None
 		if resolved is None:
