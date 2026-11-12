@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:(no line given; aggregate `lint` job / failing job `orchestrate-poll (1)`, run 43213585983/job/131167076320, head SHA 36461bd04b595b45dc827b5f61b7d4ee917e1ed8) | severity=high | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The PR head is red: `orchestrate-poll (1)` failed and `lint` failed on `CI jobs that did not succeed: orchestrate-poll`, and the log tail does not include the name of the failing test, so the failure cannot be mapped to a diff file.\n  WHY: A red required CI gate blocks merge however correct the diff is, and the failing test must be found in the full job log (run 43213585983, job 131167076320) before anyone can act on it or classify it as a flake or an inherited failure. The source rated this SEVERITY: MAJOR, mapped here to high. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 mention the same failing check only in non-finding CI notes, and minimax_minimax-m3 judges it an inherited failure unrelated to the diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The last run adds a `WORKFLOW_HEAL warn heal_self_labels_unreadable issue=<N> repo=<owner/repo>` log line that fires only when the raw-shape check overturns a suppression.\n  expected_change_site: scripts/workflow_failure_heal_intake.sh in the duplicate) heal_issue_failed_itself block, plus agents.d/9248-heal-escalation-alert-dedupe.md registry, plus a test assertion in tests/test_workflow_failure_heal.py.\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer reports that all three are present (last_run_diff.patch lines 1-3 and 13-14). The shell condition short-circuits exactly when shape is false and escalated is true, the agents.d marker targets `## Stable log prefixes (contractual)`, and set -e safety holds because `log()` is a plain echo. The reviewer reports no actual gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- CI NOTE (not mapped to a code site; not a finding): the failed check-run \"orchestrate-poll (1)\", and the \"lint\" aggregate that fails only because of it, cannot be traced to this diff from the log tail. The tail shows only PASS lines, and its ::error:: lines are expected fixture output of test_verify_integration_fingerprints_rejects_reappeared_must_not_contain. The PR's changes reach the orchestrate-poll tests only through stall_recovery_latch_label (scripts/orchestrate_poll_process.sh:25024-25026). The full job log should be read (run 43213585983, job 131167076320) or the shard rerun before editing anything.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The last run adds a `WORKFLOW_HEAL warn heal_self_labels_unreadable issue=<N> repo=<owner/repo>` log line that fires only when the raw-shape check overturns a suppression.\n  Expected change site: scripts/workflow_failure_heal_intake.sh in the duplicate) heal_issue_failed_itself block, plus agents.d/9248-heal-escalation-alert-dedupe.md registry, plus a test assertion in tests/test_workflow_failure_heal.py.\n  Evidence of absence: All three are present (last_run_diff.patch lines 1-3 and 13-14). The shell condition `[ \"${HEAL_SELF_LABELS_SHAPE}\" = \"true\" ] || [ \"${HEAL_SELF_ESCALATED}\" != \"true\" ] || log \"warn ...\"` short-circuits to true exactly when shape is false AND escalated is true, which is the only case the test asserts. The agents.d marker targets `## Stable log prefixes (contractual)` and documents the token. Set -e safety is preserved because `log()` is a plain echo.\n  ISSUE_CONFIDENCE: 5\n- CI note (not a finding): the reviewer traces the failing `orchestrate-poll (1)` and dependent `lint` check-runs to an integration fingerprint verification failure in `.github/workflows/implement.yml`, which the PR does not touch, and calls it inherited. It also calls inherited the four pre-push-gate \"caused by this change\" tests (`tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_review_autofix_provider_outage_contract.py`, `tests/test_session_start_extract_repo_slug.py`).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml (aggregate `lint` job) / failing job `orchestrate-poll (1)`, run 43213585983/job/131167076320, head SHA 36461bd04b595b45dc827b5f61b7d4ee917e1ed8 | severity=MAJOR | confidence=3\n  PROBLEM: The PR head is red: `orchestrate-poll (1)` failed and `lint` failed on `CI jobs that did not succeed: orchestrate-poll`. The tail does not contain the name of the failing test. The pre-push gate tables in the PR comments, which the reviewer treats as untrusted, named `tests/test_orchestrate_lib.py` and `tests/test_review_autofix_provider_outage_contract.py::test_label_contract_and_reporter_skip`. The targeted latch tests (`tests/test_orchestrate_lib.py:1403-1450`) are consistent with `scripts/orchestrate_lib.py:1617-1637`.\n  WHY: A red required CI gate blocks merge regardless of diff correctness, and the failing test must be identified from the full job log (run 43213585983, job 131167076320) before the editor can act or classify it as a flake or an inherited failure.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5ef273235a1d1525961477c432ae84aaec2dabbbd08e1e655d1c6f4bd6c7dc1a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9281,
+    "run_id": "43213586313",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43213586313",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112144625_1f972271d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9281,
+    "run_id": "43213586313"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T14:46:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
