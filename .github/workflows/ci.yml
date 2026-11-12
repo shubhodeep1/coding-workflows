@@ -3578,7 +3578,10 @@ jobs:
           echo "system-python shard ${shard_index}/${shard_total}: ${#shard_tests[@]} of ${test_count} test functions"
 
           set +e
-          python3 -m pytest -q -p no:cacheprovider "${shard_tests[@]}"
+          # faulthandler dumps every thread's stack when one test runs past 5
+          # minutes, so a hang names its test before the 20-minute job cancel
+          # (shard 10, run 43085524213, was cancelled with an empty log).
+          python3 -m pytest -q -p no:cacheprovider -o faulthandler_timeout=300 --durations=15 "${shard_tests[@]}"
           shard_rc=$?
           set -e
           if [ "${shard_rc}" -ne 0 ]; then
