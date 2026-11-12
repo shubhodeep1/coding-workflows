@@ -1416,9 +1416,11 @@ def main(argv: list[str] | None = None) -> int:
 		# This branch only names the failure on one stderr line instead of a raw
 		# traceback (#9341). Exit code 1 matches an uncaught Python exception, so
 		# there is no new pass or fallback path. SystemExit/KeyboardInterrupt are
-		# not Exception subclasses and keep their previous behaviour.
+		# not Exception subclasses and keep their previous behaviour. CR/LF in
+		# the message are escaped so a multi-line message stays on one line.
+		unexpected_exc_message = str(exc).replace("\r", "\\r").replace("\n", "\\n")
 		print(
-			f"ERROR: render_prompt unexpected {type(exc).__name__}: {exc} (prompt={prompt_path})",
+			f"ERROR: render_prompt unexpected {type(exc).__name__}: {unexpected_exc_message} (prompt={prompt_path})",
 			file=sys.stderr,
 		)
 		return 1
