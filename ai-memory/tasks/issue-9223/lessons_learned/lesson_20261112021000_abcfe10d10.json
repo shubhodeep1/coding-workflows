@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-12T02:10:00Z",
+  "issue_number": 9223,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=.github/workflows/implement.yml:1-1; cited_path=.github/workflows/implement.yml; files_touched=.github/workflows/test-and-mark-stable.yml, changelog.d/9223-release-gate-clarify-stall-diagnostics.md, tests/test_ci_wires_every_test_file.py, tests/test_release_smoke_run_lookup.py, tests/test_test_and_mark_stable_clarify_wait.py.",
+  "phase": "review_autofix",
+  "pr_number": 9273,
+  "record_id": "lesson_20261112021000_abcfe10d10",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/implement.yml",
+    ".github/workflows/test-and-mark-stable.yml",
+    "changelog.d/9223-release-gate-clarify-stall-diagnostics.md",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_release_smoke_run_lookup.py",
+    "tests/test_test_and_mark_stable_clarify_wait.py"
+  ]
+}
