@@ -167,6 +167,42 @@ def test_percent_heavy_exception_stays_within_300_characters() -> None:
 	assert exception == percent_message.replace("%", "%25")[:300]
 
 
+def test_nul_byte_in_stderr_keeps_the_exception_line() -> None:
+	# `grep -a`: a NUL byte must not turn the copy into a "binary file"
+	# whose matching lines grep would suppress.
+	result, _runner_temp = _run("printf 'noise\\000x\\n' >&2\necho \"KeyError: 'k'\" >&2\nexit 1\n")
+	assert result.returncode == 1
+	assert _diagnostic_lines(result.stderr) == [f"{DIAGNOSTIC_PREFIX} rc=1 exception=KeyError: 'k'"]
+
+
+def test_mktemp_failure_runs_the_runner_unchanged() -> None:
+	# The fallback branch: no stderr copy, so the runner is exec'd with its
+	# exit code and output kept and no diagnostic line printed.
+	for runner_script, expected_rc in (("echo fine\nexit 0\n", 0), ("echo fine\necho \"KeyError: 'x'\" >&2\nexit 4\n", 4)):
+		tmp = Path(tempfile.mkdtemp(prefix="plan-runner-diag-"))
+		(tmp / "scripts").mkdir()
+		(tmp / "scripts" / "workflow_failure_heal.py").write_text("print('false')\n", encoding="utf-8")
+		(tmp / "scripts" / "run_plan_codex.sh").write_text(runner_script, encoding="utf-8")
+		(tmp / "issue.json").write_text("{}", encoding="utf-8")
+		(tmp / "github_env").write_text("", encoding="utf-8")
+		(tmp / "body.sh").write_text(_body(), encoding="utf-8")
+		result = subprocess.run(
+			["bash", "--noprofile", "--norc", "-e", str(tmp / "body.sh")],
+			cwd=tmp,
+			env=_clean_env(
+				ISSUE_META_FILE=str(tmp / "issue.json"),
+				GITHUB_ENV=str(tmp / "github_env"),
+				RUNTIME_DIR=str(tmp),
+				RUNNER_TEMP=str(tmp / "missing-runner-temp"),
+			),
+			capture_output=True, text=True, check=False, timeout=60,
+		)
+		assert result.returncode == expected_rc, result.stderr
+		assert "fine" in result.stdout
+		assert _diagnostic_lines(result.stderr) == []
+		assert not (tmp / "missing-runner-temp").exists()
+
+
 def test_heal_route_failure_is_unchanged() -> None:
 	result, runner_temp = _run(
 		"echo RUNNER_RAN\nexit 0\n", heal_route_script="sys.exit(1)\n"
