@@ -228,3 +228,197 @@ Other MCP servers observed: none. The per-target breakdown (`semble_targets`, `s
 4. Exclude skipped runs from the 1,000-run listing budget and the deep-dive selection.
 
 **Assumptions and missing context:** No files were edited; the report above is the deliverable. Statements about queue time and the triage feedback loop are inferences from timeout ceilings and timing overlap. The cause of the merge-train failures cannot be determined without the step logs.
+## Deep Audit — Workflows & Scripts (2026-11-12)
+
+> **Scope and method.** This pass goes deep on a few files rather than skimming all of them: `scripts/gh_helpers.sh`, `scripts/label_helpers.sh`, `scripts/check_failure_triage.sh`, `scripts/workflow_failure_heal_intake.sh`, the API and loop paths of `scripts/orchestrate_poll_process.sh`, `.github/workflows/implement.yml`, `review_autofix.yml`, `update_workflows.yml`, `test-and-mark-stable.yml`, `ci.yml` (merge-train step), `lint-pr-body-auto-close.yml` and `workflow-log-analysis.yml`. Byte and character counts are estimates from line spans, because no shell was available to run `wc -c`. Every count marked "est." is labelled **[NEEDS VERIFICATION]**.
+>
+> **Cross-references to the existing report sections.** The missing `concurrency:` block in `ci.yml` (Speed item 2) and the unknown cause of the merge-train failures (Speed item 1 / Reliability item 1) are already covered there, so they are not repeated. BUG-002 below adds to Reliability item 1.
+
+### Section 1: Bug & Correctness Sweep
+
+**BUG-001** · `.github/workflows/implement.yml:5544-5774` (comment POST at `5757-5758`; labels at `5763-5774`) · Severity: **Medium** · Category: `bug`
+- **Description:** The fall-through branch of "Handle no-op implementation" runs under `set -euo pipefail` (line 5545). It posts its comment with `gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" -f body="${noop_body}"`, which has no `|| …` guard. `gh_retry` makes only one attempt for a non-idempotent POST (`scripts/gh_helpers.sh:1210-1213`). So one transient failure aborts the step before the `ai:implementation-failed` label is applied at 5763-5774. The earlier guards in the same step add `>/dev/null 2>&1 || true` to their comment POSTs (5637-5638, 5728-5729).
+  - Downstream, "Comment on issue failure" (6939-7014) then finds `ai:implementing` still set and restores `ai:awaiting-approval` (7001-7006). The issue is parked for re-approval instead of being routed to orchestrator re-processing. This routing consequence is an inference from the step `if:` conditions **[NEEDS VERIFICATION]**.
+  - The same unguarded-POST shape exists at 6979-6980. There the `ai:blocked` latch is applied first, but a failed POST still fails the step after terminalization.
+- **Recommended fix:** Apply the labels (5763-5774) before the advisory comment, and guard the POST the way 5637-5638 does: `… -f body="${noop_body}" >/dev/null 2>&1 || echo "::warning::Could not post no-op comment on #${ISSUE_NUMBER}; label applied."`. Apply the same guard at 6979-6980.
+
+**BUG-002** · `.github/workflows/ci.yml:908-910` vs `920-929` · Severity: **Low** · Category: `bug`
+- **Description:** The merge-train step prints each shard log raw (`cat "${mt_stem}.log"`). Yet the comment at 920-921 says lines get a `"| "` prefix "so log text cannot act as a workflow command", and only the 40-line tail (929) is actually prefixed.
+  - The modules under test exercise `gh_helpers.sh`, which writes `::error::`/`::warning::` lines (for example `gh_helpers.sh:1276`). Pytest replays captured output for failing tests, so those lines become real run annotations and can mislead failure attribution. That attribution is the gap the existing Reliability item 1 describes.
+- **Recommended fix:** Prefix the full log too: `{ cat "${mt_stem}.log" 2>/dev/null || true; } | sed 's/^/| /'` inside the `::group::` at 909. Alternatively, wrap it in `::stop-commands::<random-token>` / `::<random-token>::`.
+
+**SEC-001** · `.github/workflows/update_workflows.yml:913`, `1849-1851` (producers `614-632`, `936-945`, `961`, `969`) · Severity: **Low** · Category: `security`
+- **Description:** The Summary step interpolates step outputs directly into double-quoted shell assignments:
+  - `AUDIT_GATE_MESSAGE="${{ steps.audit_gate.outputs.message }}"`
+  - `FAILURE_REASON_DETAIL="${{ steps.update.outputs.failure_reason_detail }}"`
+  - Line 913 does the same for `vars.WORKFLOW_PROFILE`.
+
+  `failure_reason_detail` contains `${SELECTED_PROFILE}`, manifest entries and paths (`fail_with_reason` calls at 950-1023). The message comes from a Python-parsed result file. A `"`, backtick or `$(` in those values would execute as shell code. The sources are an admin-controlled variable and the verified upstream release, which is why this is rated Low.
+- **Recommended fix:** Move these values into the step's `env:` block, the pattern the same file already uses at 1073-1090, for example `FAILURE_REASON_DETAIL: ${{ steps.update.outputs.failure_reason_detail }}`. Then read `"${FAILURE_REASON_DETAIL}"`.
+
+**SEC-002** · `.github/workflows/review_autofix.yml:1261-1263` · Severity: **Low** · Category: `security`
+- **Description:** On a `mktemp` failure, the inline `gh_retry` logs `aborting without running: $*`, which includes every argument, comment bodies (`-f body=…`) among them. `gh_helpers.sh` replaced this exact pattern with `_gh_cmd_log_summary` (lines 854-860, issue #8095 SEC-001), which never prints flag values.
+- **Recommended fix:** Print only the first two arguments (`${1:-} ${2:-}`), or fold this wrapper into DUP-002.
+
+**No finding (verified):** `github.event.comment.body`, `issue.title`, `pull_request.title/body/head.ref` reach shell only through `env:` in every workflow (for example `lint-pr-body-auto-close.yml:60-61`, `issue_pr_status.yml:239-240`, `orchestrate_clarify_respond.yml:145`, `implement.yml:1045`). No direct `${{ github.event.* }}` interpolation of untrusted text was found in any `run:` body.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+**API-001** · `scripts/gh_helpers.sh:228-231`, `1259-1268`; callers `scripts/label_helpers.sh:196-214`, `scripts/orchestrate_poll_process.sh:4463-4479`, `scripts/validate_process.sh:1246-1259`, `scripts/check_failure_triage.sh:1242-1248` · Severity: **High** · Category: `api-redundancy`
+- **Description:** When a label already exists, `gh label create` fails with `label with name "…" already exists; use --force …`. That message contains no `HTTP 422` (repo fixtures: `tests/test_label_helpers_phase_transition_contract.py:94`, `tests/test_implement_post_codex_recovery.py:288`). So `_is_gh_permanent_failure` (line 230) does not match it, and `gh_retry` takes the transient path: 5 attempts with 1+2+4+8 = **15 s** of sleeps.
+  - The repo already documents this: `scripts/implement_handle_guard_block.sh:30-33` says "gh_retry does not treat it as permanent", and `scripts/review_rb_judge.sh:916-923` says the same.
+  - The central helper `ensure_label_exists` (`label_helpers.sh:196`) only recognises "already exists" (line 210) after `gh_retry` has given up. The process-local cache (159-166) helps only on repeat calls.
+  - Other affected call sites: `implement.yml:5581, 5629, 5716, 5767, 6732, 6784, 6961, 7002`; `review_autofix.yml:1284, 1701, 4634, 4637` (inline retry: 4 attempts, 14 s); `implement_diagnose_post_codex_failure.sh:222, 242, 245`; `review_merge_train.sh:812`; `review_autofix_step_mark_ready_to_merge.sh:20-26`; `review_autofix_step_mark_review_blocked_workflow_failure.sh:14`.
+  - `check_failure_triage.sh:1244-1245` creates 2 labels on every triage run. The existing report counts 15 triage runs in about 2 h.
+- **Calls:** today 5 POSTs and about 15 s per (label, process) when the label exists, so 10 POSTs and about 30 s per triage run. After the fix: 1 POST and 0 s.
+- **Recommended fix:** Append `|already[ _-]*exists|already_exists` to the ERE at `gh_helpers.sh:230`. The permanent path still prints the stderr excerpt (1245-1247), so the check at `label_helpers.sh:210` keeps working. Add a case to the existing `tests/test_gh_retry_permanent_auth_failures.py`. Then update the now-stale comments at `implement_handle_guard_block.sh:30-33` and `review_rb_judge.sh:916-923`.
+
+**API-002** · `scripts/gh_helpers.sh:1415-1489` · Severity: **Medium** · Category: `api-redundancy`
+- **Description:** Unlike `gh_retry` (1243-1250) and `gh_retry_to_file` (1328-1336), `gh_api_json_to_file` never calls `_is_gh_permanent_failure`. The comment at 220-222 names only those two helpers. As a result, 404, 401 and 422 responses are retried 5 times with 15 s of backoff. Several callers expect a 404 and treat it as a rejection outcome:
+  - `workflow_failure_heal_intake.sh:627/643` (`issue_not_found`)
+  - `workflow_failure_heal_intake.sh:646/659` (`pull_request_not_found`)
+  - `workflow_failure_heal_intake.sh:653` (compare against an unknown SHA)
+  - `check_failure_triage.sh:848` and `987`
+- **Calls:** 5 → 1 per permanent failure, which also saves about 15 s on each rejection path.
+- **Recommended fix:** In the `else` branch (1456-1477), check `_is_gh_permanent_failure "${stderr_content}"` first. If it matches, print the escaped excerpt, run `: > "${outfile}"` and `return 1`, mirroring 1328-1336.
+
+**API-003** · `scripts/gh_helpers.sh:1519-1552` · Severity: **Low** · Category: `api-redundancy`
+- **Description:** `curl_gh_api` retries every non-2xx status except a rate-limited 429/403, including 400, 401, 404, 410 and 422, using 1-8 s backoff. That is 5 calls where 1 would do.
+- **Recommended fix:** After the rate-limit branch, add `case "${http_code}" in 400|401|404|410|422) rm -f …; return 1 ;; esac`, matching the `permanent` kind in `gh_api_retry` (1128-1135).
+
+**API-004** · `scripts/workflow_failure_heal_intake.sh:2072-2079` (vs `1303-1306`, `2248-2253`) · Severity: **Low** · Category: `api-redundancy`
+- **Description:** `HEAL_TRUSTED_AUTHOR` calls `GET /user` whenever `PHASE_COMMENT_AUTHOR` is empty, even if `PROVENANCE_LOGIN` was already read from the same token at line 1305. The recovery path at 2249-2252 already reuses `PROVENANCE_LOGIN`.
+- **Calls:** 2 → 1 on self-repo phase reports.
+- **Recommended fix:** At 2074, use `HEAL_TRUSTED_AUTHOR="${PHASE_COMMENT_AUTHOR:-${PROVENANCE_LOGIN:-}}"` before the fallback call.
+
+**API-005** · `scripts/check_failure_triage.sh:1282-1303` · Severity: **Low** · Category: `api-redundancy`
+- **Description:** `historical_api_get` uses raw `gh api` with a fixed 2 s/4 s retry and no rate-limit detection. A 403 or 429 rate-limit response is retried twice inside the limit window, which is a tight retry on a non-transient condition.
+- **Recommended fix:** Detect `_is_gh_rate_limit` on `${hist_api_err}`, then call `_gh_rate_limit_wait_for` (gh_helpers.sh:333-342) or return 1. Alternatively switch to `gh_api_retry --optional`, where exit code 2 maps to 4 **[NEEDS VERIFICATION: `gh_api_retry` uses `gh api -i` for non-paginated calls; confirm that job-log redirects still work]**.
+
+**BATCH-001** · `scripts/orchestrate_poll_process.sh:18551-18582` (callers `20337`, `25962`, `32788`); `.github/workflows/implement.yml:5690-5703` · Severity: **Low** · Category: `api-batching`
+- **Description:** Each hop of `count_noop_ancestors` makes 2 REST calls (`GET issues/{n}` for the body, then a paginated `GET issues/{parent}/comments`). That is up to 2×`MAX_IMPL_NOOP_REISSUES` calls per issue, inside poll loops.
+- **Calls:** 2 per hop → 1 per hop, using one GraphQL `issue(number:){ body comments(last:100){ nodes { body } } }`. The first hop's body can come from `_candidate_details_json` when the issue is already in the batch **[NEEDS VERIFICATION]**.
+- **Recommended fix:** Extend the `_fetch_candidate_issue_details_graphql` pattern with a single-issue variant and fail open to the current REST path.
+
+**BATCH-002** · `scripts/orchestrate_poll_process.sh:189-248` · Severity: **Low** · Category: `api-batching`
+- **Description:** `replay_failed_reclarify_commands` makes a per-issue `GET issues/{n}` (202) plus a paginated comments read (205) inside a `while read` loop over the queued issues.
+- **Calls:** N issue reads + N comment listings. Batching the issue reads gives ceil(N/25) + N. The comment reads must stay full-history REST, because line 206 requires a complete history to authorize a replay.
+- **Recommended fix:** Fold the issue reads into the batched-GraphQL contract documented at 249-257. Keep the comment REST read.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+**DUP-001** · `ensure_label_exists` defined 9 times · Severity: **Medium** · Category: `duplication`
+- **Description:** The definitions are:
+  - `scripts/label_helpers.sh:176` (canonical, cached)
+  - `scripts/orchestrate_poll_process.sh:4429` (overlays `label_contract.v1.json`, own cache)
+  - `scripts/validate_process.sh:1231` (contract overlay, **no cache**)
+  - `scripts/review_rb_judge.sh:924`
+  - `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh:11`
+  - `scripts/review_autofix_step_mark_ready_to_merge.sh:15`
+  - `.github/workflows/review_autofix.yml:1282` (4-argument signature), `:1700` and `:4629`
+
+  Behaviour differs: caching, metadata source, and argument count.
+- **Recommended fix:** Make `scripts/label_helpers.sh` own `ensure_label_exists <label> [repo]`, with an optional overlay from `.github/ai/label_contract.v1.json` when the file is present (moved from `orchestrate_poll_process.sh:4453-4458`). Replace the definitions in `validate_process.sh` and `orchestrate_poll_process.sh` with `source label_helpers.sh`. Keep the inline copies only as `type ensure_label_exists || …` fallbacks that delegate to catalog values.
+
+**DUP-002** · `.github/workflows/review_autofix.yml:1251-1280` vs `scripts/gh_helpers.sh:1204-1282` · Severity: **Medium** · Category: `duplication`
+- **Description:** The inline `gh_retry` copy has drifted from the shared helper:
+  - no permanent-failure classification
+  - no rate-limit wait or breaker
+  - retries POST creates (no `_gh_cmd_is_unsafe_post`)
+  - `max=4` instead of 5
+  - logs raw argv (SEC-002)
+
+  This step already verifies a support checkout (`.codex-freshness-src`, 1307-1310) before sourcing `pr_checks_lib.sh`.
+- **Recommended fix:** When `freshness_helper_verified=true`, source `.codex-freshness-src/scripts/gh_helpers.sh` and keep the inline copy only for the unverified fallback. Note that 100 call sites in 48 files define the no-retry stub `type gh_retry … || gh_retry() { "$@"; }`; that stub is a correct fail-open, so leave it.
+
+**DUP-003** · `scripts/orchestrate_poll_process.sh:18551-18582` vs `.github/workflows/implement.yml:5685-5703` · Severity: **Low** · Category: `duplication`
+- **Description:** The ancestor no-op walk appears twice, nearly identical: same marker, same `Re-issued from #N` regex, same awk sum. The only difference is the transport (`_safe_gh_jq` vs `gh_retry gh api`).
+- **Recommended fix:** Create a new `scripts/noop_ancestry_helpers.sh` exporting `count_noop_ancestors <repo> <issue_num> [max_depth]`. Source it from the poller and from implement via `${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}`, which already supplies `gh_helpers.sh` at 5546. This also shrinks EXPR-001.
+
+**DUP-004** · "Resolve workflow support ref" block: 18 copies across 11 workflows (`implement.yml:469-511`, `772-812`, `1353-1397`, `7291-7334`; 2 each in `clarify.yml`, `plan.yml`, `orchestrate.yml`, `orchestrate_poll.yml`; 1 each in 5 more workflows) · Severity: **Low** · Category: `duplication`
+- **Description:** The copies have started to drift: `implement.yml:782` hardcodes `"shubhodeep1/coding-workflows"`, while 476 uses `wf_source`. The block cannot move to `scripts/`, because it runs before the support source is checked out, and consumer repos have no `scripts/`.
+- **Recommended fix:** Keep the blocks inline but normalize them to the `wf_source` form. Extend `tests/test_workflow_support_ref_follows_pin.py` (cited at 780-781) to assert the bodies are identical apart from the output variable name.
+
+**DUP-005** · `.github/workflows/workflow-log-analysis.yml:1105-1106`, `1908-1909`, `2508-2509` · Severity: **Low** · Category: `duplication`
+- **Description:** `_wla_label_retry` and `_wla_label_create` are defined three times with identical one-line bodies.
+- **Recommended fix:** After API-001, use `ensure_label_exists` from `label_helpers.sh` when it is sourced, and keep a single fallback definition.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+The repo already guards interpolated `run:` bodies at 18,000 characters (`tests/test_workflow_file_size_limit.py:28-32, 66-98`), so a High-risk body (18,000 or more) cannot merge while CI is green. The findings below are in the 15,000-18,000 band or close to it.
+
+**EXPR-001** · `.github/workflows/implement.yml:5545-5774` ("Handle no-op implementation") · Severity: **Medium** · Category: `expression-limit`
+- **Description:** The body is 230 lines with long prose `printf` lines (5574, 5617, 5624, 5711, 5713). Estimated at about 15,500-17,000 characters, leaving about 4,000-5,500 of headroom against 21,000 and about 1,000-2,500 against the 18,000 guard **[NEEDS VERIFICATION]**. Its only interpolations are `${{ github.server_url/repository/run_id }}` (5549, 5551, 5757, 5765, 5767, 5771, 5773).
+- **Recommended fix:** Replace them with the runner's default environment variables (`${GITHUB_SERVER_URL}`, `${GITHUB_REPOSITORY}`, `${GITHUB_RUN_ID}`). The body then contains no `${{ }}` and drops out of the limit entirely. DUP-003 shrinks it further.
+
+**EXPR-002** · `.github/workflows/test-and-mark-stable.yml:1069-1344` ("Phase 2: Wait for plan to complete") · Severity: **Medium** · Category: `expression-limit`
+- **Description:** The body is 276 lines, estimated at about 16,000-17,000 characters (about 4,000-5,000 headroom) **[NEEDS VERIFICATION]**. The only interpolation is `${{ steps.create-issue.outputs.created_after }}` at 1086, 1098 and 1116. Phase 1 (907-1045) has the same pattern at 947.
+- **Recommended fix:** Add `CREATED_AFTER: ${{ steps.create-issue.outputs.created_after }}` to `env:` (1062-1067) and use `${CREATED_AFTER}`. Do the same in Phase 1.
+
+**EXPR-003** · `.github/workflows/test-and-mark-stable.yml:6602-6833` ("Send Telegram notification") · Severity: **Low** · Category: `expression-limit`
+- **Description:** The body is 232 lines, about 50 of them comments, estimated at about 14,000-15,000 characters **[NEEDS VERIFICATION]**. It has more than 20 interpolations (6609-6629, 6826).
+- **Recommended fix:** Move the `needs.*.result` and `outputs` values into `env:`, as the step already does for `GATE_ONLY` and the others at 6594-6600.
+
+**EXPR-004** · `.github/workflows/implement.yml` (7,362 lines) · Severity: **Low** · Category: `expression-limit`
+- **Description:**
+  - **The 1 MB / 800 KB figures in the brief are superseded.** CLAUDE.md §27 and `tests/test_workflow_file_size_limit.py:26-27` set the effective limit at 512,000 bytes, with the guard at 480,000. No workflow can approach 800 KB while that guard passes.
+  - **implement.yml may be close to the 480,000-byte guard.** At an inferred 60-65 bytes per line, it would sit at roughly 440-480 KB. Next largest: `test-and-mark-stable.yml` (6,833 lines), `review_autofix.yml` (6,012) **[NEEDS VERIFICATION: `wc -c`]**.
+  - **`if:` conditions are far from the expression limit.** The largest are at 5537 and 6940, under 500 characters each.
+- **Recommended fix:** Pre-emptively extract "Run Codex implementation" (body 2932-4217, about 1,286 lines, no `${{ }}`) into `scripts/implement_step_run_codex.sh`. Follow the `review_autofix_step_<slug>.sh` and `REQUIRED_BOOTSTRAP_SCRIPTS` pattern in CLAUDE.md §27.
+
+### Section 5: Cross-Cutting Concerns
+
+**DEAD-001** · `scripts/orchestrate_poll_process.sh:18646-18662` · Severity: **Low** · Category: `dead-code`
+- **Description:** `read_standalone_state_json` has no callers anywhere in `scripts/`. `get_standalone_state_comment_id` is reachable only from the 2-argument path of `write_standalone_state_json` (18680-18684), and all 22 call sites (25123-26174) pass 3 arguments.
+- **Recommended fix:** Remove `read_standalone_state_json`. Either remove the 2-argument fallback with a test asserting the 3-argument contract, or keep it and document it as a deliberate fallback.
+
+**CONSIST-001** · `.github/workflows/implement.yml:5581-5583`, `5629-5631`, `5716-5718`, `6961-6963` vs `scripts/label_helpers.sh:48, 50, 62, 115, 117, 129` · Severity: **Medium** · Category: `consistency`
+- **Description:** Inline label creation disagrees with the catalog (which mirrors `label_contract.v1.json`):
+
+  | Label | implement.yml | Catalog |
+  |---|---|---|
+  | `ai:closed` | `6b7280` | `6a737d` |
+  | `ai:needs-human` | `b60205` + "Automation halted…" | `e11d48` + "Escalated for human intervention…" |
+  | `ai:blocked` | "Blocked: human input required" | "Orchestrator auto-answer loop blocked…" |
+
+  `gh label create` never updates a label that already exists, so in a fresh consumer repo the first workflow to create a label fixes its metadata.
+- **Recommended fix:** Replace these inline creates with `ensure_label_exists` (already sourced in this job at 5763-5765) and keep the inline create only as a fallback that uses the catalog values.
+
+**CONSIST-002** · `.github/workflows/review_autofix.yml:1311` · Severity: **Low** · Category: `consistency`
+- **Description:** `_safe_gh_jq() { gh api "$@"; }` drops the documented contract (`gh_helpers.sh:1369-1399`): nothing on stdout when the call fails. The effect is mostly masked because `pr_checks_lib.sh` calls it through the inline `gh_retry`, which buffers stdout (1265-1270).
+- **Recommended fix:** Resolved by DUP-002 (source the verified `gh_helpers.sh`). Otherwise, copy the temp-file body from `gh_helpers.sh:1385-1399`.
+
+**CONSIST-003** · `scripts/check_failure_triage.sh:215`, `220`; `.github/workflows/implement.yml:2283-2294` · Severity: **Low** · Category: `consistency`
+- **Description:** These are raw `gh api` reads with no rate-limit handling, while the same paths use `gh_retry` elsewhere (`check_failure_triage.sh:1182-1201`; `implement.yml:2101`).
+  - In triage, the `GET /user` and issue reads fail closed after one attempt and skip the supersede. The writes at 263-266 are unretried on purpose (comment 236-237), which is fine.
+  - In implement, the loop can make up to 5 full paginated fetches, sleeping 2-10 s between attempts with no rate-limit awareness.
+- **Recommended fix:** Wrap the reads in `gh_retry`. In implement, keep the 5-pass eventual-consistency loop but use `gh_retry gh api --paginate …` as the transport.
+
+**DEBT-001** · `scripts/orchestrate_poll_process.sh` (at least 32,788 lines; a call site sits at line 32788) · Severity: **Low** · Category: `tech-debt`
+- **Description:** A single sourced script of this size holds unrelated subsystems: reclarify replay (189-248), label ensure (4429), standalone state (18588-18692) and no-op ancestry (18551). That makes duplication (DUP-001, DUP-003) and dead code (DEAD-001) hard to spot.
+- **Recommended fix:** Continue the extraction pattern from `review_autofix_step_*.sh`. Move the self-contained helper groups into `scripts/orchestrate_poll_<area>.sh` modules, source them from the top of the file, and register them in the existing bootstrap and test registries.
+
+**TODO/FIXME/HACK markers:** none. A search for `TODO|FIXME|HACK|XXX:` across `scripts/*.sh`, `scripts/*.py` and `.github/workflows/*.yml` returned 0 matches.
+
+**ShellCheck:** no new SC2086, SC2046 or SC2006 violations were found in the sampled bodies. Numeric `$(seq …)` loops at `ci.yml:865, 896` and `implement.yml:5690` iterate over validated integers. ShellCheck already runs in `static-checks` (`ci.yml:28-29`).
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---|---|
+| Critical | 0 | — |
+| High | 1 | API-001 |
+| Medium | 7 | BUG-001, API-002, DUP-001, DUP-002, EXPR-001, EXPR-002, CONSIST-001 |
+| Low | 17 | BUG-002, SEC-001, SEC-002, API-003, API-004, API-005, BATCH-001, BATCH-002, DUP-003, DUP-004, DUP-005, EXPR-003, EXPR-004, DEAD-001, CONSIST-002, CONSIST-003, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | `scripts/gh_helpers.sh`, `tests/test_gh_retry_permanent_auth_failures.py`, comment updates in `scripts/implement_handle_guard_block.sh` and `scripts/review_rb_judge.sh` | Small |
+| API call optimization | `scripts/gh_helpers.sh`, `scripts/workflow_failure_heal_intake.sh`, `scripts/check_failure_triage.sh`, `scripts/orchestrate_poll_process.sh`, `.github/workflows/implement.yml` | Medium |
+| Code modularization | `scripts/label_helpers.sh`, `scripts/validate_process.sh`, `scripts/orchestrate_poll_process.sh`, `scripts/review_rb_judge.sh`, `scripts/review_autofix_step_mark_*.sh`, `.github/workflows/review_autofix.yml`, `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/implement.yml`, new `scripts/noop_ancestry_helpers.sh` | Large |
+| Expression size reduction | `.github/workflows/implement.yml`, `.github/workflows/test-and-mark-stable.yml` | Small |
+| Medium/Low fixes | `.github/workflows/implement.yml`, `.github/workflows/ci.yml`, `.github/workflows/update_workflows.yml`, `.github/workflows/review_autofix.yml`, `scripts/orchestrate_poll_process.sh`, `scripts/check_failure_triage.sh` | Medium |
