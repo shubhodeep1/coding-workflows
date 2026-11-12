@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The file list leaves out `scripts/orchestrate_poll_process.sh`, but step 3 asks to update its comment near line 33218. Which instruction applies?\nChoices:\nA. Add `scripts/orchestrate_poll_process.sh` to the allowed files, for a comment-only change at lines 33217-33224 that adds `ai:workflow-heal-escalated` to the listed latch labels. No code change in that file. (RECOMMENDED)\nB. Keep the strict file list. Leave `scripts/orchestrate_poll_process.sh` untouched, even though its comment will no longer list every latch label.\nC. Keep the strict file list, but rewrite only the comment in `scripts/orchestrate_lib.py` so it says that the poller comment at `orchestrate_poll_process.sh` line 33218 lists only the original two labels.",
+  "fingerprint": "a555e790b42f16f6fed6245463c39a981b3e09066ac70783270ce7872845dc41",
+  "lineage": {
+    "issue_number": 9411,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43290922340",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43290922340",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261112195010_cbd2268b49",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9411,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43290922340"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9411 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-12T19:50:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
