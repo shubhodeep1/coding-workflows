@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-12T02:01:53Z",
+  "issue_number": 9294,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=tests/test_ci_poll_test_sharding.py:1-1; cited_path=tests/test_agents_fragment_contract.py, tests/test_ai_label_precreation_contract.py, tests/test_changelog_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_review_autofix_provider_outage_contract.py, tests/test_workflow_checkout_integration_ref_audit.py; files_touched=.github/workflows/ci.yml, changelog.d/9294-monotonic-elapsed-clamp.md, scripts/review_autofix_step_checkout_pr_head_branch.sh, tests/test_ci_poll_test_sharding.py, tests/test_review_checkout_head_diagnostics.py.",
+  "phase": "review_autofix",
+  "pr_number": 9323,
+  "record_id": "lesson_20261112020153_cf9c49e8a9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_agents_fragment_contract.py, tests/test_ai_label_precreation_contract.py, tests/test_changelog_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_review_autof",
+    "tests/test_ci_poll_test_sharding.py",
+    ".github/workflows/ci.yml",
+    "changelog.d/9294-monotonic-elapsed-clamp.md",
+    "scripts/review_autofix_step_checkout_pr_head_branch.sh",
+    "tests/test_review_checkout_head_diagnostics.py"
+  ]
+}
