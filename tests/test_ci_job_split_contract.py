@@ -186,8 +186,9 @@ class SystemPythonJobTest(unittest.TestCase):
 				continue
 			with self.subTest(line=code):
 				# Same case-insensitive spellings as the step-level check, so a
-				# `TMPDIR="${{ runner.temp }}/x"` run line is rejected too.
-				for runner_temp_spelling in ("runner_temp", "runner.temp"):
+				# `TMPDIR="${{ runner.temp }}/x"` run line is rejected too, and
+				# the same literal hosted-runner path (`/home/runner/work/_temp`).
+				for runner_temp_spelling in ("runner_temp", "runner.temp", "/home/runner/work"):
 					self.assertNotIn(runner_temp_spelling, code.lower())
 
 	def test_system_python_shard_count_fits_the_job_budget(self) -> None:
