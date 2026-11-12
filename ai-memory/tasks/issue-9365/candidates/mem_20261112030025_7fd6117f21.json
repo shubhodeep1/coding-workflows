@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: GITHUB FACTS show PR #9246 is open and unmerged against `main`, and it targets this exact failure (\"closed-reader test\" on ubuntu-26.04). The triage issue also says a check that fails on the base branch should be fixed there, not in this PR. Option B would duplicate and conflict with #9246. Option C weakens the check, which the triage issue forbids. So the `gh_retry` / `scripts/gh_helpers.sh` / `tests/test_gh_retry_stdout_isolation.py` path stays out of this fix. #9356 goes green on that point once #9246 lands and `main` is merged into `ai/issue-9341`.\nQ2: Triage issues carrying the `check-failure-triage:pr=<n>` header are routed to the failing PR's head branch (`scripts/resolve_integration_ref.sh:255-277`), so this fix lands on `ai/issue-9341`. That branch is where the #9341 work is missing. The repo confirms the gaps the triage describes:\n- `scripts/render_prompt.py:182` calls `read_text(encoding=\"utf-8\")` with no decode handling.\n- `main()` catches only `RenderPromptError` (`scripts/render_prompt.py:1406`).\nOption A delivers the behaviour already promised in `changelog.d/9341-render-prompt-readable-errors.md` and wires in the tests so CI runs them. Q1:A with Q2:A still leaves concrete work, so it avoids the empty combination the note warns about.\n\nEXECUTION PLAN (required for any non-letter decision):\nNot required: both decisions are lettered options. These constraints are binding on the planner:\n- Q1:A: make no changes to `scripts/gh_helpers.sh` or `tests/test_gh_retry_stdout_isolation.py`. Add no steps that comment on, wait for, or check PR #9246 or any other PR.\n- Q2:A: limit the change to these three files on `ai/issue-9341`:\n  - `scripts/render_prompt.py`: in `load_prompt`, catch `UnicodeDecodeError` and raise `RenderPromptError` with the path and byte offset. Add a final `except Exception` to `main()` that prints `ERROR: render_prompt unexpected <Type>: <msg> (prompt=<path>)` and returns 1.\n  - `scripts/render_prompt.sh`: make `collect_prompt_placeholders` catch read and decode errors, print `ERROR: collect_prompt_placeholders <Type>: <path>: <msg>` and exit 1. Capture its output into a variable and check the exit status before the loop, instead of reading it through `< <(...)` at about line 309, so the script stops before it calls `render_prompt.py`.\n  - `tests/test_render_prompt_foundation.py`: call the three new tests (about lines 219, 236 and 264) from the module's `main()` (about lines 1425-1466).\n- Leave the existing passing behaviour of every other code path unchanged. Do not weaken or skip any test.",
+  "fingerprint": "910dda8813fbbc621b23c273804d0459f0c8d78535e7c8c1caa6238d5330e782",
+  "lineage": {
+    "issue_number": 9365,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43142179904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43142179904",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9365"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261112030025_7fd6117f21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9365,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43142179904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9365",
+  "timestamps": {
+    "created_at": "2026-11-12T03:00:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
