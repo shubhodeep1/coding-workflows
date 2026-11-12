@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Don't change `tests/test_render_prompt_foundation.py` for this, and don't disable or skip either CI job or the `lint` aggregate.\"\n  expected_change_site: tests/test_render_prompt_foundation.py (should remain unchanged)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The last run diff edits the comment at lines 236-240 above test_argparse_scripts_called_by_ci_tests_exit_zero_on_help in tests/test_render_prompt_foundation.py, comment-only with no runtime effect, but contrary to the explicit instruction (severity NIT; reviewers differ on confidence 3-5)\n- requirement: CI failures must be fixed, specifically for tests-hooks-and-orchestrator and orchestrate-poll (1)\n  expected_change_site: CI logs should show pass after these changes\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: PR CI still fails on tests/test_ai_label_precreation_contract.py, tests/test_changelog_fragment_contract.py, and tests/test_review_autofix_provider_outage_contract.py (severity BLOCKER; refuted by anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash, which found check-runs failed_count: 0 and attributed the failures to the sandbox environment)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: The linked issue says \"Don't change `tests/test_render_prompt_foundation.py` for this.\"\nExpected change site: no edit to `tests/test_render_prompt_foundation.py` in this fix.\nEvidence of absence: The LAST RUN DIFF edits the comment above `test_argparse_scripts_called_by_ci_tests_exit_zero_on_help` in that file. It is comment-only, so it has no runtime effect, and the plan grant `tests/**` covers the path. It still goes against the issue's explicit instruction. The edit is also unrelated to the two failing jobs, and `PR CHANGED FILES` does not list the file. The edit is a safe one to revert.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_render_prompt_foundation.py:(comment above test_argparse_scripts_called_by_ci_tests_exit_zero_on_help) | severity=NIT | confidence=4\n  PROBLEM: Unnecessary comment change that violates project instructions\n  WHY: It has no runtime effect, but violates the requirement to avoid editing this file, increasing PR noise.\nTASK_GAP:\nRequirement: CI failures must be fixed, specifically for tests-hooks-and-orchestrator and orchestrate-poll (1).\nExpected change site: CI logs should show pass after these changes.\nEvidence of absence: The PR CI still fails on tests/test_ai_label_precreation_contract.py, tests/test_changelog_fragment_contract.py, and tests/test_review_autofix_provider_outage_contract.py, which are listed as Failures caused by this change.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Don't change `tests/test_render_prompt_foundation.py` for this.\"\nExpected change site: `tests/test_render_prompt_foundation.py` should remain unchanged.\nEvidence of absence: The latest diff edits the comment at lines 236-240 in that file, despite the linked issue's explicit instruction not to change it.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: The linked issue's suggested-fix section states verbatim: \"Don't change `tests/test_render_prompt_foundation.py` for this, and don't disable or skip either CI job or the `lint` aggregate.\"\nExpected change site: tests/test_render_prompt_foundation.py should be untouched by this fix.\nEvidence of absence: The LAST RUN DIFF edits the comment block above `test_argparse_scripts_called_by_ci_tests_exit_zero_on_help` in tests/test_render_prompt_foundation.py (lines 236-240 in the working tree), and last_run_changed_files.txt lists only that file. The edit is comment-only with no runtime effect and the path is technically covered by the pipeline plan grant's `tests/**` glob, but it directly contradicts the issue's explicit instruction and adds unnecessary diff noise to a CI-repair PR.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "39a6012867b191926d6ccf517ce2ae12f556c208457b8bd7596a278f35a28c13",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9385,
+    "run_id": "43190611087",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43190611087",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112122009_b4aab4cf6c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9385,
+    "run_id": "43190611087"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T12:20:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
