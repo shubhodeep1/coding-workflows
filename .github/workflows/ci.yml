@@ -2466,10 +2466,11 @@ jobs:
       # job together with the two steps below. That run's step timings could
       # not be read, so the pick is an estimate from the planning sandbox (about
       # 31s for this step and 34s and 32s for the two below, relative weights
-      # only), not a measurement. This job has the fewest subprocess call sites
-      # of the 20-minute non-matrix test jobs (about 284) and checks out full
-      # history. None of the three steps needs Node or the prepared .claude/
-      # live copies. Names and bodies unchanged.
+      # only), not a measurement. Per-job durations could not be read either,
+      # so "most headroom" is a proxy, not a measured comparison: this job has
+      # the fewest subprocess call sites of the 20-minute non-matrix test jobs
+      # (about 284) and checks out full history. None of the three steps needs
+      # Node or the prepared .claude/ live copies. Names and bodies unchanged.
       - name: Implement post-Codex recovery unit tests
         run: |
           set -euo pipefail
