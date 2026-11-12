@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Both CI checks, tests-hooks-and-orchestrator and orchestrate-poll (1), must go green (issue #9297).\n  expected_change_site: unknown; the failing step must be identified from the full log of job 130811464472 (possibly tests/test_gh_retry_stdout_isolation.py or ci.yml matrix slices)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: orchestrate-poll is success, but tests-hooks-and-orchestrator is still failure on head c4a9428 and the lint aggregate fails; the 16 KB log tail ends mid-step in tests/test_lint_pr_body_auto_close.py with no failing assertion, so the failure is undiagnosed. Reviewers disagree on the cause: possibly the job's timeout-minutes 20 or a later step. Severity MAJOR; confidence ranges 2-5, highest used.\n- requirement: Both CI checks (tests-hooks-and-orchestrator and orchestrate-poll) must pass (go green).\n  expected_change_site: PR body, PR title, and commit messages\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Claims job 130811464472 fails because of lint errors from tests/test_lint_pr_body_auto_close.py on auto-close keywords ('Fixes', 'resolved') referencing tracking issue #2734 in the PR body and commit messages. Severity BLOCKER. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash explicitly rejected this as expected fixture output.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP:\n  Requirement: Issue #9297 expects both CI checks, tests-hooks-and-orchestrator and orchestrate-poll (1), to go green.\n  Expected change site: unknown. If the failing step is \"Merge-train and gh_helpers rate-limit tests\" (.github/workflows/ci.yml:837-934), the fix site would be tests/test_gh_retry_stdout_isolation.py.\n  Evidence of absence: On head c4a9428 orchestrate-poll is success, tests-hooks-and-orchestrator is still failure and the lint aggregate fails. The 16 KB log tail ends partway through tests/test_lint_pr_body_auto_close.py with no failing assertion. No hunk can be tied to the failure. A job timeout (timeout-minutes: 20) or a later-step failure cannot be ruled out. Next step is the full log of job 130811464472 and a rerun.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 2\n- All other categories: NONE. The reviewer checked the last autofix changes and found no defects. It did not report the pass-1 auto-close claim, because the #2734 lines are expected fixture output.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: Both CI checks (tests-hooks-and-orchestrator and orchestrate-poll) must pass (go green).\n  Expected change site: PR body, PR title, and commit messages.\n  Evidence of absence: The tests-hooks-and-orchestrator job is failing (job 130811464472) due to lint errors reported by tests/test_lint_pr_body_auto_close.py regarding auto-close keyword usage ('Fixes', 'resolved') referencing the ai:orchestrator-tracking issue #2734 in the PR body and commit messages.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- All other categories: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Both named tests and a new backwards-clock regression test pass, and both CI checks go green.\"\n  Expected change site: CI acceptance for tests-hooks-and-orchestrator and orchestrate-poll; the failing step must be identified before determining whether a code change is required.\n  Evidence of absence: The latest check run reports tests-hooks-and-orchestrator as failure and orchestrate-poll as success. The log tail ends during tests/test_lint_pr_body_auto_close.py without a failing assertion or termination reason, so the failure remains undiagnosed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- All other categories: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP:\n  Requirement: \"Expected outcome: Both named tests and a new backwards-clock regression test pass, and both CI checks go green.\" (AI Issue Summary, entry[0]; linked issue #9297)\n  Expected change site: unknown, cannot be mapped to any hunk in the PR diff or last run diff.\n  Evidence of absence: orchestrate-poll is success, but tests-hooks-and-orchestrator (job 130811464472, run 43106607851) is still failure on head c4a9428 and the lint gate fails with it. The 16 KB log tail ends mid-step in tests/test_lint_pr_body_auto_close.py at 22:29:31 with every shown test PASSing and no FAIL line. The signature matches the merge-base failure (job 130774127933), consistent with timeout-minutes: 20 or a base-branch failure. The pass-1 BLOCKER auto-close claim is rejected as a false positive: the ##[error][lint_pr_body_auto_close] lines are fixture output from test_main_exit_codes (tests/test_lint_pr_body_auto_close.py:458-506; _fetch_issue_labels_gh is monkey-patched at lines 467-470). Nothing in the diff can fix this; it needs a full-log fetch of job 130811464472 and, if it is a timeout, a rerun or ci.yml matrix rebalance.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 2\n- Verified with no defects: tests/test_scripts_build_parser_help.py:163-171, tests/test_review_checkout_head_diagnostics.py:270-291, scripts/review_autofix_step_checkout_pr_head_branch.sh:42-47. All other categories: NONE.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c5b1b47e8530c4c9eae66254e8479f788ccbea390ed9975c8ca5c533724d54e9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9316,
+    "run_id": "43106608031",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43106608031",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112012041_9823c6cc9c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9316,
+    "run_id": "43106608031"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T01:20:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
