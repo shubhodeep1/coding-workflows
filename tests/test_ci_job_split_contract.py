@@ -172,7 +172,11 @@ class SystemPythonJobTest(unittest.TestCase):
 		would keep socket paths short and stays allowed.
 		"""
 		shard_step = self._steps()["System-Python test shard"]
-		self.assertNotIn("RUNNER_TEMP", str(shard_step.get("env", {}).get("TMPDIR", "")))
+		# A step-level `TMPDIR: ${{ runner.temp }}` is the same regression as the
+		# shell `RUNNER_TEMP` spelling, so both are rejected case-insensitively.
+		step_tmpdir = str(shard_step.get("env", {}).get("TMPDIR", "")).lower()
+		for runner_temp_spelling in ("runner_temp", "runner.temp"):
+			self.assertNotIn(runner_temp_spelling, step_tmpdir)
 		for line in shard_step["run"].splitlines():
 			code = line.strip()
 			if code.startswith("#") or "TMPDIR=" not in code:
