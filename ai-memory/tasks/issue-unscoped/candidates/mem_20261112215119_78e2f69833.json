@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nNote: two TASK_GAP entries were recorded only as confirmation that the requirement is met (both severity NIT, ISSUE_CONFIDENCE 1):\n- Requirement: Part 2, `gh_retry`'s replay must return non-zero when the reader closed the pipe, whichever `cat` is installed. Keep `_gh_retry_replay_rc`, do not re-run the command, leave no temp files, and do not change `gh_retry_to_file`.\n  Expected change site: `scripts/gh_helpers.sh`, `gh_retry` success branch.\n  Evidence of absence: not absent. The branch replays with builtin `printf` in a subshell, keeps `_gh_retry_replay_rc`, and `rm -f` runs before `return`. `tests/test_gh_retry_stdout_isolation.py` asserts one call, a non-zero status and no leftover temp files.\n- Requirement: Part 1, skip existing names in the `no_docker` link loop with `os.path.lexists`.\n  Expected change site: `tests/test_codex_isolated_exec.py`, `test_missing_docker_fails_closed_and_never_runs_host_codex`.\n  Evidence of absence: not absent. The other reviewers cite it at `tests/test_codex_isolated_exec.py:232`. It shipped earlier under #9200, and the changelog fragment says so. I did not re-read that file in this pass.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nNote: two TASK_GAP entries were recorded as checked, not a gap (both SEVERITY: NIT, ISSUE_CONFIDENCE: 1):\n- Requirement: \"in the loop that links system tools into no_docker, skip names that already exist using os.path.lexists(target) ... so broken links are not linked twice\"\n  Expected change site: tests/test_codex_isolated_exec.py, test_missing_docker_fails_closed_and_never_runs_host_codex\n  Evidence of absence: not absent. tests/test_codex_isolated_exec.py:232 reads `if entry.name != \"docker\" and not os.path.lexists(target):` with the explanatory comment at line 229; it shipped earlier (Refs #9200) and the changelog fragment says so.\n- Requirement: \"the replay must return non-zero when the reader closed the pipe, whichever cat is installed. Keep the return contract and the _gh_retry_replay_rc name. Do not re-run the command, and leave no temp files. Do not change gh_retry_to_file or the test assertions.\"\n  Expected change site: scripts/gh_helpers.sh, gh_retry success branch\n  Evidence of absence: not absent. scripts/gh_helpers.sh:1232-1250 replays via `builtin printf` in a subshell (no `cat`), keeps `_gh_retry_replay_rc` (line 1232/1248/1250), runs `rm -f` on both temp files before `return` (line 1249), executes the command exactly once per attempt, and `gh_retry_to_file` has no diff hunk.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7b5707fae87c1d220d76c0d6cd40a4511cfc953ea2e3064e566b1c595d639a0c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9267,
+    "run_id": "43258888725",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43258888725",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112215119_78e2f69833",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9267,
+    "run_id": "43258888725"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T21:51:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
