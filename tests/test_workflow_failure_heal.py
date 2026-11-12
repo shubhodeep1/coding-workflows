@@ -1213,6 +1213,28 @@ def test_filter_log_keeps_the_chain_marker_after_a_traceback_longer_than_the_sca
 	assert "later output 0" not in filtered
 
 
+def test_filter_log_keeps_the_chain_marker_after_an_exception_line_at_the_scan_window_edge() -> None:
+	# The exception line is the last line of the scan window, so the chain
+	# marker sits just past it and must still be kept.
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(heal._TRACEBACK_SCAN_MAX_LINES - 1)]
+	marker = "The above exception was the direct cause of the following exception:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		"ValueError: inner failure",
+		marker,
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: outer failure",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "ValueError: inner failure" in filtered
+	assert marker in filtered
+	assert "RuntimeError: outer failure" in filtered
+	assert "later output 0" not in filtered
+
+
 def test_drop_step_script_lines_drops_unstyled_echoed_script() -> None:
 	dropped = heal._drop_step_script_lines(BTC_SWEEPER_UNSTYLED_STEP_LOG)
 	assert "set -euo pipefail\n" not in dropped.split("##[group]Run set -euo pipefail", 1)[1]

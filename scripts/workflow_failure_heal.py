@@ -3731,8 +3731,11 @@ def _traceback_context_indices(lines: list[str]) -> set[int]:
 		# cursor only moves forward and index = cursor below, so this is linear.
 		# The walk classifies lines as the window scan does, so the
 		# continuation lines and chain marker after that exception line are
-		# kept too (a chained traceback's link is not lost).
-		if not exception_seen and cursor == scan_end:
+		# kept too (a chained traceback's link is not lost). The walk also runs
+		# when the window ends with the block still open after the exception
+		# line (that line last in the window), so a chain marker or
+		# continuation line just past the window is not dropped.
+		if cursor == scan_end:
 			while cursor < total:
 				content = _LOG_TIMESTAMP_RE.sub("", lines[cursor])
 				if _TRACEBACK_HEADER_RE.search(content):
