@@ -257,6 +257,9 @@ jobs:
       # Skip a failure the default branch already has when an open heal issue
       # tracks that workflow there; the PR is noted on the heal issue instead.
       CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED: ${{ vars.CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED || 'true' }}
+      # Issue #9120: re-run a first-attempt run whose failed jobs only hit a
+      # github.com release-download 502/503/504 once, instead of filing an issue.
+      CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED || 'true' }}
       # Issue #8265: a failure whose fix is only in unmodified upstream-managed
       # files goes upstream as one heal report instead of a consumer issue.
       CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED || 'true' }}

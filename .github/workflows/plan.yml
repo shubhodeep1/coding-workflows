@@ -2334,6 +2334,16 @@ jobs:
             --remove-label 'ai:clarification' \
             --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
 
+          # Issue #9120: a blocked ai:check-triage issue is re-checked by the
+          # unblock judge, so it alerts at WARNING, not CRITICAL. Labels come from
+          # the issue metadata this run already fetched (no API call); a missing
+          # or unreadable file keeps CRITICAL and today's comment text.
+          BLOCKED_CHECK_TRIAGE=false
+          if [ -s "${ISSUE_META_FILE:-}" ] &&
+            jq -e 'any(.labels[]?.name; . == "ai:check-triage")' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+            BLOCKED_CHECK_TRIAGE=true
+          fi
+
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           # A block that only waits for another open PR (the planner's
           # "work is delivered by open PR #<N>" self-check, #8335) needs no
@@ -2375,6 +2385,10 @@ jobs:
               printf '\n'
               printf '%s\n' "Reason: ${BLOCKED_REASON}"
               printf '\n'
+              if [ "${BLOCKED_CHECK_TRIAGE}" = "true" ]; then
+                printf '%s\n' "This is a CI-failure triage issue. The unblock judge re-checks the failing check and closes this issue with evidence once it passes on the pull request's newer head or on the default branch; no reply is needed unless the check keeps failing."
+                printf '\n'
+              fi
               printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
               printf '%s\n' "Provide the required input, then reply with /answer."
               printf '\n'
@@ -2388,6 +2402,9 @@ jobs:
           if [ -n "${PLAN_BLOCKED_WAIT_PR}" ]; then
             echo "PLAN_BLOCKED_WAIT issue=${ISSUE_NUMBER} pr=${PLAN_BLOCKED_WAIT_PR} level=WARNING"
             MSG="Planning for issue #${ISSUE_NUMBER} is waiting on open PR #${PLAN_BLOCKED_WAIT_PR}; it resumes automatically after that PR merges."
+            PLAN_BLOCKED_TG_LEVEL="WARNING"
+          elif [ "${BLOCKED_CHECK_TRIAGE}" = "true" ]; then
+            MSG="Planning blocked for issue #${ISSUE_NUMBER} (CI triage; the unblock judge will re-check): ${BLOCKED_REASON}"
             PLAN_BLOCKED_TG_LEVEL="WARNING"
           else
             MSG="Planning blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
