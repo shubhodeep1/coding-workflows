@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-12T05:17:11Z",
+  "issue_number": 9313,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=tests/test_summarize_reviewer_consensus_sandbox_pin.py:unknown; cited_path=PR description acceptance table (CI results for `test_review_utility_roles_never_start_host_opencode`, `SystemPythonJobTest`, `tests-system-python`); files_touched=tests/test_ci_job_split_contract.py, tests/test_summarize_reviewer_consensus_sandbox_pin.py.",
+  "phase": "review_autofix",
+  "pr_number": 9338,
+  "record_id": "lesson_20261112051711_be9a981613",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "PR description acceptance table (CI results for `test_review_utility_roles_never_start_host_opencode`, `SystemPythonJobTest`, `tests-system-python`)",
+    "tests/test_summarize_reviewer_consensus_sandbox_pin.py",
+    "tests/test_ci_job_split_contract.py"
+  ]
+}

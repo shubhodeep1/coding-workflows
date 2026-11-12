@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-12T05:17:11Z",
+  "issue_number": 9313,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=tests/test_ci_job_split_contract.py:unknown; cited_path=gh_retry closed-reader failure on ubuntu-26.04 (runner-image fix, not a path in this diff); files_touched=tests/test_ci_job_split_contract.py, tests/test_summarize_reviewer_consensus_sandbox_pin.py.",
+  "phase": "review_autofix",
+  "pr_number": 9338,
+  "record_id": "lesson_20261112051711_02ec72f3d2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "gh_retry closed-reader failure on ubuntu-26.04 (runner-image fix, not a path in this diff)",
+    "tests/test_ci_job_split_contract.py",
+    "tests/test_summarize_reviewer_consensus_sandbox_pin.py"
+  ]
+}
