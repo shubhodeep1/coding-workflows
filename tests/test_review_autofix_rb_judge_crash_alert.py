@@ -191,8 +191,10 @@ def _run_comment_script(
 			"RB_JUDGE_STATUS": "failed",
 		}
 		run_env.update(env)
+		# Call the gh stub through bash from a shell function, so the test
+		# also works where the temp dir is mounted noexec.
 		result = subprocess.run(
-			["bash", "-c", f"source {str(COMMENT_SCRIPT)!r}"],
+			["bash", "-c", f"gh() {{ bash {str(gh)!r} \"$@\"; }}; source {str(COMMENT_SCRIPT)!r}"],
 			env=run_env,
 			cwd=tmp,
 			capture_output=True,
@@ -236,7 +238,8 @@ def test_trusted_matching_marker_skips_post_and_keeps_label_handover():
 
 
 def test_untrusted_author_marker_still_posts():
-	comments = [_trusted_comment(_marker(HEAD_A, "judge_crashed"), login="mallory")]
+	# Same body shape the step writes, so only the author check can reject it.
+	comments = [_trusted_comment("blocked\n\n" + _marker(HEAD_A, "judge_crashed"), login="mallory")]
 	out = _run_comment_script({}, comments=comments)
 	assert len(out["comment_posts"]) == 1
 	assert "rb_judge_crash_repeat=false" in out["output"]
@@ -268,7 +271,8 @@ def test_trusted_marker_with_trailing_whitespace_still_dedupes():
 
 
 def test_different_head_or_reason_posts():
-	for body in (_marker(HEAD_B, "judge_crashed"), _marker(HEAD_A, "llm_failed")):
+	# Same body shape the step writes, so only the head/reason check can reject it.
+	for body in ("blocked\n\n" + _marker(HEAD_B, "judge_crashed"), "blocked\n\n" + _marker(HEAD_A, "llm_failed")):
 		out = _run_comment_script({}, comments=[_trusted_comment(body)])
 		assert len(out["comment_posts"]) == 1, body
 		assert "rb_judge_crash_repeat=false" in out["output"]
