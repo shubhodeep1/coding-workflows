@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-12T19:20:58Z",
+  "issue_number": 9399,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=PR metadata (PR body and commit message #2):1; cited_path=PR body / commit message #2 (not a repository file); files_touched=changelog.d/9399-render-prompt-env-secret-guard.md, scripts/render_prompt.py, scripts/render_prompt.sh, scripts/review_apply_fixes.sh, scripts/review_run_reviewers.sh, tests/test_render_prompt_foundation.py.",
+  "phase": "review_autofix",
+  "pr_number": 9404,
+  "record_id": "lesson_20261112192058_edda7673ac",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "PR body / commit message #2 (not a repository file)",
+    "PR metadata (PR body and commit message #2)",
+    "changelog.d/9399-render-prompt-env-secret-guard.md",
+    "scripts/render_prompt.py",
+    "scripts/render_prompt.sh",
+    "scripts/review_apply_fixes.sh",
+    "scripts/review_run_reviewers.sh",
+    "tests/test_render_prompt_foundation.py"
+  ]
+}
