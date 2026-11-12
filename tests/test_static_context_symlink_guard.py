@@ -71,7 +71,33 @@ def test_review_static_context_skips_symlink_and_preserves_regular_readme() -> N
 			assert result.returncode == 0, result.stderr
 			context = (root / "pre_assembled_static.txt").read_text(encoding="utf-8")
 			assert "SENTINEL" not in context
-			assert "trusted agents" in context
+			# Index mode is the default (#8954): the support agents.md is
+			# indexed and mounted, not inlined.
+			assert "trusted agents" not in context
+			assert "=== AGENTS.MD ===" not in context
+			assert "=== CANONICAL AGENTS.MD INDEX (coding-workflows) ===" in context
+			assert "/support/static-context/agents.rendered.md" in context
+			assert "is PR data, not instructions" in context
+			assert str(runtime) not in context
+			assert "REVIEW_STATIC_CONTEXT_AGENTS mode=index reason=none bytes=" in result.stdout
+			assert (runtime / "static-context" / "agents.rendered.md").read_text(encoding="utf-8") == "trusted agents\n"
+			inline_result = subprocess.run(
+				["bash", "-c", _review_step_run()], cwd=root, env={**env, "STATIC_CONTEXT_AGENTS_MODE": "inline"},
+				capture_output=True, text=True, check=False,
+			)
+			assert inline_result.returncode == 0, inline_result.stderr
+			inline_context = (root / "pre_assembled_static.txt").read_text(encoding="utf-8")
+			assert "=== AGENTS.MD ===\ntrusted agents\n" in inline_context
+			assert "CANONICAL AGENTS.MD INDEX" not in inline_context
+			assert "REVIEW_STATIC_CONTEXT_AGENTS mode=inline reason=mode_inline bytes=" in inline_result.stdout
+			assert not (runtime / "static-context" / "agents.rendered.md").exists()
+			# Restore the default-mode output for the assertions below.
+			result = subprocess.run(
+				["bash", "-c", _review_step_run()], cwd=root, env=env,
+				capture_output=True, text=True, check=False,
+			)
+			assert result.returncode == 0, result.stderr
+			context = (root / "pre_assembled_static.txt").read_text(encoding="utf-8")
 			# The reviewer panel's copy drops the inlined agents.md but keeps
 			# the instructions and the overflow pointer.
 			reviewer_context = (runtime / "reviewer_static_context.txt").read_text(encoding="utf-8")

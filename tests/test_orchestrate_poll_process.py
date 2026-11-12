@@ -1740,13 +1740,21 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'list':
 				if il_label not in labels:
 					continue
 				try:
-					out.append({
+					il_entry = {
 						'number': int(inum),
 						'labels': [{'name': l} for l in labels],
 						'body': idata.get('body', ''),
-					})
+					}
 				except (TypeError, ValueError):
 					continue
+				# Issue #8955: the close sweep asks for the issue author.
+				if 'author' in str(il_json_fields or '').split(','):
+					il_author_entry = store.get('issue_authors', {}).get(str(inum))
+					if il_author_entry is not None:
+						il_entry['author'] = {'login': str((il_author_entry.get('user') or {}).get('login', ''))}
+					else:
+						il_entry['author'] = {'login': str(idata.get('author_login', 'octocat'))}
+				out.append(il_entry)
 			print(json.dumps(out))
 			sys.exit(0)
 	print('[]')
@@ -2212,6 +2220,9 @@ if args[0] == 'api':
 				issue_payload['number'] = issue_num
 			if re.search(r'(?m)^\s*state\s*$', query):
 				issue_payload['state'] = issue_state
+			# Issue #8808: issue createdAt (opt-in per issue via issue_created_at).
+			if re.search(r'(?m)^\s*createdAt\s*$', query):
+				issue_payload['createdAt'] = str((store.get('issue_created_at') or {}).get(str(issue_num), '2026-01-01T00:00:00Z'))
 			if re.search(r'(?m)^\s*body\s*$', query):
 				issue_payload['body'] = issue.get('body', '')
 			# Opt-in issue author fields (issue #7228) override the per-issue defaults.
@@ -2302,6 +2313,10 @@ if args[0] == 'api':
 							},
 						})
 				issue_payload['timelineItems'] = {'nodes': timeline_nodes}
+				# Issue #8808: opt-in truncated timeline (more than the last 50
+				# cross-references).
+				if str(issue_num) in {str(n) for n in store.get('issue_timeline_truncated', [])}:
+					issue_payload['timelineItems']['pageInfo'] = {'hasPreviousPage': True}
 			repo[f'i{alias_num}'] = issue_payload
 		print(json.dumps({'data': {'repository': repo}}))
 		sys.exit(0)
@@ -2533,6 +2548,22 @@ if args[0] == 'api':
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)$', path)
+	if m and method == 'PATCH' and store.get('record_issue_state_patch') and any(f.startswith('state=') for f in fields):
+		# Issue #8808: heal stale auto-close (state=closed, state_reason=completed).
+		# Opt-in so other fixtures' state PATCHes (tracking-issue auto-close,
+		# plan-split close) keep the generic handling below.
+		num = int(m.group(1))
+		if num in set(store.get('fail_issue_state_patch_for', [])):
+			print('forced issue PATCH failure', file=sys.stderr)
+			sys.exit(1)
+		issue = get_issue(m.group(1))
+		patch = dict(f.split('=', 1) for f in fields if '=' in f)
+		if patch.get('state') == 'closed':
+			issue['closed'] = True
+		store.setdefault('issue_state_patch_calls', []).append({'issue': num, **patch})
+		save()
+		print(json.dumps({'number': num, 'state': patch.get('state', '')}))
+		sys.exit(0)
 	if m and method == 'PATCH' and any(f.startswith('body=') for f in fields):
 		# Issue body write (pipeline plan grant, Q108).
 		num = int(m.group(1))
@@ -3206,7 +3237,8 @@ if args[0] == 'api':
 			else:
 				print(json.dumps(result))
 			sys.exit(0)
-		result = {'workflow_runs': runs, 'total_count': len(runs)}
+		# Issue #8808: opt-in total_count above the page (a busy branch).
+		result = {'workflow_runs': runs, 'total_count': len(runs) + int(store.get('workflow_runs_total_count_extra', 0) or 0)}
 		if jq:
 			import subprocess as _sp
 			p = _sp.run(['jq', '-r', jq], input=json.dumps(result), capture_output=True, text=True)
@@ -19301,13 +19333,17 @@ def _run_target_merge_helper_rules(tmp_path: Path) -> None:
 	helper = tmp_path / "helper.sh"
 	helper.write_text(script[start:end] + "\n", encoding="utf-8")
 
-	def run(base: str, default: str, declared: str, managed: str) -> str:
+	def run(base: str, default: str, declared: str, managed: str, triage: str | None = None) -> str:
 		pr_json = json.dumps({"base": {"ref": base}}) if base is not None else "{}"
+		if triage is None:
+			call = '_pr_json_base_is_target_merge 10 "$2" "$3" "$4" "$5"'
+		else:
+			call = '_pr_json_base_is_target_merge 10 "$2" "$3" "$4" "$5" "$6"'
 		proc = subprocess.run(
 			[
 				"bash", "-c",
-				'source "$1"; if _pr_json_base_is_target_merge 10 "$2" "$3" "$4" "$5"; then echo "yes:${_TARGET_MERGE_REASON}"; else echo no; fi',
-				"_", str(helper), pr_json, default, declared, managed,
+				'source "$1"; if ' + call + '; then echo "yes:${_TARGET_MERGE_REASON}"; else echo no; fi',
+				"_", str(helper), pr_json, default, declared, managed, triage or "",
 			],
 			check=True, capture_output=True, text=True,
 		)
@@ -19322,6 +19358,187 @@ def _run_target_merge_helper_rules(tmp_path: Path) -> None:
 	assert run("", "main", "", "true") == "no"
 	assert run(None, "main", "", "true") == "no"
 	assert run("Main", "main", "", "false") == "no"
+	# Issue #8955: the optional sixth argument (check-triage marker PR head).
+	assert run("ai/issue-9", "main", "", "false", "ai/issue-9") == "yes:check_triage_pr_branch"
+	assert run("ai/issue-9", "main", "", "false", "") == "no"
+	assert run("ai/issue-9", "main", "", "false", "ai/issue-8") == "no"
+	assert run("AI/issue-9", "main", "", "false", "ai/issue-9") == "no"
+	# Existing rules still win over the triage branch.
+	assert run("main", "main", "", "false", "main") == "yes:default_branch"
+	assert run("", "main", "", "false", "ai/issue-9") == "no"
+
+
+# ---------------------------------------------------------------------------
+# Issue #8955: ai:check-triage issues close when their fix PR merges into the
+# head branch of the failing PR their `check-failure-triage:pr=<N>` marker
+# names (close_merged_issues_sweep, reason=check_triage_pr_branch).
+# ---------------------------------------------------------------------------
+
+_TRIAGE_PIPELINE_LOGIN = "github-actions[bot]"
+
+
+def _triage_issue_body(pr: int = 970, extra: str = "") -> str:
+	return (
+		f"<!-- check-failure-triage:pr={pr} -->\n"
+		"Check `lint` failed on PR #970.\n\n---\n\nDiagnosis.\n" + extra
+	)
+
+
+def _triage_fix_pr(number: int = 971, base: str = "ai/issue-9") -> dict:
+	return {
+		"number": number,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-11-07T05:00:00Z",
+		"baseRefName": base,
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"body": "Fix.\n\nCloses #10\n",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+
+
+def _triage_marker_pr(number: int = 970, head: str = "ai/issue-9", head_repo: str | None = None) -> dict:
+	pr = {
+		"number": number,
+		"state": "open",
+		"merged": False,
+		"baseRefName": "main",
+		"headRefName": head,
+		"headRefFromApi": head,
+		"body": "Fixes #9",
+	}
+	if head_repo is not None:
+		pr["headRepoFullName"] = head_repo
+	return pr
+
+
+def _run_triage_sweep(labels: list[str], *, author: str = _TRIAGE_PIPELINE_LOGIN, body: str | None = None,
+		marker_pr: dict | None = None, fix_pr: dict | None = None, linked: bool = True) -> dict:
+	prs = [fix_pr or _triage_fix_pr(), marker_pr or _triage_marker_pr()]
+	return _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: labels},
+		issue_bodies={10: body if body is not None else _triage_issue_body()},
+		issue_authors={10: {"login": author, "association": "NONE"}},
+		issue_linked_prs={10: 971} if linked else {},
+		prs=prs,
+		mock_gh_issue_list_label_filter=True,
+	)
+
+
+def test_close_merged_sweep_closes_done_check_triage_issue_merged_into_marker_pr_branch():
+	result = _run_triage_sweep(["ai:check-triage", "ai:done"])
+	assert 10 in result.get("closed_issues", []), result["stdout"]
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=check_triage candidate_pr=971 accepted reason=check_triage_pr_branch"
+	) in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=971 origin=check_triage status=closed" in result["stdout"]
+	assert "Found 1 open issue(s) with ai:check-triage" in result["stdout"]
+
+
+def test_close_merged_sweep_closes_ready_check_triage_issue_merged_into_marker_pr_branch():
+	result = _run_triage_sweep(["ai:check-triage", "ai:ready-to-merge"])
+	assert 10 in result.get("closed_issues", []), result["stdout"]
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=ready_label candidate_pr=971 accepted reason=check_triage_pr_branch"
+	) in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=971 origin=ready_label status=closed" in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_rejects_non_pipeline_author():
+	result = _run_triage_sweep(["ai:check-triage", "ai:done"], author="someone-else")
+	assert 10 not in result.get("closed_issues", [])
+	assert "origin=check_triage candidate_pr=971 rejected=non_target_base" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=check_triage no_merged_pr_found non_target_base_seen=true" in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_rejects_foreign_marker_head():
+	result = _run_triage_sweep(["ai:check-triage", "ai:done"], marker_pr=_triage_marker_pr(head_repo="attacker/repo"))
+	assert 10 not in result.get("closed_issues", [])
+	assert "origin=check_triage candidate_pr=971 rejected=non_target_base" in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_rejects_duplicate_marker_and_other_branch():
+	dup = _run_triage_sweep(["ai:check-triage", "ai:done"], body=_triage_issue_body(extra="<!-- check-failure-triage:pr=970 -->\n"))
+	assert 10 not in dup.get("closed_issues", [])
+	other = _run_triage_sweep(["ai:check-triage", "ai:done"], fix_pr=_triage_fix_pr(base="ai/issue-8"))
+	assert 10 not in other.get("closed_issues", [])
+	assert "rejected=non_target_base base=ai/issue-8" in other["stdout"]
+
+
+def test_close_merged_sweep_check_triage_rejects_fork_headed_candidate():
+	fork_fix = _triage_fix_pr()
+	fork_fix["headRepoFullName"] = "attacker/repo"
+	result = _run_triage_sweep(["ai:check-triage", "ai:done"], fix_pr=fork_fix)
+	assert 10 not in result.get("closed_issues", []), result["stdout"]
+	assert "origin=check_triage candidate_pr=971 rejected=non_target_base" in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_marker_fetch_failure_defers():
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:check-triage", "ai:merged"]},
+		issue_bodies={10: _triage_issue_body()},
+		issue_authors={10: {"login": _TRIAGE_PIPELINE_LOGIN, "association": "NONE"}},
+		issue_linked_prs={10: 971},
+		prs=[_triage_fix_pr()],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 triage_marker_pr=970 rejected=check_triage_pr_fetch_failed" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label pr_fetch_failed — skipping this cycle." in result["stdout"] + result["stderr"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=971 rejected=check_triage_pr_fetch_failed" in result["stdout"]
+	assert "candidate_pr=971 rejected=non_target_base" not in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_marker_fetch_failure_tags_later_bound_candidates():
+	second_fix = _triage_fix_pr(number=972)
+	second_fix["headRefName"] = "ai/issue-10-retry"
+	second_fix["headRefFromApi"] = "ai/issue-10-retry"
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:check-triage", "ai:merged"]},
+		issue_bodies={10: _triage_issue_body()},
+		issue_authors={10: {"login": _TRIAGE_PIPELINE_LOGIN, "association": "NONE"}},
+		issue_linked_prs={10: [971, 972]},
+		prs=[_triage_fix_pr(), second_fix],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), result["stdout"]
+	assert result["stdout"].count("triage_marker_pr=970 rejected=check_triage_pr_fetch_failed") == 1, result["stdout"]
+	for pr in (971, 972):
+		assert f"origin=merged_label candidate_pr={pr} rejected=check_triage_pr_fetch_failed" in result["stdout"], result["stdout"]
+	assert "rejected=non_target_base" not in result["stdout"], result["stdout"]
+
+
+def test_close_merged_sweep_pending_check_triage_issue_is_silent():
+	result = _run_triage_sweep(["ai:check-triage", "ai:implementing"], linked=False)
+	assert 10 not in result.get("closed_issues", [])
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=check_triage no_merged_pr_found non_target_base_seen=false — pending, leaving open." in result["stdout"]
+	assert "leaving open and alerting" not in result["stdout"] + result["stderr"]
+
+
+def test_close_merged_sweep_check_triage_contract():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("close_merged_issues_sweep() {")
+	body = script[start:script.index("\nreconcile_managed_issue_labels() {", start)]
+	assert '--label "ai:check-triage"' in body
+	assert body.count("--json number,labels,body,author") == 3
+	assert 'normalize("check_triage")' in body
+	assert 'set_issue_phase_label "${issue_num}" "ai:merged"' in body
+	# The triage branch is resolved only after the five-argument check rejects.
+	first_check = body.index('_pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}"; then')
+	assert first_check < body.index("_close_sweep_check_triage_branch")
+	# Standalone stall recovery keeps the five-argument call (non-goal).
+	assert '_pr_json_base_is_target_merge "${issue_num}" "${_stall_nt_pr_json}" "${_STALL_STANDALONE_DEFAULT_BRANCH}" "${_stall_nt_declared}" "${_stall_nt_managed}"; then' in script
 
 
 def test_reconciliation_uses_implementation_pr_masked_by_later_mention():
@@ -25581,16 +25798,20 @@ def test_wave_dispatch_gate_invokes_verifier_against_integration_ref():
 	assert "verifier exited ${_gate_exit} (unexpected)" in script, (
 		"wave-dispatch gate warning must surface unexpected verifier exit codes while preserving fail-open dispatch"
 	)
-	assert "trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT" in script, (
-		"wave-dispatch gate must protect temp-file cleanup with an EXIT trap"
+	assert "trap '_orch_poll_cycle_exit_rc=$?; rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true; _orch_poll_cycle_on_exit \"${_orch_poll_cycle_exit_rc}\" || true' EXIT" in script, (
+		"wave-dispatch gate must protect temp-file cleanup with an EXIT trap chained to the "
+		"ORCH_POLL_CYCLE_SUMMARY exit handler"
 	)
 	assert script.index(
-		"trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT"
+		"trap '_orch_poll_cycle_exit_rc=$?; rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true; _orch_poll_cycle_on_exit \"${_orch_poll_cycle_exit_rc}\" || true' EXIT"
 	) < script.index('_gate_fp_file="$(mktemp'), (
 		"wave-dispatch gate must register cleanup before allocating temp files"
 	)
 	assert 'trap - EXIT' in script, (
 		"wave-dispatch gate must clear its temporary EXIT trap after explicit cleanup"
+	)
+	assert "            trap - EXIT\n            _orch_poll_cycle_install_exit_trap || true\n" in script, (
+		"wave-dispatch gate must reinstall the ORCH_POLL_CYCLE_SUMMARY EXIT trap right after clearing its own"
 	)
 	# Failure-path side effects: stall cycle bump, tracking comment,
 	# telegram alert.
@@ -31306,6 +31527,225 @@ def test_persist_orch_revise_option_block_is_shown_only_when_a_revise_can_run():
 			assert proc.stdout == ("BEGIN\n" + fragment + "END" if shown else "BEGINEND"), case_id
 			# Never starts Python, so the judge prompt is byte-identical with the switch off.
 			assert py == [], case_id
+
+
+# --------------------------------------------------------------------------
+# Stale auto-close of held run-sourced heal issues (issue #8808)
+# --------------------------------------------------------------------------
+
+_HEAL_STALE_PLAN_ID = 880801
+_HEAL_STALE_FP = "a" * 64
+
+
+def _heal_stale_issue_body() -> str:
+	return (
+		f"<!-- workflow-failure-heal:fp={_HEAL_STALE_FP} -->\n"
+		"<!-- workflow-failure-heal:gen=1 -->\n"
+		f"<!-- workflow-failure-heal:root={_HEAL_STALE_FP} -->\n"
+		"<!-- workflow-failure-heal:source=owner/repo#run -->\n"
+		"<!-- workflow-failure-heal:classification=workflow-defect -->\n"
+		"<!-- workflow-failure-heal:workflow=.github/workflows/ci.yml -->\n\n"
+		"- **Target branch:** `main`\n\n## Automated workflow failure heal (generation 1 of max 3)\n"
+	)
+
+
+def _heal_stale_runs(count: int, conclusion: str = "success") -> list[dict]:
+	return [{"id": 9100 + i, "html_url": f"https://github.com/owner/repo/actions/runs/{9100 + i}",
+		"head_sha": f"{i + 1:040x}", "head_branch": "main", "event": "push", "status": "completed",
+		"conclusion": conclusion, "created_at": f"2026-02-0{i + 1}T00:00:00Z"} for i in range(count)]
+
+
+def _heal_stale_comments(extra: list | None = None) -> list:
+	plan = _heal_cf_plan_comment("HEAL_COUNTERFACTUAL: UNVERIFIED: the step timeline is missing")
+	plan["id"] = _HEAL_STALE_PLAN_ID
+	hold = {"body": ("Automatic approval withheld.\n\n<!-- ai:heal-counterfactual-hold:v1 issue=501 "
+		f"plan_comment={_HEAL_STALE_PLAN_ID} result=UNVERIFIED source=plan -->"),
+		"user": {"login": _PLAN_GATE_LOGIN}, "author_association": "NONE", "created_at": "2026-01-01T00:00:01Z"}
+	return [plan, hold, *(extra or []), _standalone_awaiting_approval_state_comment()]
+
+
+def _heal_stale_tick(comments: list | None = None, env: dict | None = None, runs: list | None = None,
+		store_extra: dict | None = None) -> dict:
+	return _run_poller(
+		state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval", "ai:workflow-heal"]},
+		issue_comments={501: comments if comments is not None else _heal_stale_comments()},
+		issue_bodies={501: _heal_stale_issue_body()},
+		mock_gh_issue_list_label_filter=True,
+		env_overrides=env or {},
+		mock_store_extra={"workflow_runs_by_file": {"ci.yml": runs if runs is not None else _heal_stale_runs(5)},
+			"issue_created_at": {"501": "2026-01-01T00:00:00Z"}, "record_issue_state_patch": True, **(store_extra or {})},
+	)
+
+
+def _heal_stale_markers(result: dict) -> list[str]:
+	return [c.get("body", "") for c in result["issues"]["501"]["comments"]
+		if "<!-- ai:heal-stale-close:v1 issue=501 " in c.get("body", "")]
+
+
+def test_standalone_held_heal_issue_with_green_runs_closes_in_one_tick() -> None:
+	result = _heal_stale_tick()
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "501") == [], log
+	assert "STALL_SKIP issue=501 reason=heal_counterfactual_hold phase=ai:awaiting-approval action=none" in log
+	assert "HEAL_STALE_CLOSE issue=501 outcome=closed reason=workflow_green green_runs=5" in log
+	assert result.get("issue_state_patch_calls", []) == [
+		{"issue": 501, "state": "closed", "state_reason": "completed"}], log
+	markers = _heal_stale_markers(result)
+	assert len(markers) == 1, log
+	assert markers[0].rstrip().endswith(
+		"<!-- ai:heal-stale-close:v1 issue=501 workflow=ci.yml branch=main green_runs=5 newest_run=9104 -->")
+	assert "https://github.com/owner/repo/actions/runs/9100" in markers[0]
+	# A just-closed issue gets no poller hold notice.
+	assert not [c for c in result["issues"]["501"]["comments"] if " source=poller -->" in c.get("body", "")], log
+	# Labels are left as they are.
+	assert "ai:awaiting-approval" in result["issues"]["501"]["labels"]
+
+
+def test_standalone_held_heal_issue_stale_close_second_tick_posts_no_duplicate() -> None:
+	first = _heal_stale_tick()
+	marker = _heal_stale_markers(first)[0]
+	posted = {"body": marker, "user": {"login": _PLAN_GATE_LOGIN}, "author_association": "NONE",
+		"created_at": "2026-03-01T00:00:00Z"}
+	second = _heal_stale_tick(comments=_heal_stale_comments([posted]))
+	log = second["stdout"] + second["stderr"]
+	assert _heal_stale_markers(second) == [marker], log
+	assert "HEAL_STALE_CLOSE issue=501 outcome=closed" in log
+	assert second.get("issue_state_patch_calls", []) == [
+		{"issue": 501, "state": "closed", "state_reason": "completed"}], log
+
+
+def test_standalone_heal_stale_close_flag_false_keeps_the_hold() -> None:
+	result = _heal_stale_tick(env={"HEAL_STALE_AUTO_CLOSE_ENABLED": "false"})
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=skipped reason=disabled green_runs=0" in log
+	assert result.get("issue_state_patch_calls", []) == []
+	assert _heal_stale_markers(result) == []
+	assert "STALL_SKIP issue=501 reason=heal_counterfactual_hold" in log
+
+
+def test_standalone_heal_stale_close_invalid_flag_and_integers_use_defaults() -> None:
+	result = _heal_stale_tick(env={"HEAL_STALE_AUTO_CLOSE_ENABLED": "maybe", "HEAL_STALE_GREEN_RUNS": "abc",
+		"HEAL_STALE_MIN_AGE_HOURS": "-3"})
+	log = result["stdout"] + result["stderr"]
+	assert "::warning::HEAL_STALE_AUTO_CLOSE_ENABLED has invalid value; treating as true" in log
+	assert "::warning::HEAL_STALE_GREEN_RUNS must be a positive integer; defaulting to 5" in log
+	assert "::warning::HEAL_STALE_MIN_AGE_HOURS must be a non-negative integer; defaulting to 24" in log
+	assert "HEAL_STALE_CLOSE issue=501 outcome=closed reason=workflow_green green_runs=5" in log
+
+
+def test_standalone_heal_stale_close_keeps_with_too_few_green_runs() -> None:
+	result = _heal_stale_tick(runs=_heal_stale_runs(4))
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=too_few_green_runs green_runs=4" in log
+	assert result.get("issue_state_patch_calls", []) == []
+	assert _heal_stale_markers(result) == [], log
+
+
+def test_standalone_heal_stale_close_keeps_with_open_refs_linked_issue_branch_pr() -> None:
+	# A `Refs`-linked open ai/issue-<n> PR never sets willCloseTarget, so
+	# linked_pr is null; the open-head check still keeps the issue.
+	result = _heal_stale_tick(store_extra={"issue_linked_prs": {"501": [8801]},
+		"prs": [{"number": 8801, "state": "open", "merged": False, "willCloseTarget": False,
+			"headRefName": "ai/issue-501", "baseRefName": "main", "mergeable": True, "mergeable_state": "clean"}]})
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=open_pr" in log
+	assert result.get("issue_state_patch_calls", []) == []
+	assert _heal_stale_markers(result) == [], log
+
+
+def test_standalone_heal_stale_close_keeps_on_malformed_run_entry() -> None:
+	runs = _heal_stale_runs(5)
+	runs.append({**runs[0], "id": 9200, "created_at": "not-a-date"})
+	result = _heal_stale_tick(runs=runs)
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=runs_unavailable" in log
+	assert result.get("issue_state_patch_calls", []) == []
+
+
+def test_standalone_heal_stale_close_caps_green_runs_at_ninety() -> None:
+	result = _heal_stale_tick(env={"HEAL_STALE_GREEN_RUNS": "150"})
+	log = result["stdout"] + result["stderr"]
+	assert "::warning::HEAL_STALE_GREEN_RUNS above 90 cannot be met; using 90" in log
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=too_few_green_runs green_runs=5" in log
+
+
+def test_standalone_heal_stale_close_busy_branch_page_cut_short_still_closes() -> None:
+	# #8352: the newest page is all after the anchor and total_count is far
+	# larger; the green page alone is enough.
+	result = _heal_stale_tick(store_extra={"workflow_runs_total_count_extra": 400})
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=closed reason=workflow_green green_runs=5" in log
+	assert result.get("issue_state_patch_calls", []) == [
+		{"issue": 501, "state": "closed", "state_reason": "completed"}], log
+
+
+def test_standalone_heal_stale_close_failed_patch_posts_marker_once_and_retries_only_the_close() -> None:
+	first = _heal_stale_tick(store_extra={"fail_issue_state_patch_for": [501]})
+	log = first["stdout"] + first["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=close_failed green_runs=5" in log
+	markers = _heal_stale_markers(first)
+	assert len(markers) == 1, log
+	posted = {"body": markers[0], "user": {"login": _PLAN_GATE_LOGIN}, "author_association": "NONE",
+		"created_at": "2026-03-01T00:00:00Z"}
+	second = _heal_stale_tick(comments=_heal_stale_comments([posted]))
+	log = second["stdout"] + second["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=closed reason=workflow_green" in log
+	assert _heal_stale_markers(second) == markers, log
+	assert second.get("issue_state_patch_calls", []) == [
+		{"issue": 501, "state": "closed", "state_reason": "completed"}], log
+
+
+def test_standalone_heal_stale_close_keeps_when_the_timeline_is_truncated() -> None:
+	# More than the last 50 cross-references: an older ai/issue-<n> PR could
+	# be past the window, so the linked PR is unknown and the issue is kept.
+	result = _heal_stale_tick(store_extra={"issue_timeline_truncated": [501]})
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=linked_pr_unknown" in log
+	assert result.get("issue_state_patch_calls", []) == []
+	assert _heal_stale_markers(result) == [], log
+
+
+def test_heal_stale_close_wiring() -> None:
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'HEAL_STALE_AUTO_CLOSE_ENABLED="${HEAL_STALE_AUTO_CLOSE_ENABLED:-true}"' in poller
+	assert 'HEAL_STALE_GREEN_RUNS="${HEAL_STALE_GREEN_RUNS:-5}"' in poller
+	assert 'HEAL_STALE_MIN_AGE_HOURS="${HEAL_STALE_MIN_AGE_HOURS:-24}"' in poller
+	# The check runs in the hold branch, before the hold notice.
+	hold = poller.split('if [ "${gate_reason}" = "heal_counterfactual_hold" ]; then', 1)[1].split("    return 1\n", 1)[0]
+	assert hold.index("_heal_stale_close_check ") < hold.index("_heal_counterfactual_hold_notify ")
+	assert 'if [ "${HEAL_STALE_CLOSE_OUTCOME:-}" != "closed" ]; then' in hold
+	# The batched details map carries the issue createdAt (no new call).
+	assert "          state\n          createdAt\n          body\n" in poller
+	assert "created_at: (.value.createdAt // null)," in poller
+	body = poller.split("_heal_stale_close_check()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert "-f state=closed -f state_reason=completed" in body
+	assert "-f branch=" in body and "-f event=push" in body and "-f status=completed" in body
+	assert "STALL_MANAGED_LINKED_PR_CACHE" in body
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	for line in ("HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}",
+			"HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}",
+			"HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}"):
+		assert workflow.count(line) == workflow.count(
+			"HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}") == 5, line
+
+
+def test_no_automation_reopens_closed_heal_issues() -> None:
+	# Issue #8808 D7: a stale-closed heal issue stays closed. Partial-delivery
+	# tracking (partial_delivery.py, issue_pr_status.yml) never reopens an
+	# issue, so the auto-close needs no partial-delivery guard. The only
+	# reopeners are these trackers, each reopening its own tracker issue.
+	reopeners = set()
+	for path in sorted([*(REPO_ROOT / "scripts").glob("*.sh"), *(REPO_ROOT / "scripts").glob("*.py"),
+			*(REPO_ROOT / ".github" / "workflows").glob("*.yml")]):
+		for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+			if "gh issue reopen" in line and not line.lstrip().startswith("#"):
+				reopeners.add(path.name)
+	assert reopeners <= {"security_audit.sh", "workflow_retro_fanout.sh", "workflow-log-analysis.yml"}, reopeners
+	for relative in ("scripts/partial_delivery.py", ".github/workflows/issue_pr_status.yml"):
+		text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+		assert "reopen" not in text.lower(), relative
+		assert not re.search(r"PATCH[^\n]*state=open|state=open[^\n]*PATCH", text), relative
 
 
 if __name__ == "__main__":

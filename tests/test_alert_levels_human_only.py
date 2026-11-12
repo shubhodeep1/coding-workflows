@@ -689,3 +689,25 @@ def _collect_impl_failed_reissue_order_cases() -> None:
 
 
 _collect_impl_failed_reissue_order_cases()
+
+
+# The orchestrator poller cycle timing summary cases live in
+# tests/test_orchestrate_poll_cycle_summary.py and are collected here for the
+# same reason: ci.yml was outside that issue's file grant.
+def _collect_orchestrate_poll_cycle_summary_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"orchestrate_poll_cycle_summary_cases",
+		Path(__file__).resolve().parent / "test_orchestrate_poll_cycle_summary.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	assert collected >= 6, f"only {collected} poller cycle summary cases collected"
+
+
+_collect_orchestrate_poll_cycle_summary_cases()
