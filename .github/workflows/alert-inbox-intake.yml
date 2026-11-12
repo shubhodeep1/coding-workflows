@@ -17,7 +17,7 @@ name: Alert Inbox Intake
 #
 # A failed store sends one Telegram notice through tg_send_msg_direct, which
 # is never captured, so an intake failure cannot loop back into the inbox.
-# If checkout itself failed, the helper is absent and the step only emits an
+# If scripts/tg_helpers.sh is unavailable (e.g. checkout failed), the step only emits an
 # ::error:: annotation instead.
 
 "on":
@@ -71,7 +71,7 @@ jobs:
             *) alert_level="unknown" ;;
           esac
           if [ ! -f scripts/tg_helpers.sh ]; then
-            echo "::error::Alert inbox intake failed before checkout; no Telegram notice could be sent (${alert_level} alert from ${source_repo})."
+            echo "::error::Alert inbox intake failed and scripts/tg_helpers.sh is unavailable; no Telegram notice could be sent (${alert_level} alert from ${source_repo})."
             exit 1
           fi
           # shellcheck disable=SC1091
