@@ -639,7 +639,8 @@ def test_closed_reader_status_does_not_depend_on_cat_exit_status(tmp_path: Path)
 	)
 	assert _calls(tmp_path) == 1, result.stderr
 	rc_line = result.stdout.strip()
-	assert rc_line.startswith("rc=") and rc_line != "rc=0", (rc_line, result.stderr)
+	# 141 = SIGPIPE in the replay subshell; 1 = printf EPIPE when SIGPIPE is ignored.
+	assert rc_line in ("rc=141", "rc=1"), (rc_line, result.stderr)
 	assert _leftover_temp_files(tmp_path) == []
 
 
