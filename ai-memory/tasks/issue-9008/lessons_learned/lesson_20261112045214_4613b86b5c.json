@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-12T04:52:14Z",
+  "issue_number": 9008,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=scripts/review_conflict_prepare.sh:348-395; cited_path=.github/workflows (CI check-runs `tests-hooks-and-orchestrator` job 130808305483 and the `lint` aggregate job); files_touched=README.md, agents.d/9008-guard-hook-merge-prepush-pair.md, changelog.d/9008-guard-hook-merge-prepush-pair.md, scripts/review_conflict_prepare.sh, tests/test_conflict_guard_hook_template_merge.py.",
+  "phase": "review_autofix",
+  "pr_number": 9011,
+  "record_id": "lesson_20261112045214_4613b86b5c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows (CI check-runs `tests-hooks-and-orchestrator` job 130808305483 and the `lint` aggregate job)",
+    "scripts/review_conflict_prepare.sh",
+    "README.md",
+    "agents.d/9008-guard-hook-merge-prepush-pair.md",
+    "changelog.d/9008-guard-hook-merge-prepush-pair.md",
+    "tests/test_conflict_guard_hook_template_merge.py"
+  ]
+}
