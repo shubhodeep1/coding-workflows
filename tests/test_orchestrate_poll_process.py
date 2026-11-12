@@ -31986,10 +31986,19 @@ def test_final_merge_auto_resume_skip_reasons() -> None:
 	result = _run_final_merge_exhausted_tick(
 		_final_merge_exhausted_state(), prs=[_final_merge_open_pr(headSha="__advanced_integration_head__")]
 	)
-	_assert_final_merge_auto_resume_skipped(result, "reason=validation_not_recorded detail=head_moved")
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=head_not_validated")
 	# No validation pass recorded.
 	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(validation_last_passed_sha=""))
-	_assert_final_merge_auto_resume_skipped(result, "reason=validation_not_recorded")
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=no_validated_sha")
+	# The exhaustion park already aborted the comprehensive cycle, so the
+	# promotion gate could not apply on a retry.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(
+			comprehensive_release_callback={"handled": True, "status": "failed", "handled_at": "2026-01-01T00:00:00Z"}
+		)
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=comprehensive_cycle_aborted")
+	assert result.get("pr_get_calls", {}).get(str(_FMAR_PR), 0) == 0
 
 
 def test_final_merge_auto_resume_disabled_keeps_project_parked() -> None:
