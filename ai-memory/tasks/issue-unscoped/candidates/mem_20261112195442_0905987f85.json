@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:543 (job tests-hooks-and-orchestrator, job 130606294464) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: CI is red on head 254b6ba3 because job tests-hooks-and-orchestrator (job 130606294464) fails, and the aggregate `lint` job (130646405646) fails only because its CI_NEEDS_JSON reports that job as \"failure\"; the step that actually fails is beyond the 16 KB log tail.\n  WHY: The red check blocks the merge, but none of the PR's four changed files runs in that job, and the `##[error][lint_pr_body_auto_close]` lines that cite #2734 are fixture output from the test file, not from this PR's body (which uses `Refs #8969`). The pre-push gate lists the failures as inherited from the merge-base, so the right action is to rerun the job or read its full log, not to edit this PR. Both reviewers gave severity NIT, mapped here to low; they agree.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml (job tests-hooks-and-orchestrator, job 130606294464); the aggregate `lint` job (130646405646) fails only because its CI_NEEDS_JSON reports that job as \"failure\" | severity=NIT | confidence=2\n  PROBLEM: CI is red on head 254b6ba3, but the step that actually failed is not in the 16 KB log tail. The `##[error][lint_pr_body_auto_close]` lines that cite `Fixes #2734` / `resolved: #2734` are fixtures in tests/test_lint_pr_body_auto_close.py. None of the PR's four files runs in that job; the changed test file runs in `orchestrate-poll`, which passed. The pre-push gate lists the failures as inherited from the merge-base.\n  WHY: The red check blocks the merge, but no line this PR changes causes it. The editor should rerun the job or read the full log of job 130606294464 and change this PR only if that log names one of its files. No edit to this PR is called for.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:job tests-hooks-and-orchestrator (line 543), run 43044946395, job 130606294464 | severity=NIT | confidence=2\n  PROBLEM: The job fails on head 254b6ba3, and the aggregate lint job fails only because CI_NEEDS_JSON reports it as \"failure\". The log tail ends in the PR-body-auto-close unit-test step, whose `##[error]` lines are expected fixture output that references #2734; this PR's body uses `Closes ...#9179` / `Refs #8969`. The failing step is beyond the tail, and none of the PR's four changed files runs in this job.\n  WHY: CI stays red and blocks the merge, but seven consecutive editor passes could not trace the failure to any changed line. The evidence points to an environmental or pre-existing failure, so the remaining action is to rerun the job or read the full log of job 130606294464 rather than edit this PR.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ea840fd5b8d638e3ab6a57302593a74383442825a83bdd70a221f839136cbaed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9180,
+    "run_id": "43262534771",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43262534771",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112195442_0905987f85",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9180,
+    "run_id": "43262534771"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T19:54:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
