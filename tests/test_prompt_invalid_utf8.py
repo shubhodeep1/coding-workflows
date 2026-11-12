@@ -263,3 +263,29 @@ def test_rb_judge_fallback_embed_reports_trimmed_count(tmp_path: Path, cap: int,
 	assert text.startswith((b"abcdefgh" + EM_DASH * ((shown - 8) // 3)).decode("utf-8") + "\n[... TRUNCATED")
 	assert _shown_bytes(text) == shown
 	assert result.stderr.decode("utf-8").strip().splitlines()[-1] == str(shown)
+
+
+def test_rb_judge_fallback_embed_bounds_walk_back_on_malformed_input(tmp_path: Path) -> None:
+	fallback = tmp_path / "fallback.sh"
+	fallback.write_text(_rb_judge_fallback_block(), encoding="utf-8")
+	src = tmp_path / "input.bin"
+	# A long run of stray continuation bytes past the ASCII prefix: the cut
+	# may drop at most 3 bytes, never the whole capped prefix.
+	src.write_bytes(b"abcdefgh" + b"\x80" * 20)
+	script = (
+		f'source "{fallback}"\n'
+		"_init_prompt_budget\n"
+		'_embed_input_file "$1" "$2" head\n'
+		'cat "$(_prompt_budget_state_file)" >&2\n'
+	)
+	result = subprocess.run(
+		["bash", "-c", script, "embed", str(src), "20"],
+		capture_output=True,
+		cwd=str(tmp_path),
+		env=_env(tmp_path),
+		check=False,
+	)
+	assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+	assert result.stdout.startswith(b"abcdefgh" + b"\x80" * 9 + b"\n[... TRUNCATED")
+	assert _shown_bytes(result.stdout.decode("utf-8", errors="replace")) == 17
+	assert result.stderr.decode("utf-8").strip().splitlines()[-1] == "17"
