@@ -1,0 +1,31 @@
+{
+  "discovered_at": "2026-11-12T06:14:58Z",
+  "issue_number": 9130,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=.github/workflows/review_autofix.yml:0; cited_path=.github/workflows/review_autofix.yml; files_touched=.github/workflows/check_failure_triage.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/plan.yml, README.md, agents.d/9130-self-heal-outage-and-grant-files.md, changelog.d/9130-self-heal-outage-and-grant-files.md, scripts/check_failure_triage.sh, scripts/check_triage_resolution.py, scripts/files_touched_scope_guard.py, scripts/orchestrate_poll_process.sh, scripts/workflow_failure_heal.py, tests/test_check_failure_triage_post_stage.py, tests/test_check_failure_triage_transient_rerun.py, tests/test_check_failure_triage_workflow_security.py, tests/test_check_triage_resolution.py, tests/test_ci_wires_every_test_file.py, tests/test_files_touched_scope_guard.py, tests/test_orchestrate_poll_process.py.",
+  "phase": "review_autofix",
+  "pr_number": 9134,
+  "record_id": "lesson_20261112061458_ff6db8e202",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/check_failure_triage.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    ".github/workflows/plan.yml",
+    "README.md",
+    "agents.d/9130-self-heal-outage-and-grant-files.md",
+    "changelog.d/9130-self-heal-outage-and-grant-files.md",
+    "scripts/check_failure_triage.sh",
+    "scripts/check_triage_resolution.py",
+    "scripts/files_touched_scope_guard.py",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/workflow_failure_heal.py",
+    "tests/test_check_failure_triage_post_stage.py",
+    "tests/test_check_failure_triage_transient_rerun.py",
+    "tests/test_check_failure_triage_workflow_security.py",
+    "tests/test_check_triage_resolution.py",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_files_touched_scope_guard.py",
+    "tests/test_orchestrate_poll_process.py"
+  ]
+}
