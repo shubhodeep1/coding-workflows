@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2577-2587 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Check-run `orchestrate-poll (1)` (job 131112979851) is red on head 567d5266404a9f9e2a4dc5ff9a8eea15804f4592, so the aggregate `lint` check (job 131142686373) also fails. The log tail does not identify the failing step.\n  WHY: The failure cannot be tied to this PR's diff and is probably inherited or flaky, but the CI gate stays red until the full log is triaged. Severity differs between reviewers (NIT, MAJOR, MAJOR); the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml (check-run `orchestrate-poll (1)`, job 131112979851, and the `lint` aggregator, job 131142686373) | severity=NIT | confidence=2\n  PROBLEM: Both check-runs are red on head 567d5266404a9f9e2a4dc5ff9a8eea15804f4592. No file this PR changes is read by the failing tests, so the failure is probably inherited or flaky.\n  WHY: The check is red and the full job log is needed to triage it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2577-2587 | severity=MAJOR | confidence=4\n  PROBLEM: The PR-head check run `orchestrate-poll (1)` failed, leaving the aggregate `lint` check red. The supplied log tail does not identify the failing test or step.\n  WHY: The failed matrix job makes the `lint` aggregate exit with failure and blocks the CI gate. The evidence does not attribute the failure to this PR's changes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml (failing check-runs `orchestrate-poll (1)` job 131112979851 and `lint` job 131142686373 on head SHA 567d5266404a9f9e2a4dc5ff9a8eea15804f4592) | severity=MAJOR | confidence=2\n  PROBLEM: The CI gate is red on the PR head. The `orchestrate-poll (1)` log tail shows every visible test passing and ends before the failing step. `lint` fails only because it aggregates `orchestrate-poll`.\n  WHY: The failure is not attributable to this diff and is likely inherited. `tests/test_orchestrate_poll_process.py` references `test-and-mark-stable.yml` only as a workflow-name string (lines 1793, 11274, 11281). The gate stays red until the full log is read.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ee0bc240808e2d06f08909612e6ea12285b874c9d9544b5c1cf989b2910fe80a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9273,
+    "run_id": "43142013986",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43142013986",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112140530_33da5be148",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9273,
+    "run_id": "43142013986"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T14:05:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
