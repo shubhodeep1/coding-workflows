@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1239-1246 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The stdout replay appends a NUL byte to every chunk via `builtin printf '%s\\0' \"${_gh_retry_replay_chunk}\"`, which violates the requirement of byte-exact output.\n  WHY: Output that is not NUL-delimited would be corrupted for consumers such as `gh` API JSON responses. Severity is BLOCKER in the source. Another reviewer (anthropic_claude-sonnet-5_5) checked the same replay loop and found no defect.\n- scripts/gh_helpers.sh:1238-1241 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `IFS= read -r -d ''` loop reads the stdout file into memory in chunks, which is inefficient for large files compared with the original `cat`.\n  WHY: Large API responses could make the loop slow and use a lot of memory in the subshell, whereas `cat` streams. Severity is MAJOR in the source.\n- scripts/gh_helpers.sh:1238 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `read -d ''` may chunk files that have no NUL delimiters incompletely or incorrectly, depending on the shell or environment.\n  WHY: `read -d ''` is not a robust replacement for `cat`'s byte-stream handling, so output could be unpredictable. Severity is MAJOR in the source.\n- tests/test_gh_retry_stdout_isolation.py:647-655 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The payload in test_replay_keeps_nul_bytes_and_trailing_newlines never ends in a NUL byte, so the post-loop branch at scripts/gh_helpers.sh:1242-1245 is not pinned by any test.\n  WHY: Nothing fails today, but a future change to the read loop or to bash's `read` semantics could double-emit the last chunk without a failing test. Severity is NIT in the source.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:1239-1246 | severity=BLOCKER | confidence=5\n  PROBLEM: The stdout replay appends a NUL byte to every chunk via `builtin printf '%s\\0' \"${_gh_retry_replay_chunk}\"`, which violates the requirement of byte-exact output.\n  WHY: Output that is not NUL-delimited would be corrupted for consumers such as `gh` API JSON responses.\n- scripts/gh_helpers.sh:1238-1241 | severity=MAJOR | confidence=4\n  PROBLEM: The `IFS= read -r -d ''` loop reads the stdout file into memory in chunks, which is inefficient for large files compared with the original `cat`.\n  WHY: Large API responses could make the loop slow and use a lot of memory in the subshell, whereas `cat` streams.\n- scripts/gh_helpers.sh:1238 | severity=MAJOR | confidence=3\n  PROBLEM: `read -d ''` may chunk files that have no NUL delimiters incompletely or incorrectly, depending on the shell or environment.\n  WHY: `read -d ''` is not a robust replacement for `cat`'s byte-stream handling, so output could be unpredictable.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_gh_retry_stdout_isolation.py:647-655 | severity=NIT | confidence=2\n  PROBLEM: The payload in test_replay_keeps_nul_bytes_and_trailing_newlines never ends in a NUL byte, so the post-loop branch at scripts/gh_helpers.sh:1242-1244 is not pinned by any test.\n  WHY: Nothing fails today. This is a coverage-only gap, and a NUL-terminated payload such as `\"a\\\\b\\0\"` would lock the behavior.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_gh_retry_stdout_isolation.py:647-655 | severity=NIT | confidence=3\n  PROBLEM: The payload never ends in a NUL, so the interplay between the trailing-NUL read and the post-loop branch at scripts/gh_helpers.sh:1243-1245 is not pinned by any test.\n  WHY: Nothing fails today, but a future change to the read loop or to bash's `read` semantics could double-emit the last chunk without a failing test.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fd73dce0f450a6d4f59c43591a50985664d553e7688b8b71c597a04d6b9defea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9267,
+    "run_id": "43201440033",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43201440033",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112125459_c374b38efe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9267,
+    "run_id": "43201440033"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T12:54:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
