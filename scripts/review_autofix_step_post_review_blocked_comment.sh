@@ -126,6 +126,9 @@ fi
 if [ -n "${RB_JUDGE_CRASH_REASON}" ] && [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
 	RB_JUDGE_CRASH_MARKER="<!-- rb-judge-crash:v1 head=${AUTOFIX_FAILURE_HEAD_SHA} reason=${RB_JUDGE_CRASH_REASON} -->"
 	BODY+=$'\n\n'"${RB_JUDGE_CRASH_MARKER}"
+	# Only a body that ends with the marker (as this step writes it, last,
+	# trailing whitespace ignored) counts, so a trusted comment that merely
+	# quotes the marker cannot suppress the alert.
 	# API audit (§14): this step has no comment snapshot (the gate job's is
 	# in another job), so the newest page is read through tg_helpers.sh,
 	# only on judge-crash runs.
@@ -136,7 +139,7 @@ if [ -n "${RB_JUDGE_CRASH_REASON}" ] && [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[
 		# Read the same repository the POST below writes to.
 		if rb_judge_crash_comments="$(GITHUB_REPOSITORY="${AUTOFIX_STEP_REPOSITORY:-${GITHUB_REPOSITORY:-}}" _tg_newest_comments_json "${PR_NUMBER}")"; then
 			rb_judge_crash_count="$(printf '%s' "${rb_judge_crash_comments}" | jq -r --arg login "${rb_judge_crash_login}" --arg marker "${RB_JUDGE_CRASH_MARKER}" \
-				"${_TG_TRACKING_JQ_DEFS}"'[.[]? | select(tg_trusted($login) and (.body | contains($marker)))] | length' 2>/dev/null)" || rb_judge_crash_count=""
+				"${_TG_TRACKING_JQ_DEFS}"'[.[]? | select(tg_trusted($login) and (.body | sub("\\s+\\z"; "") | endswith($marker)))] | length' 2>/dev/null)" || rb_judge_crash_count=""
 			if [[ "${rb_judge_crash_count}" =~ ^[0-9]+$ ]]; then
 				[ "${rb_judge_crash_count}" -lt 1 ] || RB_JUDGE_CRASH_REPEAT="true"
 			else
@@ -146,7 +149,7 @@ if [ -n "${RB_JUDGE_CRASH_REASON}" ] && [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[
 			echo "::warning::rb-judge-crash dedupe read failed for PR #${PR_NUMBER}; posting"
 		fi
 	else
-		echo "::warning::rb-judge-crash dedupe unavailable (tg_helpers.sh missing from the support bundle) for PR #${PR_NUMBER}; posting"
+		echo "::warning::rb-judge-crash dedupe unavailable (tg_helpers.sh missing from the support bundle, failed to load, or lacks the comment helpers) for PR #${PR_NUMBER}; posting"
 	fi
 fi
 echo "rb_judge_crash_repeat=${RB_JUDGE_CRASH_REPEAT}" >> "${GITHUB_OUTPUT:-/dev/null}"

@@ -242,6 +242,22 @@ def test_untrusted_author_marker_still_posts():
 	assert "rb_judge_crash_repeat=false" in out["output"]
 
 
+def test_trusted_comment_quoting_marker_mid_body_still_posts():
+	# Only a body that ends with the marker counts: a trusted comment that
+	# quotes it (an editor summary, say) must not suppress the alert.
+	comments = [_trusted_comment("Quoted: " + _marker(HEAD_A, "judge_crashed") + "\nmore text")]
+	out = _run_comment_script({}, comments=comments)
+	assert len(out["comment_posts"]) == 1
+	assert "rb_judge_crash_repeat=false" in out["output"]
+
+
+def test_trusted_marker_with_trailing_whitespace_still_dedupes():
+	comments = [_trusted_comment("blocked\r\n\r\n" + _marker(HEAD_A, "judge_crashed") + "\r\n")]
+	out = _run_comment_script({}, comments=comments)
+	assert out["comment_posts"] == []
+	assert "rb_judge_crash_repeat=true" in out["output"]
+
+
 def test_different_head_or_reason_posts():
 	for body in (_marker(HEAD_B, "judge_crashed"), _marker(HEAD_A, "llm_failed")):
 		out = _run_comment_script({}, comments=[_trusted_comment(body)])
