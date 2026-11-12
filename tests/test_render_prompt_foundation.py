@@ -1356,6 +1356,7 @@ def test_render_prompt_py_help_strings_are_well_formed() -> None:
 
 
 def main() -> int:
+	test_render_prompt_py_help_strings_are_valid_format_strings()
 	test_output_contract_reference_includes_status_update_cadence()
 	test_render_prompt_sh_renders_implement_contract_defaults_and_env_values()
 	test_render_prompt_sh_renders_header_with_empty_repo_learnings()
@@ -1398,6 +1399,11 @@ def main() -> int:
 	test_render_prompt_py_identity_recall_reports_render_failure_details()
 	test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt()
 	print("OK: render prompt foundation assertions hold")
+	# Imported here so pytest does not collect these cases twice; run as a
+	# script, sys.path[0] is tests/.
+	import test_scripts_build_parser_help as _bp_help_tests
+
+	_bp_help_tests.main()
 	return 0
 
 
