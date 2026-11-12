@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:449-453 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The supersede check requires the status resource `url` to end in the commit SHA (line 451). GitHub commit-status objects use `url` to identify the individual status resource, not the commit SHA, and the endpoint request already scopes statuses to the requested head SHA.\n  WHY: A real `ai-review/head-gate` success status will not pass this URL check, so the failed `review / gate` stays blocking. The test fixture at `tests/test_pr_checks_lib_required_filter.py:879-881` builds a URL ending in the SHA, so it does not reproduce the API response shape. Source severity: MAJOR.\n- .github/workflows/ci.yml:3465-3490 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The required `lint` check-run on head 18c58be219db175b3d5662f316c02a8dadce7009 (run 43085267118) is red because its dependencies `tests-hooks-and-orchestrator` (job 130747872621) and `orchestrate-poll (1)` (job 130747873570) failed. The captured log tails do not identify the failing step or map it to any hunk in this PR.\n  WHY: `lint` is in the default required set, so `_pr_checks_completed` (reason=required_checks_failed) and GitHub keep the head blocked until the jobs are re-run green or their full logs are triaged. Severity disagreement: anthropic_claude-sonnet-5_5 rated NIT with confidence 2 and said it is not a code defect in this PR and no edit in files_touched fixes it; openai_gpt-6-luna rated MAJOR with confidence 5. The ledger uses the highest.\n- tests/test_pr_checks_lib_required_filter.py:1069-1076 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Residual, not a new defect: the required `lint` check-run (run 43085267118) is red because `tests-hooks-and-orchestrator` (job 130747872621) and `orchestrate-poll (1)` (job 130747873570) failed, and neither log tail maps to a hunk in this PR. The new test's assertions match HEAD, so it cannot have caused the failure.\n  WHY: `lint` is in the default required set, so the head stays blocked until the jobs are re-run green or their full logs are read. No code edit in this PR's changed files fixes it. Source severity: NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:lines 3465-3490, the roll-up step of the required `lint` job. Line 3489 is echo \"::error::CI jobs that did not succeed: ${ci_unsuccessful_jobs}\". | severity=NIT | confidence=2\n  PROBLEM: The required `lint` check-run on PR head 18c58be219db175b3d5662f316c02a8dadce7009 failed in run 43085267118 because `tests-hooks-and-orchestrator` (job 130747872621) and `orchestrate-poll (1)` (job 130747873570) failed. Both log tails stop before the failing step and show only PASS lines plus deliberate `##[error]` fixture output from tests/test_lint_pr_body_auto_close.py and test_verify_integration_fingerprints_rejects_reappeared_must_not_contain. The failure is not linked to any hunk: the supersede block only runs for a failed `review / gate` check-run with a numeric id and a non-empty completed_at, and otherwise gate_sup_drop_id stays \"\" and the filters behave as on the base branch.\n  WHY: `lint` is in the default required set, so the head stays blocked by `_pr_checks_completed` (reason=required_checks_failed) and by GitHub until the jobs are re-run green or their full logs point to a cause. No code edit within files_touched fixes it. The reviewer wants it treated as a re-run / full-log triage item, not a code defect in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/pr_checks_lib.sh:449-453, especially the `url` suffix check at line 451 | severity=MAJOR | confidence=5\n  PROBLEM: The supersede check compares the status resource URL to a URL ending in the commit SHA. GitHub commit-status objects use `url` to identify the individual status resource, not the commit SHA, and the endpoint request already scopes statuses to the requested head SHA.\n  WHY: A real `ai-review/head-gate` success status will not pass this URL check, so the failed `review / gate` remains blocking. The test fixture at `tests/test_pr_checks_lib_required_filter.py:879-881` constructs a URL ending in the SHA and therefore does not reproduce the API response shape.\n- .github/workflows/ci.yml:3487-3490 | severity=MAJOR | confidence=5\n  PROBLEM: The required `lint` check is failing because `tests-hooks-and-orchestrator` and `orchestrate-poll` failed. The captured logs do not identify the underlying failing step or map it to a PR hunk.\n  WHY: The aggregate exits nonzero when any dependency result is unsuccessful, which leaves the required CI check red and blocks merge. The underlying failures are still untriaged in the supplied context.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_pr_checks_lib_required_filter.py:1069-1076 (new in last run diff) | severity=NIT | confidence=2\n  PROBLEM: Residual, not a new defect: the required `lint` check-run on head 18c58be219db175b3d5662f316c02a8dadce7009 (run 43085267118) is red because dependencies `tests-hooks-and-orchestrator` (job 130747872621) and `orchestrate-poll (1)` (job 130747873570) failed, and neither log tail maps to any hunk in this PR. The new test's assertions match HEAD (`scripts/review_head_gate.sh:5`, `scripts/pr_checks_lib.sh:439`) and its own module's job passed. The failing log tails end in PASS lines plus the deliberate `##[error]` fixture output of `tests/test_lint_pr_body_auto_close.py` and `test_verify_integration_fingerprints_rejects_reappeared_must_not_contain`.\n  WHY: `lint` is in the default required set, so `_pr_checks_completed` and GitHub keep the head blocked from merge until the two jobs are re-run green or their full logs are read. No code edit in this PR's changed files fixes it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "03d48b49ac3b0f9c50269c861acdb857edbfb089ab05c4312ec07c8b2be5d34a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9262,
+    "run_id": "43275747518",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43275747518",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112231123_a8229e55a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9262,
+    "run_id": "43275747518"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T23:11:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
