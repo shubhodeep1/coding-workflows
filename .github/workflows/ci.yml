@@ -2340,7 +2340,9 @@ jobs:
       # Moved on from tests-promote-stall-and-review with the step above
       # (budget-watch issue #9363). In the #9018 text below, "this job" means
       # tests-promote-stall-and-review; the Node pair it mentions now runs in
-      # this job as well.
+      # this job as well, so its "no single job takes both moves" no longer
+      # holds. Its depth-1 checkout claim does not describe this job either:
+      # this job checks out full history (fetch-depth: 0), a superset.
       # Moved from tests-heal-plan-and-validation, which took 17m59s of its 20
       # minutes on main (run 42413379208, budget-watch issue #9018). Step
       # timings were not readable when this was planned; it was chosen as that
