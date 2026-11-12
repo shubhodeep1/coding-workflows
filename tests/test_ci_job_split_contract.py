@@ -177,6 +177,9 @@ class SystemPythonJobTest(unittest.TestCase):
 		step_tmpdir = str(shard_step.get("env", {}).get("TMPDIR", "")).lower()
 		for runner_temp_spelling in ("runner_temp", "runner.temp"):
 			self.assertNotIn(runner_temp_spelling, step_tmpdir)
+		# The literal expansion of RUNNER_TEMP on hosted runners
+		# (/home/runner/work/_temp) brings back the same long socket path.
+		self.assertFalse(step_tmpdir.startswith("/home/runner/work"), step_tmpdir)
 		for line in shard_step["run"].splitlines():
 			code = line.strip()
 			if code.startswith("#") or "TMPDIR=" not in code:
