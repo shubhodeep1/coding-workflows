@@ -458,9 +458,18 @@ fi
 # The promote cycle needs PROMOTE_CYCLE_MIN_DOCS candidates (proving +
 # verifying), so a larger valid value raises the candidate cap. An invalid or
 # smaller value is ignored here; the promote cycle validates it itself.
+# Leading zeros are stripped first: the promote cycle accepts a value such as
+# `04`, so the dispatcher must honour it too. A set value still unusable after
+# that warns on stderr (stdout is parsed by list-only callers).
 APPLY_ANALYSIS_EFFECTIVE_MAX_CANDIDATES="${APPLY_ANALYSIS_MAX_CANDIDATES}"
-if [[ "${PROMOTE_CYCLE_MIN_DOCS:-}" =~ ^[1-9][0-9]{0,5}$ ]] && [ "${PROMOTE_CYCLE_MIN_DOCS}" -gt "${APPLY_ANALYSIS_EFFECTIVE_MAX_CANDIDATES}" ]; then
-	APPLY_ANALYSIS_EFFECTIVE_MAX_CANDIDATES="${PROMOTE_CYCLE_MIN_DOCS}"
+apply_analysis_min_docs="${PROMOTE_CYCLE_MIN_DOCS:-}"
+if [[ "${apply_analysis_min_docs}" =~ ^[0-9]{1,18}$ ]]; then
+	apply_analysis_min_docs="$((10#${apply_analysis_min_docs}))"
+fi
+if [ -n "${apply_analysis_min_docs}" ] && ! [[ "${apply_analysis_min_docs}" =~ ^[1-9][0-9]{0,5}$ ]]; then
+	printf '::warning::PROMOTE_CYCLE_MIN_DOCS must be a positive integer below 1000000 to raise the candidate cap (got %q); the cap stays at %s.\n' "$(printf '%s' "${PROMOTE_CYCLE_MIN_DOCS}" | cut -c1-40)" "${APPLY_ANALYSIS_EFFECTIVE_MAX_CANDIDATES}" >&2
+elif [ -n "${apply_analysis_min_docs}" ] && [ "${apply_analysis_min_docs}" -gt "${APPLY_ANALYSIS_EFFECTIVE_MAX_CANDIDATES}" ]; then
+	APPLY_ANALYSIS_EFFECTIVE_MAX_CANDIDATES="${apply_analysis_min_docs}"
 	echo "APPLY_ANALYSIS_CANDIDATE_CAP raised_to=${APPLY_ANALYSIS_EFFECTIVE_MAX_CANDIDATES} reason=promote_cycle_min_docs" >&2
 fi
 
