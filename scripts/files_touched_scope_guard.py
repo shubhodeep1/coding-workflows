@@ -974,9 +974,11 @@ _PLAN_BULLET_LISTING_REST_RE = re.compile(r"^\s*$|^\s+(?:[\u2014\u2013]|-+\s|\(|
 # file of `- `bin/deploy`, `public/CNAME`` would read as prose and, with no
 # planning root (the poller), be left out of the grant silently. A leading
 # table pipe (`| `bin/deploy` | new |`) and a link's opening bracket
-# (`- [`public/CNAME`](public/CNAME)`) are decoration too.
+# (`- [`public/CNAME`](public/CNAME)`) are decoration too. A table cell
+# border between two listed spans (`| `bin/deploy` | `public/CNAME` |`) is a
+# joiner, so the second cell is not dropped silently either.
 _PLAN_LISTING_DECORATION_RE = re.compile(r"^(?:[\s*_|\[]|\[[ xX]\]|\([^()\n`]{0,40}\))*$")
-_PLAN_LISTING_JOINER_RE = re.compile(r"^(?:[\s,;&+*_]|\band\b|\bor\b)*$", re.IGNORECASE)
+_PLAN_LISTING_JOINER_RE = re.compile(r"^(?:[\s,;&+*_|]|\band\b|\bor\b)*$", re.IGNORECASE)
 
 
 def _plan_bullet_token_is_listing(line: str, bullet: "re.Match[str]") -> bool:

@@ -2366,6 +2366,7 @@ def test_plan_grant_decorated_or_joined_listings_never_drop_silently() -> None:
 		("- (new) `bin/deploy`\n", ["bin/deploy"]),
 		("1. `bin/deploy`, `public/CNAME` and `newdir/tool`\n", ["bin/deploy", "public/CNAME", "newdir/tool"]),
 		("| `bin/deploy` | new deploy script |\n", ["bin/deploy"]),
+		("| `bin/deploy` | `public/CNAME` |\n", ["bin/deploy", "public/CNAME"]),
 		("- [`public/CNAME`](public/CNAME)\n", ["public/CNAME"]),
 	):
 		plan = "## Files likely to change\n- `scripts/a.sh`\n" + line
@@ -2383,6 +2384,9 @@ def test_plan_grant_decorated_or_joined_listings_never_drop_silently() -> None:
 		_planning_tree(Path(td))
 		bold = "## Files likely to change\n- `scripts/a.sh`\n- **`bin/deploy`**\n- [ ] `newdir/tool`\n"
 		assert guard.extract_plan_file_path_sets(bold, td) == (["scripts/a.sh", "bin/deploy"], ["newdir/tool"])
+		# A second table cell is listed too: granted file, unverified one held.
+		table = "## Files likely to change\n| `bin/deploy` | `newdir/tool` |\n"
+		assert guard.extract_plan_file_path_sets(table, td) == (["bin/deploy"], ["newdir/tool"])
 
 
 def test_plan_files_outside_files_touched_skips_covered_directory_tokens() -> None:
