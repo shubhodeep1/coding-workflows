@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The step has no labels or comments loaded. Its only API call is the summary-comment POST at `scripts/review_autofix_step_post_editor_summary.sh:316`, and no line in the script reads labels. So some read is needed. Option C would add lines to `review_autofix.yml`, which the issue's \u00a727 constraint forbids. Option A spends one GraphQL read per clean-marker post and adds no extra REST call besides the conditional DELETE, so it fits the issue's \"at most one extra REST call\" limit better than B. B adds a REST labels read on every clean post, plus a paginated comments read whenever the label is present. The step's POST runs with `GH_TOKEN: ${{ secrets.GH_PAT }}` (`review_autofix.yml:3934`). The gate decides which marker author to trust with `gh api user` under that same token (`review_autofix_step_evaluate_gate.sh:346`). So the `.user.login` in the POST response is exactly that trusted login, and no `gh api user` call is needed. If the cap marker is older than the newest 100 comments, keeping the label fails safe: that is what happens today.\nQ2: The fingerprint-cap writer leaves out `support=` only when `REVIEW_SUPPORT_SHA` is not a 40-hex SHA (`review_autofix.yml:1731-1736,1789`). The clean-marker writer handles the same condition by writing `support=none` (`review_autofix_step_post_editor_summary.sh:307-308`). So a missing field and `none` mean the same thing. Treating a missing field as `none` compares like with like. It also clears the label in the motivating case: a support bundle that could not be resolved, later replaced by a real support SHA after the harness fix.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/review_autofix_step_post_editor_summary.sh:259-333 (clean-marker block; summary POST at line 316, whose output currently goes to /dev/null)\n    - .github/workflows/review_autofix.yml:3931-3941 (step env: GH_TOKEN=GH_PAT, AUTOFIX_STEP_REPOSITORY, AUTOFIX_STEP_RUN_ID; this file gains no lines)\n    - scripts/review_autofix_step_evaluate_gate.sh:336-350,618-742 (trust rule: author login, lowercased, equals the token's own login)\n    - .github/workflows/review_autofix.yml:1737-1738 and scripts/orchestrate_poll_process.sh:35421-35437 (a cap marker counts only on its own line; regex `(^|\\n)<!-- review-autofix-failure-cap:v1 head=<sha>( [^ >\\n]+)* -->[ \\r]*(\\n|$)`)\n  steps:\n    - Capture the POST response at line 316 instead of sending it to /dev/null. Keep the existing success/warning branches and the `EDITOR_SUMMARY_POSTED` behaviour unchanged. Read `.user.login` from the response and lowercase it as the trusted login.\n    - Run the stale-clear logic only when the POST succeeded and `clean_marker_suffix` is non-empty. In every other case make no read and no log beyond what the step already logs.\n    - Make one `gh api graphql` call for the PR's `labels(first:100){nodes{name}}` and `comments(last:100){nodes{author{login} body}}`. If the call fails, log `REVIEW_BLOCKED_STALE_CLEAR ... outcome=error reason=lookup_failed` and continue with exit 0.\n    - If the PR does not carry `ai:review-blocked`, return silently (or log `outcome=kept reason=label_absent`). If the trusted login is empty, log `outcome=kept reason=trusted_login_unavailable`.\n    - From comments whose lowercased author login equals the trusted login, find the newest one that has a cap marker on its own line. Parse its `head=` and `support=` (missing \u2192 `none`, per Q2), lowercasing both.\n    - If there is no trusted cap marker, log `outcome=kept reason=no_cap_marker`. This covers an untrusted-author marker, a marker outside the newest 100 comments, and labels added by the judge or a human. If cap head == clean head and cap support == clean support, log `outcome=kept reason=same_head_support`. Otherwise send one `DELETE repos/<repo>/issues/<pr>/labels/ai%3Areview-blocked`. Log `outcome=removed reason=head_changed|support_changed`, or `outcome=error reason=delete_failed` if it fails. Never exit non-zero.\n    - Check that the `REVIEW_BLOCKED_STALE_CLEAR` prefix does not collide with an existing prefix. Register it in `agents.d/<issue>-review-blocked-stale-clear.md` under `## Stable log prefixes (contractual)`, and add a `fixed` entry in `changelog.d/<issue>-review-blocked-stale-clear.md`.\n    - Add tests (extend the post-editor-summary tests, or add `tests/test_review_blocked_stale_clear.py` wired into `ci.yml`) for the six stub cases in the issue, using a stubbed `gh`. Also add: the GraphQL read fails \u2192 `outcome=error`, exit 0; no clean marker written \u2192 no GraphQL call.\n  replaces_acceptance_criterion: The issue's step 1, \"reuse the PR comments and labels the step already holds; otherwise one labels read\", becomes \"one GraphQL read (labels + newest 100 comments), only after a clean marker posts\".\n  equivalence_argument: Because the step holds no labels or comments, one read is unavoidable. A single GraphQL call keeps the \"at most one extra REST call (the DELETE)\" limit and costs the same as the one labels read the issue allowed, while also returning the comments needed for the cap-marker check. Using the POST response's login keeps the gate's trust rule (same GH_PAT identity) without another call.\n  reversibility: The block is self-contained in one script with fail-open logging. Reverting or gating it restores today's behaviour, where the label stays until a human removes it.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/review_autofix.yml:1731-1736,1789 (`${cap_support:+ support=${cap_support}}`)\n    - scripts/review_autofix_step_post_editor_summary.sh:307-308 (non-40-hex support \u2192 `none`)\n  steps:\n    - When parsing the newest trusted cap marker, use `none` as its support if the `support=` field is absent. Compare it to `clean_marker_support` after lowercasing both.\n    - Add test cases: (a) same head, cap with no `support=`, clean `support=none` \u2192 kept; (b) same head, cap with no `support=`, clean support is a real SHA \u2192 removed.\n  replaces_acceptance_criterion: none\n  equivalence_argument: Both writers encode \"support SHA unknown\" from the same `REVIEW_SUPPORT_SHA` validation. Mapping a missing field to `none` makes the comparison symmetric.\n  reversibility: This is a single comparison default. Changing it to B (treat as unknown and keep the label) is a one-line edit plus one test update.",
+  "fingerprint": "d2494f9d40b050f154f0eecd42d6bc2d7a527c308c1187548edf5e3803428bd8",
+  "lineage": {
+    "issue_number": 9369,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43326099393",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43326099393",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9369"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261112232152_d014f93f35",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9369,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43326099393"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9369",
+  "timestamps": {
+    "created_at": "2026-11-12T23:21:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
