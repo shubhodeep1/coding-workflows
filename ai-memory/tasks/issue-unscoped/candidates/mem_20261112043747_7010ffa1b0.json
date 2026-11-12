@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_gh_retry_stdout_isolation.py:225-231 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The use of `max(8 * 1024 * 1024, 4 * pipe_max)` in `_output_larger_than_any_pipe()` is potentially fragile because it assumes `pipe-max-size` is readable and formatted correctly and that 8 MiB is sufficient.\n  WHY: On some platforms `/proc/sys/fs/pipe-max-size` might not exist, or the reader might be too slow to avoid a deadlock with large buffers, though the reviewer notes this is a test-environment concern, not a production bug (severity not stated by the source; low assigned as a placeholder is avoided: the source gave only confidence).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"`sf_now_ms` reads bash's `EPOCHREALTIME` first and keeps `date +%s%3N` as the bash < 5 fallback.\"\n  expected_change_site: `.github/workflows/ci.yml`, `sf_now_ms`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, anthropic_claude-sonnet-5_5]\n  EVIDENCE: The PR diff has no `.github/workflows/ci.yml` hunk and changes only tests/test_ci_poll_test_sharding.py and tests/test_gh_retry_stdout_isolation.py. anthropic_claude-sonnet-5_5 (confidence 1) says this is not a real gap because line 3198 of the checkout already holds the EPOCHREALTIME-first implementation. z-ai_glm-5_3-flash also found the implementation at ci.yml:3198 and dropped the gap.\n- requirement: \"The closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`.\"\n  expected_change_site: `tests/test_gh_retry_stdout_isolation.py`, `test_closed_reader_does_not_rerun_a_successful_command`\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The test at line 255 still pipes into `true` (`gh_retry gh api repos/o/r | true`) and has no `read -r -n 1` or `IFS= read`. It enlarges the output via `_output_larger_than_any_pipe()` (lines 228-234) instead, so the PR description is stale. All three reviewers rate it a NIT and say the test's intent is met.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: The `sf_now_ms` clock in `.github/workflows/ci.yml` reads bash's `EPOCHREALTIME` first and keeps `date +%s%3N` as the bash < 5 fallback.\n  Expected change site: `.github/workflows/ci.yml`, `sf_now_ms`.\n  Evidence of absence: Not a real gap. The PR diff has no ci.yml hunk because the change is already on the branch base. Line 3198 holds the implementation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- Requirement: The closed reader in `tests/test_gh_retry_stdout_isolation.py` is now bash's own `{ IFS= read -r -n 1 _ || true; }`.\n  Expected change site: the pipeline in `test_closed_reader_does_not_rerun_a_successful_command`.\n  Evidence of absence: The test at line 255 still pipes into `true`. `_output_larger_than_any_pipe()` sizes the output beyond any pipe instead. The description is out of date and no code change is needed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_gh_retry_stdout_isolation.py:225-231 | severity not stated | confidence=2\n  PROBLEM: The use of `max(8 * 1024 * 1024, 4 * pipe_max)` is potentially fragile because it assumes `pipe-max-size` is readable and formatted correctly and that 8 MiB is sufficient.\n  WHY: On some platforms `/proc/sys/fs/pipe-max-size` might not exist, or the reader might be too slow to avoid a deadlock, though this is a test-environment optimization, not a production bug.\n\nTASK_GAP:\n- Requirement: \"`sf_now_ms` reads bash's `EPOCHREALTIME` first and keeps `date +%s%3N` as the bash < 5 fallback.\"\n  Expected change site: `.github/workflows/ci.yml`, `sf_now_ms`\n  Evidence of absence: The PR diff lists changes only in the two test files and contains no hunk introducing the `sf_now_ms` implementation change.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"`sf_now_ms` reads bash's `EPOCHREALTIME` first and keeps `date +%s%3N` as the bash < 5 fallback.\"\n  Expected change site: `.github/workflows/ci.yml`, `sf_now_ms`.\n  Evidence of absence: The PR diff contains no hunk for `.github/workflows/ci.yml`. The current checkout has the clock implementation, but this PR diff does not deliver it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"The closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`.\"\n  Expected change site: `tests/test_gh_retry_stdout_isolation.py`, `test_closed_reader_does_not_rerun_a_successful_command`.\n  Evidence of absence: The diff retains `gh_retry gh api repos/o/r | true` and changes the output size instead. It does not add the specified bash reader.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"tests/test_gh_retry_stdout_isolation.py: the closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`. It reads one byte and exits on any coreutils. The diagnostics helper is removed. The assertions are unchanged.\"\n  Expected change site: the closed-reader pipeline in `test_closed_reader_does_not_rerun_a_successful_command` (tests/test_gh_retry_stdout_isolation.py)\n  Evidence of absence: No `read -r -n 1` or `IFS= read` appears in the file. The test at line 255 keeps `| true` and enlarges the payload via `_output_larger_than_any_pipe()` (lines 228-234) instead. This is a stale-description mismatch, not a code defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ebc753e84642fd03cd2c1429e73047bfc57b3305ccfe810c21be3925f05bd1ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9246,
+    "run_id": "43142525093",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43142525093",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112043747_7010ffa1b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9246,
+    "run_id": "43142525093"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T04:37:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
