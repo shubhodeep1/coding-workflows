@@ -233,9 +233,11 @@ ARGPARSE_HELP_SCRIPTS = (
 
 
 def test_argparse_scripts_called_by_ci_tests_exit_zero_on_help() -> None:
-	# Python 3.14 argparse checks every help string with `%` formatting when the
-	# argument is added, and `--help` runs the same `%` expansion on the 3.12 CI
-	# job, so a bad help string in any of these scripts fails here.
+	# Python 3.14+ argparse checks every help string (subparser arguments
+	# included) with `%` formatting when the argument is added, so any bad help
+	# string fails here. On the 3.12 CI job, a top-level `--help` only expands
+	# the top-level parser's help strings (and each subcommand's one-line
+	# help); argument help strings inside subparsers are not exercised there.
 	failures: list[str] = []
 	for name in ARGPARSE_HELP_SCRIPTS:
 		script = REPO_ROOT / "scripts" / name
