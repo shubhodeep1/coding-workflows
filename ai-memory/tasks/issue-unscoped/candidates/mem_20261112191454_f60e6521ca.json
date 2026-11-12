@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3465-3490 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The required `lint` roll-up check is red in run 43085267118 (head 18c58be219db175b3d5662f316c02a8dadce7009) because its dependency jobs `tests-hooks-and-orchestrator` (job 130747872621) and `orchestrate-poll (1)` (job 130747873570) failed. The captured log tails do not show which step failed.\n  WHY: The `lint` job exits with status 1 when any dependency fails, so the required check blocks auto-merge on this head. Both reviewers say the failure cannot be tied to this PR's diff, and anthropic_claude-sonnet-5_5 says no code edit within this PR's scope addresses it: the failed jobs need a re-run or a read of their full logs. Severity disagreement: anthropic_claude-sonnet-5_5 rated NIT (confidence 2) and openai_gpt-6-luna rated MAJOR (confidence 4); the highest is used.\n- scripts/pr_checks_lib.sh:433 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The commit-status read `gh_retry _safe_gh_jq \"repos/${repo}/commits/${head_sha}/statuses?per_page=100\"` runs only after a check-run failure, but it may see stale or inconsistent state compared with the check-run.\n  WHY: If GitHub API replication lag leaves the statuses out of step with the check-run failure, the supersede logic could wrongly drop a blocking check-run and let the PR merge too early. The reviewer gave no severity; low is a default, not the reviewer's rating.\n- scripts/pr_checks_lib.sh:370-485 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The supersede logic in `_pr_checks_completed` implicitly trusts the check-run `id` and `completed_at` values parsed from the JSON payload.\n  WHY: A malformed payload that passes the explicit validation checks but yields garbage values could make the supersede logic target the wrong check-run or fail to supersede. The reviewer gave no severity; low is a default, not the reviewer's rating.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:the `lint` roll-up job step \"CI jobs that did not succeed\" (run 43085267118 on head 18c58be219db175b3d5662f316c02a8dadce7009) | severity=NIT | confidence=2\n  PROBLEM: The required `lint` check is red because two dependency jobs failed: `tests-hooks-and-orchestrator` (job 130747872621) and `orchestrate-poll (1)` (job 130747873570). Both log tails end with PASS lines plus expected fixture `##[error]` lines from `tests/test_lint_pr_body_auto_close.py` and `test_verify_integration_fingerprints_rejects_reappeared_must_not_contain`. The step that actually failed is cut off in both tails.\n  WHY: Auto-merge refuses this head while `lint` is red. The reviewer cannot tie the failure to this PR's diff, because the supersede block only acts on a failed `review / gate` check-run with a numeric `id` and `completed_at`, so `gate_drop_id` stays empty outside the PR's own test module. No code edit within this PR's scope addresses it; the failed jobs need a re-run or a read of their full logs.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh:433 | confidence=3\n  PROBLEM: The commit-status read `gh_retry _safe_gh_jq \"repos/${repo}/commits/${head_sha}/statuses?per_page=100\"` runs only after a check-run failure, but it may see stale or inconsistent state compared with the check-run.\n  WHY: GitHub API replication lag could make the supersede logic wrongly drop a blocking check-run and let the PR merge too early.\n- scripts/pr_checks_lib.sh:370-485 | confidence=2\n  PROBLEM: The supersede JQ filter in `_pr_checks_completed` implicitly trusts the check-run `id` and `completed_at` values parsed from the payload.\n  WHY: A malformed payload that passes the explicit validation checks but yields garbage values could make the logic target the wrong check-run or fail to supersede.\n- HARDENING (scripts/pr_checks_lib.sh:430) | HARDENING_RISK_SCORE=1\n  PROBLEM: The status read does not validate the `created_at` timestamp format beyond `fromdateiso8601`, which could be brittle if the API returns an unexpected format.\n  WHY: Suggested minimal fix: add an explicit ISO8601 regex check if needed, though `try ... catch null` already prevents crashes (estimated 2 lines changed).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:`lint` job, lines 3465-3471 and 3487-3490 | severity=MAJOR | confidence=4\n  PROBLEM: The reported CI run has a red required `lint` check because `tests-hooks-and-orchestrator` and `orchestrate-poll` failed.\n  WHY: The `lint` job exits with status 1 when any dependency does not succeed, which blocks the required check. The supplied log tails do not identify the underlying failing test or step, so the failure cannot be attributed to a defect in the latest test change.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4023e4e3844de34826188670856745060ecfe1a764c45ce17dba561c1649ca3b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9262,
+    "run_id": "43254063287",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43254063287",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112191454_f60e6521ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9262,
+    "run_id": "43254063287"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T19:14:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
