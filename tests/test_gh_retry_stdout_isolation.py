@@ -235,20 +235,24 @@ def _output_larger_than_any_pipe() -> int:
 
 
 def test_closed_reader_does_not_rerun_a_successful_command(tmp_path: Path) -> None:
-	# More output than any pipe holds, into a reader that takes one byte and
-	# exits: the reader goes away before the output is written. The command
-	# already succeeded, so it must not be run again; the undelivered output is
-	# reported as a non-zero status. The size matters: Rust coreutils' cat
-	# (ubuntu-26.04) grows its stdout pipe to pipe-max-size (1 MiB by default)
-	# and splices up to 1 MiB in one call, so a 1 MiB output landed in the pipe
-	# whole and the copy returned 0 before the reader left. That is ordinary
-	# pipe behaviour, not a gh_retry defect.
+	# More output than any pipe holds, into a reader that exits at once: the
+	# reader goes away before the output is written, so the replay must hit
+	# the closed pipe. The command already succeeded, so it must not be run
+	# again; the undelivered output is reported as a non-zero status.
+	# The size matters: Rust coreutils' cat (ubuntu-26.04) grows its stdout
+	# pipe to pipe-max-size (1 MiB by default) and splices up to 1 MiB in one
+	# call, so a 1 MiB output landed in the pipe whole and the copy returned
+	# 0 before the reader left. That is ordinary pipe behaviour, not a
+	# gh_retry defect. The reader is `true`, not `head -c 1`: the Rust
+	# coreutils `head` on ubuntu-26.04 runners reads all of its input before
+	# exiting, so the writer never saw a closed pipe and the test got rc=0
+	# there although gh_retry behaved correctly.
 	big = "x" * _output_larger_than_any_pipe()
 	env = _setup(tmp_path, [(big, "", 0)])
 	result = _run(
 		tmp_path,
 		env,
-		"gh_retry gh api repos/o/r | { IFS= read -r -n 1 _ || true; }\n"
+		"gh_retry gh api repos/o/r | true\n"
 		'echo "rc=${PIPESTATUS[0]}"',
 	)
 	assert _calls(tmp_path) == 1, result.stderr
