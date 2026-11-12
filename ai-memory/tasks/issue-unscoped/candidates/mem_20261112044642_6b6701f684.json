@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Both must fail on isolated-base and pass after the fix\" and \"Run the whole test file plus tests/test_alert_levels_human_only.py.\"\n  expected_change_site: Verification of the new cases in tests/test_orchestrate_poll_cycle_summary.py and execution of that test file plus tests/test_alert_levels_human_only.py (pre-push gate run; no source change needed). Severity disagreement: sonnet-5_5 rated NIT, gemini and minimax rated MAJOR; highest is MAJOR.\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR description marks the pre-push test gate unverified with container_rc_137, reports 0 tests selected, and lists both red-on-base tests and both requested test files as \"not run\", the code, tests and changelog are present and earlier editor runs reported 103 passed, CI check-run failures on head 60c4efbc are all cancelled jobs\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Both must fail on isolated-base and pass after the fix\" and \"Run the whole test file plus tests/test_alert_levels_human_only.py.\"\n  Expected change site: the pre-push gate run of `tests/test_orchestrate_poll_cycle_summary.py` and `tests/test_alert_levels_human_only.py`. No source change is needed.\n  Evidence of absence: the PR description's acceptance table lists all four targets as \"not run\", and the gate status is `container_rc_137`. The code is correct on reading, and earlier editor runs reported 103 passed. The CI check-run failures on head `60c4efbc` are all `cancelled` jobs, and `lint` fails only because the jobs it depends on were cancelled.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Both must fail on isolated-base and pass after the fix\" and \"Run the whole test file plus tests/test_alert_levels_human_only.py.\"\n  Expected change site: Verification of the new cases in tests/test_orchestrate_poll_cycle_summary.py and execution of that test file plus tests/test_alert_levels_human_only.py\n  Evidence of absence: The PR description marks the pre-push test gate unverified with container_rc_137, reports 0 tests selected, and lists both red-on-base tests and both requested test files as \"not run.\"\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Both must fail on isolated-base and pass after the fix\" and \"Run the whole test file plus tests/test_alert_levels_human_only.py.\"\n  Expected change site: Verification of the new cases in tests/test_orchestrate_poll_cycle_summary.py and execution of that test file plus tests/test_alert_levels_human_only.py\n  Evidence of absence: The PR description marks the pre-push test gate unverified with container_rc_137, reports 0 tests selected, and lists both red-on-base tests and both requested test files as \"not run.\" Code, tests and changelog are present and earlier editor runs note tests pass locally, but the automated pre-push gate has not completed successfully (container_rc_137, an infrastructure issue, not a code defect).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "d446b3ae7c179975608d0dd999b4e05f52f298fbae47bc0596e420d8874bcea7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9336,
+    "run_id": "43155520820",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43155520820",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112044642_6b6701f684",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9336,
+    "run_id": "43155520820"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T04:46:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
