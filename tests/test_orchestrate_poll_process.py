@@ -31982,11 +31982,13 @@ def test_final_merge_auto_resume_skip_reasons() -> None:
 	# Integration branch no longer ahead of the default branch.
 	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), compare_ahead_by=0)
 	_assert_final_merge_auto_resume_skipped(result, "reason=not_ahead")
-	# Head moved after validation passed.
+	# Head moved after validation passed, but the new head is not clean:
+	# the moved-head path applies every gate before re-validating.
 	result = _run_final_merge_exhausted_tick(
-		_final_merge_exhausted_state(), prs=[_final_merge_open_pr(headSha="__advanced_integration_head__")]
+		_final_merge_exhausted_state(),
+		prs=[_final_merge_open_pr(headSha="__advanced_integration_head__", mergeable=False, mergeable_state="dirty")],
 	)
-	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=head_not_validated")
+	_assert_final_merge_auto_resume_skipped(result, "reason=not_mergeable detail=dirty")
 	# No validation pass recorded.
 	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(validation_last_passed_sha=""))
 	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=no_validated_sha")
@@ -31999,6 +32001,34 @@ def test_final_merge_auto_resume_skip_reasons() -> None:
 	)
 	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=comprehensive_cycle_aborted")
 	assert result.get("pr_get_calls", {}).get(str(_FMAR_PR), 0) == 0
+
+
+def test_final_merge_auto_resume_revalidates_moved_head() -> None:
+	# Issue #9320 item 4: a head change re-enables one automatic retry, but an
+	# unvalidated head is never merged on an older pass: it is re-validated.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(), prs=[_final_merge_open_pr(headSha="__advanced_integration_head__")]
+	)
+	log = _fmar_log(result)
+	new_head = result["sandbox_sha_aliases"]["__advanced_integration_head__"]
+	assert (
+		f"FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=resumed final_pr={_FMAR_PR} head_sha={new_head} action=revalidate"
+		in log
+	), log[-4000:]
+	assert _FMAR_PR not in result.get("merged_prs", [])
+	assert len(result["validation_dispatches"]) == 1, log[-4000:]
+	latest = result["latest_state"]
+	assert latest["status"] == "validating"
+	assert latest["final_merge_attempt_count"] == 0
+	assert latest["final_merge_failure_kind"] is None
+	assert latest["final_merge_auto_resume_head_shas"] == [new_head]
+	assert "ai:validating" in result["tracking_labels"]
+	assert "ai:validated" not in result["tracking_labels"]
+	assert "ai:blocked" not in result["tracking_labels"]
+	markers = _fmar_marker_comments(result)
+	assert len(markers) == 1
+	assert markers[0].startswith(f"<!-- final-merge-auto-resume:{new_head} -->")
+	assert "Project already failed, skipping." not in log
 
 
 def test_final_merge_auto_resume_disabled_keeps_project_parked() -> None:
