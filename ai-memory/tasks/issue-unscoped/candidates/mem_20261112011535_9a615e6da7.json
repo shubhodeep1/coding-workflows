@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:1284-1291 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The base gate validates the run's raw `.path` against `^\\.github/workflows/[A-Za-z0-9_.-]{1,100}\\.ya?ml$` without stripping an `@refs/...` suffix, so suffixed paths clear `base_gate_workflow_path` and the tracked-failure skip at line 1353 never runs.\n  WHY: The gate falls through to `base_gate outcome=file` and files the per-PR issue this PR is meant to suppress, and the new tests only use suffix-free paths. Reviewers rated it MAJOR; the suggested fix is `${base_gate_workflow_path%%@*}` before the regex check plus a suffixed-path test.\n- .github/workflows/plan.yml:2329-2393 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new custom blocked-planning comments in `plan.yml` may need the auto-close keyword guard if they later reference tracking issues.\n  WHY: A future change referencing tracking issues would violate \u00a721. The reviewer rated it NIT.\n- CI check-run `tests-hooks-and-orchestrator` and `lint` on head 2198dcd620a2ef762faadaa915398284f35b9050 | severity=high | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The head commit's CI is red, but the failing test has not been mapped to a defect in the diff.\n  WHY: The PR cannot merge with a red required job. The log tail shows no failing assertion, and the pre-push gate's attribution to `tests/test_workflow_checkout_integration_ref_audit.py` is unverified. The reviewer rated it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The existing run read now returns the workflow id and `.path` together, so the only new call is the heal-issue listing.\"\n  expected_change_site: scripts/check_failure_triage.sh\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `check_failure_triage.sh` adds a `gh api repos/${REPO}/actions/runs/${base_gate_run_id}` REST call for every base-branch CI failure. It runs before and independently of the heal-issue lookup, so it is an extra per-failure call rather than one combined read.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/check_failure_triage.sh:~1284-1291 | severity=MAJOR | confidence=3\n  PROBLEM: The run's raw `.path` is validated without stripping an `@<ref>` suffix, unlike `scripts/workflow_failure_heal.py:9664-9665`, so `base_gate_workflow_path` is cleared and the tracked-failure skip is skipped.\n  WHY: The gate falls through to `base_gate outcome=file` and files the per-PR issue. The failure is fail-open, and the new tests use only suffix-free paths.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:2329-2393 | severity=NIT | confidence=2\n  PROBLEM: The new blocked-planning comments in `plan.yml` may need the auto-close keyword guard if they reference tracking issues.\n  WHY: A future change referencing tracking issues would violate \u00a721.\n- scripts/check_failure_triage.sh:1284-1290 | severity=MAJOR | confidence=5\n  PROBLEM: The regex rejects a `.path` carrying the `@refs/...` suffix, so `base_gate_workflow_path` is cleared.\n  WHY: The tracked-failure skip at line 1353 fails to look up the heal issue, so the PR is triaged per-PR.\n- TASK_GAP:\n  Requirement: \"The existing run read now returns the workflow id and `.path` together, so the only new call is the heal-issue listing.\"\n  Expected change site: scripts/check_failure_triage.sh\n  Evidence of absence: The implementation adds a REST call to `gh api repos/${REPO}/actions/runs/${base_gate_run_id}` for every base-branch CI failure, before and independently of the heal-issue lookup.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/check_failure_triage.sh:1284-1290 | severity=MAJOR | confidence=5\n  PROBLEM: The raw run `.path` can carry `@refs/heads/<branch>`, which the regex rejects, clearing `base_gate_workflow_path`. Other scripts strip it: `scripts/workflow_failure_heal.py:9665`, `scripts/ci_cancelled_rerun.py:222`, `scripts/release_ci_gate.sh:192`, `scripts/persist_postmerge_verify.py:277`.\n  WHY: The gate at line 1353 is bypassed and falls through to `base_gate outcome=file` at line 1389. The new tests in `tests/test_check_failure_triage_workflow_security.py` only use the no-suffix form.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/check_failure_triage.sh:1289-1290 | severity=MAJOR | confidence=5\n  PROBLEM: The new gate rejects workflow paths containing an `@refs/...` suffix instead of normalizing them first. The existing handling is at `scripts/workflow_failure_heal.py:9664-9667`, and `tests/test_workflow_failure_heal.py:6072` covers a suffixed path.\n  WHY: For `path=.github/workflows/ci.yml@refs/heads/main` the regex clears `base_gate_workflow_path`, the line 1353 condition cannot run the heal-issue lookup, and the per-PR issue is filed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/check_failure_triage.sh:1284-1291 | severity=MAJOR | confidence=4\n  PROBLEM: The run `.path` is accepted only when it matches the regex, but GitHub's run `path` can carry a ref suffix. It is handled at `scripts/orchestrate_poll_process.sh:26940` and `scripts/ci_cancelled_rerun.py:222`, and documented at `scripts/review_merge_train.sh:1066`. A suffixed path clears `base_gate_workflow_path`, so the guard at line 1353 is false.\n  WHY: The gate falls through to `base_gate outcome=file` with no distinguishing log line, and the new tests use a suffix-free path (TRACKED_BASE).\n- CI check-run `tests-hooks-and-orchestrator` (failure) and `lint` | severity=MAJOR | confidence=2\n  PROBLEM: The head commit 2198dcd620a2ef762faadaa915398284f35b9050 has red CI, but the 16 KB log tail shows no failing assertion. The pre-push gate's attribution to `tests/test_workflow_checkout_integration_ref_audit.py` is unverified, since no hunk touches that logic.\n  WHY: The PR cannot merge with a red required job, and the failing test has not been mapped to a defect in the diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "949578af72c3cba80b57345beb41ca3132ac8c67a20e1f6590daf382779ccabf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9272,
+    "run_id": "43105421262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43105421262",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112011535_9a615e6da7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9272,
+    "run_id": "43105421262"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T01:15:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
