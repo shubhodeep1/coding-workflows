@@ -251,6 +251,15 @@ def test_trusted_comment_quoting_marker_mid_body_still_posts():
 	assert "rb_judge_crash_repeat=false" in out["output"]
 
 
+def test_trusted_comment_ending_with_inline_quoted_marker_still_posts():
+	# The step writes the marker on its own line; a trusted comment whose
+	# last text quotes it inline must not count as a repeat.
+	for body in ("Quoted: " + _marker(HEAD_A, "judge_crashed"), "Editor summary: " + _marker(HEAD_A, "judge_crashed") + "\r\n"):
+		out = _run_comment_script({}, comments=[_trusted_comment(body)])
+		assert len(out["comment_posts"]) == 1, body
+		assert "rb_judge_crash_repeat=false" in out["output"], body
+
+
 def test_trusted_marker_with_trailing_whitespace_still_dedupes():
 	comments = [_trusted_comment("blocked\r\n\r\n" + _marker(HEAD_A, "judge_crashed") + "\r\n")]
 	out = _run_comment_script({}, comments=comments)
