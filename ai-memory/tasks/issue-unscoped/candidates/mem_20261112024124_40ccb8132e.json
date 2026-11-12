@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_scripts_build_parser_help.py:167-173 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The final assertion in test_guard_flags_bare_percent_in_subcommand_help_string accepts any `bad_sub_help.py: ValueError: ` prefix, not only the bad-help-string error.\n  WHY: A ValueError from another cause would still pass the test; the reviewers rate it NIT and note it does not fail today (the sonnet reviewer gave confidence 2, the others gave 3).\n- tests/test_scripts_build_parser_help.py:29-37 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, anthropic_claude-sonnet-5_5]\n  PROBLEM: Discovery matches only a column-0 `def build_parser()`, so scripts that build their parser elsewhere (for example inside `main()`) are not checked.\n  WHY: A bare `%` in an unchecked script's help text would not fail the guard. Severity disagreement: gemini rated it MAJOR, while sonnet rated it NIT and said the issue only asked for scripts that define `build_parser()`, so only the docstring and changelog wording overclaim.\n- tests/test_scripts_build_parser_help.py:52-61 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_load_script_module` imports and executes arbitrary Python from `scripts/` using `exec_module`.\n  WHY: The reviewer says a malicious or malformed script could compromise the CI environment. Severity disagreement: sonnet judged this not an issue because CI already runs the same code.\n- .github/workflows/ci.yml:543 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The tests-hooks-and-orchestrator job failed on head d426f07, and the failing step is past the log cutoff, so it cannot be tied to the PR's four changed files.\n  WHY: The `lint` aggregate stays red while this job is red.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a regression test in tests/test_render_prompt_foundation.py (or a new tests/test_render_prompt_cli_parser.py wired into an existing CI step)...\"\n  expected_change_site: tests/test_scripts_build_parser_help.py and CI configuration\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: tests/test_scripts_build_parser_help.py does not identify all scripts that define `build_parser`, so it is not the comprehensive regression guard the issue asked for. Two other reviewers found all issue deliverables present.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_scripts_build_parser_help.py:test_guard_flags_bare_percent_in_subcommand_help_string final assertion | severity=NIT | confidence=2\n  PROBLEM: The `ValueError` branch matches any `ValueError` from the fixture, not only the bad-help-string error.\n  WHY: It does not fail today; a tighter check would only matter if the fixture gained another `ValueError` source.\n- tests/test_scripts_build_parser_help.py and changelog.d/9247-argparse-help-string-guard.md: module docstring (\"Every `scripts/*.py` argparse parser\") and changelog line 2 (\"in any script\") | severity=NIT | confidence=3\n  PROBLEM: Discovery matches only a column-0 `def build_parser()`, so scripts that build their parser inside `main()` (for example `scripts/cost_audit.py`, per the pass-1 reviewer and not verified by this reviewer) are not checked, and the wording overclaims.\n  WHY: Nothing breaks; a bare `%` in an unchecked script's help text would not fail this guard.\n- .github/workflows/ci.yml:tests-hooks-and-orchestrator job, line 543 | severity=NIT | confidence=2\n  PROBLEM: The job failed on head d426f07, and the failing step could not be identified from the visible log tail.\n  WHY: The `lint` aggregate stays red while this job is red.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_scripts_build_parser_help.py:29-37 | severity=MAJOR | confidence=4\n  PROBLEM: Discovery regex `^def build_parser\\(\\)` misses parsers defined with indentation, within classes, or not at the start of a line.\n  WHY: The test does not verify all scripts that define an ArgumentParser, so future argparse help-string defects could go undetected.\n- tests/test_scripts_build_parser_help.py:171-173 | severity=NIT | confidence=3\n  PROBLEM: The assertion `startswith((\"bad_sub_help.py: RuntimeError: tool render: \", \"bad_sub_help.py: ValueError: \"))` accepts a generic ValueError.\n  WHY: A ValueError raised for any other reason would satisfy the test and mask a parser-logic or test-setup failure.\n- tests/test_scripts_build_parser_help.py:52-61 | severity=MAJOR | confidence=3\n  PROBLEM: `_load_script_module` imports and executes arbitrary Python code from `scripts/` using `exec_module`.\n  WHY: Malicious or malformed scripts in `scripts/` would execute during CI, potentially compromising the environment or leaking secrets.\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \"Add a regression test in tests/test_render_prompt_foundation.py (or a new tests/test_render_prompt_cli_parser.py wired into an existing CI step)...\"\n  Expected change site: tests/test_scripts_build_parser_help.py and CI configuration\n  Evidence of absence: The implemented test does not correctly identify all scripts that define `build_parser`, so it fails to provide the requested comprehensive regression guard.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_scripts_build_parser_help.py:167-169 | severity=NIT | confidence=3\n  PROBLEM: The 3.14 branch of the dual-shape assertion accepts any `bad_sub_help.py: ValueError: ` prefix without tying the message to the bad-help-string failure.\n  WHY: A ValueError from another cause would still pass the test and could mask a guard regression.\n- .github/workflows/ci.yml:806-813 (job tests-hooks-and-orchestrator, run 43093131303, job 130775051839; aggregate lint job 130784039253) | severity=NIT | confidence=3\n  PROBLEM: The required job fails on PR head d426f0708f1aa31a4225b9be465317004a034c51, but the failing assertion is past the 16 KB log cutoff and cannot be mapped to any of the four changed files.\n  WHY: The gate blocks merge on a failure that no diff hunk in this PR produces or can fix, and the true failing step is unidentified.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0a8d16242eedbdd5c7670a05469ff3d825374fa587a04a3995ffb1f4482058d2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9270,
+    "run_id": "43138724905",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43138724905",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112024124_40ccb8132e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9270,
+    "run_id": "43138724905"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T02:41:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
