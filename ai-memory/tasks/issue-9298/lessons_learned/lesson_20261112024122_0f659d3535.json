@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-12T02:41:22Z",
+  "issue_number": 9298,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=scripts/gh_helpers.sh:1-1; cited_path=tests/test_gh_retry_stdout_isolation.py; files_touched=agents.d/9008-guard-hook-merge-prepush-pair.md, scripts/review_untrusted_workspace.py, tests/test_conflict_guard_hook_template_merge.py, tests/test_pr_merge_status_guard.py, tests/test_review_sandbox_claude_roles.py.",
+  "phase": "review_autofix",
+  "pr_number": 9322,
+  "record_id": "lesson_20261112024122_0f659d3535",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_gh_retry_stdout_isolation.py",
+    "scripts/gh_helpers.sh",
+    "agents.d/9008-guard-hook-merge-prepush-pair.md",
+    "scripts/review_untrusted_workspace.py",
+    "tests/test_conflict_guard_hook_template_merge.py",
+    "tests/test_pr_merge_status_guard.py",
+    "tests/test_review_sandbox_claude_roles.py"
+  ]
+}
