@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:575-880 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `tests-hooks-and-orchestrator` job (run 43084526304, job 130745334019) fails, which turns the `lint` aggregate red. The log tail does not identify the failing step. The likely cause is `tests/test_review_merge_train.py` at ci.yml:857-880 (also cited as ci.yml:869), which the pre-push gate lists as an inherited failure.\n  WHY: A red required check keeps the merge gate closed. Severity is MAJOR from all three reviewers. Confidence differs: 2 (anthropic), 5 (openai), 3 (z-ai). The highest is used. Anthropic and z-ai say no change in this PR feeds the failure, and the full log or a re-run is needed to confirm.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:845-880 (job `tests-hooks-and-orchestrator`; log tail ends in the step at ci.yml:845, later steps run from ci.yml:857) | severity=MAJOR | confidence=2\n  PROBLEM: The job is red, so the `lint` aggregate is red. The `##[error][lint_pr_body_auto_close]` lines in the tail are fixture output from `test_main_exit_codes`, which passes. The failing step comes after line 845.\n  WHY: The next step runs `tests/test_review_merge_train.py` (ci.yml:857-880), which the pre-push gate lists as an inherited failure that also fails on the merge-base. This is the most likely cause but is unconfirmed. Nothing the PR changes feeds that job. The full log or a re-run is needed.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:575 (`tests-hooks-and-orchestrator` job) | severity=MAJOR | confidence=5\n  PROBLEM: CI run 43084526304 reports this job failed, causing the `lint` aggregate to fail. The job-log tail does not identify the failing step or test, so the failure is unresolved and cannot be attributed to a specific change in this PR.\n  WHY: The job returns failure and the aggregate reports `tests-hooks-and-orchestrator` as unsuccessful.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:845-869 (`tests-hooks-and-orchestrator` job step list after ci.yml:845; failed job 130745334019, run 43084526304) | severity=MAJOR | confidence=3\n  PROBLEM: The required `tests-hooks-and-orchestrator` check fails on the PR head, leaving the `lint` aggregate red and blocking merge. The log tail ends inside the `tests/test_lint_pr_body_auto_close.py` step (ci.yml:843-845), and the four `##[error][lint_pr_body_auto_close]` lines there are fixture output from `test_main_exit_codes`, which passes. The failing step is later and not identified. The strongest candidate is the step at ci.yml:869, which runs `tests/test_review_merge_train.py`, listed by the pre-push gate as an inherited failure.\n  WHY: A red required check leaves the merge gate closed. The PR's diff is not exercised by that job's remaining steps, so the failure is plausibly inherited. The full job log for 130745334019 or a re-run is needed to confirm and to identify the failing step.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a35f458194a6de801366c2013d2767cf094ea87bd139fa0be77fc8d7f91da228",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9057,
+    "run_id": "43102895032",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43102895032",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112003501_6bd2254d8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9057,
+    "run_id": "43102895032"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T00:35:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
