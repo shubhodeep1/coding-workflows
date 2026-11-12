@@ -40,6 +40,14 @@ REVIEW_HEAD_CHECKOUT_EMITTED=false
 review_head_checkout_now_ms()
 {
   local review_head_checkout_now_value=""
+  # Bash's own clock first: on the ubuntu-26.04 image (uutils coreutils)
+  # `date +%s%3N` can step backwards between calls, which made an elapsed
+  # value negative and the summary print switch_ms=na. `date` stays as the
+  # fallback for shells without EPOCHREALTIME.
+  if [[ "${EPOCHREALTIME:-}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+    printf '%s' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
+    return 0
+  fi
   review_head_checkout_now_value="$(date +%s%3N 2>/dev/null || true)"
   if [[ "${review_head_checkout_now_value}" =~ ^[0-9]{13,}$ ]]; then
     printf '%s' "${review_head_checkout_now_value}"

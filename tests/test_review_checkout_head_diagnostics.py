@@ -132,13 +132,14 @@ class Layout:
 		env.update(overrides)
 		return env
 
-	def run(self, *, sourced: bool = False, **overrides: str) -> subprocess.CompletedProcess[str]:
+	def run(self, *, sourced: bool = False, extra_functions: str = "", **overrides: str) -> subprocess.CompletedProcess[str]:
 		self.github_env.write_text("")
+		fakes = FAKE_FUNCTIONS + extra_functions
 		if sourced:
 			# Mirrors the workflow step: GitHub's bash -eo pipefail shell sources the script file.
-			cmd = ["bash", "-c", FAKE_FUNCTIONS + 'set -eo pipefail; source "$1"', "_", str(SCRIPT_PATH)]
+			cmd = ["bash", "-c", fakes + 'set -eo pipefail; source "$1"', "_", str(SCRIPT_PATH)]
 		else:
-			cmd = ["bash", "-c", FAKE_FUNCTIONS + review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")]
+			cmd = ["bash", "-c", fakes + review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")]
 		return subprocess.run(cmd, cwd=self.split, env=self.env(**overrides), capture_output=True, text=True)
 
 
@@ -309,6 +310,29 @@ def test_errexit_abort_in_branch_switch_is_recorded(layout: Layout) -> None:
 	assert fields["fetch_attempts"] == "1"
 	assert "TARGET_BRANCH=" not in layout.github_env.read_text()
 	_assert_no_temp_files(layout)
+
+
+# ubuntu-26.04 runners (uutils coreutils): `date +%s%3N` readings can go
+# backwards between calls. This fake steps back 800 ms on every call, so a
+# step clock that read `date` would see end < start and print switch_ms=na.
+BACKWARDS_DATE_FUNCTION = """date() {
+  local fake_date_reading
+  fake_date_reading=$(( $(cat "${FAKE_DATE_COUNTER}") - 800 ))
+  echo "${fake_date_reading}" > "${FAKE_DATE_COUNTER}"
+  echo "${fake_date_reading}"
+}
+"""
+
+
+def test_clock_ignores_a_date_that_goes_backwards(layout: Layout) -> None:
+	counter = layout.root / "date_counter"
+	counter.write_text("2000000000000\n")
+	result = layout.run(extra_functions=BACKWARDS_DATE_FUNCTION, FAKE_DATE_COUNTER=str(counter))
+	assert result.returncode == 0, result.stderr
+	_, fields = _summary(result)
+	assert (fields["stage"], fields["outcome"]) == ("done", "ok"), fields
+	assert fields["fetch_ms"].isdigit() and fields["switch_ms"].isdigit(), fields
+	assert counter.read_text() == "2000000000000\n", "the step clock read `date` although EPOCHREALTIME is set"
 
 
 def test_script_contract_is_additive() -> None:
