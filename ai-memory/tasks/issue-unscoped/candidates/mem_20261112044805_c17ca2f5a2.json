@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:Job `lint` (log 43102168954), Job `orchestrate-poll (1)` (log 43102168954) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI jobs `lint` and `orchestrate-poll (1)` are failing, which blocks the PR from merging.\n  WHY: The failing steps in the log tails do not map to the changes in `scripts/workflow_failure_heal.py`, so the cause may be infrastructure, a missing dependency, or an unrelated regression. The source severity was MAJOR (mapped to high here). anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash separately judged the same CI failures unmappable to this diff and not a real regression (z-ai_glm-5_3-flash NIT, confidence 1), so severity disagrees.\n- scripts/workflow_failure_heal.py:640-645, 3698-3701, 3736-3747 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: None. The reviewer states that the comment and docstring rewording is accurate and no defect exists.\n  WHY: The reviewer verified the comments against the forward-walk code and found runtime behavior unchanged. The source severity was NIT.\n- .github/workflows/ci.yml:jobs `tests-hooks-and-orchestrator` 130796135823 and `orchestrate-poll (1)` 130796136396 | severity=low | confidence=1\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Both jobs fail, but the failure does not map to this diff. The visible `##[error]` lines are fixture output from tests that print PASS.\n  WHY: The failing steps lie past the end of the truncated log tails and full logs are needed. The source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:Job `lint` (log 43102168954), Job `orchestrate-poll (1)` (log 43102168954) | severity=MAJOR | confidence=4\n  PROBLEM: CI jobs `lint` and `orchestrate-poll (1)` are failing, which blocks the PR from merging.\n  WHY: The failing steps in the log tails do not map to the changes in `scripts/workflow_failure_heal.py`, suggesting infrastructure or environment issues (e.g. PyYAML missing in the test sandbox) or unrelated regressions.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_failure_heal.py:640-645, 3698-3701, 3736-3747 | severity=NIT | confidence=5\n  PROBLEM: None. The comment and docstring rewording is accurate against the forward-walk code, and runtime behavior is unchanged.\n  WHY: It does not fail at runtime.\n- .github/workflows/ci.yml:jobs `tests-hooks-and-orchestrator` 130796135823 and `orchestrate-poll (1)` 130796136396 | severity=NIT | confidence=1\n  PROBLEM: Both jobs fail, but neither failure maps to this diff. The visible `##[error]` lines are fixture output from tests that print PASS.\n  WHY: The failing steps are past the truncated log tails and the full logs are needed. The reviewer proposes no code change.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "52f314b6b9bac8e0e534c032826f4659fbb858954b91f561830594bd78acfc2d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9219,
+    "run_id": "43155548443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43155548443",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112044805_c17ca2f5a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9219,
+    "run_id": "43155548443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T04:48:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
