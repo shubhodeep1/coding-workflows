@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_job_split_contract.py:183-192 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The run-line guard in test_system_python_shard_keeps_default_tmpdir searches the whole line containing TMPDIR= for the RUNNER_TEMP and /home/runner/work spellings rather than only the TMPDIR value. The comment at lines 188-190 (\"Same case-insensitive spellings as the step-level check\") does not say the match scope differs.\n  WHY: A valid future line such as `export TMPDIR=/tmp  # unlike RUNNER_TEMP` would falsely fail the contract test; it passes against the current ci.yml. All three reviewers rated it NIT, with confidence 3 to 4.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: In .github/workflows/ci.yml, in the tests-system-python shard step, stop pointing TMPDIR at $RUNNER_TEMP (keep the default or use a short path).\n  expected_change_site: .github/workflows/ci.yml, System-Python test shard step\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no change to .github/workflows/ci.yml; the added test only guards against a regression. Other reviewers (sonnet, glm) found the fix already present on the base branch, so this is disputed.\n- requirement: Increase the shard timeout or add more entries to the system-python-shard matrix list to address cancellations.\n  expected_change_site: .github/workflows/ci.yml, tests-system-python timeout or matrix\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no change to the timeout or matrix; the added test requires at least 24 shards but adds no matrix entries. Other reviewers (sonnet, glm) found the 24-shard matrix already present on the base branch, so this is disputed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ci_job_split_contract.py:188-192 | severity=NIT | confidence=3\n  PROBLEM: The comment \"Same case-insensitive spellings as the step-level check\" is inaccurate about the scope of the run-body check compared to the step-level env.TMPDIR check.\n  WHY: This is a documentation and maintenance issue only; the contract test correctly enforces the restriction on TMPDIR= assignments.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_ci_job_split_contract.py:183-192 | severity=NIT | confidence=4\n  PROBLEM: The run-line guard searches the entire line containing TMPDIR= for `/home/runner/work`, rather than checking the TMPDIR value.\n  WHY: A valid line that sets TMPDIR to a short `/tmp` path but also mentions `/home/runner/work` elsewhere would fail this contract test and block CI.\n- TASK_GAP: \n  Requirement: \"In .github/workflows/ci.yml, in the tests-system-python shard step, stop pointing TMPDIR at $RUNNER_TEMP\" and keep the default or use a short path.\n  Expected change site: .github/workflows/ci.yml, System-Python test shard step.\n  Evidence of absence: The PR diff contains no change to .github/workflows/ci.yml. The added test guards against a regression, but does not implement the requested workflow change.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP:\n  Requirement: Increase the shard timeout or \"add more entries to the system-python-shard matrix list\" to address cancellations.\n  Expected change site: .github/workflows/ci.yml, tests-system-python timeout or matrix.\n  Evidence of absence: The PR diff contains no change to the timeout or matrix. The added test requires at least 24 shards, but does not add matrix entries or otherwise change the workflow.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ci_job_split_contract.py:183-192 | severity=NIT | confidence=3\n  PROBLEM: The run-body loop searches the whole lowercased run line for each spelling (`runner_temp`, `runner.temp`, `/home/runner/work`) instead of only the TMPDIR value, while the step-level check (lines 177-182) inspects only the env.TMPDIR value. The comment at lines 188-190 describes the spelling set but not the differing match scope.\n  WHY: A valid future line such as `export TMPDIR=/tmp  # keep short, unlike RUNNER_TEMP` would falsely fail the contract test. The current ci.yml shard step (lines 3521-3544) has no non-comment `TMPDIR=` line, so the guard passes today.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f694ce47a6e74b70385feb188345f9a799c5a17d47a6d3c9be8f7d4241831bcb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9338,
+    "run_id": "43133018819",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43133018819",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112135927_d1715ed318",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9338,
+    "run_id": "43133018819"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T13:59:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
