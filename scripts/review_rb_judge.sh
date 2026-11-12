@@ -522,7 +522,9 @@ with open(sys.argv[1], 'rb') as fh:
     data = fh.read(read_cap)
 i = cap
 if cap > 0 and len(data) > cap:
-    while i > 0 and (data[i] & 0xC0) == 0x80:
+    # Bounded to 3 bytes like the primary trim in gh_helpers.sh, so a run
+    # of malformed continuation bytes cannot empty the capped prefix.
+    while i > 0 and cap - i < 3 and (data[i] & 0xC0) == 0x80:
         i -= 1
 print(i)
 PY
