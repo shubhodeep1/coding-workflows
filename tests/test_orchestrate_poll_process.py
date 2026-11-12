@@ -3461,8 +3461,7 @@ print(json.dumps(parsed))
 
 		_write_exec(
 			bin_dir / "python3",
-			r'''#!/usr/bin/python3
-import json
+			f"#!{sys.executable}\n" + r'''import json
 import os
 import subprocess
 import sys
