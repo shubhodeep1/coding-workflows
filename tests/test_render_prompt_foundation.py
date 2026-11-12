@@ -297,6 +297,43 @@ def test_render_prompt_py_reports_unexpected_exception_without_traceback() -> No
 	]
 
 
+def test_render_prompt_py_escapes_multiline_unexpected_exception_message() -> None:
+	# #9341: the `except Exception` branch writes CR/LF in the exception
+	# message as literal `\r` / `\n` text so a multi-line message still prints
+	# exactly one stderr line. A regression that drops the escaping fails here.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_unexpected_multiline_") as td:
+		prompt_file = Path(td) / "mode-sample.txt"
+		prompt_file.write_text("Header\nFooter\n", encoding="utf-8")
+		script = (
+			"import importlib.util, sys\n"
+			f"spec = importlib.util.spec_from_file_location('render_prompt', {str(RENDER_PROMPT_PY)!r})\n"
+			"module = importlib.util.module_from_spec(spec)\n"
+			"assert spec.loader is not None\n"
+			"sys.modules['render_prompt'] = module\n"
+			"spec.loader.exec_module(module)\n"
+			"def _boom(*args, **kwargs):\n"
+			"\traise RuntimeError('line1\\nline2\\r\\nline3')\n"
+			"module.apply_workflow_overlay = _boom\n"
+			f"raise SystemExit(module.main([{str(prompt_file)!r}]))\n"
+		)
+		proc = subprocess.run(
+			[sys.executable, "-c", script],
+			cwd=str(REPO_ROOT),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+			check=False,
+		)
+
+	assert proc.returncode == 1, proc.stderr
+	assert proc.stdout == ""
+	assert "Traceback" not in proc.stderr
+	assert proc.stderr.splitlines() == [
+		f"ERROR: render_prompt unexpected RuntimeError: line1\\nline2\\r\\nline3 (prompt={prompt_file})"
+	]
+
+
 def test_render_prompt_sh_renders_header_with_empty_repo_learnings() -> None:
 	header_compaction_rules = (
 		"<compaction-rules>\n"
