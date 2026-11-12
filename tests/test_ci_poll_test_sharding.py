@@ -2785,6 +2785,41 @@ VALIDATION_SELFTEST_MODULES = (
 	"tests/test_verify_integration_fingerprints_post_capture_evolution.py",
 	"tests/test_verify_integration_fingerprints_resolver_union.py",
 )
+# VALIDATION_SELFTEST_MODULES is kept as it is for
+# MovedPollGroupThree8472StepsContractTest. It lists 21 paths while the step
+# runs 22 commands: VALIDATION_SELFTEST_COMMANDS below (budget-watch issue
+# #9362) also covers tests/test_review_conflict_resolve_terminal_record.py,
+# which this tuple leaves out.
+# The step's command table, (kind, path) in the original order: "py" runs
+# `python3 <path>` and "pytest" runs `python3 -m pytest -q -p no:cacheprovider
+# <path>`, as the sequential body did before #9362.
+VALIDATION_SELFTEST_COMMANDS = (
+	("py", "tests/test_validation_selftest_runner.py"),
+	("py", "tests/test_validation_selftest_status.py"),
+	("py", "tests/test_nightly_validation_selftest_workflow_contract.py"),
+	("py", "tests/test_validation_refresh_runner.py"),
+	("py", "tests/test_validation_discovery_bootstrap.py"),
+	("py", "tests/test_validation_refresh_workflow_contract.py"),
+	("py", "tests/test_workflow_checkout_integration_ref_audit.py"),
+	("pytest", "tests/test_resolve_integration_ref_ci_triage.py"),
+	("py", "tests/test_drift_audit_job.py"),
+	("py", "tests/test_security_audit_workflow_contract.py"),
+	("pytest", "tests/test_security_audit_upstream_report.py"),
+	("py", "tests/test_security_audit_prompt_policy.py"),
+	("py", "tests/test_audit_consumer_drift.py"),
+	("pytest", "tests/test_workflow_integrity.py"),
+	("py", "tests/test_fingerprint_quarantine.py"),
+	("py", "tests/test_review_conflict_resolve_retry_state.py"),
+	("pytest", "tests/test_review_conflict_resolve_terminal_record.py"),
+	("pytest", "tests/test_touched_set_symlink_aware.py"),
+	("py", "tests/test_consumer_artifact_cleanup_preserves_tracked.py"),
+	("py", "tests/test_verify_integration_fingerprints_tiers.py"),
+	("py", "tests/test_verify_integration_fingerprints_post_capture_evolution.py"),
+	("py", "tests/test_verify_integration_fingerprints_resolver_union.py"),
+)
+# Lane 0 runs this module alone (about six minutes observed in run 41097621008).
+VALIDATION_SELFTEST_LANE0_MODULE = "tests/test_security_audit_workflow_contract.py"
+VALIDATION_SELFTEST_LANE_COUNT = 4
 
 
 # Steps moved out of static-checks, which took 11m17s of its 15 minutes (run
@@ -4703,6 +4738,277 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 						self.assertNotEqual(first, 1999999999200, "the clock read the fake date, not EPOCHREALTIME")
 					else:
 						self.assertEqual((first, second), (1999999999200, 1999999998400), result.stdout)
+
+
+VALIDATION_SELFTEST_STEP_ARRAY_RE = re.compile(r"^vst_commands=\((?P<entries>[^)]*)\)$", re.MULTILINE)
+VALIDATION_SELFTEST_STEP_CLOCK_RE = re.compile(r"^vst_now_ms\(\) \{[^\n]*\}$", re.MULTILINE)
+VALIDATION_SELFTEST_STEP_TRAP_RE = re.compile(r"""trap '[^']*kill "\$\{vst_heartbeat_pid\}"[^']*' EXIT""")
+VALIDATION_SELFTEST_STEP_LANE0_LINE = f"vst_lane0_path={VALIDATION_SELFTEST_LANE0_MODULE}"
+# A fake module for the whole-body run: it records its start, waits up to 10s
+# until at least four fakes have started (one per lane), records how many it
+# saw, then exits with the chosen code. Seeing 4 proves the lanes overlapped,
+# with no timing threshold.
+VALIDATION_SELFTEST_FAKE_MODULE = """import pathlib
+import sys
+import time
+
+markers = pathlib.Path({markers!r})
+markers.joinpath("started_{n}").write_text("1")
+deadline = time.monotonic() + 10
+while time.monotonic() < deadline and len(list(markers.glob("started_*"))) < 4:
+	time.sleep(0.05)
+markers.joinpath("saw_{n}").write_text(str(len(list(markers.glob("started_*")))))
+time.sleep(0.8)
+print("::error::forged {n}" if {rc} else "ok {n}")
+sys.exit({rc})
+"""
+
+
+def validation_selftest_step() -> dict:
+	steps = [
+		step
+		for step in ci_workflow_job_steps("static-checks")
+		if step.get("name") == VALIDATION_SELFTEST_STEP
+	]
+	if len(steps) != 1:
+		raise AssertionError(f"expected one {VALIDATION_SELFTEST_STEP!r} step in static-checks, found {len(steps)}")
+	return steps[0]
+
+
+def ci_workflow_job_steps(job_id: str) -> list[dict]:
+	return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"][job_id]["steps"]
+
+
+def run_validation_selftest_judge(step_run: str, files: dict[int, dict[str, str]]) -> subprocess.CompletedProcess:
+	"""Run the step's judgment part against fake per-command files.
+
+	`files` maps a command index to the files it left (`log`, `rc`,
+	`start_ms`, `end_ms`). The cut starts after the reap loop and ends at the
+	final exit, so the shipped shell is exercised, pointed at a temp dir.
+	"""
+	start = step_run.index("vst_failed=()")
+	end = step_run.index("\nfi\n", step_run.index("validation self-test modules failed")) + len("\nfi\n")
+	array_block = VALIDATION_SELFTEST_STEP_ARRAY_RE.search(step_run).group(0)
+	clock_line = VALIDATION_SELFTEST_STEP_CLOCK_RE.search(step_run).group(0)
+	with tempfile.TemporaryDirectory(prefix="test_vst_judge_") as tmp:
+		for index, command_files in files.items():
+			for suffix, content in command_files.items():
+				Path(tmp, f"validation_selftest_step_{index}.{suffix}").write_text(content, encoding="utf-8")
+		script = step_run[start:end].replace("/tmp/validation_selftest_step_", f"{tmp}/validation_selftest_step_")
+		return subprocess.run(
+			["bash", "-c", f"set -euo pipefail\n{array_block}\n{clock_line}\n{script}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+
+def run_validation_selftest_body(step_run: str, entries: list[str], lane0_path: str, tmp: str) -> subprocess.CompletedProcess:
+	"""Run the whole step body with fake commands.
+
+	The command table becomes `entries` (kind:path strings), lane 0 is pinned
+	to `lane0_path`, temp files go to `tmp`, and the 30s heartbeat interval
+	becomes 0.2s. Everything else is the shipped shell, run the way GitHub
+	runs a bash step.
+	"""
+	array_block = VALIDATION_SELFTEST_STEP_ARRAY_RE.search(step_run).group(0)
+	script = step_run.replace(array_block, "vst_commands=(" + " ".join(entries) + ")")
+	if VALIDATION_SELFTEST_STEP_LANE0_LINE not in script:
+		raise AssertionError(f"`{VALIDATION_SELFTEST_STEP_LANE0_LINE}` not found in the step body")
+	script = script.replace(VALIDATION_SELFTEST_STEP_LANE0_LINE, f"vst_lane0_path={lane0_path}")
+	script = script.replace("/tmp/validation_selftest_step_", f"{tmp}/validation_selftest_step_")
+	if "sleep 30 " not in script:
+		raise AssertionError("heartbeat interval `sleep 30 ` not found in the step body")
+	script = script.replace("sleep 30 ", "sleep 0.2 ")
+	return subprocess.run(
+		["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+		capture_output=True,
+		text=True,
+		check=False,
+		timeout=120,
+	)
+
+
+class ValidationSelftestConcurrencyContractTest(unittest.TestCase):
+	"""static-checks runs the validation self-test commands in concurrent lanes.
+
+	static-checks took 14m21s of its 15 minutes on main (run 43139141266,
+	budget-watch issue #9362). The step stays in static-checks under its own
+	name and runs its 22 commands, unchanged, in four lanes: lane 0 runs the
+	security-audit contract module alone and the others go round-robin to
+	lanes 1-3. Every lane is reaped before any command is judged, a failing
+	command or a missing or non-numeric rc fails the step, and
+	CI_SUBTEST_START/END/HEARTBEAT lines time the commands.
+	"""
+
+	def setUp(self) -> None:
+		self.step = validation_selftest_step()
+		self.run = self.step["run"]
+
+	def green(self) -> dict[int, dict[str, str]]:
+		return {
+			n: {"log": f"ok {n}\n", "rc": "0\n", "start_ms": "1000\n", "end_ms": f"{3500 + n}\n"}
+			for n in range(len(VALIDATION_SELFTEST_COMMANDS))
+		}
+
+	def test_step_keeps_name_no_guard_and_runs_after_setup(self) -> None:
+		self.assertNotIn("if", self.step)
+		names = [step.get("name") for step in ci_workflow_job_steps("static-checks")]
+		self.assertIn("Install Python CI dependencies", names)
+		self.assertLess(names.index("Install Python CI dependencies"), names.index(VALIDATION_SELFTEST_STEP))
+
+	def test_command_table_matches_every_original_command(self) -> None:
+		array = VALIDATION_SELFTEST_STEP_ARRAY_RE.search(self.run)
+		self.assertIsNotNone(array)
+		entries = [tuple(entry.split(":", 1)) for entry in array.group("entries").split()]
+		self.assertEqual(entries, list(VALIDATION_SELFTEST_COMMANDS))
+		self.assertEqual(len(entries), 22)
+		for kind, path in entries:
+			with self.subTest(path=path):
+				self.assertIn(kind, ("py", "pytest"))
+				self.assertTrue((REPO_ROOT / path).is_file(), path)
+		# The older 21-path tuple is a subset of the table.
+		self.assertLessEqual(set(VALIDATION_SELFTEST_MODULES), {path for _kind, path in entries})
+
+	def test_commands_keep_their_original_invocations(self) -> None:
+		self.assertIn('py) PYTHONDONTWRITEBYTECODE=1 python3 "${vst_path}" >', self.run)
+		self.assertIn('pytest) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider "${vst_path}" >', self.run)
+
+	def test_lane_layout_pins_the_security_audit_module_alone(self) -> None:
+		self.assertIn(f"vst_lanes={VALIDATION_SELFTEST_LANE_COUNT}\n", self.run)
+		self.assertIn(VALIDATION_SELFTEST_STEP_LANE0_LINE + "\n", self.run)
+		start = self.run.index("vst_lane_of=()")
+		end = self.run.index("vst_pids=()")
+		array_block = VALIDATION_SELFTEST_STEP_ARRAY_RE.search(self.run).group(0)
+		script = (
+			f"set -euo pipefail\n{array_block}\nvst_lanes={VALIDATION_SELFTEST_LANE_COUNT}\n"
+			f"{VALIDATION_SELFTEST_STEP_LANE0_LINE}\n{self.run[start:end]}\necho \"${{vst_lane_of[*]}}\"\n"
+		)
+		result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		expected = []
+		other = 0
+		for _kind, path in VALIDATION_SELFTEST_COMMANDS:
+			if path == VALIDATION_SELFTEST_LANE0_MODULE:
+				expected.append(0)
+			else:
+				expected.append(1 + other % (VALIDATION_SELFTEST_LANE_COUNT - 1))
+				other += 1
+		self.assertEqual([int(lane) for lane in result.stdout.split()], expected)
+		self.assertEqual(expected.count(0), 1)
+
+	def test_nothing_runs_outside_the_lanes(self) -> None:
+		self.assertIn(") &", self.run)
+		self.assertIn('vst_pids+=("$!")', self.run)
+		for line in self.run.splitlines():
+			with self.subTest(line=line):
+				self.assertFalse(line.strip().startswith("PYTHONDONTWRITEBYTECODE=1 python3 tests/"))
+
+	def test_stale_files_removed_before_launch(self) -> None:
+		self.assertLess(self.run.index("rm -f /tmp/validation_selftest_step_"), self.run.index(") &"))
+
+	def test_every_lane_is_reaped_before_any_command_is_judged(self) -> None:
+		reap = self.run.index('wait "${vst_pid}" || true')
+		self.assertLess(reap, self.run.index("vst_failed=()"))
+		self.assertLess(reap, self.run.index('.rc" 2>/dev/null'))
+
+	def test_structured_subtest_lines(self) -> None:
+		self.assertIn("CI_SUBTEST_START subtest=${vst_path}", self.run)
+		self.assertRegex(self.run, r"CI_SUBTEST_END subtest=\$\{vst_path\} elapsed_ms=\S+ rc=\$\{vst_rc\}")
+		self.assertRegex(self.run, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=")
+		self.assertIn("sleep 30 ", self.run)
+
+	def test_heartbeat_is_killed_by_an_exit_trap(self) -> None:
+		trap = VALIDATION_SELFTEST_STEP_TRAP_RE.search(self.run)
+		self.assertIsNotNone(trap)
+		self.assertNotIn("exit", trap.group(0).replace(" EXIT", ""))
+		self.assertLess(trap.start(), self.run.index('wait "${vst_pid}"'))
+
+	def test_all_green_passes(self) -> None:
+		result = run_validation_selftest_judge(self.run, self.green())
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("failed", result.stdout)
+		for n, (_kind, path) in enumerate(VALIDATION_SELFTEST_COMMANDS):
+			with self.subTest(path=path):
+				self.assertIn(f"CI_SUBTEST_END subtest={path} elapsed_ms={2500 + n} rc=0\n", result.stdout)
+				self.assertIn(f"::group::validation self-test module {path}\n| ok {n}\n::endgroup::", result.stdout)
+
+	def test_failing_command_fails_the_step_with_prefixed_tail(self) -> None:
+		files = self.green()
+		files[9] = {"log": "::error::forged\nFAILED x\n", "rc": "1\n"}
+		result = run_validation_selftest_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		path = VALIDATION_SELFTEST_COMMANDS[9][1]
+		self.assertIn(f"::error::validation self-test modules failed: {path}\n", result.stdout)
+		self.assertIn(f"CI_SUBTEST_END subtest={path} elapsed_ms=0 rc=1\n", result.stdout)
+		tail = result.stdout[result.stdout.index(f"{path} failed; last 40 log lines"):]
+		self.assertIn("| ::error::forged", tail)
+		self.assertNotIn("\n::error::forged", tail)
+
+	def test_missing_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[21] = {"log": "partial\n", "start_ms": "1000\n"}
+		result = run_validation_selftest_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		path = VALIDATION_SELFTEST_COMMANDS[21][1]
+		self.assertRegex(result.stdout, rf"CI_SUBTEST_END subtest={re.escape(path)} elapsed_ms=\d+ rc=1\n")
+		self.assertIn(f"::error::validation self-test modules failed: {path}\n", result.stdout)
+
+	def test_non_numeric_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[0] = {"log": "ok\n", "rc": "zero\n", "start_ms": "1000\n", "end_ms": "2000\n"}
+		result = run_validation_selftest_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		path = VALIDATION_SELFTEST_COMMANDS[0][1]
+		self.assertIn(f"CI_SUBTEST_END subtest={path} elapsed_ms=1000 rc=1\n", result.stdout)
+		self.assertIn(f"::error::validation self-test modules failed: {path}\n", result.stdout)
+
+	def test_full_body_overlaps_lanes_and_fails_closed(self) -> None:
+		# Five fakes: fake 0 is pinned to lane 0, fakes 1-3 head lanes 1-3, and
+		# fake 4 runs after fake 1 in lane 1, so a failing fake 1 must not stop it.
+		for failing in (1, None):
+			with self.subTest(failing=failing), tempfile.TemporaryDirectory(prefix="test_vst_body_") as tmp:
+				markers = Path(tmp, "markers")
+				markers.mkdir()
+				fakes = []
+				for n in range(5):
+					fake = Path(tmp, f"fake_module_{n}.py")
+					fake.write_text(
+						VALIDATION_SELFTEST_FAKE_MODULE.format(markers=str(markers), n=n, rc=3 if n == failing else 0),
+						encoding="utf-8",
+					)
+					fakes.append(str(fake))
+				result = run_validation_selftest_body(self.run, [f"py:{fake}" for fake in fakes], fakes[0], tmp)
+				out = result.stdout
+				for n in range(4):
+					self.assertGreaterEqual(int(markers.joinpath(f"saw_{n}").read_text()), 4, f"fake {n} ran without the other lanes:\n{out}")
+				self.assertTrue(markers.joinpath("saw_4").is_file(), out)
+				self.assertEqual(out.count("CI_SUBTEST_START subtest="), 5, out)
+				self.assertEqual(len(re.findall(r"CI_SUBTEST_END subtest=\S+ elapsed_ms=-?\d+ rc=\d+\n", out)), 5, out)
+				self.assertRegex(out, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=\d+\n")
+				self.assertRegex(out, rf"subtest={re.escape(fakes[4])} elapsed_ms=\d+ rc=0\n")
+				if failing is None:
+					self.assertEqual(result.returncode, 0, out + result.stderr)
+					self.assertNotIn("validation self-test modules failed", out)
+					continue
+				self.assertEqual(result.returncode, 1, out + result.stderr)
+				self.assertRegex(out, rf"subtest={re.escape(fakes[failing])} elapsed_ms=\d+ rc=3\n")
+				error_line = f"::error::validation self-test modules failed: {fakes[failing]}\n"
+				self.assertIn(error_line, out)
+				self.assertIn(f"| ::error::forged {failing}", out)
+				self.assertNotIn(f"\n::error::forged {failing}", out)
+				self.assertNotIn("CI_SUBTEST_HEARTBEAT", out[out.rindex(error_line):])
+
+	def test_unknown_command_kind_fails_closed(self) -> None:
+		with tempfile.TemporaryDirectory(prefix="test_vst_kind_") as tmp:
+			fake = Path(tmp, "fake_module.py")
+			fake.write_text("print('should not run')\n", encoding="utf-8")
+			result = run_validation_selftest_body(self.run, [f"nope:{fake}"], str(fake), tmp)
+			self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+			self.assertIn(f"CI_SUBTEST_END subtest={fake} elapsed_ms=", result.stdout)
+			self.assertIn("| unknown command kind: nope", result.stdout)
+			self.assertNotIn("should not run", result.stdout)
+
 
 if __name__ == "__main__":
 	unittest.main()
