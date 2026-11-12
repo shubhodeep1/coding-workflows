@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2490-2523 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The orchestrate-poll (1) matrix job (run 43186603904, job 131075210069) failed, which leaves the required lint gate red, and the log tail cannot be mapped to any hunk in this PR.\n  WHY: The failed matrix leg blocks the PR gate. Severity disagreement: sonnet rated it NIT (confidence 2), luna MAJOR (confidence 5), glm MAJOR (confidence 3). The highest severity and confidence are used. The evidence does not justify a code edit, and a full job log or a re-run is needed.\n- scripts/gh_helpers.sh:2840-2890 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reviewer reasoned about the Python trim logic and `head -c` ordering in `_embed_input_file` and concluded the logic appears correct, flagging it only as a NIT.\n  WHY: No defect was identified. Other reviewers verified the trim window logic as sound.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:2490-2523 | severity=NIT | confidence=2\n  PROBLEM: The orchestrate-poll matrix job (run 43186603904, job 131075210069) failed. The log tail ends mid-suite on a passing test with no \"Process completed\" line and no failing test. No hunk in this PR touches the scripts or tests that this job runs.\n  WHY: The tail is consistent with a job timeout or runner loss, but that is not confirmed. The required `lint` gate stays red until the job is re-run or its full log is inspected, and no code edit is justified.\n- All other lenses reported NONE. Task completeness: every deliverable is present. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:2840-2890 | severity=NIT | confidence=4\n  PROBLEM: The Python-based trimming logic handles the `n` byte limit, and `head -c` is applied after the trim. The reviewer concluded the logic seems correct.\n  WHY: N/A (the reviewer stated no runtime failure).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2490-2523 | severity=MAJOR | confidence=5\n  PROBLEM: A required CI check remains failing. The log tail ends with passing test events and does not identify the failing test or step, so the failure cannot be mapped to a defect in this PR's diff.\n  WHY: The failed matrix leg keeps the aggregate lint check red and blocks the PR gate. The evidence does not establish that the 20-minute timeout at line 2523 caused the failure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml (orchestrate-poll matrix job) | severity=MAJOR | confidence=3\n  PROBLEM: The orchestrate-poll (1) job (run 43186603904, job 131075210069) failed on the PR head SHA, so the required lint gate (job 131095409298) fails. The log tail ends with TEST_CASE_EVENT pass events and no \"Process completed with exit code\" line. The only ##[error] lines come from tests/test_orchestrate_poll_process.py::test_verify_integration_fingerprints_rejects_reappeared_must_not_contain, which then reports PASS. The named file .github/workflows/implement.yml is not touched by this PR.\n  WHY: The failed matrix job leaves lint red and blocks merge. No code change in this PR is evidenced as the cause, so a speculative edit would be wrong. The full job log should be pulled and the job re-run.\n- Note: the reviewer verified and rejected the earlier gemini concern about scripts/gh_helpers.sh:2840-2890. The trim window is sound for valid UTF-8 and fails open on invalid input. The last-run diff in scripts/review_rb_judge.sh:511-538 and tests/test_prompt_invalid_utf8.py:237-265 was verified clean.\n- All other lenses reported NONE. Task completeness: all deliverables verified present.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0726233e73083146fe43e5e0a6a80bab0839cff689247f561912490b0dcd163d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9283,
+    "run_id": "43141987333",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43141987333",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112121157_61a5cf0040",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9283,
+    "run_id": "43141987333"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T12:11:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
