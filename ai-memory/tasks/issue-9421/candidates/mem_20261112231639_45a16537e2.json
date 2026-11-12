@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Stop runner-image drift, red-main cascades and queue-driven re-dispatch from jamming the pipeline\",\"issues\":[{\"id\":\"phase1-runner-pin-canary\",\"title\":\"Stuck-backlog Phase 1: pin runner image to ubuntu-26.04 and add a nightly ubuntu-latest canary\",\"priority\":1},{\"id\":\"phase2-red-base-ci-hold\",\"title\":\"Stuck-backlog Phase 2: hold plan auto-approval while the tracked base branch CI is red\",\"priority\":2},{\"id\":\"phase3-queue-backpressure-issue-linkage\",\"title\":\"Stuck-backlog Phase 3: queue backpressure and [issue:N] run linkage for clarify/plan/implement runs\",\"priority\":2}],\"dependency_edges\":[{\"from\":\"phase1-runner-pin-canary\",\"to\":\"phase2-red-base-ci-hold\"},{\"from\":\"phase1-runner-pin-canary\",\"to\":\"phase3-queue-backpressure-issue-linkage\"},{\"from\":\"phase2-red-base-ci-hold\",\"to\":\"phase3-queue-backpressure-issue-linkage\"}]}",
+  "fingerprint": "40ae3377361780ef5c6a06067b38f6a3da0c41bd300af251dce670b1c0fbaf51",
+  "lineage": {
+    "issue_number": 9421,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43321440585",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43321440585",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261112231639_45a16537e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9421,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43321440585"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Stop runner-image drift, red-main cascades and queue-driven re-dispatch from jamming the pipeline' into 3 issues (tracking #9421)",
+  "timestamps": {
+    "created_at": "2026-11-12T23:16:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
