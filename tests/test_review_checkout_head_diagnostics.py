@@ -132,13 +132,14 @@ class Layout:
 		env.update(overrides)
 		return env
 
-	def run(self, *, sourced: bool = False, **overrides: str) -> subprocess.CompletedProcess[str]:
+	def run(self, *, sourced: bool = False, extra_functions: str = "", **overrides: str) -> subprocess.CompletedProcess[str]:
 		self.github_env.write_text("")
+		prelude = FAKE_FUNCTIONS + extra_functions
 		if sourced:
 			# Mirrors the workflow step: GitHub's bash -eo pipefail shell sources the script file.
-			cmd = ["bash", "-c", FAKE_FUNCTIONS + 'set -eo pipefail; source "$1"', "_", str(SCRIPT_PATH)]
+			cmd = ["bash", "-c", prelude + 'set -eo pipefail; source "$1"', "_", str(SCRIPT_PATH)]
 		else:
-			cmd = ["bash", "-c", FAKE_FUNCTIONS + review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")]
+			cmd = ["bash", "-c", prelude + review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh")]
 		return subprocess.run(cmd, cwd=self.split, env=self.env(**overrides), capture_output=True, text=True)
 
 
@@ -308,6 +309,30 @@ def test_errexit_abort_in_branch_switch_is_recorded(layout: Layout) -> None:
 	assert fields["switch_ms"].isdigit()
 	assert fields["fetch_attempts"] == "1"
 	assert "TARGET_BRANCH=" not in layout.github_env.read_text()
+	_assert_no_temp_files(layout)
+
+
+def test_backward_date_clock_keeps_switch_ms_numeric(layout: Layout) -> None:
+	# ubuntu-26.04 runners ship Rust coreutils whose `date +%s%3N` gave
+	# readings that went backwards within a run, so switch_ms came out
+	# negative and was printed as na. This fake `date` goes back 1 s per call
+	# (a counter file, because `date` runs inside $(...) subshells). The step
+	# must time itself with bash's EPOCHREALTIME and never reach `date`.
+	counter = layout.root / "fake_date_counter"
+	fake_date = f"""date() {{
+  local fake_date_value=1700000000000
+  if [ -f "{counter}" ]; then fake_date_value="$(cat "{counter}")"; fi
+  echo "$((fake_date_value - 1000))" > "{counter}"
+  printf '%s\\n' "${{fake_date_value}}"
+}}
+"""
+	result = layout.run(extra_functions=fake_date, FAKE_GIT_FAIL_SUBCMD="reset")
+	assert result.returncode != 0
+	_, fields = _summary(result)
+	assert fields["stage"] == "branch_switch"
+	assert fields["outcome"] == "failed"
+	assert fields["fetch_ms"].isdigit(), fields
+	assert fields["switch_ms"].isdigit(), fields
 	_assert_no_temp_files(layout)
 
 
