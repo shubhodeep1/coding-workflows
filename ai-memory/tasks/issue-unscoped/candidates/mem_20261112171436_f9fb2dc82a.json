@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:7339-7351 (also _run_poller timeout handling lines 357-374) | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `test_security_pass_cap_converts_low_keep_fixing_to_advisory` fails on PR head 6ea36343 with \"poller did not exit within 180s; process group killed\" after the poller prints \"Project complete!\", so the \"orchestrate-poll (1)\" check and the \"lint\" job that collects it are red.\n  WHY: The subprocess timeout kills the poller process group and the test assertion fails, which keeps the required-checks gate red; severity disagreement: openai_gpt-6-luna rated it MAJOR (confidence 4, \"needs investigation\"), while anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rated it NIT (confidence 1) as not traced to this PR's diff and already tracked by workflow failure heal issue #9199.\n- tests/test_resolve_integration_ref_ci_triage.py:398-406 | severity=low | confidence=1\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: No defect in the added test `test_reissue_helper_switch_is_pinned_against_caller_value`; the reviewer verified that it guards the pin at scripts/resolve_integration_ref.sh:595 as intended.\n  WHY: There is no failure path: the test passes with the pin present and fails when the pin is removed, which is the intended regression behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:line 7339, test_security_pass_cap_converts_low_keep_fixing_to_advisory (run through _run_poller at line 828 and _run_poller_subprocess at line 291); failed check-run \"orchestrate-poll (1)\", and \"lint\", which fails only because it collects that job's result | severity=NIT | confidence=1\n  PROBLEM: On PR head 6ea36343 the test fails with \"poller did not exit within 180s; process group killed\" after the poller printed \"Project complete!\", so it hangs during shutdown. The reviewer could not map this to any hunk in the PR: neither `scripts/orchestrate_poll_process.sh` nor the test file changed, `sandbox_solc_resolve_versions` in `scripts/codex_isolated_exec.sh` returns early when `SANDBOX_SOLC_VERSIONS` is unset, and the new solc block runs only when `/opt/solc/hardhat-nodejs/compilers-v2/linux-amd64` exists.\n  WHY: The required-checks gate stays red on this head until the shard is re-run or the same timeout is shown on merge-base 507ba62a. Workflow failure heal issue #9199 already tracks it, and the reviewer surfaced it only because every failed check-run must be reported.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:`test_security_pass_cap_converts_low_keep_fixing_to_advisory` at line 7351 calls `_run_poller`; its `communicate(timeout=POLLER_SUBPROCESS_TIMEOUT_SEC)` timeout at lines 357-374 kills the process group and raises an assertion. | severity=MAJOR | confidence=4\n  PROBLEM: The `orchestrate-poll (1)` check fails on this PR head because the poller does not exit within 180 seconds, even though the job log shows it printed \"Project complete!\" first.\n  WHY: The test subprocess hits the timeout and is killed, leaving the check red. The failure is not mapped to a change in the last-run diff and needs investigation.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_resolve_integration_ref_ci_triage.py:lines 398-406 (`test_reissue_helper_switch_is_pinned_against_caller_value`) | severity=NIT | confidence=1\n  PROBLEM: No defect in the added test itself; the reviewer verified that it guards the pin at scripts/resolve_integration_ref.sh:595 as intended.\n  WHY: N/A, no failure path: the test passes with the pin present and fails when it is removed, which is the intended regression behavior.\n- tests/test_orchestrate_poll_process.py:line 7339 (`test_security_pass_cap_converts_low_keep_fixing_to_advisory`; `_run_poller` timeout handling lines 357-374), failing check-run \"orchestrate-poll (1)\" and the \"lint\" job that collects it | severity=NIT | confidence=1\n  PROBLEM: The check-run fails on PR head 6ea36343 with \"poller did not exit within 180s; process group killed\" after the poller printed \"Project complete!\", so it hangs during shutdown. The reviewer did not treat it as a code defect: neither scripts/orchestrate_poll_process.sh nor the test file is in this PR, `scripts/codex_isolated_exec.sh` does nothing new when `SANDBOX_SOLC_VERSIONS` is unset, and the last-run diff cannot affect it. Workflow failure heal issue #9199 already tracks it.\n  WHY: The subprocess timeout kills the poller process group and the test assertion fails, so the job exits non-zero and the lint job aggregates that result.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9a77247282b9881e79c1934073211e12f50c9650683be26d9be2d456534236a2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "43220867845",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43220867845",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112171436_f9fb2dc82a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "43220867845"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T17:14:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
