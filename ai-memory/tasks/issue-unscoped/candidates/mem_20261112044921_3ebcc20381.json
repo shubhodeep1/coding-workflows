@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:1289-1291 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: `base_gate_workflow_path=\"${base_gate_workflow_path%%@*}\"` strips from the first `@` rather than only the trailing `@<ref>` suffix, so a workflow file such as `ci.yml@legacy.yml` is truncated to `ci.yml` and can match a heal issue for a different workflow.\n  WHY: The per-PR triage issue is suppressed for the wrong workflow. Severity disagreement: anthropic_claude-sonnet-5_5 said NIT (confidence 2, contrived), minimax_minimax-m3 and openai_gpt-6-luna said MAJOR (confidence 4). Highest is used, mapped to high. z-ai_glm-5_3-flash rejected the finding as matching repo convention.\n- .github/workflows/ci.yml:543,2490,3488-3491 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The CI jobs `tests-hooks-and-orchestrator` and `orchestrate-poll` are failing, which makes the aggregate `lint` check red. Gemini also names `tests/test_workflow_checkout_integration_ref_audit.py`.\n  WHY: The red required check blocks the PR. Severity disagreement: anthropic_claude-sonnet-5_5 said NIT (confidence 2, no link to a PR hunk, likely the #9215 merge-base breakage), google_gemini-3_1-flash-lite said BLOCKER (attributes it to auto-close keywords), openai_gpt-6-luna said MAJOR. Highest is used, mapped to high. Gemini's auto-close attribution is contradicted by anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash, who read the `##[error]` lines as fixture output.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Remove auto-close keywords from PR body and commit messages referencing ai:orchestrator-tracking issues (CLAUDE.md \u00a719 / \u00a721).\n  expected_change_site: PR metadata (body and commit messages)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The `lint` job in CI fails with an auto-close keyword violation (\"Fixes #2734\") in both the PR body and a commit message.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/check_failure_triage.sh:1291 | severity=NIT | confidence=2\n  PROBLEM: The strip cuts at the first `@`, so `ci.yml@legacy.yml` would be normalized to `ci.yml` and could match a heal issue for the unrelated `ci.yml`.\n  WHY: This needs a workflow file whose name contains `@`. The trigger is contrived, so the reviewer recorded it as checked and not a defect.\n- CI check-runs `tests-hooks-and-orchestrator`, `orchestrate-poll (1)` and `lint` | severity=NIT | confidence=2\n  PROBLEM: These checks are red, but nothing in the visible log maps them to a hunk in this PR. The `##[error]` lines are fixture output from tests that report PASS.\n  WHY: No fix in the PR diff is indicated. The likely cause is the merge-base Ubuntu 26.04 breakage tracked by #9215, and a later round should recheck.\n- HARDENING: scripts/check_failure_triage.sh line 1291, strip only a trailing `@refs/*` suffix, for example `%%@refs/*`. Estimated 1 line. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CI pipeline (lint job and tests/test_workflow_checkout_integration_ref_audit.py):n/a | severity=BLOCKER | confidence=5\n  PROBLEM: CI gate failure in the lint and test jobs.\n  WHY: The reviewer says the PR contains forbidden auto-close keywords (\"Fixes\", \"resolved\") referencing the ai:orchestrator-tracking issue #2734, which fails the lint job. It also says the pre-push gate reports a failure in `tests/test_workflow_checkout_integration_ref_audit.py` that needs investigation.\n- TASK_GAP: Requirement: Remove auto-close keywords from PR body and commit messages referencing ai:orchestrator-tracking issues (CLAUDE.md \u00a719 / \u00a721).\n  Expected change site: PR metadata (body and commit messages)\n  Evidence of absence: The `lint` job in CI fails with an auto-close keyword violation (\"Fixes #2734\") in both the PR body and a commit message.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/check_failure_triage.sh:1289 | severity=MAJOR | confidence=4\n  PROBLEM: The strip at the first `@` is greedy. A workflow path with `@` in the filename, such as `.github/workflows/ci.yml@legacy.yml`, is truncated to `.github/workflows/ci.yml`, and the regex that follows accepts it.\n  WHY: The truncated path can match a heal issue for a different workflow. That suppresses the per-PR triage issue and puts a bookkeeping comment on the wrong heal issue. The same pattern exists in `scripts/review_merge_train.sh`, `scripts/ci_cancelled_rerun.py:222` and `scripts/orchestrate_poll_process.sh`. The new test only covers the two ref-suffix forms.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/check_failure_triage.sh:1291 | severity=MAJOR | confidence=4\n  PROBLEM: The normalization strips everything from the first `@`, not just the run-ref suffix.\n  WHY: For `.github/workflows/ci.yml@legacy.yml` with a run path ending in `@refs/heads/main`, the result is `.github/workflows/ci.yml`. The allowlist accepts it, so a heal issue for `ci.yml` can suppress triage for the different workflow.\n- .github/workflows/ci.yml:543,2490,3488-3491 | severity=MAJOR | confidence=5\n  PROBLEM: Both test jobs, `tests-hooks-and-orchestrator` and `orchestrate-poll`, fail on the current PR head, which makes the required `lint` aggregate fail. The log excerpts do not establish a failure in this PR's changed code.\n  WHY: The aggregate exits nonzero when either dependency does not succeed, leaving the required check red.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "87a8c278064704e0ca45f7bd26651a9bccc516aa6e2b33af5fa57b976ddb7186",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9272,
+    "run_id": "43155526744",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43155526744",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112044921_3ebcc20381",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9272,
+    "run_id": "43155526744"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T04:49:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
