@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nNote: two pass-1 items were checked and rejected. The first was that `| true` may not trigger a non-zero exit (`tests/test_gh_retry_stdout_isolation.py:242`). The second was that `agents.md:5652` lists a non-existent workflow.\nTwo NIT task-gap entries, each with ISSUE_CONFIDENCE 1, state that the requirement is met and not absent:\n- TASK_GAP: Requirement: Run `make generate` and commit the regenerated workflow block in `agents.md`, adding `rollback-stable.yml`. Expected change site: `agents.md` TREE:START id=workflows block. Evidence of absence: not absent; the diff adds `.github/workflows/rollback-stable.yml` between `review_rb_judge_dispatch.yml` and `security-audit.yml`. SEVERITY: NIT. ISSUE_CONFIDENCE: 1.\n- TASK_GAP: Requirement: Make the `tests-hooks-and-orchestrator` job pass via the closed-reader test, with minimal change. Expected change site: `tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command`. Evidence of absence: not absent; the diff changes the reader to `true`, and the other assertions are unchanged. SEVERITY: NIT. ISSUE_CONFIDENCE: 1.\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nNote: the reviewer did not adopt either consensus finding. It rejected the cat/SIGPIPE concern at `tests/test_gh_retry_stdout_isolation.py:233-247` as speculative. It rejected the `propagate-consumer-secrets.yml` task gap in the `agents.md` tree block as factually wrong. ISSUE_CONFIDENCE for adopting both findings: 2.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nNote: the reviewer rejected the cat/EPIPE finding at `tests/test_gh_retry_stdout_isolation.py:242` as speculative. It also rejected the `propagate-consumer-secrets.yml` task gap at `agents.md:5652`, because that file exists. It judged that the three pre-push gate failures cannot be attributed to the diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d5dcaf56ed2f27c3980322fac626be37c24c79f83ad31f851ef8a257d44159b9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9370,
+    "run_id": "43165415735",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43165415735",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112091301_0ad55d9660",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9370,
+    "run_id": "43165415735"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T09:13:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
