@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:3714-3751 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The forward walk (line 3735) only runs when `not exception_seen and cursor == scan_end`, so when the exception line is the last line of the scan window, a chain marker or indented continuation at index `scan_end` is dropped.\n  WHY: A long traceback loses the \"The above exception was the direct cause...\" link in the heal evidence, so the chained cause is again invisible to the diagnosis prompt. The reviewer rated this NIT.\n- (CI check-runs, head 00546da57908fa7029069d881d75e5ed8e162184) lint job 130809735661; tests-hooks-and-orchestrator job 130796135823; orchestrate-poll (1) job 130796136396 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Three check-runs fail on the PR head, and the failing step cannot be mapped to any line of this diff because the logs are truncated.\n  WHY: No runtime failure is demonstrable from the diff. It is surfaced so the full logs of jobs 130796135823 and 130796136396 can be requested. The reviewer rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Tests: `tests/test_workflow_failure_heal.py`: two new tests.\" (PR description)\n  expected_change_site: PR description (not a repository file)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR description says two new tests, but the diff adds four: test_filter_log_keeps_chained_traceback_frames_and_exception_lines_outside_tail, test_filter_log_keeps_the_innermost_lines_of_a_long_traceback, test_filter_log_keeps_the_exception_line_of_a_traceback_longer_than_the_scan_window, test_filter_log_keeps_the_chain_marker_after_a_traceback_longer_than_the_scan_window. The reviewer rated this NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Tests: `tests/test_workflow_failure_heal.py`: two new tests.\"\n  Expected change site: PR description (not a repository file)\n  Evidence of absence: The PR description specifies two new tests, but the diff introduces four new tests (test_filter_log_keeps_chained_traceback_frames_and_exception_lines_outside_tail, test_filter_log_keeps_the_innermost_lines_of_a_long_traceback, test_filter_log_keeps_the_exception_line_of_a_traceback_longer_than_the_scan_window, test_filter_log_keeps_the_chain_marker_after_a_traceback_longer_than_the_scan_window).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_failure_heal.py:3714-3751 | severity=low | confidence=3\n  PROBLEM: The forward walk (line 3735) only runs when `not exception_seen and cursor == scan_end`, so when the exception line is the last line of the scan window, a chain marker or indented continuation at index `scan_end` is dropped.\n  WHY: A long traceback loses the \"The above exception was the direct cause...\" link in the heal evidence, so the chained cause is again invisible to the diagnosis prompt. The reviewer rated this NIT.\n- (CI check-runs, head 00546da57908fa7029069d881d75e5ed8e162184) lint job 130809735661; tests-hooks-and-orchestrator job 130796135823; orchestrate-poll (1) job 130796136396 | severity=low | confidence=2\n  PROBLEM: Three check-runs fail on the PR head, and the failing step cannot be mapped to any line of this diff because the logs are truncated.\n  WHY: No runtime failure is demonstrable from the diff. It is surfaced so the full logs of jobs 130796135823 and 130796136396 can be requested. The reviewer rated this NIT.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "46c9780cac8ed17646e21cee5c2eb5464cad2d4cbe9e74026092fa2a0c266a4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9219,
+    "run_id": "43142047904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43142047904",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112144511_e915b8bc75",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9219,
+    "run_id": "43142047904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T14:45:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
