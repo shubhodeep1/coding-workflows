@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description says the closed-reader test now uses bash's own `{ IFS= read -r -n 1 _ || true; }` as the reader (reads one byte and exits on any coreutils).\n  expected_change_site: `tests/test_gh_retry_stdout_isolation.py`, `test_closed_reader_does_not_rerun_a_successful_command`, in the pipeline after `gh_retry gh api repos/o/r`\n  confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The pipeline at line 255 still ends in `| true`, and `read -r -n 1` appears nowhere in the file; the goal is met a different way via `_output_larger_than_any_pipe()`, so only the PR description is out of date (severity NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: The PR description says the closed-reader test now uses bash's own `{ IFS= read -r -n 1 _ || true; }` as the reader, and that it passed 30 of 30 repeated runs.\nExpected change site: `tests/test_gh_retry_stdout_isolation.py`, `test_closed_reader_does_not_rerun_a_successful_command`, in the pipeline after `gh_retry gh api repos/o/r`.\nEvidence of absence: The pipeline at line 255 still ends in `| true`, and `read -r -n 1` appears nowhere in the file. The goal is met a different way, because `_output_larger_than_any_pipe()` sizes the output at 8 MiB or more. Only the PR description is out of date.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: The PR description states that the closed-reader test now uses \"bash's own `{ IFS= read -r -n 1 _ || true; }`\", which \"reads one byte and exits on any coreutils\".\nExpected change site: tests/test_gh_retry_stdout_isolation.py, within test_closed_reader_does_not_rerun_a_successful_command.\nEvidence of absence: The test still pipes into | true (line 255), and `read -r -n 1` appears nowhere in the file. The implementation uses _output_larger_than_any_pipe(); the PR description is inaccurate.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: The PR description says the closed-reader test now uses Bash's `{ IFS= read -r -n 1 _ || true; }` reader.\nExpected change site: `tests/test_gh_retry_stdout_isolation.py`, `test_closed_reader_does_not_rerun_a_successful_command`, in the pipeline following `gh_retry gh api repos/o/r`.\nEvidence of absence: The diff keeps the `| true` reader and contains no `read -r -n 1`. It increases output size via `_output_larger_than_any_pipe()` instead.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\n(Task gaps: none reported. The one prior gap, a stale PR description about the `{ IFS= read -r -n 1 _ || true; }` reader, was adjudicated in earlier cycles as a NIT with no code change required.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cbea8766d7a04c89b2e2d3fc8c6331a300ae170bc8cb860646e8201d39a0616b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9246,
+    "run_id": "43133085290",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43133085290",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112122656_26bec50354",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9246,
+    "run_id": "43133085290"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T12:26:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
