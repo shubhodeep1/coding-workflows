@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/9235-render-prompt-help-percent.md:2-12 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The fragment cites `9200-ubuntu-2604-render-prompt-and-ci-fixes.md` by file name at lines 2 and 12, and that fragment may be deleted after changelog assembly.\n  WHY: Nothing breaks at runtime, but the published changelog entry could name a file that no longer exists. The reviewer rated this a NIT and did not open `scripts/assemble_changelog.py` to confirm the deletion.\n- CI check-runs (no file:line) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The `tests-hooks-and-orchestrator` job (130837175706) and the aggregate `lint` check are red, but the diff touches no file that job runs.\n  WHY: The failing step is past the log tail, so it cannot be mapped to this diff. The failure also appears on earlier heads, which suggests it is inherited or flaky. The reviewer rated this a NIT and recommends re-running the job and reading its full log.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/9235-render-prompt-help-percent.md:2,12 | severity=NIT | confidence=2\n  PROBLEM: The fragment cites `9200-ubuntu-2604-render-prompt-and-ci-fixes.md` by file name, and the pass-1 reviewer says `scripts/assemble_changelog.py` deletes fragments once assembled.\n  WHY: Nothing breaks at runtime. This is a documentation wording nit only.\n- CI check-run failures | severity=NIT | confidence=2\n  PROBLEM: The `tests-hooks-and-orchestrator` job (130837175706) and the aggregate `lint` check are red, but this diff touches no file that job runs.\n  WHY: The `##[error]` lines in the log tail come from deliberate fixtures in `tests/test_lint_pr_body_auto_close.py`. The failure also appears on earlier heads, and `test_render_prompt_foundation.py` runs in `tests-release-and-log-analysis`, which succeeded.\n- All other checklist sections (security, correctness, concurrency, error paths, performance, index/DB, implicit execution, task completeness) reported NONE. Hardening suggestions: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "9a55928b172bd9adf7eccac7dd05b762ee868f15736f47cca349786339a148a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9245,
+    "run_id": "43114013169",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43114013169",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112022248_99aaadbb6d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9245,
+    "run_id": "43114013169"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T02:22:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
