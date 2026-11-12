@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **The review step's `REVIEW_HEAD_CHECKOUT` timing reads bash's `EPOCHREALTIME` first.** On ubuntu-26.04 runners `date +%s%3N` gave readings that went backwards within a run, so `fetch_ms` and `switch_ms` came out as `na` and `tests/test_review_checkout_head_diagnostics.py` failed intermittently in CI. `scripts/review_autofix_step_checkout_pr_head_branch.sh` now uses the same clock order as the orchestrator poller fix from #9200 (`EPOCHREALTIME`, then `date +%s%3N`, then `date +%s`); the line format is unchanged.
