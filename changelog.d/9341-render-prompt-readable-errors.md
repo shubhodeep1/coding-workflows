@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **Prompt-render crashes now print one named `ERROR:` line instead of a Python traceback.** The exit code is still 1, and there is no new pass or fallback path.
+
+`scripts/render_prompt.py` now turns a non-UTF-8 prompt file into `ERROR: Unable to decode prompt file '<path>' as UTF-8 at byte offset <N>: <reason>`, and any other unexpected exception into `ERROR: render_prompt unexpected <ExceptionType>: <message> (prompt=<path>)`. `scripts/render_prompt.sh` reports an unreadable or non-UTF-8 placeholder source as `ERROR: collect_prompt_placeholders <ExceptionType>: <path>: <message>` and exits 1 before calling `render_prompt.py`, so only one ERROR line is printed. Before this, these failures showed only as raw tracebacks that the workflow log filter hid, which left heal issue #9236 without a diagnosis. Refs #9210 and #9236.

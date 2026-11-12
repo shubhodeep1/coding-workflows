@@ -192,7 +192,11 @@ import pathlib
 import re
 import sys
 
-text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+try:
+	text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+except (OSError, UnicodeDecodeError) as exc:
+	print(f"ERROR: collect_prompt_placeholders {type(exc).__name__}: {sys.argv[1]}: {exc}", file=sys.stderr)
+	sys.exit(1)
 for name in sorted(set(re.findall(r"\{\{([A-Za-z0-9_]+)\}\}", text))):
 	print(name)
 PY
@@ -301,12 +305,22 @@ append_render_var "SEMBLE_PREFETCH" "${SEMBLE_PREFETCH_BLOCK}"
 append_render_var "SERENA_TOOL_HINTS" "${SERENA_TOOL_HINTS_BLOCK}"
 append_render_var "MODEL_FAMILY_OVERLAY" "${MODEL_FAMILY_OVERLAY_BLOCK}"
 
+# Capture the placeholder names in a checked command substitution instead of a
+# process substitution: bash ignores a process substitution's exit status even
+# under `set -euo pipefail`, so a collect_prompt_placeholders failure would
+# otherwise fall through into render_prompt.py and print a second ERROR line
+# (#9341). The helper's stderr is not captured, so its single ERROR line
+# reaches the caller; the EXIT trap still removes any assembled temp file.
+if ! _render_placeholder_names="$(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")"; then
+	exit 1
+fi
+
 while IFS= read -r placeholder_name; do
 	[ -n "${placeholder_name}" ] || continue
 	if [ "${!placeholder_name+x}" = "x" ]; then
 		append_render_var "${placeholder_name}" "${!placeholder_name}"
 	fi
-done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
+done <<< "${_render_placeholder_names}"
 
 if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
 	"${RENDER_ARGS[@]}"

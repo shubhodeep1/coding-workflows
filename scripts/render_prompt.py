@@ -182,6 +182,12 @@ def load_prompt(prompt_path: Path) -> str:
 		return _normalize_prompt_text(prompt_path.read_text(encoding="utf-8"))
 	except OSError as exc:
 		raise PromptLoadError(f"Unable to read prompt file '{prompt_path}': {exc}") from exc
+	except UnicodeDecodeError as exc:
+		# UnicodeDecodeError is a ValueError, not an OSError, so without this
+		# branch a non-UTF-8 prompt escaped as a raw traceback (#9341).
+		raise PromptLoadError(
+			f"Unable to decode prompt file '{prompt_path}' as UTF-8 at byte offset {exc.start}: {exc.reason}"
+		) from exc
 
 
 def _find_prompt_root(prompt_path: Path) -> Path | None:
@@ -1405,6 +1411,16 @@ def main(argv: list[str] | None = None) -> int:
 		sys.stdout.write(render_prompt_text(prompt_text, effective_values))
 	except RenderPromptError as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)
+		return 1
+	except Exception as exc:
+		# This branch only names the failure on one stderr line instead of a raw
+		# traceback (#9341). Exit code 1 matches an uncaught Python exception, so
+		# there is no new pass or fallback path. SystemExit/KeyboardInterrupt are
+		# not Exception subclasses and keep their previous behaviour.
+		print(
+			f"ERROR: render_prompt unexpected {type(exc).__name__}: {exc} (prompt={prompt_path})",
+			file=sys.stderr,
+		)
 		return 1
 
 	return 0

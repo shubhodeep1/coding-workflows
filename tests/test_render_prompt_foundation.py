@@ -209,6 +209,94 @@ def test_render_prompt_sh_renders_implement_contract_defaults_and_env_values() -
 	)
 
 
+_NON_UTF8_PROMPT_BYTES = b"Header\n\xff\nFooter\n"
+
+
+def _stderr_error_lines(stderr: str) -> list[str]:
+	return [line for line in stderr.splitlines() if line.startswith("ERROR:")]
+
+
+def test_render_prompt_py_reports_non_utf8_prompt_without_traceback() -> None:
+	# #9341: a non-UTF-8 prompt used to escape load_prompt as a raw
+	# UnicodeDecodeError traceback with no named ERROR line.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_non_utf8_py_") as td:
+		prompt_file = Path(td) / "mode-implement.txt"
+		prompt_file.write_bytes(_NON_UTF8_PROMPT_BYTES)
+		proc = _run_render_prompt_py(prompt_file)
+
+	assert proc.returncode == 1, proc.stderr
+	assert proc.stdout == ""
+	assert "Traceback" not in proc.stderr
+	error_lines = _stderr_error_lines(proc.stderr)
+	assert len(error_lines) == 1, proc.stderr
+	assert str(prompt_file) in error_lines[0]
+	assert "byte offset 7" in error_lines[0]
+
+
+def test_render_prompt_sh_reports_non_utf8_prompt_without_traceback() -> None:
+	# #9341: collect_prompt_placeholders read the prompt with no error handling,
+	# and its process substitution hid the failure from the shell. The helper
+	# now prints one named ERROR line and the shell exits 1 before calling
+	# render_prompt.py, so no second ERROR line follows.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_non_utf8_sh_") as td:
+		prompt_file = Path(td) / "mode-implement.txt"
+		prompt_file.write_bytes(_NON_UTF8_PROMPT_BYTES)
+		env = _base_env()
+		env["PROMPT_PRELUDE_REFACTOR_ENABLED"] = "false"
+		proc = subprocess.run(
+			["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 1, proc.stderr
+	assert proc.stdout == ""
+	assert "Traceback" not in proc.stderr
+	error_lines = _stderr_error_lines(proc.stderr)
+	assert len(error_lines) == 1, proc.stderr
+	assert error_lines[0].startswith("ERROR: collect_prompt_placeholders UnicodeDecodeError:")
+	assert str(prompt_file) in error_lines[0]
+
+
+def test_render_prompt_py_reports_unexpected_exception_without_traceback() -> None:
+	# #9341: main() caught only RenderPromptError, so any other exception
+	# printed a raw traceback. The final `except Exception` branch names it on
+	# one stderr line and keeps exit code 1.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_unexpected_") as td:
+		prompt_file = Path(td) / "mode-sample.txt"
+		prompt_file.write_text("Header\nFooter\n", encoding="utf-8")
+		script = (
+			"import importlib.util, sys\n"
+			f"spec = importlib.util.spec_from_file_location('render_prompt', {str(RENDER_PROMPT_PY)!r})\n"
+			"module = importlib.util.module_from_spec(spec)\n"
+			"assert spec.loader is not None\n"
+			"sys.modules['render_prompt'] = module\n"
+			"spec.loader.exec_module(module)\n"
+			"def _boom(*args, **kwargs):\n"
+			"\traise RuntimeError('boom')\n"
+			"module.apply_workflow_overlay = _boom\n"
+			f"raise SystemExit(module.main([{str(prompt_file)!r}]))\n"
+		)
+		proc = subprocess.run(
+			[sys.executable, "-c", script],
+			cwd=str(REPO_ROOT),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 1, proc.stderr
+	assert proc.stdout == ""
+	assert "Traceback" not in proc.stderr
+	assert proc.stderr.splitlines() == [
+		f"ERROR: render_prompt unexpected RuntimeError: boom (prompt={prompt_file})"
+	]
+
+
 def test_render_prompt_sh_renders_header_with_empty_repo_learnings() -> None:
 	header_compaction_rules = (
 		"<compaction-rules>\n"
