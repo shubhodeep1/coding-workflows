@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- PR Description:n/a | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR description uses the auto-close keyword \"Closes\" with #9250.\n  WHY: If #9250 is an `ai:orchestrator-tracking` issue, merging this PR will auto-close the tracking issue and stop the orchestrator state machine for this project. The source severity was BLOCKER, mapped here to critical.\n- .github/workflows/review_autofix.yml (CI check-runs on head 41f5fb1851152f61c5afa30a3a5a770d74c6f8e7):n/a | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: All 8 failed check-runs on the PR head have conclusion `cancelled`, not `failure`, so no completed CI run has exercised this diff and the PR's green state is unverified.\n  WHY: A real regression in the last-run hunks (the `identical_failure_cap` guard at scripts/workflow_failure_heal_autofix_report.sh:366) has never been exercised by a completed CI run on this head. The editor should re-check these jobs once a run completes without cancellation. The source severity was NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If GITHUB_EVENT_NAME is pull_request or pull_request_target\" derive the failed run's head from the event payload.\n  expected_change_site: scripts/workflow_failure_heal_autofix_report.sh, run-head selection block\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The block only accepts GITHUB_EVENT_NAME equal to pull_request (lines 374-375), and its comment explicitly excludes pull_request_target (lines 359-360). The PR therefore does not implement this stated approach requirement. Source severity was NIT. Two reviewers disagree: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash state that the pull_request_target omission is deliberate and documented, and that it is not a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- PR Description | severity=BLOCKER | confidence=4\n  PROBLEM: Auto-close keyword \"Closes\" is used with #9250.\n  WHY: If #9250 is an `ai:orchestrator-tracking` issue, merging this PR will auto-close the tracking issue and kill the orchestrator state machine for this project.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"If GITHUB_EVENT_NAME is pull_request or pull_request_target\" derive the failed run's head from the event payload.\n  Expected change site: scripts/workflow_failure_heal_autofix_report.sh, run-head selection block.\n  Evidence of absence: The block only accepts GITHUB_EVENT_NAME equal to pull_request (lines 374-375), and its comment explicitly excludes pull_request_target (lines 359-360). The PR therefore does not implement this stated approach requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/review_autofix.yml (CI check-runs on head 41f5fb1851152f61c5afa30a3a5a770d74c6f8e7) | severity=NIT | confidence=3\n  PROBLEM: All 8 failed check-runs on the PR head have conclusion `cancelled`, not `failure`: \"review / gate\", \"review / fingerprint-cap-block\", \"review / deterministic-skip-merge\", \"review / claude-fixer-auto-merge\", \"review / post-merge-validate-dispatch\", \"review / post-merge-force-poll\", \"review / needs.gate.outputs...codex-agent\", and \"readiness\" (runs 43161891175, 43161891012). Readiness (job 130994797208) ends with `##[error]The operation was canceled.` during `git fetch` of `refs/pull/9278/merge`, and the other seven have empty log tails. The PR's green state is unverified, not proven.\n  WHY: No runtime defect is shown in the diff. The risk is that a real regression in the last-run hunks (the `identical_failure_cap` guard at scripts/workflow_failure_heal_autofix_report.sh:366) has never been exercised by a completed CI run on this head. The editor should re-check these jobs once a run completes without cancellation.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "26576d35c9110957e1124e26bed97bdf90aa9e37a002d3aa8756bf9375c95324",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9278,
+    "run_id": "43225868576",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43225868576",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112174125_56372ca130",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9278,
+    "run_id": "43225868576"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T17:41:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
