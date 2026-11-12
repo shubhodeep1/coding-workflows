@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.sh:196 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The error message uses `sys.argv[1]` as the file path, but when `PROMPT_PRELUDE_REFACTOR_ENABLED=true` the file actually read is `${ASSEMBLED_PROMPT_FILE}`, a temporary file, so the message names the wrong path.\n  WHY: If the temporary assembled file is unreadable, the message points to the original prompt path, which misleads the operator debugging it. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"3) scripts/render_prompt.sh collect_prompt_placeholders: wrap the read_text call. On OSError or UnicodeDecodeError, print 'ERROR: collect_prompt_placeholders <ExceptionType>: <path>: <message>' to stderr and exit 1.\"\n  expected_change_site: scripts/render_prompt.sh line 196\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implemented message `ERROR: collect_prompt_placeholders {type(exc).__name__}: {sys.argv[1]}: {exc}` uses `sys.argv[1]`, which is the wrong path when an assembled prompt is processed, so it does not name the path where the error occurred. The reviewer rated it MAJOR. Other reviewers (minimax_minimax-m3, z-ai_glm-5_3-flash) judged this deliverable satisfied.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/render_prompt.sh:196 | severity=NIT | confidence=4\n  PROBLEM: The error message uses `sys.argv[1]` as the file path, but when `PROMPT_PRELUDE_REFACTOR_ENABLED=true` the file actually read is `${ASSEMBLED_PROMPT_FILE}` (a temporary file), so the message names the wrong path.\n  WHY: If the temporary assembled file is unreadable, the message points to the original prompt path, which misleads the operator debugging it.\n- TASK_GAP:\n  Requirement: \"3) scripts/render_prompt.sh collect_prompt_placeholders: wrap the read_text call. On OSError or UnicodeDecodeError, print 'ERROR: collect_prompt_placeholders <ExceptionType>: <path>: <message>' to stderr and exit 1.\"\n  Expected change site: scripts/render_prompt.sh line 196\n  Evidence of absence: The implemented message `ERROR: collect_prompt_placeholders {type(exc).__name__}: {sys.argv[1]}: {exc}` uses `sys.argv[1]`, which is the wrong path when an assembled prompt is processed, contradicting the requirement to name the path where the error occurred.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "be1d1cf2e2761882e994e42d36925550577402f7632f0a7c6f600196fdfe53e5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9356,
+    "run_id": "43165427424",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43165427424",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112090957_b373936c95",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9356,
+    "run_id": "43165427424"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T09:09:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
