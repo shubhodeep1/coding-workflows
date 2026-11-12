@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue improve?\nChoices:\nA. Clarify and plan phases (`.github/workflows/ai-clarify.yml`, `ai-plan.yml`, the prompts under `prompts/`)\nB. Implement phase (`.github/workflows/ai-implement.yml` and its helper scripts) (RECOMMENDED)\nC. Review / autofix pipeline (`.github/workflows/review_autofix.yml` and the `review_autofix_step_*.sh` scripts)\nD. Orchestrator / poller (`orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`)\nE. Documentation only (README, `docs/how-it-works.md`)\nF. Something else (please name the file, workflow or feature)\nQ2: What kind of improvement do you want?\nChoices:\nA. Fix a specific bug or failure (please link the failing run or describe the symptom) (RECOMMENDED)\nB. Cut cost or runtime (fewer tokens, fewer GitHub API calls, faster runs)\nC. Make it more reliable (fewer stalls or flaky retries, better self-healing)\nD. Make it clearer (better logs, error messages or docs)\nE. Add a new feature (please describe it)\nQ3: How will we know the change is done?\nChoices:\nA. A specific failing run or reproducible case passes afterwards (please give the run ID or the steps) (RECOMMENDED)\nB. A measurable target is met (for example, runtime or token use drops by X%; please state X)\nC. A named deliverable exists (for example, a new doc section or a new log line; please name it)",
+  "fingerprint": "f332f1fbcf8a33ebf28f3267a5ec3a0a66dcfc53ccc3df218cbb79be4472eafe",
+  "lineage": {
+    "issue_number": 9408,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43289006584",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43289006584",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261112192648_03df7ac61f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9408,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43289006584"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9408 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-12T19:26:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
