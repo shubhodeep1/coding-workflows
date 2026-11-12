@@ -4762,12 +4762,14 @@ Two automations take the operator out of that loop by default:
    (`STABLE_HOLD outcome=cleared version=<v>`). Auto-release and the promote cycle resume on their
    next tick.
 
-Re-running with the same target is safe: it only re-sends the consumer dispatch
-(`outcome=already_rolled_back`), and a blank target after a rollback re-confirms the current
-version instead of going further back. Refusals (`outcome=refused reason=<code>`), `hold_failed`,
-`release_still_running`, `runs_lookup_failed` and `tag_push_failed` exit 1; every failure after the
-hold leaves it active, so re-dispatch once the cause is fixed. To drop a hold without a release,
-commit `"active": false` to `stable-hold.json` on `ai/stable-hold`.
+Re-running with the same target is safe while the hold for that version is still active: it only
+re-sends the consumer dispatch (`outcome=already_rolled_back`), and a blank target re-confirms the
+current version instead of going further back. Once the hold is cleared (by a release, or by hand),
+an explicit target equal to the current version is refused (`reason=target_not_lower`) and a blank
+target rolls `@stable` back one more release. Refusals (`outcome=refused reason=<code>`),
+`hold_failed`, `release_still_running`, `runs_lookup_failed` and `tag_push_failed` exit 1; every
+failure after the hold leaves it active, so re-dispatch once the cause is fixed. To drop a hold
+without a release, commit `"active": false` to `stable-hold.json` on `ai/stable-hold`.
 
 **The `promote-candidate` branch.** The internal wrappers (`.github/workflows/internal-*.yml`) call
 their reusable workflows at `@promote-candidate`, not `@main`. Between promote cycles

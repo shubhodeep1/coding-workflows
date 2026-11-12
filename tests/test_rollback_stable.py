@@ -370,12 +370,32 @@ def test_blank_target_after_rollback_does_not_roll_back_further(fx: Fixture) -> 
 
 
 def test_partial_run_pushes_only_the_missing_tag(fx: Fixture) -> None:
+	# A previous run wrote the hold and moved `stable`, then failed on `v1`.
 	fx.set_remote_tag("stable", "v1.45.0")
+	fx.state["hold_file"] = json.dumps({"schema": "stable_hold.v1", "active": True, "from_version": "v1.46.0", "to_version": "v1.45.0"})
+	fx.state["hold_sha"] = "b" * 40
 	proc, state, events = fx.run({"STABLE_ROLLBACK_TARGET_VERSION": "v1.45.0"})
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert "outcome=rolled_back" in proc.stdout
 	assert [e.split()[-1] for e in events if e.startswith("push")] == ["refs/tags/v1"]
 	assert fx.remote_peel("v1") == fx.sha["v1.45.0"]
+
+
+def test_explicit_current_version_without_hold_is_refused(fx: Fixture) -> None:
+	# Nothing was rolled back, so no hold may be written for the current version.
+	proc, state, events = fx.run({"STABLE_ROLLBACK_TARGET_VERSION": "v1.46.0"})
+	assert proc.returncode == 1
+	assert "STABLE_ROLLBACK outcome=refused reason=target_not_lower to=v1.46.0" in proc.stdout
+	assert not state.get("hold_puts") and not events and not state.get("dispatches")
+	_assert_untouched(fx)
+
+
+def test_release_run_started_during_drain_is_cancelled(fx: Fixture) -> None:
+	fx.state["runs"] = {"mark-stable.yml": [[], [{"id": 906, "status": "queued"}], []]}
+	proc, state, _ = fx.run({"STABLE_ROLLBACK_TARGET_VERSION": "v1.45.0"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert state["cancels"] == ["906"]
+	assert fx.remote_peel("stable") == fx.sha["v1.45.0"]
 
 
 def test_dry_run_changes_nothing(fx: Fixture) -> None:
