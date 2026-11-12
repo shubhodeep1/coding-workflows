@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:543-3479 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Check run tests-hooks-and-orchestrator (job 130606294464) failed on head 254b6ba3, so the aggregate lint job (line 3479) also failed. The captured log tail does not show which step or command failed.\n  WHY: The required checks stay red and block merge, but no reviewer could trace the failure to a changed file; it needs a rerun or the full job log (run 43044946395). Severity is disputed: openai_gpt-6-luna rated it MAJOR with confidence 5, while anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rated it NIT with confidence 2 and called it inherited or not caused by this PR. The highest rating is used here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:job tests-hooks-and-orchestrator (line 543); aggregate job lint (line 3479); last visible step \"PR body auto-close lint unit tests\" (lines 826-833) | severity=NIT | confidence=2\n  PROBLEM: Check run tests-hooks-and-orchestrator (job 130606294464) failed on head 254b6ba3, and lint fails only because it depends on that job. The `##[error][lint_pr_body_auto_close]` lines about #2734 in the log tail come from fixture data in tests/test_lint_pr_body_auto_close.py (line 489). The step that actually failed is not in the tail, and none of the PR's four files runs in this job; tests/test_review_autofix_review_pipeline_contract.py runs only in orchestrate-poll (line 3387), which passed.\n  WHY: The required checks stay red, but the available evidence points to no line in this PR's diff. The fix is to rerun the job or read its full log; change this PR only if that log names one of its files. Reported so the failure stays tracked, not as a code defect in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:tests-hooks-and-orchestrator job, lines 543-548 | severity=MAJOR | confidence=5\n  PROBLEM: The supplied check run reports this job failed, so the aggregate lint job also failed. The available log tail does not show the failing command, and its last visible test output is passing.\n  WHY: CI remains red. The failure is not mapped to a changed file or a specific failing step, so its code cause is undetermined.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:tests-hooks-and-orchestrator job (line 543); aggregate lint job (line 3479); head 254b6ba3, job 130606294464 | severity=NIT | confidence=2\n  PROBLEM: Check run `tests-hooks-and-orchestrator` failed on the PR head, so the aggregate `lint` job failed. The 16 KB log tail shows only passing pytest steps, and the visible `::error::[lint_pr_body_auto_close]` lines are expected output of tests/test_lint_pr_body_auto_close.py. None of this PR's four changed files runs in that job, and the pre-push gate classifies the failure as inherited from the merge-base.\n  WHY: The required checks stay red and block merge. The failing step is above the captured log tail and needs a rerun or the full job log (run 43044946395, job 130606294464). No code cause in this PR's diff can be shown from the supplied evidence.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e0ef6c2fd32e5502c599c123d75b620f9ad9cc2214ef5541a1d5725ac30fd860",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9180,
+    "run_id": "43133096856",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43133096856",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112122924_0de8c16c0f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9180,
+    "run_id": "43133096856"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T12:29:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
