@@ -45,7 +45,12 @@ _WORKER_URL = f"https://api.cloudflare.com/client/v4/accounts/{_WORKER_ACCOUNT_I
 
 
 def _load_guard():
-	spec = importlib.util.spec_from_file_location("pr_merge_status_guard", GUARD_PATH)
+	# The live hook is host-only: review sandboxes snapshot the tree through
+	# review_untrusted_workspace.allowed(), which never admits it. Load the
+	# byte-identical template twin there (test_template_copies_are_identical
+	# enforces parity on the host) so collection still succeeds.
+	path = GUARD_PATH if GUARD_PATH.is_file() else TEMPLATE_GUARD_PATH
+	spec = importlib.util.spec_from_file_location("pr_merge_status_guard", path)
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)

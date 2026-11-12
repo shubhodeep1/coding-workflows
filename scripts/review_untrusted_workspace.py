@@ -73,9 +73,17 @@ DOCS_TWIN_DIR = "workflow-templates/.claude/docs"
 # transfer: only the runner writes it, byte-identical to the resolved template.
 # prepush_affected_tests.py: integration PR #8436 parked on a live/template
 # conflict with identical index stages (run 42360075171).
+# gh_api_write_guard.py, pr_watch_guard.py, session-start.sh (issue #9298):
+# every live hook with a template twin, in GUARD_HOOK_TEMPLATE_PAIRS order
+# (scripts/review_conflict_prepare.sh). gh_api_write_guard.py stays admitted
+# by allowed() for the review editor; check_paths() still refuses it as a
+# conflicted resolver path, so an unpaired conflict on it fails closed.
 PAIRED_LIVE_COPIES = {
 	".claude/hooks/pr_merge_status_guard.py": "workflow-templates/.claude/hooks/pr_merge_status_guard.py",
 	".claude/hooks/prepush_affected_tests.py": "workflow-templates/.claude/hooks/prepush_affected_tests.py",
+	".claude/hooks/gh_api_write_guard.py": "workflow-templates/.claude/hooks/gh_api_write_guard.py",
+	".claude/hooks/pr_watch_guard.py": "workflow-templates/.claude/hooks/pr_watch_guard.py",
+	".claude/hooks/session-start.sh": "workflow-templates/.claude/hooks/session-start.sh",
 }
 _UNMERGED_MODE_RE = re.compile(r"[0-7]{6}")
 _UNMERGED_SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -709,7 +717,10 @@ def check_paths(host, paths_file, report_file=None):
 			continue
 		reason = "unsafe_file"
 		try:
-			if not allowed(name):
+			# A paired live copy reaching the model paths was not paired
+			# (divergent template): refuse it even when allowed() admits it
+			# for the editor (gh_api_write_guard.py), so it fails closed.
+			if name in PAIRED_LIVE_COPIES or not allowed(name):
 				reason = _path_rejection_reason(name)
 				raise LookupError("policy")
 			checked_path(host, name)
