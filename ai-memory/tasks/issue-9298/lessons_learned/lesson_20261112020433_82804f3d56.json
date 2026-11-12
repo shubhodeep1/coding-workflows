@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-12T02:04:33Z",
+  "issue_number": 9298,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=scripts/gh_helpers.sh:1; cited_path=scripts/gh_helpers.sh; files_touched=tests/test_conflict_guard_hook_template_merge.py, tests/test_review_sandbox_claude_roles.py.",
+  "phase": "review_autofix",
+  "pr_number": 9322,
+  "record_id": "lesson_20261112020433_82804f3d56",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/gh_helpers.sh",
+    "tests/test_conflict_guard_hook_template_merge.py",
+    "tests/test_review_sandbox_claude_roles.py"
+  ]
+}
