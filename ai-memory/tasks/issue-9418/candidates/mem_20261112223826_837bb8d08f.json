@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Fix 1 would change `scripts/stable_e2e_step_wait_review.sh`, which is outside this issue's locked heal scope. What should this issue deliver?\nChoices:\nA) Stay inside the locked scope. Do fix 2 only: in the E2E cleanup step of `.github/workflows/test-and-mark-stable.yml` (`Cleanup test artifacts`, around line 3707), also cancel the Phase 3c `workflow_dispatch` review run for `${BRANCH}` / PR `${PR_NUMBER}` if it is still queued or in progress. Add a contract test under `tests/` and a `changelog.d/` entry. The plan states that fix 1 (the timeout-path run and job list) is out of scope and should go to a separate follow-up issue whose scope includes `scripts/`. (RECOMMENDED)\nB) Make no code change. Record the failure as a temporary runner or platform problem (candidate 1), and let the plan say the release gate should be re-run once runner capacity recovers.\nC) Do fixes 1 and 2 together. This needs a human to file a new issue whose heal scope includes `scripts/stable_e2e_step_wait_review.sh`. This issue cannot widen its own scope, so planning it here would be refused at implement time.\nQ2: Should optional fix 3 (dispatch the Phase 3c \"Bug B fallback\" review at `test-and-mark-stable.yml:2115` only when no `pull_request` review run with `head_sha=BAIT_SHA` appears within a short wait) be included?\nChoices:\nA) Leave it out. The fallback exists because the `synchronize` event sometimes does not fire. Making it conditional changes release-gate behaviour on evidence that cannot yet tell the two causes apart. (RECOMMENDED)\nB) Include it, with a short wait before the conditional dispatch, and add contract tests.\n**Note:** B is incompatible with Q1:B (no code change). Choosing both will require re-clarification.",
+  "fingerprint": "bb8286e34037b2770c0607844f2097f408d7f5cb0a59885c763a556def19c07c",
+  "lineage": {
+    "issue_number": 9418,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43318863343",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43318863343",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261112223826_837bb8d08f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9418,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43318863343"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9418 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-12T22:38:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
