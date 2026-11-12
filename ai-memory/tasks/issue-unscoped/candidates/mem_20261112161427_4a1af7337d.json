@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.py:1421-1423 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `prompt_path` value is interpolated into the unexpected-exception ERROR line without CR/LF escaping, while the exception message is escaped.\n  WHY: A prompt path containing CR/LF would split the output across lines and break the single-ERROR-line contract. Reviewers rated it NIT or hardening-only, and the path is repo-controlled, so the trigger is contrived. Source reviewers gave confidence 2-3.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add tests that assert exit code 1, a single ERROR line naming the file and no Traceback in stderr (applied to the `except Exception` branch of render_prompt.py)\n  expected_change_site: tests/test_render_prompt_foundation.py (alongside test_render_prompt_py_reports_unexpected_exception_without_traceback, lines 264-297)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: The existing test only raises the single-line `RuntimeError('boom')` (tests/test_render_prompt_foundation.py:279), so the CR/LF escaping at scripts/render_prompt.py:1421 is not exercised, and no test raises a multi-line exception. A regression that drops the escaping would still pass.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/render_prompt.py:1421-1423 | severity=NIT | confidence=2\n  PROBLEM: The `prompt_path` variable is interpolated into the unexpected-exception ERROR message without CR/LF escaping.\n  WHY: A path containing newlines would break the contract that every failure prints exactly one ERROR line.\n- TASK_GAP\n  Requirement: Add tests that assert exit code 1, a single ERROR line naming the file and no Traceback in stderr, for render_prompt.py unexpected exception behavior (Requirement 4).\n  Expected change site: tests/test_render_prompt_foundation.py\n  Evidence of absence: The existing test test_render_prompt_py_reports_unexpected_exception_without_traceback only covers a single-line exception message. No test verifies that multi-line exception messages are escaped to a single ERROR line as implemented in scripts/render_prompt.py:1416-1419.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/render_prompt.py:1423 | severity=NIT | confidence=3\n  PROBLEM: `prompt_path` is interpolated into the ERROR line without CR/LF escaping, while `unexpected_exc_message` is escaped on the line above.\n  WHY: A prompt path with `\\r` or `\\n` would print two stderr lines for one exception. The reviewer called this theoretical and hardening-only, since prompt paths are repo-controlled.\n- TASK_GAP\n  Requirement: \"Add tests under tests/ for a non-UTF-8 prompt file. They assert exit code 1, a single ERROR line naming the file and no `Traceback` in stderr, for both render_prompt.py and render_prompt.sh.\" The single-ERROR-line invariant also applies to the final `except Exception` branch.\n  Expected change site: tests/test_render_prompt_foundation.py:264-297 (test_render_prompt_py_reports_unexpected_exception_without_traceback). It needs a second case that raises a multi-line exception and asserts `proc.stderr.splitlines()` has length 1 with CR/LF rendered as literal `\\r` / `\\n`.\n  Evidence of absence: Commit b5ed36abd119d3486568337b3aae9940b4ec43b5 added CR/LF escaping at render_prompt.py:1421 but no multi-line-exception test. The existing test at line 279 only raises `RuntimeError('boom')`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING: scripts/render_prompt.py:1423 \u2014 also escape `prompt_path` the same way, or assert at startup that prompt paths contain no newlines. HARDENING_RISK_SCORE: 1\n- HARDENING: tests/test_render_prompt_foundation.py:264 \u2014 add a second test that monkey-patches `apply_workflow_overlay` to raise `RuntimeError(\"line1\\nline2\")` and asserts a single escaped stderr line. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/render_prompt.py:1423 (hardening suggestion, HARDENING_RISK_SCORE: 1)\n  PROBLEM: The unexpected-error formatter escapes CR/LF in the exception message but not in `prompt_path`.\n  WHY: The positional argument accepts an arbitrary path, so a path containing CR/LF can split the ERROR output across lines. Suggested fix: escape CR/LF in the formatted prompt path as well (about 1 line).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/render_prompt.py:1423 (hardening suggestion, HARDENING_RISK_SCORE: 1)\n  PROBLEM: The exception message is CR/LF-escaped but the interpolated `prompt={prompt_path}` is not.\n  WHY: A prompt path containing a newline would split the ERROR line. The reviewer called the trigger contrived and the finding an advisory consistency nit. Suggested fix: escape it with the same expression, about 3 lines.\n- TASK_GAP\n  Requirement: The linked issue requires tests that \"assert exit code 1, a single ERROR line naming the file and no 'Traceback' in stderr\". The last autofix run added CR/LF escaping to keep the `except Exception` output on one stderr line.\n  Expected change site: tests/test_render_prompt_foundation.py, alongside `test_render_prompt_py_reports_unexpected_exception_without_traceback` (lines 264-297).\n  Evidence of absence: The only test of the `except Exception` branch raises single-line `RuntimeError('boom')` (tests/test_render_prompt_foundation.py:279). The `assert proc.stderr.splitlines() == [...]` at line 295 would still pass if the escaping at scripts/render_prompt.py:1421 were dropped. No test raises a multi-line exception.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0923ffe4aad66307516ca0e37e0d1d6c04b5aeb0fbe66b2e97ccfc55c9e7cf6e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9356,
+    "run_id": "43192105847",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43192105847",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112161427_4a1af7337d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9356,
+    "run_id": "43192105847"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T16:14:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
