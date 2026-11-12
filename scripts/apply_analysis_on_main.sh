@@ -463,8 +463,11 @@ fi
 # that warns on stderr (stdout is parsed by list-only callers).
 APPLY_ANALYSIS_EFFECTIVE_MAX_CANDIDATES="${APPLY_ANALYSIS_MAX_CANDIDATES}"
 apply_analysis_min_docs="${PROMOTE_CYCLE_MIN_DOCS:-}"
-if [[ "${apply_analysis_min_docs}" =~ ^[0-9]{1,18}$ ]]; then
-	apply_analysis_min_docs="$((10#${apply_analysis_min_docs}))"
+# The zero run is dropped as a string first, so any number of leading zeros
+# (the cycle's ^[0-9]+$ check allows them) normalizes, while at most 18
+# significant digits ever reach 64-bit arithmetic.
+if [[ "${apply_analysis_min_docs}" =~ ^0*([0-9]{1,18})$ ]]; then
+	apply_analysis_min_docs="$((10#${BASH_REMATCH[1]}))"
 fi
 if [ -n "${apply_analysis_min_docs}" ] && ! [[ "${apply_analysis_min_docs}" =~ ^[1-9][0-9]{0,5}$ ]]; then
 	printf '::warning::PROMOTE_CYCLE_MIN_DOCS must be a positive integer below 1000000 to raise the candidate cap (got %q); the cap stays at %s.\n' "$(printf '%s' "${PROMOTE_CYCLE_MIN_DOCS}" | cut -c1-40)" "${APPLY_ANALYSIS_EFFECTIVE_MAX_CANDIDATES}" >&2

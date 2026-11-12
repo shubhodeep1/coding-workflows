@@ -906,3 +906,22 @@ def test_leading_zero_min_docs_still_raises_the_cap_and_unusable_values_warn() -
 		assert "::warning::PROMOTE_CYCLE_MIN_DOCS must be a positive integer" in proc.stderr
 		assert "::warning::" not in proc.stdout
 		assert "APPLY_ANALYSIS_CANDIDATE_CAP" not in proc.stderr + proc.stdout
+
+
+def test_long_zero_padded_min_docs_raises_the_cap_without_overflow() -> None:
+	# The promote cycle accepts any all-digit value, so a 19-digit zero-padded
+	# `4` must raise the cap too; a 20-digit non-zero value must warn, not wrap.
+	docs = _dated_docs(10)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true", "PROMOTE_CYCLE_MIN_DOCS": "0" * 18 + "4"})
+	assert proc.returncode == 0, proc.stderr
+	assert "APPLY_ANALYSIS_CANDIDATES count=4 " in proc.stdout
+	assert "APPLY_ANALYSIS_CANDIDATE_CAP raised_to=4 reason=promote_cycle_min_docs" in proc.stderr
+	assert _searches(final) == 4
+	for value in ("00", "1" * 20):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, _ = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true", "PROMOTE_CYCLE_MIN_DOCS": value})
+		assert proc.returncode == 0, proc.stderr
+		assert "APPLY_ANALYSIS_CANDIDATES count=3 " in proc.stdout
+		assert "::warning::PROMOTE_CYCLE_MIN_DOCS must be a positive integer" in proc.stderr
+		assert "APPLY_ANALYSIS_CANDIDATE_CAP" not in proc.stderr + proc.stdout
