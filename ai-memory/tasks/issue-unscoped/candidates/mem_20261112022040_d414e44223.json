@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:7339 | severity=high | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: In the failed check-run \"orchestrate-poll (1)\", test_security_pass_cap_converts_low_keep_fixing_to_advisory timed out: the poller printed \"Project complete!\" and was killed after 180s (\"poller did not exit within 180s; process group killed\"), which also made the aggregate \"lint\" job fail.\n  WHY: The CI gate stays red for this head, but the reviewer could not trace the hang to any hunk in this PR (scripts/orchestrate_poll_process.sh is unchanged, and the new solc code paths are no-ops when unset or absent). They recommend re-running the shard first and treating it as a PR defect only if the timeout also happens on merge-base 507ba62a. The source severity was MAJOR, mapped here to high. minimax_minimax-m3 and z-ai_glm-5_3-flash judged it pre-existing or out of scope, citing tracking issue #9199.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory (line 7339) | severity=MAJOR | confidence=2\n  PROBLEM: In the failed check-run \"orchestrate-poll (1)\", which also fails the aggregate \"lint\" job, the poller printed \"Project complete!\" and was then killed after the 180-second limit (\"poller did not exit within 180s; process group killed\"). The reviewer could not trace this to any hunk in the PR: scripts/orchestrate_poll_process.sh is unchanged, the test file reaches codex_isolated_exec.sh only through the judge-launch fake at line 3953, sandbox_solc_resolve_versions returns immediately when SANDBOX_SOLC_VERSIONS is empty, the solc cache block runs only if /opt/solc/... exists, and the last-run diff touches only tests/test_resolve_integration_ref_ci_triage.py.\n  WHY: The CI gate stays red for this head. Re-run the shard first, and treat it as a defect in this PR only if the timeout also happens on the merge-base 507ba62a.\n- Note (no severity stated): the copilot-pull-request-reviewer failure is the third-party reviewer's own HTTP 422 custom_instructions_too_large error, so it is not a code defect in this PR.\n- Note: the reviewer judged test_reissue_helper_switch_is_pinned_against_caller_value (tests/test_resolve_integration_ref_ci_triage.py lines 398-406) sound, and reported TASK COMPLETENESS / INTENT GAPS as NONE and HARDENING_RISK_SCORE as 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- Note: the reviewer judged the regression test at `tests/test_resolve_integration_ref_ci_triage.py:397-407` correct, guarding the pin at `scripts/resolve_integration_ref.sh:574`. They called the `test_orchestrate_poll_process.py::test_security_pass_cap_converts_low_keep_fixing_to_advisory` 180-second timeout pre-existing, outside PR CHANGED FILES, and out of scope.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- Note: the reviewer verified the regression test against `run_case` (scripts/resolve_integration_ref.sh:739-761) and the pin (scripts/resolve_integration_ref.sh:595), and judged it not vacuous. They called the pre-push-gate failures sandbox artefacts. They did not re-raise the `orchestrate-poll (1)` timeout (tracked in #9199) or the `copilot-pull-request-reviewer` 422, because the last-run diff gives no new evidence for either.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3f76d4dea5dd1eefc2364be654308af406bb864d88b4ef95d8a0ebc599c4f6b0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "43112497090",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43112497090",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112022040_d414e44223",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "43112497090"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T02:20:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
