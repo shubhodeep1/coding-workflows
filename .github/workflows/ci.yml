@@ -3199,7 +3199,10 @@ jobs:
           sf_modules=(tests/test_orchestrate_poll_noop_suspicious_recovery.py tests/test_state_snapshot.py tests/test_run_substate_ledger.py)
           rm -f /tmp/single_file_step_*.log /tmp/single_file_step_*.rc \
             /tmp/single_file_step_*.start_ms /tmp/single_file_step_*.end_ms
-          sf_now_ms() { date +%s%3N; }
+          # Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
+          # coreutils) gave readings that went backwards within a run, which
+          # printed negative elapsed_ms. `date` stays as the fallback for bash < 5.
+          sf_now_ms() { if [[ "${EPOCHREALTIME:-}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"; else date +%s%3N; fi; }
           sf_step_start_ms="$(sf_now_ms || true)"
           case "${sf_step_start_ms}" in
             ''|*[!0-9]*)
