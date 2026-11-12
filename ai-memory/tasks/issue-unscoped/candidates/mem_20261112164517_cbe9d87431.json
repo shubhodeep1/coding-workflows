@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Stop pointing `TMPDIR` at `$RUNNER_TEMP`\" in the system-Python shard step\n  expected_change_site: .github/workflows/ci.yml, `tests-system-python` / \"System-Python test shard\"\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff adds a guard in tests/test_ci_job_split_contract.py but has no .github/workflows/ci.yml hunk changing the shard step's TMPDIR behavior, and the current checkout already keeps the default. Severity=MAJOR. Sonnet and GLM re-verified this and reported it as not a gap, because the fix rides the stacked base branch.\n- requirement: \"Raise `timeout-minutes` \u2026 or add more entries to `system-python-shard`\" to keep shards within the job budget\n  expected_change_site: .github/workflows/ci.yml, `tests-system-python` timeout or shard matrix\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff adds a test requiring at least 24 shard entries but does not change the timeout or add matrix entries, and the 24-entry matrix is not introduced by this PR. Severity=MAJOR. Sonnet and GLM re-verified this and reported it as not a gap.\n- requirement: \"For `tests-hooks-and-orchestrator`, find the failing step in the full job log before changing code. Fix the specific contract test the PR broke, and do not weaken the test.\"\n  expected_change_site: The failing contract test identified from the `tests-hooks-and-orchestrator` job log\n  confidence=[3]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff has no fix tied to a diagnosed failure in that job, the check-run context still reports it as failed, and its log tail does not identify the failing step. Severity=MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Stop pointing `TMPDIR` at `$RUNNER_TEMP`\" in the system-Python shard step.\n  Expected change site: `.github/workflows/ci.yml`, `tests-system-python` / \"System-Python test shard\".\n  Evidence of absence: The PR diff adds a guard in `tests/test_ci_job_split_contract.py`, but contains no `.github/workflows/ci.yml` hunk that changes the shard step's `TMPDIR` behavior. The current checkout keeps the default, but that change is not part of this PR's diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Raise `timeout-minutes` \u2026 or add more entries to `system-python-shard`\" to keep shards within the job budget.\n  Expected change site: `.github/workflows/ci.yml`, `tests-system-python` timeout or shard matrix.\n  Evidence of absence: The PR diff adds a test requiring at least 24 shard entries, but does not change the timeout or add matrix entries. The current checkout's 24-entry matrix is not introduced by this PR.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"For `tests-hooks-and-orchestrator`, find the failing step in the full job log before changing code. Fix the specific contract test the PR broke, and do not weaken the test.\"\n  Expected change site: The failing contract test identified from the `tests-hooks-and-orchestrator` job log.\n  Evidence of absence: The PR diff contains no fix tied to a diagnosed failure in that job. The provided check-run context still reports `tests-hooks-and-orchestrator` as failed, while its log tail does not identify the failing step.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "35ec4fd6c0aa829e8a9ca39271c1fb07b9ce9461dbf2b12b6eed5292509ac433",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9338,
+    "run_id": "43210670745",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43210670745",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112164517_cbe9d87431",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9338,
+    "run_id": "43210670745"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T16:45:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
