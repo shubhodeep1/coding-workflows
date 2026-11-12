@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`.\" (it reads one byte and exits on any coreutils)\n  expected_change_site: tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The test still uses `gh_retry gh api repos/o/r | true` (lines 253-257) and sizes the output with `_output_larger_than_any_pipe()` to force a closed pipe, and the one-byte `read` reader is absent. Severity NIT. Reviewers noted the code behavior matches the test's documented intent, so only the PR description is stale.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: The PR description says \"the closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`\".\nExpected change site: `tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command`\nEvidence of absence: The test still uses `gh_retry gh api repos/o/r | true`. It reaches the same goal by sizing the output with `_output_larger_than_any_pipe()`, so the write hits a closed pipe on any coreutils. The in-test comment explains this. No code defect exists, and the assertions match the description's \"unchanged\" claim. Only the PR description is out of date. A previous editor run already examined this and deferred it.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"The closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`.\"\nExpected change site: tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command\nEvidence of absence: The test uses gh_retry gh api repos/o/r | true and relies on _output_larger_than_any_pipe to ensure the writer hits a closed pipe, rather than implementing the read command described in the PR description.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"The closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`.\"\nExpected change site: `tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command`\nEvidence of absence: The test still pipes to `true` at lines 253\u2013257 and relies on `_output_larger_than_any_pipe()` to trigger the closed-pipe behavior; the specified one-byte `read` reader is absent.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"the closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`. It reads one byte and exits on any coreutils.\"\nExpected change site: tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command\nEvidence of absence: The test body (lines 253-257 in the working tree) still uses `gh_retry gh api repos/o/r | true` with output sized by `_output_larger_than_any_pipe()`; `read -r -n 1` appears nowhere in the file, and no diff hunk (PR or last run) introduces it. The shipped approach does reach the same goal (forcing a closed pipe on any coreutils by exceeding pipe-max-size, as the in-test comment documents), so this is a stale PR-description sentence rather than a code defect; the code behavior matches the test's documented intent and CI is green.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f679b6858fe7a0d67b01cedf2fb5744951288ce08242b2a4a600b36d7697a79e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9246,
+    "run_id": "43268376692",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43268376692",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112201105_54ee586abe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9246,
+    "run_id": "43268376692"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T20:11:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
