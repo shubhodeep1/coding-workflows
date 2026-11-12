@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:582-679 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The CI_SUBTEST_END `vst_elapsed_ms` is computed without a lower bound, so a backwards wall-clock step prints a negative value, unlike the clamped heartbeat at lines 644-645.\n  WHY: Telemetry only, so pass or fail is unaffected. Both reviewers rated it NIT, and the test accepts `-?\\d+`.\n- .github/workflows/ci.yml:lane assignment (`vst_lane_of`, `vst_lanes=4`, `vst_lane0_path`) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Lanes are split by module count (lane 0 has one module, lanes 1-3 have seven each), not by measured duration, so the saving is an estimate.\n  WHY: The job may stay near the 15-minute timeout if the other modules are slow. The PR states this and no defect is demonstrated (NIT).\n- agents.d/9362-static-checks-ci-subtest.md:2 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The fragment adds a second bullet for the `CI_SUBTEST_START`, `CI_SUBTEST_END` and `CI_SUBTEST_HEARTBEAT` prefixes, which are already registered in the \"Stable log prefixes (contractual)\" section.\n  WHY: Nothing fails, because the fragment mechanism is the sanctioned way to document an extra emitter. The reviewer raised it only as a possible duplicate registry bullet (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, moving the slowest `static-checks` step (\"Validation self-test unit tests\") to another job\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The \"Validation self-test unit tests\" step remains in `static-checks` at .github/workflows/ci.yml:546, and the diff rewrites its body into concurrent lanes in place. Severity disagreement: openai_gpt-6-luna rated it MAJOR, anthropic_claude-sonnet-5_5 rated it NIT and called it an accepted deviation from the approved plan. minimax_minimax-m3 and z-ai_glm-5_3-flash reviewed the same gap and judged it not a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:\"Validation self-test unit tests\" step, judge loop `vst_elapsed_ms` / `CI_SUBTEST_END` | severity=NIT | confidence=3\n  PROBLEM: The heartbeat value is clamped to 0 on a backwards clock step, but the END value has no lower bound, and the test accepts a negative value (`elapsed_ms=-?\\d+`).\n  WHY: A negative `elapsed_ms` can be logged. This is cosmetic telemetry and pass or fail is unaffected.\n- .github/workflows/ci.yml:lane assignment (`vst_lane_of`, `vst_lanes=4`, `vst_lane0_path=...`) | severity=NIT | confidence=2\n  PROBLEM: Lane 0 holds one module and lanes 1-3 hold seven each, split by count rather than by measured duration.\n  WHY: The saving is an estimate. The job may stay near the 15-minute timeout, but no defect is demonstrated.\n- agents.d/9362-static-checks-ci-subtest.md:2 | severity=NIT | confidence=2\n  PROBLEM: The fragment adds a second bullet for `CI_SUBTEST_START`, `CI_SUBTEST_END` and `CI_SUBTEST_HEARTBEAT`, which are already registered.\n  WHY: Nothing fails. The fragment mechanism is the sanctioned way to document an extra emitter.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, relocating the slowest `static-checks` step to another job.\n  Evidence of absence: The diff relocates no step and rewrites the body in place into four lanes. The job id, step name and `timeout-minutes` are kept. The approved plan deliberately chose in-place overlap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:582, 611, 619, 674-679 | severity=NIT | confidence=4\n  PROBLEM: `vst_elapsed_ms` is calculated by subtracting epoch-millisecond readings without a lower bound, while the heartbeat has a backward-clock clamp at lines 644-645.\n  WHY: If the wall clock moves backward between a module's start and end readings, a negative `elapsed_ms` is reported.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, moving the identified step or steps from `static-checks` to the job with the most headroom.\n  Evidence of absence: The \"Validation self-test unit tests\" step remains in `static-checks` at `.github/workflows/ci.yml:546`. The diff runs its commands in concurrent lanes in place and does not move the step.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d68bd50fcdbb34585bafa967748b8126502f00158c41d86503f1406ea2814ad0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9368,
+    "run_id": "43165419226",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43165419226",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112091540_c46211f088",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9368,
+    "run_id": "43165419226"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T09:15:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
