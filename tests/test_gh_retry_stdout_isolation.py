@@ -262,29 +262,6 @@ def test_closed_reader_does_not_rerun_a_successful_command(tmp_path: Path) -> No
 	assert _leftover_temp_files(tmp_path) == []
 
 
-def _closed_pipe_diagnostics(tmp_path: Path, env: dict[str, str]) -> str:
-	"""Failure-only facts about how this host's cat/head handle a closed pipe.
-
-	ubuntu-26.04 runners replay through Rust coreutils and the test sees
-	rc=0; these lines say which tool and which signal disposition do it.
-	"""
-	big_file = tmp_path / "diag_big.txt"
-	big_file.write_text("x" * (1024 * 1024), encoding="utf-8")
-	probe = (
-		"type -a cat head 2>&1 | tr '\\n' ';'; echo\n"
-		"cat --version 2>&1 | head -n 1\n"
-		"head --version 2>&1 | head -n 1\n"
-		"echo \"bash=${BASH_VERSION}\"\n"
-		"grep -E '^Sig(Ign|Blk)' /proc/self/status 2>&1 | tr '\\n' ' '; echo\n"
-		f"cat '{big_file}' | head -c 1 > /dev/null; echo \"cat_head=${{PIPESTATUS[*]}}\"\n"
-		f"cat '{big_file}' | ( exec 0<&- ); echo \"cat_closed=${{PIPESTATUS[*]}}\"\n"
-		f"cat '{big_file}' | true; echo \"cat_true=${{PIPESTATUS[*]}}\"\n"
-		f"( cat '{big_file}'; echo \"inner_cat=$?\" >&2 ) | head -c 1 > /dev/null\n"
-	)
-	proc = subprocess.run(["bash", "-c", probe], env=env, capture_output=True, text=True, timeout=60)
-	return (proc.stdout + proc.stderr).strip()
-
-
 CLOSED_READER_BODY = (
 	"gh_retry gh api repos/o/r | head -c 1 > /dev/null\n"
 	'echo "rc=${PIPESTATUS[0]}"'
