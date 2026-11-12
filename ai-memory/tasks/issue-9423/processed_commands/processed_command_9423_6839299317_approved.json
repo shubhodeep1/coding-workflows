@@ -5,13 +5,25 @@
   "entry_id": "processed_command_9423_6839299317_approved",
   "issue_number": 9423,
   "metadata": {
+    "branch": "ai/issue-9423",
+    "changed_files": [
+      "agents.d/stuck-states-p8d-generic-seed.md",
+      "changelog.d/stuck-states-p8d-generic-seed.md",
+      "scripts/dependency_wait_resume.py",
+      "tests/test_dependency_wait_resume.py"
+    ],
+    "issue_number": 9423,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9423",
+    "pr_number": 9425,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9425",
+    "run_attempt": "1",
+    "run_id": "43331500372",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43331500372"
   },
   "run_attempt": 1,
   "run_id": "43331500372",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-12T23:48:33Z",
+  "status": "completed",
+  "timestamp": "2026-11-12T23:57:25Z",
   "workflow": "implement"
 }
