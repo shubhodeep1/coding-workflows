@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:543 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `tests-hooks-and-orchestrator` job (check run job 130606294464) fails at PR head `254b6ba3dcda`, and the aggregate `lint` job (job 130646405646) fails with it because it needs that job; the captured 16 KB log tail shows only passing steps, so the failing step is not visible.\n  WHY: The red job keeps the aggregate check and merge gate red, and the cause is unverified and not tied to any changed line; finding it needs the full job log of run 43044946395 or a rerun. Severity disagreement: openai_gpt-6-luna rated it MAJOR (confidence 5), while anthropic_claude-sonnet-5_5 (confidence 2) and z-ai_glm-5_3-flash (confidence 3) rated it NIT and raised it only for investigation, noting that none of the four changed files runs in this job and the pre-push gate classifies the failure as inherited from the merge-base. The highest severity is used here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Gate only this new admission behind the env var REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED\"; setting it to `false` \"turns it off.\"\n  expected_change_site: `.github/workflows/review_autofix.yml` and the sandbox snapshot/transfer invocations in `scripts/review_untrusted_sandbox.sh`\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The flag is defined and checked in `scripts/review_untrusted_workspace.py`, but the workflow does not export it and the wrapper's snapshot and transfer invocations do not pass it. The changelog states that the workflow does not forward the switch, so setting the Actions repository variable to `false` does not turn off the admission in the production review-autofix path. Three reviewers explicitly disagreed that this is a gap: anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash cite \"Change no other rule\", a `files_touched` grant that excludes workflow files, and the helper's own default.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:the `tests-hooks-and-orchestrator` job (check run job 130606294464) and the aggregate `lint` job (job 130646405646), which fails only because it needs `tests-hooks-and-orchestrator` (`CI_NEEDS_JSON` shows it as \"failure\"). | severity=NIT | confidence=2\n  PROBLEM: The job is red at PR head `254b6ba3dcda`. The captured log tail shows only passing pytest steps, ending with `tests/test_lint_pr_body_auto_close.py`, so the failing step is above the 16 KB tail. None of the four changed files runs in this job, and the changed test file runs in `orchestrate-poll`, which succeeded.\n  WHY: It keeps the merge gate red. The evidence available does not tie it to any changed line, and finding the cause needs the full job log or a rerun.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:`tests-hooks-and-orchestrator` job at line 543; failed check run 130606294464. | severity=MAJOR | confidence=5\n  PROBLEM: The PR-head job failed, and the aggregate `lint` check also failed. The supplied log tail shows passing tests and expected lint-test diagnostics but does not identify the failing step or connect the failure to this PR's changes.\n  WHY: The failed job leaves the aggregate check red and blocks the CI gate. The failure's cause remains unverified.\n- TASK_GAP\n  Requirement: \"Gate only this new admission behind the env var REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED\"; setting it to `false` \"turns it off.\"\n  Expected change site: `.github/workflows/review_autofix.yml` and the sandbox snapshot/transfer invocations in `scripts/review_untrusted_sandbox.sh`.\n  Evidence of absence: The flag is defined and checked in `scripts/review_untrusted_workspace.py`, but the workflow does not export it and the wrapper's snapshot and transfer invocations do not pass it. The changelog also states that the workflow does not forward the switch. Setting the Actions repository variable to `false` therefore does not turn off the admission in the production review-autofix path, and the helper uses its default-on behavior.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:tests-hooks-and-orchestrator job (failed check run 130606294464 on head 254b6ba3; aggregate lint job 130646405646 fails because of it) | severity=NIT | confidence=3\n  PROBLEM: The PR-head run of tests-hooks-and-orchestrator fails and keeps the lint gate red. The captured 16 KB log tail ends inside the \"PR body auto-close lint unit tests\" step, which shows only PASS lines plus expected `::error::[lint_pr_body_auto_close]` output, so the failing step is above the tail. None of the four changed files runs in this job, and the pre-push gate classifies the failure as inherited from the merge-base, so it is raised for investigation, not as a defect in a changed line.\n  WHY: The failed job blocks the merge gate. Mapping it to a step requires the full job log of run 43044946395 or a re-run on the next head.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0b8d556d6a5c9f18eb2f2567dd9d5cd5f3004be3f69487e9adc02bd5c4078593",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9180,
+    "run_id": "43155554315",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43155554315",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112044811_e53a421078",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9180,
+    "run_id": "43155554315"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T04:48:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
