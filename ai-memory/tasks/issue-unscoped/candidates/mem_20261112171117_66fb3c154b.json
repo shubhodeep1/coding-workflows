@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3322-3355 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Moving the \"Pre-push affected-test gate tests\" CI step into the orchestrate-poll job violates dispatch-rule and workflow checkout integrity invariants.\n  WHY: The reviewer says the move causes failures in tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py and tests/test_files_touched_scope_guard.py (source severity BLOCKER; z-ai_glm-5_3-flash's notes dispute this and say the failures do not trace to the diff).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml \u2014 selection of the step to move and the destination group\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/ci.yml:3325-3330 says the step timings could not be read and the step was picked by test and subprocess counts, an estimate and not a measurement, and group 3 was chosen by lightest pinned load rather than measured headroom. Severity ranges from NIT (minimax_minimax-m3) to MAJOR (openai_gpt-6-luna) to BLOCKER (google_gemini-3_1-flash-lite).\n- requirement: \"Document the workflow changes in an `agents.d/` fragment.\" (per CLAUDE.md \u00a730)\n  expected_change_site: agents.d/\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No agents.d/ fragment was added to document the CI structure changes, which the reviewer says causes tests/test_agents_fragment_contract.py to fail.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:3322-3355 | severity=BLOCKER | confidence=4\n  PROBLEM: Moving the \"Pre-push affected-test gate tests\" step into the orchestrate-poll job violates dispatch-rule and workflow checkout integrity invariants.\n  WHY: It causes failures in tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py and tests/test_files_touched_scope_guard.py.\n- TASK_GAP: Requirement: \"Document the workflow changes in an `agents.d/` fragment.\" (per CLAUDE.md \u00a730)\n  Expected change site: agents.d/\n  Evidence of absence: No agents.d/ fragment was added, which causes tests/test_agents_fragment_contract.py to fail.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP: Requirement: \"Move the slowest steps to the CI job with the most headroom without breaking repository structural integrity or dispatch invariants.\" (budget-watch issue #9391)\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The move to orchestrate-poll breaks multiple CI integrity invariants, and group 3 was chosen by lightest pinned load rather than measured runtime headroom.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml \u2014 selection of the step to move and the destination group\n  Evidence of absence: .github/workflows/ci.yml:3325-3336 documents that the step was picked by test and subprocess counts, an estimate and not a measurement, because the run's step timings could not be read. Group 3 was chosen by lightest pinned load. The rest of the requirement is met, and the gap is disclosed in the workflow comment and the changelog. The reviewer raised it to record the gap, not to request a redo.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings)\" into the CI job with the most headroom.\n  Expected change site: `.github/workflows/ci.yml`, selection of the step or steps to move and their target job or matrix group.\n  Evidence of absence: The diff moves only `Pre-push affected-test gate tests`. .github/workflows/ci.yml:3325-3330 states that the step timings could not be read and the selection was estimated from test and subprocess counts, so the diff does not establish that the moved step was among the slowest.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a99aa500e2480b15cc55c44659e176eb227e702fa51e391ac9fd65c63db59129",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9397,
+    "run_id": "43242633148",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43242633148",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112171117_66fb3c154b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9397,
+    "run_id": "43242633148"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T17:11:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
