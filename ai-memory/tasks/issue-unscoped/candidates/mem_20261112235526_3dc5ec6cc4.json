@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:7339 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The CI check-run \"orchestrate-poll (1)\" fails in test_security_pass_cap_converts_low_keep_fixing_to_advisory with \"poller did not exit within 180s; process group killed\" after the poller prints \"Project complete!\". The aggregating \"lint\" job fails only because it collects that job's result.\n  WHY: Both reviewers rated this NIT, which is recorded here as low. The failure is real and keeps required checks red, but it cannot be traced to this PR: neither scripts/orchestrate_poll_process.sh nor the test file is in the changed set, and sandbox_solc_resolve_versions in scripts/codex_isolated_exec.sh returns immediately when SANDBOX_SOLC_VERSIONS is empty. It is already tracked by workflow failure heal issue #9199. Next step: re-run the shard on the PR head and on merge-base 507ba62a, and treat it as this PR's defect only if it passes on base and fails on head. z-ai_glm-5_3-flash cited the file as .github/workflows/ci.yml (orchestrate-poll (1) job; failing test tests/test_orchestrate_poll_process.py:7339).\n- AGENTS.md / CLAUDE.md:(copilot-pull-request-reviewer check-run; no line cited) | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The copilot-pull-request-reviewer check fails with \"Error: Prompt too big after adding system message\", statusCode 422, errorCode custom_instructions_too_large, before it analyses any code.\n  WHY: Both reviewers rated this NIT, which is recorded here as low. Confidence was 2 from anthropic_claude-sonnet-5_5 and 3 from z-ai_glm-5_3-flash. The PR adds only agents.d fragments and leaves AGENTS.md and CLAUDE.md untouched, so nothing in its changed set causes this or can fix it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory (CI check-runs \"orchestrate-poll (1)\" and the aggregating \"lint\" job on head 6ea36343) | severity=NIT | confidence=2\n  PROBLEM: The poller hangs on exit after printing \"Project complete!\", which produces \"poller did not exit within 180s; process group killed\". The \"lint\" job fails only because it collects that job's result.\n  WHY: The failure is real but cannot be mapped to this PR. scripts/orchestrate_poll_process.sh and the test file are not changed, and the solc paths in scripts/codex_isolated_exec.sh are guarded. It is tracked by #9199. Re-run the shard on the PR head and on merge-base 507ba62a to confirm the failure is inherited.\n- AGENTS.md / CLAUDE.md:copilot-pull-request-reviewer check-run, \"Error: Prompt too big after adding system message\", statusCode 422, errorCode custom_instructions_too_large | severity=NIT | confidence=2\n  PROBLEM: The third-party reviewer rejects its own prompt because the repository instruction files are too large.\n  WHY: The PR adds only agents.d fragments and does not edit AGENTS.md or CLAUDE.md, so there is nothing to fix in this PR.\n- HARDENING: tests/test_resolve_integration_ref_ci_triage.py:test_reissue_helper_switch_is_pinned_against_caller_value, line 402 (env = {**os.environ, ...}) | HARDENING_RISK_SCORE: 0\n  PROBLEM: The subprocess inherits the full parent environment. The reviewer found no failing path, and this matches how _run_case and test_prose_marker_skip_outer_value_does_not_leak build their environments.\n  WHY: No fix is required. Optionally, drop keys starting with \"RETARGET_MERGED_BASE_\" from os.environ before adding RETARGET_MERGED_BASE_ENABLED=false (an estimated 1-line change).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml (orchestrate-poll (1) job; failing test tests/test_orchestrate_poll_process.py:7339) | severity=NIT | confidence=2\n  PROBLEM: In `test_security_pass_cap_converts_low_keep_fixing_to_advisory`, the poller prints \"Project complete!\" and then does not exit within 180 s, so the process group is killed. The `lint` job fails only because it collects that job's result.\n  WHY: The shutdown hang after project completion cannot be mapped to any file in the PR. It is tracked by #9199 and listed as a known failure in tests/test_workflow_failure_heal_scope_tests.py. Re-run the shard on head and on merge-base 507ba62a.\n- (third-party check) copilot-pull-request-reviewer job, HTTP 422 errorCode=custom_instructions_too_large | severity=NIT | confidence=3\n  PROBLEM: The third-party reviewer refuses its prompt because the repository instruction files are too large.\n  WHY: The prompt is rejected before code review begins. No file in this PR can change this, since it adds only agents.d fragments and leaves AGENTS.md and CLAUDE.md untouched.\n- TASK_GAP (no gap; verification entry) | severity=NIT | confidence=5\n  Requirement: \"feat: Run CI-failure re-issues on the branch that holds the failing code, and give the implement sandbox a Solidity compiler\" (PR title).\n  Expected change site: scripts/resolve_integration_ref.sh (reissue base-branch routing) and scripts/codex_isolated_exec.sh + .github/workflows/implement.yml (SANDBOX_SOLC_VERSIONS).\n  Evidence of absence: None. Both deliverables are present: resolve_ci_reissue_base_branch at scripts/resolve_integration_ref.sh:535-625; sandbox_solc_resolve_versions and the solc installer in scripts/codex_isolated_exec.sh:183-230 and the generated solc_install.py; and the workflow-level env entry in .github/workflows/implement.yml:54-59.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a0b8896084efe64aab6101fafdcf20e583c531e2cb4533697e7ff6c648e7f24f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "43270015665",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43270015665",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112235526_3dc5ec6cc4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "43270015665"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T23:55:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
