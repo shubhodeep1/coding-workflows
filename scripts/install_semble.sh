@@ -132,7 +132,10 @@ binary_matches_pin()
 mark_available()
 {
 	if [ -n "${SEMBLE_INSTALL_RESULT_FILE:-}" ]; then printf 'available\n' > "${SEMBLE_INSTALL_RESULT_FILE}" || true; fi
-	write_github_env "SEMBLE_INSTALL_MS" "$(( $(semble_install_now_ms) - SEMBLE_INSTALL_START_MS ))"
+	local semble_install_elapsed_ms="$(( $(semble_install_now_ms) - SEMBLE_INSTALL_START_MS ))"
+	# A clock that fails mid-run reads 0; never report a negative duration.
+	[ "${semble_install_elapsed_ms}" -ge 0 ] || semble_install_elapsed_ms=0
+	write_github_env "SEMBLE_INSTALL_MS" "${semble_install_elapsed_ms}"
 	write_github_env "SEMBLE_AVAILABLE" "true"
 	log "Semble ${SEMBLE_VERSION} is available."
 }
@@ -140,7 +143,10 @@ mark_available()
 mark_unavailable()
 {
 	if [ -n "${SEMBLE_INSTALL_RESULT_FILE:-}" ]; then printf 'unavailable\n' > "${SEMBLE_INSTALL_RESULT_FILE}" || true; fi
-	write_github_env "SEMBLE_INSTALL_MS" "$(( $(semble_install_now_ms) - SEMBLE_INSTALL_START_MS ))"
+	local semble_install_elapsed_ms="$(( $(semble_install_now_ms) - SEMBLE_INSTALL_START_MS ))"
+	# A clock that fails mid-run reads 0; never report a negative duration.
+	[ "${semble_install_elapsed_ms}" -ge 0 ] || semble_install_elapsed_ms=0
+	write_github_env "SEMBLE_INSTALL_MS" "${semble_install_elapsed_ms}"
 	write_github_env "SEMBLE_AVAILABLE" "false"
 	log "Semble ${SEMBLE_VERSION} is unavailable; callers should use fallback paths."
 }

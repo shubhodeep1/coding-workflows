@@ -56,6 +56,8 @@ semble_bootstrap_event()
 	event_mode="$(printf '%s' "${SEMBLE_BOOTSTRAP_MODE:-eager}" | tr '[:upper:]' '[:lower:]')"
 	case "${event_mode}" in lazy|eager) ;; *) event_mode=eager ;; esac
 	index_ms="$(( $(semble_build_now_ms) - SEMBLE_BUILD_START_MS ))"
+	# A clock that fails mid-run reads 0; never report a negative duration.
+	[ "${index_ms}" -ge 0 ] || index_ms=0
 	if [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] && [[ "${GITHUB_RUN_ATTEMPT:-1}" =~ ^[0-9]+$ ]]; then
 		run_field=" run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
 	fi
