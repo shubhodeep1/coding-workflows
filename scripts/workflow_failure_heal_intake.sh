@@ -2454,6 +2454,9 @@ case "${ACTION}" in
 			# as its keys. Only a label array in the raw report counts as
 			# readable; any other shape fails open (alert sent).
 			HEAL_SELF_LABELS_SHAPE="$(jq -r 'if type == "object" then ((.labels | type) == "array") else false end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo false)"
+			# Record when the shape check overturns a suppression, so the CRITICAL
+			# alert that follows can be told apart from a first escalation.
+			[ "${HEAL_SELF_LABELS_SHAPE}" = "true" ] || [ "${HEAL_SELF_ESCALATED}" != "true" ] || log "warn heal_self_labels_unreadable issue=${EXISTING} repo=${EXISTING_REPO}"
 			[ "${HEAL_SELF_LABELS_SHAPE}" = "true" ] || HEAL_SELF_ESCALATED=false
 			ensure_label_exists "${ESCALATED_LABEL}" "${EXISTING_REPO}" || true
 			gh_retry gh issue edit "${EXISTING}" --repo "${EXISTING_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${EXISTING} repo=${EXISTING_REPO}"

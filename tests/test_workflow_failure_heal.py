@@ -6813,6 +6813,9 @@ def test_intake_heal_self_escalation_alerts_once() -> None:
 		assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
 		assert "escalate_repeat" not in result.stdout, malformed
 		assert len(_heal_self_escalation_alerts(calls)) == 1, (malformed, calls)
+		# Only the dict keyed by the label would have suppressed without the
+		# raw-shape check, so only it logs the overturned suppression.
+		assert ("WORKFLOW_HEAL warn heal_self_labels_unreadable issue=42" in result.stdout) == (malformed == {heal.ESCALATED_LABEL: True}), malformed
 		assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
 
 
