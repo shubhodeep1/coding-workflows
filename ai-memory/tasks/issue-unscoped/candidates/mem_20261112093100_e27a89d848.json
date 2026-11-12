@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:~543 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Job `tests-hooks-and-orchestrator` (about line 543) and the aggregate `lint` check are red on head eab05f0f, and the failure could not be mapped to this PR.\n  WHY: The job does not run `tests/test_render_prompt_foundation.py` or anything in `changelog.d/`, and the same job failed on earlier heads, so it is most likely an inherited failure or a flake. The reviewer's action is to re-run the job and read its full log, not to edit code. The source rated this NIT, which is mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:~543 | severity=low (source: NIT) | confidence=2\n  PROBLEM: Job `tests-hooks-and-orchestrator` (about line 543) and the aggregate `lint` check are red on head eab05f0f (`lint` job 130861434195, `tests-hooks-and-orchestrator` job 130837175706). The `lint` job fails only because `tests-hooks-and-orchestrator` reported failure.\n  WHY: The failure could not be mapped to this PR. The job does not run `tests/test_render_prompt_foundation.py` or anything in `changelog.d/`. The same job failed on earlier heads, and the pre-push gate recorded `tests/test_ci_poll_test_sharding.py` as failing on the merge-base. It is most likely an inherited failure or a flake.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "ed1cac3a38964e72688b1cac522ec04ed349530c6f4a702e0a1679c92d517303",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9245,
+    "run_id": "43165501072",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43165501072",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112093100_e27a89d848",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9245,
+    "run_id": "43165501072"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T09:31:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
