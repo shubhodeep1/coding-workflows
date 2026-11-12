@@ -182,7 +182,10 @@ class SystemPythonJobTest(unittest.TestCase):
 			if code.startswith("#") or "TMPDIR=" not in code:
 				continue
 			with self.subTest(line=code):
-				self.assertNotIn("RUNNER_TEMP", code)
+				# Same case-insensitive spellings as the step-level check, so a
+				# `TMPDIR="${{ runner.temp }}/x"` run line is rejected too.
+				for runner_temp_spelling in ("runner_temp", "runner.temp"):
+					self.assertNotIn(runner_temp_spelling, code.lower())
 
 	def test_system_python_shard_count_fits_the_job_budget(self) -> None:
 		# Run 43053071771: 12 shards took 13-17 minutes of pytest each and most
