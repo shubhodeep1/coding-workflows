@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2489-2587 | severity=low | confidence=2\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `orchestrate-poll (1)` check (\"Orchestrate poll process unit tests\") fails on the PR head, and the aggregate `lint` check fails with it, but the supplied log tail does not show the failing step.\n  WHY: The failure cannot be tied to this PR's diff because the job runs only tests/test_orchestrate_poll_process.py, which never reads the changed wait-clarify content. Both reviewers rated it NIT (mapped to low). Neither indicates a code change.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Once these land, re-run the gate.\"\n  expected_change_site: Post-merge run of `.github/workflows/test-and-mark-stable.yml`\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description marks the listed acceptance checks \"not run,\" and the provided check-run context contains no result for the release gate. (anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash considered this a post-merge deferral, not missing code.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2577-2587 | severity=low (source: NIT) | confidence=2\n  PROBLEM: The `orchestrate-poll (1)` check is failing on the PR head. The supplied log tail ends after a passing test and does not show the failing test or cause.\n  WHY: This failed matrix job causes the aggregate `lint` check to fail. The failure cannot be tied to a defect in this PR's diff from the available log.\n- TASK_GAP:\n  Requirement: \"Once these land, re-run the gate.\"\n  Expected change site: Post-merge run of `.github/workflows/test-and-mark-stable.yml`.\n  Evidence of absence: The PR description marks the listed acceptance checks \"not run,\" and the provided check-run context contains no result for the release gate.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:2489-2577 | severity=low (source: NIT) | confidence=2\n  PROBLEM: The `orchestrate-poll (1)` job (job 131112979851, head 567d5266404a9f9e2a4dc5ff9a8eea15804f4592) failed and the aggregate `lint` job fails with it, but the log tail ends before the failing step. The last visible error lines are fixture output from a test that passes.\n  WHY: A red check blocks merge and its root cause is not identifiable from the tail. It cannot be mapped to this PR's diff, since the job runs only tests/test_orchestrate_poll_process.py, which never reads the changed wait-clarify content. Prior pre-push gates listed that file as inherited-failing on the merge-base. Surfaced for the editor to fetch the full job log.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c45c1dd6c26094d9da7727c615d936e9c71fa97fe6467a5627b66dec88fbd175",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9273,
+    "run_id": "43148258098",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43148258098",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112155941_ddf95dc5ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9273,
+    "run_id": "43148258098"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T15:59:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
