@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_run_codex_failure_diagnostic.py:5-6 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The module docstring still says \"The step's exit code, stdout and stderr stay unchanged.\" although the step now adds one ::error::RUN_PLAN_CODEX_FAILED line to stderr on failure and reroutes stdout through fd 3.\n  WHY: The same claim was corrected in plan.yml, the agents.d fragment, the changelog fragment and the PLAN_RUNNER_FAILURE_DIAGNOSTIC constant, so the docstring contradicts them (all reviewers rated it NIT, mapped to low; no runtime failure).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_plan_run_codex_failure_diagnostic.py:5-6 | severity=NIT | confidence=4\n  PROBLEM: The docstring still says \"The step's exit code, stdout and stderr stay unchanged.\" The last autofix run changed the same claim elsewhere but not here. On failure the step adds one ::error::RUN_PLAN_CODEX_FAILED line to stderr.\n  WHY: It does not fail at runtime. The docstring is comment-only and contradicts the rest of the PR's wording.\n- TASK_GAP (reviewer judged it not a gap; deliberate deferral): SEVERITY=NIT, ISSUE_CONFIDENCE=1\n  Requirement: Fix 3 in the issue is marked \"Optional\": add an ERR trap in `scripts/run_plan_codex.sh` that prints `RUN_PLAN_CODEX_FAILED line=${LINENO} rc=$?`.\n  Expected change site: `scripts/run_plan_codex.sh`\n  Evidence of absence: No hunk touches `scripts/run_plan_codex.sh`. The issue labels the trap optional, the approved plan (AD-2) restricts the heal scope to `.github/workflows/plan.yml`, `tests/**` and `changelog.d/*.md`, and the plan.yml wrapper emits the `RUN_PLAN_CODEX_FAILED` line.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_plan_run_codex_failure_diagnostic.py:5-6 | severity=NIT | confidence=4\n  PROBLEM: Stale docstring claim: \"The step's exit code, stdout and stderr stay unchanged.\"\n  WHY: The docstring misleads maintainers because the diagnostic wrapper now reroutes stdout through file descriptor 3 and appends an ::error::RUN_PLAN_CODEX_FAILED line to stderr when the runner fails.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_plan_run_codex_failure_diagnostic.py:5-6 | severity=NIT | confidence=4\n  PROBLEM: The module docstring still says \"The step's exit code, stdout and stderr stay unchanged.\" The previous autofix pass corrected this wording in `.github/workflows/plan.yml:1983`, `agents.d/9266-plan-codex-failure-diagnostic.md`, `changelog.d/9266-plan-codex-failure-diagnostic.md` and the `PLAN_RUNNER_FAILURE_DIAGNOSTIC` constant in `tests/test_plan_codex_step_extraction.py`, but missed this docstring.\n  WHY: It does not fail at runtime. It is documentation drift, and a reader using the docstring as the spec for the step's stderr contract would be misled.\n- TASK_GAP (reviewer judged it not a gap): SEVERITY=NIT, ISSUE_CONFIDENCE=4\n  Requirement: the ERR trap in `scripts/run_plan_codex.sh` (`line=${LINENO} rc=$?`), Fix 3 of the issue.\n  Expected change site: `scripts/run_plan_codex.sh`\n  Evidence of absence: The issue marks Fix 3 \"Optional\", the PR constraints say \"Edit nothing under `scripts/`\", and the `ai:workflow-heal-scope:v1` marker restricts scope to `.github/workflows/plan.yml,tests/**,changelog.d/*.md`. The in-scope deliverable is fully present.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_plan_run_codex_failure_diagnostic.py:5-6 | severity=NIT | confidence=5\n  PROBLEM: The docstring still claims \"The step's exit code, stdout and stderr stay unchanged.\" The last run corrected this claim in plan.yml:1983, the agents.d fragment, the changelog fragment and the `PLAN_RUNNER_FAILURE_DIAGNOSTIC` comment, but left it here. The step adds one `::error::RUN_PLAN_CODEX_FAILED` line to stderr on failure and reroutes the runner's stdout through fd 3.\n  WHY: It does not fail at runtime. It is a stale, misleading doc claim that contradicts the behavior the same PR documents elsewhere.\n- No qualifying task gap: Fix 3 (ERR trap in scripts/run_plan_codex.sh) is optional and outside the heal-scope marker, Fix 1 needs an operator-supplied traceback (AD-1), and Fix 2 is deferred to PR #9219 (AD-3).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "eed35b6730a47e912849424787fced6b6f65fc0587077525c53e39baed5b0df4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9288,
+    "run_id": "43206440536",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43206440536",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112134027_c5b5c6cc73",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9288,
+    "run_id": "43206440536"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T13:40:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
