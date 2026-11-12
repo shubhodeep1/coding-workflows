@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3487-3490 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The \"Require every CI job to succeed\" gate fails because the prerequisite CI jobs are reported as cancelled.\n  WHY: The gate treats every job result other than \"success\" as unsuccessful, so the PR has no complete CI result. The reviewer's log does not tie the cancellations to a defect in the changed code. Source severity is NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"No existing identifier, env var or log prefix is renamed or removed.\"\n  expected_change_site: tests/test_conflict_guard_hook_template_merge.py, main() and the removed xfail support\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The last-run diff removes the test-local `expect_fail` and its XFAIL/XPASS handling, and the PR diff removes `_xfail_without_pytest` and `PREPUSH_GAP_REASON`. Sonnet-5_5 judged this not a real gap, because the issue itself requires removing the strict xfail marker and the production identifiers are kept (severity NIT, confidence 1). Luna rated it NIT with confidence 5.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP (reported as not a gap):\n- Requirement: \"No existing identifier, env var or log prefix is renamed or removed.\"\n  Expected change site: tests/test_conflict_guard_hook_template_merge.py, main() and the xfail shim.\n  Evidence of absence: Not a gap. The issue's required change 3 says to remove the strict expected-failure marker, so the dead helper code goes with it. The production identifiers, env var and log prefix are all kept.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:3487-3490 | severity=NIT | confidence=5\n  PROBLEM: The current PR check run reports the prerequisite CI jobs as cancelled, so the lint gate fails.\n  WHY: The gate treats every job result other than \"success\" as unsuccessful. The reported log does not tie the cancellations to a defect in the changed code.\nTASK_GAP:\n- Requirement: \"No existing identifier, env var or log prefix is renamed or removed.\"\n  Expected change site: tests/test_conflict_guard_hook_template_merge.py, `main()` and the removed xfail support.\n  Evidence of absence: The last-run diff removes the local identifier `expect_fail` and its XFAIL/XPASS handling. The PR diff also removes `_xfail_without_pytest` and `PREPUSH_GAP_REASON`. These are test-local names, but their removal does not meet the requirement as written.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7fe584f96e0e4d229a9cf94afe567d2d2ae8a7d9e98779f18ea512740628cb9b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9010,
+    "run_id": "43142076369",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43142076369",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112153320_c409e52fd6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9010,
+    "run_id": "43142076369"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T15:33:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
