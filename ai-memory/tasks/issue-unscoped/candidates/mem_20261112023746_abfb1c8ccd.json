@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:543 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The CI job `tests-hooks-and-orchestrator` (line 543) failed, and the failed step is not in the 16 KB log tail. The reviewer could not tie the failure to this PR's diff.\n  WHY: The job does not run `tests/test_render_prompt_foundation.py` or anything in `changelog.d/`. The failure is probably inherited or flaky, so the reviewer recommends a re-run and no code change. The reviewer rated it NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:543 | severity=NIT | confidence=2\n  PROBLEM: The CI job `tests-hooks-and-orchestrator` (line 543) failed, and the failed step is not in the 16 KB log tail. The tail shows only passing pytest steps, plus `##[error]` lines that `tests/test_lint_pr_body_auto_close.py` prints on purpose from its fixtures.\n  WHY: The job does not run `tests/test_render_prompt_foundation.py` or anything in `changelog.d/`. The pre-push gate reported an inherited failure in `tests/test_ci_poll_test_sharding.py`, and earlier heads failed the same job. The reviewer recommends re-running the job and reading the full log, with no code change in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "cedfee78367cde443ce08ed044f220f492ac2e0965049c1aa09caf693e0e4256",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9245,
+    "run_id": "43098958279",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43098958279",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112023746_abfb1c8ccd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9245,
+    "run_id": "43098958279"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T02:37:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
