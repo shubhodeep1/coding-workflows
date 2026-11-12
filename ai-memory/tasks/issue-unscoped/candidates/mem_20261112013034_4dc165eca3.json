@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_pr_check_runs_context.py:51-53,424-444 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The matcher identifies the runner step-failure line by text and format rather than by source, so a passing step that prints `##[error]Process completed with exit code N` can be chosen as the anchor and hide the real failure.\n  WHY: The scan stops at the first match, so the excerpt can omit a later genuine step failure, which is the defect the change was meant to fix. Severity is MAJOR in all three reports, mapped here to high. anthropic_claude-sonnet-5_5 examined the same concern and did not report it, because the runner-only `##[error]` prefix is required at the start of the message and the fallback matches the old behaviour.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/collect_pr_check_runs_context.py:426-427, 437-439 | severity=MAJOR | confidence=4\n  PROBLEM: The matcher incorrectly assumes any log line matching the pattern `##[error]Process completed with exit code N` is the runner-generated step failure line.\n  WHY: A passing test in a consumer workflow can print this text, and the matcher cannot tell it apart from the runner's line. The log excerpt then ends at that passing test line and cuts off the real error details, which reproduces the bug the change was meant to prevent.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/collect_pr_check_runs_context.py:LOG_TAIL_STEP_FAILURE_LINE_RE (hunk @@ -41,6 +41,16 @@) and the matching loop in _select_log_tail_window | severity=MAJOR | confidence=4\n  PROBLEM: The regex matches both the runner's real step-failure line and a passing test's stdout that prints the same text. The runner timestamps every stdout line, so the two are indistinguishable, and the loop anchors on the first hit.\n  WHY: A passing step that emits runner-mimicking stdout before the real failing step's exit-code line gets the wrong anchor. The new tests test_non_step_failure_errors_fall_back_to_the_first_error and the timestamped STEP_ERROR case together show the matcher cannot tell the two sources apart.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/collect_pr_check_runs_context.py:51-53, 433-439 | severity=MAJOR | confidence=4\n  PROBLEM: The matcher identifies the runner failure line by its text and format, not by its source, so a log line emitted by a passing step can match it.\n  WHY: If passing test output contains `##[error]Process completed with exit code N`, the scan selects that line and stops. A later genuine step failure is then omitted from the excerpt, reproducing the collector defect.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "aa68696430593d09f5a90ea3fde64c7caaac8f8acece7f10b43017bd1b3b74cc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9335,
+    "run_id": "43110000188",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43110000188",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112013034_4dc165eca3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9335,
+    "run_id": "43110000188"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T01:30:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
