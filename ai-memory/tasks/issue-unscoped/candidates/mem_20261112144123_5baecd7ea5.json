@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2831-3035 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash, minimax_minimax-m3]\n  PROBLEM: Check run `orchestrate-poll (1)` (matrix group 1, run 43213136495, job 131165548299) failed on head af0f767, which makes the aggregate `lint` gate fail. The supplied log tail ends at a passing test, so the cause is not visible.\n  WHY: Severity disagreement: BLOCKER (gemini, luna), MAJOR (sonnet, glm), and minimax reported it only in a note. Highest used. Most reviewers say the failure cannot be tied to the diff, because group 1 is untouched and the moved step never ran there. Gemini instead says the move did not fix the budget problem. The full job log is needed to find the cause.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps [...] into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml (orchestrate-poll group 0 \u2192 tests-release-and-log-analysis)\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The step was moved, but `orchestrate-poll` still fails in CI. Gemini reads this as the move not solving the budget/timeout problem. Glm and sonnet reviewed the same requirement and found it fully implemented.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:2831 (job `orchestrate-poll`, matrix group 1, run 43213136495, job 131165548299) | severity=MAJOR | confidence=2\n  PROBLEM: `orchestrate-poll (1)` failed on head af0f767, and the aggregate `lint` gate failed with it. The failure cannot be mapped to this PR, since the log tail ends on a passing test. The cause may be a flaky test or a job timeout.\n  WHY: The failing step lies past the end of the supplied log excerpt. Someone needs to read the full job log or re-run the job. If it was a 20-minute cancellation, group 1 is the next budget-watch target and needs its own issue.\n- Other categories: NONE. The move is confirmed correct (step now at ci.yml:2580, between 2177 and 2729). Task completeness: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml (job `orchestrate-poll`, job matrix, and job `tests-release-and-log-analysis`) | severity=BLOCKER | confidence=4\n  PROBLEM: The `lint` job fails because `orchestrate-poll (1)` failed. The PR moved a heavy step from matrix group 0 to `tests-release-and-log-analysis`, but the `orchestrate-poll` matrix job still fails.\n  WHY: `orchestrate-poll` is required and did not succeed, per the log line \"CI jobs that did not succeed: orchestrate-poll\".\n- TASK_GAP:\n  Requirement: \"Move its slowest steps [...] into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The step was moved, but `orchestrate-poll` still fails in CI. This suggests the move did not solve the budget/timeout issue, or that the estimate was inaccurate.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2831-3035 (\"Orchestrate poll process unit tests\") | severity=BLOCKER | confidence=5\n  PROBLEM: Check run `orchestrate-poll (1)` failed on the reviewed head, but the supplied log tail ends after a passing test event and does not show the cause. The moved step runs in `tests-release-and-log-analysis`, so the evidence does not tie the failure to the PR diff.\n  WHY: The failed matrix group makes the dependent `lint` gate fail. The full job log is needed to identify the cause.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml (orchestrate-poll (1), matrix group 1, run 43213136495, job 131165548299, head af0f767b3a3e78b2106526b0c1cf02357cc89307; aggregate `lint` gate) | severity=MAJOR | confidence=3\n  PROBLEM: `orchestrate-poll (1)` failed on the current head, so the aggregate `lint` job failed. The log tail ends at a passing test, and the `##[error]` lines in it are expected fixture output. The failing step is past the end of the tail. Group 1 is untouched by this PR, so the failure cannot be mapped to a diff site.\n  WHY: The red required check blocks the merge. The full job log for run 43213136495 / job 131165548299 is needed. Earlier editor rounds reached the same conclusion.\n- The glm output also contains a TASK COMPLETENESS entry, but it records the requirement as fully implemented and says no TASK_GAP is emitted. The last-run changelog fix (53\u219254 modules) was verified correct.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d94f4ee47b3b7d7fab9fc12f867782c306ccf7cd8c9cb3b28607df668d7327ae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9268,
+    "run_id": "43213136733",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43213136733",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112144123_5baecd7ea5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9268,
+    "run_id": "43213136733"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T14:41:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
