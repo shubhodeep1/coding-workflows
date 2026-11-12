@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"`date +%s%3N` and then `date +%s` stay as fallbacks.\"\n  expected_change_site: `semble_build_now_ms` in `scripts/build_semble_wrapper.sh`, `semble_install_now_ms` in `scripts/install_semble.sh`, and `_semble_now_ms` in `scripts/semble_helpers.sh`\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff's clock helpers use only `date +%s%3N` after the `EPOCHREALTIME` check; `_semble_now_ms` falls back to printing `0` if that command fails. None tries `date +%s`, so the fallback chain stated in the PR description is incomplete. (Reviewer severity: NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"`date +%s%3N` and then `date +%s` stay as fallbacks.\"\n  Expected change site: `semble_build_now_ms` in `scripts/build_semble_wrapper.sh`, `semble_install_now_ms` in `scripts/install_semble.sh`, and `_semble_now_ms` in `scripts/semble_helpers.sh`.\n  Evidence of absence: The PR diff's clock helpers use only `date +%s%3N` after the `EPOCHREALTIME` check; `_semble_now_ms` falls back to printing `0` if that command fails. None tries `date +%s`, so the fallback chain stated in the PR description is incomplete.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "010797a13d04380b9a2a0d8752528e8c32907299ac6981f053f7940c8b602b79",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9345,
+    "run_id": "43119696654",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43119696654",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112083855_d15dfb6485",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9345,
+    "run_id": "43119696654"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T08:38:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
