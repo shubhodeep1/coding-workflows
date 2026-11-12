@@ -68,6 +68,9 @@ if "/actions/workflows/" in path and "/runs" in path:
     respond({"workflow_runs": seq[min(n, len(seq) - 1)]})
 if path.startswith("repos/owner/repo/actions/runs/") and path.endswith("/cancel"):
     state.setdefault("cancels", []).append(path.split("/")[5])
+    if state.get("cancel_fail_once", 0) > 0:
+        state["cancel_fail_once"] -= 1
+        fail("HTTP 502: Bad Gateway")
     respond({})
 if path.endswith("/dispatches"):
     repo = "/".join(path.split("/")[1:3])
@@ -76,6 +79,8 @@ if path.endswith("/dispatches"):
         fail("HTTP 404: Not Found")
     respond({})
 if path.startswith("repos/owner/repo/contents/stable-hold.json?ref="):
+    if state.get("hold_read_error"):
+        fail("HTTP 503: Service Unavailable")
     if state.get("hold_file") is None:
         fail("gh: Not Found (HTTP 404)")
     enc = base64.b64encode(state["hold_file"].encode()).decode()
@@ -388,6 +393,25 @@ def test_explicit_current_version_without_hold_is_refused(fx: Fixture) -> None:
 	assert "STABLE_ROLLBACK outcome=refused reason=target_not_lower to=v1.46.0" in proc.stdout
 	assert not state.get("hold_puts") and not events and not state.get("dispatches")
 	_assert_untouched(fx)
+
+
+def test_explicit_current_version_with_unreadable_hold_is_hold_unknown(fx: Fixture) -> None:
+	fx.state["hold_read_error"] = True
+	proc, state, events = fx.run({"STABLE_ROLLBACK_TARGET_VERSION": "v1.46.0"})
+	assert proc.returncode == 1
+	assert "STABLE_ROLLBACK outcome=refused reason=hold_unknown to=v1.46.0" in proc.stdout
+	assert not state.get("hold_puts") and not events
+	_assert_untouched(fx)
+
+
+def test_failed_cancel_is_retried_on_the_next_poll(fx: Fixture) -> None:
+	active = {"id": 907, "status": "in_progress"}
+	fx.state["cancel_fail_once"] = 1
+	fx.state["runs"] = {"mark-stable.yml": [[active], [active], []]}
+	proc, state, _ = fx.run({"STABLE_ROLLBACK_TARGET_VERSION": "v1.45.0"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert state["cancels"] == ["907", "907"]
+	assert fx.remote_peel("stable") == fx.sha["v1.45.0"]
 
 
 def test_release_run_started_during_drain_is_cancelled(fx: Fixture) -> None:

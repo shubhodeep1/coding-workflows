@@ -4771,6 +4771,15 @@ target rolls `@stable` back one more release. Refusals (`outcome=refused reason=
 failure after the hold leaves it active, so re-dispatch once the cause is fixed. To drop a hold
 without a release, commit `"active": false` to `stable-hold.json` on `ai/stable-hold`.
 
+The hold gates only the scheduled `cycle` job of `promote-main-to-stable.yml`. A promote cycle that
+was already in flight at rollback time (an open tracking issue labelled
+`ai:comprehensive-test-pending`) is not gated: when its verifying run is ready to merge, the poller
+dispatches the `promote` job with `target_sha`, which fast-forwards `stable`, runs the release gate,
+and that release clears the hold. The rollback only cancels promote runs that are queued or running
+when it starts. If such a tracking issue is open and the regression may be in its `promote_sha`,
+remove the `ai:comprehensive-test-pending` label from it after rolling back, so the cycle stays
+unpromoted until a human decides.
+
 **The `promote-candidate` branch.** The internal wrappers (`.github/workflows/internal-*.yml`) call
 their reusable workflows at `@promote-candidate`, not `@main`. Between promote cycles
 [`promote-candidate-follow.yml`](.github/workflows/promote-candidate-follow.yml) (on every push to

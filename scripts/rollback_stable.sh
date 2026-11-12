@@ -293,10 +293,15 @@ if [ -n "${target_input}" ]; then
 		refuse "${TARGET_REFUSAL}" "to=${target_input}"
 	fi
 	# The current stable commit is not lower than itself: only a re-run of a
-	# rollback to this version (hold active for it) may proceed.
-	if [ "${TARGET_SHA}" = "${current_sha}" ] && [ "${target_hold_confirmed}" != "true" ] \
-		&& [ "$(hold read || true)" != "active ${target_input}" ]; then
-		refuse target_not_lower "to=${target_input}"
+	# rollback to this version (hold active for it) may proceed. An unreadable
+	# hold is refused as hold_unknown, like the blank-target path.
+	if [ "${TARGET_SHA}" = "${current_sha}" ] && [ "${target_hold_confirmed}" != "true" ]; then
+		explicit_hold_line="$(hold read || true)"
+		case "${explicit_hold_line}" in
+			"active ${target_input}") ;;
+			inactive|"active "*) refuse target_not_lower "to=${target_input}" ;;
+			*) refuse hold_unknown "to=${target_input}" ;;
+		esac
 	fi
 	target_version="${target_input}"
 else
@@ -364,7 +369,9 @@ active_release_run_ids()
 }
 
 # cancel_new_release_runs <workflow_file> <ids>: one cancel POST per run id
-# not yet cancelled by this run (tracked in cancelled_release_run_ids).
+# not yet cancelled by this run (tracked in cancelled_release_run_ids). An id
+# is recorded only after its cancel succeeds, so a failed cancel is retried on
+# the next drain poll.
 cancelled_release_run_ids=" "
 cancel_new_release_runs()
 {
@@ -372,10 +379,12 @@ cancel_new_release_runs()
 	while IFS= read -r active_id; do
 		[[ "${active_id}" =~ ^[0-9]+$ ]] || continue
 		[[ "${cancelled_release_run_ids}" == *" ${active_id} "* ]] && continue
-		cancelled_release_run_ids+="${active_id} "
 		echo "Cancelling $1 run ${active_id}."
-		GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${active_id}/cancel" >/dev/null \
-			|| echo "::warning::Could not cancel $1 run ${active_id}; waiting for it to stop."
+		if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${active_id}/cancel" >/dev/null; then
+			cancelled_release_run_ids+="${active_id} "
+		else
+			echo "::warning::Could not cancel $1 run ${active_id}; retrying on the next poll."
+		fi
 	done <<< "$2"
 }
 
