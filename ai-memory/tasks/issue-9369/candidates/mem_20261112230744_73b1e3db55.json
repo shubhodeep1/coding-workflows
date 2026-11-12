@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The step has no labels, comments or trusted login loaded, so this needs extra reads. Which API budget should the plan use?\nChoices:\nA) When the clean marker posts, make one GraphQL read for the PR's labels plus its newest 100 comments, skipped if no clean marker was written. Make the DELETE only when the label is present and stale. Take the trusted login from the POST response the step already gets back for its summary comment, so there is no `gh api user` call. If the cap marker is older than the newest 100 comments, keep the label. (RECOMMENDED)\nB) Use REST: one `GET /issues/<pr>/labels` on every clean post, then a full paginated `GET /issues/<pr>/comments` only when the label is present, then the DELETE only when stale. Take the login from the POST response, as in A.\nC) Pass the labels and comments from the `gate` job to this step through job outputs, so this step makes no new reads. **Note:** this adds lines to `review_autofix.yml`, which conflicts with the issue's \"gains no lines\" (\u00a727) constraint. Choosing it relaxes that constraint.\nQ2: The cap marker writes `support=` only when a support SHA was known, while the clean marker always writes `support=<sha|none>`. How should a cap marker with no `support=` field be compared?\nChoices:\nA) Treat a missing cap `support` as `none`. On the same head, the label is removed only when the clean support is a real SHA (it then differs from `none`); if both are `none`, it is kept. (RECOMMENDED)\nB) Treat a missing cap `support` as unknown and keep the label unless the heads differ.\nC) Treat a missing cap `support` as always different, so the label is removed whenever a clean marker is posted.",
+  "fingerprint": "94e62168b696474819b9873089e3634b228efb0ed57c3ba13a5087f30e7e3ed4",
+  "lineage": {
+    "issue_number": 9369,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43152115514",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43152115514",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261112230744_73b1e3db55",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9369,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43152115514"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9369 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-12T23:07:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
