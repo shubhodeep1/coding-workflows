@@ -138,7 +138,11 @@ def test_deliver_report_job_contract() -> None:
 	assert "persist-credentials: false" in job
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in job
 	assert "REPORT_PUSH_TOKEN: ${{ secrets.GH_PAT }}" in job
-	assert "|| github.token" not in job
+	# The checkout may fall back to github.token; the delivery step may not.
+	checkout = job.split("      - name: Checkout repository\n", 1)[1].split("\n      - name: ", 1)[0]
+	assert "token: ${{ secrets.GH_PAT || github.token }}" in checkout
+	deliver_step = job.split("      - name: Deliver report pull request\n", 1)[1]
+	assert "|| github.token" not in deliver_step
 	assert "REPORT_BRANCH: ${{ needs.analyze-commit-notify.outputs.report_branch }}" in job
 	assert "PURGED_DOCS: ${{ needs.analyze-commit-notify.outputs.purged_docs }}" in job
 	assert "run: bash scripts/workflow_log_analysis_deliver_report.sh" in job
