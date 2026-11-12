@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/resolve_integration_ref.sh:531-549 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: In resolve_ci_reissue_base_branch, any failure or empty output from retarget_merged_base.sh is marked \"lookup_failed\" (lines 534 and 544), so an internal script error is treated the same as a failed lookup.\n  WHY: The reviewer says refusing with `branch_lookup_failed` is acceptable fail-closed behaviour, and line 538 (`cat \"${helper_err}\" >&2`) keeps it observable; the reviewer gave no severity, so low is a placeholder.\n- tests/test_orchestrate_poll_process.py:7339 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: test_security_pass_cap_converts_low_keep_fixing_to_advisory fails with \"poller did not exit within 180s; process group killed\" after the poller printed \"Project complete!\". The aggregate \"lint\" job fails only because it collects this result.\n  WHY: The merge gate stays red, but this PR changes neither scripts/orchestrate_poll_process.sh nor the test file. scripts/codex_isolated_exec.sh takes no relevant path when SANDBOX_SOLC_VERSIONS is empty, and #9199 already tracks the failure. Next step: re-run the shard or run it on merge-base 507ba62a. The reviewer rated it NIT; the same failure is also listed below from z-ai_glm-5_3-flash at a different line.\n- tests/test_orchestrate_poll_process.py:36 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Check-run `orchestrate-poll (1)` on head 6ea36343 fails with \"poller did not exit within 180s; process group killed\" after \"Project complete!\" in test_security_pass_cap_converts_low_keep_fixing_to_advisory. The aggregate `lint` job fails only because of that.\n  WHY: The failure does not trace to any changed line: scripts/codex_isolated_exec.sh:202-223 returns early, and the solc-cache block is guarded at scripts/codex_isolated_exec.sh:989-1000. #9199 already tracks it. Re-run the shard and treat it as a PR defect only if it reproduces on merge-base 507ba62a. The reviewer rated it NIT; the same failure is also listed above from anthropic_claude-sonnet-5_5 at line 7339.\n- n/a (CI check-run \"copilot-pull-request-reviewer\"):n/a | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The third-party reviewer stops before reading any code because its own prompt is too large (\"Prompt too big after adding system message\", errorCode custom_instructions_too_large, statusCode 422).\n  WHY: The check stays red whatever the code contains, and no file in this PR can fix it. Both reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory (line 7339); CI check-runs \"orchestrate-poll (1)\" and the aggregate \"lint\" | severity=NIT | confidence=2\n  PROBLEM: The test fails with \"poller did not exit within 180s; process group killed\" after the poller printed \"Project complete!\". \"lint\" fails only because it collects this job's result (\"CI jobs that did not succeed: orchestrate-poll\").\n  WHY: The merge gate stays red, but this PR changes neither scripts/orchestrate_poll_process.sh nor the test file. With SANDBOX_SOLC_VERSIONS empty, sandbox_solc_resolve_versions in scripts/codex_isolated_exec.sh returns immediately, and the in-container solc block runs only when /opt/solc/hardhat-nodejs/compilers-v2/linux-amd64 exists. #9199 tracks the failure. Re-run the shard or run it on merge-base 507ba62a.\n- n/a (CI check-run \"copilot-pull-request-reviewer\"):job log line \"Prompt too big after adding system message\", errorCode custom_instructions_too_large, statusCode 422 | severity=NIT | confidence=2\n  PROBLEM: The third-party reviewer gives up because its own prompt is too large, before it reads any code.\n  WHY: The check stays red whatever the code contains; nothing in this PR's diff causes it and no edit to its files can fix it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/resolve_integration_ref.sh:531-549 (inside resolve_ci_reissue_base_branch) | confidence=2\n  PROBLEM: If retarget_merged_base.sh fails or prints an empty string, the helper state is still marked \"lookup_failed\" at lines 534 and 544.\n  WHY: It refuses with `branch_lookup_failed` as fail-closed behaviour, which the reviewer finds acceptable, but this conflates an internal script error with a lookup failure. Line 538 (`cat \"${helper_err}\" >&2`) keeps it observable.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory (timeout harness around line 36 of the poll-process tests; failing check-run `orchestrate-poll (1)` on head 6ea36343) | severity=NIT | confidence=2\n  PROBLEM: The check-run fails with \"poller did not exit within 180s; process group killed\" after \"Project complete!\", and the aggregate `lint` job fails only because of it. Neither scripts/orchestrate_poll_process.sh nor the test file is in the PR. scripts/codex_isolated_exec.sh takes no relevant path when SANDBOX_SOLC_VERSIONS is empty (scripts/codex_isolated_exec.sh:202-223; guard at scripts/codex_isolated_exec.sh:989-1000).\n  WHY: The merge gate stays red, but the failure does not trace to any changed line, #9199 already tracks it, and it has repeated on unrelated heads. Re-run the shard and treat it as a PR defect only if it reproduces on merge-base 507ba62a.\n- (third-party check) copilot-pull-request-reviewer:check-run on head 6ea36343; log shows HTTP 422 errorCode custom_instructions_too_large before any code analysis | severity=NIT | confidence=2\n  PROBLEM: The third-party reviewer stops on its own instruction size (\"Prompt too big after adding system message\", statusCode 422) before reading the diff.\n  WHY: No file in this PR can change that reviewer's prompt size; the check stays red regardless, so it is not actionable here.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5a95a09927ac430bcab6f0ff4dbb60106af2ee46cb48c9150b4c48d1f81394e6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "43142057328",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43142057328",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112151315_5ba5dfafc1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "43142057328"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T15:13:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
