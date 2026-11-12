@@ -641,6 +641,8 @@ jobs:
                 ''|*[!0-9]*) ;;
                 *) [ "${vst_step_start_ms}" = "0" ] || vst_beat_elapsed_ms="$((10#${vst_beat_ms} - 10#${vst_step_start_ms}))" ;;
               esac
+              # A clock that steps backwards reads as 0, never a negative value.
+              [ "${vst_beat_elapsed_ms}" -ge 0 ] || vst_beat_elapsed_ms=0
               vst_running_csv="$(IFS=,; echo "${vst_running[*]}")"
               echo "CI_SUBTEST_HEARTBEAT running=${vst_running_csv:-none} elapsed_ms=${vst_beat_elapsed_ms}"
             done
