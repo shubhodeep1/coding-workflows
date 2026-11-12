@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-12T04:50:43Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/ci.yml:543; cited_path=.github/workflows/propagate-consumer-secrets.yml, .github/workflows/implement.yml; files_touched=.github/workflows/check_failure_triage.yml, .github/workflows/ci.yml, .github/workflows/plan.yml, README.md, agents.d/9215-triage-skip-tracked-base-failure.md, changelog.d/9215-triage-skip-tracked-base-failure.md, scripts/check_failure_triage.sh, tests/test_check_failure_triage_workflow_security.py, tests/test_plan_blocked_wait_on_pr.py.",
+  "phase": "review_autofix",
+  "pr_number": 9272,
+  "record_id": "lesson_20261112045043_872486e34c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/propagate-consumer-secrets.yml, .github/workflows/implement.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/check_failure_triage.yml",
+    ".github/workflows/plan.yml",
+    "README.md",
+    "agents.d/9215-triage-skip-tracked-base-failure.md",
+    "changelog.d/9215-triage-skip-tracked-base-failure.md",
+    "scripts/check_failure_triage.sh",
+    "tests/test_check_failure_triage_workflow_security.py",
+    "tests/test_plan_blocked_wait_on_pr.py"
+  ]
+}
