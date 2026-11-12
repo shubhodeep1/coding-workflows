@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:1982-1983, 1998-1999 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The inline comment, changelog fragment (changelog.d/9266-plan-codex-failure-diagnostic.md:1) and agents.d fragment (agents.d/9266-plan-codex-failure-diagnostic.md:1) say stderr is \"unchanged\", but the wrapper adds one `::error::RUN_PLAN_CODEX_FAILED ...` line to stderr on non-zero runner exit.\n  WHY: The wording is ambiguous, not a behavioral defect, so a consumer could write a test asserting stderr equality; the reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:1982-1983, 1998-1999 | severity=low (source: NIT) | confidence=4\n  PROBLEM: The inline comment, changelog fragment (changelog.d/9266-plan-codex-failure-diagnostic.md:1) and agents.d fragment (agents.d/9266-plan-codex-failure-diagnostic.md:1) say stderr is \"unchanged\", but the wrapper adds one `::error::RUN_PLAN_CODEX_FAILED ...` line to stderr on non-zero runner exit.\n  WHY: The wording is ambiguous, not a behavioral defect, so a consumer could write a test asserting stderr equality.\n- TASK_GAP (delivered, not a gap): Requirement: the new diagnostic tests in tests/test_plan_run_codex_failure_diagnostic.py and the updated tests/test_plan_codex_step_extraction.py::test_workflow_stages_and_invokes_extracted_runner reflect the wrapper.\n  Expected change site: tests/test_plan_run_codex_failure_diagnostic.py and tests/test_plan_codex_step_extraction.py\n  Evidence of absence: Both files are present and updated; the collector at tests/test_plan_codex_step_extraction.py:1028-1053 exposes the new tests, and the constant at lines 56-75 mirrors the workflow step. SEVERITY: NONE (delivered). ISSUE_CONFIDENCE: 5\n- TASK_GAP (deferred): Requirement: Fix 2, keep Python traceback frames and exception lines in `scripts/workflow_failure_heal.py` `filter_log`.\n  Expected change site: scripts/workflow_failure_heal.py\n  Evidence of absence: Per AD-3 this is the subject of open PR #9219 and is out of scope. SEVERITY: NONE (deferred). ISSUE_CONFIDENCE: 5\n- TASK_GAP (out of scope by design): Requirement: Fix 1, the operator-supplied traceback from run 43040637560 and a helper-level fail-closed `::error::`.\n  Expected change site: scripts/run_plan_codex.sh / scripts/render_prompt.{sh,py}\n  Evidence of absence: Per AD-1 this needs the actual traceback, which is not in the repository; the delivered diagnostic serves the same operational goal. SEVERITY: NONE. ISSUE_CONFIDENCE: 5\n- TASK_GAP (optional): Requirement: Fix 3, optional `ERR` trap in `scripts/run_plan_codex.sh`.\n  Expected change site: scripts/run_plan_codex.sh\n  Evidence of absence: Marked optional; the wrapper's `grep -aE | tail -n 1` already surfaces the last exception line. SEVERITY: NONE (optional). ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a2145fb2e52a8a815958e78b1389476a65e4d7fc021a2af54b57e2bea4cb4f6c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9288,
+    "run_id": "43125947153",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43125947153",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112101819_b9e456ce6c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9288,
+    "run_id": "43125947153"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T10:18:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
