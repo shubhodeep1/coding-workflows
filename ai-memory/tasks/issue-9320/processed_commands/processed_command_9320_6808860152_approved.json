@@ -5,13 +5,28 @@
   "entry_id": "processed_command_9320_6808860152_approved",
   "issue_number": 9320,
   "metadata": {
+    "branch": "ai/issue-9320",
+    "changed_files": [
+      ".github/workflows/orchestrate_poll.yml",
+      "README.md",
+      "agents.d/8984-final-merge-auto-resume.md",
+      "changelog.d/8984-final-merge-auto-resume.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_orchestrate_poll_process.py",
+      "tests/test_orchestrate_poll_workflow_contract.py"
+    ],
+    "issue_number": 9320,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9320",
+    "pr_number": 9351,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9351",
+    "run_attempt": "1",
+    "run_id": "43114089699",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43114089699"
   },
   "run_attempt": 1,
   "run_id": "43114089699",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-11T22:58:38Z",
+  "status": "completed",
+  "timestamp": "2026-11-12T00:38:24Z",
   "workflow": "implement"
 }
