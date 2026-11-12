@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:3643-3650, 3709-3712, 3814-3820 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The production review-autofix workflow does not pass `REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED` to the helper's snapshot or transfer invocations, so setting the repository variable to `false` cannot disable admission of `.github/ai/chatgpt_pool.json` in that workflow.\n  WHY: Without the variable, the helper treats the flag as unset and admits the file, so the advertised off switch does nothing in production; source severity was MAJOR, and anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash each stated that this is deferred, out-of-scope follow-up work under the issue's files_touched grant and \"Change no other rule\".\n- .github/workflows/ci.yml:543-1072 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: Check run 43044946395 (job 130606294464, `tests-hooks-and-orchestrator`) fails on head 254b6ba3, which also fails the aggregate `lint` job, but the log tail does not show which step failed.\n  WHY: The PR stays red whatever the diff does, and the failure cannot be traced to any PR file without the full job log; both sources rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:job tests-hooks-and-orchestrator (starts at line 543). The log tail ends in the step that runs tests/test_lint_pr_body_auto_close.py at line 833. The aggregate lint job fails only because it depends on that job. | severity=NIT | confidence=2\n  PROBLEM: Check run 43044946395 (job 130606294464) fails on head 254b6ba3, and so does the aggregate lint job (130646405646). The step that failed is not in the log tail, and none of the four PR files runs in this job. The PR's test file runs at line 3387 in orchestrate-poll, which passed.\n  WHY: The lint aggregate keeps the PR red no matter what the diff does and cannot be mapped to any file in this diff. Rerun the job or read the full log, and change PR files only if that log ties the failure to one of them.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:Sandbox preparation `env` block at lines 3643-3650, editor `env` block at lines 3709-3712, and cleanup step at lines 3814-3820 | severity=MAJOR | confidence=5\n  PROBLEM: The production review-autofix workflow does not pass `REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED` to the helper's snapshot or transfer invocations, and the changelog says the workflow does not forward it.\n  WHY: Setting the repository variable to `false` does not reach the helper, which then treats the flag as unset and admits `.github/ai/chatgpt_pool.json`, so the off switch cannot disable this admission in production.\n- .github/workflows/ci.yml:`tests-hooks-and-orchestrator` job, lines 543-1072; failed check run 43044946395 | severity=NIT | confidence=2\n  PROBLEM: The check run failed, which also failed the aggregate `lint` check. The log tail ends with output from `test_lint_pr_body_auto_close.py` but does not identify the failing command.\n  WHY: The CI job exits unsuccessfully and leaves the PR checks red. The available log does not connect the failure to the PR's changed files, so the full job log is needed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5b7f1c27f64425b054a14b92d1705b16ce4889439da6f590303f6edec6f13970",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9180,
+    "run_id": "43165515176",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43165515176",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112094526_54c9c18458",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9180,
+    "run_id": "43165515176"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T09:45:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
