@@ -1454,7 +1454,8 @@ class UnblockStepShardingContractTest(unittest.TestCase):
 
 
 WIRING_PART1_STEP_NAME = "Regression tests wired by the CI wiring guard (part 1)"
-WIRING_PART1_JOB_ID = "tests-promote-stall-and-review"
+# Issue #9363 moved the step on to tests-release-and-log-analysis.
+WIRING_PART1_JOB_ID = "tests-release-and-log-analysis"
 WIRING_PART1_MODULES = (
 	"tests/test_ai_memory_cli.py",
 	"tests/test_branch_rebuild.py",
@@ -1567,7 +1568,8 @@ class WiringGuardPartOneShardingContractTest(unittest.TestCase):
 	#8150 did. Every listed module must collect at least one test, every
 	test must run exactly once, and a shard that fails or records no exit
 	code must fail the step. Issue #9018 moved the step, unchanged, to
-	tests-promote-stall-and-review.
+	tests-promote-stall-and-review. Issue #9363 moved it, unchanged, to
+	tests-release-and-log-analysis.
 	"""
 
 	def setUp(self) -> None:
@@ -1866,8 +1868,9 @@ MOVED_HOOKS_JOB_STEPS = {
 			"tests/test_orchestrator_concurrency_caps.py",
 		),
 	),
+	# Issue #9363 moved it on from tests-promote-stall-and-review.
 	"Judge Semble prefetch contract test": (
-		"tests-promote-stall-and-review",
+		"tests-release-and-log-analysis",
 		(
 			"tests/test_judge_semble_prefetch_contract.py",
 			"tests/test_implement_semble_contract.py",
@@ -2460,6 +2463,93 @@ class MovedPromote8771StepsContractTest(unittest.TestCase):
 				self.assertLess(names.index(PROMOTE_8771_SETUP_STEP), names.index(name))
 
 
+# Steps moved out of tests-promote-stall-and-review, which took 21m25s of its
+# 20 minutes (run 43138350536, budget-watch issue #9363): step name -> (target
+# job id, module paths its body names). The run's step timings were not
+# readable; the pick is an estimate from test and subprocess counts. The steps
+# go to two jobs so that no single job takes all of them. The wiring guard
+# part 1 modules are pinned by WIRING_PART1_MODULES and the Judge Semble
+# modules by MOVED_HOOKS_JOB_STEPS.
+PROMOTE_9363_SOURCE_JOB_ID = "tests-promote-stall-and-review"
+PROMOTE_9363_SETUP_STEP = "Install Python CI dependencies"
+MOVED_PROMOTE_9363_STEPS = {
+	WIRING_PART1_STEP_NAME: ("tests-release-and-log-analysis", ()),
+	"Judge Semble prefetch contract test": ("tests-release-and-log-analysis", ()),
+	"Review conflict-resolve sandbox-only tests": (
+		"tests-heal-plan-and-validation",
+		("tests/test_review_conflict_resolve_sandbox_only.py",),
+	),
+	"Review conflict-resolve retry-prelude rendering contract test": (
+		"tests-heal-plan-and-validation",
+		("tests/test_review_conflict_resolve_retry_prelude_render.py",),
+	),
+	"Review-blocked judge security-pass helper tests": (
+		"tests-heal-plan-and-validation",
+		(
+			"tests/test_review_rb_judge_security_pass.py",
+			"tests/test_review_rb_judge_head_binding.py",
+			"tests/test_review_enable_auto_merge_cdpath.py",
+			"tests/test_review_rb_judge_draft_skip.py",
+			"tests/test_rb_judge_incomplete_comment_context.py",
+		),
+	),
+}
+
+
+class MovedPromote9363StepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-promote-stall-and-review run once, in their target jobs (#9363)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_target_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_PROMOTE_9363_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_PROMOTE_9363_STEPS:
+			with self.subTest(step=name):
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_job_id, modules) in MOVED_PROMOTE_9363_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[PROMOTE_9363_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_PROMOTE_9363_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_target_job_setup(self) -> None:
+		for name, (job_id, _modules) in MOVED_PROMOTE_9363_STEPS.items():
+			names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+			with self.subTest(step=name):
+				self.assertIn(PROMOTE_9363_SETUP_STEP, names, job_id)
+				self.assertIn(name, names)
+				self.assertLess(names.index(PROMOTE_9363_SETUP_STEP), names.index(name))
+
+	def test_no_target_is_the_source_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_PROMOTE_9363_STEPS.items():
+			with self.subTest(step=name):
+				self.assertNotEqual(job_id, PROMOTE_9363_SOURCE_JOB_ID)
+
+
 # Steps moved out of tests-heal-plan-and-validation, which took 16m08s of its
 # 20 minutes (run 42373283876, budget-watch issue #8993): step name -> (target
 # job id, module paths its body names). The run's step timings were not
@@ -2555,12 +2645,14 @@ class MovedHeal8993StepsContractTest(unittest.TestCase):
 # 20 minutes (run 42413379208, budget-watch issue #9018): step name -> (target
 # job id, paths its body names). The run's step timings were not readable; the
 # pick is the heal job's heaviest steps that can move, an estimate. The wiring
-# guard part 1 modules are pinned by WIRING_PART1_MODULES. The steps go to two
-# jobs so that no single job takes both moves.
+# guard part 1 modules are pinned by WIRING_PART1_MODULES. The steps went to two
+# jobs so that no single job took both moves; issue #9363 later moved part 1
+# on to the Node pair's job.
 HEAL_9018_SOURCE_JOB_ID = "tests-heal-plan-and-validation"
 HEAL_9018_SETUP_STEP = "Install Python CI dependencies"
 MOVED_HEAL_9018_STEPS = {
-	WIRING_PART1_STEP_NAME: ("tests-promote-stall-and-review", ()),
+	# Issue #9363 moved it on from tests-promote-stall-and-review.
+	WIRING_PART1_STEP_NAME: ("tests-release-and-log-analysis", ()),
 	HOOKS_NODE_SETUP_STEP: ("tests-release-and-log-analysis", ()),
 	HOOKS_VITEST_STEP: ("tests-release-and-log-analysis", ("tools/claude-pool-broker",)),
 }
@@ -2616,8 +2708,14 @@ class MovedHeal9018StepsContractTest(unittest.TestCase):
 			with self.subTest(step=name):
 				self.assertNotEqual(job_id, HEAL_9018_SOURCE_JOB_ID)
 
-	def test_steps_go_to_two_jobs(self) -> None:
-		self.assertGreater(len({job_id for job_id, _paths in MOVED_HEAL_9018_STEPS.values()}), 1)
+	def test_part1_target_agrees_with_the_9363_move(self) -> None:
+		# Issue #9018 sent these steps to two jobs. Issue #9363 moved wiring
+		# guard part 1 on to the Node pair's job, so the two-job check no
+		# longer holds; both registries must name the same target for it.
+		self.assertEqual(
+			MOVED_HEAL_9018_STEPS[WIRING_PART1_STEP_NAME][0],
+			MOVED_PROMOTE_9363_STEPS[WIRING_PART1_STEP_NAME][0],
+		)
 
 # Steps moved out of tests-release-and-log-analysis, which took 15m14s of its
 # 20 minutes (run 40750326439, budget-watch issue #8278): step name -> (new job
