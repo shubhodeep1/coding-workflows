@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: Step 3 of the spec asks for the comment near `orchestrate_poll_process.sh` line 33218 to be updated. That comment (lines 33217-33224) lists the latch labels as \"ai:destructive-blocked / ai:scope-blocked\" and refers to `orchestrate_lib.STALL_RECOVERY_LATCH_LABELS` (lines 1608-1611). So the file list and step 3 conflict, and the explicit step is the more specific instruction. The edit only touches comments, and the poller code that reads `.latched` (lines 33225-33233) already logs any latch label, so no code change is needed there. Option B would leave a known-stale comment that step 3 asks us to fix. Option C would add a comment that points at a stale comment, and it still would not do what step 3 asks.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/orchestrate_poll_process.sh lines 33217-33224 (the comment that lists `ai:destructive-blocked / ai:scope-blocked`)\n    - scripts/orchestrate_lib.py lines 1594-1611 (the `STALL_RECOVERY_LATCH_LABELS` comment and tuple)\n  steps:\n    - Add `scripts/orchestrate_poll_process.sh` to the allowed file list, for a comment-only edit.\n    - In that file, change the comment at lines 33218-33219 so the latch-label list also names `ai:workflow-heal-escalated`. Leave every non-comment line in the file unchanged.\n    - Do everything else exactly as the spec says: the intake.sh escalation dedupe, the two tests, appending to the `STALL_RECOVERY_LATCH_LABELS` tuple, the `orchestrate_lib.py` comment update, and one `changelog.d/9248-*.md` fragment.\n    - Before finishing, run `tests/test_workflow_failure_heal.py` and `tests/test_orchestrate_lib.py` in full.\n  replaces_acceptance_criterion: The strict file list now also allows a comment-only edit to `scripts/orchestrate_poll_process.sh`.\n  equivalence_argument: The spec itself asks for this comment to change. The edit changes no runtime behaviour, so it adds no review or test surface, and it keeps the poller's documentation accurate about which labels pause stall recovery.\n  reversibility: Removing the added label name from the comment reverts it. Nothing else depends on it.",
+  "fingerprint": "0339d33348a0bd3c891434a3083eb4f86c58a542aa75ead75930b1c387a88a21",
+  "lineage": {
+    "issue_number": 9411,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43294149060",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43294149060",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9411"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261112201332_6e0069a890",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9411,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43294149060"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9411",
+  "timestamps": {
+    "created_at": "2026-11-12T20:13:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
