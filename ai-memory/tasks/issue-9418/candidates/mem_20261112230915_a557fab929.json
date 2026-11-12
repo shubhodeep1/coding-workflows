@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The heal scope marker on this issue only allows `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/internal-review.yml`, `.github/workflows/review_autofix.yml`, `tests/**` and `changelog.d/*.md`, so fix 1 (`scripts/stable_e2e_step_wait_review.sh`) cannot land here. Fix 2 is inside that scope and fixes a real leak. GITHUB FACTS show run 43300092840 still `queued` on `ai/issue-9410` long after PR #9416 was closed. The `Cleanup test artifacts` step (test-and-mark-stable.yml:3707-3765) closes the PR and issue and deletes the branch, but never cancels the Phase 3c dispatch from :2115-2118. Option B ignores this leak. Option C needs a human to file a new issue, so this issue can't deliver it. Fix 1 is recorded as out of scope for a follow-up issue, not dropped.\nQ2: The comment at :2075-2114 explains why the fallback dispatch exists: the `synchronize` event sometimes does not fire (run 25204168842). Making the dispatch conditional on evidence that can't yet separate runner starvation from a concurrency hold would change release-gate behaviour. Fix 2 already removes the leaked holder. This is consistent with Q1:A.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/test-and-mark-stable.yml step `Cleanup test artifacts` (lines 3707-3765; env has ISSUE_NUMBER and PR_NUMBER; BRANCH is derived as `ai/issue-${ISSUE_NUMBER}` at :3760)\n    - Job-level env `TEST_REPO` (:585) and `REVIEW_WORKFLOW_FILE` (:635, default `internal-review.yml`), which the Phase 3c dispatch at :2115-2118 also uses\n    - tests/test_test_and_mark_stable_step_scripts_contract.py, or a sibling contract test under tests/\n    - changelog.d/ fragment convention\n  steps:\n    - In `Cleanup test artifacts`, before the branch delete at :3759-3763 (the run is listed by branch, so the branch must still exist), add a fail-soft block guarded on non-empty ISSUE_NUMBER/PR_NUMBER. The block lists `workflow_dispatch` runs of `${REVIEW_WORKFLOW_FILE}` in `${TEST_REPO}` on `${BRANCH}` whose status is `queued`, `in_progress`, `waiting` or `pending`, and posts `repos/${TEST_REPO}/actions/runs/<id>/cancel` for each one. Every call ends in `|| echo \"Warning: ...\"` so cleanup never fails. The log prints only run ids and statuses. Keep `if: always()` and the existing step name and env unchanged.\n    - Use one list call per cleanup (\u00a714). Add a comment above it citing runs 43300092840 / 43283656910, and saying that the branch-scoped `workflow_dispatch` filter is needed because PR close does not cancel dispatch runs.\n    - Leave the Phase 3c dispatch, the Phase 4 wait logic and every timeout unchanged.\n    - Add a contract test asserting that the cleanup step's run body contains the dispatch-run cancel (references to `REVIEW_WORKFLOW_FILE`, `workflow_dispatch`, `/cancel`, `TEST_REPO`). The test also asserts that the cancel comes before the branch DELETE and that every call is fail-soft.\n    - Add a changelog.d/ entry.\n    - Check `wc -c .github/workflows/test-and-mark-stable.yml` stays below 480,000 bytes (\u00a724).\n    - In the plan and PR body, say three things. Candidate 1 (runner starvation or a wedged queued job) remains possible and transient, so a re-run of the release gate is expected to pass. Fix 1 (the timeout-path run and job inventory in `scripts/stable_e2e_step_wait_review.sh`) is out of scope and goes to a follow-up issue whose scope includes `scripts/`. Use `Refs`, never auto-close keywords, for related issues.\n  replaces_acceptance_criterion: The suggested fix 1 (timeout-path inventory) is deferred, not delivered by this issue.\n  equivalence_argument: Fix 2 removes the one concrete leaked concurrency holder that the evidence confirms, and it stays inside the locked scope. Fix 1 only adds diagnostics and changes no gate behaviour, so deferring it weakens no check.\n  reversibility: The cancel block is additive and fail-soft. Reverting the single hunk restores the old cleanup. If a human wants fix 1 here, they can widen the scope on a new issue.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/test-and-mark-stable.yml:2075-2123 (Bug B fallback rationale and dispatch)\n  steps:\n    - Make no change to the Phase 3c dispatch.\n  replaces_acceptance_criterion: none\n  equivalence_argument: n/a\n  reversibility: A later issue can add the conditional dispatch once the evidence separates the two candidates.",
+  "fingerprint": "8b519b871509829a59bad03b202c80a47f873bd20ce5eaf0dadb91951f06180c",
+  "lineage": {
+    "issue_number": 9418,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43321683889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43321683889",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9418"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261112230915_a557fab929",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9418,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43321683889"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9418",
+  "timestamps": {
+    "created_at": "2026-11-12T23:09:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
