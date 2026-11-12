@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where does the spec for #9130 come from (its approved plan's file list and what its Q3 and Q4 options actually said)?\nChoices:\nA) The `/answer` will paste #9130's approved file list and the text of its Q3:A and Q4:A. That text plus this issue is the full spec, and the pasted text wins over Q2\u2013Q4 below if they conflict. (RECOMMENDED)\nB) The five numbered items in this issue are the whole spec. Planning picks files from the repo, and Q2\u2013Q4 below replace #9130's Q3/Q4.\n**Note:** with A, answers to Q2\u2013Q4 are only fallbacks. With B, Q2\u2013Q4 must be answered.\nQ2: What does the transient-rerun stage in `.github/workflows/check_failure_triage.yml` re-run? (It makes one POST with `GH_PAT`, expects HTTP 201, fails open, and is gated by `CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED`, default `true`.)\nChoices:\nA) Only the failed jobs of the triaged workflow run (`POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs`), and only when diagnosis marks the failure as transient (runner, infrastructure or network). (RECOMMENDED)\nB) The whole failed workflow run (`POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun`) when the failure is transient.\nC) Only the single failed job named by the triage check (`POST /repos/{owner}/{repo}/actions/jobs/{job_id}/rerun`).\nQ3: How does the re-run relate to posting the triage issue?\nChoices:\nA) The triage issue is still posted as it is today, and the re-run is fired as well. The issue closes on its own when the re-run on the same head succeeds (through `open_head_rerun`, see Q4). (RECOMMENDED)\nB) If the POST returns 201, no triage issue is posted. Any other response falls through to the normal post.\n**Note:** B leaves `open_head_rerun` only triage issues posted before a re-run, so it fits poorly with Q4:A.\nQ4: What does `open_head_rerun` do in `_verify_open_head` (`scripts/check_triage_resolution.py`, from line 675)?\nChoices:\nA) Today, a same-repo open PR whose head SHA still matches the header's `Head SHA` fails with `open_head_unchanged`. Instead, it resolves with `path=\"open_head_rerun\"` when a newer run attempt of the triaged check on that same SHA has succeeded. Without such an attempt it still fails as `open_head_unchanged`. Existing `open_head` and `merged` paths and reason codes stay as they are. (RECOMMENDED)\nB) It is only a new failure reason, `open_head_rerun_pending`, logged while a re-run on the unchanged head is still in progress. It never resolves an issue.\nC) Something else, given verbatim in `/answer` (see Q1:A).",
+  "fingerprint": "de9aaff2f0e4677b17a06ad2640925c80cd22f1ed1254d983f7d01f8602d2641",
+  "lineage": {
+    "issue_number": 9387,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43206738254",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43206738254",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261112112742_4cff4277f9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9387,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43206738254"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9387 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-12T11:27:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
