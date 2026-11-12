@@ -312,6 +312,11 @@ append_render_var "MODEL_FAMILY_OVERLAY" "${MODEL_FAMILY_OVERLAY_BLOCK}"
 # (#9341). The helper's stderr is not captured, so its single ERROR line
 # reaches the caller; the EXIT trap still removes any assembled temp file.
 if ! _render_placeholder_names="$(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")"; then
+	# The EXIT trap deletes the assembled temp file the ERROR line names, so
+	# point at the original prompt (a NOTE, not a second ERROR line).
+	if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
+		echo "NOTE: ${PLACEHOLDER_SOURCE_FILE} was assembled from ${PROMPT_FILE} and is removed on exit; inspect the source prompt and its includes." >&2
+	fi
 	exit 1
 fi
 
