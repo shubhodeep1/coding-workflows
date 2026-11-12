@@ -5,13 +5,34 @@
   "entry_id": "processed_command_9395_6827111410_approved",
   "issue_number": 9395,
   "metadata": {
+    "branch": "ai/issue-9395",
+    "changed_files": [
+      ".github/ai/label_contract.v1.json",
+      ".github/workflows/alert-inbox-intake.yml",
+      ".github/workflows/ci.yml",
+      "README.md",
+      "agents.d/alert-triage-phase1-inbox-capture.md",
+      "changelog.d/alert-triage-phase1-inbox-capture.md",
+      "scripts/alert_inbox_capture.sh",
+      "scripts/alert_inbox_store.sh",
+      "scripts/label_helpers.sh",
+      "scripts/tg_helpers.sh",
+      "tests/test_alert_inbox_store.py",
+      "tests/test_tg_helpers_alert_inbox.py",
+      "tests/test_workflow_checkout_integration_ref_audit.py"
+    ],
+    "issue_number": 9395,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9395",
+    "pr_number": 9401,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9401",
+    "run_attempt": "1",
+    "run_id": "43242776857",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43242776857"
   },
   "run_attempt": 1,
   "run_id": "43242776857",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-12T15:21:06Z",
+  "status": "completed",
+  "timestamp": "2026-11-12T16:13:28Z",
   "workflow": "implement"
 }
