@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The `resolve` path, its kill switch and the poll-job step that calls it exist only in open PR #9259, not on main. Which code should this follow-up audit and fix?\nChoices:\nA) Wait until #9259 merges, then audit and fix the merged code on main, adding only the missing contract tests and fixes. (RECOMMENDED)\nB) Branch from #9259's head and add the tests and fixes on top of it, so this PR depends on #9259 merging first.\nC) If #9259 has not merged, build the `resolve` path from scratch on main as plan P10 describes. **Note:** this duplicates #9259 and will conflict with it.\nQ2: When should `resolve` treat an entry's consumer-sync condition as met?\nChoices:\nA) The same way as a release condition: the entry's merge commit is contained in `stable` (`compare/<merge_sha>...stable` returns `ahead` or `identical`). Consumer sync runs automatically from the `@stable` release (plan P10.1). (RECOMMENDED)\nB) Contained in `stable`, and also each repo in `.github/ai/consumer_repos.json` shows it has synced. This adds calls for each consumer repo per tick, beyond plan P10's limit of 10 compare calls per tick.\nC) Never tick consumer-sync entries automatically; only tick release entries.",
+  "fingerprint": "f7069357a23a63892a1a7920cae5afa3355414a9e0dbd768f48b54b550af72f6",
+  "lineage": {
+    "issue_number": 9393,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43229500665",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43229500665",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261112135454_276f4ad41f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9393,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43229500665"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9393 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-12T13:54:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
