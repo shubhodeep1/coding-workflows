@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Hourly alert triage and auto-heal (plan docs/plans/alert-triage-auto-heal-plan.md, phases 1-6)\",\"issues\":[{\"id\":\"p1-alert-inbox-capture\",\"title\":\"Alert triage phase 1: capture tg_send_msg WARNING+ alerts into the ai/alert-inbox branch (default off)\",\"priority\":1},{\"id\":\"p2-hourly-alert-triage\",\"title\":\"Alert triage phase 2: hourly Claude-engine triage of the alert inbox + heal-intake kind alert_triage (default off, dry-run)\",\"priority\":2},{\"id\":\"p3-self-fix-break-glass\",\"title\":\"Alert triage phase 3: alert-self-fix workflow (fix PR + auto-merge) and bounded break-glass head-gate scan (default off)\",\"priority\":3},{\"id\":\"p4-clarify-recommended-only\",\"title\":\"Alert triage phase 4: RECOMMENDED-only clarify answers and no paging for ai:alert-triage issues\",\"priority\":4},{\"id\":\"p5-alert-triage-watchdog\",\"title\":\"Alert triage phase 5: daily watchdog in workflow-log-analysis.yml for stale triage runs or inbox\",\"priority\":5},{\"id\":\"p6-fleet-routes\",\"title\":\"Alert triage phase 6: fleet routes - release_regression auto-rollback and fleet_environmental stable hotfix (default off)\",\"priority\":6}],\"dependency_edges\":[{\"from\":\"p1-alert-inbox-capture\",\"to\":\"p2-hourly-alert-triage\"},{\"from\":\"p2-hourly-alert-triage\",\"to\":\"p3-self-fix-break-glass\"},{\"from\":\"p3-self-fix-break-glass\",\"to\":\"p4-clarify-recommended-only\"},{\"from\":\"p4-clarify-recommended-only\",\"to\":\"p5-alert-triage-watchdog\"},{\"from\":\"p5-alert-triage-watchdog\",\"to\":\"p6-fleet-routes\"}]}",
+  "fingerprint": "bc9371a7b77503e954770b3b25a2b5325b2c09315a64cc04d910bcf344e8b6d2",
+  "lineage": {
+    "issue_number": 9394,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43233488752",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43233488752",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261112143539_de5f4b415d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9394,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43233488752"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Hourly alert triage and auto-heal (plan docs/plans/alert-triage-auto-heal-plan.md, phases 1-6)' into 6 issues (tracking #9394)",
+  "timestamps": {
+    "created_at": "2026-11-12T14:35:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
