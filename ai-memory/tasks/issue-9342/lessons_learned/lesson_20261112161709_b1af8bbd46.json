@@ -1,0 +1,33 @@
+{
+  "discovered_at": "2026-11-12T16:17:09Z",
+  "issue_number": 9342,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=README.md:4774-4783; cited_path=.github/workflows/promote-main-to-stable.yml, scripts/orchestrate_poll_process.sh; files_touched=.github/workflows/ci.yml, .github/workflows/mark-stable.yml, .github/workflows/rollback-stable.yml, .github/workflows/test-and-mark-stable.yml, README.md, agents.d/9342-stable-rollback.md, agents.md, changelog.d/9342-stable-rollback.md, docs/INVENTORY.md, docs/scripts-pending-removal.md, scripts/auto_release_stable.sh, scripts/promote_main_cycle.sh, scripts/rollback_stable.sh, scripts/stable_hold.sh, tests/test_auto_release_stable.py, tests/test_gh_retry_stdout_isolation.py, tests/test_promote_main_cycle.py, tests/test_rollback_stable.py, tests/test_stable_hold.py, tests/test_workflow_checkout_integration_ref_audit.py.",
+  "phase": "review_autofix",
+  "pr_number": 9359,
+  "record_id": "lesson_20261112161709_b1af8bbd46",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/promote-main-to-stable.yml, scripts/orchestrate_poll_process.sh",
+    "README.md",
+    ".github/workflows/ci.yml",
+    ".github/workflows/mark-stable.yml",
+    ".github/workflows/rollback-stable.yml",
+    ".github/workflows/test-and-mark-stable.yml",
+    "agents.d/9342-stable-rollback.md",
+    "agents.md",
+    "changelog.d/9342-stable-rollback.md",
+    "docs/INVENTORY.md",
+    "docs/scripts-pending-removal.md",
+    "scripts/auto_release_stable.sh",
+    "scripts/promote_main_cycle.sh",
+    "scripts/rollback_stable.sh",
+    "scripts/stable_hold.sh",
+    "tests/test_auto_release_stable.py",
+    "tests/test_gh_retry_stdout_isolation.py",
+    "tests/test_promote_main_cycle.py",
+    "tests/test_rollback_stable.py",
+    "tests/test_stable_hold.py",
+    "tests/test_workflow_checkout_integration_ref_audit.py"
+  ]
+}
