@@ -5,13 +5,25 @@
   "entry_id": "processed_command_9341_6810217975_approved",
   "issue_number": 9341,
   "metadata": {
+    "branch": "ai/issue-9341",
+    "changed_files": [
+      "changelog.d/9341-render-prompt-readable-errors.md",
+      "scripts/render_prompt.py",
+      "scripts/render_prompt.sh",
+      "tests/test_render_prompt_foundation.py"
+    ],
+    "issue_number": 9341,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9341",
+    "pr_number": 9356,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9356",
+    "run_attempt": "1",
+    "run_id": "43124094148",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43124094148"
   },
   "run_attempt": 1,
   "run_id": "43124094148",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-12T00:48:50Z",
+  "status": "completed",
+  "timestamp": "2026-11-12T01:13:40Z",
   "workflow": "implement"
 }
