@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:519-525, 1786-1789 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The PR-head `tests-hooks-and-orchestrator` check failed and the dependent `lint` check failed, leaving CI red. The supplied log tail does not identify the failing step.\n  WHY: The failed test job leaves the CI gate red, but the evidence does not tie the failure to the changed code. Both reviewers rated it MAJOR, which is mapped here to high. Confidence is 4 from openai_gpt-6-luna and 3 from z-ai_glm-5_3-flash.\n- scripts/review_conflict_prepare.sh:36, 351-395 | severity=low | confidence=1\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The reviewer found no defect in the header comment or the pair loop. It reported this only as a no-defect confirmation (NIT) and said to drop it if a non-finding is not accepted.\n  WHY: There is no demonstrable failure path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:519-525, 1786-1789 | severity=MAJOR | confidence=4\n  PROBLEM: The PR-head `tests-hooks-and-orchestrator` check failed, and the dependent `lint` check failed. The supplied log tail does not identify the failing step, so it does not establish whether the hook-template tests passed.\n  WHY: The failed test job leaves the CI gate red. The available evidence does not identify a failure in the changed code.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_conflict_prepare.sh:352-362, 351-395, 36 | severity=NIT | confidence=1\n  PROBLEM: None found in the last-run change or the surrounding loop. The only change is a header-comment line at line 36, which is consistent with the `case` behavior. The loop's state transitions are sound.\n  WHY: N/A. There is no demonstrable failure path. The reviewer noted this was a no-defect confirmation and said to drop it if a non-finding is not accepted.\n- .github/workflows/ci.yml (tests-hooks-and-orchestrator job, run 43105695165, job 130808305483) | severity=MAJOR | confidence=3\n  PROBLEM: The PR-head `tests-hooks-and-orchestrator` job fails, and the aggregate `lint` job fails with it, leaving PR validation red. The captured log tail ends inside `tests/test_lint_pr_body_auto_close.py` output. The failing step lies past the end of the tail and cannot be tied to any line of this diff.\n  WHY: The CI job is red at the review-time head, so the PR cannot be validated as green. The failure site is outside the captured log window and outside the diff's reach. Fixing it needs the full job log, a CI re-run, or a fix on main.\n- TASK_GAP (no gap found): Requirement: change `_conflict_prepare_guard_hook_template_merge` to take live and template paths as arguments, loop over every live/template pair, recompute the allowlist after each success, and remove the strict xfail marker. | Expected change site: scripts/review_conflict_prepare.sh and tests/test_conflict_guard_hook_template_merge.py | Evidence of absence: none, because every deliverable is present in the PR diff. | ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3f58ff105b0b8cd9aed36706b7c287354725710f838ff902c4ee0ec5c2e0a813",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9011,
+    "run_id": "43165529119",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43165529119",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112094859_72c5468890",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9011,
+    "run_id": "43165529119"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T09:48:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
