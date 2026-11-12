@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.py:1421 (also scripts/render_prompt.py:188-190, scripts/render_prompt.sh:195-199) | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: Error messages interpolate the prompt path verbatim, so a path containing a newline splits the diagnostic across multiple stderr lines.\n  WHY: This violates the one named ERROR line contract and can confuse log parsers. Both reviewers rated it NIT.\n- scripts/render_prompt.sh:180-185, 242-247, 243, 314-316 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: When collect_prompt_placeholders fails, the EXIT trap (cleanup_temp_files) deletes the assembled temp file, whose path the error message names.\n  WHY: The operator cannot inspect the offending bytes. Minimax adds that the new test sets PROMPT_PRELUDE_REFACTOR_ENABLED=false, so the prelude-refactor path is not covered. Both reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/render_prompt.py:1421 | severity=NIT | confidence=4\n  PROBLEM: The error message interpolates the prompt path verbatim, so a path containing a newline produces multiple physical stderr lines, violating the one named ERROR line requirement.\n  WHY: Log parsers or filters expecting a single line per error are confused.\n- scripts/render_prompt.sh:180-185, 243, 314-316 | severity=NIT | confidence=3\n  PROBLEM: When collect_prompt_placeholders fails, the EXIT trap (cleanup_temp_files) deletes the assembled temp file before the operator can inspect it.\n  WHY: Diagnosing the root cause, such as the byte sequence behind a UnicodeDecodeError, becomes difficult or impossible.\n- HARDENING_SUGGESTIONS: scripts/render_prompt.sh lines 314-316: before exiting on collect_prompt_placeholders failure, disable the trap or add an option to skip cleanup (est. 3-5 lines changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/render_prompt.sh:242-247 interacting with 314-316 and 180-185 / 243 | severity=NIT | confidence=4\n  PROBLEM: On the PROMPT_PRELUDE_REFACTOR_ENABLED=true branch, PLACEHOLDER_SOURCE_FILE is the mktemp file, and the EXIT trap deletes it after the new checked command substitution fails and the script exits 1.\n  WHY: The error message names a path that no longer exists, so the offending bytes cannot be inspected. The new test at tests/test_render_prompt_foundation.py:236-264 sets PROMPT_PRELUDE_REFACTOR_ENABLED=false, so this path is not covered.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/render_prompt.py:188-190, 1420-1422; scripts/render_prompt.sh:195-199 | severity=NIT | confidence=4\n  PROBLEM: Error messages interpolate the prompt path without escaping line breaks.\n  WHY: A prompt path containing a newline is valid on Linux, and on a decode or read failure it splits the diagnostic across multiple stderr lines, violating the one-line error contract.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a739e3033a3f31dbc10faf57e9e4a4256a9e5da3566e4daeabb97ca1765696fd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9356,
+    "run_id": "43148773177",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43148773177",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112044732_5eef167a1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9356,
+    "run_id": "43148773177"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T04:47:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
