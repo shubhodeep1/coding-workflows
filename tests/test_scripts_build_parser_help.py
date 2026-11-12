@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Every `scripts/*.py` argparse parser must format its help text.
+"""Every `scripts/*.py` `build_parser()` parser must format its help text.
+
+Only scripts with a top-level `def build_parser()` are checked; scripts that
+build their parser inline (for example inside `main()`) are not covered.
 
 argparse treats help strings as `%`-format strings. A bare `%` (for example
 `{%...%}`) makes `format_help()` raise on every Python version, and Python
