@@ -487,3 +487,167 @@ The repo's own guard (`tests/test_workflow_file_size_limit.py:28-98`) fails CI f
 | Code modularization | 13 workflows carrying the support-ref block, `scripts/gh_helpers.sh`, `scripts/label_helpers.sh` callers in `.github/workflows/implement.yml`, `scripts/review_autofix_step_evaluate_gate.sh`, `.github/workflows/internal-clarify.yml`, `.github/workflows/clarify.yml`, new render script plus CI check | Large |
 | Expression size reduction | `.github/workflows/implement.yml`, `tests/test_workflow_file_size_limit.py` | Small |
 | Medium/Low fixes | `scripts/orchestrate_poll_process.sh`, `tests/test_orchestrate_poll_process.py`, `.github/workflows/implement.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/review_autofix_sweep.yml`, `.github/workflows/internal-cancel-on-pr-close.yml`, `.github/workflows/cancel_on_pr_close.yml` (and the BUG-004 copies), `.github/workflows/clarify.yml`, `.github/workflows/internal-clarify.yml` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-11-12)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`** means every merge precondition was proven by reading the code: same endpoint and auth scope, same function or step, no mutation in between, unchanged error and retry behaviour, no concurrency boundary crossed, and no cache contract broken. The implement stage may act on these without further review.
+- **`NEEDS_VERIFICATION`** means the change is probably safe, but at least one precondition can't be proven from static reading. The listed checks must pass first.
+- **`RISKY_SKIP`** means at least one hard trigger applies: a retry or stall-recovery path, an auth or identity probe, pagination, a rate-limit-sensitive path, `orchestrate_poll_process.sh`, race-defending code, or a change to log keys. These are listed for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001: the merge-train release loop lists the same PR's comments twice for each released PR** — `RISKY_SKIP`
+- **Files:**
+  - `scripts/review_merge_train.sh:1662` (queue-marker lookup through `_mt_find_marker_comment_id`)
+  - `:1685-1686` (released-marker upsert through `_mt_upsert_comment` with no 4th argument, so `:910` runs the lookup again)
+  - The listing itself is `_mt_find_marker_comment` at `:836-837`.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{pr}/comments?per_page=100`, called with `--paginate`.
+- **Current call count:** 2×P per released PR, where P = ceil(comments/100). **Proposed:** P.
+- **Evidence:** both lookups fetch every comment on the same PR and filter locally by marker prefix. Only the prefix differs: `MT_MARKER="<!-- merge-train:queued -->"` vs `MT_RELEASED_MARKER="<!-- merge-train:released -->"` (`:146-147`).
+  ```bash
+  if ! _mt_resolve_automation_login || ! release_queue_comment_id="$(_mt_find_marker_comment_id "${num}" "${MT_MARKER}")"; then
+  ...
+  _mt_upsert_comment "${num}" "${MT_RELEASED_MARKER}" "${release_comment_body}" \
+  ```
+  Three mutations happen between the two lookups:
+  - the queue-marker PATCH to `MT_RETIRED_MARKER` (`:1668`);
+  - the label DELETE claim (`:1677`);
+  - the dispatch (`:1682`).
+
+  None of them creates or removes a `merge-train:released` comment, so one listing that returns both markers' latest "id created_at" would be equivalent for our own writes. The file's API-budget header (`:105-109`) counts one comments-list per unblocked queued PR plus a "best-effort released-comment upsert", but it doesn't count the second list inside that upsert.
+- **Proposed fix:** add a sibling of `_mt_find_marker_comment` that runs the `:836` listing once and returns one line per marker. In the release loop, pass the released-marker id to `_mt_upsert_comment` as its existing optional 4th argument. Leave `_mt_find_marker_comment`'s output format unchanged for its other callers (`:975`, `:994`).
+- **Safety rationale:** two hard triggers apply. The listing is a `--paginate` call, and the loop explicitly defends against concurrent release runs ("Concurrent release invocations cannot both claim it", `:1674-1676`).
+- **Downstream signal:** manual review only. A reviewer must confirm that a concurrent peer can't write a released marker between the merged read (before the claim) and the upsert (after the claim). They must also update the API-budget comment and the merge-train tests together.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001: `_mt_upsert_comment` GETs the comment body that the marker listing just iterated over** — `RISKY_SKIP`
+- **Files:** `scripts/review_merge_train.sh:914` (single-comment GET) and `:836-837` (the listing it follows, reached through `:910`, or through the caller's own lookup when `$4` is passed: gate at `:994`/`:1029`, release at `:1685`).
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/comments/{id}`.
+- **Current call count:** 1 extra GET per upsert that finds an existing marker. **Proposed:** 0.
+- **Evidence:**
+  ```bash
+  existing_body="$(gh_retry gh api "repos/${MT_REPO}/issues/comments/${existing_id}" --jq '.body' 2>/dev/null || true)"
+  if [ "${existing_body}" = "${body}" ]; then
+  ```
+  The listing's `--jq` already reads `.body` to apply `startswith(marker)` but only emits `"\(.id) \(.created_at)"`.
+- **Proposed fix:** have the marker listing (or a new variant of it) also emit the matched body, for example as base64 to stay newline-safe. Compare against that in `_mt_upsert_comment` and keep the `:914` GET only as a fallback when no body was captured.
+- **Safety rationale:** the data would come from a `--paginate` call (pagination trigger). The `|| true` failure path ("unknown body, so PATCH anyway") must also be preserved exactly.
+- **Downstream signal:** manual review only. Ship it together with MERGE-001, since both change the same listing helper. Check that a body captured before the `:1668` PATCH can't be the one compared at `:915`; today it is a different marker, so it shouldn't be.
+
+**REUSE-002: the review sweep reads `repos/{repo}.default_branch` while every PR in its own snapshot carries it** — `RISKY_SKIP`
+- **Files:**
+  - `.github/workflows/review_autofix_sweep.yml:310` (the read)
+  - `:236-247` (the PR snapshot, same step, same `READ_TOKEN`)
+- **Endpoint:** `GET /repos/{owner}/{repo}`.
+- **Current call count:** 1 per tick that has at least one candidate. **Proposed:** 0.
+- **Evidence:**
+  ```bash
+  sweep_default_branch="$(GH_TOKEN="${READ_TOKEN}" gh api "repos/${REPOSITORY}" --jq .default_branch 2>/dev/null || true)"
+  ```
+  - The read only runs when `total > 0` (the early exit is at `:298-301`), so `prs_json` holds at least one PR whose `base.repo` is this repository.
+  - The `:238-247` projection drops `.base.repo.default_branch`.
+  - Two zero-call alternatives are unreliable:
+    - Reading `$GITHUB_EVENT_PATH`, as `workflow_failure_heal_intake.sh:1293-1296` does, may fail on `schedule` ticks. Public reports say the cron payload has no `repository` object ([arduino/arduino-cli#1507](https://github.com/arduino/arduino-cli/pull/1507), [community discussion #54817](https://github.com/orgs/community/discussions/54817)), though a Gitea PR claims the opposite for GitHub ([go-gitea/gitea#38446](https://github.com/go-gitea/gitea/pull/38446)).
+    - The step's own checkout already falls back to `github.ref_name` for the same reason (`:152`).
+- **Proposed fix:** add `base_default_branch: (.base.repo.default_branch // "")` to the `:238` projection. Set `sweep_default_branch` from the first non-empty value, and fall back to the existing `:310` call when it is empty. The name `base_default_branch` is unused in the repo.
+- **Safety rationale:** the data would come from a `--paginate` listing (pagination trigger). The value also feeds the issue #6629 provenance check (`:303-309`, "no fallback: a failed read skips every dispatch"), which defends against forged run names.
+- **Downstream signal:** manual review only. A reviewer must confirm three things:
+  - the list-pulls `base.repo` object includes `default_branch`;
+  - `AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable` behaviour is unchanged when every value is empty;
+  - no test pins the call at `:310`.
+
+**REUSE-003: the per-project poller loop re-reads the default branch after `DEFAULT_BRANCH_TRACKING` is already set** — `RISKY_SKIP`
+- **Files:** `scripts/orchestrate_poll_process.sh`, all inside the per-project `for ((tidx=0; tidx<COUNT; tidx++))` loop (`:27636`–`:34607`):
+  - `:27840` resets `DEFAULT_BRANCH_TRACKING=""`
+  - `:28530-28532` fills it on every iteration that reaches the sync block
+  - `:28576` (`FINAL_DEFAULT_BRANCH`, `merge_conflict` branch) and `:33627` (`DEFAULT_BRANCH`, before the check-runs read at `:33628`) re-read it
+  - `:33984` already uses the intended pattern: `FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq ...)}"`
+- **Endpoint:** `GET /repos/{owner}/{repo}`.
+- **Current call count:** up to 2 per project per cycle. **Proposed:** 0 when `DEFAULT_BRANCH_TRACKING` is set.
+- **Evidence:**
+  ```bash
+  if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
+    DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  fi
+  ...
+  FINAL_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  ```
+  - Both sites use the same `|| echo "main"` fallback.
+  - The file already has a per-process memo, `_review_run_default_branch` (`:26882-26934`), but it fails closed rather than falling back to `"main"`, so the two can't simply be unified.
+  - About 20 `.default_branch` reads exist in the file (for example `:4263`, `:5580`, `:6099`, `:17335`, `:34794`).
+- **Proposed fix:** at `:28576` and `:33627`, use `${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq ...)}`, mirroring `:33984`.
+- **Safety rationale:** the code is in `orchestrate_poll_process.sh` (hard trigger). A `"main"` fallback cached by `:28531` after a transient failure would also stick for the rest of the iteration instead of being retried.
+- **Downstream signal:** manual review only. A reviewer must confirm that no code between `:28531` and `:33627` changes `DEFAULT_BRANCH_TRACKING` to a non-default value; `:28364` sets it from `EXTFIN_DEFAULT_BRANCH`. They must also accept the sticky-fallback trade-off before editing the poller.
+
+**REUSE-004: clarify reads `/user` twice in one job for release-marker and capacity-replay comments** — `NEEDS_VERIFICATION`
+- **Files:**
+  - `.github/workflows/clarify.yml:804` (step "Decide clarify route", where `_rel_login` is already reused within the step at `:859-861`)
+  - `:1107` (step "Set clarification phase label")
+  - Both steps run with `GH_TOKEN: ${{ secrets.GH_PAT }}` (`:719`, `:1086`) in the same `clarify` job.
+- **Endpoint:** `GET /user`.
+- **Current call count:** 2 on runs whose comment is a PR-dependency release marker or a capacity-wait replay. **Proposed:** 1.
+- **Evidence:**
+  ```bash
+  if _rel_login="$(source scripts/gh_helpers.sh && gh_retry gh api user --jq .login)" \
+  ...
+  hold_release_login="$(gh api user --jq .login 2>/dev/null || true)"
+  ```
+  The §14 comment at `:796-798` says no earlier call in the job returns the token's identity, but it doesn't account for the later read at `:1107`.
+- **Proposed fix:** when `_rel_login` matches the login regex at `:805`/`:862`, write `CLARIFY_ROUTE_PIPELINE_LOGIN=<login>` to `$GITHUB_ENV`. The name is new and has no collisions. At `:1107`, use `hold_release_login="${CLARIFY_ROUTE_PIPELINE_LOGIN:-$(gh api user --jq .login 2>/dev/null || true)}"`.
+- **Safety rationale:** it is the same endpoint and token, but it crosses a step boundary. The login also gates which hold markers get released, so this is an identity probe.
+- **Downstream signal:** before implementing, verify that:
+  - no step between `:715` and `:1083` changes `GH_TOKEN` or runs under a different token;
+  - writing the login to `$GITHUB_ENV` is acceptable; it is a public login, not a secret;
+  - `:1107` keeps its current fail-open behaviour when the env value is empty.
+
+**REUSE-005: the first hop of the implement no-op ancestry walk re-fetches the current issue already cached in `ISSUE_META_FILE`** — `NEEDS_VERIFICATION`
+- **Files:**
+  - `.github/workflows/implement.yml:5691` (hop 1 runs with `current="${ISSUE_NUMBER}"`, set at `:5689`)
+  - The cache is written at `:1030-1031` and exported through `GITHUB_ENV` at `:325-326`.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{ISSUE_NUMBER}`.
+- **Current call count:** 1 on hop 1. **Proposed:** 0 when the cache matches.
+- **Evidence:**
+  ```bash
+  parent_body="$(gh_retry gh api "repos/${REPO}/issues/${current}" --jq '.body // ""' 2>/dev/null || echo "")"
+  ```
+  The step only needs the `Re-issued from #N` line (`:5692`), which the re-issue flow writes when it creates the issue.
+- **Proposed fix:** on hop 1 only, if `jq -e --arg n "${ISSUE_NUMBER}" '(.number|tostring)==$n' "${ISSUE_META_FILE}"` succeeds, read `.body // ""` from the file. Otherwise fall back to the existing call.
+- **Safety rationale:** it isn't paginated, isn't in the poller, and isn't a retry or stall path. But the source was written in an earlier step, and the metadata can be emptied on mismatch (`:1002-1003`, `:1021-1022`), so equivalence isn't proven.
+- **Downstream signal:** before implementing, verify that no step between `:1031` and `:5536` rewrites the issue body in a way that could change the `Re-issued from #N` line, and that `ISSUE_META_FILE` is still present in this step's environment.
+
+### Dead Calls (DEAD-API-###)
+No findings. The candidates I checked all have their results used:
+- the sweep's `/user` read at `:505`, used at `:516`;
+- the merge-train `/user` read at `:824`, memoized in `MT_AUTOMATION_LOGIN`;
+- the heal-report `/user` reads at `:172` and `:210`, memoized;
+- the intake's provenance comments at `:1308`, consumed at `:1324` and `:1827`.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — this changes the retry loop of the shared `gh_api_json_to_file` helper. Some callers may rely on retrying a 404 while GitHub catches up, for example the run GET at `workflow_failure_heal_intake.sh:1317` and the compare against a just-pushed SHA at `:653`. Each caller needs a review before 404/422 stops being retried.
+- API-002: RISKY_SKIP — this changes the retry classification for batched GraphQL in `review_merge_train.sh:558` and `cancel_on_pr_close.yml:230`. It also depends on how the pinned gh version exits on partial `errors[]`, which is unconfirmed.
+- API-003: SAFE_TO_MERGE — new detail:
+  - `workflow_failure_heal_intake.sh` never reassigns `GH_TOKEN`, so the reads at `:1305` and `:2078` use the same token through the same `gh_retry`.
+  - The file already does this reuse at `:2249-2250`.
+  - The duplicate only happens for `SOURCE_KIND` values `issue`, `pull_request` and `autofix_failure`, because `phase_failure` already reuses the login at `:1830`.
+  - The fallback call must stay for `workflow_run` and for non-self `phase_failure`, where `PROVENANCE_LOGIN` is empty.
+- API-004: NEEDS_VERIFICATION — new detail:
+  - The per-PR read at `review_autofix_sweep.yml:517` only runs after the label check (`:503`), login resolution (`:504-512`) and author match (`:516`). A batch query must apply the same pre-filter, or it will read issues for smoke PRs the pipeline didn't author.
+  - A missing or errored alias must map to an empty state (no close), matching the current `|| true`.
+  - The batch must use `READ_TOKEN`.
+- API-005: RISKY_SKIP — correction to the proposed fix:
+  - Each hop reads the body of `current` (`implement.yml:5691`) and the comments of a different issue, `parent_num` (`:5695`). The pair that can actually be merged is hop k's comments(`parent_num`) with hop k+1's body(`parent_num`).
+  - Replacing the REST `--paginate` comment listing with GraphQL `comments(last:100)` would drop no-op markers beyond 100 comments, which is the pagination trigger.
+  - The safe part of this is REUSE-005.
+
+### Summary Counts
+These counts cover both the new findings above and the Deep Audit IDs tagged in the cross-references.
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 1 | API-003 |
+| NEEDS_VERIFICATION | 3 | REUSE-004, REUSE-005, API-004 |
+| RISKY_SKIP | 7 | MERGE-001, REUSE-001, REUSE-002, REUSE-003, API-001, API-002, API-005 |
+
+### Implement-Stage Handoff
+- API-003: in `scripts/workflow_failure_heal_intake.sh:2074`, set `HEAL_TRUSTED_AUTHOR="${PHASE_COMMENT_AUTHOR:-${PROVENANCE_LOGIN:-}}"`. Keep the existing `gh_retry gh api --method GET user` fallback at `:2075-2079` unchanged for when the value is empty. Update the §14 comment at `:2076-2077` to say the provenance read is reused.
