@@ -508,23 +508,34 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
       cat "${_p}"
       _emit_bytes="${_size}"
     else
-      PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY' || head -c "${_effective_cap}" "${_p}"
+      # python3 returns the cut moved back to a UTF-8 character boundary
+      # (heal #9261), so the emitted bytes, the TRUNCATED marker and the
+      # budget all use one count. Fail open: on any python3 failure keep the
+      # original byte cut.
+      local _rb_utf8_cut_bytes
+      _rb_utf8_cut_bytes="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY'
 import sys
 
 cap = int(sys.argv[2])
 read_cap = cap + 1 if cap > 0 else 0
 with open(sys.argv[1], 'rb') as fh:
     data = fh.read(read_cap)
+i = cap
 if cap > 0 and len(data) > cap:
-    i = cap
     while i > 0 and (data[i] & 0xC0) == 0x80:
         i -= 1
-    data = data[:i]
-sys.stdout.buffer.write(data)
+print(i)
 PY
+)" || _rb_utf8_cut_bytes=""
+      if ! [[ "${_rb_utf8_cut_bytes}" =~ ^[0-9]+$ ]] || [ "${_rb_utf8_cut_bytes}" -gt "${_effective_cap}" ]; then
+        _rb_utf8_cut_bytes="${_effective_cap}"
+      fi
+      if [ "${_rb_utf8_cut_bytes}" -gt 0 ]; then
+        head -c "${_rb_utf8_cut_bytes}" "${_p}"
+      fi
       printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s; fallback embedder) ...]\n' \
-        "${_size}" "${_effective_cap}" "${_mode}" "${_cap}" "${_budget_remaining}"
-      _emit_bytes="${_effective_cap}"
+        "${_size}" "${_rb_utf8_cut_bytes}" "${_mode}" "${_cap}" "${_budget_remaining}"
+      _emit_bytes="${_rb_utf8_cut_bytes}"
     fi
 
     if [[ "${_emit_bytes:-}" =~ ^[0-9]+$ ]] && [ "${_emit_bytes}" -gt 0 ]; then

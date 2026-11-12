@@ -227,3 +227,39 @@ def test_embed_input_file_ascii_cut_unchanged(tmp_path: Path) -> None:
 	assert text.startswith("0123456789012345678901234\n[... TRUNCATED")
 	assert _shown_bytes(text) == 25
 	assert budget == "25"
+
+
+RB_JUDGE = SCRIPTS_DIR / "review_rb_judge.sh"
+
+
+def _rb_judge_fallback_block() -> str:
+	lines = RB_JUDGE.read_text(encoding="utf-8").splitlines()
+	start = lines.index("if ! command -v _embed_input_file >/dev/null 2>&1; then")
+	end = lines.index("fi", start)
+	return "\n".join(lines[start : end + 1]) + "\n"
+
+
+@pytest.mark.parametrize("cap, shown", [(9, 8), (10, 8), (11, 11)])
+def test_rb_judge_fallback_embed_reports_trimmed_count(tmp_path: Path, cap: int, shown: int) -> None:
+	fallback = tmp_path / "fallback.sh"
+	fallback.write_text(_rb_judge_fallback_block(), encoding="utf-8")
+	src = tmp_path / "input.bin"
+	src.write_bytes(b"abcdefgh" + EM_DASH * 20)
+	script = (
+		f'source "{fallback}"\n'
+		"_init_prompt_budget\n"
+		'_embed_input_file "$1" "$2" head\n'
+		'cat "$(_prompt_budget_state_file)" >&2\n'
+	)
+	result = subprocess.run(
+		["bash", "-c", script, "embed", str(src), str(cap)],
+		capture_output=True,
+		cwd=str(tmp_path),
+		env=_env(tmp_path),
+		check=False,
+	)
+	assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+	text = result.stdout.decode("utf-8")
+	assert text.startswith((b"abcdefgh" + EM_DASH * ((shown - 8) // 3)).decode("utf-8") + "\n[... TRUNCATED")
+	assert _shown_bytes(text) == shown
+	assert result.stderr.decode("utf-8").strip().splitlines()[-1] == str(shown)
