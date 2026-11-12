@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1238-1247 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When stdout is empty, `read -d ''` hits EOF and may leave the variable unset, so under `set -u` the post-loop `[ -n \"${_gh_retry_replay_chunk}\" ]` aborts the replay subshell and a successful gh_retry with empty stdout returns non-zero.\n  WHY: Source severity MAJOR; callers that get empty bodies under `set -euo pipefail` would treat the call as failed, a regression from `cat`.\n- scripts/gh_helpers.sh:1238-1247 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The NUL-delimited `read -d ''` plus `printf` replay loop relies on subtle read behavior and is more fragile than a single stream copy.\n  WHY: The reviewer says it is byte-exact and shows no runtime failure, so this is a style concern only. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) re-checked the loop and found it byte-exact.\n- tests/test_gh_retry_stdout_isolation.py:642 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The closed-reader test asserts only that rc is non-zero and does not pin the documented 141 (SIGPIPE) or 1 (EPIPE).\n  WHY: An unrelated non-zero status would pass; severity is NIT, and the NUL-byte test limits the exposure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"tests/test_codex_isolated_exec.py, test_missing_docker_fails_closed_and_never_runs_host_codex: skip names that already exist using os.path.lexists(target) so broken links are not linked twice.\"\n  expected_change_site: tests/test_codex_isolated_exec.py\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not modify tests/test_codex_isolated_exec.py. Three other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) found `os.path.lexists` already present at line 232, shipped earlier under Refs #9200, so they report no gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_gh_retry_stdout_isolation.py:~642 | severity=low | confidence=3\n  PROBLEM: The assertion `rc_line.startswith(\"rc=\") and rc_line != \"rc=0\"` accepts any non-zero status and does not pin 141 or 1.\n  WHY: An unrelated non-zero replay status would pass this test; the NUL-byte test limits the exposure.\n- TASK_GAP: (No task gaps reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:1238-1247 | severity=low | confidence=2\n  PROBLEM: The replay loop using `read -d ''` and `printf` relies on subtle read behavior and may be more fragile than a single stream operation.\n  WHY: It does not demonstrate a runtime correctness failure.\n- tests/test_gh_retry_stdout_isolation.py:642 | severity=low | confidence=3\n  PROBLEM: The closed-reader test asserts rc is non-zero but does not pin 141 or 1.\n  WHY: An unrelated failure could produce a non-zero code and pass the test.\n- TASK_GAP: Requirement: \"1) tests/test_codex_isolated_exec.py, test_missing_docker_fails_closed_and_never_runs_host_codex: in the loop that links system tools into no_docker, skip names that already exist using os.path.lexists(target) (or target.is_symlink() or target.exists()) so broken links are not linked twice.\"\n  Expected change site: tests/test_codex_isolated_exec.py\n  Evidence of absence: The PR diff does not include any changes to tests/test_codex_isolated_exec.py. If the test is still failing, it remains a gap.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/gh_helpers.sh:1238-1247 | severity=high | confidence=3\n  PROBLEM: When stdout is empty, `read -d ''` hits EOF and may leave the variable unset, so under `set -u` the post-loop `[ -n \"${_gh_retry_replay_chunk}\" ]` aborts the replay subshell and a successful gh_retry with empty stdout returns non-zero.\n  WHY: Source severity MAJOR; callers using gh_retry for empty-body endpoints under `set -euo pipefail` would see the call as failed, a regression from `cat`.\n- tests/test_gh_retry_stdout_isolation.py:640-642 | severity=low | confidence=3\n  PROBLEM: The closed-reader test accepts any non-zero replay rc and does not pin 141 or 1.\n  WHY: A future change returning a different non-zero status would pass; the NUL-byte test limits the exposure.\n- TASK_GAP: (No task gaps reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_gh_retry_stdout_isolation.py:642 | severity=low | confidence=3\n  PROBLEM: The closed-reader test accepts any non-zero status, while scripts/gh_helpers.sh:1234 documents exactly 141 (SIGPIPE) or 1 (EPIPE).\n  WHY: No runtime failure today; it only weakens the closed-pipe regression pin.\n- TASK_GAP: (No task gaps reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c9b1778f11239dc5dc17ee2a2482ad550b932b908aaf3b38c9b0893a1276362e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9267,
+    "run_id": "43165475318",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43165475318",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112103138_7655a195fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9267,
+    "run_id": "43165475318"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T10:31:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
