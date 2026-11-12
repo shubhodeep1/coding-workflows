@@ -653,3 +653,15 @@ def test_replay_keeps_nul_bytes_and_trailing_newlines(tmp_path: Path) -> None:
 	assert result.stderr == ""
 	assert _calls(tmp_path) == 1
 	assert _leftover_temp_files(tmp_path) == []
+
+
+@pytest.mark.parametrize("payload", ["a\\b\0", "\0", "x\n\0\0"])
+def test_replay_of_output_ending_in_nul_is_not_duplicated(tmp_path: Path, payload: str) -> None:
+	# A trailing NUL makes the last `read -d ''` hit EOF with no data, so the
+	# post-loop branch must be skipped and the final chunk emitted once.
+	env = _setup(tmp_path, [(payload, "", 0)])
+	result = _run(tmp_path, env, "gh_retry gh api repos/o/r")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == payload
+	assert _calls(tmp_path) == 1
+	assert _leftover_temp_files(tmp_path) == []
