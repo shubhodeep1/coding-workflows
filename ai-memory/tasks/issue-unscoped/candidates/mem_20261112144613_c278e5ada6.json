@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Do not change `_orch_poll_cycle_now_ms`, its EPOCHREALTIME and date fallbacks, or `SUMMARY_RE`\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh:36-56` (`_orch_poll_cycle_now_ms`) and `tests/test_orchestrate_poll_cycle_summary.py:32-36` (`SUMMARY_RE`)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer reports the constraint is honored. The diff touches only the regions around `_orch_poll_cycle_project_flush` (lines 74-93) and `_orch_poll_cycle_on_exit` (lines 118-138). `_orch_poll_cycle_now_ms` and `SUMMARY_RE` are untouched. Source severity: NIT.\n- requirement: \"Add tests to tests/test_orchestrate_poll_cycle_summary.py: test_cycle_summary_reports_unknown_elapsed_when_start_is_in_the_future ... and test_project_timing_reports_unknown_elapsed_when_start_is_in_the_future ...\"\n  expected_change_site: `tests/test_orchestrate_poll_cycle_summary.py`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer reports both tests are present at lines 188-194 and 197-209 and match the spec. Source severity: NIT.\n- requirement: \"Add changelog.d/9243-poller-negative-elapsed-unknown.md\"\n  expected_change_site: `changelog.d/9243-poller-negative-elapsed-unknown.md`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer reports the file is present with the `<!-- changelog: fixed -->` marker and `Refs #9243`. Source severity: NIT.\n- requirement: \"Both must fail on isolated-base and pass after the fix\"\n  expected_change_site: `tests/test_orchestrate_poll_cycle_summary.py`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer reports that editor-summary PR comments show both tests failing with the guards removed (negative elapsed values `-98205551273488`, `-98205551273467`) and passing on the PR head. Source severity: NIT.\n- requirement: \"Run the whole test file plus tests/test_alert_levels_human_only.py\"\n  expected_change_site: `tests/test_orchestrate_poll_cycle_summary.py`, `tests/test_alert_levels_human_only.py`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer reports that editor-summary PR comments show 103 tests passing across both files on the PR head. Source severity: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Do not change `_orch_poll_cycle_now_ms`, its EPOCHREALTIME and date fallbacks, or `SUMMARY_RE`\"\n  Expected change site: `scripts/orchestrate_poll_process.sh:36-56` (`_orch_poll_cycle_now_ms`) and `tests/test_orchestrate_poll_cycle_summary.py:32-36` (`SUMMARY_RE`)\n  Evidence of absence: The constraint is honored. The diff touches only the regions around `_orch_poll_cycle_project_flush` (lines 74-93) and `_orch_poll_cycle_on_exit` (lines 118-138), and the two new tests are appended after line 185.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"Add tests ... test_cycle_summary_reports_unknown_elapsed_when_start_is_in_the_future ... and test_project_timing_reports_unknown_elapsed_when_start_is_in_the_future ...\"\n  Expected change site: `tests/test_orchestrate_poll_cycle_summary.py`\n  Evidence of absence: Both tests are present at lines 188-194 and 197-209. The deliverable is present and matches the spec.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"Add changelog.d/9243-poller-negative-elapsed-unknown.md\"\n  Expected change site: `changelog.d/9243-poller-negative-elapsed-unknown.md`\n  Evidence of absence: The file is present with the `<!-- changelog: fixed -->` marker and `Refs #9243`. The deliverable is present.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"Both must fail on isolated-base and pass after the fix\"\n  Expected change site: `tests/test_orchestrate_poll_cycle_summary.py`\n  Evidence of absence: Editor-summary PR comments show both tests failing with the guards removed and passing on the PR head. The acceptance criterion is satisfied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"Run the whole test file plus tests/test_alert_levels_human_only.py\"\n  Expected change site: `tests/test_orchestrate_poll_cycle_summary.py`, `tests/test_alert_levels_human_only.py`\n  Evidence of absence: 103 tests passed across both files on the PR head in the most recent runs.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Overall: the reviewer concluded \"No issues found.\"\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "b04b7aeb141a24320d4bfc75ec68ed835df7b69fb48f11aba44aed0d6073d6f6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9336,
+    "run_id": "43215507328",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43215507328",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112144613_c278e5ada6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9336,
+    "run_id": "43215507328"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-12T14:46:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
