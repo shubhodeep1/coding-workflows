@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh:349-410 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When the loop over GUARD_HOOK_TEMPLATE_PAIRS hits a fatal error (rc 2) on a later pair, earlier successfully merged pairs remain staged in the Git index and the script exits without cleaning up.\n  WHY: The index is left partially staged and inconsistent, which could interfere with later resolver or push steps (reported as MAJOR).\n- tests/test_conflict_guard_hook_template_merge.py:529-549 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: After the strict xfail marker and pytest shim were removed, the XFAIL (lines 537-539) and XPASS(strict) (lines 547-549) branches in main() are unreachable dead code.\n  WHY: Not a runtime defect, only maintainability residue; both reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The shell pair list in GUARD_HOOK_TEMPLATE_PAIRS must cover PAIRED_LIVE_COPIES exactly, so that no shell-only pair can skip the Python-side sandbox exclusion check.\n  expected_change_site: tests/test_conflict_guard_hook_template_merge.py test_shell_pair_list_matches_paired_live_copies (lines 496-502)\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: tests/test_conflict_guard_hook_template_merge.py lines 496-502 enforce coverage in one direction only (every Python pair must appear in the shell list) and allow extra shell entries that follow the naming convention, so a future shell-only pair absent from PAIRED_LIVE_COPIES would pass the test.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_prepare.sh:349-410 | severity=MAJOR | confidence=3\n  PROBLEM: When the loop over GUARD_HOOK_TEMPLATE_PAIRS encounters a fatal error (rc 2) on a later pair, the earlier successful pairs remain staged in the Git index, and the script exits without cleaning up the staging area.\n  WHY: The Git index is left in a partially-staged and inconsistent state, which could interfere with subsequent resolver or push steps.\n- TASK_GAP:\n  Requirement: The shell pair list in GUARD_HOOK_TEMPLATE_PAIRS must cover PAIRED_LIVE_COPIES exactly, ensuring no pair added to the shell list can skip the Python-side sandbox exclusion check.\n  Expected change site: tests/test_conflict_guard_hook_template_merge.py lines 498-502\n  Evidence of absence: The current test implementation skips any live path found in PAIRED_LIVE_COPIES (lines 498-500) and only checks the naming convention for extra entries (lines 501-502). A shell-only pair that does not follow the convention and is not in PAIRED_LIVE_COPIES would pass the test while potentially not being excluded by `scripts/review_untrusted_workspace.py`. The check should require strict set equality.\n  severity=MAJOR | confidence=3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_conflict_guard_hook_template_merge.py:529-549 | severity=NIT | confidence=4\n  PROBLEM: The last run removed the `_xfail_without_pytest` shim and the `PREPUSH_GAP_REASON` strict-xfail marker, so `expect_fail` is always False and the XFAIL and XPASS(strict) branches at lines 537-539 and 547-549 are unreachable.\n  WHY: Not a runtime defect; the harness pretends to support a feature no test in this file uses.\n- TASK_GAP:\n  Requirement: the shell pair list must cover every pair in `PAIRED_LIVE_COPIES` in `scripts/review_untrusted_workspace.py`.\n  Expected change site: `tests/test_conflict_guard_hook_template_merge.py` `test_shell_pair_list_matches_paired_live_copies` at lines 496-502.\n  Evidence of absence: The test enforces coverage in one direction only and permits extra shell entries with the paired shape. Both lists hold 5 pairs today, so the relaxation is latent: a future shell-only pair that the Python side never excludes would still pass.\n  severity=MAJOR | confidence=3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_conflict_guard_hook_template_merge.py:533-549 | severity=NIT | confidence=4\n  PROBLEM: After the last run removed the strict xfail marker and pytest import shim, no test carries a pytestmark, so the XFAIL branch (lines 537-539) and XPASS(strict) branch (lines 547-549) in main() are dead code.\n  WHY: No runtime failure, only dead branches; a one-line comment would resolve it if the generality is intentional.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "696bbb1eb760b934190a85353941a1406cb26e284c6e67f779f9be79de8e19f8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9010,
+    "run_id": "43155579095",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43155579095",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261112045102_57b5fa847c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9010,
+    "run_id": "43155579095"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-12T04:51:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
