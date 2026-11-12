@@ -3695,6 +3695,10 @@ def _traceback_context_indices(lines: list[str]) -> set[int]:
 	or the next header ends it, and a chained traceback's header starts its
 	own block. Each block keeps at most _TRACEBACK_CONTEXT_MAX_LINES lines, the
 	last ones, since the innermost frames and the exception are printed last.
+	When more continuation lines follow the exception line than that cut
+	holds (a pydantic ValidationError lists every error indented), the cut
+	keeps the exception line and the innermost frames before it plus the
+	last lines of the block, so the exception type and message are not lost.
 	A traceback still without its exception line after
 	_TRACEBACK_SCAN_MAX_LINES lines is walked on with the same line rules, so
 	its exception line and the continuation lines and chain marker after it
@@ -3711,6 +3715,7 @@ def _traceback_context_indices(lines: list[str]) -> set[int]:
 			continue
 		block: list[int] = []
 		exception_seen = False
+		exception_pos: int | None = None
 		cursor = index + 1
 		scan_end = min(total, cursor + _TRACEBACK_SCAN_MAX_LINES)
 		while cursor < scan_end:
@@ -3720,6 +3725,7 @@ def _traceback_context_indices(lines: list[str]) -> set[int]:
 			if not content.strip() or content[:1].isspace() or _TRACEBACK_CHAIN_RE.match(content.strip()):
 				block.append(cursor)
 			elif not exception_seen:
+				exception_pos = len(block)
 				block.append(cursor)
 				exception_seen = True
 			else:
@@ -3743,6 +3749,7 @@ def _traceback_context_indices(lines: list[str]) -> set[int]:
 				if not content.strip() or content[:1].isspace() or _TRACEBACK_CHAIN_RE.match(content.strip()):
 					block.append(cursor)
 				elif not exception_seen:
+					exception_pos = len(block)
 					block.append(cursor)
 					exception_seen = True
 				else:
@@ -3750,7 +3757,15 @@ def _traceback_context_indices(lines: list[str]) -> set[int]:
 				cursor += 1
 		while block and not _LOG_TIMESTAMP_RE.sub("", lines[block[-1]]).strip():
 			block.pop()
-		kept.update(block[-_TRACEBACK_CONTEXT_MAX_LINES:])
+		if exception_pos is not None and len(block) - exception_pos > _TRACEBACK_CONTEXT_MAX_LINES:
+			# The last-N cut would drop the exception line: keep it with the
+			# innermost frames before it (half the cap) and fill the rest with
+			# the block's last lines (continuation lines, chain marker).
+			exception_head = block[max(0, exception_pos + 1 - _TRACEBACK_CONTEXT_MAX_LINES // 2):exception_pos + 1]
+			kept.update(exception_head)
+			kept.update(block[len(block) - (_TRACEBACK_CONTEXT_MAX_LINES - len(exception_head)):])
+		else:
+			kept.update(block[-_TRACEBACK_CONTEXT_MAX_LINES:])
 		index = cursor
 	return kept
 

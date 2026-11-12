@@ -1235,6 +1235,37 @@ def test_filter_log_keeps_the_chain_marker_after_an_exception_line_at_the_scan_w
 	assert "later output 0" not in filtered
 
 
+def test_filter_log_keeps_the_exception_line_before_many_continuation_lines() -> None:
+	# A pydantic ValidationError prints every error indented after the
+	# exception line, so more than _TRACEBACK_CONTEXT_MAX_LINES continuation
+	# lines can follow it; the cut must still keep the exception line.
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(40)]
+	details = [f"  field_{i}\n    Field required [type=missing]" for i in range(30)]
+	exception_line = "pydantic_core._pydantic_core.ValidationError: 30 validation errors for Settings"
+	marker = "During handling of the above exception, another exception occurred:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		exception_line,
+		*"\n".join(details).split("\n"),
+		"",
+		marker,
+		"",
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: settings failed",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert exception_line in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	assert marker in filtered
+	assert "RuntimeError: settings failed" in filtered
+	first_block = set(frames) | {exception_line} | set("\n".join(details).split("\n"))
+	assert len([line for line in filtered if line in first_block]) <= heal._TRACEBACK_CONTEXT_MAX_LINES
+	assert "later output 0" not in filtered
+
+
 def test_drop_step_script_lines_drops_unstyled_echoed_script() -> None:
 	dropped = heal._drop_step_script_lines(BTC_SWEEPER_UNSTYLED_STEP_LOG)
 	assert "set -euo pipefail\n" not in dropped.split("##[group]Run set -euo pipefail", 1)[1]
