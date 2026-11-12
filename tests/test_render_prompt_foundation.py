@@ -1462,6 +1462,11 @@ def main() -> int:
 	test_render_prompt_py_identity_recall_reports_canonical_prompt_missing_details()
 	test_render_prompt_py_identity_recall_reports_render_failure_details()
 	test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt()
+	# CI runs this module directly (`python3 tests/test_render_prompt_foundation.py`),
+	# so tests must be listed here to execute there (#9341, #9365).
+	test_render_prompt_py_reports_non_utf8_prompt_without_traceback()
+	test_render_prompt_sh_reports_non_utf8_prompt_without_traceback()
+	test_render_prompt_py_reports_unexpected_exception_without_traceback()
 	print("OK: render prompt foundation assertions hold")
 	return 0
 
