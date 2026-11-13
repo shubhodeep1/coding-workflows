@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:680 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `[ \"${vst_elapsed_ms}\" -ge 0 ] || vst_elapsed_ms=0` clamp at line 680 is redundant because the preceding `case` statement already leaves `vst_elapsed_ms` at 0 when the subtraction is skipped.\n  WHY: The reviewer states it does not fail at runtime and the code is functional; it only indicates confused logic. The reviewer gave no severity, so low is assigned as the lowest level.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" (one reviewer also quotes: \"Do not raise `timeout-minutes` and do not split tests into new required job names.\")\n  expected_change_site: `.github/workflows/ci.yml`, the \"Validation self-test unit tests\" step in `static-checks`\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The step remains in `static-checks` (`.github/workflows/ci.yml:578`) and its 23 commands run in four concurrent lanes in place instead of being moved to another job. Most reviewers note this follows the approved plan on #9362, and the issue's hard limits (job and step names, `timeout-minutes: 15`, no new required job) are met. Severity is NIT in every report. Confidence ranges from 2 to 5, and 5 is used here as the maximum.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, relocating \"Validation self-test unit tests\" out of `static-checks`.\nEvidence of absence: The step stays in `static-checks` and its 23 commands run in four lanes inside that step. The approved plan on #9362 chose this deliberately, and the `ci.yml` comments give the reason. The issue's hard limits are met. Reported for completeness only, as a documented, plan-approved deviation.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:680 | severity=low | confidence=2\n  PROBLEM: The clamp of `vst_elapsed_ms` at line 680 is redundant because the `case` statement already leaves it at 0.\n  WHY: The reviewer states it does not fail at runtime.\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: .github/workflows/ci.yml, moving the \"Validation self-test unit tests\" step to another job (e.g., `tests-hooks-and-orchestrator` or `orchestrate-poll` group 3/4).\nEvidence of absence: The step remains in `static-checks` (line 578 of .github/workflows/ci.yml) and its body has been rewritten to run 23 commands in four concurrent lanes in place instead of moving the step. This deviates from the requirement, even if intentional based on the plan.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, the \"Validation self-test unit tests\" step.\nEvidence of absence: The step remains in `static-checks` (line 578) and its 23 commands run in four concurrent lanes inside the same step body. The hard limits from the issue are still satisfied. This is the approved-plan deviation documented in the AI Issue Summary, the workflow comment block at lines 552\u2013577, and the changelog and agents fragments.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, the \"Validation self-test unit tests\" step in `static-checks`.\nEvidence of absence: The PR changes that step's body to run 23 commands in four concurrent lanes, but does not move the step to another job or leave it unchanged. The change follows the approved in-place plan, but that plan does not satisfy this explicit linked-issue requirement.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, relocating the \"Validation self-test unit tests\" step from `static-checks` into another job.\nEvidence of absence: The step remains inside `static-checks` (`.github/workflows/ci.yml:578`) and no step was moved to another job; its commands run in four concurrent lanes in place. The PR body, the AI Issue Summary comment and the ci.yml comment block (lines 549-577) record this as the approved plan's deliberate replacement of the move approach, and the issue's hard limits are met. Reported for completeness only.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f5245559fe8bd53f358e599c256deb1399eaff3eee6599ac2eb625059de12be5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9368,
+    "run_id": "43390790325",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43390790325",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113162755_69d27b5758",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9368,
+    "run_id": "43390790325"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T16:27:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
