@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If `${GITHUB_EVENT_NAME}` is `pull_request` or `pull_request_target` \u2026 read `.pull_request.head.sha`.\"\n  expected_change_site: scripts/workflow_failure_heal_autofix_report.sh, run-head event-name check\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The code at line 374 explicitly checks only GITHUB_EVENT_NAME=pull_request and the comment at lines 359-360 indicates pull_request_target is excluded, The event-head branch accepts only `GITHUB_EVENT_NAME=pull_request` at lines 374-375. The comment at lines 359-360 and the test case at `tests/test_workflow_failure_heal.py:5278` explicitly exclude `pull_request_target`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"If `${GITHUB_EVENT_NAME}` is `pull_request` or `pull_request_target` \u2026 read `.pull_request.head.sha`.\"\n  Expected change site: scripts/workflow_failure_heal_autofix_report.sh, run-head event-name check\n  Evidence of absence: The code at line 374 explicitly checks only GITHUB_EVENT_NAME=pull_request and the comment at lines 359-360 indicates pull_request_target is excluded.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"If GITHUB_EVENT_NAME is pull_request or pull_request_target,\" read the event's `.pull_request.head.sha`.\n  Expected change site: `scripts/workflow_failure_heal_autofix_report.sh`, run-head event-name check.\n  Evidence of absence: The event-head branch accepts only `GITHUB_EVENT_NAME=pull_request` at lines 374-375. The comment at lines 359-360 and the test case at `tests/test_workflow_failure_heal.py:5278` explicitly exclude `pull_request_target`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "897c172d6663243431caf023cbe6bc5146836d38267518da3654abdf6257bf52",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9278,
+    "run_id": "43161891175",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43161891175",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113202500_ce5eb89eb0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9278,
+    "run_id": "43161891175"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T20:25:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
