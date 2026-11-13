@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run the whole test file plus tests/test_alert_levels_human_only.py.\"\n  expected_change_site: Verification of tests/test_orchestrate_poll_cycle_summary.py and tests/test_alert_levels_human_only.py on the current PR head\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description records 0 tests run and marks both test targets \"not run\"; earlier PR comments describe runs on older heads, but do not establish verification of this current head.\n- requirement: Both new future-start tests \"must fail on isolated-base and pass after the fix.\"\n  expected_change_site: Verification of test_cycle_summary_reports_unknown_elapsed_when_start_is_in_the_future and test_project_timing_reports_unknown_elapsed_when_start_is_in_the_future against the isolated base and current PR head\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description marks both red-on-base acceptance checks \"not run\"; earlier PR comments describe checks on older heads, not verification against the current head.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Run the whole test file plus tests/test_alert_levels_human_only.py.\"\n  Expected change site: Verification of tests/test_orchestrate_poll_cycle_summary.py and tests/test_alert_levels_human_only.py on the current PR head.\n  Evidence of absence: The PR description records 0 tests run and marks both test targets \"not run.\" Earlier PR comments describe runs on older heads, but do not establish verification of this current head.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: Both new future-start tests \"must fail on isolated-base and pass after the fix.\"\n  Expected change site: Verification of test_cycle_summary_reports_unknown_elapsed_when_start_is_in_the_future and test_project_timing_reports_unknown_elapsed_when_start_is_in_the_future against the isolated base and current PR head.\n  Evidence of absence: The PR description marks both red-on-base acceptance checks \"not run.\" Earlier PR comments describe checks on older heads, not verification against the current head.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "639468d503dd60402383c419e0caf9a3d675ff4064a511764528226a8fc61f9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9336,
+    "run_id": "43326831769",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43326831769",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113091328_060ac4a7da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9336,
+    "run_id": "43326831769"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-13T09:13:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
