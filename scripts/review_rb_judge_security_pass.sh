@@ -287,7 +287,7 @@ Open high/critical/unrated security findings (${RB_SECURITY_BLOCKING_ISSUES:-unk
 # security-exhaustion merge without blocking findings may reach it.
 # Returns 0 when a judge merge may proceed, 1 when the security gate holds it.
 # A hold sets RB_SECURITY_HOLD_REASON: the gate's hold_reason (audit_dispatched,
-# audit_pending and awaiting_followups resolve without a human; a failed
+# audit_pending, awaiting_followups and head_unpushed resolve without a human; a failed
 # pending-marker write must keep pending_marker_failed even on a nonzero exit), or
 # security_mode_unverified, gate_failed or unknown.
 rb_security_merge_gate()
