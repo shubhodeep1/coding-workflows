@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.sh:195, 304-309 | severity=major | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: `collect_prompt_placeholders` reads the prompt with strict UTF-8 decoding and nothing checks the scan's exit status, so invalid UTF-8 yields no placeholder `--var` args while the wrapper still exits 0 (the related renderer code is at scripts/render_prompt.py:190-196 and 1340-1347).\n  WHY: After this PR `render_prompt.py` succeeds on invalid UTF-8, so the output can keep literal `{{NAME}}` tokens with only a stderr traceback. anthropic_claude-sonnet-5_5 notes the defect predates the PR and is out of the plan grant's `files_touched`, so it is not actionable in this PR.\n- scripts/gh_helpers.sh:_embed_utf8_safe_cut (od invocation) | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: `\"${_cut_path}\"` is passed to `od` without a `--` end-of-options marker.\n  WHY: A path starting with a dash would be parsed as an option. Callers pass internal temp paths, so this is hardening only. The reviewers rated it NIT or a hardening suggestion.\n- .github/workflows/ci.yml:tests/test_ci_wires_every_test_file.py | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The CI check-run for tests/test_ci_wires_every_test_file.py is reported as failing.\n  WHY: The task requires this test to pass, and the reviewer treats the failure as incomplete wiring. The reviewer rated it BLOCKER. anthropic_claude-sonnet-5_5 reports 0 failed check-runs on the PR head, which disagrees.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Run pytest on tests/test_prompt_invalid_utf8.py and tests/test_ci_wires_every_test_file.py, and confirm both pass.\n  expected_change_site: All CI test executions for the PR\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR description lists `tests/test_ci_wires_every_test_file.py` under \"Failures caused by this change\", so the mandatory test pass has not been met.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/gh_helpers.sh:_embed_utf8_safe_cut and the call at line 2932 | severity=NIT | confidence=1\n  PROBLEM: No defect found. The reviewer traced the 3-byte, 4-byte and ASCII cut cases by hand and each gives the expected cut. The reviewer states this is not a finding.\n  WHY: `_head_bytes` feeds `head -c`, the TRUNCATED marker and `_emit_bytes`, so the budget counts the bytes actually shown.\n- scripts/render_prompt.sh:195, 309 | severity=MAJOR | confidence=4\n  PROBLEM: `collect_prompt_placeholders` still reads the prompt with strict decoding and nothing checks the scan's exit status. Invalid UTF-8 raises `UnicodeDecodeError`, no placeholders are passed as `--var`, and the wrapper can still exit 0.\n  WHY: After this PR the renderer succeeds on invalid UTF-8, so output can keep literal `{{NAME}}` tokens. The reviewer notes this predates the PR and is out of the grant (not in `files_touched`), so it is not actionable in this PR.\n- scripts/gh_helpers.sh:_embed_utf8_safe_cut (hardening) | HARDENING_RISK_SCORE=1\n  PROBLEM: The `od` call takes the path without a `--` end-of-options marker.\n  WHY: Not reachable today because callers pass internal temp paths. The suggested fix is to insert `--` before `\"${_cut_path}\"` (1 line).\n- TASK COMPLETENESS: no gaps found. The reviewer did not run pytest in this pass.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:_embed_utf8_safe_cut (od invocation) | severity=NIT | confidence=4\n  PROBLEM: `od` is invoked with a file path that is not protected from option parsing if the path starts with a dash.\n  WHY: If `_cut_path` begins with a dash, `od` may misread it as an option.\n- .github/workflows/ci.yml:tests/test_ci_wires_every_test_file.py | severity=BLOCKER | confidence=5\n  PROBLEM: The CI check-run for this test file is failing.\n  WHY: The task requires this test to pass, and its failure indicates incomplete wiring or broken contract enforcement.\n- TASK_GAP\n  Requirement: Run pytest on tests/test_prompt_invalid_utf8.py and tests/test_ci_wires_every_test_file.py, and confirm both pass.\n  Expected change site: All CI test executions for the PR\n  Evidence of absence: The PR description lists `tests/test_ci_wires_every_test_file.py` under \"Failures caused by this change\", so the mandatory test pass has not been met.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- scripts/gh_helpers.sh:_embed_utf8_safe_cut (hardening) | HARDENING_RISK_SCORE=1\n  PROBLEM: `_cut_path` is passed to `od` without an end-of-options marker.\n  WHY: The suggested fix is to add `--` before `\"${_cut_path}\"` (1 line).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/render_prompt.py:190-196; scripts/render_prompt.sh:195, 304-309; scripts/render_prompt.py:1340-1347 | severity=MAJOR | confidence=4\n  PROBLEM: The shell wrapper scans the prompt with strict UTF-8 decoding to discover placeholders. On an invalid byte it prints no placeholder names, the process-substitution failure is unchecked, and the wrapper continues without passing those variables to the renderer.\n  WHY: The renderer leaves undiscovered placeholders as literal tokens, so a prompt with both invalid UTF-8 and a wrapper-supplied placeholder can exit successfully with literal `{{NAME}}` in the output.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/gh_helpers.sh:_embed_utf8_safe_cut (od invocation, ~line 2796) (hardening) | HARDENING_RISK_SCORE=1\n  PROBLEM: `\"${_cut_path}\"` is passed to `od` without a `--` end-of-options marker, so a path starting with `-` would be parsed as an option.\n  WHY: Callers pass internal runner-temp artifact paths, so this is defense-in-depth only. The suggested fix is to insert `--` before `\"${_cut_path}\"` (1 line).\n- No other findings. The reviewer verified all six descope steps. It deliberately did not re-emit the pre-existing `scripts/render_prompt.sh:195` strict-read finding, because it is out of grant and was already rejected by prior editor rounds.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f33156910d6e207e9d2523b20bddcb91cf75d4dd6c5f1ed4cc3eba6abe6b73f3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9402,
+    "run_id": "43305901913",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43305901913",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113020636_a836ed8ded",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9402,
+    "run_id": "43305901913"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T02:06:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
