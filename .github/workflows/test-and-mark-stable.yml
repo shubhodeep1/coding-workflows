@@ -2166,6 +2166,74 @@ jobs:
           fi
           source "${STABLE_E2E_STEP_SCRIPT}"
 
+      # ── Phase 4d: Review-timeout run inventory (#9418) ──
+      # Release run 43283656910 timed out in Phase 4 while review runs
+      # 43300092840 (gate job queued, no runner) and 43300108598 (pending,
+      # no jobs) never started a step, and the log could not tell runner
+      # starvation from a concurrency hold. stable_e2e_step_wait_review.sh
+      # writes status=timeout before exit 1; this step then lists the review
+      # runs on the smoke branch and the jobs of each unfinished run: a job
+      # queued with runner=none means no runner, a run with no jobs means a
+      # workflow-level concurrency hold. Inline because scripts/ is outside
+      # the #9418 heal scope. One runs call plus at most 5 jobs calls (§14);
+      # read-only, fail-soft, prints ids, enums and timestamps only.
+      - name: "Phase 4d: Review-timeout run inventory"
+        id: review-timeout-inventory
+        if: failure() && steps.wait-review.outputs.status == 'timeout'
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          BAIT_SHA: ${{ steps.inject-bait.outputs.bait_sha }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          if ! [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]] \
+            || ! [[ "${REVIEW_WORKFLOW_FILE:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*\.yml$ ]] \
+            || ! [[ "${TEST_REPO:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "  Skipped review-timeout inventory (missing or invalid inputs)"
+            exit 0
+          fi
+          timeout_inv_tok() { if [[ "${1:-}" =~ ^[A-Za-z0-9_:.-]+$ ]]; then printf '%s' "$1"; else printf '?'; fi; }
+          TIMEOUT_INV_BRANCH="ai/issue-${ISSUE_NUMBER}"
+          TIMEOUT_INV_PR="unknown"
+          [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] && TIMEOUT_INV_PR="#${PR_NUMBER}"
+          TIMEOUT_INV_BAIT="none"
+          [[ "${BAIT_SHA:-}" =~ ^[0-9a-f]{7,40}$ ]] && TIMEOUT_INV_BAIT="${BAIT_SHA:0:7}"
+          echo "  Review runs on ${TIMEOUT_INV_BRANCH} (PR ${TIMEOUT_INV_PR}, bait=${TIMEOUT_INV_BAIT}):"
+          if ! TIMEOUT_INV_RUNS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?branch=${TIMEOUT_INV_BRANCH}&per_page=20" \
+            --jq '.workflow_runs[]? | "\(.id) \(.event) \(.status) \(.conclusion // "null") \((.head_sha // "")[0:7]) \(.created_at) \(.updated_at)"')"; then
+            echo "  (review run inventory fetch failed)"
+            exit 0
+          fi
+          [ -n "${TIMEOUT_INV_RUNS}" ] || echo "  (no review runs on ${TIMEOUT_INV_BRANCH})"
+          TIMEOUT_INV_JOB_FETCHES=0
+          while read -r TIMEOUT_INV_RUN_ID TIMEOUT_INV_RUN_EVENT TIMEOUT_INV_RUN_STATUS TIMEOUT_INV_RUN_CONCL TIMEOUT_INV_RUN_SHA TIMEOUT_INV_RUN_CREATED TIMEOUT_INV_RUN_UPDATED _; do
+            [[ "${TIMEOUT_INV_RUN_ID:-}" =~ ^[0-9]+$ ]] || continue
+            echo "  run ${TIMEOUT_INV_RUN_ID} event=$(timeout_inv_tok "${TIMEOUT_INV_RUN_EVENT:-}") status=$(timeout_inv_tok "${TIMEOUT_INV_RUN_STATUS:-}") conclusion=$(timeout_inv_tok "${TIMEOUT_INV_RUN_CONCL:-}") head_sha=$(timeout_inv_tok "${TIMEOUT_INV_RUN_SHA:-}") created=$(timeout_inv_tok "${TIMEOUT_INV_RUN_CREATED:-}") updated=$(timeout_inv_tok "${TIMEOUT_INV_RUN_UPDATED:-}")"
+            [ "${TIMEOUT_INV_RUN_STATUS:-}" != "completed" ] || continue
+            if [ "${TIMEOUT_INV_JOB_FETCHES}" -ge 5 ]; then
+              echo "    (job lookup skipped: cap of 5 reached)"
+              continue
+            fi
+            TIMEOUT_INV_JOB_FETCHES=$((TIMEOUT_INV_JOB_FETCHES + 1))
+            if ! TIMEOUT_INV_JOBS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/runs/${TIMEOUT_INV_RUN_ID}/jobs?per_page=30" \
+              --jq '.jobs[]? | "\(.status) \(.conclusion // "null") \(.created_at // "null") \(.started_at // "null") \(.runner_name // "none" | gsub("[^A-Za-z0-9_.-]"; "_")) \(.name // "" | gsub("[^A-Za-z0-9_.-]"; "_") | .[0:80])"')"; then
+              echo "    (job fetch failed for run ${TIMEOUT_INV_RUN_ID})"
+              continue
+            fi
+            if [ -z "${TIMEOUT_INV_JOBS}" ]; then
+              echo "    (no jobs yet: run is held before job creation, e.g. a workflow-level concurrency group)"
+              continue
+            fi
+            while read -r TIMEOUT_INV_JOB_STATUS TIMEOUT_INV_JOB_CONCL TIMEOUT_INV_JOB_CREATED TIMEOUT_INV_JOB_STARTED TIMEOUT_INV_JOB_RUNNER TIMEOUT_INV_JOB_NAME _; do
+              [ -n "${TIMEOUT_INV_JOB_STATUS:-}" ] || continue
+              echo "    job $(timeout_inv_tok "${TIMEOUT_INV_JOB_NAME:-}") status=$(timeout_inv_tok "${TIMEOUT_INV_JOB_STATUS}") conclusion=$(timeout_inv_tok "${TIMEOUT_INV_JOB_CONCL:-}") created=$(timeout_inv_tok "${TIMEOUT_INV_JOB_CREATED:-}") started=$(timeout_inv_tok "${TIMEOUT_INV_JOB_STARTED:-}") runner=$(timeout_inv_tok "${TIMEOUT_INV_JOB_RUNNER:-}")"
+            done <<< "${TIMEOUT_INV_JOBS}"
+          done <<< "${TIMEOUT_INV_RUNS}"
+          echo "  hint: job status=queued with runner=none -> no runner (starvation); run with no jobs -> concurrency hold"
+
       # Per-phase soft-error analysis: review_autofix.
       # Wait cap is bumped to 300s here because the previous single
       # end-of-job analyser raced review_autofix's tail (it exited
