@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:446-455 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The supersede decision trusts any commit status with context `ai-review/head-gate`. It checks the state, SHA, and timestamp, but not who created the status or whether it came from the review pipeline.\n  WHY: Anyone with permission to write commit statuses can post a newer `success` status for the head SHA after a failed gate. `_pr_checks_completed` then drops the failed check-run and treats the PR as ready, even though no trusted review-gate success exists. (The source rated this MAJOR, mapped here to high.)\n- tests/test_gh_retry_stdout_isolation.py:228-242 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The required check-run \"tests-hooks-and-orchestrator\" (run 43085267118, job 130747872621) fails on head 18c58be. `test_closed_reader_does_not_rerun_a_successful_command` gets rc=0 on the ubuntu-26.04 runner, whose uutils coreutils `cat` returns 141 on the closed pipe while the inner command reports 0.\n  WHY: This failure feeds the required `lint` roll-up job (job 130768195671), so the auto-merge gate refuses the PR with reason=required_checks_failed. The cause is runner-image behavior in code outside this PR's changed files: a re-run or a separate fix to gh_retry or the test is needed, and loosening the assertion would only hide the problem. (Both sources rated this NIT, mapped here to low. z-ai_glm-5_3-flash filed it under .github/workflows/ci.yml, the `lint` roll-up job.)\n- tests/test_review_checkout_head_diagnostics.py:253-264 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The required check-run \"orchestrate-poll (1)\" (run 43085267118, job 130747873570) fails because `test_head_moved_after_switch_reports_skipped_stale` gets fetch_ms=na where it requires `isdigit()`.\n  WHY: This is the second failed dependency behind the red required `lint` check, so it blocks auto-merge in the same way. The timing comes from the review checkout diagnostics path, which this PR does not touch, so the fix belongs in a separate triage change or a re-run. (Both sources rated this NIT, mapped here to low.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_gh_retry_stdout_isolation.py:line 242, test_closed_reader_does_not_rerun_a_successful_command: assert rc_line.startswith(\"rc=\") and rc_line != \"rc=0\" | severity=NIT | confidence=2\n  PROBLEM: The required check-run \"tests-hooks-and-orchestrator\" (run 43085267118, job 130747872621) fails on head 18c58be. The test gets rc=0 on the ubuntu-26.04 image, where uutils coreutils `cat` (inner_cat=0, cat_closed=141) keeps the closed-pipe status from reaching PIPESTATUS through gh_retry. The test is not in this PR's changed files.\n  WHY: This job feeds the required \"lint\" roll-up (job 130768195671), so auto-merge refuses the PR with reason=required_checks_failed. No edit inside files_touched can fix it; it needs a re-run or a separate fix, and loosening the assertion would only hide the problem.\n- tests/test_review_checkout_head_diagnostics.py:line 264, test_head_moved_after_switch_reports_skipped_stale: assert fields[\"fetch_ms\"].isdigit() and fields[\"switch_ms\"].isdigit() | severity=NIT | confidence=2\n  PROBLEM: The required check-run \"orchestrate-poll (1)\" (run 43085267118, job 130747873570) fails because fetch_ms=na. The timing comes from the review checkout diagnostics path, which this PR does not touch.\n  WHY: This is the second failed dependency behind the red required \"lint\" check, so it also blocks auto-merge. Nothing in this PR's scope can fix it; it needs a re-run or a separate triage change.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/pr_checks_lib.sh:446-455 | severity=MAJOR | confidence=4\n  PROBLEM: The supersede decision trusts any commit status with context `ai-review/head-gate`. It checks the state, SHA, and timestamp, but not who created the status or whether it came from the review pipeline.\n  WHY: Anyone with permission to write commit statuses can post a newer `success` status for the head SHA after a failed gate. `_pr_checks_completed` then drops the failed check-run and treats the PR as ready, even though no trusted review-gate success exists.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:required `lint` roll-up job (run 43085267118, job 130768195671); root causes at tests/test_gh_retry_stdout_isolation.py:228-242 (`test_closed_reader_does_not_rerun_a_successful_command`, got `rc=0` because the ubuntu-26.04 runner's uutils coreutils `cat` returns 141 on the closed pipe while the inner command reports 0) and tests/test_review_checkout_head_diagnostics.py:253-264 (`test_head_moved_after_switch_reports_skipped_stale`, got `fetch_ms=na` where the test requires `isdigit()`). | severity=NIT | confidence=2\n  PROBLEM: The required `lint` check is red on head 18c58be, so the PR cannot auto-merge (reason=required_checks_failed). Neither root-cause test file references `pr_checks_lib.sh`; the causes are runner-image behavior in code outside this PR's changed files.\n  WHY: This is surfaced under the failed-check-run mapping rule, not as a diff defect. No edit within the PR's changed files can fix either failure; the fixes belong in gh_retry's closed-pipe status handling and in the checkout-diagnostics timing capture, as separate changes.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bca7c5da02ad606d4ad7f222ca16c77990ea3c523ae83d97a31768f83004c88e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9262,
+    "run_id": "43161999789",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43161999789",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113213419_6a5261d570",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9262,
+    "run_id": "43161999789"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T21:34:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
