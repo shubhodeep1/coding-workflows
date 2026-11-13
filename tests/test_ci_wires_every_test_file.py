@@ -23,6 +23,10 @@ WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 
 # "tests/<file>": "why it cannot run in CI". Keep it empty when possible.
 UNWIRED_ALLOWLIST: dict[str, str] = {
+	"tests/test_check_failure_triage_release_download_rerun.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_check_failure_triage_workflow_security.py, which collects them"
+	),
 	"tests/test_orchestrate_integration_staleness_clock.py": (
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_orchestrate_integration_ahead_by_gate.py, which collects them"
@@ -43,6 +47,18 @@ UNWIRED_ALLOWLIST: dict[str, str] = {
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_gh_pr_comments_argv_limit.py, which collects them"
 	),
+	"tests/test_review_autofix_sweep_smoke_pr_backstop.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_review_autofix_sweep_merge_queued_skip.py, which collects them"
+	),
+	"tests/test_orchestrate_judge_tracking_closed_guard.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_test_and_mark_stable_orchestrate_child_count.py, which collects them"
+	),
+	"tests/test_test_and_mark_stable_smoke_pr_cleanup.py": (
+		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+		"through tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py, which collects them"
+	),
 	"tests/test_review_static_context_agents_index.py": (
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_review_static_context_readme.py, which collects them"
@@ -58,6 +74,10 @@ UNWIRED_ALLOWLIST: dict[str, str] = {
 	"tests/test_poller_impl_failed_reissue_order.py": (
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_alert_levels_human_only.py, which collects them"
+	),
+	"tests/test_plan_run_codex_failure_diagnostic.py": (
+		"ci.yml is outside the file grant of the issue that added it (#9266); its cases run in CI "
+		"through tests/test_plan_codex_step_extraction.py, which collects them"
 	),
 	"tests/test_orchestrate_poll_cycle_summary.py": (
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
