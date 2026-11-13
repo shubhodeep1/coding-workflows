@@ -3536,7 +3536,7 @@ jobs:
     # step proves sys.base_prefix is /usr. The shard step collects once and
     # runs the functions with NR % total == index; raise the shard count by
     # editing the matrix list alone (job-index / job-total feed the step).
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -3696,7 +3696,7 @@ jobs:
     # tests/test_sandbox_python_coverage.py, which fails when a launch script
     # gains an entry point it does not list. The test container gets no
     # network, no credential and no root.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false

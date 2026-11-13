@@ -2969,7 +2969,7 @@ jobs:
   deliver-report:
     needs: [analyze-commit-notify, deep-audit, api-redundancy]
     if: ${{ always() && github.event_name != 'schedule' && needs.analyze-commit-notify.outputs.committed == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read
