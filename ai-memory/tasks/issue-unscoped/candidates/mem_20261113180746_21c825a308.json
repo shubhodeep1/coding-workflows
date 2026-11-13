@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3829-3840 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The jq output serializes `.head_branch` and the loop requires it to equal `BRANCH`, so active workflow_dispatch runs with a null or empty `head_branch` are discarded and never cancelled.\n  WHY: Such a run leaks past cleanup and the step prints a false \"No active dispatch review runs\" message. Severity was MAJOR from all three flaggers (mapped to high). anthropic_claude-sonnet-5_5 explicitly disputed this finding: the server-side `branch=${BRANCH}` filter means null-branch runs are never returned.\n- .github/workflows/test-and-mark-stable.yml:3820-3821 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The comment \"One list call per cleanup (CLAUDE.md \u00a714)\" cites the wrong section, because \u00a714 is Consumer Repo Registry and GitHub API Call Hygiene is \u00a715.\n  WHY: There is no runtime impact, but the cross-reference misdirects maintainers. All four reviewers rated it NIT (mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml:~3820-3821 | severity=NIT | confidence=5\n  PROBLEM: The comment \"One list call per cleanup (CLAUDE.md \u00a714)\" points to the wrong section. \u00a714 is Consumer Repo Registry and \u00a715 is GitHub API Call Hygiene.\n  WHY: There is no runtime failure. Future readers are sent to the wrong rule, and the new test does not assert the \"\u00a714\" text.\n- (Explicitly dismissed: the head_branch null-handling finding from pass 1, because the server-side `branch=` filter excludes null-branch runs and Phase 3c dispatches with `--ref \"${BRANCH}\"`.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:3829-3830, 3840 | severity=MAJOR | confidence=4\n  PROBLEM: The jq output serializes `.head_branch`, and GitHub often returns null or an empty string for it on workflow_dispatch runs. The bash check `[ \"${CLEANUP_DISPATCH_RUN_BRANCH:-}\" = \"${BRANCH}\" ]` then fails on the string \"null\".\n  WHY: Valid orphan workflow_dispatch review runs on the target branch stay active because cleanup filters them out.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:3829-3830, 3840 | severity=MAJOR | confidence=4\n  PROBLEM: The loop requires `CLEANUP_DISPATCH_RUN_BRANCH == BRANCH`, so runs with a null or empty `head_branch` are discarded. scripts/gh_helpers.sh:2265-2268 accepts null or empty `head_branch` for dispatch runs (issue #6629, Q2 / #4928).\n  WHY: The cancel POST is never issued and the step logs a false \"No active\" message, which is the failure mode the cancel block exists to prevent (Phase 3c dispatch run 43300092840 sat queued 48 minutes after PR #9416 closed).\n- .github/workflows/test-and-mark-stable.yml:3821 | severity=NIT | confidence=5\n  PROBLEM: The comment cites \"CLAUDE.md \u00a714\" but \u00a714 is Consumer Repo Registry; the batching rule is \u00a715 (GitHub API Call Hygiene).\n  WHY: There is no runtime impact, but the cross-reference is misleading.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:3820-3821 | severity=NIT | confidence=5\n  PROBLEM: The comment cites the wrong section for the one-API-call rule. \u00a714 covers the consumer repo registry and GitHub API call hygiene is \u00a715.\n  WHY: No runtime behavior fails. The citation misdirects maintainers.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:3830, 3840 | severity=MAJOR | confidence=3\n  PROBLEM: The listing serializes `head_branch` and the loop requires it to equal `BRANCH`, so a matching active workflow_dispatch run with a null or empty `head_branch` is discarded. scripts/gh_helpers.sh:2265-2268 (`select(.event == \"workflow_dispatch\" and (((.head_branch // \"\") == \"\") or .head_branch == $branch))`, citing #4928 and #6629) accepts that shape. jq interpolates null as the literal string \"null\".\n  WHY: Cleanup skips such a run and prints \"No active dispatch review runs\", leaving it queued and holding `review-gate-notice-<repo>-<pr>`. The server-side `branch=` filter already narrows the listing, so the jq re-check only discards the null case.\n- .github/workflows/test-and-mark-stable.yml:3821 | severity=NIT | confidence=5\n  PROBLEM: The comment cites \"CLAUDE.md \u00a714\" (Consumer Repo Registry, CLAUDE.md line 424), but the API call hygiene rule is \u00a715 (CLAUDE.md line 439).\n  WHY: No runtime failure; the cross-reference sends readers to the wrong section.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1cc5c8e81691e045a751f062012b34a73097ba824bf054cb4ff896e511ed090a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9456,
+    "run_id": "43430824430",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43430824430",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113180746_21c825a308",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9456,
+    "run_id": "43430824430"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T18:07:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
