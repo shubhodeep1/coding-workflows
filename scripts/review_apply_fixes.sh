@@ -1923,6 +1923,8 @@ esac
 editor_prompt_rendered="$(mktemp)"
 (
   cd "${SUPPORT_ROOT_DIR}"
+  # Security (#9465): the render reads untrusted PR text; keep GitHub tokens out of its environment.
+  unset GH_TOKEN GITHUB_TOKEN GH_PAT
   # The editor heredoc itself uses no `{{SEMBLE_PREFETCH}}`, but
   # targeted_file_context.py can inline judge-prompt templates verbatim
   # into the editor prompt body. Set SEMBLE_PREFETCH="" so any inlined

@@ -216,6 +216,13 @@ placeholder_env_name_is_credential_like()
 	local name_word=""
 	local -a name_words=()
 
+	# Security (#9465): only plain identifiers may be read from the
+	# environment. `${!name}` on `1` / `0` / `@` would expand a positional or
+	# special parameter instead of an environment variable.
+	if ! [[ "${upper_name}" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+		return 0
+	fi
+
 	case "${upper_name}" in
 		*TOKEN*|*SECRET*|*PASSWORD*|*PASSWD*|*PASSPHRASE*|*CREDENTIAL*|*PRIVATE*|*APIKEY*|*COOKIE*|*WEBHOOK*|*CONNECTION_STRING*|*DATABASE_URL*)
 			return 0
@@ -223,6 +230,11 @@ placeholder_env_name_is_credential_like()
 		ACTIONS_*|INPUT_*)
 			# Runner internals (ACTIONS_RUNTIME_URL, ACTIONS_ID_TOKEN_REQUEST_URL, ...)
 			# and action inputs, which can carry secrets; never prompt content.
+			return 0
+			;;
+		GH_*|GITHUB_*)
+			# gh CLI / Actions variables (GH_TOKEN, GH_PAT, GITHUB_TOKEN, ...);
+			# no shipped template reads one of these from the environment (#9465).
 			return 0
 			;;
 	esac
@@ -311,6 +323,13 @@ RENDER_ARGS=(
 )
 
 INPUT_ALREADY_ASSEMBLED_FLAG_ADDED=false
+# Script-local (not an input): true when the caller marked the body as an
+# already-composed prompt that embeds untrusted PR / comment / issue text via
+# RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED or RENDER_PROMPT_SKIP_SYNTAX_VALIDATION.
+# Deliberately NOT derived from INPUT_ALREADY_ASSEMBLED_FLAG_ADDED: the trusted
+# PROMPT_PRELUDE_REFACTOR_ENABLED assembly path also adds that flag and must
+# keep its environment placeholder lookups.
+RENDER_PROMPT_BODY_IS_UNTRUSTED=false
 if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
 	RENDER_ARGS+=(--input-already-assembled)
 	INPUT_ALREADY_ASSEMBLED_FLAG_ADDED=true
@@ -336,6 +355,7 @@ fi
 # include assembly for every trusted template render.
 case "${RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED:-}" in
 	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		RENDER_PROMPT_BODY_IS_UNTRUSTED=true
 		if [ "${INPUT_ALREADY_ASSEMBLED_FLAG_ADDED}" != "true" ]; then
 			RENDER_ARGS+=(--input-already-assembled)
 			INPUT_ALREADY_ASSEMBLED_FLAG_ADDED=true
@@ -351,6 +371,7 @@ esac
 # Default (unset) keeps the strict syntax gate for every static template render.
 case "${RENDER_PROMPT_SKIP_SYNTAX_VALIDATION:-}" in
 	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		RENDER_PROMPT_BODY_IS_UNTRUSTED=true
 		RENDER_ARGS+=(--skip-syntax-validation)
 		;;
 esac
@@ -360,13 +381,25 @@ append_render_var "SEMBLE_PREFETCH" "${SEMBLE_PREFETCH_BLOCK}"
 append_render_var "SERENA_TOOL_HINTS" "${SERENA_TOOL_HINTS_BLOCK}"
 append_render_var "MODEL_FAMILY_OVERLAY" "${MODEL_FAMILY_OVERLAY_BLOCK}"
 
+# Security (#9465): an untrusted body (reviewer / editor prompts that already
+# embed raw PR diff, comment and check-run text) must never choose which
+# environment variables are read. Without this gate a `{{GH_TOKEN}}` (or any
+# other exported name the denylist misses) written in a PR comment would be
+# resolved from the review step's environment and sent to third-party model
+# providers, and the value would appear in render_prompt.py's argv. Such
+# bodies get only the four fixed variables appended above; every other
+# `{{NAME}}` stays literal. Placeholder names are not even collected here.
+_render_placeholder_names=""
+
 # Capture the placeholder names in a checked command substitution instead of a
 # process substitution: bash ignores a process substitution's exit status even
 # under `set -euo pipefail`, so a collect_prompt_placeholders failure would
 # otherwise fall through into render_prompt.py and print a second ERROR line
 # (#9341). The helper's stderr is not captured, so its single ERROR line
 # reaches the caller; the EXIT trap still removes any assembled temp file.
-if ! _render_placeholder_names="$(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")"; then
+if [ "${RENDER_PROMPT_BODY_IS_UNTRUSTED}" = "true" ]; then
+	:
+elif ! _render_placeholder_names="$(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")"; then
 	# The EXIT trap deletes the assembled temp file the ERROR line names, so
 	# point at the original prompt (a NOTE, not a second ERROR line).
 	if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then

@@ -1645,6 +1645,15 @@ def main() -> int:
 	import test_scripts_build_parser_help as _bp_help_tests
 
 	_bp_help_tests.main()
+	# ci.yml is outside the #9465 file grant, so the env-placeholder guard
+	# cases run here (same import-in-main pattern as above).
+	import test_render_prompt_env_placeholder_guard as _env_guard_tests
+
+	_env_guard_tests.test_untrusted_body_does_not_substitute_env_values()
+	_env_guard_tests.test_untrusted_body_keeps_fixed_allowlist_substitution()
+	_env_guard_tests.test_trusted_template_denies_credential_like_env_placeholders()
+	_env_guard_tests.test_review_render_subshells_unset_github_tokens()
+	print("OK: render prompt env placeholder guard assertions hold")
 	return 0
 
 
