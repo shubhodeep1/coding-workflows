@@ -5,13 +5,25 @@
   "entry_id": "processed_command_9419_6839010302_approved",
   "issue_number": 9419,
   "metadata": {
+    "branch": "ai/issue-9419",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/review_autofix.yml",
+      "changelog.d/9419-review-checkout-pr-closed-gate.md",
+      "tests/test_review_autofix_pr_closed_gate.py"
+    ],
+    "issue_number": 9419,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9419",
+    "pr_number": 9428,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9428",
+    "run_attempt": "1",
+    "run_id": "43329296173",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43329296173"
   },
   "run_attempt": 1,
   "run_id": "43329296173",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-12T23:32:07Z",
+  "status": "completed",
+  "timestamp": "2026-11-13T00:14:54Z",
   "workflow": "implement"
 }
