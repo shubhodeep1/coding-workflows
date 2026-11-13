@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The agent's sandbox has no network and no `ACTIONS_ID_TOKEN_REQUEST_*` variables. The read profile's allow list is a fixed constant (`READ_PROFILE_ALLOW`, `scripts/claude_engine.py:505`). How should the agent's bridge queries reach `agent-db-bridge`?\nChoices:\nA. A host-side bridge relay, built like `scripts/claude_anthropic_relay.py`. Inside the sandbox, `cs_bridge_query.sh` only passes the stdin JSON to a relay socket. The host side fetches the OIDC token (audience `agent-db-bridge`), allows only the `CS_BRIDGE_URL` host and POSTs the request. The token never enters the sandbox, and the read profile gets one exact `Bash(...)` allow rule. Applies to the codex fallback too. (RECOMMENDED)\nB. Query rounds driven from the host. The agent outputs a list of bridge requests. The workflow runs them on the runner through `cs_bridge_query.sh`, then resumes the agent with the results. Capped at N rounds (for example 3) before the final verdict.\nC. No live queries by the agent. Before the agent runs, the workflow runs a fixed set of queries keyed on the ticket's user ID and time, and passes the results in as context. Simplest, but the agent can't follow leads.\nQ2: The issue gives `GET /api/tickets/<id>/files/<n>` but doesn't say how the workflow finds out which `<n>` exist. The hub's ticket JSON shape is not in this repo. How should photos be listed?\nChoices:\nA. Ask for `n = 0, 1, 2, \u2026` until the first 404, at most 5 files, with a per-file size limit. Doesn't depend on the ticket JSON shape. (RECOMMENDED)\nB. Read a file list from the ticket JSON. Please give the field name and element shape in your answer, for example `files: [{n, mime, size}]`. Same 5-file cap.\nC. Don't fetch photos in v1. Give the agent only the ticket text.\nQ3: In `verify` mode the prompt must \"re-run the original evidence queries\". But the v1 `evidence` items only hold `{target, op, collection_or_index, summary}`, not the query itself, and the inputs don't include the earlier verdict. Where does verify mode get the original queries and the user's IDs?\nChoices:\nA. The hub's `GET /api/tickets/<id>` response already includes the earlier verdict (with `evidence`, `user_ids`, `root_path`, `root_function`). Verify mode rebuilds equivalent queries from those fields, and the v1 schema stays as listed. (RECOMMENDED)\nB. As A, but add an optional `query` field (the exact bridge request JSON, size-capped) to each `evidence` item in v1, so verify mode can re-run the queries word for word.\nC. Add a new `workflow_call` input that carries the earlier verdict JSON. **Note:** this changes the input list that tele-funtoken-msg-scoring's wrapper already expects.",
+  "fingerprint": "e635cdd895ef581fe670743de9d870495e190caa007498675a4dcf09ade587f4",
+  "lineage": {
+    "issue_number": 9440,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43344080234",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43344080234",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261113013615_e6e3b30e36",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9440,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43344080234"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9440 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-13T01:36:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
