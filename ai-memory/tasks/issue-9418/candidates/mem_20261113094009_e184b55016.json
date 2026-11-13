@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The checkout shows fix 2 is already done: the cleanup step in `.github/workflows/test-and-mark-stable.yml` (lines 3761-3794, marked #9418) now cancels active `workflow_dispatch` review runs on the smoke branch. That leaves fix 1, which explains a timeout. Option A delivers it inside the heal scope: Phase 4 has `id: wait-review` (line 2127), and the script writes `status=timeout` before `exit 1` (lines 848-850), so a follow-up step guarded by `failure() && steps.wait-review.outputs.status == 'timeout'` can reliably print the same run inventory that the `no_review_triggered` branch prints (lines 842-845), plus the job statuses that separate `queued` (no runner) from `pending` (concurrency hold). Option B ships nothing, and the next timeout would be just as hard to diagnose. Option C needs a human to widen the scope marker, and the plan would be refused for scope without it. The planner should still say in the plan that run 43283656910 most likely failed for a transient reason (runner starvation or a wedged queued job), and that this change only adds diagnosis.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/test-and-mark-stable.yml: Phase 4 step `id: wait-review` (lines 2126-2167); the next step, \"Phase 4c: Soft-error analyser (review_autofix)\" (line 2175); the cleanup step's fail-soft listing pattern using `_safe_gh_jq` and `REVIEW_WORKFLOW_FILE` / `TEST_REPO` (lines 3771-3794)\n    - scripts/stable_e2e_step_wait_review.sh lines 842-850: the inventory call shape and its jq fields (id, name, event, status, conclusion, head_sha[0:7])\n    - tests/test_test_and_mark_stable_step_scripts_contract.py, or a sibling contract test\n    - changelog.d/ (one new fragment)\n  steps:\n    - Add one new step directly after the \"Phase 4: Wait for review & autofix to complete\" step and before \"Phase 4c\", with a new unique name (for example \"Phase 4d: Review-timeout run inventory\") and the guard `if: failure() && steps.wait-review.outputs.status == 'timeout'`. Add `continue-on-error: true` so the step can never change the job outcome.\n    - Pass every expression value through `env:` (PR_NUMBER from `steps.wait-implement.outputs.pr_number`, ISSUE_NUMBER from `steps.create-issue.outputs.issue_number`, BAIT_SHA from `steps.inject-bait.outputs.bait_sha`). Keep the `run:` body free of `${{ }}`. Derive the branch as `ai/issue-${ISSUE_NUMBER}` only after a `^[0-9]+$` regex check, the same way the cleanup step does.\n    - Make one list call for the review workflow's runs on that branch (`repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?branch=...&per_page=20`, with the same `REVIEW_WORKFLOW_FILE` regex check). Print only id, event, status, conclusion, short head_sha, created_at and updated_at. For each run whose status is not `completed`, make one jobs call (`actions/runs/<id>/jobs`) and print only the job name, status, conclusion, created_at, started_at and runner_name. Re-check every run id against `^[0-9]+$` before using it in a URL. Every call is fail-soft (`|| echo \"  (... fetch failed)\"`), and no log bodies, titles or tokens are printed.\n    - Leave unchanged: scripts/stable_e2e_step_wait_review.sh, the Phase 4 logic, REVIEW_TIMEOUT and the step timeouts, the Phase 3c dispatch, and the existing cleanup cancel block.\n    - Add a contract test that loads the workflow YAML and checks four things: the new step comes right after `wait-review`; its `if:` contains both `failure()` and `steps.wait-review.outputs.status == 'timeout'`; it has `continue-on-error: true`; and its `run:` body has no `${{` and calls both the runs and the jobs endpoints.\n    - Add a changelog.d fragment that describes the diagnostic step. After the edit, check that the workflow file is still under the 480,000-byte guard (\u00a724).\n  replaces_acceptance_criterion: Suggested fix 1, which put the timeout-branch inventory in scripts/stable_e2e_step_wait_review.sh. The same output now comes from a workflow step gated on the script's `status=timeout` output.\n  equivalence_argument: The script already writes `status=timeout` to `$GITHUB_OUTPUT` before `exit 1`, so the follow-up step fires on exactly the condition the issue targets, in the same job, against the same repo and branch. It prints the same inventory plus job-level statuses, which is exactly the evidence the issue says would separate runner starvation (`queued`) from a concurrency hold (`pending`). Fix 2 is already in the cleanup step, and fix 3 was marked optional.\n  reversibility: The change is one self-contained, non-blocking step plus a test and a changelog fragment. Deleting the step restores the previous behaviour exactly. If a human later widens the scope to `scripts/`, the logic can move into the script's timeout branch and this step can be removed.",
+  "fingerprint": "f9fdc61e80c4091ad8400b2275e6cac7687767e9b7a3a0796a209c90643213f2",
+  "lineage": {
+    "issue_number": 9418,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43401339286",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43401339286",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9418"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261113094009_e184b55016",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9418,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43401339286"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9418",
+  "timestamps": {
+    "created_at": "2026-11-13T09:40:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
