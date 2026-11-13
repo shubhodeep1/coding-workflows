@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-13T09:14:23Z",
+  "issue_number": 9332,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=tests/test_orchestrate_poll_cycle_summary.py:1-1; cited_path=PR description (test-run status for tests/test_orchestrate_poll_cycle_summary.py and tests/test_alert_levels_human_only.py); files_touched=changelog.d/9243-poller-negative-elapsed-unknown.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrate_poll_cycle_summary.py.",
+  "phase": "review_autofix",
+  "pr_number": 9336,
+  "record_id": "lesson_20261113091423_2dd7506f9e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "PR description (test-run status for tests/test_orchestrate_poll_cycle_summary.py and tests/test_alert_levels_human_only.py)",
+    "tests/test_orchestrate_poll_cycle_summary.py",
+    "changelog.d/9243-poller-negative-elapsed-unknown.md",
+    "scripts/orchestrate_poll_process.sh"
+  ]
+}
