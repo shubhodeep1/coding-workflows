@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: Option A breaks a rule the repo already holds. `scripts/claude_engine.py:167-176` says the read profile has no shell tool because \"command-prefix permissions cannot make Bash read-only\", so `READ_PROFILE_ALLOW` and the `read` entry of `PROFILE_TOOLS` stay unchanged (\u00a76), and A would also turn `cs_bridge_query.sh` into a socket client, which is not the OIDC-fetching script the issue describes. With option B, the agent outputs bridge requests as JSON data; the workflow checks the count and size of each request and passes each one on stdin (never as shell text) to `scripts/cs_bridge_query.sh` on the runner, at most 3 rounds, re-running `scripts/ai_engine.sh` with the results appended as untrusted data. The OIDC token and network stay on the host, the codex fallback works the same way with no in-sandbox tool, and \"exactly one extra command\" now means the only command run for the agent is `cs_bridge_query.sh`, which keeps its host allowlist and never prints the token.\nQ2: The hub's ticket JSON shape is not in this repo, and option B would need a field name we don't have (the data-provision guard rules it out). Option A doesn't depend on the ticket shape: ask for `n = 0, 1, 2, \u2026` with the `cs-hub` OIDC token, stop at the first 404, and keep at most 5 files, each under a fixed size cap. Any other error, or a file over the cap, stops further photo fetching and is noted in the prompt context instead of failing the job.\nQ3: The workflow passes the whole `GET /api/tickets/<id>` response to the agent as untrusted data, so any earlier verdict the hub includes (`evidence`, `user_ids`, `root_path`, `root_function`) is visible without the workflow knowing its field name, and the v1 schema stays exactly as the issue lists it. If the response has no earlier verdict, the verify procedure rebuilds the queries from the ticket's intake fields (user ID, time, tx hash or bet ID); if it still cannot rebuild them, it returns `verify_failed`, with `reply_to_cs` saying why. Option B's extra `query` field could break the wrapper's own schema check in job 2, and option C changes the wrapper's input list, so both are out.",
+  "fingerprint": "907b77793ae5b2de4e5c4e44f10cb16603121c8cc3679f7e1fd3dc8cfb82a2eb",
+  "lineage": {
+    "issue_number": 9440,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43346103563",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43346103563",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9440"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261113020154_5ce4710788",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9440,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43346103563"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9440",
+  "timestamps": {
+    "created_at": "2026-11-13T02:01:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
