@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan: rewrite `tests/e2e_smoke_canary.txt` so it holds exactly the three lines the issue specifies\n\nPlanning ref: `e13a1bc952b35a447bcf7dc2ea018e6f7bee8e74` on branch `main`. The integration branch mismatch line reads `unknown`, not `true`, so the plan goes ahead.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_e2e_editor_smoke_canary.py\nACCEPTANCE: post-merge none: this is a smoke canary data file with no post-merge workflow behaviour\n\n## Functions or modules to implement\nNone. Replace the whole contents of `tests/e2e_smoke_canary.txt` with these bytes: `status: ok\\nrun_id: alt-43385957741\\nupdated-by: ai-pipeline\\n`. Use LF line endings, put a single newline after the last line (the current file ends in one), and leave no blank lines or bait or comment markers.\n\nCurrent contents:\n```\nstatus: ok\ndecompose-run: 41445772297\n```\n\n## Data structures affected\nOnly the plain-text canary file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Trailing newline\n- Chosen: end the third line with a single newline.\n- Alternatives considered: no final newline.\n- Why: the existing file ends in a newline, and a POSIX text file of \"three lines\" has one after each line.\n\n## Security considerations\n- No trust boundary, endpoint or external input is touched.\n- Abuse case: an injected \"bait\" comment line in the editor input. The canary test checks for a bait marker, so the file must contain only the three lines.\n\n## Potential risks or edge cases\n- `tests/test_e2e_editor_smoke_canary.py` compares the file byte-for-byte with a template. It reads `E2E_EXPECTED_RUN_ID` from the environment and, when that is set, requires a numeric run ID. The issue's value is `alt-43385957741`, which is not numeric. If the harness sets the variable, that test may skip or fail. The issue's exact content still takes precedence, because the constraint is to modify only this file.\n- Editors sometimes add a carriage return or extra whitespace; neither may appear.\n\n## Testing considerations\n- Run `pytest tests/test_e2e_editor_smoke_canary.py`. Without the environment variables it skips.\n- Check the result with `cat -A tests/e2e_smoke_canary.txt`. It should show exactly three lines, each ending in `$`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: the issue fully specifies one file's exact contents and allows no other change. The complete implementation is the shortcut, so there is nothing to expand or reduce.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this is a smoke canary data file with no post-merge workflow behaviour\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_e2e_editor_smoke_canary.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "3d758c32f9038a9358aea38a038a65ccf8763c53870b8dde3c6c70c245025878",
+  "lineage": {
+    "issue_number": 9458,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43402598177",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43402598177",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9458"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261113094936_2140afe727",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9458,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43402598177"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9458",
+  "timestamps": {
+    "created_at": "2026-11-13T09:49:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
