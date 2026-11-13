@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`. It reads one byte and exits on any coreutils.\"\n  expected_change_site: tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The test still pipes into `| true` and uses `_output_larger_than_any_pipe()` to force a closed pipe, so the `read -r -n 1` reader is absent, and the PR description is stale (including its \"30 of 30\" repeated-run claim). Reviewers rated it NIT, a documentation inconsistency rather than a runtime defect.\n- requirement: \"`.github/workflows/ci.yml` (`sf_now_ms`): reads bash's `EPOCHREALTIME` first and keeps `date +%s%3N` as the bash < 5 fallback.\"\n  expected_change_site: .github/workflows/ci.yml, sf_now_ms\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no hunk for `.github/workflows/ci.yml`. The added test covers the clock behavior but does not change the clock implementation in this PR. Rated NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: PR description says \"the closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`. It reads one byte and exits on any coreutils.\"\n  Expected change site: tests/test_gh_retry_stdout_isolation.py, test_closed_reader_does_not_rerun_a_successful_command\n  Evidence of absence: The test still pipes into `| true`. It makes the closed-pipe condition reliable by sizing the output with `_output_larger_than_any_pipe()`, so `read -r -n 1` never appears. The code and its in-test comment agree with each other. The only mismatch is the stale PR description, which is not a code defect. The \"30 of 30\" repeated-run claim in the description also no longer matches the code. No code change is needed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"The closed reader is now bash's own { IFS= read -r -n 1 _ || true; }.\"\n  Expected change site: tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command\n  Evidence of absence: The actual implementation uses gh_retry gh api repos/o/r | true and sizes the output with _output_larger_than_any_pipe() instead of the reader specified in the PR description. It functionally satisfies the closed-pipe requirement and passes CI, so this is a documentation inconsistency rather than a runtime correctness defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"`.github/workflows/ci.yml` (`sf_now_ms`): reads bash's `EPOCHREALTIME` first and keeps `date +%s%3N` as the bash < 5 fallback.\"\n  Expected change site: `.github/workflows/ci.yml`, `sf_now_ms`\n  Evidence of absence: The PR diff contains no hunk for `.github/workflows/ci.yml`; the added test covers the clock behavior but does not change the clock implementation in this PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"The closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`. It reads one byte and exits on any coreutils.\"\n  Expected change site: `tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command`\n  Evidence of absence: The test still pipes into `true` and uses `_output_larger_than_any_pipe()` to force a closed pipe; it does not add the specified `read -r -n 1` reader.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e67865c623ed5b0038850a2289545eae17eda4d830365cb46953b181c5e02ad3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9246,
+    "run_id": "43313064915",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43313064915",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113033248_2d1abf626d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9246,
+    "run_id": "43313064915"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T03:32:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
