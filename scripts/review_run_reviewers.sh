@@ -3056,7 +3056,10 @@ reviewer_prompt_rendered="$(mktemp)"
   # fail to resolve, and hard-fail every reviewer with PromptAssemblyError
   # (observed on tele-funtoken-msg-scoring run 29182737982). The skip-syntax
   # gate alone does NOT cover this — include expansion runs before it.
-  RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${REVIEWER_PROMPT_BODY_FILE}"
+  # Defense in depth (refs #3576): run this untrusted-body render with the
+  # job's tokens and provider keys unset, so no NAME placeholder in the PR diff or
+  # comments can ever resolve to a secret.
+  env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${REVIEWER_PROMPT_BODY_FILE}"
 ) > "${reviewer_prompt_rendered}"
 mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
 
@@ -3210,7 +3213,10 @@ prepare_reviewer_prompt_for_model() {
   # not trigger include-assembly and hard-fail the render (run 29182737982).
   if ! (
     cd "${SUPPORT_ROOT_DIR:-.}"
-    RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 MODEL_FAMILY_OVERLAY="${overlay_text}" bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${model_prompt_file}"
+    # Defense in depth (refs #3576): run this untrusted-body render with the
+    # job's tokens and provider keys unset, so no NAME placeholder in the PR diff or
+    # comments can ever resolve to a secret.
+    env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 MODEL_FAMILY_OVERLAY="${overlay_text}" bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${model_prompt_file}"
   ) > "${model_prompt_rendered_file}"; then
     rm -f "${model_prompt_file}" "${model_prompt_rendered_file}"
     if [ -n "${log_file}" ]; then

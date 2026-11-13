@@ -213,6 +213,21 @@ append_render_var()
 	RENDER_ARGS+=(--var "${name}=${value}")
 }
 
+# Returns 0 when a placeholder name looks like it names a secret, so its value
+# must never be forwarded from the process environment into a prompt
+# (security finding render-prompt-env-indirect-expansion-secret-leak, refs
+# #3576). Upper-cased so mixed-case variants are caught too.
+render_prompt_env_name_is_secret_like()
+{
+	local upper_name="${1^^}"
+	case "${upper_name}" in
+		*TOKEN*|*KEY*|*SECRET*|*PAT*|*PASSWORD*|*PASSWD*|*CREDENTIAL*)
+			return 0
+			;;
+	esac
+	return 1
+}
+
 if command -v python3 >/dev/null 2>&1; then
 	PYTHON_BIN="python3"
 elif command -v python >/dev/null 2>&1; then
@@ -320,12 +335,45 @@ if ! _render_placeholder_names="$(collect_prompt_placeholders "${PLACEHOLDER_SOU
 	exit 1
 fi
 
-while IFS= read -r placeholder_name; do
-	[ -n "${placeholder_name}" ] || continue
-	if [ "${!placeholder_name+x}" = "x" ]; then
-		append_render_var "${placeholder_name}" "${!placeholder_name}"
-	fi
-done <<< "${_render_placeholder_names}"
+# Security (finding render-prompt-env-indirect-expansion-secret-leak, refs
+# #3576): the loop below forwards `${!NAME}` for every NAME placeholder found in the
+# body. Callers that render an untrusted body (raw PR diff, comments,
+# check-run text) mark it with RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED or
+# RENDER_PROMPT_SKIP_SYNTAX_VALIDATION; there a PR author controls the names,
+# so a literal GH_TOKEN placeholder would pull the real secret into a prompt sent to a
+# model provider. For such bodies skip env forwarding entirely: only the
+# explicit append_render_var values above are passed. This is decided from
+# the caller's env only, never from INPUT_ALREADY_ASSEMBLED_FLAG_ADDED, which
+# the trusted PROMPT_PRELUDE_REFACTOR_ENABLED assembly path sets internally.
+# Trusted templates keep env forwarding, but secret-like names are refused.
+RENDER_PROMPT_UNTRUSTED_BODY=false
+case "${RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED:-}" in
+	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		RENDER_PROMPT_UNTRUSTED_BODY=true
+		;;
+esac
+case "${RENDER_PROMPT_SKIP_SYNTAX_VALIDATION:-}" in
+	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		RENDER_PROMPT_UNTRUSTED_BODY=true
+		;;
+esac
+
+if [ "${RENDER_PROMPT_UNTRUSTED_BODY}" != "true" ]; then
+	while IFS= read -r placeholder_name; do
+		[ -n "${placeholder_name}" ] || continue
+		if [ -n "${RENDER_VARS_SEEN[${placeholder_name}]+x}" ]; then
+			continue
+		fi
+		if [ "${!placeholder_name+x}" = "x" ]; then
+			if render_prompt_env_name_is_secret_like "${placeholder_name}"; then
+				# Name only, never the value.
+				echo "WARNING: render_prompt.sh: refusing to forward secret-like environment placeholder ${placeholder_name}" >&2
+				continue
+			fi
+			append_render_var "${placeholder_name}" "${!placeholder_name}"
+		fi
+	done <<< "${_render_placeholder_names}"
+fi
 
 if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
 	"${RENDER_ARGS[@]}"

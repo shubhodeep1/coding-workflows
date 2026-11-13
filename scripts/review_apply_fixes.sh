@@ -1943,7 +1943,10 @@ editor_prompt_rendered="$(mktemp)"
   # include-assembly and hard-fail the editor with PromptAssemblyError, the same
   # defect that took down the reviewer step on run 29182737982. The skip-syntax
   # gate does not cover include expansion, which runs before it.
-  RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 SEMBLE_PREFETCH="" SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
+  # Defense in depth (refs #3576): run this untrusted-body render with the
+  # job's tokens and provider keys unset, so no NAME placeholder in the PR diff or
+  # comments can ever resolve to a secret.
+  env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 SEMBLE_PREFETCH="" SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
 ) > "${editor_prompt_rendered}"
 mv "${editor_prompt_rendered}" "${EDITOR_PROMPT_BODY_FILE}"
 

@@ -1019,6 +1019,140 @@ def test_render_prompt_sh_skips_syntax_validation_when_env_opt_in_set() -> None:
 	assert '`{% include "_prelude_common.txt" %}` directives).' in skip_proc.stdout
 
 
+def _braced(name: str) -> str:
+	# Built by concatenation so this file's own diff, which reviewer prompt
+	# bodies embed, never carries a contiguous braced placeholder token.
+	return "{{" + name + "}}"
+
+
+def test_render_prompt_sh_does_not_forward_env_into_untrusted_body() -> None:
+	# Security finding render-prompt-env-indirect-expansion-secret-leak (refs
+	# #3576): an untrusted reviewer/editor body carrying a literal GH_TOKEN /
+	# OPENROUTER_API_KEY placeholder must never be filled from the process
+	# environment. Either untrusted-body flag on its own is enough.
+	secret_sentinels = {
+		"GH_TOKEN": "ghp_SENTINEL_SECRET_VALUE_1",
+		"OPENROUTER_API_KEY": "sk-or-SENTINEL_SECRET_VALUE_2",
+		"BENIGN_PLACEHOLDER_VALUE": "BENIGN_SENTINEL_VALUE_3",
+	}
+	body = (
+		"Static scaffolding line.\n"
+		f"{_braced('WORKFLOW_EDIT_RESTRICTION')}\n"
+		"=== BEGIN embedded PR diff ===\n"
+		f"+ token: {_braced('GH_TOKEN')}\n"
+		f"+ key: {_braced('OPENROUTER_API_KEY')}\n"
+		f"+ benign: {_braced('BENIGN_PLACEHOLDER_VALUE')}\n"
+		"=== END embedded PR diff ===\n"
+	)
+	flag_sets = (
+		{"RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED": "1", "RENDER_PROMPT_SKIP_SYNTAX_VALIDATION": "1"},
+		{"RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED": "1"},
+		{"RENDER_PROMPT_SKIP_SYNTAX_VALIDATION": "1"},
+	)
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_untrusted_env_") as td:
+		prompt_file = Path(td) / "reviewer_prompt_body.txt"
+		prompt_file.write_text(body, encoding="utf-8")
+		for flags in flag_sets:
+			env = _base_env()
+			env.pop("RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED", None)
+			env.pop("RENDER_PROMPT_SKIP_SYNTAX_VALIDATION", None)
+			env.update(secret_sentinels)
+			env.update(flags)
+			env["ALLOW_WORKFLOW_EDITS"] = "false"
+			proc = subprocess.run(
+				["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+				cwd=str(REPO_ROOT),
+				env=env,
+				text=True,
+				capture_output=True,
+				timeout=60,
+			)
+			assert proc.returncode == 0, f"{flags}: {proc.stderr}"
+			for value in secret_sentinels.values():
+				assert value not in proc.stdout, flags
+				assert value not in proc.stderr, flags
+			for name in secret_sentinels:
+				assert _braced(name) in proc.stdout, (flags, name)
+			assert "- Do not change CI workflows.\n" in proc.stdout, flags
+			assert _braced("WORKFLOW_EDIT_RESTRICTION") not in proc.stdout, flags
+
+
+def test_render_prompt_sh_refuses_secret_like_env_placeholders_in_trusted_template() -> None:
+	# Trusted templates keep env forwarding, but names that look like secrets
+	# are refused and named (never valued) on stderr.
+	secret_values = {
+		"GH_TOKEN": "ghp_SENTINEL_TRUSTED_SECRET_1",
+		"MY_API_KEY": "SENTINEL_TRUSTED_SECRET_2",
+	}
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_trusted_env_") as td:
+		prompt_file = Path(td) / "plain_template.txt"
+		prompt_file.write_text(
+			f"Token: {_braced('GH_TOKEN')}\n"
+			f"Key: {_braced('MY_API_KEY')}\n"
+			f"Title: {_braced('ISSUE_TITLE_TEXT')}\n",
+			encoding="utf-8",
+		)
+		env = _base_env()
+		env.pop("RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED", None)
+		env.pop("RENDER_PROMPT_SKIP_SYNTAX_VALIDATION", None)
+		env.update(secret_values)
+		env["ISSUE_TITLE_TEXT"] = "Forwarded issue title"
+		proc = subprocess.run(
+			["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	for value in secret_values.values():
+		assert value not in proc.stdout
+		assert value not in proc.stderr
+	assert "Title: Forwarded issue title\n" in proc.stdout
+	assert _braced("GH_TOKEN") in proc.stdout
+	assert _braced("MY_API_KEY") in proc.stdout
+	for name in secret_values:
+		assert (
+			f"WARNING: render_prompt.sh: refusing to forward secret-like environment placeholder {name}"
+			in proc.stderr
+		), proc.stderr
+	assert "ISSUE_TITLE_TEXT" not in proc.stderr
+
+
+def test_review_body_renders_run_with_secrets_unset() -> None:
+	# Defense in depth: the three untrusted-body render call sites run
+	# render_prompt.sh with the job's tokens and provider keys unset.
+	call_sites = (
+		(
+			REPO_ROOT / "scripts" / "review_run_reviewers.sh",
+			'render_prompt.sh" "${REVIEWER_PROMPT_BODY_FILE}"',
+		),
+		(
+			REPO_ROOT / "scripts" / "review_run_reviewers.sh",
+			'render_prompt.sh" "${model_prompt_file}"',
+		),
+		(
+			REPO_ROOT / "scripts" / "review_apply_fixes.sh",
+			'render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"',
+		),
+	)
+	for script_path, marker in call_sites:
+		lines = [
+			line
+			for line in script_path.read_text(encoding="utf-8").splitlines()
+			if marker in line and "RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1" in line
+		]
+		assert len(lines) == 1, (script_path, marker, lines)
+		line = lines[0]
+		assert "env -u GH_TOKEN" in line, line
+		assert "-u GH_PAT" in line, line
+		assert "-u GITHUB_TOKEN" in line, line
+		assert "-u OPENROUTER_API_KEY" in line, line
+		assert line.index("env -u GH_TOKEN") < line.index("bash "), line
+
+
 # Body reproducing the reviewer/editor include-assembly hard-fail (tele-funtoken
 # PRs shubhodeep1/tele-funtoken-msg-scoring#3548 -> _partials/site_footer.html,
 # shubhodeep1/tele-funtoken-msg-scoring#3549 -> _partials/header-cro-v2.html):
@@ -1569,6 +1703,9 @@ def main() -> int:
 	test_render_prompt_py_hard_fails_on_embedded_diff_template_tokens_without_skip()
 	test_render_prompt_py_skip_syntax_validation_allows_embedded_diff_tokens()
 	test_render_prompt_sh_skips_syntax_validation_when_env_opt_in_set()
+	test_render_prompt_sh_does_not_forward_env_into_untrusted_body()
+	test_render_prompt_sh_refuses_secret_like_env_placeholders_in_trusted_template()
+	test_review_body_renders_run_with_secrets_unset()
 	test_render_prompt_py_skip_syntax_validation_preserves_standalone_include_lines()
 	test_render_prompt_py_resolves_standalone_include_for_trusted_templates()
 	test_render_prompt_py_uses_checked_in_persona_source()
