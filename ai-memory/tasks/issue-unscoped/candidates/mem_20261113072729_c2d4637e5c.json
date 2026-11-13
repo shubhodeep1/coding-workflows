@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:lines 1491-1495 | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Comment in `tests-heal-plan-and-validation` was already reworded to list all four moved steps; the reviewer reports it as a NIT, not a defect.\n  WHY: It is a comment-only note with no runtime effect (source severity NIT).\n- .github/workflows/ci.yml:tests-hooks-and-orchestrator job, Release CI gate tests step | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Missing GH_TOKEN environment variable for the moved Release CI gate tests step.\n  WHY: The step uses a stub gh and calls release_ci_gate.sh, which reportedly requires GH_TOKEN. Other reviewers (sonnet, minimax, glm) refuted this claim.\n- .github/workflows/ci.yml:tests-hooks-and-orchestrator job, Mark-stable release-tag refspec contract test step | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Missing GH_TOKEN environment variable for the moved Mark-stable release-tag refspec contract test step.\n  WHY: The test reportedly interacts with the GitHub API and the contract test failures indicate an authorization failure.\n- tests/test_ci_poll_test_sharding.py:test_each_step_has_no_guard | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Moved steps are still identified as pinned in GROUP_PINNED_STEPS, causing test_each_step_has_no_guard to fail.\n  WHY: The CI contract requires that steps moved out of guarded jobs must not be pinned in their new target job.\n- .github/workflows/ci.yml:comments at lines 1059 and 1494 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Inaccurate provenance description in step comments.\n  WHY: Documentation inaccuracy that is misleading for future maintainers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Move its slowest steps into the CI job with the most headroom, unchanged\n  expected_change_site: .github/workflows/ci.yml, tests-hooks-and-orchestrator job\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The moved steps cause CI contract test failures (tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_ci_poll_test_sharding.py), indicating they were not moved unchanged (missing GH_TOKEN, still pinned in GROUP_PINNED_STEPS). Source severity BLOCKER. Other reviewers refuted this.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:lines 1491-1495 | severity=NIT | confidence=1\n  PROBLEM: Comment in `tests-heal-plan-and-validation` was already reworded to list all four moved steps; the reviewer reports it as a NIT, not a defect.\n  WHY: It is a comment-only note with no runtime effect.\n(All other lenses: NONE. Task completeness: NONE. HARDENING_RISK_SCORE: 0.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:tests-hooks-and-orchestrator job, Release CI gate tests step | confidence=4\n  PROBLEM: Missing GH_TOKEN environment variable for the moved Release CI gate tests step.\n  WHY: The step uses a stub gh and calls release_ci_gate.sh, which requires GH_TOKEN to interface with the GitHub API. The test_gh_api_write_guard.py failure confirms this contract is violated.\n- .github/workflows/ci.yml:tests-hooks-and-orchestrator job, Mark-stable release-tag refspec contract test step | confidence=4\n  PROBLEM: Missing GH_TOKEN environment variable for the moved Mark-stable release-tag refspec contract test step.\n  WHY: The step runs tests/test_mark_stable_release_tag_refspec_contract.py which interacts with GitHub API, and the contract test failures indicate authorization failure.\n- tests/test_ci_poll_test_sharding.py:test_each_step_has_no_guard | confidence=4\n  PROBLEM: Moved steps are still identified as pinned in the GROUP_PINNED_STEPS, causing test_each_step_has_no_guard to fail.\n  WHY: The CI contract requires that steps moved out of guarded jobs must not be pinned in their new target job.\n- .github/workflows/ci.yml:comments at lines 1059 and 1494 | confidence=2\n  PROBLEM: Inaccurate provenance description in step comments.\n  WHY: Documentation inaccuracy; misleading for future maintainers.\n- TASK_GAP:\n  Requirement: Move its slowest steps into the CI job with the most headroom, unchanged\n  Expected change site: .github/workflows/ci.yml, tests-hooks-and-orchestrator job\n  Evidence of absence: The moved steps cause multiple CI contract test failures (tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_ci_poll_test_sharding.py), indicating the steps were not moved \"unchanged\" in terms of environment (missing GH_TOKEN) and contract compliance (still pinned in GROUP_PINNED_STEPS).\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n(Task completeness entry was a NIT confirming the requirement is satisfied: Requirement \"Move its slowest steps into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes`...\"; all four steps are in `tests-hooks-and-orchestrator` (ci.yml:1064, 1069, 1081, 1086); SEVERITY: NIT; ISSUE_CONFIDENCE: 5. It also rejected the Gemini GH_TOKEN claim and noted the \"Two of these steps ran here before #7366\" comment at `.github/workflows/ci.yml:1059` is a documentary NIT only.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9d31defecc6d70da083eb2c6a699a4043f51ecca36e3ccde677f7e86284f816b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9430,
+    "run_id": "43355880067",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43355880067",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113072729_c2d4637e5c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9430,
+    "run_id": "43355880067"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-13T07:27:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
