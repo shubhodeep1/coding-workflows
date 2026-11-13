@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-13T07:36:45Z",
+  "issue_number": 9411,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=scripts/orchestrate_poll_process.sh:33217-33226; cited_path=PR test-gate results (pre-push gate, `container_rc_137`, 0 tests run); files_touched=scripts/orchestrate_poll_process.sh.",
+  "phase": "review_autofix",
+  "pr_number": 9426,
+  "record_id": "lesson_20261113073645_19122201cb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "PR test-gate results (pre-push gate, `container_rc_137`, 0 tests run)",
+    "scripts/orchestrate_poll_process.sh"
+  ]
+}
