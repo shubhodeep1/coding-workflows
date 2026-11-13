@@ -554,13 +554,17 @@ def test_commit_step_purges_only_processed_docs_and_pushes_run_branch() -> None:
 		assert proc.returncode == 0, out
 		assert f"WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc={OLD_UNPROCESSED} reason=unprocessed" in out
 		assert f"WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc={OLD_IN_FLIGHT} reason=in_flight_project" in out
-		assert not _ls_remote_file(tmp, env, RUN_BRANCH, OLD_PROCESSED)
+		# The purge selects only the processed doc, but PR mode (project
+		# #9116) takes the purge deletions out of the report PR before any
+		# merge call, so every doc stays on the run branch.
+		assert "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending count=1" in out
+		assert _ls_remote_file(tmp, env, RUN_BRANCH, OLD_PROCESSED)
 		assert _ls_remote_file(tmp, env, RUN_BRANCH, OLD_UNPROCESSED)
 		assert _ls_remote_file(tmp, env, RUN_BRANCH, OLD_IN_FLIGHT)
 		assert _ls_remote_file(tmp, env, RUN_BRANCH, REPORT)
 		assert "committed=true" in output
 		assert f"report_branch={RUN_BRANCH}" in output
-		assert f"purged_docs={OLD_PROCESSED}\n" in output
+		assert "purged_docs=\n" in output
 
 
 def test_commit_step_skips_purge_without_processing_report() -> None:

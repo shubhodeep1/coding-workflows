@@ -2129,35 +2129,36 @@ jobs:
             # this run's own push.
             report_head_sha="$(git rev-parse HEAD)"
             report_merge_requested=""
-            if gh pr merge "${report_pr_number}" --squash --match-head-commit "${report_head_sha}"; then
+            # A report PR can land long after the purge guard ran (#7022): a
+            # merge queue accepts even the direct merge (exit 0) and lands it
+            # later, and auto-merge waits for checks. An apply-analysis
+            # project dispatched meanwhile could read a doc this PR deletes.
+            # So the age-based purge deletions leave the PR before any merge
+            # call; apply-analysis deletes the docs it processes, and push
+            # mode (WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=false) still purges.
+            report_purge_drop_ok=1
+            report_purged_paths="$(git diff --name-only --diff-filter=D HEAD~1 HEAD -- 'analysis/workflow-optimization-*.md' 2>/dev/null)" || report_purge_drop_ok=0
+            if [ "${report_purge_drop_ok}" -eq 1 ] && [ -n "${report_purged_paths}" ]; then
+              if printf '%s\n' "${report_purged_paths}" | xargs -d '\n' git checkout HEAD~1 -- \
+                 && git commit --amend -q -m "chore: add workflow log analysis report" \
+                 && git push --force-with-lease="refs/heads/${REPORT_PR_BRANCH}:${report_last_pushed_sha}" origin "HEAD:refs/heads/${REPORT_PR_BRANCH}"; then
+                report_last_pushed_sha="$(git rev-parse HEAD)"
+                report_head_sha="${report_last_pushed_sha}"
+                # The docs stay, so purged_docs must not name them.
+                purged_docs_list=""
+                echo "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending count=$(printf '%s\n' "${report_purged_paths}" | wc -l | tr -d ' ')"
+              else
+                report_purge_drop_ok=0
+              fi
+            fi
+            if [ "${report_purge_drop_ok}" -ne 1 ]; then
+              echo "::warning::Could not remove the purge deletions from report PR ${report_pr_url:-#${report_pr_number}}; not merging it or arming auto-merge. The PR still deletes the docs this run's purge guard chose: drop those deletions (or close the PR and re-run) before merging it by hand."
+            elif gh pr merge "${report_pr_number}" --squash --match-head-commit "${report_head_sha}"; then
               # A merge queue can accept the PR (exit 0) without merging it
               # yet, so the landing check below decides pr_merged.
               report_merge_requested="direct"
-            else
-              # Auto-merge can land hours later, after the purge guard's
-              # answer is stale (#7022): an apply-analysis project dispatched
-              # meanwhile could read a doc this PR deletes. Drop the purge
-              # deletions from the PR before arming auto-merge; the next run
-              # purges again with a fresh guard.
-              report_purge_drop_ok=1
-              report_purged_paths="$(git diff --name-only --diff-filter=D HEAD~1 HEAD -- 'analysis/workflow-optimization-*.md' 2>/dev/null)" || report_purge_drop_ok=0
-              if [ "${report_purge_drop_ok}" -eq 1 ] && [ -n "${report_purged_paths}" ]; then
-                if printf '%s\n' "${report_purged_paths}" | xargs -d '\n' git checkout HEAD~1 -- \
-                   && git commit --amend -q -m "chore: add workflow log analysis report" \
-                   && git push --force-with-lease="refs/heads/${REPORT_PR_BRANCH}:${report_last_pushed_sha}" origin "HEAD:refs/heads/${REPORT_PR_BRANCH}"; then
-                  report_last_pushed_sha="$(git rev-parse HEAD)"
-                  report_head_sha="${report_last_pushed_sha}"
-                  echo "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending count=$(printf '%s\n' "${report_purged_paths}" | wc -l | tr -d ' ')"
-                else
-                  report_purge_drop_ok=0
-                fi
-              fi
-              if [ "${report_purge_drop_ok}" -eq 1 ] \
-                 && gh pr merge "${report_pr_number}" --auto --squash --match-head-commit "${report_head_sha}"; then
-                report_merge_requested="auto"
-              elif [ "${report_purge_drop_ok}" -ne 1 ]; then
-                echo "::warning::Could not remove the purge deletions from report PR ${report_pr_url:-#${report_pr_number}}; not arming auto-merge so a stale purge cannot land later."
-              fi
+            elif gh pr merge "${report_pr_number}" --auto --squash --match-head-commit "${report_head_sha}"; then
+              report_merge_requested="auto"
             fi
             if [ -n "${report_merge_requested}" ]; then
               report_delivery="pr_auto_merge"
@@ -2879,6 +2880,9 @@ jobs:
           # deliver-report job's PR carries it. Never push to the default
           # branch: without a report branch there is nothing to deliver.
           if [ -z "${REPORT_BRANCH:-}" ]; then
+            # Project #9116 P1: commit_report delivers the report itself, so
+            # no run branch reaches this job and the section is not delivered.
+            echo "::warning::The deep audit section was committed locally but not delivered: this run has no report branch (the report was delivered by commit_report)."
             echo "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=skipped reason=no_report_branch job=deep-audit"
             exit 0
           fi
@@ -3494,6 +3498,9 @@ jobs:
           # deliver-report job's PR carries it. Never push to the default
           # branch: without a report branch there is nothing to deliver.
           if [ -z "${REPORT_BRANCH:-}" ]; then
+            # Project #9116 P1: commit_report delivers the report itself, so
+            # no run branch reaches this job and the section is not delivered.
+            echo "::warning::The API redundancy section was committed locally but not delivered: this run has no report branch (the report was delivered by commit_report)."
             echo "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=skipped reason=no_report_branch job=api-redundancy"
             exit 0
           fi

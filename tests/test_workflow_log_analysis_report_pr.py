@@ -271,8 +271,39 @@ def test_report_pr_auto_merge_drops_purge_deletions() -> None:
 		assert "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending count=1" in proc.stdout
 		branch_head = box.origin_ref(f"refs/heads/{PR_BRANCH}")
 		calls = box.gh_calls()
+		assert len(calls) == 3, calls
 		assert calls[2] == f"pr merge 42 --auto --squash --match-head-commit {branch_head}", calls
-		assert box.outputs()["delivery"] == "pr_auto_merge"
+		out = box.outputs()
+		assert out["delivery"] == "pr_auto_merge"
+		# The kept doc is not reported as purged.
+		assert out["purged_docs"] == ""
+
+
+def test_report_pr_queued_direct_merge_drops_purge_deletions_first() -> None:
+	# A merge queue accepts the direct merge (exit 0) and lands it later, so
+	# the purge deletions must leave the PR before that merge call too.
+	old_report = "analysis/workflow-optimization-2020-01-01.md"
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		(box.work / old_report).write_text("# old\n", encoding="utf-8")
+		with (box.work / "analysis" / "recommendation-processing-report.md").open("a", encoding="utf-8") as handle:
+			handle.write("- workflow-optimization-2020-01-01.md: applied\n")
+		_git(box.work, "add", "-A", env=box.git_env)
+		_git(box.work, "commit", "-q", "-m", "old report", env=box.git_env)
+		_git(box.work, "push", "-q", "origin", "HEAD:main", env=box.git_env)
+		box.write_report()
+		proc = box.run(FAKE_GH_MERGE_QUEUED="1")
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert box.origin_has(f"refs/heads/{PR_BRANCH}", REPORT)
+		assert box.origin_has(f"refs/heads/{PR_BRANCH}", old_report)
+		assert "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending count=1" in proc.stdout
+		branch_head = box.origin_ref(f"refs/heads/{PR_BRANCH}")
+		calls = box.gh_calls()
+		assert len(calls) == 2, calls
+		assert calls[1] == f"pr merge 42 --squash --match-head-commit {branch_head}", calls
+		out = box.outputs()
+		assert out["delivery"] == "pr_auto_merge"
+		assert out["purged_docs"] == ""
 
 
 def test_report_pr_auto_merge_when_direct_merge_refused() -> None:
@@ -566,6 +597,7 @@ def main() -> int:
 	test_report_pr_default_mode_opens_and_merges_pr()
 	test_report_pr_queued_direct_merge_is_not_reported_merged()
 	test_report_pr_auto_merge_drops_purge_deletions()
+	test_report_pr_queued_direct_merge_drops_purge_deletions_first()
 	test_report_pr_auto_merge_when_direct_merge_refused()
 	test_report_pr_auto_merge_wait_sees_the_report_land()
 	test_report_pr_auto_merge_not_landed_warns_about_skipped_audits()
