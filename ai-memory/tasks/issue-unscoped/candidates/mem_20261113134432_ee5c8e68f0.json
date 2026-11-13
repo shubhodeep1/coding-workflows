@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Create `.github/ai/chatgpt_pool.json` with exactly this JSON object (plus a trailing newline): `{\"reviewer_slot_enabled\": false, \"model\": \"gpt-6-sol\", \"replaces\": \"openai/gpt-6-luna\", \"reasoning\": \"xhigh\"}`. It must match `SHIPPED_CONFIG` in `tests/test_review_chatgpt_reviewer_slot.py`. `reviewer_slot_enabled` MUST stay `false`; go-live is out of scope.\"\n  expected_change_site: `.github/ai/chatgpt_pool.json` (path bound to `POOL_CONFIG = REPO_ROOT / \".github\" / \"ai\" / \"chatgpt_pool.json\"` at tests/test_review_chatgpt_reviewer_slot.py:40)\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR diff adds only `changelog.d/phase2-chatgpt-pool-config-file.md` and the new test in `tests/test_review_chatgpt_reviewer_slot.py`. CI shows `FAILED tests/test_review_chatgpt_reviewer_slot.py::test_shipped_pool_config_file_is_committed_and_switched_off` with `AssertionError: assert False ... where False = PosixPath('/home/runner/work/coding-workflows/coding-workflows/.github/ai/chatgpt_pool.json').is_file` at tests/test_review_chatgpt_reviewer_slot.py:125. PR comment 6851213621 says the file was written to the worktree but left untracked (`?? .github/ai/chatgpt_pool.json`) and never committed. Severity BLOCKER.\n- requirement: \"Add a `changelog.d/` fragment (`<!-- changelog: fixed -->`) saying the shipped switch file now exists, so `REVIEWER_CHATGPT_SLOT_ENABLED=true` can turn the slot on for one repo.\"\n  expected_change_site: `changelog.d/phase2-chatgpt-pool-config-file.md`\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The fragment exists with `<!-- changelog: fixed -->` at `changelog.d/phase2-chatgpt-pool-config-file.md:1`. Its first sentence (\"`.github/ai/chatgpt_pool.json` ships with `reviewer_slot_enabled: false`\") describes a state the PR head does not establish, so the release notes `scripts/assemble_changelog.py` builds would mislead operators. The fix is to land the missing file in the same PR. Severity MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP | SEVERITY: BLOCKER | ISSUE_CONFIDENCE: 5\n  Requirement: \"Create `.github/ai/chatgpt_pool.json` with exactly this JSON object (plus a trailing newline): `{\"reviewer_slot_enabled\": false, \"model\": \"gpt-6-sol\", \"replaces\": \"openai/gpt-6-luna\", \"reasoning\": \"xhigh\"}`. It must match `SHIPPED_CONFIG` in `tests/test_review_chatgpt_reviewer_slot.py`. `reviewer_slot_enabled` MUST stay `false`; go-live is out of scope.\"\n  Expected change site: `.github/ai/chatgpt_pool.json` (path bound to `POOL_CONFIG = REPO_ROOT / \".github\" / \"ai\" / \"chatgpt_pool.json\"` at tests/test_review_chatgpt_reviewer_slot.py:40)\n  Evidence of absence: The PR diff adds only the changelog fragment and the test. CI fails `test_shipped_pool_config_file_is_committed_and_switched_off` at tests/test_review_chatgpt_reviewer_slot.py:125 because `.github/ai/chatgpt_pool.json` `.is_file` is False. A direct read returns \"File not found\". Comment 6851213621 shows the file was untracked (`?? .github/ai/chatgpt_pool.json`) and never committed, so `git ls-files` does not list it and the first \"Done when\" check fails.\n- TASK_GAP | SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n  Requirement: \"Add a `changelog.d/` fragment (`<!-- changelog: fixed -->`) saying the shipped switch file now exists, so `REVIEWER_CHATGPT_SLOT_ENABLED=true` can turn the slot on for one repo.\"\n  Expected change site: `changelog.d/phase2-chatgpt-pool-config-file.md`\n  Evidence of absence: The fragment is present at `changelog.d/phase2-chatgpt-pool-config-file.md:1`, but it claims `.github/ai/chatgpt_pool.json` ships, which the PR head does not establish. On this commit the file still resolves to `config_missing`, so the release notes would mislead operators. The fix is to land the file in the same PR.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM minimax_minimax-m3 ===",
+  "fingerprint": "7cb7afc55469f6ce8df7e96617a875381f16eda3c44878ff0f005e18a76543ec",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9454,
+    "run_id": "43394460676",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43394460676",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113134432_ee5c8e68f0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9454,
+    "run_id": "43394460676"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-13T13:44:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
