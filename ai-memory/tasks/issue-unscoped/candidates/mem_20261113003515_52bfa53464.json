@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The six scripts that still read `date +%s%3N` first now read bash's `EPOCHREALTIME` first; changelog lists `review_merge_train.sh` and `review_conflict_resolve.sh` among the six changed scripts (`_mt_now_ms`, `_resolver_terminal_now_ms`).\n  expected_change_site: scripts/review_merge_train.sh (`_mt_now_ms`), scripts/review_conflict_resolve.sh (`_resolver_terminal_now_ms`)\n  confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Neither script has a hunk in the PR diff or pr_changed_files.txt, current tree already reads EPOCHREALTIME first (review_merge_train.sh:1545-1564, review_conflict_resolve.sh:428-433); delivery-narration mismatch, severity NIT\n- requirement: Cherry-picks #9246's four commits unchanged, including the `.github/workflows/ci.yml` step timer reading `EPOCHREALTIME`.\n  expected_change_site: .github/workflows/ci.yml (`sf_now_ms()`)\n  confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: ci.yml absent from pr_changed_files.txt and the PR diff, current tree already contains the EPOCHREALTIME check; delivery-narration mismatch, severity NIT\n- requirement: Tests that simulate \"no usable clock\" by breaking `date` now also `unset EPOCHREALTIME` (`tests/test_review_conflict_resolve_terminal_record.py`, `tests/test_semble_helpers.py`).\n  expected_change_site: tests/test_semble_helpers.py::test_semble_elapsed_ms_clamps_negative_duration_to_zero (line 312), tests/test_review_conflict_resolve_terminal_record.py\n  confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Neither test file has a hunk in the PR diff, test_review_conflict_resolve_terminal_record.py:240 already unsets EPOCHREALTIME, but the semble test (lines 317-327) only fakes `date` so on bash 5+ the fake `date` is bypassed; severity NIT\n- requirement: The PR description lists `.github/workflows/ci.yml`, `scripts/review_merge_train.sh`, `scripts/review_conflict_resolve.sh`, `tests/test_review_conflict_resolve_terminal_record.py` and `tests/test_semble_helpers.py` as changed by this PR.\n  expected_change_site: those five files (PR body text correction)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: None has a hunk in the PR diff or pr_changed_files.txt; the merge of main (#9252) already brought the changes, remaining work is correcting PR body text, not code; severity NIT\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: The PR description lists `.github/workflows/ci.yml`, `scripts/review_merge_train.sh`, `scripts/review_conflict_resolve.sh`, `tests/test_review_conflict_resolve_terminal_record.py` and `tests/test_semble_helpers.py` as changed by this PR.\n  Expected change site: those five files.\n  Evidence of absence: none of them has a hunk in the PR diff or in `pr_changed_files.txt`; mismatch between PR description and diff, not a code defect. The merge of `main` (#9252) already brought those changes onto the tree.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: PR DESCRIPTION \"Changes\" section says the two tests that simulate \"no usable clock\" by breaking `date` now also `unset EPOCHREALTIME`.\n  Expected change site: tests/test_semble_helpers.py::test_semble_elapsed_ms_clamps_negative_duration_to_zero (line 312)\n  Evidence of absence: no hunk touches the file; the test at line 312 only writes a fake `date` that exits 1 (lines 317-322) and runs `_semble_elapsed_ms 99999999999999` (line 327); on bash 5+ `_semble_now_ms` reads EPOCHREALTIME (semble_helpers.sh:96-98), so the \"no usable clock\" path is not exercised.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: PR DESCRIPTION says `scripts/review_merge_train.sh` `_mt_now_ms`, `scripts/review_conflict_resolve.sh` `_resolver_terminal_now_ms`, and `.github/workflows/ci.yml` step timer read `EPOCHREALTIME` first.\n  Expected change site: scripts/review_merge_train.sh, scripts/review_conflict_resolve.sh, .github/workflows/ci.yml\n  Evidence of absence: none of the three files is in `pr_changed_files.txt`; the current tree already reads EPOCHREALTIME first (review_merge_train.sh:1545-1564, review_conflict_resolve.sh:428-433, ci.yml `sf_now_ms` exercised at tests/test_ci_poll_test_sharding.py:4729); delivery-narration gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"The six scripts that still read `date +%s%3N` first now read bash's `EPOCHREALTIME` first,\" and the changelog lists `review_merge_train.sh` and `review_conflict_resolve.sh` among the six changed scripts.\n  Expected change site: `scripts/review_merge_train.sh` (`_mt_now_ms`) and `scripts/review_conflict_resolve.sh` (`_resolver_terminal_now_ms`).\n  Evidence of absence: Neither script has a hunk in the PR diff. The current tree contains the described clock behavior.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Cherry-picks #9246's four commits unchanged,\" including the `.github/workflows/ci.yml` step timer reading `EPOCHREALTIME`.\n  Expected change site: `.github/workflows/ci.yml`, `sf_now_ms()`.\n  Evidence of absence: ci.yml is absent from the PR changed-files list and has no hunk in the PR diff. The current tree contains the EPOCHREALTIME check.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: The tests that simulate \"no usable clock\" by breaking `date` \"now also unset `EPOCHREALTIME`.\"\n  Expected change site: `tests/test_review_conflict_resolve_terminal_record.py` and `tests/test_semble_helpers.py`.\n  Evidence of absence: Neither test file has a hunk in the PR diff. `test_failing_date_still_emits_and_preserves_rc` already unsets `EPOCHREALTIME`, but `test_semble_elapsed_ms_clamps_negative_duration_to_zero` does not; its fake `date` is bypassed when `EPOCHREALTIME` is available.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "efb7525e947f3ab7343c1ffb0a0302700d01ab5561907a194ed5c4342707f017",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9345,
+    "run_id": "43269990461",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43269990461",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113003515_52bfa53464",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9345,
+    "run_id": "43269990461"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T00:35:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
