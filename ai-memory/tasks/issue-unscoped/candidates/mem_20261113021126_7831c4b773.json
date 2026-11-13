@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1521-1550, 1685-1690, 1732-1742, 1809-1814, 1944-1949 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The CI job migration causes 5 tests to fail in the pre-push gate (e.g., test_agents_fragment_contract, test_files_touched_scope_guard).\n  WHY: The move has introduced demonstrable failures in the CI pipeline on the PR head, blocking successful verification (source severity=BLOCKER).\n- .github/workflows/ci.yml:1521-1550 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The moved steps were not verified for dependency satisfaction or environment setup in the target jobs.\n  WHY: Tests may fail if they rely on dependencies, environment setup, or files implicitly present in the original job (tests-promote-stall-and-review) but missing in tests-heal-plan-and-validation or tests-release-and-log-analysis (source severity=MAJOR).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, selection of target jobs for the five steps removed from tests-promote-stall-and-review\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Comments at .github/workflows/ci.yml:1524-1528 and :2311-2315 say step timings for run 43138350536 were unreadable and the pick is an estimate; no diff hunk shows which steps were slowest or which job has the most headroom; steps went to two jobs rather than one; tests-heal-plan-and-validation carried 17m00s of 20 before receiving three more moved steps. Severity disagreement: NIT (sonnet, luna) vs MAJOR (gemini, minimax); highest = MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the choice of target jobs for the five steps removed from `tests-promote-stall-and-review`.\n  Evidence of absence: Comments at `.github/workflows/ci.yml:1524-1528` and `:2311-2315` say the step timings for run 43138350536 were unreadable and the pick is an estimate. Nothing shows which steps were slowest or which job has most headroom. Steps went to two jobs rather than one. Issue allows an estimate; no `timeout-minutes` raised, no required job name added, step names and bodies unchanged.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1521-1550, 1685-1690, 1732-1742, 1809-1814, 1944-1949 | severity=BLOCKER | confidence=4\n  PROBLEM: The CI job migration causes 5 tests to fail in the pre-push gate (e.g., test_agents_fragment_contract, test_files_touched_scope_guard).\n  WHY: The move has introduced demonstrable failures in the CI pipeline on the PR head, blocking successful verification.\n- .github/workflows/ci.yml:1521-1550 | severity=MAJOR | confidence=3\n  PROBLEM: The moved steps were not verified for dependency satisfaction or environment setup in the target jobs.\n  WHY: Tests may fail if they rely on dependencies, environment setup, or files implicitly present in the original job but missing in the new target jobs.\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml (choice of target jobs for the five steps removed from tests-promote-stall-and-review)\n  Evidence of absence: The PR comments admit the step timings for run 43138350536 were unreadable, so the move was based on estimates, and no data was provided to show the target jobs have the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml \u2014 selection of target jobs for the five steps removed from tests-promote-stall-and-review\n  Evidence of absence: Comment at ci.yml:1524-1528 and :2311-2315 states step timings were not readable and the pick is an estimate. No diff hunk cites a per-step measurement or per-job headroom analysis. tests-heal-plan-and-validation carried 17m00s of 20 before receiving three more moved steps, and tests-release-and-log-analysis already hosts the Node pair plus full-history checkout. The last-run diff is comment-only and does not address this gap. Hard constraints are met, but \"slowest steps\"/\"most headroom\" is unverified.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection of destination jobs for the five steps removed from `tests-promote-stall-and-review`.\n  Evidence of absence: Notes at lines 1524\u20131528 and 2311\u20132315 say timings were unreadable and destinations chosen by estimates. The diff does not establish these are the slowest steps or that either destination has the most headroom; the contract test only pins the selected owners.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a86ce3f8206a88fbec4ac232383ba08abf2934f5ee16239c8c8bc5bf04fefccb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9367,
+    "run_id": "43150805151",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43150805151",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113021126_7831c4b773",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9367,
+    "run_id": "43150805151"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T02:11:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
