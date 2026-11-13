@@ -621,3 +621,166 @@ Count correction: the Medium row lists 12 IDs and the Low row lists 29, for 41 f
 | Code modularization | `.github/workflows/workflow-log-analysis.yml`, new `scripts/workflow_log_analysis_pass.sh`, new `.github/actions/setup-log-analysis-engine/action.yml`, `scripts/gh_helpers.sh`, `scripts/label_helpers.sh`, `tests/test_workflow_gh_retry_fallback_contract.py`, `tests/test_workflow_support_ref_follows_pin.py` | Large |
 | Expression size reduction | `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/implement.yml`, `.github/workflows/test-and-mark-stable.yml`, `tests/test_workflow_file_size_limit.py` | Small |
 | Medium/Low fixes | `scripts/worktree_gc.sh`, `.github/workflows/security-audit.yml` (+4 bootstrap copies), `scripts/tg_helpers.sh`, `scripts/gh_helpers.sh`, `.github/workflows/sync_ai_labels.yml`, `.github/workflows/review_autofix_sweep.yml`, `scripts/orchestrate_poll_process.sh` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-11-13)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means every precondition was proven by reading the code. The calls hit the same endpoint (or a strict subset of its fields) with the same pagination, filters and token, from the same function or step, with no write in between, the same error and retry behaviour, and no concurrency or cache contract crossed. The implement stage may act on these directly. `NEEDS_VERIFICATION` means the merge looks plausible, but at least one precondition can't be proven by reading the code alone. Run the listed verification steps before changing anything. `RISKY_SKIP` means the call is in a retry, backoff or stall-recovery path, an identity, auth or permission probe, a paginated listing, a rate-limit-sensitive path, `orchestrate_poll_process.sh`, or a deliberate race or time-of-check-to-time-of-use (TOCTOU) recheck. These are listed so they are visible, and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001** — `RISKY_SKIP`
+- **Files and lines:** `scripts/validate_process.sh:4122-4126` (tracking issue body) and `scripts/validate_process.sh:5544-5554` (tracking issue state).
+- **Call count:** 2 per tracking run with fixable failures. Proposed: 1.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{n}`, twice.
+- **Evidence:** The same issue is read twice in one script run, keeping a different field each time:
+  ```bash
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}" --jq '.body // ""' > "${PROJECT_SPEC_FILE}"
+  ```
+  ```bash
+  # Tracker-open guard: never open a fix-up against a closed tracker.
+  TRACKER_STATE="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_RAW}" --jq '.state' ...)"
+  ```
+  The two reads are separated by the whole validation run: context assembly, AI attempts and test execution.
+- **Proposed fix (not for auto-implementation):** Read `{body, state}` once at `:4123` and keep `state` in a variable. This only saves the call if the guard may use a state that is as old as the validation run. Check first that `TRACKING_ISSUE_NUM` and `TRACKING_ISSUE_RAW` always resolve to the same number.
+- **Safety rationale:** The second read is an explicit tracker-open guard against a race. A tracker can close during a validation run that takes many minutes. Merging would make the guard check a stale state, which hits the "defends against upstream races" trigger.
+- **Downstream signal:** Do not auto-implement. Keep both calls unless a human accepts that the guard may act on a state as old as the validation run, which would allow fix-ups to be opened against a tracker that closed mid-run.
+
+**MERGE-002** — `RISKY_SKIP`
+- **Files and lines:** `.github/workflows/implement.yml:232` ("Precheck approval phase label"), `:999-1013` ("Resolve checkout ref"), `:2100-2102` ("Fetch issue metadata"), `:2329-2335` ("Validate approval phase label") and `:2771-2775` ("Recheck security dependency before edits"). All are in job `implement` (`:109`).
+- **Call count:** 3 in the normal case. `:1007` and `:2101` already skip when `ISSUE_META_FILE` passes `issue_meta_matches_issue`, so the reads that actually run are `:232`, `:2329` and `:2771`. Proposed: 1, but not recommended.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{n}`.
+- **Evidence:** The cache-reuse pattern is already in place (`:999-1004`, `:2100-2102`). The two reads that still run are documented rechecks: `# Recheck just before advancing the phase. /approved must not bypass a still-open security prerequisite or a failed API read.` (`:2327-2328`), and the step name at `:2764` says "before edits".
+  - Net-new detail: the fallback at `:2377-2379` (`gh_retry gh api ".../issues/${ISSUE_NUMBER}" --jq '[.labels[].name]'`) is reachable only when `jq '[.labels[].name]'` fails on the payload that `:2335` just wrote. That only happens with a payload that has no `labels` array, so it is effectively never called. Leave it alone; it costs nothing in steady state.
+- **Proposed fix (not for auto-implementation):** None. Folding `:2329` or `:2771` into the `:232` snapshot would remove the security-dependency and PR-dependency TOCTOU checks.
+- **Safety rationale:** These are deliberate live rechecks of a security gate (issues #7159 and #7228) taken at different points in the run. Merging them changes what the gate sees, which hits the race-defence and permission triggers.
+- **Downstream signal:** Do not auto-implement. Any change needs a security reviewer to confirm that the security-dependency and PR-dependency holds may be evaluated on a snapshot taken before the approval claim and before the editor runs.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001** — `RISKY_SKIP`
+- **Files and lines:**
+  - `.github/workflows/implement.yml:2134-2141` (identity read, then exported to `GITHUB_ENV`)
+  - `scripts/implement_heal_preflight.sh:129-130` (run by "Heal route preflight", `implement.yml:2308-2316`)
+  - `.github/workflows/implement.yml:2477-2484` ("Unblock judge bulk-delete override")
+- **Call count:** 1 always, plus 1 on the heal route, plus 1 when a bulk-delete override marker is present, so up to 3 per run. Proposed: 1.
+- **Endpoint:** `GET /user`.
+- **Evidence:** The first read stores the login in the job environment:
+  ```bash
+  pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"
+  ...
+  echo "IMPLEMENT_SCOPE_PIPELINE_LOGIN=${pipeline_login}" >> "$GITHUB_ENV"
+  ```
+  Later steps in the same job read it again with the same `GH_TOKEN: ${{ secrets.GH_PAT }}` (`:2082`, `:2474`):
+  ```bash
+  pipeline_login="$(gh api user --jq '.login' 2>/dev/null || true)"   # :2480
+  identity="$(gh api user --jq .login 2>/dev/null)" || refuse unavailable identity_unavailable   # heal_preflight :129
+  ```
+  The comment at `:2131-2133` covers only the opposite direction (the later read can't feed the earlier grant). It does not explain why `:2480` doesn't reuse the exported value. `IMPLEMENT_SCOPE_PIPELINE_LOGIN` is already reused without a new call at `:4685`, `scripts/implement_step_prepush_test_gate.sh:566` and `scripts/implement_commit_changes.sh:604`.
+- **Proposed fix (not for auto-implementation):** At `:2480`, use `pipeline_login="${IMPLEMENT_SCOPE_PIPELINE_LOGIN:-}"` and keep the live `gh api user` read as the fallback when it is empty.
+- **Safety rationale:**
+  - Both re-reads are identity probes that authorize something: lifting the bulk-delete guard, and refusing or allowing a heal edit (`implement_heal_preflight.sh:32`: "Never allow another editor path to run after a failed authorization read"). That hits the auth/permission-probe trigger.
+  - The value would come from `GITHUB_ENV`, which any step in between can write. One such step is "Heal route preflight", which runs `bash scripts/implement_heal_preflight.sh` from the workspace. The comment at `:2336-2339` describes the checkout's `scripts/` as branch-controlled.
+- **Downstream signal:** Do not auto-implement. A security reviewer must confirm two things:
+  - (a) Whether the `scripts/` used at `:2316` is the trusted staged copy or the branch checkout.
+  - (b) That no step between `:2141` and `:2463` can write `IMPLEMENT_SCOPE_PIPELINE_LOGIN` to `GITHUB_ENV`.
+
+  If either is unproven, reusing the value widens the trust surface of the bulk-delete override.
+
+**REUSE-002** — `RISKY_SKIP`
+- **Files and lines:** All in job `sweep` of `.github/workflows/review_autofix_sweep.yml`:
+  - `:163-204` → `scripts/provider_outage.py:349-353` (lazy, cached per process)
+  - `:505` (enumerate step; lazy, only when a pipeline smoke PR exists)
+  - `:641-656` → `scripts/workflow_failure_heal_non_retryable_backfill.sh:150-154` (every tick when enabled)
+  - `:684-693` → `scripts/review_security_hold_sweep.py:228-234` in legacy mode, or `:203-219` in `actions_token` mode
+- **Call count:** 1–4 per tick. Proposed: 1.
+- **Endpoint:** `GET /user`.
+- **Evidence:**
+  ```bash
+  smoke_pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"   # sweep.yml:505, GH_TOKEN=secrets.GH_PAT (:208)
+  LOGIN="$(gh api user --jq .login 2>/dev/null | head -1 || true)"        # backfill.sh:150, GH_TOKEN=secrets.GH_PAT (:647)
+  ```
+  ```python
+  identity_result = _run_gh(["api", "user", "--jq", ".login // \"\""])   # security_hold_sweep.py:229
+  ```
+  Each read is a separate process, and no step exports the login.
+- **Proposed fix (not for auto-implementation):**
+  - Add one early step that resolves the GH_PAT login and writes it to `$GITHUB_OUTPUT`.
+  - Pass it to each consumer through an optional env var. A new name is needed, unique per §10.
+  - Each consumer keeps its own `gh api user` fallback when the value is empty.
+- **Safety rationale:**
+  - Every one of these reads chooses which comment author is trusted. That makes them identity probes on a trust boundary (auth/permission-probe trigger).
+  - The tokens are not identical: the security-hold step uses `secrets.GH_PAT || github.token` (`:687`), and `actions_token` mode probes a separate `SECURITY_HOLD_FINDING_AUTHOR_TOKEN`.
+  - The backfill script is also run by `workflow-templates/ai-review.yml` in consumer repos (header `:8`), so any new input must have a default (§8).
+- **Downstream signal:** Do not auto-implement. This needs manual review of each consumer's trust model and token, and confirmation that a value from an earlier step cannot come from a different token than the consumer's own `GH_TOKEN`. The saving is 1–3 calls per 30-minute tick, which does not justify the risk.
+
+**REUSE-003** — `RISKY_SKIP`
+- **Files and lines:** `scripts/orchestrate_poll_process.sh:196-199` (`replay_failed_reclarify_commands`) and `:20709`, `:20732-20735` (`PERSIST_JOURNAL_LOGIN_CACHE`, also filled at `:20857`, `:21093`, `:21470`, `:21539`).
+- **Call count:** Up to 2 per poll tick. Proposed: 1.
+- **Endpoint:** `GET /user`.
+- **Evidence:**
+  ```bash
+  trusted_login="$(gh_retry gh api user --jq .login 2>/dev/null)" || trusted_login=""      # :198, function-local
+  PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login 2>/dev/null)" || ...    # :20733, process cache
+  ```
+  The two sites use different shape checks: `:199` rejects a `[bot]` suffix, while `:20734` accepts it.
+- **Proposed fix (not for auto-implementation):** In `replay_failed_reclarify_commands`, read `PERSIST_JOURNAL_LOGIN_CACHE` first and fill it after a successful live read. Keep the stricter `:199` regex for the replay decision.
+- **Safety rationale:** The code is in `orchestrate_poll_process.sh` and is an identity probe that authorizes a command replay (`:186`: "The marker is data, not authorization"), so it hits two mandatory RISKY_SKIP triggers.
+- **Downstream signal:** Do not auto-implement. The poller owner must confirm that line `:20709` (`PERSIST_JOURNAL_LOGIN_CACHE="${PERSIST_JOURNAL_LOGIN_CACHE:-}"`) cannot reset a value set earlier during sourcing, and that the two regexes are reconciled without loosening the replay check.
+
+**REUSE-004** — `RISKY_SKIP`
+- **Files and lines:** `.github/workflows/review_autofix_sweep.yml:236-249` (open-PR snapshot written to `ci-cancelled-pr-snapshot.json`) and `scripts/ci_cancelled_rerun.py:246-274` (`current_pr_heads`, called at `:499`).
+- **Call count:** 2 × P pages per tick. Proposed: P pages.
+- **Endpoint:** `GET /repos/{owner}/{repo}/pulls?state=open&per_page=100` with `--paginate`, twice.
+- **Evidence:** The snapshot already holds `head_sha` for every non-draft open PR (`:241`). The rerun helper lists the PRs again:
+  ```python
+  # The sweep's earlier /pulls listing predates review dispatch; its
+  # review-run cache has no live PR heads. Refresh once for all PRs,
+  # not per PR; a failed/partial page cannot authorize a rerun.
+  ```
+- **Proposed fix:** None recommended. The re-listing is a deliberate freshness check: the module docstring at `:9` says "The sweep's earlier PR snapshot cannot prove a head is still current".
+- **Safety rationale:** Both calls are paginated, and the second one deliberately defends against a head moving between the snapshot and the rerun POST. That hits the pagination and race-defence triggers.
+- **Downstream signal:** Do not auto-implement. It is listed only so a later pass does not "fix" it. Removing it would let a cancelled CI run be re-run against a head that has since been replaced.
+
+### Dead Calls (DEAD-API-###)
+No findings. Every call I traced feeds a downstream decision, log line, file or guard:
+- `review_autofix.yml:909`, `:1342`, `:1744`, `:2341`, `:5623`
+- `implement.yml:6518`
+- `review_autofix_sweep.yml:310`, `:505`, `:517`
+- the `implement.yml` issue reads in MERGE-002
+
+The `implement.yml:2377-2379` fallback is nearly unreachable rather than dead, as noted in MERGE-002.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — It is a hand-rolled retry loop around `--paginate` (`implement.yml:2283-2294`). Net-new detail for implementers:
+  - The full paginated listing is still required downstream: `attempt_journal.py render` (`:2303-2306`) and the bulk-delete override parsing (`:2477-2510`) both read `ISSUE_COMMENTS_FILE`. Only the repeat listings can go.
+  - The proposed `GET /repos/{owner}/{repo}/issues/comments/{id}` probe is scoped to the repository, so it must also check that `issue_url` ends in `/issues/${ISSUE_NUMBER}`.
+- BATCH-001: RISKY_SKIP — It is in `orchestrate_poll_process.sh`. The loop is a deliberate re-read after labels were changed (`:32532`, "Re-read labels since we may have changed them"). Before any swap, verify that `_fetch_issue_labels_batch_graphql` does not answer from a cycle-local cache filled before the review-blocked writes.
+- BATCH-002: RISKY_SKIP — It is in `orchestrate_poll_process.sh`, on the blocker-resolution path.
+- BATCH-003: RISKY_SKIP — It is in `orchestrate_poll_process.sh`. This resolves the Deep Audit's open question: `:206` ("Incomplete or malformed comment history never authorizes replay") means `comments(last: 20)` is not enough, so the paginated comment listing at `:205` must stay. The live issue read at `:202-204` also checks `.pull_request? == null`, which a GraphQL `issue(number:)` batch expresses differently (it returns null for a PR number), so the batch must map nulls to skip.
+- BATCH-004: RISKY_SKIP — It is in `orchestrate_poll_process.sh`, on the tier-2 merged-PR resolution path.
+- BATCH-005: RISKY_SKIP — It is in `orchestrate_poll_process.sh`, on the security-pass unblock path.
+- BATCH-006: RISKY_SKIP — The poller half is in `orchestrate_poll_process.sh`, and the `implement.yml:5695-5696` half uses `--paginate`. `comments(last:100)` is not equivalent to the full paginated listing for the no-op ancestry check.
+- BATCH-007: NEEDS_VERIFICATION — The read at `review_autofix_sweep.yml:517` runs only for PRs that have the `e2e-smoke-test` label, an `ai/issue-<N>` head and the GH_PAT login as author (`:501-516`), so S is normally 0–1. Verify the S distribution from `AUTOFIX_SWEEP_SMOKE_CLOSE*` log lines before adding a pre-pass. The batched query must keep `READ_TOKEN` (`github.token`) and the "any API error skips the close" semantics (`:498-499`).
+- API-002: NEEDS_VERIFICATION — The value is a provenance input (issue #6629). By design it has no fallback, and a failed read skips every dispatch (`:303-309`). The checkout at `:152` already hedges with `github.event.repository.default_branch || github.ref_name`, which suggests the field may be missing on some events.
+  - Confirm that `schedule` payloads carry `repository.default_branch`.
+  - Make sure a malformed or absent hint falls back to the live read, and never decides provenance alone.
+  - `provider_outage.py:444` also fetches `defaultBranchRef`, but only on its PR-recovery path, so it is not a reliable source to reuse.
+- API-003: RISKY_SKIP — The repo-wide `actions/runs` listing is paginated (`test-and-mark-stable.yml:3753-3760`). Splitting it into per-status calls changes page boundaries in a release-gate cleanup path.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | BATCH-007, API-002 (cross-references) |
+| RISKY_SKIP | 15 | MERGE-001, MERGE-002, REUSE-001, REUSE-002, REUSE-003, REUSE-004; cross-references API-001, BATCH-001, BATCH-002, BATCH-003, BATCH-004, BATCH-005, BATCH-006, API-003 |
+
+The 15 RISKY_SKIP items are 6 new findings from this pass plus 9 Deep Audit findings retagged as cross-references.
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
+- Every candidate I found is one of these:
+  - an identity probe that authorizes something (REUSE-001 to REUSE-003)
+  - a deliberate freshness or TOCTOU recheck (MERGE-001, MERGE-002, REUSE-004)
+  - paginated or retry-wrapped
+  - inside `orchestrate_poll_process.sh`
+- The two NEEDS_VERIFICATION cross-references (API-002 and BATCH-007) need the verification steps listed above before they are handed off.
