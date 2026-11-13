@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run both test files in full before finishing.\" (tests/test_workflow_failure_heal.py and tests/test_orchestrate_lib.py)\n  expected_change_site: pre-push test gate / validation of tests/test_workflow_failure_heal.py and tests/test_orchestrate_lib.py\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: PR description reports the gate as unverified (container_rc_137, 0 tests run); severity disagreement: BLOCKER (google_gemini-3_1-flash-lite) vs NIT (anthropic_claude-sonnet-5_5, openai_gpt-6-luna); anthropic_claude-sonnet-5_5 treated it as CI infrastructure condition (confidence 2)\n- requirement: \"In the heal_issue_failed_itself block,\" compute HEAL_SELF_ESCALATED from PAYLOAD_FILE `.labels` with jq, fail open to false, and suppress repeat alerts while logging `escalate_repeat ... alert=suppressed`.\n  expected_change_site: scripts/workflow_failure_heal_intake.sh, heal_issue_failed_itself block\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff changes only scripts/orchestrate_poll_process.sh; it contains no change to the intake block (severity MAJOR). Note: anthropic_claude-sonnet-5_5 and minimax_minimax-m3 found this already present on the base branch (scripts/workflow_failure_heal_intake.sh:2451, 2464-2467).\n- requirement: \"Add test_intake_heal_self_escalation_alerts_once next to test_intake_escalates_a_heal_issue_that_fails_its_own_run.\"\n  expected_change_site: tests/test_workflow_failure_heal.py\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no change to tests/test_workflow_failure_heal.py adding the required test (severity MAJOR). Note: other reviewers found it already present at tests/test_workflow_failure_heal.py:6785.\n- requirement: \"Append ai:workflow-heal-escalated to STALL_RECOVERY_LATCH_LABELS\" and update its comment.\n  expected_change_site: scripts/orchestrate_lib.py, STALL_RECOVERY_LATCH_LABELS\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no change to scripts/orchestrate_lib.py (severity MAJOR). Note: other reviewers found it already present at scripts/orchestrate_lib.py:1608, 1617-1621.\n- requirement: \"Add test_detect_stalls_skips_workflow_heal_escalated_latch.\"\n  expected_change_site: tests/test_orchestrate_lib.py\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no change to tests/test_orchestrate_lib.py adding the required test (severity MAJOR). Note: other reviewers found it already present at tests/test_orchestrate_lib.py:1403.\n- requirement: Include \"one changelog.d/9248-*.md fragment.\"\n  expected_change_site: changelog.d/\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no changelog fragment (severity NIT). Note: other reviewers found changelog.d/9248-heal-escalation-alert-dedupe.md exists.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: Run both `tests/test_workflow_failure_heal.py` and `tests/test_orchestrate_lib.py` in full before finishing.\nExpected change site: the pre-push test gate, not a source file.\nEvidence of absence: the PR description reports the gate as unverified (`container_rc_137`, 0 tests run). The PR changes only a shell comment, so test outcomes do not depend on it.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n(Other categories: NONE. Other pass-1 gaps verified as already present in base branch, not emitted.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Run both test files in full before finishing.\"\nExpected change site: Validation for tests/test_workflow_failure_heal.py and tests/test_orchestrate_lib.py\nEvidence of absence: The PR description reports that the pre-push gate failed with container_rc_137 and that zero tests were run. The required validation is currently unverified.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"In the heal_issue_failed_itself block,\" compute HEAL_SELF_ESCALATED from PAYLOAD_FILE `.labels` with jq, fail open to false, and suppress repeat alerts while logging `escalate_repeat ... alert=suppressed`.\nExpected change site: `scripts/workflow_failure_heal_intake.sh`, heal_issue_failed_itself block.\nEvidence of absence: The PR diff changes only `scripts/orchestrate_poll_process.sh`; it contains no change to the intake block implementing this behavior.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nTASK_GAP:\nRequirement: \"Add test_intake_heal_self_escalation_alerts_once next to test_intake_escalates_a_heal_issue_that_fails_its_own_run.\"\nExpected change site: `tests/test_workflow_failure_heal.py`.\nEvidence of absence: The PR diff contains no change to `tests/test_workflow_failure_heal.py` adding the required test.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nTASK_GAP:\nRequirement: \"Append ai:workflow-heal-escalated to STALL_RECOVERY_LATCH_LABELS\" and update its comment.\nExpected change site: `scripts/orchestrate_lib.py`, `STALL_RECOVERY_LATCH_LABELS`.\nEvidence of absence: The PR diff contains no change to `scripts/orchestrate_lib.py` implementing the label or updating that comment.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nTASK_GAP:\nRequirement: \"Add test_detect_stalls_skips_workflow_heal_escalated_latch.\"\nExpected change site: `tests/test_orchestrate_lib.py`.\nEvidence of absence: The PR diff contains no change to `tests/test_orchestrate_lib.py` adding the required test.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nTASK_GAP:\nRequirement: Include \"one changelog.d/9248-*.md fragment.\"\nExpected change site: `changelog.d/`.\nEvidence of absence: The PR diff contains no changelog fragment.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n\nTASK_GAP:\nRequirement: \"Run both test files in full before finishing.\"\nExpected change site: Validation for `tests/test_workflow_failure_heal.py` and `tests/test_orchestrate_lib.py`.\nEvidence of absence: The PR description reports the gate as unverified with `container_rc_137` and zero tests run.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "1c940fff34bf1a53250a2496a71365ebce138579c42a5bb162793bd2fae36b38",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9426,
+    "run_id": "43365281172",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43365281172",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113094654_fbc5519711",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9426,
+    "run_id": "43365281172"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T09:46:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
