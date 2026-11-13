@@ -222,11 +222,26 @@ fi
 # kill switch.
 # Return codes: 0 resolved and staged; 1 refused, path untouched;
 # 2 staged result failed verification (fatal).
+# The function takes an optional <live> <template> pair and defaults to the
+# guard pair; the call site runs it for every pair in
+# GUARD_HOOK_TEMPLATE_PAIRS whose live path is unmerged (issue #9004).
 GUARD_HOOK_LIVE_PATH=".claude/hooks/pr_merge_status_guard.py"
 GUARD_HOOK_TEMPLATE_PATH="workflow-templates/.claude/hooks/pr_merge_status_guard.py"
+# live:template pairs the template merge covers.  Must equal
+# PAIRED_LIVE_COPIES in scripts/review_untrusted_workspace.py
+# (tests/test_conflict_guard_hook_template_merge.py locks that).  No path
+# contains ':'.  A static list rather than a runtime Python read, so this
+# step needs no extra interpreter before the merge.
+GUARD_HOOK_TEMPLATE_PAIRS=(
+  ".claude/hooks/pr_merge_status_guard.py:workflow-templates/.claude/hooks/pr_merge_status_guard.py"
+  ".claude/hooks/prepush_affected_tests.py:workflow-templates/.claude/hooks/prepush_affected_tests.py"
+  ".claude/hooks/gh_api_write_guard.py:workflow-templates/.claude/hooks/gh_api_write_guard.py"
+  ".claude/hooks/pr_watch_guard.py:workflow-templates/.claude/hooks/pr_watch_guard.py"
+  ".claude/hooks/session-start.sh:workflow-templates/.claude/hooks/session-start.sh"
+)
 _conflict_prepare_guard_hook_template_merge()
 {
-  local ghm_live="${GUARD_HOOK_LIVE_PATH}" ghm_tpl="${GUARD_HOOK_TEMPLATE_PATH}"
+  local ghm_live="${1:-${GUARD_HOOK_LIVE_PATH}}" ghm_tpl="${2:-${GUARD_HOOK_TEMPLATE_PATH}}"
   local ghm_stages="" ghm_tpl_entry="" ghm_tpl_mode="" ghm_tpl_oid="" ghm_tpl_stage="" ghm_tpl_path=""
   local ghm_side_ref="" ghm_side_stage="" ghm_side_reason="" ghm_tree_entry="" ghm_t_mode="" ghm_t_type="" ghm_t_oid="" ghm_t_path=""
   local ghm_live_entry="" ghm_staged="" ghm_wt_oid=""
@@ -329,35 +344,47 @@ _conflict_prepare_guard_hook_template_merge()
 
 _ghm_resolved=false
 _ghm_defer_commit=false
-if [ "${_resolver_allowlist_count}" -gt 0 ] \
-   && grep -Fxq "${GUARD_HOOK_LIVE_PATH}" "${RESOLVER_ALLOWLIST_FILE}"; then
-  _ghm_rc=0
-  _conflict_prepare_guard_hook_template_merge || _ghm_rc=$?
-  case "${_ghm_rc}" in
-    0)
-      git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
-      _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
-      _ghm_resolved=true
-      echo "Guard-hook template merge: ${_resolver_allowlist_count} unmerged path(s) remain."
-      if [ "${_resolver_allowlist_count}" -eq 0 ]; then
-        # Same rule as a manifest-only conflict on integration-sync
-        # branches: commit only after the fingerprint check below.
-        case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
-          orchestrator/project-*) _ghm_defer_commit=true ;;
-        esac
-      fi
-      ;;
-    1)
-      # Refused: the hook stays unmerged and the resolver's existing
-      # sandbox_path_host_only fail-closed path applies.
-      ;;
-    *)
-      echo "::error::Guard-hook template merge: staged result failed verification; refusing to dispatch resolver."
-      exit 1
-      ;;
-  esac
-  unset _ghm_rc
-fi
+_ghm_resolved_paths=""
+for _ghm_pair in "${GUARD_HOOK_TEMPLATE_PAIRS[@]}"; do
+  _ghm_pair_live="${_ghm_pair%%:*}"
+  _ghm_pair_tpl="${_ghm_pair#*:}"
+  if [ -z "${_ghm_pair_live}" ] || [ -z "${_ghm_pair_tpl}" ] || [ "${_ghm_pair_live}" = "${_ghm_pair}" ]; then
+    continue
+  fi
+  # The allowlist is regenerated after each resolved pair, so this check
+  # always reads the current unmerged set.
+  if [ "${_resolver_allowlist_count}" -gt 0 ] \
+     && grep -Fxq "${_ghm_pair_live}" "${RESOLVER_ALLOWLIST_FILE}"; then
+    _ghm_rc=0
+    _conflict_prepare_guard_hook_template_merge "${_ghm_pair_live}" "${_ghm_pair_tpl}" || _ghm_rc=$?
+    case "${_ghm_rc}" in
+      0)
+        git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+        _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+        _ghm_resolved=true
+        _ghm_resolved_paths="${_ghm_resolved_paths:+${_ghm_resolved_paths} }${_ghm_pair_live}"
+        echo "Guard-hook template merge: ${_resolver_allowlist_count} unmerged path(s) remain."
+        if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+          # Same rule as a manifest-only conflict on integration-sync
+          # branches: commit only after the fingerprint check below.
+          case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+            orchestrator/project-*) _ghm_defer_commit=true ;;
+          esac
+        fi
+        ;;
+      1)
+        # Refused: the hook stays unmerged and the resolver's existing
+        # sandbox_path_host_only fail-closed path applies.
+        ;;
+      *)
+        echo "::error::Guard-hook template merge: staged result failed verification; refusing to dispatch resolver."
+        exit 1
+        ;;
+    esac
+    unset _ghm_rc
+  fi
+done
+unset _ghm_pair _ghm_pair_live _ghm_pair_tpl
 
 # Deterministic resolution for folded changelog / agents fragments.
 # The release fold (scripts/assemble_changelog.py, assemble_agents.py)
@@ -854,7 +881,7 @@ if [ "${_ghm_resolved:-false}" = "true" ] && [ "${_resolver_allowlist_count}" -e
   if [ "${_ghm_defer_commit:-false}" = "true" ]; then
     _mu_defer_commit=true
     _det_commit_label="Guard-hook template merge"
-    _det_commit_path="${GUARD_HOOK_LIVE_PATH}"
+    _det_commit_path="${_ghm_resolved_paths:-${GUARD_HOOK_LIVE_PATH}}"
     _det_commit_scope="hook-only"
     echo "Guard-hook template merge: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
   else
