@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description says the closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }` (and that the test passed 30 of 30 repeated runs).\n  expected_change_site: tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The test still pipes into `| true` and `read -r -n 1` appears nowhere in the diff, and the closed-pipe outcome is reached by sizing the output with `_output_larger_than_any_pipe()`. The code and its in-test comment agree, so only the PR description is stale (severity NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: The PR description says the closed reader in the closed-reader test is now bash's own `{ IFS= read -r -n 1 _ || true; }`, and that the test passed 30 of 30 repeated runs.\n  Expected change site: `tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command`\n  Evidence of absence: The test still pipes into `| true`, and `read -r -n 1` appears nowhere in the diff. It reaches the same goal by sizing the output with `_output_larger_than_any_pipe()`, so the replay hits a closed pipe on any coreutils. The code and its in-test comment are consistent with each other. Only the PR description is out of date, and no code change is needed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: The PR description states \"the closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`\" and \"passed 30 of 30 repeated runs\".\n  Expected change site: tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command\n  Evidence of absence: The code still uses `| true` and the test logic was implemented via output sizing, not the `read` command described in the PR body. This is a documentation drift noted in the previous review passes.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"The closed reader is now bash's own `{ IFS= read -r -n 1 _ || true; }`.\"\n  Expected change site: `tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command`\n  Evidence of absence: The test still pipes into `true`; it does not use `read -r -n 1`. The PR instead sizes the output with `_output_larger_than_any_pipe()`. This exercises a closed-pipe outcome by a different method, but does not implement the reader change stated in the PR description.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "07d848d9f68ac9b6474b320a7869bfcd4c5341bc31423ab0089e81e41e1cf21b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9246,
+    "run_id": "43392926035",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43392926035",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113122008_99899742a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9246,
+    "run_id": "43392926035"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T12:20:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
