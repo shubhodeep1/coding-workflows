@@ -5,13 +5,23 @@
   "entry_id": "processed_command_9447_6844340090_approved",
   "issue_number": 9447,
   "metadata": {
+    "branch": "ai/issue-9447",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/9447-orchestrate-poll-budget-predates-9214.md"
+    ],
+    "issue_number": 9447,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9447",
+    "pr_number": 9453,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9453",
+    "run_attempt": "1",
+    "run_id": "43367817812",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43367817812"
   },
   "run_attempt": 1,
   "run_id": "43367817812",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-13T05:38:05Z",
+  "status": "completed",
+  "timestamp": "2026-11-13T06:15:14Z",
   "workflow": "implement"
 }
