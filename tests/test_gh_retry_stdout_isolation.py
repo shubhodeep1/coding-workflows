@@ -245,7 +245,10 @@ def test_closed_reader_does_not_rerun_a_successful_command(tmp_path: Path) -> No
 	)
 	assert _calls(tmp_path) == 1, result.stderr
 	rc_line = result.stdout.strip()
-	assert rc_line.startswith("rc=") and rc_line != "rc=0", (rc_line, result.stderr, _closed_pipe_diagnostics(tmp_path, env))
+	# 141 = 128 + SIGPIPE (13): the `cat` replay inside gh_retry is killed by
+	# SIGPIPE and gh_retry returns that status. subprocess.run keeps its
+	# default restore_signals=True, so SIGPIPE is SIG_DFL in the child bash.
+	assert rc_line == "rc=141", (rc_line, result.stderr, _closed_pipe_diagnostics(tmp_path, env))
 	assert _leftover_temp_files(tmp_path) == []
 
 
