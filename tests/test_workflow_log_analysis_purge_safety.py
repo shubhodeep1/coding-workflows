@@ -47,8 +47,15 @@ CASES = _report_pr_cases()
 
 
 def _recent_doc() -> str:
-	stamp = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=2)).strftime("%Y-%m-%d")
-	return f"analysis/workflow-optimization-{stamp}.md"
+	# Stay inside the 30-day window but never land on the sandbox's fixed
+	# report path (CASES.REPORT): on the day that path is two days old the
+	# seeded "recent" doc would be the report itself and the test would flake.
+	for days in (2, 3):
+		stamp = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).strftime("%Y-%m-%d")
+		doc = f"analysis/workflow-optimization-{stamp}.md"
+		if doc != CASES.REPORT:
+			return doc
+	return doc
 
 
 def _seed(box, *, processing_report: str | None, in_flight: str = "") -> None:
