@@ -30,6 +30,7 @@ CHECKOUT_STEP = "Checkout PR head branch"
 CHECKOUT_STEP_SCRIPT = "review_autofix_step_checkout_pr_head_branch.sh"
 PR_CLOSED_GATE = "env.PR_CLOSED != 'true'"
 WORKSPACE_PATH_RE = re.compile(r"(\$\{?|env\.)WORKSPACE_PATH\b")
+WORKSPACE_PATH_GUARD_RE = re.compile(r"\[\[?\s+-[nz]\s+\"?\$\{?WORKSPACE_PATH\b")
 RACE_REFERENCE = (
 	"a PR merged or closed before codex-agent starts leaves WORKSPACE_PATH unset "
 	"(#9419, run 43147436812)"
@@ -135,8 +136,13 @@ def test_workspace_dependent_steps_after_pr_state_check_are_pr_closed_gated():
 			continue
 		name = str(step.get("name") or step.get("id") or "<unnamed step>")
 		checked.append(name)
-		if PR_CLOSED_GATE not in _step_if(step):
-			ungated.append(name)
+		if PR_CLOSED_GATE in _step_if(step):
+			continue
+		# Issue #9419 step 3: an always() step is allowed only if its run body
+		# checks WORKSPACE_PATH (`[ -n/-z "${WORKSPACE_PATH...` ) before use.
+		if "always()" in _step_if(step) and WORKSPACE_PATH_GUARD_RE.search(str(step.get("run") or "")):
+			continue
+		ungated.append(name)
 	assert CHECKOUT_STEP in checked, (
 		f"{CHECKOUT_STEP!r} no longer reads WORKSPACE_PATH after expansion; "
 		"this contract would stop covering the step it was written for"
