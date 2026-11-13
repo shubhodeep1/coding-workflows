@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Then run tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py with the installed interpreter and confirm both pass.\"\n  expected_change_site: Verification results for both named test files (tests/test_orchestrate_poll_process.py, tests/test_implement_post_codex_recovery.py)\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description marks tests/test_orchestrate_poll_process.py as \"not run\" and tests/test_implement_post_codex_recovery.py as \"unmet\"; it reports a timeout for the former and failures for the latter. The required passing results are not confirmed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Then run tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py with the installed interpreter and confirm both pass.\"\n  Expected change site: Verification results for both named test files.\n  Evidence of absence: The PR description marks tests/test_orchestrate_poll_process.py as \"not run\" and tests/test_implement_post_codex_recovery.py as \"unmet\"; it reports a timeout for the former and failures for the latter. The required passing results are not confirmed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "959663e79f3e4f0e9420b7a8f30b2811dc4fb49e413e83bf6421bbc747347551",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9390,
+    "run_id": "43407441071",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43407441071",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113222823_4d165f4ee2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9390,
+    "run_id": "43407441071"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-13T22:28:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
