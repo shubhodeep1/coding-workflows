@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-13T07:17:10Z",
+  "issue_number": 9313,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=tests/test_gh_retry_stdout_isolation.py:242; cited_path=tests/test_gh_retry_stdout_isolation.py (the `tests-hooks-and-orchestrator` failure is attributed to the `gh_retry` closed-reader test); files_touched=tests/test_ci_job_split_contract.py, tests/test_summarize_reviewer_consensus_sandbox_pin.py.",
+  "phase": "review_autofix",
+  "pr_number": 9338,
+  "record_id": "lesson_20261113071710_c5f574e65f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_gh_retry_stdout_isolation.py (the `tests-hooks-and-orchestrator` failure is attributed to the `gh_retry` closed-reader test)",
+    "tests/test_gh_retry_stdout_isolation.py",
+    "tests/test_ci_job_split_contract.py",
+    "tests/test_summarize_reviewer_consensus_sandbox_pin.py"
+  ]
+}
