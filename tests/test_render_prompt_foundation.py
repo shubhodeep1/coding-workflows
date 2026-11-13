@@ -1593,6 +1593,7 @@ def main() -> int:
 	test_render_prompt_py_reports_non_utf8_prompt_without_traceback()
 	test_render_prompt_sh_reports_non_utf8_prompt_without_traceback()
 	test_render_prompt_py_reports_unexpected_exception_without_traceback()
+	test_render_prompt_py_escapes_multiline_unexpected_exception_message()
 	print("OK: render prompt foundation assertions hold")
 	# Imported here so pytest does not collect these cases twice; run as a
 	# script, sys.path[0] is tests/.
