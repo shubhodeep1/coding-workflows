@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Then run tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py with the installed interpreter and confirm both pass.\"\n  expected_change_site: Verification results on the PR head (pre-push test gate / acceptance table in the PR description / CI); no code change required\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: PR description acceptance table shows tests/test_orchestrate_poll_process.py as \"not run\" (timeout) and tests/test_implement_post_codex_recovery.py as \"unmet\", the 4 failures in test_implement_post_codex_recovery.py are inherited from the merge-base and trace to sandbox-excluded paths or a missing yaml module, and neither file is confirmed passing at gate level (severity disagreement: NIT from anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna and z-ai_glm-5_3-flash; MAJOR from minimax_minimax-m3)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Then run tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py with the installed interpreter and confirm both pass.\"\nExpected change site: Verification results on the PR head from CI or the pre-push gate. No code change is needed for this.\nEvidence of absence: The PR description's acceptance table shows `tests/test_orchestrate_poll_process.py` as \"not run\" (timeout) and `tests/test_implement_post_codex_recovery.py` as \"unmet\". The 4 failures in the second file also fail on the merge-base, and that file never references the edited shim. A CI run on a full checkout is still needed.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Then run tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py with the installed interpreter and confirm both pass.\"\nExpected change site: Verification results.\nEvidence of absence: The pre-push test gate reports failures, but they appear environment-related or inherited from the merge-base rather than caused by the shim change.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n(Two other requirements were reported as satisfied: the shim change at tests/test_orchestrate_poll_process.py lines 3462-3467 and no other `#!/usr/bin/python3` shebangs in tests/.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Then run tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py with the installed interpreter and confirm both pass.\"\nExpected change site: Pre-push test gate / acceptance table \u2014 `tests/test_orchestrate_poll_process.py` (not run / timeout) and `tests/test_implement_post_codex_recovery.py` (unmet / 4 inherited failures plus baseline_timeout).\nEvidence of absence: The acceptance table reports `not run` and `unmet`. The 4 failing tests (`test_review_pipeline_integration_chain_module_runs_clean`, `test_validator_capture_aggregates_multiple_files_before_nonzero_exit`, `test_validator_diagnostic_surfaces_offending_lines`, `test_validator_offending_bytes_redacts_secrets`) are inherited from the merge-base and trace to sandbox-excluded paths (`.github/ai/label_contract.v1.json`, missing `yaml` module). The acceptance criterion cannot be marked met until both files pass on a full checkout.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Then run tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py with the installed interpreter and confirm both pass.\"\nExpected change site: Verification results for both named test files.\nEvidence of absence: The pre-push gate marks tests/test_orchestrate_poll_process.py as timed out and tests/test_implement_post_codex_recovery.py as unmet; the acceptance table lists them as \"not run\" and \"unmet.\" The check-run summary does not identify either test file or confirm its result.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Then run tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py with the installed interpreter and confirm both pass.\"\nExpected change site: Verification artefacts on the PR head (pre-push test gate / acceptance table; no code change required).\nEvidence of absence: The pre-push gate reports test_orchestrate_poll_process.py as \"not run\" (timeout) and test_implement_post_codex_recovery.py as \"unmet\" (4 inherited failures). Mitigating: all 21 CI check-runs on head 91574249255b5d469b284cc25a33b6f4a434ca15 are green, the code deliverable is present at tests/test_orchestrate_poll_process.py:3462-3467, and the gate's attribution of tests/test_files_touched_scope_guard.py failures (test_files_touched_scope_guard.py:701, test_files_touched_scope_guard.py:1347-1353) is environment-caused and unrelated to the shim.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cce5f8a8db3b94938344845c7a4af5486ddef7f633b9765125d85085298e083e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9390,
+    "run_id": "43388767841",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43388767841",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113154131_720c492104",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9390,
+    "run_id": "43388767841"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T15:41:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
