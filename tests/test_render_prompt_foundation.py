@@ -297,10 +297,11 @@ def test_render_prompt_py_reports_unexpected_exception_without_traceback() -> No
 	]
 
 
-def test_render_prompt_py_unexpected_exception_escapes_cr_lf() -> None:
-	# The generic `except Exception` branch escapes CR/LF so a multi-line
-	# exception message still yields exactly one stderr line (#9341).
-	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_unexpected_crlf_") as td:
+def test_render_prompt_py_escapes_multiline_unexpected_exception_message() -> None:
+	# #9341: the `except Exception` branch writes CR/LF in the exception
+	# message as literal `\r` / `\n` text so a multi-line message still prints
+	# exactly one stderr line. A regression that drops the escaping fails here.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_unexpected_multiline_") as td:
 		prompt_file = Path(td) / "mode-sample.txt"
 		prompt_file.write_text("Header\nFooter\n", encoding="utf-8")
 		script = (
@@ -311,7 +312,7 @@ def test_render_prompt_py_unexpected_exception_escapes_cr_lf() -> None:
 			"sys.modules['render_prompt'] = module\n"
 			"spec.loader.exec_module(module)\n"
 			"def _boom(*args, **kwargs):\n"
-			"\traise RuntimeError('first\\r\\nsecond\\nthird')\n"
+			"\traise RuntimeError('line1\\nline2\\r\\nline3')\n"
 			"module.apply_workflow_overlay = _boom\n"
 			f"raise SystemExit(module.main([{str(prompt_file)!r}]))\n"
 		)
@@ -322,14 +323,14 @@ def test_render_prompt_py_unexpected_exception_escapes_cr_lf() -> None:
 			text=True,
 			capture_output=True,
 			timeout=60,
+			check=False,
 		)
 
 	assert proc.returncode == 1, proc.stderr
 	assert proc.stdout == ""
 	assert "Traceback" not in proc.stderr
 	assert proc.stderr.splitlines() == [
-		"ERROR: render_prompt unexpected RuntimeError: first\\r\\nsecond\\nthird "
-		f"(prompt={prompt_file})"
+		f"ERROR: render_prompt unexpected RuntimeError: line1\\nline2\\r\\nline3 (prompt={prompt_file})"
 	]
 
 
@@ -1558,6 +1559,8 @@ def test_trusted_render_denies_secret_like_names_and_keeps_plain_names() -> None
 		"TG_BOT_SECRET": "sentinel-tg-9399",
 		"GH_PAT": "sentinel-pat-9399",
 		"gh_token": "sentinel-lower-9399",
+		"SENTRY_DSN": "sentinel-dsn-9399",
+		"UPSTREAM_BEARER": "sentinel-bearer-9399",
 	}
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
