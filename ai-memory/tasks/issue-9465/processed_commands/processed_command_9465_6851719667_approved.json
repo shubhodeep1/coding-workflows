@@ -5,13 +5,28 @@
   "entry_id": "processed_command_9465_6851719667_approved",
   "issue_number": 9465,
   "metadata": {
+    "branch": "ai/issue-9465",
+    "changed_files": [
+      "changelog.d/9465-render-prompt-env-secret-guard.md",
+      "scripts/render_prompt.sh",
+      "scripts/review_apply_fixes.sh",
+      "scripts/review_run_reviewers.sh",
+      "tests/test_ci_wires_every_test_file.py",
+      "tests/test_render_prompt_env_placeholder_guard.py",
+      "tests/test_render_prompt_foundation.py"
+    ],
+    "issue_number": 9465,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9465",
+    "pr_number": 9470,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9470",
+    "run_attempt": "1",
+    "run_id": "43418597652",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43418597652"
   },
   "run_attempt": 1,
   "run_id": "43418597652",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-13T13:52:38Z",
+  "status": "completed",
+  "timestamp": "2026-11-13T14:31:00Z",
   "workflow": "implement"
 }
