@@ -49,6 +49,7 @@ def _run(
 	statuses_json: str = "{}",
 	statuses_fail: bool = False,
 	calls_log: str = "",
+	user_json: str = "{}",
 ):
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
@@ -84,6 +85,7 @@ _safe_gh_jq() {{
       ;;
     *"/check-runs"*) printf '%s' "${{RUNS_JSON}}" ;;
     *"/pulls/"*) printf '%s' "${{PR_JSON}}" ;;
+    user) printf '%s' "${{USER_JSON:-}}" ;;
     *) printf '%s' '{{}}' ;;
   esac
 }}
@@ -98,6 +100,7 @@ source {str(LIB)!r}
 		"STATUSES_JSON": statuses_json,
 		"STATUSES_FAIL": "1" if statuses_fail else "0",
 		"GH_CALLS_LOG": calls_log,
+		"USER_JSON": user_json,
 	}
 	if env:
 		full_env.update(env)
@@ -851,6 +854,7 @@ def test_ci_check_default_applies_only_to_bases_ci_runs_on() -> None:
 SUP_SHA = "295a8507" + "0" * 32
 SUP_OTHER_SHA = "1" * 40
 SUP_ARGS = f'9168 "{SUP_SHA}" "main"'
+SUP_LOGIN = "pipeline-bot"
 
 
 def _sup_gate_run(conclusion: str = "failure", *, check_id: int = 7001,
@@ -874,9 +878,11 @@ def _sup_green_runs() -> list[dict]:
 
 
 def _sup_status(state: str = "success", *, created_at: str = "2026-11-10T00:02:41Z",
-		sha: str = SUP_SHA, status_id: int = 1, context: str = "ai-review/head-gate") -> dict:
+		sha: str = SUP_SHA, status_id: int = 1, context: str = "ai-review/head-gate",
+		creator: str = SUP_LOGIN) -> dict:
 	return {
 		"id": status_id,
+		"creator": {"login": creator},
 		"url": f"https://api.github.com/repos/owner/repo/statuses/{sha}",
 		"state": state,
 		"context": context,
@@ -892,6 +898,7 @@ def _sup(
 	args: str = SUP_ARGS,
 	statuses_fail: bool = False,
 	env: dict[str, str] | None = None,
+	user_json: str = json.dumps({"login": SUP_LOGIN}),
 ) -> tuple[int, str, list[str], list[str]]:
 	"""Run the gate with stdout discarded (as _pr_wait_for_required_checks
 	does) and return (rc, reason, PR_CHECKS_GATE_SUPERSEDED lines, gh calls)."""
@@ -910,6 +917,7 @@ def _sup(
 			statuses_json=json.dumps(statuses if statuses is not None else []),
 			statuses_fail=statuses_fail,
 			calls_log=calls_log,
+			user_json=user_json,
 			env={**REPO_ENV, **(env or {})},
 		)
 		calls = Path(calls_log).read_text().splitlines()
@@ -1064,6 +1072,29 @@ def test_review_gate_self_run_newest_is_not_evaluated() -> None:
 	rc, reason, lines, calls = _sup(runs, [_sup_status()], env={"PR_CHECKS_SELF_RUN_ID": "999"})
 	assert (rc, reason) == (0, "ok"), (rc, reason)
 	assert lines == [] and _status_calls(calls) == [], (lines, calls)
+
+
+def test_review_gate_success_from_other_creator_blocks() -> None:
+	"""A same-context success posted by any login other than the gate
+	token's own does not relax the check (status-write is not enough)."""
+	rc, reason, lines, calls = _sup(_sup_green_runs() + [_sup_gate_run()], [_sup_status(creator="mallory")])
+	assert (rc, reason) == (1, "blocking"), (rc, reason)
+	assert len(lines) == 1 and "outcome=skip reason=untrusted_status_creator" in lines[0], lines
+	assert calls.count("user") == 1, calls
+
+
+def test_review_gate_creator_login_read_failure_blocks() -> None:
+	for user_json in ("", "{}", json.dumps({"login": "bad login"})):
+		rc, reason, lines, _ = _sup(_sup_green_runs() + [_sup_gate_run()], [_sup_status()], user_json=user_json)
+		assert (rc, reason) == (1, "blocking"), (user_json, rc, reason)
+		assert len(lines) == 1 and "reason=creator_check_failed" in lines[0], (user_json, lines)
+
+
+def test_review_gate_no_login_read_unless_supersede_candidate() -> None:
+	"""The `user` read happens only when every other condition holds."""
+	rc, reason, _, calls = _sup(_sup_green_runs() + [_sup_gate_run()], [_sup_status("pending")])
+	assert (rc, reason) == (1, "blocking"), (rc, reason)
+	assert "user" not in calls, calls
 
 
 def test_review_gate_supersede_context_matches_head_gate_helper() -> None:

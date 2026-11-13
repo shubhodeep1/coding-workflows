@@ -242,8 +242,12 @@ _pr_required_check_names_for_base()
 # one check-run from the blocking count only when the newest status with
 # context `ai-review/head-gate` (pinned literal, the value
 # scripts/review_head_gate.sh posts; not read from the environment) has state
-# success, names the full 40-hex head SHA, and was created strictly after
-# the check-run's completed_at. Every other case keeps blocking. Each
+# success, names the full 40-hex head SHA, was created strictly after
+# the check-run's completed_at, and whose `creator.login` equals the
+# caller token's own login (one `GET user`, only when every other condition
+# holds; the same identity review_head_gate_post_status posts with), so a
+# principal that can merely write commit statuses cannot relax the check.
+# Every other case keeps blocking. Each
 # evaluation logs one `PR_CHECKS_GATE_SUPERSEDED pr=<n> head=<sha>
 # failed_run=<actions run id|unknown> check_run=<id> ... outcome=superseded
 # status_created_at=<ts>` or `... outcome=skip reason=<token>` line to
@@ -251,7 +255,8 @@ _pr_required_check_names_for_base()
 # stdout and that is the auto-merge path PR #9168 was stuck on. Skip
 # reasons: short_head_sha, status_read_failed, no_head_gate_status,
 # status_not_success, status_sha_mismatch, status_not_newer,
-# unparseable_timestamp. PR_CHECKS_LAST_REASON values, PENDING/TOTAL and
+# unparseable_timestamp, untrusted_status_creator, creator_check_failed.
+# PR_CHECKS_LAST_REASON values, PENDING/TOTAL and
 # the CI side channel are unaffected.
 #
 # Usage:  _pr_checks_completed <PR_NUMBER> [<HEAD_SHA>] [<BASE_REF>]
@@ -452,7 +457,7 @@ _pr_checks_completed()
 								else
 									(try ([($st.created_at | fromdateiso8601), ($failed_at | fromdateiso8601)]) catch null) as $ts |
 									if ($ts == null) then "skip\tunparseable_timestamp"
-									elif ($ts[0] > $ts[1]) then "superseded\t\($st.created_at)"
+									elif ($ts[0] > $ts[1]) then "superseded\t\($st.created_at)\t\(($st.creator.login? // "") | tostring)"
 									else "skip\tstatus_not_newer" end
 								end
 							end
@@ -461,8 +466,22 @@ _pr_checks_completed()
 				fi
 				case "${gate_sup_decision}" in
 					superseded$'\t'*)
-						gate_sup_created_at="${gate_sup_decision#superseded$'\t'}"
-						gate_sup_drop_id="${gate_sup_check_id}"
+						# Bind the status to its author (review finding, #9212):
+						# only a status the token's own login posted (the identity
+						# review_head_gate_post_status uses) may relax the check.
+						# §14: one `user` read, only on this candidate path; this
+						# function has no cached login (same read as
+						# _pr_base_sync_count). Any read or match failure blocks.
+						local gate_sup_creator="" gate_sup_self_login=""
+						IFS=$'\t' read -r gate_sup_created_at gate_sup_creator <<< "${gate_sup_decision#superseded$'\t'}"
+						gate_sup_self_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)"
+						if ! [[ "${gate_sup_self_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+							gate_sup_reason="creator_check_failed"
+						elif [ "${gate_sup_creator}" != "${gate_sup_self_login}" ]; then
+							gate_sup_reason="untrusted_status_creator"
+						else
+							gate_sup_drop_id="${gate_sup_check_id}"
+						fi
 						;;
 					skip$'\t'no_head_gate_status|skip$'\t'status_not_success|skip$'\t'status_sha_mismatch|skip$'\t'status_not_newer|skip$'\t'unparseable_timestamp)
 						gate_sup_reason="${gate_sup_decision#skip$'\t'}"
