@@ -10307,8 +10307,31 @@ PY
 # judge verdict — the latter used to `continue` before reaching this loop,
 # so the findings existed only as prose in the "Project Failed" comment and
 # a human had to re-derive them (tele-funtoken-msg-scoring#3928, cycle 9).
+# judge_tracking_issue_closed_skip <type> (issue #8953): returns 0 and logs
+# ORCHESTRATE_JUDGE_ADDITION_SKIP when the tracking issue TRACKING_NUM is now
+# closed, so the judge creates no issues for a finished project. The tick's
+# tracking list is read before the judge's LLM call and cannot show a close
+# made during it, so this reads the state fresh: one GET, only when the judge
+# proposed new issues. Fail-open: get_issue_state_labels_json falls back to
+# "open" on a read error, so a transient failure keeps today's behaviour.
+# A skip also sets judge_tracking_closed_skipped=1 (the function runs in the
+# caller's shell), so the in_progress arm can stop before the wave advance.
+judge_tracking_issue_closed_skip() {
+  local judge_skip_type="${1:-judge-addition}"
+  local judge_skip_state_json judge_skip_state
+  [[ "${TRACKING_NUM:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+  judge_skip_state_json="$(get_issue_state_labels_json "${TRACKING_NUM}" 2>/dev/null || true)"
+  judge_skip_state="$(printf '%s' "${judge_skip_state_json}" | jq -r '.state // ""' 2>/dev/null || true)"
+  if [ "${judge_skip_state}" = "closed" ]; then
+    echo "ORCHESTRATE_JUDGE_ADDITION_SKIP reason=tracking_closed tracking=${TRACKING_NUM} type=${judge_skip_type}"
+    judge_tracking_closed_skipped=1
+    return 0
+  fi
+  return 1
+}
+
 create_judge_fixup_issues_from_verdict() {
-      if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
+      if [ "${NEW_ISSUES_COUNT}" -gt 0 ] && ! judge_tracking_issue_closed_skip judge-fix-up; then
         echo "Processing ${NEW_ISSUES_COUNT} judge fix-up candidate(s)..."
         echo "${JUDGE_JSON}" | jq -c '.new_issues[]? | select(type == "object")' | while read -r fix_issue; do
           FIX_TITLE="$(echo "${fix_issue}" | jq -r '.title // ""')"
@@ -33193,8 +33216,10 @@ fi
 
     # Issues check-stalls skipped because they carry a human-gated latch
     # label (orchestrate_lib.STALL_RECOVERY_LATCH_LABELS —
-    # ai:destructive-blocked / ai:scope-blocked).  implement.yml refuses
-    # to redispatch those until a human removes the label, so no recovery
+    # ai:destructive-blocked / ai:scope-blocked / ai:workflow-heal-escalated).
+    # Stall recovery never clears or redispatches those; the latch lifts
+    # only when the label is removed (by a human, or by an unblock-judge
+    # remove_label op), so no stall-recovery
     # action can move them; log one stable line per issue so the pause
     # is visible in the poll log instead of silent.  `.latched` is
     # additive on the check-stalls payload — older payloads (or the
@@ -34201,7 +34226,9 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       # Create new issues if judge found gaps
       WAVE_ISSUE_COUNT_BEFORE="$(jq --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | length' "${STATE_FILE}")"
       WAVE_ISSUE_TRACKING_BEFORE="$(jq -c --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | map({id, github_issue, status}) | sort_by(.id)' "${STATE_FILE}")"
-      if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
+      # Closed tracking issue => no judge-addition issues (issue #8953).
+      judge_tracking_closed_skipped=0
+      if [ "${NEW_ISSUES_COUNT}" -gt 0 ] && ! judge_tracking_issue_closed_skip judge-addition; then
         echo "Processing ${NEW_ISSUES_COUNT} new issue candidate(s) from judge..."
         echo "${JUDGE_JSON}" | jq -c '.new_issues[]? | select(type == "object")' | while read -r new_issue; do
           NEW_TITLE="$(echo "${new_issue}" | jq -r '.title // ""')"
@@ -34274,7 +34301,14 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       # ---------------------------------------------------------------
       WAVE_ISSUE_COUNT_AFTER="$(jq --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | length' "${STATE_FILE}")"
       WAVE_ISSUE_TRACKING_AFTER="$(jq -c --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | map({id, github_issue, status}) | sort_by(.id)' "${STATE_FILE}")"
-      if [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ] || [ "${WAVE_ISSUE_TRACKING_AFTER}" != "${WAVE_ISSUE_TRACKING_BEFORE}" ]; then
+      # Closed tracking issue => no wave advance either (issue #8953): the
+      # advance creates the next wave's sub-issues. At most one state read
+      # per arm: the judge-addition guard above already read it when the
+      # judge proposed issues.
+      if [ "${judge_tracking_closed_skipped}" = "1" ] \
+        || { [ "${NEW_ISSUES_COUNT}" -eq 0 ] && judge_tracking_issue_closed_skip wave-advance; }; then
+        echo "Tracking issue #${TRACKING_NUM} is closed; not advancing past wave ${CURRENT_WAVE} and creating no issues."
+      elif [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ] || [ "${WAVE_ISSUE_TRACKING_AFTER}" != "${WAVE_ISSUE_TRACKING_BEFORE}" ]; then
         if [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ]; then
           ADDED_COUNT=$(( WAVE_ISSUE_COUNT_AFTER - WAVE_ISSUE_COUNT_BEFORE ))
           echo "Current wave gained ${ADDED_COUNT} new issue(s) from judge. Staying on wave ${CURRENT_WAVE} until they complete."

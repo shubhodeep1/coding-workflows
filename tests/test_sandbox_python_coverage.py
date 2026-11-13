@@ -197,7 +197,8 @@ def _support_file_basename(name: str) -> str | None:
 
 
 def _support_file_variable_basename(script: str, variable: str) -> str | None:
-	text = (REPO_ROOT / script).read_text(encoding="utf-8")
+	# Full-line comments are dropped so a commented-out assignment does not count.
+	text = "\n".join(_strip_comment(line) for line in (REPO_ROOT / script).read_text(encoding="utf-8").splitlines())
 	match = re.search(r"\b" + re.escape(variable) + r'="\$\(_ai_engine_py support-file --name ([A-Za-z0-9_-]+)\)"', text)
 	return _support_file_basename(match.group(1)) if match else None
 
@@ -223,9 +224,18 @@ def resolve_host_basenames(script: str, src: str) -> tuple[list[str], str]:
 	for caller, kind, value in callers:
 		text = (REPO_ROOT / caller).read_text(encoding="utf-8")
 		if kind == "variable":
-			resolved = _support_file_variable_basename(caller, value) if f'"${{{value}}}"' in text else None
+			live_caller = "\n".join(_strip_comment(line) for line in text.splitlines())
+			resolved = _support_file_variable_basename(caller, value) if f'"${{{value}}}"' in live_caller else None
 		else:
-			resolved = value if value in text else None
+			# The caller must pass `--module "${var}"` and assign that variable a
+			# path ending in the file; a bare mention of the file or a commented-out
+			# line does not count, so full-line comments are dropped first.
+			live = "\n".join(_strip_comment(line) for line in text.splitlines())
+			passed = re.search(r'--module\s+"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"', live)
+			assigned = passed and re.search(
+				r"\b" + re.escape(passed.group(1)) + r'="(?:[^"\n]*/)?' + re.escape(value) + r'"', live
+			)
+			resolved = value if assigned else None
 		if resolved is None:
 			return [], f"{caller} no longer passes a resolvable {kind} {value!r} for ${{{variable}}} in {script}"
 		basenames.append(resolved)
@@ -273,6 +283,10 @@ class RegistryCoverageTest(unittest.TestCase):
 					# A `python3 /x.py` run site carries no host source.
 					continue
 				with self.subTest(entry_point=path, script=script):
+					# Basename only: every mount/install source is a runtime staging
+					# copy (${support}, ${support_dir}, ${engine_dir}, ${root}) or a
+					# variable, so no full repository path exists to compare here. The
+					# covering tests pin the real host path themselves.
 					basenames, reason = resolve_host_basenames(script, src)
 					self.assertTrue(basenames, reason)
 					for basename in basenames:
