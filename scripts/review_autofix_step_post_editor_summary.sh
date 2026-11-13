@@ -325,8 +325,11 @@ echo "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=$([ -n "${clean_marker_suffix}" ] &
 # head or a different review-support SHA than the clean marker.
 # - Trust rule: the same one the gate uses. Only comments whose lowercased
 #   author login equals the token's own login count (the step's GH_TOKEN is
-#   the gate's GH_PAT), and the marker must sit on its own line. The login is
-#   read from the summary POST response, so no `gh api user` call is made.
+#   the gate's GH_PAT), the body must start with the cap writer's
+#   `**AI review/autofix stopped` header, and the marker must be the body's
+#   last non-empty line (the gate's last_line() rule), so an editor summary
+#   that quotes a cap marker never counts. The login is read from the
+#   summary POST response, so no `gh api user` call is made.
 # - Budget (Q1=A): one GraphQL read (labels plus the newest 100 comments),
 #   only after a clean marker posts and only with a trusted login, plus one
 #   REST DELETE only when the label is present and stale.
@@ -335,8 +338,10 @@ echo "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=$([ -n "${clean_marker_suffix}" ] &
 # - Fail-safe: a lookup or DELETE failure, a missing login, or a cap marker
 #   older than the newest 100 comments keeps the label (today's behaviour);
 #   the last case logs cap_marker_out_of_window when totalCount exceeds 100.
-# - A cap that labeled linked issues (not this PR) never removes the PR
-#   label (cap_not_pr_target); a 404 DELETE logs removed/already_absent.
+# - A cap that labeled linked issues (not this PR) never drives a removal:
+#   the scan skips it and compares the newest cap that labeled this PR; with
+#   none in the window the label is kept (cap_not_pr_target). A 404 DELETE
+#   logs removed/already_absent.
 #   Never returns non-zero; linked issues are not touched.
 # Log: REVIEW_BLOCKED_STALE_CLEAR pr=<n> outcome=removed|kept|error
 #   reason=<token> cap_head=<sha|none> cap_support=<sha|none>
@@ -408,6 +413,17 @@ support_re = re.compile(r"^(?:[0-9a-f]{40}|none)$")
 # says so (review_autofix.yml labeled_summary). A cap that labeled linked
 # issues did not set this PR label, so it never drives a removal.
 pr_target_re = re.compile(r"^- Labeled `ai:review-blocked`: this pull request", re.MULTILINE)
+# The cap writer's header; an editor summary (or any other trusted comment)
+# never starts with it, as in the gate's SUMMARY_PREFIX check.
+CAP_PREFIX = "**AI review/autofix stopped"
+
+
+def last_line(body):
+	lines = [line.rstrip("\r") for line in body.splitlines() if line.strip()]
+	return lines[-1].strip() if lines else ""
+
+
+not_pr_target = None
 # comments(last:100) is oldest-first; walk newest-first.
 for node in reversed(comments.get("nodes") or []):
 	if not isinstance(node, dict):
@@ -415,10 +431,11 @@ for node in reversed(comments.get("nodes") or []):
 	author = node.get("author") if isinstance(node.get("author"), dict) else {}
 	if str(author.get("login") or "").lower() != trusted:
 		continue
-	matches = list(marker_re.finditer(str(node.get("body") or "")))
-	if not matches:
+	body = str(node.get("body") or "")
+	# Gate trust rule: the marker is the last non-empty line of a cap comment.
+	marker = marker_re.fullmatch(last_line(body)) if body.startswith(CAP_PREFIX) else None
+	if marker is None:
 		continue
-	marker = matches[-1]
 	cap_head = marker.group(1).lower()
 	cap_support = "none"
 	for field in marker.group(2).split():
@@ -427,13 +444,19 @@ for node in reversed(comments.get("nodes") or []):
 	if not support_re.match(cap_support):
 		# A malformed support field never counts as a cap marker (fail safe).
 		continue
-	if not pr_target_re.search(str(node.get("body") or "")):
-		emit("kept", "cap_not_pr_target", cap_head, cap_support)
+	if not pr_target_re.search(body):
+		# This cap labeled linked issues; an older cap may have labeled the PR
+		# (a later cap never removes the PR label), so keep walking.
+		if not_pr_target is None:
+			not_pr_target = (cap_head, cap_support)
+		continue
 	if cap_head != clean_head:
 		emit("remove", "head_changed", cap_head, cap_support)
 	if cap_support != clean_support:
 		emit("remove", "support_changed", cap_head, cap_support)
 	emit("kept", "same_head_support", cap_head, cap_support)
+if not_pr_target is not None:
+	emit("kept", "cap_not_pr_target", not_pr_target[0], not_pr_target[1])
 total = comments.get("totalCount")
 if isinstance(total, int) and total > len(comments.get("nodes") or []):
 	# An older cap marker may sit outside the newest-100 window (one-read budget).

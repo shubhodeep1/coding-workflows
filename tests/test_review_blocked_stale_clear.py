@@ -283,11 +283,32 @@ def test_cap_that_labeled_linked_issue_does_not_remove_pr_label(tmp_path: Path) 
 	assert _deletes(calls) == []
 
 
+def test_older_pr_target_cap_is_used_past_newer_linked_issue_cap(tmp_path: Path) -> None:
+	# An older cap labeled the PR; a newer cap labeled a linked issue and left the PR label.
+	comments = [_cap_comment(head=OTHER_HEAD), _cap_comment(head=HEAD, target=ISSUE_TARGET_LINE)]
+	result, calls, _ = _run(tmp_path, _graphql(comments))
+	_assert_line(result, "removed", "head_changed", OTHER_HEAD, SUPPORT)
+	assert _deletes(calls) == [f"DELETE {DELETE_PATH}"]
+
+
+def test_editor_summary_quoting_a_cap_marker_is_not_a_cap(tmp_path: Path) -> None:
+	# The step's own summary (LLM text) under the trusted login must never act as a cap.
+	forged = {"author": {"login": PIPELINE}, "body": f"AI autofix editor summary\n{PR_TARGET_LINE}\n{_cap_marker(head=OTHER_HEAD)}\nFiles changed / commit status:\n- none"}
+	result, calls, _ = _run(tmp_path, _graphql([forged]))
+	_assert_line(result, "kept", "no_cap_marker")
+	assert _deletes(calls) == []
+	forged_last = {"author": {"login": PIPELINE}, "body": f"AI autofix editor summary\n{PR_TARGET_LINE}\n{_cap_marker(head=HEAD)}"}
+	result, calls, _ = _run(tmp_path, _graphql([_cap_comment(head=OTHER_HEAD), forged_last]))
+	_assert_line(result, "removed", "head_changed", OTHER_HEAD, SUPPORT)
+
+
 def test_pr_target_wording_matches_the_cap_writer() -> None:
 	# The PR-target check reads the cap comment's prose; pin it to the writer.
 	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
 	assert 'labeled_summary="this pull request (no linked issue found)"' in workflow
 	assert "- Labeled \\`ai:review-blocked\\`: ${labeled_summary}." in workflow
+	# The cap-comment header the trust rule requires (CAP_PREFIX).
+	assert "**AI review/autofix stopped: ${cap_title}**" in workflow
 
 
 def test_cap_marker_out_of_window_is_logged_distinctly(tmp_path: Path) -> None:
