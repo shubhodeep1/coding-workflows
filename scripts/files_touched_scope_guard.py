@@ -928,8 +928,12 @@ def _plan_grant_missing_path(raw: str) -> str:
 # with identifiers (`  - `build_payload`: wraps it`), not root file names.
 _PLAN_GRANT_LEAD_BACKTICK_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+`([^`\n]+)`\s*(?:$|[-:(–—])")
 # The same shape without backticks (`- VERSION`, `- VERSION - bump it`,
-# `- VERSION: bump it`); used only for a line with no backticks (#9387).
-_PLAN_GRANT_LEAD_BARE_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+[^\s`:(]+(?:\s*$|\s*[:(]|\s+[-–—])")
+# `- VERSION: bump it`); used only for a line with no backticks (#9387). The
+# bare token must be upper case (`VERSION`, `LICENSE`, `CODEOWNERS`), so a
+# label word in prose (`- Tests: add cases`, `- Docs - explain it`, `- None -
+# no files need edits`) never counts; NONE, TBD and TODO are excluded too.
+_PLAN_GRANT_LEAD_BARE_RE = re.compile(
+	r"^(?:[-*+]|\d+[.)])\s+\**(?!(?:NONE|TBD|TODO)(?![A-Z0-9_]))[A-Z][A-Z0-9_]*\**(?:\s*$|\s*[:(]|\s+[-–—])")
 
 
 def _plan_grant_missing_root_path(raw: str) -> str:
@@ -948,6 +952,9 @@ def _plan_grant_missing_root_path(raw: str) -> str:
 	if path.startswith("-") or "." in path or any(char in path for char in _GLOB_CHARS):
 		return ""
 	if _PLAN_GRANT_BARE_FILE_RE.match(path) or not os.path.lexists(".git"):
+		return ""
+	if path.lower() in {"none", "tbd", "todo"}:
+		# A no-change or placeholder entry (`- `None` - no edits`), not a file.
 		return ""
 	return path if _plan_grant_checkout_state(path) == "missing" else ""
 

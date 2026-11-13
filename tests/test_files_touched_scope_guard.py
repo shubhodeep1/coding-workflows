@@ -2282,7 +2282,9 @@ def test_plan_gate_missing_root_extensionless_path_hold_is_replannable() -> None
 			assert record.get("replannable") is True and body is None, (bare, record)
 		# An unbackticked prose bullet or an indented sub-bullet never counts.
 		for prose in ("- Update VERSION notes\n", "- `scripts/a.sh`\n  - `build_payload`: wraps the call\n",
-				"- `scripts/a.sh`\n  - VERSION\n"):
+				"- `scripts/a.sh`\n  - VERSION\n", "- Tests: add cases for the new tool\n",
+				"- Docs - explain the schema\n", "- Notes (see below)\n", "- None\n", "- NONE\n",
+				"- None - no files need edits\n", "- `None` - no files need edits\n", "1. TODO: decide later\n"):
 			code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n" + prose,
 				_pipeline_meta(), cwd=root)
 			assert code == 0 and record["reason"] == "pipeline_plan_grant", (prose, record)
