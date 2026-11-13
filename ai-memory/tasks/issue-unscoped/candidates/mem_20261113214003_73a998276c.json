@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml step selection and placement in `tests-hooks-and-orchestrator` (around lines 1049-1086); tests/test_ci_poll_test_sharding.py `MovedHeal9420StepsContractTest` (lines 3881-3977)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Workflow comments (ci.yml lines 1051-1055, 1494-1495) and the changelog fragment changelog.d/9420-ci-heal-job-steps-to-hooks-job.md state the run's step timings were unavailable and the selection is an estimate; MovedHeal9420StepsContractTest checks placement and setup but does not establish the moved steps are the slowest or that tests-hooks-and-orchestrator had the most headroom; severity MAJOR per all three reviewers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml (step selection and placement); tests/test_ci_poll_test_sharding.py (Move validation)\n  Evidence of absence: The workflow comments (lines 1051\u20131055, 1494\u20131495) and the changelog fragment explicitly state that the run's step timings were unavailable and the selected steps are an estimate, not a measurement based on the slowest steps. The PR does not identify the \"slowest steps\" or \"most headroom\" based on actual CI data.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml` step selection around lines 1049-1086; `tests/test_ci_poll_test_sharding.py` `MovedHeal9420StepsContractTest` at lines 3881-3977.\n  Evidence of absence: In-workflow comment at ci.yml lines 1051-1055 says the pick is an estimate, not a measurement; the note at lines 1494-1495 does not show the moved steps were slowest; the contract test does not establish the moved steps are the slowest in run 43314513853 nor that tests-hooks-and-orchestrator had the most headroom among 20-minute non-matrix test jobs; changelog fragment changelog.d/9420-ci-heal-job-steps-to-hooks-job.md lines 1-4 also describes an estimate. Reliance on budget-watch mitigates but does not satisfy the requirement.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, step selection and placement in `tests-hooks-and-orchestrator`; `tests/test_ci_poll_test_sharding.py`, `MovedHeal9420StepsContractTest` selection contract.\n  Evidence of absence: Workflow comment says run 43314513853's step durations were unavailable and the selection is an estimate; the test contract checks placement and setup but does not establish these were the slowest steps or that the target job had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4df302e262624b19965784b47a27866b552db5219f55ab9c2da5d23d0aa82ed7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9430,
+    "run_id": "43451241298",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43451241298",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113214003_73a998276c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9430,
+    "run_id": "43451241298"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T21:40:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
