@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9369,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9369\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9429\",\"pr_number\":9429,\"branch\":\"ai/issue-9369\",\"run_id\":\"43329800487\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43329800487\",\"changed_files\":[\".github/workflows/ci.yml\",\"agents.d/9369-review-blocked-stale-clear.md\",\"changelog.d/9369-review-blocked-stale-clear.md\",\"scripts/review_autofix_step_post_editor_summary.sh\",\"tests/test_review_blocked_stale_clear.py\"]}",
+  "fingerprint": "e7ed894680937e84f38de91d80cc2ecc2790bedaebeb35bfd5d9a9161c5e650d",
+  "lineage": {
+    "issue_number": 9369,
+    "parent_ids": [],
+    "pr_number": 9429,
+    "run_id": "43329800487",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43329800487",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9429"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261113002104_6e4b9e9a4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9369,
+    "level": "run",
+    "pr_number": 9429,
+    "run_id": "43329800487"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9369: https://github.com/shubhodeep1/coding-workflows/pull/9429",
+  "timestamps": {
+    "created_at": "2026-11-13T00:21:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
