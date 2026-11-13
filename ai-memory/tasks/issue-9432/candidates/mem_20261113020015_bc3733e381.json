@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9432,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9432\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9446\",\"pr_number\":9446,\"branch\":\"ai/issue-9432\",\"run_id\":\"43343303654\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43343303654\",\"changed_files\":[\"agents.d/stuck-states-p8d-generic-seed.md\",\"changelog.d/9432-seed-latch-heal-escalated.md\",\"scripts/dependency_wait_resume.py\",\"tests/test_dependency_wait_resume.py\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "dfd02c45862768ad1fee24b3b6300f211e15d821dbacaed3aa3883d6a90f6152",
+  "lineage": {
+    "issue_number": 9432,
+    "parent_ids": [],
+    "pr_number": 9446,
+    "run_id": "43343303654",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43343303654",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9446"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261113020015_bc3733e381",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9432,
+    "level": "run",
+    "pr_number": 9446,
+    "run_id": "43343303654"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9432: https://github.com/shubhodeep1/coding-workflows/pull/9446",
+  "timestamps": {
+    "created_at": "2026-11-13T02:00:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
