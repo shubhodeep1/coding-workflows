@@ -333,7 +333,10 @@ echo "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=$([ -n "${clean_marker_suffix}" ] &
 # - A cap marker without `support=` compares as `support=none` (Q2=A): the
 #   cap writer omits the field exactly when the clean writer writes `none`.
 # - Fail-safe: a lookup or DELETE failure, a missing login, or a cap marker
-#   older than the newest 100 comments keeps the label (today's behaviour).
+#   older than the newest 100 comments keeps the label (today's behaviour);
+#   the last case logs cap_marker_out_of_window when totalCount exceeds 100.
+# - A cap that labeled linked issues (not this PR) never removes the PR
+#   label (cap_not_pr_target); a 404 DELETE logs removed/already_absent.
 #   Never returns non-zero; linked issues are not touched.
 # Log: REVIEW_BLOCKED_STALE_CLEAR pr=<n> outcome=removed|kept|error
 #   reason=<token> cap_head=<sha|none> cap_support=<sha|none>
@@ -344,7 +347,7 @@ review_blocked_stale_clear() {
   local rbsc_clean_head="${clean_marker_head:-unknown}"
   local rbsc_clean_support="${clean_marker_support:-none}"
   local rbsc_outcome="kept" rbsc_reason="" rbsc_cap_head="none" rbsc_cap_support="none"
-  local rbsc_login="" rbsc_repo="${AUTOFIX_STEP_REPOSITORY:-}" rbsc_response_file="" rbsc_decision_out="" rbsc_decision=""
+  local rbsc_login="" rbsc_repo="${AUTOFIX_STEP_REPOSITORY:-}" rbsc_response_file="" rbsc_decision_out="" rbsc_decision="" rbsc_delete_err=""
   rbsc_login="$(printf '%s' "${review_blocked_clear_post_response:-}" | jq -r '.user.login // ""' 2>/dev/null || true)"
   rbsc_login="$(printf '%s' "${rbsc_login}" | tr 'A-Z' 'a-z' | tr -d '\r\n')"
   if ! [[ "${rbsc_login}" =~ ^[a-z0-9][a-z0-9-]{0,38}$ ]]; then
@@ -356,8 +359,8 @@ review_blocked_stale_clear() {
     rbsc_response_file="$(mktemp "${RUNNER_TEMP:-/tmp}/review_blocked_stale_clear.XXXXXX" 2>/dev/null || true)"
     if [ -z "${rbsc_response_file}" ] \
       || ! GH_RETRY_IDEMPOTENT=true gh_retry gh api graphql \
-        -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){labels(first:100){nodes{name}} comments(last:100){nodes{author{login} body}}}}}' \
-        -f owner="${rbsc_repo%%/*}" -f name="${rbsc_repo#*/}" -F number="${rbsc_pr}" > "${rbsc_response_file}" 2>/dev/null; then
+        -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){labels(first:100){nodes{name}} comments(last:100){totalCount nodes{author{login} body}}}}}' \
+        -f owner="${rbsc_repo%%/*}" -f name="${rbsc_repo#*/}" -F number="${rbsc_pr}" > "${rbsc_response_file}"; then
       rbsc_outcome="error"
       rbsc_reason="lookup_failed"
     else
@@ -401,6 +404,10 @@ comments = pr.get("comments") if isinstance(pr.get("comments"), dict) else {}
 # other text never counts.
 marker_re = re.compile(r"^<!-- review-autofix-failure-cap:v1 head=([0-9a-fA-F]{40})((?: [^ >\n]+)*) -->[ \r]*$", re.MULTILINE)
 support_re = re.compile(r"^(?:[0-9a-f]{40}|none)$")
+# The cap labels the PR only when it found no linked issue, and its comment
+# says so (review_autofix.yml labeled_summary). A cap that labeled linked
+# issues did not set this PR label, so it never drives a removal.
+pr_target_re = re.compile(r"^- Labeled `ai:review-blocked`: this pull request", re.MULTILINE)
 # comments(last:100) is oldest-first; walk newest-first.
 for node in reversed(comments.get("nodes") or []):
 	if not isinstance(node, dict):
@@ -420,11 +427,17 @@ for node in reversed(comments.get("nodes") or []):
 	if not support_re.match(cap_support):
 		# A malformed support field never counts as a cap marker (fail safe).
 		continue
+	if not pr_target_re.search(str(node.get("body") or "")):
+		emit("kept", "cap_not_pr_target", cap_head, cap_support)
 	if cap_head != clean_head:
 		emit("remove", "head_changed", cap_head, cap_support)
 	if cap_support != clean_support:
 		emit("remove", "support_changed", cap_head, cap_support)
 	emit("kept", "same_head_support", cap_head, cap_support)
+total = comments.get("totalCount")
+if isinstance(total, int) and total > len(comments.get("nodes") or []):
+	# An older cap marker may sit outside the newest-100 window (one-read budget).
+	emit("kept", "cap_marker_out_of_window")
 emit("kept", "no_cap_marker")
 PY
 )"
@@ -436,14 +449,19 @@ PY
       rbsc_cap_support="${rbsc_cap_support:-none}"
       case "${rbsc_decision}:${rbsc_reason}" in
         remove:head_changed|remove:support_changed)
-          if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X DELETE "repos/${rbsc_repo}/issues/${rbsc_pr}/labels/ai%3Areview-blocked" >/dev/null 2>&1; then
+          if rbsc_delete_err="$(GH_RETRY_IDEMPOTENT=true gh_retry gh api -X DELETE "repos/${rbsc_repo}/issues/${rbsc_pr}/labels/ai%3Areview-blocked" 2>&1 >/dev/null)"; then
             rbsc_outcome="removed"
+          elif [[ "${rbsc_delete_err}" == *"HTTP 404"* || "${rbsc_delete_err}" == *"Label does not exist"* ]]; then
+            # Removed concurrently (a human or another run): the label is gone.
+            rbsc_outcome="removed"
+            rbsc_reason="already_absent"
           else
+            [ -z "${rbsc_delete_err}" ] || printf '%s\n' "${rbsc_delete_err}" >&2
             rbsc_outcome="error"
             rbsc_reason="delete_failed"
           fi
           ;;
-        kept:label_absent|kept:no_cap_marker|kept:same_head_support)
+        kept:label_absent|kept:no_cap_marker|kept:same_head_support|kept:cap_not_pr_target|kept:cap_marker_out_of_window)
           rbsc_outcome="kept"
           ;;
         *)

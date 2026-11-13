@@ -53,6 +53,10 @@ FAKE_GH_FUNC = r"""gh() {
   fi
   if [ "${is_delete}" = "1" ]; then
     echo "DELETE ${delete_path}" >> "${FAKE_GH_CALLS_FILE}"
+    if [ "${FAKE_GH_DELETE_404:-0}" = "1" ]; then
+      echo "gh: Label does not exist (HTTP 404)" >&2
+      return 1
+    fi
     [ "${FAKE_GH_DELETE_FAIL:-0}" = "1" ] && return 1
     return 0
   fi
@@ -81,17 +85,25 @@ def _cap_marker(head: str = HEAD, support: str | None = SUPPORT) -> str:
 	return f"<!-- review-autofix-failure-cap:v1 head={head} fp=83dddbabbcab0d66 reason=x count=3{support_field} -->"
 
 
-def _cap_comment(head: str = HEAD, support: str | None = SUPPORT, author: str = PIPELINE) -> dict:
-	return {"author": {"login": author}, "body": f"**AI review/autofix stopped**\n\n{_cap_marker(head, support)}"}
+PR_TARGET_LINE = "- Labeled `ai:review-blocked`: this pull request (no linked issue found)."
+ISSUE_TARGET_LINE = "- Labeled `ai:review-blocked`: linked issue(s) #7."
 
 
-def _graphql(comments: list[dict], labels: tuple[str, ...] = ("ai:review-blocked",)) -> dict:
+def _cap_comment(head: str = HEAD, support: str | None = SUPPORT, author: str = PIPELINE, target: str = PR_TARGET_LINE) -> dict:
+	# Same shape as the cap comment review_autofix.yml posts (labeled_summary line, then marker).
+	return {"author": {"login": author}, "body": f"**AI review/autofix stopped**\n\n{target}\n\n{_cap_marker(head, support)}"}
+
+
+def _graphql(comments: list[dict], labels: tuple[str, ...] = ("ai:review-blocked",), total_count: int | None = None) -> dict:
+	comments_conn: dict = {"nodes": comments}
+	if total_count is not None:
+		comments_conn["totalCount"] = total_count
 	return {
 		"data": {
 			"repository": {
 				"pullRequest": {
 					"labels": {"nodes": [{"name": name} for name in labels]},
-					"comments": {"nodes": comments},
+					"comments": comments_conn,
 				}
 			}
 		}
@@ -264,11 +276,40 @@ def test_newest_trusted_cap_marker_decides(tmp_path: Path) -> None:
 	_assert_line(result, "removed", "head_changed", OTHER_HEAD, SUPPORT)
 
 
+def test_cap_that_labeled_linked_issue_does_not_remove_pr_label(tmp_path: Path) -> None:
+	# A cap that labeled a linked issue did not set the PR label (a human or the judge did).
+	result, calls, _ = _run(tmp_path, _graphql([_cap_comment(head=OTHER_HEAD, target=ISSUE_TARGET_LINE)]))
+	_assert_line(result, "kept", "cap_not_pr_target", OTHER_HEAD, SUPPORT)
+	assert _deletes(calls) == []
+
+
+def test_pr_target_wording_matches_the_cap_writer() -> None:
+	# The PR-target check reads the cap comment's prose; pin it to the writer.
+	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	assert 'labeled_summary="this pull request (no linked issue found)"' in workflow
+	assert "- Labeled \\`ai:review-blocked\\`: ${labeled_summary}." in workflow
+
+
+def test_cap_marker_out_of_window_is_logged_distinctly(tmp_path: Path) -> None:
+	comments = [{"author": {"login": PIPELINE}, "body": "AI autofix editor summary\n- none"}]
+	result, calls, _ = _run(tmp_path, _graphql(comments, total_count=250))
+	_assert_line(result, "kept", "cap_marker_out_of_window")
+	assert _deletes(calls) == []
+	result, calls, _ = _run(tmp_path, _graphql(comments, total_count=1))
+	_assert_line(result, "kept", "no_cap_marker")
+
+
+def test_delete_404_counts_as_already_absent(tmp_path: Path) -> None:
+	result, calls, _ = _run(tmp_path, _graphql([_cap_comment(head=OTHER_HEAD)]), FAKE_GH_DELETE_404="1")
+	_assert_line(result, "removed", "already_absent", OTHER_HEAD, SUPPORT)
+	assert _deletes(calls) == [f"DELETE {DELETE_PATH}"]
+
+
 def test_graphql_read_passes_values_as_variables(tmp_path: Path) -> None:
 	_, calls, _ = _run(tmp_path, _graphql([]))
 	(call,) = _graphql_calls(calls)
 	assert "owner=o" in call and "name=r" in call and "number=42" in call
-	assert "labels(first:100)" in call and "comments(last:100)" in call
+	assert "labels(first:100)" in call and "comments(last:100){totalCount" in call
 
 
 def test_log_prefix_is_registered() -> None:
