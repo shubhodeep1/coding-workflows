@@ -31012,7 +31012,13 @@ def test_integration_test_repair_wiring_and_poll_workflow_forwarding():
 	assert fn.count("gh workflow run") == 1
 	assert "_has_active_autofix_run" not in fn and "_safe_gh_jq" not in fn and "gh api" not in fn
 	calls = script.count('_dispatch_integration_test_repair "${TRACKING_NUM:-}"')
-	assert calls == 4, calls
+	assert calls == 5, calls
+	# Stuck-states P12: the fifth dispatch is the contract-list-union success
+	# path, which runs test repair like the plain merge (Refs #9432).
+	union = script[script.index('if sync_contract_list_union_merge "${integration_branch}" "${default_branch}"; then'):]
+	union = union[:union.index("    return 0")]
+	assert 'mark_integration_sync_clean "${default_branch}"' in union
+	assert '_dispatch_integration_test_repair "${TRACKING_NUM:-}" "${integration_branch}" "" "${default_branch}"' in union
 	clean_calls = re.findall(r'mark_integration_sync_clean "\$\{default_branch\}"\n\s+_dispatch_integration_test_repair ', script)
 	assert len(clean_calls) == 3, len(clean_calls)
 	rtm = script[script.index('echo "  PR #${RTM_PR} merged directly."'):]
