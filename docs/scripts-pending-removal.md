@@ -392,3 +392,14 @@ Copy this block when adding a new entry:
   - No open issue carries its port marker: `gh issue list -R shubhodeep1/coding-workflows -l ai:workflow-heal -s open --search 'in:body "Ported from heal:"' --json number --jq length` prints `0`.
   - `tests/test_heal_port_to_default.py` (and its `ci.yml` entry) and the `heal-port` subcommand of `scripts/workflow_failure_heal.py` are removed in the same PR.
 - **Owner:** @shubhodeep1
+
+### `scripts/cs_bridge_query.sh`
+
+- **Introduced in:** PR for #9440 (2026-11-13), Refs shubhodeep1/tele-funtoken-msg-scoring#5238
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the only path from the CS ticket investigation (`.github/workflows/cs_investigate.yml`, run by `scripts/cs_investigate.sh`) to the agent DB bridge: it fetches the `agent-db-bridge` OIDC token on the runner and sends one request to the fixed bridge host.
+- **Removal preflight checks:**
+  - `rg -n "cs_bridge_query" .github scripts` returns only the lines being removed in the same PR (the `cs_investigate.sh` caller and its `source` line).
+  - `gh run list -R shubhodeep1/tele-funtoken-msg-scoring --workflow ai-cs-investigate.yml --created ">=$(date -u -d '30 days ago' +%F)" --json databaseId --jq length` prints `0` (no `cs_investigate.yml` run in the last 30 days), for every caller repo.
+  - `tests/test_cs_bridge_query.py` (and its `ci.yml` entry) is removed in the same PR.
+- **Owner:** @shubhodeep1
