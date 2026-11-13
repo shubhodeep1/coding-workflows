@@ -206,6 +206,22 @@ def test_compose_drops_oldest_results_to_fit(tmp_path: Path) -> None:
 	assert len(text.encode()) <= cs_verdict.MAX_UNTRUSTED_PROMPT_BYTES + 8192 + 64
 
 
+def test_compose_caps_a_many_line_ticket_and_keeps_its_end_marker(tmp_path: Path) -> None:
+	ticket = tmp_path / "ticket.json"
+	ticket.write_text("\n".join("x" for _ in range(30000)), encoding="utf-8")
+	folder = tmp_path / "results" / "round-0"
+	folder.mkdir(parents=True)
+	(folder / "req-0.json").write_text("{}", encoding="utf-8")
+	(folder / "req-0.rc").write_text("0", encoding="utf-8")
+	(folder / "req-0.body").write_text('{"rows":[]}', encoding="utf-8")
+	text = cs_verdict.compose_prompt("P", "T-42", "investigate", "1", 1, 3, ticket, [], [], tmp_path / "results")
+	start, end = text.index("BEGIN UNTRUSTED TICKET\n"), text.index("\nEND UNTRUSTED TICKET\n")
+	assert len(text[start:end].encode()) <= cs_verdict.MAX_UNTRUSTED_PROMPT_BYTES // 2
+	assert "UNTRUSTED_DATA: (ticket truncated by the workflow to fit the prompt cap)" in text
+	assert "BEGIN UNTRUSTED BRIDGE RESULT round-0 req-0" in text and "dropped the" not in text
+	assert "prompt truncated by the workflow" not in text
+
+
 def test_image_ext_uses_magic_bytes(tmp_path: Path) -> None:
 	assert cs_verdict.image_ext(PNG) == "png"
 	assert cs_verdict.image_ext(JPEG) == "jpg"
@@ -428,7 +444,7 @@ def test_hub_error_emits_invalid_verdict(stub: _Stub, tmp_path: Path) -> None:
 
 
 @needs_curl
-@pytest.mark.parametrize(("rc", "reason"), [("76", "engine_refused"), ("80", "engine_capacity_wait"), ("124", "engine_timeout"), ("1", "engine_failed")])
+@pytest.mark.parametrize(("rc", "reason"), [("76", "engine_refused"), ("80", "engine_capacity_wait"), ("124", "engine_timeout"), ("137", "engine_timeout"), ("1", "engine_failed")])
 def test_engine_failure_emits_invalid_verdict(stub: _Stub, tmp_path: Path, rc: str, reason: str) -> None:
 	result, output, _ = _drive(tmp_path, stub, [json.dumps(_verdict())], rcs={0: rc})
 	assert result.returncode == 0
@@ -469,6 +485,10 @@ def test_non_image_photo_is_refused(stub: _Stub, tmp_path: Path) -> None:
 		{"CS_HUB_URL": "http://hub.example"},
 		{"CS_HUB_URL": "http://127.0.0.1:8080", "GITHUB_ACTIONS": "true"},
 		{"CS_HUB_URL": "https://hub.example", "CS_HUB_ALLOWED_HOSTS": "cs.example other.example"},
+		{"CS_HUB_URL": "https://hub.example", "GITHUB_ACTIONS": "true"},
+		{"CS_HUB_URL": "https://hub.example", "GITHUB_ACTIONS": "true", "CS_HUB_ALLOWED_HOSTS": " "},
+		{"CS_HUB_URL": "https://hub.example:8443", "CS_HUB_ALLOWED_HOSTS": "hub.example"},
+		{"CS_HUB_URL": "https://hub.example", "CS_HUB_ALLOWED_HOSTS": "hub.example:8443"},
 	],
 )
 def test_invalid_inputs_fail_without_a_verdict(tmp_path: Path, overrides: dict[str, str]) -> None:
@@ -542,3 +562,23 @@ def test_engine_role_is_read_only() -> None:
 	assert config["role_defaults"]["CS_INVESTIGATE"] == {"engine": "claude", "claude_model": "claude-opus-5-5", "profile": "read"}
 	resolved = claude_engine.resolve_role("CS_INVESTIGATE", claude_engine.normalize_config(config)[0], {"AI_ENGINE_LABELS": ""})
 	assert resolved["profile"] == "read"
+
+
+@needs_curl
+@pytest.mark.parametrize(
+	("url", "allowed"),
+	[("https://Hub.Example", "hub.example"), ("https://hub.example:443/", "other.example\nHUB.example"), ("https://hub.example:8443", "hub.example:8443")],
+)
+def test_allowlisted_hub_passes_input_validation_inside_actions(tmp_path: Path, url: str, allowed: str) -> None:
+	# Port 9 refuses the OIDC request, so a host that passed the allowlist ends
+	# as invalid_verdict (exit 0) instead of an input error (exit 2).
+	result, output, _ = _drive(tmp_path, None, [json.dumps(_verdict())], {"CS_HUB_URL": url, "CS_HUB_ALLOWED_HOSTS": allowed, "GITHUB_ACTIONS": "true"})
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "reason=hub_fetch_failed" in result.stdout
+	assert _output_verdict(output) == {"ticket_id": "T-42", "outcome": "invalid_verdict"}
+
+
+def test_workflow_keeps_the_codex_fallback_and_requires_the_hub_allowlist() -> None:
+	text = WORKFLOW.read_text(encoding="utf-8")
+	assert "\n  AI_ENGINE_FALLBACK_POLICY: 'always'\n" in text
+	assert "if key not in allowed:" in text

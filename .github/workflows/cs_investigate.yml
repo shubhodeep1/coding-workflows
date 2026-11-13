@@ -58,6 +58,13 @@ env:
   # No capacity-resume pass re-runs CS tickets, so an exhausted Claude pool
   # falls back to codex instead of waiting (exit 80).
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: 'false'
+  # Keep the codex fallback for every Claude failure, not only exhausted
+  # capacity (issue #9440 "keep the existing codex fallback"). Under the shared
+  # default `capacity`, a missing or broker-refused credential (for example an
+  # @stable caller: the broker refuses tag refs) returns 76 and no codex runs.
+  # Fixed here, not read from vars.AI_ENGINE_FALLBACK_POLICY, so a caller-repo
+  # `capacity` value cannot turn the fallback off for CS tickets.
+  AI_ENGINE_FALLBACK_POLICY: 'always'
   AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
   AI_ENGINE_CS_INVESTIGATE: ${{ vars.AI_ENGINE_CS_INVESTIGATE || '' }}
 
@@ -100,19 +107,24 @@ jobs:
               sys.exit(1)
           if parts.query or parts.fragment or parts.path not in ("", "/") or (port is not None and not 0 < port < 65536):
               sys.exit(1)
-          allowed = os.environ.get("CS_HUB_ALLOWED_HOSTS", "").split()
-          if allowed and parts.hostname not in allowed:
+          # The cs-hub OIDC token goes to this host, so the allowlist is
+          # required (fail closed when empty). An entry is `host` (port 443)
+          # or `host:port`; a host on the list is not accepted on another port.
+          allowed = [entry.lower() for entry in os.environ.get("CS_HUB_ALLOWED_HOSTS", "").split()]
+          key = parts.hostname if port in (None, 443) else f"{parts.hostname}:{port}"
+          if key not in allowed:
               sys.exit(1)
           PY
           then
-            echo "::error::cs_investigate: hub_url must be https://<host>[:port] with no userinfo, path, query or fragment (and on CS_HUB_ALLOWED_HOSTS when set)."
+            echo "::error::cs_investigate: hub_url must be https://<host>[:port] with no userinfo, path, query or fragment, and its host (host:port for a port other than 443) must be on the required CS_HUB_ALLOWED_HOSTS variable."
             exit 1
           fi
 
       # The support commit comes from the job context (no API call and no
-      # token): the workflow's own repository, ref and SHA. The broker checks
-      # SHA-pinned refs against main/stable on its side before it hands out
-      # the Claude pool.
+      # token): the workflow's own repository, ref and SHA. The broker hands
+      # out the Claude pool only to refs/heads/main or a 40-hex SHA pin it can
+      # verify; other approved refs (refs/tags/stable, branches in this repo)
+      # get no pool token and run on codex (AI_ENGINE_FALLBACK_POLICY above).
       - name: Resolve trusted CS support commit
         id: resolve_support
         env:
@@ -209,8 +221,9 @@ jobs:
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       # The CS_INVESTIGATE role runs on Claude unless the engine policy says
-      # codex (scripts/ai_engine.sh); without a credential the isolated runner
-      # falls back to isolated codex, so these steps never fail the job.
+      # codex (scripts/ai_engine.sh); without a credential claude_run_selected
+      # returns 75 under AI_ENGINE_FALLBACK_POLICY=always and runs the isolated
+      # codex command, so these steps never fail the job.
       - name: Install Claude Code CLI
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/install-claude

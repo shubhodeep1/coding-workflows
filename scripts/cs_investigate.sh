@@ -21,7 +21,12 @@
 #
 # Environment:
 #   TICKET_ID, CS_MODE, CS_ATTEMPT, CS_HUB_URL   workflow inputs
-#   CS_HUB_ALLOWED_HOSTS   optional space-separated exact hub hosts (default empty: any)
+#   CS_HUB_ALLOWED_HOSTS   space-separated hub hosts, `host` (port 443) or `host:port`;
+#                          required inside Actions (empty fails closed), optional
+#                          outside Actions (tests)
+#   CS_ENGINE_TIMEOUT_SECS wall-clock cap per engine round (default 780)
+#   CS_RUN_DEADLINE_SECS   cap on the whole run from script start (default 2700), so
+#                          the job's 60-minute timeout never cuts off the verdict
 #   CS_BRIDGE_URL          passed to cs_bridge_query.sh (its default when empty)
 #   CS_PHOTO_MAX_BYTES     per-photo cap (default 5242880)
 #   CS_INVESTIGATE_MODEL   codex model (default openai/gpt-6-sol)
@@ -67,19 +72,35 @@ if [[ ! "${attempt}" =~ ^[1-9]$ ]]; then
 fi
 hub_proto="=https"
 if [[ "${hub_url}" =~ ^https://([A-Za-z0-9.-]{1,253})(:[0-9]{1,5})?/?$ ]]; then
-	hub_host="${BASH_REMATCH[1]}"
-elif [ "${GITHUB_ACTIONS:-}" != "true" ] && [[ "${hub_url}" =~ ^http://(127\.0\.0\.1|localhost):[0-9]{1,5}/?$ ]]; then
+	hub_host="${BASH_REMATCH[1],,}"
+	hub_port="${BASH_REMATCH[2]#:}"
+elif [ "${GITHUB_ACTIONS:-}" != "true" ] && [[ "${hub_url}" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]{1,5})/?$ ]]; then
 	# Loopback hubs are for tests only, never inside Actions.
 	hub_host="${BASH_REMATCH[1]}"
+	hub_port="${BASH_REMATCH[2]#:}"
 	hub_proto="=http"
 else
 	echo "::error::cs_investigate: hub_url must be https://<host>[:port] with no userinfo, path, query or fragment."
 	exit 2
 fi
-if [ -n "${CS_HUB_ALLOWED_HOSTS:-}" ]; then
+# The cs-hub OIDC token goes to this host, so inside Actions the allowlist is
+# required. The key is the host, plus `:port` for any port other than 443, so a
+# listed host is not accepted on a port the caller picks.
+hub_allowed_list="${CS_HUB_ALLOWED_HOSTS:-}"
+if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -z "${hub_allowed_list//[[:space:]]/}" ]; then
+	echo "::error::cs_investigate: CS_HUB_ALLOWED_HOSTS is required (the cs-hub OIDC token is sent to hub_url)."
+	exit 2
+fi
+if [ -n "${hub_allowed_list//[[:space:]]/}" ]; then
+	hub_key="${hub_host}"
+	if [ -n "${hub_port}" ] && [ "$((10#${hub_port}))" -ne 443 ]; then
+		hub_key="${hub_host}:$((10#${hub_port}))"
+	fi
 	hub_allowed="false"
-	for allowed_host in ${CS_HUB_ALLOWED_HOSTS}; do
-		[ "${allowed_host}" = "${hub_host}" ] && hub_allowed="true"
+	allowed_hosts=()
+	read -r -d '' -a allowed_hosts <<< "${hub_allowed_list}" || true
+	for allowed_host in ${allowed_hosts[@]+"${allowed_hosts[@]}"}; do
+		[ "${allowed_host,,}" = "${hub_key}" ] && hub_allowed="true"
 	done
 	if [ "${hub_allowed}" != "true" ]; then
 		echo "::error::cs_investigate: hub_url host is not in CS_HUB_ALLOWED_HOSTS."
@@ -196,6 +217,15 @@ if [ -z "${TARGET_DIR:-}" ] || [ ! -d "${TARGET_DIR}" ]; then
 fi
 model="${CS_INVESTIGATE_MODEL:-openai/gpt-6-sol}"
 [[ "${model}" =~ ^[a-zA-Z0-9/_.:-]+$ ]] || model="openai/gpt-6-sol"
+# Wall-clock bounds: each engine round runs under `timeout` (exit 124, or 137
+# after --kill-after), and no round or bridge request starts past the run
+# deadline, so the job's 60-minute timeout never cancels the step before
+# cs_emit writes a verdict.
+engine_timeout="${CS_ENGINE_TIMEOUT_SECS:-780}"
+[[ "${engine_timeout}" =~ ^[0-9]{1,5}$ ]] && [ "${engine_timeout}" -ge 60 ] || engine_timeout=780
+run_deadline="${CS_RUN_DEADLINE_SECS:-2700}"
+[[ "${run_deadline}" =~ ^[0-9]{1,5}$ ]] && [ "${run_deadline}" -ge 60 ] || run_deadline=2700
+round_timeout="${engine_timeout}"
 
 cs_run_engine()
 {
@@ -205,9 +235,9 @@ cs_run_engine()
 		unset GH_TOKEN GITHUB_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
 		export AI_ENGINE_READ_ONLY=true
 		export AI_ENGINE_INCLUDE_PATHS="${ticket_dir}"
-		# shellcheck disable=SC1091
-		source "${engine_root}/scripts/ai_engine.sh" || exit 2
-		claude_run_selected CS_INVESTIGATE "${prompt}" "${out}" "${TARGET_DIR}" --codex-stdio -- \
+		timeout -k 30 "${round_timeout}" \
+			bash -c 'source "$0" || exit 2; claude_run_selected "$@"' "${engine_root}/scripts/ai_engine.sh" \
+			CS_INVESTIGATE "${prompt}" "${out}" "${TARGET_DIR}" --codex-stdio -- \
 			bash "${engine_root}/scripts/codex_isolated_exec.sh" run --mode read-only \
 				--workdir "${TARGET_DIR}" --include "${ticket_dir}" -- \
 				--ask-for-approval never \
@@ -239,13 +269,19 @@ while :; do
 		--out "${prompt_file}"; then
 		cs_invalid prompt_failed
 	fi
+	round_budget=$((run_deadline - SECONDS))
+	if [ "${round_budget}" -lt 60 ]; then
+		cs_invalid engine_timeout
+	fi
+	round_timeout="${engine_timeout}"
+	[ "${round_budget}" -ge "${round_timeout}" ] || round_timeout="${round_budget}"
 	engine_rc=0
 	cs_run_engine "${prompt_file}" "${reply_file}" || engine_rc=$?
 	case "${engine_rc}" in
 		0) ;;
 		76) cs_invalid engine_refused ;;
 		80) cs_invalid engine_capacity_wait ;;
-		124) cs_invalid engine_timeout ;;
+		124|137) cs_invalid engine_timeout ;;
 		*) cs_invalid engine_failed ;;
 	esac
 	requests_dir="${runtime}/results/round-${round}"
@@ -257,6 +293,7 @@ while :; do
 			fi
 			for request in "${requests_dir}"/req-*.json; do
 				[ -f "${request}" ] || continue
+				[ "${SECONDS}" -lt "${run_deadline}" ] || break
 				stem="${request%.json}"
 				query_rc=0
 				bash "${CS_SCRIPT_DIR}/cs_bridge_query.sh" < "${request}" > "${stem}.raw" || query_rc=$?

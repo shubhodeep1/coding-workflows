@@ -345,7 +345,21 @@ def compose_prompt(
 	header.append("- workflow notes: " + (", ".join(notes) if notes else "none"))
 	parts = [template.rstrip() + "\n", "\n".join(header) + "\n"]
 
-	ticket_block = untrusted_block("TICKET", _ticket_text(ticket_file))
+	ticket_text = _ticket_text(ticket_file)
+	ticket_block = untrusted_block("TICKET", ticket_text)
+	# The raw ticket cap is applied before the per-line prefix, so a ticket of
+	# many short lines can grow past the untrusted budget and crowd out every
+	# bridge result. Re-cap on whole lines (the block keeps its END marker).
+	ticket_cap = MAX_UNTRUSTED_PROMPT_BYTES // 2
+	if len(ticket_block.encode("utf-8")) > ticket_cap:
+		kept: list[str] = []
+		size = 256
+		for line in ticket_text.splitlines():
+			size += len((UNTRUSTED_PREFIX + line + "\n").encode("utf-8"))
+			if size > ticket_cap:
+				break
+			kept.append(line)
+		ticket_block = untrusted_block("TICKET", "\n".join(kept + ["(ticket truncated by the workflow to fit the prompt cap)"]))
 	results = _round_results(results_dir)
 	result_blocks: list[str] = []
 	for result in results:

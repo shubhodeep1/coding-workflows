@@ -56,6 +56,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
 - `.github/workflows/claude-engine-smoke.yml` — GitHub Actions workflow: Claude engine smoke (dispatch-only self-test of the Claude engine plumbing).
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
+- `.github/workflows/cs_investigate.yml` — GitHub Actions workflow: AI CS Investigate (Reusable); investigates one CS ticket read-only and returns a cs_verdict v1 (issue #9440, not propagated).
 - `.github/workflows/drift-audit.yml` — GitHub Actions workflow: Drift Audit.
 - `.github/workflows/forward-merge-stable-to-main.yml` — GitHub Actions workflow: Forward-merge stable to main.
 - `.github/workflows/implement.yml` — GitHub Actions workflow: AI Implement.
@@ -172,6 +173,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/consumer_health_check.py` — Daily consumer health check decisions: map per-consumer snapshots to problems to file, issues to close and inactivity-disabled wrappers to re-enable (no API calls).
 - `scripts/consumer_health_check.sh` — Daily consumer health check run by `orchestrate_poll.yml` in this repository: read each consumer's workflows, poll runs and tracking issues, then re-enable wrappers and open or close `ai:consumer-health` issues.
 - `scripts/cost_audit.py` — cost_audit.py — Per-workflow LLM token-spend audit from GitHub Actions logs.
+- `scripts/cs_bridge_query.sh` — Send one agent DB bridge request from the runner with an `agent-db-bridge` OIDC token to the fixed bridge host (run by `scripts/cs_investigate.sh`).
+- `scripts/cs_investigate.sh` — Run step of `cs_investigate.yml`: fetch the CS ticket and photos, run the CS_INVESTIGATE engine role with bridge query rounds, and emit the validated verdict or `invalid_verdict`.
+- `scripts/cs_verdict.py` — Stdlib helpers for the CS investigation: compose the prompt with UNTRUSTED blocks, classify replies, validate the cs_verdict v1 schema.
 - `scripts/detect_editor_changes_lost.sh` — Defense-in-depth guard for the EDITOR_CHANGES_LOST detection step in review_autofix.yml.
 - `scripts/dispatch_and_watch_workflow_run.sh` — Shell helper for dispatch and watch workflow run.
 - `scripts/dev/replay_review_pipeline.sh` — Shell helper for replay review pipeline.
@@ -347,6 +351,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/targeted_file_context.py` — Inline likely-to-be-edited files into the Codex prompt as a reference block so the editor doesn't waste budget reading them.
 - `scripts/task_state.py` — Mirror orchestrator wave-issue state into per-task JSON files and unblock mirrored dependents.
 - `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.
+- `scripts/templates/cs_verdict.v1.schema.json` — JSON Schema for the cs_verdict v1 output of `cs_investigate.yml`.
 - `scripts/templates/slot_manifest.schema.json` — Template asset for slot_manifest.schema.json.
 - `scripts/tg_helpers.sh` — tg_helpers.sh — Telegram message tracking & cleanup helpers.
 - `scripts/transcript_archive.sh` — transcript_archive.sh — fail-open JSON archive helper for captured phase output.
