@@ -185,6 +185,8 @@
 #                                         carries an identity is always verified (issue #6559).
 #   WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS  max age of the identity's iat (default 3600), plus
 #                                         HEAL_INTAKE_QUEUE_WAITED_SECONDS (set by the queue step)
+#                                         or, when larger, the time since this run attempt
+#                                         started (runner wait included; one run read)
 #   WORKFLOW_HEAL_REPORT_ORIGIN           repository_dispatch | workflow_run | workflow_dispatch |
 #                                         recovery_scan (default GITHUB_EVENT_NAME, else
 #                                         repository_dispatch). recovery_scan is set only by
@@ -497,6 +499,43 @@ _report_auth_reject()
 	tg_send_msg "Workflow failure heal intake rejected a report claiming to come from ${SOURCE_REPO} (reason ${reject_reason}); nothing was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
 	exit 0
 }
+
+# Runner wait. The intake job can wait for a GitHub-hosted runner long after
+# the dispatch arrived: on 2026-11-13 runs 43439048054, 43496779526 and
+# 43498856864 started 1h54m to 3h25m after they were queued and rejected valid
+# reports as identity_stale, although the heal queue step had waited seconds.
+# The age limit applies at arrival, so the credit is the time since this run
+# attempt started (GitHub's run_started_at, which covers the runner wait and the
+# heal queue wait) when that exceeds the queue wait already added above. A
+# re-run attempt starts its own clock, so a replayed report gains nothing.
+# CLAUDE.md §15 audit: no earlier call in this script or the workflow's earlier
+# steps reads this run, so this is one GET, made only for a repository_dispatch
+# report that the age limit applies to (a carried identity, or an
+# engine_fallback reporting run). A failed read or an unparseable time keeps the
+# queue-only credit; the result is clamped to GitHub's 24-hour queue limit.
+RUN_ATTEMPT_ELAPSED_SECONDS=""
+if [ "${REPORT_ORIGIN}" = "repository_dispatch" ] && { [ "${REPORT_IDENTITY_STATE}" = "present" ] || [ "${SOURCE_KIND}" = "engine_fallback" ]; } \
+	&& [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+	run_attempt_number="${GITHUB_RUN_ATTEMPT:-1}"
+	[[ "${run_attempt_number}" =~ ^[1-9][0-9]{0,5}$ ]] || run_attempt_number=1
+	RUN_ATTEMPT_STARTED_AT="$(gh_retry gh api --method GET "repos/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID}/attempts/${run_attempt_number}" --jq '.run_started_at // ""' 2>/dev/null | tr -d '[:space:]' || true)"
+	if [[ "${RUN_ATTEMPT_STARTED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+		run_attempt_started_epoch="$(date -u -d "${RUN_ATTEMPT_STARTED_AT}" +%s 2>/dev/null || true)"
+		if [[ "${run_attempt_started_epoch}" =~ ^[0-9]+$ ]]; then
+			RUN_ATTEMPT_ELAPSED_SECONDS=$(( $(date -u +%s) - run_attempt_started_epoch ))
+			[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" -ge 0 ] || RUN_ATTEMPT_ELAPSED_SECONDS=0
+			[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" -le 86400 ] || RUN_ATTEMPT_ELAPSED_SECONDS=86400
+		fi
+	fi
+	if [[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" =~ ^[0-9]+$ ]]; then
+		if [ "${RUN_ATTEMPT_ELAPSED_SECONDS}" -gt "$((10#${QUEUE_WAITED_SECONDS}))" ]; then
+			REPORT_MAX_AGE=$((REPORT_MAX_AGE + RUN_ATTEMPT_ELAPSED_SECONDS - 10#${QUEUE_WAITED_SECONDS}))
+		fi
+		log "report_age_credit outcome=applied attempt_elapsed_seconds=${RUN_ATTEMPT_ELAPSED_SECONDS} queue_waited_seconds=$((10#${QUEUE_WAITED_SECONDS})) max_age=${REPORT_MAX_AGE}"
+	else
+		log "report_age_credit outcome=unavailable queue_waited_seconds=$((10#${QUEUE_WAITED_SECONDS})) max_age=${REPORT_MAX_AGE}"
+	fi
+fi
 
 REPORT_AUTH=""
 # recovery_scan (#7333): the hourly scan rebuilt this autofix_failure report
