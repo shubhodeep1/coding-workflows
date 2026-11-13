@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:7339-7357 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `orchestrate-poll (1)` check fails on head 6ea36343 because `test_security_pass_cap_converts_low_keep_fixing_to_advisory` times out with \"poller did not exit within 180s; process group killed\". The poller had already printed \"Project complete!\", so the hang happens during shutdown. The `_run_poller_subprocess` helper (lines 357-374) kills the process group and raises. The dependent `lint` check also fails.\n  WHY: All three reviewers rated this NIT. None traces it to a hunk in this PR: the PR changes neither scripts/orchestrate_poll_process.sh nor this test file, and the solc changes are opt-in or guarded. Workflow failure heal issue #9199 already tracks it. The confidence scores differ (anthropic 2, glm 2, luna 5). Reviewers advise treating it as PR-caused only if a shard run passes on merge-base 507ba62a and fails on the head.\n- tests/test_files_touched_scope_guard.py:N/A (Test Suite Failure) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push test gate reports this test failing consistently across runs after the PR's changes are applied.\n  WHY: The reviewer says this points to a possible regression or a mismatch between the scope guard logic and the integration-ref resolution changes (source severity MAJOR). anthropic_claude-sonnet-5_5 disputes it: the test references .github/ai/label_contract.v1.json or .github/workflows/propagate-consumer-secrets.yml, neither file is in the checkout or touched by the PR, and real CI test jobs passed.\n- tests/test_orchestrate_lib.py:N/A (Test Suite Failure) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push test gate reports this test failing consistently across runs after the PR's changes are applied.\n  WHY: The reviewer says this points to a possible regression or a mismatch between the orchestrator logic and the PR's changes (source severity MAJOR). anthropic_claude-sonnet-5_5 disputes it for three reasons: the missing label_contract/propagate-consumer-secrets files are not in the checkout, the parity test (lines 102-125) runs with CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED=false, and real CI test jobs passed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:line 7339, def test_security_pass_cap_converts_low_keep_fixing_to_advisory (CI check-run \"orchestrate-poll (1)\"; \"lint\" fails only because it collects that job's result) | severity=low (NIT) | confidence=2\n  PROBLEM: On head 6ea36343 the check-run fails with \"poller did not exit within 180s; process group killed\". The poller had already reached completion, so it hangs while shutting down.\n  WHY: Nothing in the PR diff explains it and the cause is not established. The PR does not modify scripts/orchestrate_poll_process.sh or this test file. With SANDBOX_SOLC_VERSIONS unset, sandbox_solc_resolve_versions returns early, and the solc block is guarded by [ -d /opt/solc/... ]. Issue #9199 tracks it. Next step: re-run the shard on the head and on merge-base 507ba62a.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_files_touched_scope_guard.py:N/A (Test Suite Failure) | severity=high (MAJOR) | confidence=4\n  PROBLEM: The pre-push test gate reports this test as consistently failing in multiple runs.\n  WHY: The tests fail after the PR's changes are applied, which points to a possible regression or a mismatch between the scope guard logic and the integration-ref resolution changes.\n- tests/test_orchestrate_lib.py:N/A (Test Suite Failure) | severity=high (MAJOR) | confidence=4\n  PROBLEM: The pre-push test gate reports this test as consistently failing in multiple runs.\n  WHY: The tests fail after the PR's changes are applied, which points to a possible regression or a mismatch between the orchestrator logic and the changes made.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:`_run_poller_subprocess`, lines 357-374, called by `test_security_pass_cap_converts_low_keep_fixing_to_advisory`, lines 7339-7357 | severity=low (NIT) | confidence=5\n  PROBLEM: The `orchestrate-poll (1)` check fails because this test's poller subprocess does not exit within the configured 180 seconds. The test kills the process group and raises an assertion, and the dependent `lint` check also fails.\n  WHY: The CI log records `poller did not exit within 180s; process group killed`. This file is outside the PR diff, so the failure is not established as a regression from this PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_orchestrate_poll_process.py:line 7339, def test_security_pass_cap_converts_low_keep_fixing_to_advisory (CI check-run \"orchestrate-poll (1)\" on head 6ea36343; \"lint\" fails only because it collects that job's result) | severity=low (NIT) | confidence=2\n  PROBLEM: The poller test times out with \"poller did not exit within 180s; process group killed\" after the poller has already printed \"Project complete!\", so the hang is in shutdown.\n  WHY: It reproduces on this head in the check-run context and repeated across prior autofix runs, but it is not traced to any hunk in the PR. The PR changes neither scripts/orchestrate_poll_process.sh nor this test file, sandbox_solc_resolve_versions returns early when SANDBOX_SOLC_VERSIONS is empty, and the solc block is guarded by `[ -d /opt/solc/... ]`. Issue #9199 tracks it. Verify with a base-vs-head shard run before treating it as PR-caused.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bda3229700e60bdc181fc3da847cd7fdc01dbcbbde904a52c08b3c3a4ba15544",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "43390794836",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43390794836",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113163155_cc3125f37e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "43390794836"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T16:31:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
