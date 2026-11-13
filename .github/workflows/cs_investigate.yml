@@ -58,10 +58,15 @@ env:
   # No capacity-resume pass re-runs CS tickets, so an exhausted Claude pool
   # falls back to codex instead of waiting (exit 80).
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: 'false'
-  # Keep the codex fallback for every Claude failure, not only exhausted
-  # capacity (issue #9440 "keep the existing codex fallback"). Under the shared
-  # default `capacity`, a missing or broker-refused credential (for example an
-  # @stable caller: the broker refuses tag refs) returns 76 and no codex runs.
+  # Keep the codex fallback whenever Claude is unavailable, not only on
+  # exhausted capacity (issue #9440 "keep the existing codex fallback"): no
+  # credential, a broker-refused token, isolation unavailable, or every account
+  # usage-limited or failed. Under the shared default `capacity`, a missing or
+  # broker-refused credential (for example an @stable caller: the broker
+  # refuses tag refs) returns 76 and no codex runs. A Claude timeout (124/137)
+  # or crash (other non-zero) is not retried on codex: scripts/cs_investigate.sh
+  # emits invalid_verdict (engine_timeout / engine_failed), since a second
+  # round could overrun the run deadline.
   # Fixed here, not read from vars.AI_ENGINE_FALLBACK_POLICY, so a caller-repo
   # `capacity` value cannot turn the fallback off for CS tickets.
   AI_ENGINE_FALLBACK_POLICY: 'always'
@@ -110,7 +115,8 @@ jobs:
           # The cs-hub OIDC token goes to this host, so the allowlist is
           # required (fail closed when empty). An entry is `host` (port 443)
           # or `host:port`; a host on the list is not accepted on another port.
-          allowed = [entry.lower() for entry in os.environ.get("CS_HUB_ALLOWED_HOSTS", "").split()]
+          # An entry written `host:443` is the same as `host`.
+          allowed = [entry.lower().removesuffix(":443") for entry in os.environ.get("CS_HUB_ALLOWED_HOSTS", "").split()]
           key = parts.hostname if port in (None, 443) else f"{parts.hostname}:{port}"
           if key not in allowed:
               sys.exit(1)
@@ -221,9 +227,10 @@ jobs:
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       # The CS_INVESTIGATE role runs on Claude unless the engine policy says
-      # codex (scripts/ai_engine.sh); without a credential claude_run_selected
-      # returns 75 under AI_ENGINE_FALLBACK_POLICY=always and runs the isolated
-      # codex command, so these steps never fail the job.
+      # codex (scripts/ai_engine.sh); when Claude is unavailable (for example
+      # no credential) claude_run selects fallback (75) under
+      # AI_ENGINE_FALLBACK_POLICY=always and claude_run_selected runs the
+      # isolated codex command, so these steps never fail the job.
       - name: Install Claude Code CLI
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/install-claude

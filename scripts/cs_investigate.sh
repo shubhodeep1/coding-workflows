@@ -100,7 +100,9 @@ if [ -n "${hub_allowed_list//[[:space:]]/}" ]; then
 	allowed_hosts=()
 	read -r -d '' -a allowed_hosts <<< "${hub_allowed_list}" || true
 	for allowed_host in ${allowed_hosts[@]+"${allowed_hosts[@]}"}; do
-		[ "${allowed_host,,}" = "${hub_key}" ] && hub_allowed="true"
+		# An entry written `host:443` is the same as `host`.
+		allowed_host="${allowed_host,,}"
+		[ "${allowed_host%:443}" = "${hub_key}" ] && hub_allowed="true"
 	done
 	if [ "${hub_allowed}" != "true" ]; then
 		echo "::error::cs_investigate: hub_url host is not in CS_HUB_ALLOWED_HOSTS."
@@ -223,8 +225,10 @@ model="${CS_INVESTIGATE_MODEL:-openai/gpt-6-sol}"
 # cs_emit writes a verdict.
 engine_timeout="${CS_ENGINE_TIMEOUT_SECS:-780}"
 [[ "${engine_timeout}" =~ ^[0-9]{1,5}$ ]] && [ "${engine_timeout}" -ge 60 ] || engine_timeout=780
+engine_timeout=$((10#${engine_timeout}))
 run_deadline="${CS_RUN_DEADLINE_SECS:-2700}"
 [[ "${run_deadline}" =~ ^[0-9]{1,5}$ ]] && [ "${run_deadline}" -ge 60 ] || run_deadline=2700
+run_deadline=$((10#${run_deadline}))
 round_timeout="${engine_timeout}"
 
 cs_run_engine()

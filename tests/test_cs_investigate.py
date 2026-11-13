@@ -567,7 +567,13 @@ def test_engine_role_is_read_only() -> None:
 @needs_curl
 @pytest.mark.parametrize(
 	("url", "allowed"),
-	[("https://Hub.Example", "hub.example"), ("https://hub.example:443/", "other.example\nHUB.example"), ("https://hub.example:8443", "hub.example:8443")],
+	[
+		("https://Hub.Example", "hub.example"),
+		("https://hub.example:443/", "other.example\nHUB.example"),
+		("https://hub.example:8443", "hub.example:8443"),
+		("https://hub.example", "hub.example:443"),
+		("https://hub.example:443", "HUB.example:443"),
+	],
 )
 def test_allowlisted_hub_passes_input_validation_inside_actions(tmp_path: Path, url: str, allowed: str) -> None:
 	# Port 9 refuses the OIDC request, so a host that passed the allowlist ends
@@ -576,6 +582,14 @@ def test_allowlisted_hub_passes_input_validation_inside_actions(tmp_path: Path, 
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert "reason=hub_fetch_failed" in result.stdout
 	assert _output_verdict(output) == {"ticket_id": "T-42", "outcome": "invalid_verdict"}
+
+
+@needs_curl
+def test_zero_padded_deadlines_are_read_as_decimal(stub: _Stub, tmp_path: Path) -> None:
+	result, output, _ = _drive(tmp_path, stub, [json.dumps(_verdict())], {"CS_RUN_DEADLINE_SECS": "0900", "CS_ENGINE_TIMEOUT_SECS": "0090"})
+	assert result.returncode == 0, result.stderr
+	assert "value too great for base" not in result.stderr
+	assert _output_verdict(output) == _verdict()
 
 
 def test_workflow_keeps_the_codex_fallback_and_requires_the_hub_allowlist() -> None:
