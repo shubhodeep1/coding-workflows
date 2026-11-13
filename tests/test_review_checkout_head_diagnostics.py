@@ -52,6 +52,9 @@ REAL_GIT = shutil.which("git")
 # git: fails `git fetch` FAKE_GIT_FETCH_FAILURES times with the stderr in
 # FAKE_GIT_FETCH_STDERR_FILE, fails FAKE_GIT_FAIL_SUBCMD, and otherwise
 # delegates to the real git. sleep: records the backoff, never waits.
+# date: only when FAKE_DATE_CALLS_FILE is set, prints a 13-digit clock that
+# goes backwards 1 s per call (a file counter, because the step reads the
+# clock inside $(...) subshells); otherwise runs the real date.
 FAKE_FUNCTIONS = """git() {
   if [ "${1:-}" = "fetch" ] && [ -n "${FAKE_GIT_FETCH_COUNTER:-}" ]; then
     local fake_git_failed=0
@@ -71,6 +74,16 @@ FAKE_FUNCTIONS = """git() {
 sleep() {
   echo "$*" >> "${FAKE_SLEEP_LOG}"
   return 0
+}
+date() {
+  if [ -n "${FAKE_DATE_CALLS_FILE:-}" ]; then
+    echo x >> "${FAKE_DATE_CALLS_FILE}"
+    local fake_date_calls
+    fake_date_calls="$(wc -l < "${FAKE_DATE_CALLS_FILE}")"
+    echo "$(( 1700000009000 - 1000 * fake_date_calls ))"
+    return 0
+  fi
+  command date "$@"
 }
 """
 
@@ -264,6 +277,22 @@ def test_head_moved_after_switch_reports_skipped_stale(layout: Layout) -> None:
 	assert fields["fetch_ms"].isdigit() and fields["switch_ms"].isdigit()
 	assert "AUTOFIX_STALE_BASE_SKIP=true" in layout.github_env.read_text()
 	assert "TARGET_BRANCH=" not in layout.github_env.read_text()
+	_assert_no_temp_files(layout)
+
+
+def test_elapsed_fields_ignore_a_date_clock_that_goes_backwards(layout: Layout) -> None:
+	# ubuntu-26.04's `date +%s%3N` (Rust coreutils) gave readings that went
+	# backwards within a run, so END - START was negative and the summary
+	# printed fetch_ms=na / switch_ms=na. The clock reads bash's
+	# EPOCHREALTIME first, so a bad `date` cannot do that.
+	result = layout.run(FAKE_DATE_CALLS_FILE=str(layout.root / "date_calls"))
+	assert result.returncode == 0, result.stderr
+	line, fields = _summary(result)
+	assert SUMMARY_RE.match(line)
+	assert (fields["stage"], fields["outcome"]) == ("done", "ok")
+	assert fields["fetch_ms"].isdigit(), line
+	assert fields["switch_ms"].isdigit(), line
+	assert fields["duration_ms"].isdigit(), line
 	_assert_no_temp_files(layout)
 
 
