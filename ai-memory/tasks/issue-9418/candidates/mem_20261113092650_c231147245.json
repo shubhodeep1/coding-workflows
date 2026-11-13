@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue deliver for the remaining scope?\nContext:\n- On timeout, `scripts/stable_e2e_step_wait_review.sh:848-850` writes `status=timeout` to `$GITHUB_OUTPUT` and exits 1.\n- The Phase 4 step has `id: wait-review` (`test-and-mark-stable.yml:2126-2167`), and only sources the staged, verified copy of the script.\n- So a follow-up step in `test-and-mark-stable.yml` can see `steps.wait-review.outputs.status == 'timeout'`. That file is inside the heal scope, but the script is not.\n- The `no_review_triggered` branch already prints a run inventory (`:842-845`). The `timeout` branch prints nothing like it.\nChoices:\n- A: Deliver fix 1 inside the scope. Add a new step to `test-and-mark-stable.yml` directly after Phase 4, guarded by `if: failure() && steps.wait-review.outputs.status == 'timeout'`. It prints the review-run inventory for the PR branch, plus the job statuses (`queued` or `pending`, with timestamps) of each non-completed review run. It prints ids, statuses and timestamps only, and every call is fail-soft. Add a contract test and a changelog fragment. Leave the script, Phase 4 logic, timeouts and the Phase 3c dispatch unchanged. (RECOMMENDED)\n- B: Make no further code change. Record that the observed timeout was most likely transient (runner starvation or a wedged queued job) and that the release gate should be re-run. Leave fix 1 for a separate, human-filed issue whose heal scope covers `scripts/stable_e2e_step_wait_review.sh`.\n- C: Put fix 1 in `scripts/stable_e2e_step_wait_review.sh` itself, at the `status=timeout` branch. This needs a human to widen this issue's `ai:workflow-heal-scope` marker to cover `scripts/`. Without that, the plan will be refused for scope.",
+  "fingerprint": "36bdb48167c09b44b576a247ad39d7f18ed7a3825e853213903c53e91cafcd97",
+  "lineage": {
+    "issue_number": 9418,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43398454349",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43398454349",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261113092650_c231147245",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9418,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43398454349"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9418 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-13T09:26:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
