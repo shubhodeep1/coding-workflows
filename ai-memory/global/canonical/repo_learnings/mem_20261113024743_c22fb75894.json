@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Multiple merged changes touched `scripts/gh_helpers.sh` and `tests/test_gh_retry_stdout_isolation.py`, including cases described as closed-reader replay. This is relevant whenever retry logic wraps `gh` commands whose output may be piped to a consumer that exits before reading all output.",
+  "fingerprint": "f2f429130521dc181c0fde9c91292ede1c3bae4870b8903a75305ee8fbca11bc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43348734205",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43348734205",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9203",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9227",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9248",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9252",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9365",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9259",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9267",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9279",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9281",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9371"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261113024743_c22fb75894",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "When changing GitHub CLI retry behavior, preserve stdout isolation and cover consumers that close the output stream early.",
+  "timestamps": {
+    "created_at": "2026-11-13T02:47:43Z",
+    "promoted_at": "2026-11-13T02:48:23Z",
+    "superseded_at": null
+  }
+}
