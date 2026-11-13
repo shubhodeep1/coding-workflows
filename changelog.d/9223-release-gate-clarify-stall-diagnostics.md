@@ -7,7 +7,7 @@ A trusted comment (owner, member, collaborator or `github-actions[bot]`) can fai
 
 When the wait times out, the error still starts `Clarify phase stalled — no activity for N minutes`. It now adds `(Clarify run: <url>)` or `(no non-skipped Clarify run titled '<title>' found)`.
 
-The alt-model job's "Create alt-model smoke issue" step now outputs `created_after` and `title`. When "Wait for clarify→plan→implement (alt-model)" hits its deadline, its error line names that issue's Clarify run the same way.
+"Wait for clarify→plan→implement (alt-model)" now reads the `created_after` and `title` outputs that "Create alt-model smoke issue" already writes before it creates the issue. When the wait hits its deadline, its error line names that issue's Clarify run the same way.
 
 Comment text is never printed. Only a run ID made of digits, checked against this repository, goes into a URL. The comment read stays at one GitHub API call per poll. Run lookups happen only on the timeout path and, while the gate is polling, on polls that find a trusted failure or cancellation comment not yet compared with the newest run.
 

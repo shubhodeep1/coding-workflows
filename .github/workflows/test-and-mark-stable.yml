@@ -5379,12 +5379,9 @@ jobs:
           BODY+=$'- Only modify `tests/e2e_smoke_canary.txt`.\n'
           BODY+=$'- This is fully specified — **no clarification is needed**.\n'
           BODY+="- Note: this run uses \`${ALT_EDITOR_MODEL}\` as the editor model override."
-          ALT_CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
             -f title="${TITLE}" -f body="${BODY}" --jq '.number')
           echo "issue_number=${NUMBER}" >> "$GITHUB_OUTPUT"
-          echo "created_after=${ALT_CREATED_AT}" >> "$GITHUB_OUTPUT"
-          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
 
       - name: Wait for clarify→plan→implement (alt-model)
         id: wait

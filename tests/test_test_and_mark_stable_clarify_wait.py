@@ -374,8 +374,12 @@ def test_alt_model_deadline_without_title_makes_no_runs_lookup() -> None:
 
 def test_alt_model_title_and_created_after_wiring() -> None:
 	create = _step("e2e-alt-model-test", "create")
-	assert 'echo "created_after=${ALT_CREATED_AT}" >> "$GITHUB_OUTPUT"' in create["run"]
-	assert 'echo "title=${TITLE}" >> "$GITHUB_OUTPUT"' in create["run"]
+	# Each key is written once, before the issue is created (#8953), so the
+	# wait step reads the same pre-creation bound as cleanup.
+	assert create["run"].count("created_after=") == 1
+	assert create["run"].count('echo "title=${TITLE}" >> "$GITHUB_OUTPUT"') == 1
+	assert create["run"].index("created_after=") < create["run"].index('"repos/${TEST_REPO}/issues"')
+	assert create["run"].index("title=${TITLE}") < create["run"].index('"repos/${TEST_REPO}/issues"')
 	wait = _step("e2e-alt-model-test", "wait")
 	assert wait["env"]["ALT_ISSUE_TITLE"] == "${{ steps.create.outputs.title }}"
 	assert wait["env"]["ALT_CREATED_AFTER"] == "${{ steps.create.outputs.created_after }}"
