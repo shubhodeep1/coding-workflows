@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-13T00:25:15Z",
+  "issue_number": 9387,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 008 as out-of-scope; anchor=.github/workflows/ci.yml:1-1; cited_path=.github/workflows/ci.yml; files_touched=.github/workflows/check_failure_triage.yml, .github/workflows/ci.yml, scripts/check_failure_triage.sh, scripts/check_triage_resolution.py, scripts/files_touched_scope_guard.py, tests/test_check_failure_triage_transient_rerun.py.",
+  "phase": "review_autofix",
+  "pr_number": 9389,
+  "record_id": "lesson_20261113002515_5951fb8f29",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/check_failure_triage.yml",
+    "scripts/check_failure_triage.sh",
+    "scripts/check_triage_resolution.py",
+    "scripts/files_touched_scope_guard.py",
+    "tests/test_check_failure_triage_transient_rerun.py"
+  ]
+}
