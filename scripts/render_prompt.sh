@@ -221,7 +221,7 @@ render_prompt_env_name_is_secret_like()
 {
 	local upper_name="${1^^}"
 	case "${upper_name}" in
-		*TOKEN*|*KEY*|*SECRET*|*PAT*|*PASSWORD*|*PASSWD*|*CREDENTIAL*)
+		*TOKEN*|*KEY*|*SECRET*|*PAT*|*PASSWORD*|*PASSWD*|*CREDENTIAL*|*_CF)
 			return 0
 			;;
 	esac

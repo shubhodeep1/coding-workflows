@@ -1083,12 +1083,14 @@ def test_render_prompt_sh_refuses_secret_like_env_placeholders_in_trusted_templa
 	secret_values = {
 		"GH_TOKEN": "ghp_SENTINEL_TRUSTED_SECRET_1",
 		"MY_API_KEY": "SENTINEL_TRUSTED_SECRET_2",
+		"FT_GAMES_CF": "SENTINEL_TRUSTED_SECRET_3",
 	}
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_trusted_env_") as td:
 		prompt_file = Path(td) / "plain_template.txt"
 		prompt_file.write_text(
 			f"Token: {_braced('GH_TOKEN')}\n"
 			f"Key: {_braced('MY_API_KEY')}\n"
+			f"Cloudflare: {_braced('FT_GAMES_CF')}\n"
 			f"Title: {_braced('ISSUE_TITLE_TEXT')}\n",
 			encoding="utf-8",
 		)
@@ -1113,6 +1115,7 @@ def test_render_prompt_sh_refuses_secret_like_env_placeholders_in_trusted_templa
 	assert "Title: Forwarded issue title\n" in proc.stdout
 	assert _braced("GH_TOKEN") in proc.stdout
 	assert _braced("MY_API_KEY") in proc.stdout
+	assert _braced("FT_GAMES_CF") in proc.stdout
 	for name in secret_values:
 		assert (
 			f"WARNING: render_prompt.sh: refusing to forward secret-like environment placeholder {name}"
@@ -1703,6 +1706,8 @@ def main() -> int:
 	test_render_prompt_py_rejects_unsupported_placeholder_expression()
 	test_render_prompt_py_rejects_dot_prefixed_filter_expression()
 	test_render_prompt_py_allows_literal_dot_field_expression()
+	test_render_prompt_py_allows_dollar_prefixed_unmatched_open_delimiter()
+	test_render_prompt_py_rejects_bare_unmatched_open_delimiter()
 	test_render_prompt_py_allows_stray_closing_braces_in_prose()
 	test_render_prompt_py_hard_fails_on_embedded_diff_template_tokens_without_skip()
 	test_render_prompt_py_skip_syntax_validation_allows_embedded_diff_tokens()
