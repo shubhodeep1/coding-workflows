@@ -196,6 +196,12 @@ type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 # or a "- commit skipped (...)" marker line when it committed nothing, and one
 # "- <path>" line per committed file otherwise. An unset or missing file is
 # unknown, so no marker is written (fail closed toward not capping).
+# Only a top-level bullet (at most one leading space, no tab) is a declined
+# finding; an indented sub-bullet is the editor's explanation under one. PRs
+# #9453 and #9390 were capped and labelled ai:needs-human because a sub-bullet
+# explaining a sandbox-only test failure ended with "a sandbox-excluded path"
+# while the editor declined no fix for that reason. review_apply_fixes.sh's
+# claimed-changes filter likewise treats indented bullets as nested.
 sandbox_excluded_marker_suffix=""
 sandbox_excluded_nothing_committed=0
 if [ -n "${COMMITTED_FILES_FILE:-}" ] && [ -f "${COMMITTED_FILES_FILE}" ] && [ -r "${COMMITTED_FILES_FILE}" ] \
@@ -222,7 +228,7 @@ if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_commit
       status = tolower(value)
       next
     }
-    section == "Ignored suggestions (with short reason)" && /^[ \t]*-[ \t]+/ {
+    section == "Ignored suggestions (with short reason)" && /^ ?-[ \t]+/ {
       value = tolower($0)
       sub(trail, "", value)
       if (value ~ /sandbox-excluded path$/) count++

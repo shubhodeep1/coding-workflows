@@ -214,6 +214,41 @@ def test_pr_8250_shaped_summary_trips_the_cap_on_the_next_dispatch(tmp_path: Pat
 	assert reset["count"] == "0" and reset["non_retryable"] == "false"
 
 
+# PR #9453 (run 43377281263) and PR #9390 (run 43388708424): the editor
+# declined no fix as "sandbox-excluded path"; an indented sub-bullet explaining
+# a sandbox-only test failure merely ended with those words, and the heal intake
+# then labelled both PRs ai:needs-human.
+PR_9453_IGNORED = (
+	"- TASK_GAP_DEFERRED: the request to move the slowest steps. This is deferred on purpose:\n"
+	"  - The approved plan chose to move no step.\n"
+	"- The pre-push gate's failures in `tests/test_changelog_fragment_contract.py` were not acted on:\n"
+	"  - Both paths are absent here because the sandbox leaves out dot-files (\"sandbox-excluded path\").\n"
+	"  - The PR does not touch either path."
+)
+PR_9390_IGNORED = (
+	"- CONSOLIDATOR_OVERRIDDEN: iss_58723a20442b362c — neither failure comes from this PR:\n"
+	"  - `test_label_contract_and_helper_have_scope_blocked` fails with `FileNotFoundError` on `.github/ai/label_contract.v1.json`, a sandbox-excluded path.\n"
+	"\t- A tab-indented sub-bullet ending the same way, a sandbox-excluded path."
+)
+
+
+@pytest.mark.parametrize("ignored", [PR_9453_IGNORED, PR_9390_IGNORED])
+def test_nested_sub_bullet_mentioning_the_reason_writes_no_marker(tmp_path: Path, ignored: str) -> None:
+	result, body, github_env = _run_step(tmp_path, _summary(ignored=ignored))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "review-autofix-failure:v1" not in body
+	assert _escalation_lines(result.stdout) == []
+	assert "AUTOFIX_FAILURE_REASON" not in github_env
+
+
+def test_top_level_declined_finding_still_counts_beside_nested_explanations(tmp_path: Path) -> None:
+	ignored = PR_9453_IGNORED + "\n- .claude/docs/s25-x.md needs an edit — sandbox-excluded path\n  - explanation, a sandbox-excluded path"
+	result, body, _ = _run_step(tmp_path, _summary(ignored=ignored))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert body.rstrip().splitlines()[-1].startswith("<!-- review-autofix-failure:v1 ")
+	assert _escalation_lines(result.stdout) == [f"AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=8250 head={HEAD} findings=1 outcome=marker"]
+
+
 def test_prompt_pins_the_reason_string_the_detector_reads() -> None:
 	prompt = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
 	assert 'with the reason "sandbox-excluded path"' in prompt
