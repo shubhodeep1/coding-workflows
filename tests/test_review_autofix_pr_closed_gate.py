@@ -29,7 +29,7 @@ PR_STATE_CHECK_STEP = "Check PR state (defense-in-depth)"
 CHECKOUT_STEP = "Checkout PR head branch"
 CHECKOUT_STEP_SCRIPT = "review_autofix_step_checkout_pr_head_branch.sh"
 PR_CLOSED_GATE = "env.PR_CLOSED != 'true'"
-WORKSPACE_PATH_RE = re.compile(r"\$\{?WORKSPACE_PATH\b")
+WORKSPACE_PATH_RE = re.compile(r"(\$\{?|env\.)WORKSPACE_PATH\b")
 RACE_REFERENCE = (
 	"a PR merged or closed before codex-agent starts leaves WORKSPACE_PATH unset "
 	"(#9419, run 43147436812)"
@@ -130,7 +130,7 @@ def test_workspace_dependent_steps_after_pr_state_check_are_pr_closed_gated():
 	checked: list[str] = []
 	ungated: list[str] = []
 	for step in steps:
-		body = str(step.get("run") or "")
+		body = "\n".join(str(step.get(key) or "") for key in ("run", "with", "env"))
 		if not (WORKSPACE_PATH_RE.search(body) or CHECKOUT_STEP_SCRIPT in body):
 			continue
 		name = str(step.get("name") or step.get("id") or "<unnamed step>")
