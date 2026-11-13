@@ -923,8 +923,13 @@ def _plan_grant_missing_path(raw: str) -> str:
 
 # A Files bullet that opens with one backticked token, alone or followed by a
 # dash, colon or parenthesis (`- `VERSION``, `- `VERSION` - bump it`), presents
-# that token as a listed path rather than prose (#9387).
-_PLAN_GRANT_LEAD_BACKTICK_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+`([^`\n]+)`\s*(?:$|[-:(–—])")
+# that token as a listed path rather than prose (#9387). Only a top-level
+# (column 0) bullet counts: an indented sub-bullet annotates a listed file
+# with identifiers (`  - `build_payload`: wraps it`), not root file names.
+_PLAN_GRANT_LEAD_BACKTICK_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+`([^`\n]+)`\s*(?:$|[-:(–—])")
+# The same shape without backticks (`- VERSION`, `- VERSION - bump it`,
+# `- VERSION: bump it`); used only for a line with no backticks (#9387).
+_PLAN_GRANT_LEAD_BARE_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+[^\s`:(]+(?:\s*$|\s*[:(]|\s+[-–—])")
 
 
 def _plan_grant_missing_root_path(raw: str) -> str:
@@ -932,7 +937,8 @@ def _plan_grant_missing_root_path(raw: str) -> str:
 
 	The nested rule (_plan_grant_missing_path) needs an existing first
 	directory; a root name has none, so the caller only asks for a bullet's
-	leading backticked token (_PLAN_GRANT_LEAD_BACKTICK_RE), and the current
+	top-level leading token (_PLAN_GRANT_LEAD_BACKTICK_RE, or
+	_PLAN_GRANT_LEAD_BARE_RE on a line without backticks), and the current
 	directory must be a git checkout (``.git`` present). Run from anywhere else
 	nothing is reported, which keeps the previous behaviour.
 	"""
@@ -996,6 +1002,9 @@ def extract_plan_file_paths(plan_text: str, *, missing_out: list[str] | None = N
 			candidates.append(bullet.group(1))
 		candidates.extend(match.group(1) for match in _PLAN_PATH_TOKEN_RE.finditer(line))
 		lead_token = _PLAN_GRANT_LEAD_BACKTICK_RE.match(line)
+		lead_raw = lead_token.group(1) if lead_token else ""
+		if not lead_raw and bullet and "`" not in line and _PLAN_GRANT_LEAD_BARE_RE.match(line):
+			lead_raw = bullet.group(1)
 		for raw in candidates:
 			path = _plan_grant_path(raw)
 			if path and path not in seen:
@@ -1003,7 +1012,7 @@ def extract_plan_file_paths(plan_text: str, *, missing_out: list[str] | None = N
 				paths.append(path)
 			elif not path and isinstance(missing_out, list):
 				missing_path = _plan_grant_missing_path(raw)
-				if not missing_path and lead_token and raw == lead_token.group(1):
+				if not missing_path and lead_raw and raw == lead_raw:
 					# A root-level name only as the bullet's leading token (#9387).
 					missing_path = _plan_grant_missing_root_path(raw)
 				if missing_path and missing_path not in missing_out:

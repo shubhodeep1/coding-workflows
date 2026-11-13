@@ -2274,6 +2274,18 @@ def test_plan_gate_missing_root_extensionless_path_hold_is_replannable() -> None
 			code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n" + prose,
 				_pipeline_meta(), cwd=root)
 			assert code == 0 and record["reason"] == "pipeline_plan_grant", (prose, record)
+		# The unbackticked top-level bullet form holds the same way.
+		for bare in ("- VERSION\n", "- VERSION - bump the version\n", "- VERSION: bump the version\n"):
+			code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n" + bare,
+				_pipeline_meta(), cwd=root)
+			assert record["decision"] == "hold" and record["denied_paths"] == ["VERSION"], (bare, record)
+			assert record.get("replannable") is True and body is None, (bare, record)
+		# An unbackticked prose bullet or an indented sub-bullet never counts.
+		for prose in ("- Update VERSION notes\n", "- `scripts/a.sh`\n  - `build_payload`: wraps the call\n",
+				"- `scripts/a.sh`\n  - VERSION\n"):
+			code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n" + prose,
+				_pipeline_meta(), cwd=root)
+			assert code == 0 and record["reason"] == "pipeline_plan_grant", (prose, record)
 		# An existing root directory is never missing; an existing file is granted.
 		(root / "bin").mkdir()
 		code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n- `bin`\n",
