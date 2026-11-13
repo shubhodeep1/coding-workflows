@@ -680,6 +680,74 @@ def test_redaction_never_swallows_the_next_lines_step_error():
 	assert result.startswith("log_tail_anchor: step_error\n") and STEP_ERROR in result
 	assert mod._redact_log_text("extraheader: AUTHORIZATION: basic abcdefgh") == "extraheader: [redacted]"
 
+
+def _passing_test_error_then_step_failure_log(*, test_output_lines: int = 600) -> bytes:
+	"""The orchestrate-poll (1) layout from PR #9180 (issue #9179).
+
+	A passing test prints "::error::" lines (shown as "##[error]") early on;
+	a later step then fails with a traceback and the runner's exit-code line.
+	"""
+	lines = [_ts(0) + "TEST_CASE_EVENT: start test_verify_integration_fingerprints_rejects_missing_must_contain"]
+	lines.append(_ts(1) + "##[error]Integration fingerprint verification FAILED - resolver output regressed merged sub-issue intent:")
+	lines.append(_ts(1) + "##[error]  - issue #1059 (PR #1066): must_contain pattern missing from '.github/workflows/implement.yml'")
+	lines += [_ts(2) + f"  PASS  test_case_{n:04d}" for n in range(test_output_lines)]
+	lines.append(_ts(3) + "39 passed, 0 failed, 39 total")
+	lines.append(_ts(4) + "Traceback (most recent call last):")
+	lines.append(_ts(4) + '  File "tests/test_x.py", line 8615, in test_plain_runner_can_call_every_test')
+	lines.append(_ts(4) + "AssertionError: test_y needs fixture 'monkeypatch', which main() cannot supply")
+	lines.append(_ts(5) + STEP_ERROR)
+	lines.append(_ts(6) + "Post job cleanup.")
+	lines += [_ts(7) + f"[command]/usr/bin/git config --local cleanup {n}" for n in range(10)]
+	return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def test_runner_exit_line_wins_over_an_earlier_test_output_error():
+	data = _passing_test_error_then_step_failure_log()
+	result = mod._select_log_tail_window(data, log_tail_bytes=mod.DEFAULT_LOG_TAIL_BYTES, partial_start=False)
+	assert result.startswith("log_tail_anchor: step_error\n")
+	body = result.split("\n", 1)[1]
+	assert "AssertionError: test_y needs fixture 'monkeypatch'" in body and STEP_ERROR in body
+	# The passing test's printed errors are too far back to fit the window.
+	assert "Integration fingerprint verification FAILED" not in body
+	assert body.split("\n")[-1].endswith("cleanup 3")
+	assert len(body.encode("utf-8")) <= mod.DEFAULT_LOG_TAIL_BYTES
+	assert len(body.split("\n")) <= mod.LOG_TAIL_LINES
+
+
+def test_runner_exit_line_wins_through_fetch(monkeypatch, local_http):
+	result, request_count, _ = _fetch(monkeypatch, _passing_test_error_then_step_failure_log())
+	assert request_count == 3
+	assert result.startswith("log_tail_anchor: step_error\n")
+	assert "AssertionError: test_y needs fixture" in result
+
+
+def test_first_step_error_is_kept_without_a_runner_exit_line():
+	data = ("lead\n##[error]first error\nmiddle\n##[error]second error\nend\n").encode("utf-8")
+	body = mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=False).split("\n", 1)[1]
+	assert body == "lead\n##[error]first error\nmiddle\n##[error]second error\nend"
+	data = ("lead\n##[error]first error\n" + "\n".join(f"after {n}" for n in range(8)) + "\n##[error]second error\n").encode("utf-8")
+	body = mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=False).split("\n", 1)[1]
+	assert body.endswith("after 4") and "second error" not in body
+
+
+def test_partial_first_line_is_never_the_runner_exit_anchor():
+	data = ("##[error]Process completed with exit code 1.\nnext\n##[error]other\nlast\n").encode("utf-8")
+	body = mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=True).split("\n", 1)[1]
+	assert body == "next\n##[error]other\nlast"
+
+
+def test_last_runner_exit_line_wins_over_a_tolerated_steps_exit_line():
+	# A continue-on-error step prints its own exit line before the step that
+	# fails the job; the window must end at the later one.
+	data = (
+		"##[error]Process completed with exit code 2.\n"
+		+ "\n".join(f"step two {n}" for n in range(10))
+		+ "\nAssertionError: real failure\n##[error]Process completed with exit code 1.\ncleanup\n"
+	).encode("utf-8")
+	body = mod._select_log_tail_window(data, log_tail_bytes=1000, partial_start=False).split("\n", 1)[1]
+	assert body.endswith("AssertionError: real failure\n##[error]Process completed with exit code 1.\ncleanup")
+	assert body.startswith("##[error]Process completed with exit code 2.\n")
+
 if __name__ == "__main__":
 	import pytest
 
