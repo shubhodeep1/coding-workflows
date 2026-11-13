@@ -66,13 +66,18 @@ def test_cancel_block_calls_are_fail_soft() -> None:
 	block = _cancel_block(_read_workflow())
 	listing = _slice_between(block, "CLEANUP_DISPATCH_REVIEW_RUN_IDS=", "CLEANUP_DISPATCH_MATCHED=0")
 	assert "_safe_gh_jq" in listing
-	assert '|| echo "")"' in listing
+	# A failed listing warns instead of folding into an empty listing.
+	assert 'if ! CLEANUP_DISPATCH_REVIEW_RUN_IDS="$(_safe_gh_jq' in block
+	assert '|| echo "")"' not in listing
+	assert "Warning: could not list dispatch review runs on ${BRANCH}" in listing
 	post_line = next(line for line in block.splitlines() if "gh api -X POST" in line)
 	assert post_line.strip().startswith("if gh api -X POST")
 	assert "Warning: could not cancel dispatch review run" in block
 
 
-def _run_block(env_extra: dict[str, str], listing: str, gh_rc: int = 0) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+def _run_block(
+	env_extra: dict[str, str], listing: str, gh_rc: int = 0, list_rc: int = 0
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
 	block = textwrap.dedent(_cancel_block(_read_workflow()))
 	with tempfile.TemporaryDirectory() as tmp:
 		calls = Path(tmp) / "calls.log"
@@ -81,7 +86,7 @@ def _run_block(env_extra: dict[str, str], listing: str, gh_rc: int = 0) -> tuple
 		script = textwrap.dedent(
 			f"""\
 			set -euo pipefail
-			_safe_gh_jq() {{ echo "LIST $*" >> "{calls}"; cat "{listing_file}"; }}
+			_safe_gh_jq() {{ echo "LIST $*" >> "{calls}"; cat "{listing_file}"; return {list_rc}; }}
 			gh() {{ echo "GH $*" >> "{calls}"; return {gh_rc}; }}
 			BRANCH="ai/issue-${{ISSUE_NUMBER}}"
 			"""
@@ -137,6 +142,15 @@ def test_cancel_block_empty_listing_reports_none() -> None:
 	result, calls = _run_block({}, "")
 	assert result.returncode == 0, result.stderr
 	assert "No active dispatch review runs on ai/issue-9410" in result.stdout
+	assert not [c for c in calls if c.startswith("GH ")]
+
+
+def test_cancel_block_failed_listing_warns_and_does_not_report_none() -> None:
+	result, calls = _run_block({}, "", list_rc=1)
+	assert result.returncode == 0, result.stderr
+	assert "Warning: could not list dispatch review runs on ai/issue-9410" in result.stdout
+	assert "No active dispatch review runs" not in result.stdout
+	assert len([c for c in calls if c.startswith("LIST ")]) == 1
 	assert not [c for c in calls if c.startswith("GH ")]
 
 

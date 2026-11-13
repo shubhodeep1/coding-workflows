@@ -3770,8 +3770,15 @@ jobs:
           # bash re-checks them against BRANCH. Every call is fail-soft.
           if [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] \
             && [[ "${REVIEW_WORKFLOW_FILE:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*\.yml$ ]]; then
-            CLEANUP_DISPATCH_REVIEW_RUN_IDS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&branch=${BRANCH}&per_page=20" \
-              --jq '.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested") | "\(.id) \(.status) \(.event) \(.head_branch)"' 2>/dev/null || echo "")"
+            # A failed listing must not read as "no active runs": warn and
+            # skip the "No active" line so a leaked run stays visible.
+            CLEANUP_DISPATCH_LIST_FAILED=0
+            if ! CLEANUP_DISPATCH_REVIEW_RUN_IDS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&branch=${BRANCH}&per_page=20" \
+              --jq '.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested") | "\(.id) \(.status) \(.event) \(.head_branch)"')"; then
+              echo "Warning: could not list dispatch review runs on ${BRANCH}; an active dispatch review run may be left uncancelled"
+              CLEANUP_DISPATCH_REVIEW_RUN_IDS=""
+              CLEANUP_DISPATCH_LIST_FAILED=1
+            fi
             CLEANUP_DISPATCH_MATCHED=0
             while read -r CLEANUP_DISPATCH_RUN_ID CLEANUP_DISPATCH_RUN_STATUS CLEANUP_DISPATCH_RUN_EVENT CLEANUP_DISPATCH_RUN_BRANCH _; do
               [ -n "${CLEANUP_DISPATCH_RUN_ID:-}" ] || continue
@@ -3789,7 +3796,7 @@ jobs:
                 echo "Warning: could not cancel dispatch review run ${CLEANUP_DISPATCH_RUN_ID}"
               fi
             done <<< "${CLEANUP_DISPATCH_REVIEW_RUN_IDS}"
-            if [ "${CLEANUP_DISPATCH_MATCHED}" -eq 0 ]; then
+            if [ "${CLEANUP_DISPATCH_LIST_FAILED}" -eq 0 ] && [ "${CLEANUP_DISPATCH_MATCHED}" -eq 0 ]; then
               echo "  No active dispatch review runs on ${BRANCH}"
             fi
           else
