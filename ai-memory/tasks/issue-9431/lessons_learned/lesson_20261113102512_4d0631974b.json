@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-13T10:25:12Z",
+  "issue_number": 9431,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=scripts/render_prompt.sh:361-376; cited_path=scripts/render_prompt.sh; files_touched=changelog.d/render-prompt-env-placeholder-secret-leak.md, scripts/render_prompt.sh, scripts/review_apply_fixes.sh, scripts/review_run_reviewers.sh, tests/test_render_prompt_foundation.py.",
+  "phase": "review_autofix",
+  "pr_number": 9441,
+  "record_id": "lesson_20261113102512_4d0631974b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/render_prompt.sh",
+    "changelog.d/render-prompt-env-placeholder-secret-leak.md",
+    "scripts/review_apply_fixes.sh",
+    "scripts/review_run_reviewers.sh",
+    "tests/test_render_prompt_foundation.py"
+  ]
+}
