@@ -684,7 +684,7 @@ def test_module_makes_no_network_or_github_calls(tmp_path, monkeypatch):
 def test_ci_runs_this_suite_and_sets_the_parity_base_only_from_the_pr_event():
 	ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 	assert "tests/test_prepush_affected_tests.py" in ci
-	assert ci.count("CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}") == 5
+	assert ci.count("CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}") == 6
 	for gate_workflow in ("mark-stable.yml", "test-and-mark-stable.yml"):
 		assert "CLAUDE_PARITY_PR_BASE_SHA" not in (REPO_ROOT / ".github" / "workflows" / gate_workflow).read_text(encoding="utf-8")
 
