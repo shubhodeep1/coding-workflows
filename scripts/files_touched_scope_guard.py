@@ -1248,8 +1248,17 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 		# files holds too; replannable unless the issue is on the heal route.
 		if decision == PLAN_DECISION_APPROVE and not grant_proposed and missing_paths:
 			decision, reason, denied = PLAN_DECISION_HOLD, "path_not_granted", list(missing_paths)
-			replannable = not (isinstance(loaded_meta, dict)
-				and _issue_on_heal_route(loaded_meta.get("body") or "", loaded_meta.get("labels")))
+			if not isinstance(loaded_meta, dict) and issue_meta_file:
+				# No protected path and the files_touched gate off: read the
+				# issue metadata here so the heal-route check still runs.
+				try:
+					with open(issue_meta_file, encoding="utf-8") as handle:
+						loaded_meta = json.load(handle)
+				except (OSError, UnicodeDecodeError, ValueError):
+					loaded_meta = None
+			# Unknown metadata fails closed (not replannable), as in _plan_hold_replannable.
+			replannable = isinstance(loaded_meta, dict) and not _issue_on_heal_route(
+				loaded_meta.get("body") or "", loaded_meta.get("labels"))
 			missing_hold = True
 			auto_heal_companions = False
 		if decision == PLAN_DECISION_HOLD and reason == "path_not_granted" and not missing_hold:

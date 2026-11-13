@@ -2254,6 +2254,36 @@ def test_plan_gate_missing_extensionless_path_hold_is_replannable() -> None:
 		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
 
 
+def test_plan_gate_missing_extensionless_hold_without_loaded_metadata_fails_closed() -> None:
+	# #9387: no protected path and the files_touched gate off leave the issue
+	# metadata unread; the heal-route check still runs, and unknown metadata
+	# is never replannable.
+	previous_cwd = os.getcwd()
+	previous_flag = os.environ.get("PLAN_FILES_TOUCHED_GATE_ENABLED")
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "lib").mkdir()
+		(root / "plan.md").write_text("## Files likely to change\n- `lib/run`\n", encoding="utf-8")
+		healed = dict(_owner_meta(), labels=[{"name": "ai:workflow-heal"}])
+		(root / "heal.json").write_text(json.dumps(healed), encoding="utf-8")
+		(root / "owner.json").write_text(json.dumps(_owner_meta()), encoding="utf-8")
+		try:
+			os.chdir(td)
+			os.environ["PLAN_FILES_TOUCHED_GATE_ENABLED"] = "false"
+			for meta_file, expected in (("heal.json", None), ("owner.json", True), ("", None), ("absent.json", None)):
+				record, _ = guard.run_plan_auto_approval_gate("plan.md", "true", meta_file, "pipeline[bot]",
+					"true", "42")
+				assert record["decision"] == "hold" and record["reason"] == "path_not_granted", (meta_file, record)
+				assert record["denied_paths"] == ["lib/run"], (meta_file, record)
+				assert record.get("replannable") is expected, (meta_file, record)
+		finally:
+			os.chdir(previous_cwd)
+			if previous_flag is None:
+				os.environ.pop("PLAN_FILES_TOUCHED_GATE_ENABLED", None)
+			else:
+				os.environ["PLAN_FILES_TOUCHED_GATE_ENABLED"] = previous_flag
+
+
 def _run_all() -> int:
 	funcs = [obj for name, obj in sorted(globals().items()) if name.startswith("test_") and callable(obj)]
 	failures = 0
