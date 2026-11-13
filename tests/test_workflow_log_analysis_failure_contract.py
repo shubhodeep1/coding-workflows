@@ -545,7 +545,35 @@ def main() -> int:
 	test_prompt_names_coverage_gaps_in_executive_summary()
 	for case_name in _REPORT_PR_CASE_NAMES:
 		globals()[case_name]()
+	for case_name in _REPORT_DELIVERY_CASES:
+		globals()[case_name]()
 	return 0
+
+
+# The report-delivery cases (#8963) live in
+# tests/test_workflow_log_analysis_report_delivery.py and are collected here,
+# since CI already runs this file and ci.yml was outside that issue's file
+# grant. A name clash would hide a test, so it fails loudly.
+_REPORT_DELIVERY_CASES: list[str] = []
+
+
+def _collect_report_delivery_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"workflow_log_analysis_report_delivery_cases",
+		Path(__file__).resolve().parent / "test_workflow_log_analysis_report_delivery.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			_REPORT_DELIVERY_CASES.append(case_name)
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert len(_REPORT_DELIVERY_CASES) >= 15, f"only {len(_REPORT_DELIVERY_CASES)} report delivery cases collected"
+
+
+_collect_report_delivery_cases()
 
 
 if __name__ == "__main__":
