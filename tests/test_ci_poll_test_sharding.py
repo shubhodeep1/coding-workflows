@@ -2790,9 +2790,9 @@ VALIDATION_SELFTEST_MODULES = (
 )
 # VALIDATION_SELFTEST_MODULES is kept as it is for
 # MovedPollGroupThree8472StepsContractTest. It lists 21 paths while the step
-# runs 22 commands: VALIDATION_SELFTEST_COMMANDS below (budget-watch issue
-# #9362) also covers tests/test_review_conflict_resolve_terminal_record.py,
-# which this tuple leaves out.
+# runs 23 commands: VALIDATION_SELFTEST_COMMANDS below (budget-watch issue
+# #9362) also covers tests/test_review_conflict_resolve_terminal_record.py
+# and tests/test_epochrealtime_ms_clock.py (#9252), which this tuple leaves out.
 # The step's command table, (kind, path) in the original order: "py" runs
 # `python3 <path>` and "pytest" runs `python3 -m pytest -q -p no:cacheprovider
 # <path>`, as the sequential body did before #9362.
@@ -2814,6 +2814,7 @@ VALIDATION_SELFTEST_COMMANDS = (
 	("py", "tests/test_fingerprint_quarantine.py"),
 	("py", "tests/test_review_conflict_resolve_retry_state.py"),
 	("pytest", "tests/test_review_conflict_resolve_terminal_record.py"),
+	("pytest", "tests/test_epochrealtime_ms_clock.py"),
 	("pytest", "tests/test_touched_set_symlink_aware.py"),
 	("py", "tests/test_consumer_artifact_cleanup_preserves_tracked.py"),
 	("py", "tests/test_verify_integration_fingerprints_tiers.py"),
@@ -4921,7 +4922,7 @@ class ValidationSelftestConcurrencyContractTest(unittest.TestCase):
 
 	static-checks took 14m21s of its 15 minutes on main (run 43139141266,
 	budget-watch issue #9362). The step stays in static-checks under its own
-	name and runs its 22 commands, unchanged, in four lanes: lane 0 runs the
+	name and runs its 23 commands, unchanged, in four lanes: lane 0 runs the
 	security-audit contract module alone and the others go round-robin to
 	lanes 1-3. Every lane is reaped before any command is judged, a failing
 	command or a missing or non-numeric rc fails the step, and
@@ -4949,7 +4950,7 @@ class ValidationSelftestConcurrencyContractTest(unittest.TestCase):
 		self.assertIsNotNone(array)
 		entries = [tuple(entry.split(":", 1)) for entry in array.group("entries").split()]
 		self.assertEqual(entries, list(VALIDATION_SELFTEST_COMMANDS))
-		self.assertEqual(len(entries), 22)
+		self.assertEqual(len(entries), 23)
 		for kind, path in entries:
 			with self.subTest(path=path):
 				self.assertIn(kind, ("py", "pytest"))
@@ -5034,10 +5035,11 @@ class ValidationSelftestConcurrencyContractTest(unittest.TestCase):
 
 	def test_missing_rc_counts_as_failure(self) -> None:
 		files = self.green()
-		files[21] = {"log": "partial\n", "start_ms": "1000\n"}
+		last = len(VALIDATION_SELFTEST_COMMANDS) - 1
+		files[last] = {"log": "partial\n", "start_ms": "1000\n"}
 		result = run_validation_selftest_judge(self.run, files)
 		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-		path = VALIDATION_SELFTEST_COMMANDS[21][1]
+		path = VALIDATION_SELFTEST_COMMANDS[last][1]
 		self.assertRegex(result.stdout, rf"CI_SUBTEST_END subtest={re.escape(path)} elapsed_ms=\d+ rc=1\n")
 		self.assertIn(f"::error::validation self-test modules failed: {path}\n", result.stdout)
 

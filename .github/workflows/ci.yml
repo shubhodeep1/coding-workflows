@@ -553,13 +553,13 @@ jobs:
       # minutes on main (run 43139141266, budget-watch issue #9362). Every
       # 20-minute job already sits near budget-watch's 15-minute line, and this
       # step overloaded both jobs it moved to before (#8472, run 41097621008),
-      # so it stays here and its 22 module commands run in four concurrent
+      # so it stays here and its 23 module commands run in four concurrent
       # lanes, following the single-file module step in orchestrate-poll (3).
       # Lane 0 runs tests/test_security_audit_workflow_contract.py alone (about
-      # six minutes observed); the other 21 commands go round-robin, in list
+      # six minutes observed); the other 22 commands go round-robin, in list
       # order, to lanes 1-3, and each lane runs its commands one after another.
       # Each command is the same invocation as before (`python3 <module>`, or
-      # `python3 -m pytest -q -p no:cacheprovider <module>` for the five pytest
+      # `python3 -m pytest -q -p no:cacheprovider <module>` for the six pytest
       # entries), so each module's own main() runs unchanged. The run's step
       # timings could not be read, so the saving (the job down to about 2
       # minutes plus the security-audit module) is an estimate, not a
@@ -570,10 +570,10 @@ jobs:
       # every module runs and the step fails at the end, naming each failure.
       # Fail closed: every lane is reaped before any result is judged, and a
       # missing or non-numeric rc (or an unknown command kind) counts as a
-      # failure. Concurrency check: a grep of the 22 modules found no fixed
+      # failure. Concurrency check: a grep of the 23 modules found no fixed
       # /tmp, RUNNER_TEMP or repo-root write path (each writes under its own
       # temp dirs; their repo-root uses are cwd and read-only git calls).
-      # Rollback: restore the sequential 22-line body if a timed run shows
+      # Rollback: restore the sequential 23-line body if a timed run shows
       # interference. Name unchanged; still no matrix guard.
       - name: Validation self-test unit tests
         run: |
