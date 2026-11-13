@@ -3818,7 +3818,7 @@ jobs:
           # Closing a PR cancels its pull_request runs but not
           # workflow_dispatch runs, so cancel them here by event and branch
           # (the smoke issue branch is unique to this run). One list call per
-          # cleanup (CLAUDE.md §14): the PR read above carries no run data.
+          # cleanup (CLAUDE.md §15): the PR read above carries no run data.
           # `gh --jq` has no --arg, so jq prints event and head_branch and
           # bash re-checks them against BRANCH. Every call is fail-soft.
           if [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] \
