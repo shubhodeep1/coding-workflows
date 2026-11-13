@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Stop pointing `TMPDIR` at `$RUNNER_TEMP` for the system-Python shard\n  expected_change_site: `.github/workflows/ci.yml`, `tests-system-python` / \"System-Python test shard\"\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: Neither the PR diff nor the last-run diff contains a `.github/workflows/ci.yml` hunk changing the shard's `TMPDIR` behavior; the PR adds only a regression guard in `tests/test_ci_job_split_contract.py`. (Refuted by anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash: the fix is already carried by the stacked base branch `ai/issue-9233`, so they do not count it as a gap. Luna rated it MAJOR.)\n- requirement: \"Raise timeout-minutes \u2026 or add more entries to the system-python-shard matrix list.\"\n  expected_change_site: `.github/workflows/ci.yml`, `tests-system-python` matrix or timeout\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: Neither diff contains a `.github/workflows/ci.yml` hunk changing the timeout or shard list; the PR adds a test requiring at least 24 shards but does not deliver that workflow change. (Refuted by z-ai_glm-5_3-flash: the matrix at ci.yml:3447 already has 24 entries. Luna rated it MAJOR.)\n- requirement: For `tests-hooks-and-orchestrator`, \"find the failing step in the full job log before changing code\" and fix the specific contract test the PR broke\n  expected_change_site: The failing step and corresponding test or implementation identified from the `tests-hooks-and-orchestrator` job log\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no diagnosis or fix for that job's failure. The supplied log tail does not identify its failing step. The PR explicitly defers the `gh_retry` closed-reader failure, but does not identify the `tests-hooks-and-orchestrator` failure as that same issue. (Refuted by anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash: the failure is the deferred `gh_retry` problem. Luna rated it MAJOR.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTask gaps considered and judged not to hold (3 entries, each NIT, confidence 1-2):\n- TASK_GAP: Requirement: Stop pointing `TMPDIR` at `$RUNNER_TEMP`, and raise the timeout or add shards. Expected change site: `.github/workflows/ci.yml`, `tests-system-python`. Evidence of absence: This PR has no `ci.yml` hunk, but the checked-out `ci.yml` already has both fixes; the fix is carried by the stacked base branch `ai/issue-9233`. Not a gap. SEVERITY: NIT, ISSUE_CONFIDENCE: 2\n- TASK_GAP: Requirement: Update the stale `PANEL_REVIEWER` assertion in `tests/test_summarize_reviewer_consensus_sandbox_pin.py`. Evidence of absence: Not absent. The PR diff replaces it with a role-set check and registers the test in `main()`. SEVERITY: NIT, ISSUE_CONFIDENCE: 1\n- TASK_GAP: Requirement: The `tests-hooks-and-orchestrator` failure. Expected change site: unknown. Evidence of absence: The log tail does not identify the failing step. The likeliest cause is the `gh_retry` closed-reader failure, which the PR description's \"Deferred scope\" explicitly defers. SEVERITY: NIT, ISSUE_CONFIDENCE: 2\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- TASK_GAP: Requirement: \"Stop pointing TMPDIR at $RUNNER_TEMP\" for the system-Python shard. Expected change site: `.github/workflows/ci.yml`, `tests-system-python` / \"System-Python test shard\". Evidence of absence: Neither the PR diff nor the last-run diff contains a `.github/workflows/ci.yml` hunk changing the shard's `TMPDIR` behavior; the PR adds only a regression guard in `tests/test_ci_job_split_contract.py`. SEVERITY: MAJOR, ISSUE_CONFIDENCE: 4\n- TASK_GAP: Requirement: \"Raise timeout-minutes \u2026 or add more entries to the system-python-shard matrix list.\" Expected change site: `.github/workflows/ci.yml`, `tests-system-python` matrix or timeout. Evidence of absence: Neither diff contains a `.github/workflows/ci.yml` hunk changing the timeout or shard list; the PR adds a test requiring at least 24 shards but does not deliver that workflow change. SEVERITY: MAJOR, ISSUE_CONFIDENCE: 4\n- TASK_GAP: Requirement: For `tests-hooks-and-orchestrator`, \"find the failing step in the full job log before changing code\" and fix the specific contract test the PR broke. Expected change site: The failing step and corresponding test or implementation identified from the `tests-hooks-and-orchestrator` job log. Evidence of absence: The PR diff contains no diagnosis or fix for that job's failure. The supplied log tail does not identify its failing step. The PR explicitly defers the `gh_retry` closed-reader failure, but does not identify the `tests-hooks-and-orchestrator` failure as that same issue. SEVERITY: MAJOR, ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nTask gaps considered and refuted: (1) the `TMPDIR` fix is present at ci.yml:3536-3540 and delivered on the stacked base branch; (2) the matrix at ci.yml:3447 has 24 entries and the shard-12 log shows `CI_SYSTEM_PYTHON_SHARD_TOTAL: 24`; (3) the `tests-hooks-and-orchestrator` failure maps to the deferred `tests/test_gh_retry_stdout_isolation.py::test_closed_reader_does_not_rerun_a_successful_command`, which the PR description's \"Deferred scope\" defers to PR #9246. (3 related items)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "da2e81cc73eae68c742e10b371a21685fdd8082adaa1384e26da7047726b72f4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9338,
+    "run_id": "43329578170",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43329578170",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113071604_c705dc5eaf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9338,
+    "run_id": "43329578170"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-13T07:16:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
