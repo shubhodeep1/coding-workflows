@@ -72,7 +72,8 @@ NEEDS_HUMAN_LABEL = "ai:needs-human"
 # The set is workflow_failure_heal.HUMAN_NEEDED_LABELS plus every
 # orchestrate_lib.STALL_RECOVERY_LATCH_LABELS entry, which today adds
 # ai:workflow-heal-escalated (#9248, Refs #9432). That heal escalation label
-# stays out of HUMAN_NEEDED_LABELS on purpose: that set starts heal reports.
+# stays out of HUMAN_NEEDED_LABELS on purpose: that set starts heal reports
+# (it drives the heal-intake ``if:`` predicates).
 # Copied, not imported: the helper runs as ``python3 -I`` without sibling
 # imports. A parity test keeps them aligned.
 SEED_HUMAN_LATCH_LABELS: frozenset[str] = frozenset((
