@@ -2796,7 +2796,7 @@ _embed_utf8_safe_cut()
 		_cut_window="${_cut_n}"
 	fi
 	local _cut_raw
-	if ! _cut_raw="$(od -An -tu1 -j "$(( _cut_n - _cut_window ))" -N "${_cut_window}" "${_cut_path}" 2>/dev/null)"; then
+	if ! _cut_raw="$(od -An -tu1 -j "$(( _cut_n - _cut_window ))" -N "${_cut_window}" -- "${_cut_path}" 2>/dev/null)"; then
 		printf '%s\n' "${_cut_n}"
 		return 0
 	fi
