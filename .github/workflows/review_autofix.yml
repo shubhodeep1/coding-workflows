@@ -3066,6 +3066,7 @@ jobs:
           echo "CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false reviewer_count=${#reviewer_models[@]}"
 
       - name: Checkout PR head branch
+        if: env.PR_CLOSED != 'true'
         env:
           REVIEW_HEAD_CHECKOUT_REPOSITORY: ${{ github.repository }}
         run: |
