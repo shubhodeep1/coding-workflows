@@ -1071,13 +1071,13 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_checks_lib_required_filter.py
 
-      # Moved from tests-release-and-log-analysis, which took 15m01s of its 20
-      # minutes on main (run 40368173231, budget-watch issue #8208). The run's
-      # step timings could not be read, so these steps were chosen by their
-      # subprocess and test counts; the savings are an estimate. This job has
-      # had no steps moved in since #7690. Names and bodies unchanged.
-      # (That paragraph describes tests-heal-plan-and-validation; this step
-      # and the release CI gate step moved on to this job in #9420.)
+      # Moved to this job from tests-heal-plan-and-validation in #9420 (see
+      # the comment above the leftover-branch step). Before that, these two
+      # steps moved from tests-release-and-log-analysis to
+      # tests-heal-plan-and-validation in #8208, after the release job took
+      # 15m01s of its 20 minutes on main (run 40368173231); that run's step
+      # timings could not be read either, so that pick was also an estimate
+      # from subprocess and test counts. Names and bodies unchanged.
       - name: Mark-stable release-tag refspec contract test
         run: |
           set -euo pipefail
@@ -1491,8 +1491,8 @@ jobs:
       # 20 minutes on main (run 38564033998, budget-watch issue #7383).
       # The activation verification step moved on to
       # tests-release-and-log-analysis in #8279.
-      # The implement leftover-branch and pr_checks_lib steps moved on to
-      # tests-hooks-and-orchestrator in #9420.
+      # The implement leftover-branch, pr_checks_lib, mark-stable refspec and
+      # release CI gate steps moved on to tests-hooks-and-orchestrator in #9420.
       - name: Tracking issue comment cap tests
         run: |
           set -euo pipefail
