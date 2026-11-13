@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:5361-5387 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The \"Create alt-model smoke issue\" step (id: create) writes `created_after` and `title` to GITHUB_OUTPUT twice (lines 5361/5368 from main, and lines 5382/5386/5387 from this PR), so the later writes shadow the earlier ones.\n  WHY: Last write wins, so `created_after` shifts to a timestamp taken after the pre-run anchors and issue creation, while the contract test and `test_alt_model_title_and_created_after_wiring` no longer guard the effective value. Reviewers rated it NIT; the changelog sentence is also stale.\n- .github/workflows/test-and-mark-stable.yml:981 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: `CLARIFY_FAILURE_CHECKED_ID` accumulates checked run IDs as a space-separated string.\n  WHY: Growth is negligible and bounded in practice. anthropic_claude-sonnet-5_5 did not report it as a defect (confidence 1), and google_gemini-3_1-flash-lite called it unbounded accumulation (confidence 2). Both rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml:5382,5386,5387 | severity=NIT | confidence=4\n  PROBLEM: The \"Create alt-model smoke issue\" step already writes `created_after` (line 5361) and `title` (line 5368). This PR adds second writes of both, so the keys are written twice.\n  WHY: The last write wins and `title` is identical, but the second `created_after` is a later timestamp than the one the cleanup comment describes. The test asserts only the duplicate lines, and the changelog sentence is stale.\n- .github/workflows/test-and-mark-stable.yml:981 | severity=NIT | confidence=1\n  PROBLEM: The `CLARIFY_FAILURE_CHECKED_ID` string grows by one run ID per newly checked comment run ID.\n  WHY: The reviewer said it does not fail at runtime and did not report it as a defect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:5362-5363,5386-5387 | severity=NIT | confidence=4\n  PROBLEM: The \"Create alt-model smoke issue\" step duplicates writes to `GITHUB_OUTPUT`.\n  WHY: The `created_after` and `title` keys are written twice. The last write wins, so the code is dead and misleading and harder to maintain.\n- .github/workflows/test-and-mark-stable.yml:981 | severity=NIT | confidence=2\n  PROBLEM: `CLARIFY_FAILURE_CHECKED_ID` accumulates checked run IDs indefinitely as a space-separated list.\n  WHY: The list grows linearly over the polling loop's lifetime. Memory use is negligible, but the accumulation is unbounded.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:5361,5368,5382,5386,5387 | severity=NIT | confidence=4\n  PROBLEM: The step writes `created_after` and `title` to `$GITHUB_OUTPUT` twice. Main's lines 5361/5368 capture `created_after` before issue creation, and this PR's lines 5386/5387 write the same keys again after it.\n  WHY: Last-write-wins makes the effective bound a post-creation timestamp, which can miss a run started in the sub-second window. The #8953 contract test (`tests/test_test_and_mark_stable_smoke_pr_cleanup.py:120`) still passes but no longer validates the effective value, and `test_alt_model_title_and_created_after_wiring` (tests/test_test_and_mark_stable_clarify_wait.py:377) pins the duplicate write. The changelog claim is stale.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8fe4cc1c613dfb3f0b69e58e287691191f228b72acbbfb2a08c036c76152c34c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9273,
+    "run_id": "43360692162",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43360692162",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113081617_0d6c8603d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9273,
+    "run_id": "43360692162"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T08:16:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
