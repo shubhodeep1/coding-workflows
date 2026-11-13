@@ -485,8 +485,10 @@ jobs:
   # forwarded. The concurrency group differs from validation-selftest's so the
   # two jobs of one run never cancel each other.
   # RUNNER_IMAGE_CANARY_ENABLED=false turns the canary off (unset means on).
+  # A manual dispatch runs the canary only from main, so another branch's
+  # ci.yml never runs under this job's issues: write grant.
   runner-image-canary:
-    if: vars.RUNNER_IMAGE_CANARY_ENABLED != 'false'
+    if: vars.RUNNER_IMAGE_CANARY_ENABLED != 'false' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
     uses: ./.github/workflows/ci.yml
     with:
       runner_image: ubuntu-latest

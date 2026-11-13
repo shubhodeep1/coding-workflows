@@ -42,6 +42,7 @@ FLOATING_RUNNER_LABEL = "ubuntu-latest"
 CI_RUNS_ON_EXPRESSION = "${{ inputs.runner_image || '" + PINNED_RUNNER_LABEL + "' }}"
 CANARY_JOB_ID = "runner-image-canary"
 CANARY_USES = "./.github/workflows/ci.yml"
+CANARY_SMOKE_STEP_NAME = "Runner-image canary system python smoke"
 EXPLICIT_24_04_PIN_FILES = ("drift-audit.yml", "security-audit.yml", "review_autofix_sweep.yml")
 RUNS_ON_FLOATING_LINE_RE = re.compile(r"^\s*runs-on:.*" + re.escape(FLOATING_RUNNER_LABEL))
 PERMISSION_LEVELS = {"none": 0, "read": 1, "write": 2}
@@ -157,6 +158,20 @@ def test_ci_runs_on_defaults_to_the_pin() -> None:
 	assert jobs, "ci.yml has no jobs"
 	wrong = {job_id: job.get("runs-on") for job_id, job in jobs.items() if job.get("runs-on") != CI_RUNS_ON_EXPRESSION}
 	assert not wrong, f"every ci.yml job must use runs-on: {CI_RUNS_ON_EXPRESSION}; found {wrong}"
+
+
+def test_canary_smoke_runs_system_python_before_setup_python() -> None:
+	"""The canary must exercise the image's own python3 (the #9200 failure), not only setup-python's."""
+	steps = _jobs(_load(CI_WORKFLOW))["static-checks"]["steps"]
+	names = [step.get("name") for step in steps]
+	assert CANARY_SMOKE_STEP_NAME in names, f"ci.yml static-checks lost the {CANARY_SMOKE_STEP_NAME!r} step"
+	assert "Setup Python" in names, "ci.yml static-checks lost its Setup Python step"
+	assert names.index(CANARY_SMOKE_STEP_NAME) < names.index("Setup Python"), (
+		f"{CANARY_SMOKE_STEP_NAME!r} must run before Setup Python so it uses the runner image's system python3"
+	)
+	smoke = steps[names.index(CANARY_SMOKE_STEP_NAME)]
+	assert smoke.get("if") == "inputs.runner_image != ''", "the smoke step must run only under the canary call"
+	assert "python3 scripts/render_prompt.py --help" in str(smoke.get("run", ""))
 
 
 def test_canary_job_calls_ci_on_the_floating_label() -> None:

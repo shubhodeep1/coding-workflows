@@ -247,6 +247,18 @@ jobs:
             fi
           done
 
+      # Runner-image canary only (empty input on push / pull_request skips it):
+      # runs the image's own system python3, before setup-python replaces it,
+      # because clarify/plan/review/judge call scripts/render_prompt.py on the
+      # system interpreter and that is what broke on the 26.04 image (#9200).
+      - name: Runner-image canary system python smoke
+        if: inputs.runner_image != ''
+        run: |
+          set -euo pipefail
+          command -v python3
+          python3 --version
+          python3 scripts/render_prompt.py --help >/dev/null
+
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
