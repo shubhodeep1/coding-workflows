@@ -342,6 +342,12 @@ echo "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=$([ -n "${clean_marker_suffix}" ] &
 #   the scan skips it and compares the newest cap that labeled this PR; with
 #   none in the window the label is kept (cap_not_pr_target). A 404 DELETE
 #   logs removed/already_absent.
+# - Accepted residual race: fingerprint-cap-block runs under its own
+#   fingerprint-cap-* concurrency group and adds the label before it posts
+#   its cap comment, so a cap landing between this read and the DELETE can
+#   lose its label. The gate's cap skip counts failure markers, not the label,
+#   so that head stays capped. Closing the window needs a second read (beyond
+#   the Q1=A budget) or a review_autofix.yml change (the issue's §27 limit).
 #   Never returns non-zero; linked issues are not touched.
 # Log: REVIEW_BLOCKED_STALE_CLEAR pr=<n> outcome=removed|kept|error
 #   reason=<token> cap_head=<sha|none> cap_support=<sha|none>
