@@ -421,6 +421,50 @@ def test_render_prompt_py_escapes_multiline_unexpected_exception_message() -> No
 	]
 
 
+def test_render_prompt_sh_never_substitutes_credential_env_placeholders() -> None:
+	# Security audit #9399 / #9431 / #9465: placeholder names come from the
+	# prompt body, which can embed untrusted PR / issue text. A literal
+	# `{{GH_PAT}}` there must not pull the runner secret into the prompt, and a
+	# harmless-looking name whose value is a whole token must not either.
+	secret_value = "render-prompt-test-secret-value-9465"
+	token_value = "ghp_" + "A" * 36
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_env_secret_") as td:
+		prompt_file = Path(td) / "mode-sample.txt"
+		prompt_file.write_text(
+			"pat={{GH_PAT}}\nkey={{OPENROUTER_API_KEY}}\ncf={{FT_GAMES_CF}}\n"
+			"looks_safe={{RENDER_PROMPT_TEST_LOOKS_SAFE}}\nsafe={{RENDER_PROMPT_TEST_SAFE}}\n",
+			encoding="utf-8",
+		)
+		env = _base_env()
+		env["PROMPT_PRELUDE_REFACTOR_ENABLED"] = "false"
+		env["GH_PAT"] = secret_value
+		env["OPENROUTER_API_KEY"] = secret_value
+		env["FT_GAMES_CF"] = secret_value
+		env["RENDER_PROMPT_TEST_LOOKS_SAFE"] = token_value
+		env["RENDER_PROMPT_TEST_SAFE"] = "plain-value"
+		proc = subprocess.run(
+			["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+			check=False,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert secret_value not in proc.stdout
+	assert token_value not in proc.stdout
+	assert secret_value not in proc.stderr
+	assert token_value not in proc.stderr
+	assert "pat={{GH_PAT}}" in proc.stdout
+	assert "key={{OPENROUTER_API_KEY}}" in proc.stdout
+	assert "cf={{FT_GAMES_CF}}" in proc.stdout
+	assert "looks_safe={{RENDER_PROMPT_TEST_LOOKS_SAFE}}" in proc.stdout
+	assert "safe=plain-value" in proc.stdout
+	assert not _stderr_error_lines(proc.stderr), proc.stderr
+
+
 def test_render_prompt_sh_renders_header_with_empty_repo_learnings() -> None:
 	header_compaction_rules = (
 		"<compaction-rules>\n"
@@ -1734,6 +1778,13 @@ def main() -> int:
 	test_render_prompt_py_identity_recall_reports_canonical_prompt_missing_details()
 	test_render_prompt_py_identity_recall_reports_render_failure_details()
 	test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt()
+	# CI runs this module directly (`python3 tests/test_render_prompt_foundation.py`),
+	# so tests must be listed here to execute there (#9341, #9365).
+	test_render_prompt_py_reports_non_utf8_prompt_without_traceback()
+	test_render_prompt_sh_reports_non_utf8_prompt_without_traceback()
+	test_render_prompt_py_reports_unexpected_exception_without_traceback()
+	test_render_prompt_py_escapes_multiline_unexpected_exception_message()
+	test_render_prompt_sh_never_substitutes_credential_env_placeholders()
 	print("OK: render prompt foundation assertions hold")
 	# Imported here so pytest does not collect these cases twice; run as a
 	# script, sys.path[0] is tests/.

@@ -202,6 +202,61 @@ for name in sorted(set(re.findall(r"\{\{([A-Za-z0-9_]+)\}\}", text))):
 PY
 }
 
+# Security (#9399, #9431, #9465): placeholder names come from the prompt body,
+# and callers render composed bodies that embed untrusted PR-diff / comment /
+# issue text. Without a guard, a literal `{{GH_PAT}}` in that text would make
+# the indirect expansion below substitute the runner's secret into a prompt
+# sent to a third-party model. No shipped template uses a placeholder whose
+# name looks like a credential, so refusing these names leaves the literal
+# `{{NAME}}` in the output (render_prompt.py leaves unknown placeholders
+# untouched) and changes no legitimate render.
+placeholder_env_name_is_credential_like()
+{
+	local upper_name="${1^^}"
+	local name_word=""
+	local -a name_words=()
+
+	case "${upper_name}" in
+		*TOKEN*|*SECRET*|*PASSWORD*|*PASSWD*|*PASSPHRASE*|*CREDENTIAL*|*PRIVATE*|*APIKEY*|*COOKIE*|*WEBHOOK*|*CONNECTION_STRING*|*DATABASE_URL*)
+			return 0
+			;;
+		ACTIONS_*|INPUT_*)
+			# Runner internals (ACTIONS_RUNTIME_URL, ACTIONS_ID_TOKEN_REQUEST_URL, ...)
+			# and action inputs, which can carry secrets; never prompt content.
+			return 0
+			;;
+	esac
+
+	IFS='_' read -r -a name_words <<< "${upper_name}"
+	for name_word in "${name_words[@]}"; do
+		case "${name_word}" in
+			KEY|KEYS|PAT|PASS|PWD|AUTH|SESSION|SIGNING|SIGNATURE|CERT|DSN|URI|CF|OTP)
+				return 0
+				;;
+		esac
+	done
+	return 1
+}
+
+# Second layer: refuse a value that is, as a whole, shaped like a well-known
+# credential even when the variable name looks harmless. Only whole-value
+# matches count, so a legitimate body that merely quotes a token-like string
+# (an issue body, a diff) still renders.
+placeholder_env_value_is_credential_like()
+{
+	local candidate_value="$1"
+	if [[ "${candidate_value}" =~ ^[[:space:]]*(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{20,}[[:space:]]*$ ]]; then
+		return 0
+	fi
+	if [[ "${candidate_value}" =~ ^[[:space:]]*sk-[A-Za-z0-9_-]{20,}[[:space:]]*$ ]]; then
+		return 0
+	fi
+	if [[ "${candidate_value}" =~ ^[[:space:]]*-----BEGIN\ [A-Z\ ]*PRIVATE\ KEY----- ]]; then
+		return 0
+	fi
+	return 1
+}
+
 append_render_var()
 {
 	local name="$1"
@@ -361,13 +416,22 @@ esac
 if [ "${RENDER_PROMPT_UNTRUSTED_BODY}" != "true" ]; then
 	while IFS= read -r placeholder_name; do
 		[ -n "${placeholder_name}" ] || continue
+		# Explicitly appended vars above win; skip before touching the environment.
 		if [ -n "${RENDER_VARS_SEEN[${placeholder_name}]+x}" ]; then
 			continue
 		fi
+		if [ "${!placeholder_name+x}" = "x" ] && render_prompt_env_name_is_secret_like "${placeholder_name}"; then
+			# Name only, never the value.
+			echo "WARNING: render_prompt.sh: refusing to forward secret-like environment placeholder ${placeholder_name}" >&2
+			continue
+		fi
+		if placeholder_env_name_is_credential_like "${placeholder_name}"; then
+			echo "NOTE: render_prompt.sh left {{${placeholder_name}}} unresolved: credential-like names are never read from the environment." >&2
+			continue
+		fi
 		if [ "${!placeholder_name+x}" = "x" ]; then
-			if render_prompt_env_name_is_secret_like "${placeholder_name}"; then
-				# Name only, never the value.
-				echo "WARNING: render_prompt.sh: refusing to forward secret-like environment placeholder ${placeholder_name}" >&2
+			if placeholder_env_value_is_credential_like "${!placeholder_name}"; then
+				echo "NOTE: render_prompt.sh left {{${placeholder_name}}} unresolved: its environment value looks like a credential." >&2
 				continue
 			fi
 			append_render_var "${placeholder_name}" "${!placeholder_name}"
