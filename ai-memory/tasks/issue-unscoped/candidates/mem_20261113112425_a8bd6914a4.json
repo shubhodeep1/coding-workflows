@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (issue #9391)\n  expected_change_site: `.github/workflows/ci.yml` \u2014 step selection out of `tests-hooks-and-orchestrator` and target-group choice in `orchestrate-poll` (step `Pre-push affected-test gate tests`, lines 3345-3357)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: .github/workflows/ci.yml lines 3345-3356 comment discloses the run's step timings could not be read; the step was selected from test and subprocess counts (about 472 tests / 57 subprocess sites) and orchestrate-poll group 3 chosen on estimated pinned load, not measured timings of run 43220859648; changelog.d/9391-ci-hooks-prepush-step-to-poll-group-3.md says the same. Severity disagreement: three reviewers rated MAJOR, z-ai_glm-5_3-flash rated NIT (mitigated by budget-watch re-measure on main; other issue constraints met).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml step selection logic.\nEvidence of absence: The PR diff selects the slowest step for the move using test-count and subprocess-count estimation rather than the required measured step timings of run 43220859648, as run-level timing data for that run was unreadable/unavailable.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (linked issue #9391, body)\nExpected change site: `.github/workflows/ci.yml` \u2014 the step selection and target-group choice for the move out of `tests-hooks-and-orchestrator`.\nEvidence of absence: The workflow comment at `.github/workflows/ci.yml` lines 3345-3356 explicitly discloses that the run's step timings could not be read, the moved step (`Pre-push affected-test gate tests`) was picked from test and subprocess counts (\"about 472 tests and 57 subprocess sites, the largest step in that job that had never moved and is not split\"), and `orchestrate-poll` group 3 was chosen on the same estimated-load basis (\"Group 3 carried the lightest pinned load\"). The PR description, the changelog fragment `changelog.d/9391-ci-hooks-prepush-step-to-poll-group-3.md`, and the workflow comment all describe the pick as \"an estimate, not a measurement\". The other issue constraints (step and job names unchanged, no `timeout-minutes` raised, no new required job, matrix size unchanged) are met. The fallback (next `budget-watch` run on `main` re-measures both jobs) is in place, but the issue's parenthetical directive \"see the run's step timings\" was not satisfied for this PR.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\u201d\nExpected change site: `.github/workflows/ci.yml`, the step selection and target for the move from `tests-hooks-and-orchestrator`.\nEvidence of absence: The workflow comment says the run's step timings could not be read and the step and target group were selected using estimates, not measured timings. The diff therefore does not establish that the moved step was among the slowest or that `orchestrate-poll` was the job with the most headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (issue #9391)\nExpected change site: `.github/workflows/ci.yml` \u2014 step selection out of `tests-hooks-and-orchestrator` and target-group choice in `orchestrate-poll`.\nEvidence of absence: The moved step was selected by test and subprocess counts (about 472 tests / 57 subprocess sites) and group 3 was chosen on estimated pinned load, not measured timings; the workflow comment at `.github/workflows/ci.yml:3345-3356` and `changelog.d/9391-ci-hooks-prepush-step-to-poll-group-3.md` both state the run's step timings could not be read. The timing-based selection criterion is therefore unmet as written. Mitigation is in place and disclosed: the constraint is documented in three places, run 43220859648's step timings are absent from the repository, budget-watch re-measures both jobs on `main` after merge and opens an issue if any job nears its timeout, and all other issue constraints are verifiably met (step name and body unchanged, single occurrence in ci.yml at line 3357, no `timeout-minutes` change at line 2780, matrix size unchanged at line 2779, no new job names). Residual risk of `orchestrate-poll (3)` overrunning is bounded by the same re-measurement loop; head SHA check-runs show 0 failures.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "111b41281ab466e4895834ece22754b72a56f762b740346fb3b9cf665ab09ccc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9397,
+    "run_id": "43336962371",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43336962371",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113112425_a8bd6914a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9397,
+    "run_id": "43336962371"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T11:24:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
