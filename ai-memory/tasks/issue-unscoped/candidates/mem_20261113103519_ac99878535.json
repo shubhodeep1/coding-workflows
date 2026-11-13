@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_gh_retry_stdout_isolation.py:242 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In `test_closed_reader_does_not_rerun_a_successful_command`, the check `assert rc_line.startswith(\"rc=\") and rc_line != \"rc=0\"` fails in required CI run 43085267118, job tests-hooks-and-orchestrator. The test expects a non-zero PIPESTATUS[0] but gets rc=0, and the runner diagnostics show the ubuntu-26.04 image's cat is uutils coreutils (`cat_closed=141`, `inner_cat=0`).\n  WHY: The failure turns the job and the aggregate required `lint` check red, which blocks merge. The test touches no file this PR changes. The cause is a runner-image portability problem in gh_retry piping, and the fix lies outside this PR's files_touched (re-run or triage issue). Severity disagreement: openai_gpt-6-luna=MAJOR (high), anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash=NIT (low); the highest is used.\n- tests/test_review_checkout_head_diagnostics.py:264 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In `test_head_moved_after_switch_reports_skipped_stale`, the check `assert fields[\"fetch_ms\"].isdigit() and fields[\"switch_ms\"].isdigit()` fails in required CI job orchestrate-poll (1) (job 130747873570, run 43085267118) because fetch_ms came back as \"na\" (\"1 failed, 13 passed\").\n  WHY: The failure turns orchestrate-poll (1) and the aggregate required `lint` check red. The test covers the review checkout-head diagnostics timing path, which this PR does not touch, so the fix lies outside this PR's scope (re-run or triage issue). Severity disagreement: openai_gpt-6-luna=MAJOR (high), anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash=NIT (low); the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_gh_retry_stdout_isolation.py:line 242, assert rc_line.startswith(\"rc=\") and rc_line != \"rc=0\" in test_closed_reader_does_not_rerun_a_successful_command | severity=NIT | confidence=4\n  PROBLEM: Required CI job tests-hooks-and-orchestrator (run 43085267118, job 130747872621) fails here. It reports rc=0 where the test expects a non-zero PIPESTATUS[0] for gh_retry output piped into head -c 1, and the ubuntu-26.04 runner's cat is uutils coreutils (inner_cat=0), which points to a runner-image change.\n  WHY: The failure turns the aggregate required `lint` check red, but the test does not load scripts/pr_checks_lib.sh or any other file this PR changes. The fix belongs in gh_retry or in the test's portability, both outside files_touched. It should go to a re-run or a triage issue; it is not a defect in this PR's diff.\n- tests/test_review_checkout_head_diagnostics.py:line 264, assert fields[\"fetch_ms\"].isdigit() and fields[\"switch_ms\"].isdigit() in test_head_moved_after_switch_reports_skipped_stale | severity=NIT | confidence=4\n  PROBLEM: Required CI job orchestrate-poll (1) (job 130747873570) fails here because fetch_ms came back as 'na' (\"1 failed, 13 passed\").\n  WHY: The failure turns the aggregate required `lint` check red. The assertion covers review checkout-head diagnostics timing, which this PR does not touch, and the supersede code in pr_checks_lib.sh is not on that path. It cannot be fixed within this PR's scope and needs a re-run or a triage issue.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_checkout_head_diagnostics.py:test_head_moved_after_switch_reports_skipped_stale, line 264 | severity=MAJOR | confidence=5\n  PROBLEM: The current CI run fails because fetch_ms is \"na\", while the assertion requires both fetch_ms and switch_ms to be numeric. The test file is outside the PR's changed files.\n  WHY: The assertion fails in orchestrate-poll (1), which fails that job and the aggregate lint check.\n- tests/test_gh_retry_stdout_isolation.py:test_closed_reader_does_not_rerun_a_successful_command, line 242 | severity=MAJOR | confidence=5\n  PROBLEM: The current CI run fails because the assertion requires a non-zero pipeline status but gets rc=0. The log identifies the runner's cat as uutils coreutils, and the test file is outside the PR's changed files.\n  WHY: The assertion fails in tests-hooks-and-orchestrator, which fails that job and the aggregate lint check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_checkout_head_diagnostics.py:line 264, `assert fields[\"fetch_ms\"].isdigit() and fields[\"switch_ms\"].isdigit()` in `test_head_moved_after_switch_reports_skipped_stale` | severity=NIT | confidence=4\n  PROBLEM: Required CI run 43085267118 fails here (`fetch_ms=na`), which turns `orchestrate-poll (1)` and the aggregate `lint` check red. The failure is in the review checkout-head diagnostics path, which the PR does not touch, and the actionable fix lies outside files_touched.\n  WHY: The diagnostics summary emitted `na` for the timing fields, so the isdigit assertion fails and the job exits 1.\n- tests/test_gh_retry_stdout_isolation.py:line 242, `assert rc_line.startswith(\"rc=\") and rc_line != \"rc=0\"` in `test_closed_reader_does_not_rerun_a_successful_command` | severity=NIT | confidence=4\n  PROBLEM: Required CI run 43085267118 fails here (`rc=0` where non-zero is expected), which turns `tests-hooks-and-orchestrator` and the aggregate `lint` check red. The ubuntu-26.04 image ships uutils coreutils (`cat_closed=141`, `inner_cat=0`), an environment/portability issue in gh_retry piping that no file this PR changes exercises.\n  WHY: Closed-pipe status propagation behaves differently on the new runner image, so `PIPESTATUS[0]` is 0 and the assertion fails.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1eccf2bdc10e1264130856777ebccaea4ac8878236187448807c2225799b80b6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9262,
+    "run_id": "43158639694",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43158639694",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113103519_ac99878535",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9262,
+    "run_id": "43158639694"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T10:35:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
