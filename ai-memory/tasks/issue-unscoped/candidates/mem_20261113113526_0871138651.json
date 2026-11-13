@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_job_split_contract.py:186 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The check in `test_system_python_shard_keeps_default_tmpdir` lowercases the step-level `TMPDIR` value, so the lowercase `runner_temp` and `runner.temp` spellings make the case-insensitivity partly redundant.\n  WHY: The reviewer states it does not fail at runtime and the logic holds, so this is only a redundancy note.\n- tests/test_summarize_reviewer_consensus_sandbox_pin.py:89-106 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The updated `test_review_utility_roles_never_start_host_opencode` correctly implements the requested role-set check.\n  WHY: The reviewer states it passes locally (\"OK: ... assertions hold\"), so there is no defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In `.github/workflows/ci.yml`, in the `tests-system-python` shard step, stop pointing `TMPDIR` at `$RUNNER_TEMP`.\"\n  expected_change_site: `.github/workflows/ci.yml`, `tests-system-python` / `System-Python test shard`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR diff and last-run diff contain no hunk modifying `.github/workflows/ci.yml`, and the PR adds only a guarding test. Gemini notes the fix exists in the worktree on the stacked base branch `ai/issue-9233`. Two other reviewers (sonnet-5_5, glm-5_3-flash) found the fix already present at head and reported no gap.\n- requirement: \"Raise `timeout-minutes` (for example to 35), or add more entries to the `system-python-shard` matrix.\"\n  expected_change_site: `.github/workflows/ci.yml`, `tests-system-python` timeout or shard matrix\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: Neither the PR diff nor the last-run diff changes the workflow timeout or matrix. The added assertion in `tests/test_ci_job_split_contract.py` only requires at least 24 shards, which already exist in the tree. Two other reviewers (sonnet-5_5, glm-5_3-flash) found the 24-entry matrix at ci.yml:3447 already present and reported no gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ci_job_split_contract.py:186 | severity=low | confidence=5\n  PROBLEM: The check in `test_system_python_shard_keeps_default_tmpdir` lowercases the step-level `TMPDIR` value, so the lowercase `runner_temp` and `runner.temp` spellings make the case-insensitivity partly redundant.\n  WHY: The reviewer states it does not fail at runtime and the logic holds, so this is only a redundancy note.\n- tests/test_summarize_reviewer_consensus_sandbox_pin.py:89-106 | severity=low | confidence=5\n  PROBLEM: The updated `test_review_utility_roles_never_start_host_opencode` correctly implements the requested role-set check.\n  WHY: The reviewer states it passes locally (\"OK: ... assertions hold\"), so there is no defect.\n- TASK_GAP: Requirement: \"In `.github/workflows/ci.yml`, in the `tests-system-python` shard step, stop pointing `TMPDIR` at `$RUNNER_TEMP`.\"\n  Expected change site: `.github/workflows/ci.yml`, `tests-system-python` / `System-Python test shard`\n  Evidence of absence: The PR diff (original and last run) contains no hunk modifying `.github/workflows/ci.yml`. The fix was observed in the worktree on the stacked base branch `ai/issue-9233`, but this PR does not contain the change as a hunk.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"Raise `timeout-minutes` or add more entries to the `system-python-shard` matrix,\" and update budget assertions if needed.\n  Expected change site: `.github/workflows/ci.yml`, `tests-system-python` timeout or shard matrix.\n  Evidence of absence: Neither diff changes the workflow timeout or matrix. The added assertion validates that 24 shards exist (already in the tree), but the PR does not deliver the matrix change as a hunk.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"In `.github/workflows/ci.yml`, in the `tests-system-python` shard step, stop pointing `TMPDIR` at `$RUNNER_TEMP`.\"\n  Expected change site: `.github/workflows/ci.yml`, `tests-system-python` / `System-Python test shard`.\n  Evidence of absence: The PR diff and last-run diff contain no hunk for `.github/workflows/ci.yml`. The PR adds a test guarding the setting but not the requested workflow change.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"Raise `timeout-minutes` (for example to 35), or add more entries to the `system-python-shard` matrix.\"\n  Expected change site: `.github/workflows/ci.yml`, `tests-system-python` timeout or shard matrix.\n  Evidence of absence: The PR diff and last-run diff contain no hunk changing the timeout or matrix entries. The added assertion requires at least 24 shards but does not make either workflow change.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "44dcf77fc8d97312818865d1a7c2150b5b48ad44dbba669858b4a0fd44c3218d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9338,
+    "run_id": "43355918100",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43355918100",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113113526_0871138651",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9338,
+    "run_id": "43355918100"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T11:35:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
