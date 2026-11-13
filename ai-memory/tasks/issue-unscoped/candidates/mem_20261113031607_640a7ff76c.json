@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3773-3793 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: A failed run-list request (`_safe_gh_jq ... 2>/dev/null || echo \"\"`) becomes an empty listing, so cleanup prints \"No active dispatch review runs on ${BRANCH}\" and skips cancelling the queued Phase 3c dispatch run, with the error output discarded.\n  WHY: A transient API failure leaves the dispatch run holding `review-gate-notice-<repo>-<pr>`, which is the leak the PR is meant to fix, and the log gives no sign of it. Severity disagreement: the reviewers rated it NIT (anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash) and MAJOR (google_gemini-3_1-flash-lite, minimax_minimax-m3). The highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml:3773-3774, 3792-3793 | severity=NIT | confidence=5\n  PROBLEM: The \"Cleanup test artifacts\" step turns a failed run-listing request into an empty listing. `|| echo \"\"` empties `CLEANUP_DISPATCH_REVIEW_RUN_IDS`, and `2>/dev/null` discards the `::error::` text from `_safe_gh_jq`. The loop never runs and the step prints \"No active dispatch review runs\".\n  WHY: After a transient failure (rate limit or 5xx), the queued Phase 3c dispatch run is not cancelled and keeps its `review-gate-notice-<repo>-<pr>` group. The step is fail-soft, so the job result is unaffected, but the message hides the skipped cancel. The reviewer suggests capturing the listing exit status and warning on failure (about 4 lines). It notes that the existing tests stub `_safe_gh_jq` as always succeeding, so a failure case needs a new test.\n- HARDENING_SUGGESTIONS: wrap the listing in `if ! CLEANUP_DISPATCH_REVIEW_RUN_IDS=\"$(_safe_gh_jq ... )\"; then` and print a warning. Set `CLEANUP_DISPATCH_LIST_FAILED=1`, and print \"No active ...\" only when that flag is unset. Estimated change: 4 lines. HARDENING_RISK_SCORE: 1\n- Other checklist sections (security, correctness, concurrency, performance, DB, naming, trust boundary): NONE.\n- Task completeness: NONE. Fix 2 is delivered. Fixes 1 and 3 are deferred under AD-1 and AD-2.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:3773-3774 | severity=MAJOR | confidence=4\n  PROBLEM: A transient GitHub API failure when listing workflow runs makes the cleanup step falsely report \"No active dispatch review runs\" and skip cleanup.\n  WHY: `|| echo \"\"` and `2>/dev/null` hide the API error, so the loop over `CLEANUP_DISPATCH_REVIEW_RUN_IDS` is skipped. The step prints a false-green message, and a stale review run may keep the concurrency lock and block later release runs.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:3773-3774, 3792-3793 | severity=MAJOR | confidence=5\n  PROBLEM: The run-listing call uses `2>/dev/null || echo \"\"`, so a transient GitHub API failure yields an empty listing that looks the same as a genuine \"no active runs\" result. `2>/dev/null` discards the `::error::` diagnostic from `_safe_gh_jq`. Cleanup then prints \"No active dispatch review runs on ${BRANCH}\" even though the listing never ran. This is also inconsistent with the per-cancel calls (lines 3786-3789), which gate on the API return code and warn on failure.\n  WHY: On any transient failure (rate limit, 5xx, network blip, auth timeout), the log shows a green \"No active dispatch review runs\" line while the queued dispatch review run keeps holding the review-gate concurrency group. This reproduces incident 43283656910. The suggested fix is to capture the listing rc and emit `Warning: could not list dispatch review runs; cleanup may have leaked`, matching the warning pattern at line 3789.\n- Notes: Fixes 1 and 3 are deferred or rejected under AD-1 and AD-2, so they are not gaps. The fix 2 implementation, the test file, the test wiring and the changelog fragment are present and consistent. Other checklist sections: NONE. Task completeness: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:3773-3774, 3792-3793 | severity=NIT | confidence=5\n  PROBLEM: A failed run-list request is converted to an empty listing, and its error output is discarded.\n  WHY: If `_safe_gh_jq` fails, cleanup skips cancellation and reports \"No active dispatch review runs\" without confirming whether any were active. A queued dispatch run can stay uncancelled without a warning.\n- Task completeness: NONE. Fix 1 is deferred to a follow-up, and optional fix 3 was excluded by AD-2. The in-scope cancellation and its contract tests are present.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:3773-3774, 3792-3793 | severity=NIT | confidence=4\n  PROBLEM: A failed run-list API call cannot be told apart from a genuine \"no active runs\" result. `_safe_gh_jq` (scripts/gh_helpers.sh:1385-1399) returns 1, and `2>/dev/null || echo \"\"` empties `CLEANUP_DISPATCH_REVIEW_RUN_IDS`. The loop never runs, `CLEANUP_DISPATCH_MATCHED` stays 0, and line 3793 prints \"No active dispatch review runs on ${BRANCH}\". The call is also not wrapped in `gh_retry` (unlike orchestrate_poll_process.sh:1644). The changelog fragment (changelog.d/9418-cleanup-cancel-dispatch-review-run.md) says \"every call only warns on failure\", but the list call's failure produces no warning.\n  WHY: In the incident scenario this PR heals, a transient list failure leaves the stale queued Phase 3c dispatch run uncancelled while the log says there is nothing to cancel, so the leak recurs. The minimal fix (about 4 lines) is to drop `2>/dev/null`, test the substitution's status, and print `Warning: could not list dispatch review runs on ${BRANCH}` instead of \"No active dispatch review runs\". The existing test test_cancel_block_empty_listing_reports_none stays valid. A failed-list case can be added to tests/test_test_and_mark_stable_cleanup_cancels_dispatch_review.py.\n- Task completeness: NONE. Fix 2 is delivered in .github/workflows/test-and-mark-stable.yml:3761-3797 with contract tests and a changelog fragment. Fix 1 is out of scope under AD-1, and fix 3 was declined under AD-2.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3c3b48e056612921bd9612160f340093adef588ea41fb7cee4482ac811a9caec",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9424,
+    "run_id": "43331080780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43331080780",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113031607_640a7ff76c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9424,
+    "run_id": "43331080780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T03:16:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
