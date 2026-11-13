@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:7339-7357 (test_security_pass_cap_converts_low_keep_fixing_to_advisory); _run_poller_subprocess() lines 347-374 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The CI check \"orchestrate-poll (1)\" fails on PR head 6ea36343 with \"poller did not exit within 180s; process group killed\" in this test, and the required \"lint\" aggregate check fails because of it, so the PR stays red.\n  WHY: The poller prints \"Project complete!\", then hangs and is killed after the 180s cap; the failure appears in the check-run log, but no reviewer could trace it to a hunk in this PR. The PR does not touch scripts/orchestrate_poll_process.sh or the test file, and the new solc code in scripts/codex_isolated_exec.sh does nothing when SANDBOX_SOLC_VERSIONS is empty. Workflow failure heal issue #9199 already tracks it. The fix is to re-run the shard on the PR head and on merge-base 507ba62a, and to treat the failure as this PR's only if it passes on the base and fails on the head. Reviewers disagree on severity: sonnet and minimax say NIT, luna and glm say MAJOR; the highest is used here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:line 7339, `def test_security_pass_cap_converts_low_keep_fixing_to_advisory`, which runs through `_run_poller_subprocess` (defined at line 291) | severity=NIT | confidence=2\n  PROBLEM: CI check \"orchestrate-poll (1)\" fails on PR head 6ea36343 with \"poller did not exit within 180s; process group killed\". The required \"lint\" check only aggregates the other jobs' results, so it fails because of this.\n  WHY: The poller printed \"Project complete!\" and then did not exit within 180 s. The PR does not change scripts/orchestrate_poll_process.sh or this test. In scripts/codex_isolated_exec.sh, `sandbox_solc_resolve_versions` returns early when SANDBOX_SOLC_VERSIONS is empty, and the in-container block runs only when /opt/solc exists. The reviewer could not trace the failure to any hunk, and #9199 already tracks it. Next step: re-run the shard on the PR head and on merge-base 507ba62a, and count it as this PR's defect only if it passes on the base and fails on the head.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:7339 (test_security_pass_cap_converts_low_keep_fixing_to_advisory) | severity=NIT | confidence=2\n  PROBLEM: The orchestrate-poll (1) shard fails on PR head 6ea36343 because this test's poller does not exit within the 180s limit in _run_poller_subprocess() (lines 357-373), so the required lint aggregate check stays red. The reviewer labelled this a CI observation, not a code defect.\n  WHY: The poller prints \"Project complete!\" before it is killed, so the hang happens during shutdown. The PR does not change scripts/orchestrate_poll_process.sh or the test file. sandbox_solc_resolve_versions returns immediately when SANDBOX_SOLC_VERSIONS is empty, and the in-container solc block runs only when /opt/solc exists. scripts/resolve_integration_ref.sh is referenced only in poller comments. #9199 already tracks the failure.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory(), lines 7339-7357; _run_poller_subprocess(), lines 347-374 | severity=MAJOR | confidence=5\n  PROBLEM: The PR-head check run reports this test failing because the poller did not exit within the 180-second subprocess timeout.\n  WHY: The test kills the poller process group after the timeout and fails the orchestrate-poll shard, so the lint aggregate also fails. The check-run log confirms the failure, but it is not mapped to any hunk in this PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_orchestrate_poll_process.py:line 7339, def test_security_pass_cap_converts_low_keep_fixing_to_advisory; `_run_poller_subprocess()` timeout handling lines 357-373 | severity=MAJOR | confidence=3\n  PROBLEM: CI check `orchestrate-poll (1)` fails on head 6ea36343 (\"poller did not exit within 180s; process group killed\"), and the required aggregate `lint` job fails as a direct result (`##[error]orchestrate-poll shard 0 failing tests: test_security_pass_cap_converts_low_keep_fixing_to_advisory`). The failure is not attributable to any hunk in this PR, and #9199 already tracks it.\n  WHY: The poller hangs past the 180s cap after printing \"Project complete!\", the process group is killed, shard 0 exits 1, and the lint gate exits 1, so the PR cannot go green. Re-run the shard on the PR head and on merge-base 507ba62a; the failure belongs to this PR only if it passes on the base and fails on the head.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "55540b6e54b29432fc2b5564b40d980a13a179f64faaf2829f8f4acee08cac6d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "43360774920",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43360774920",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113115801_45fe5e15ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "43360774920"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T11:58:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
