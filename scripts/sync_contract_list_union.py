@@ -227,7 +227,7 @@ def _canonical(value) -> str:
 	return json.dumps(value, sort_keys=True, default=str)
 
 
-def _validate(merged: str, ours_text: str, theirs_text: str, ours_resolved: str, theirs_resolved: str, affected: set[str]) -> None:
+def _validate(merged: str, ours_text: str, theirs_text: str, ours_resolved: str, theirs_resolved: str, affected: set[str], base_text: str | None = None) -> None:
 	for line in merged.splitlines():
 		if _is_marker(line):
 			raise Ineligible("markers_remain")
@@ -248,6 +248,21 @@ def _validate(merged: str, ours_text: str, theirs_text: str, ours_resolved: str,
 		expected = {_canonical(item) for item in ours_list} | {_canonical(item) for item in theirs_list}
 		if set(merged_items) != expected:
 			raise Ineligible("list_not_union")
+	# Append-only: every merge-base entry of an affected list must survive on
+	# both sides. A hunk where a side replaced or removed a base entry (both
+	# sides replacing the same entry, or delete-plus-append) is not an append
+	# and goes to the LLM resolver instead of being merged as a union.
+	if base_text is not None and affected:
+		base_data = _load_mapping(base_text)
+		for key in sorted(affected):
+			base_list = base_data.get(key)
+			if not isinstance(base_list, list):
+				raise Ineligible("list_not_union")
+			base_items = {_canonical(item) for item in base_list}
+			ours_items = {_canonical(item) for item in ours_data.get(key)}
+			theirs_items = {_canonical(item) for item in theirs_data.get(key)}
+			if not (base_items <= ours_items and base_items <= theirs_items):
+				raise Ineligible("list_not_union")
 	# Every other top-level key must equal git's auto-merged value. The
 	# token is list_not_union because the merge would change more than the
 	# union of the entrypoint lists.
@@ -268,11 +283,12 @@ def merge_contract(path: str, base: str, ours: str, theirs: str) -> str:
 		raise Ineligible("base_missing")
 	if yaml is None:
 		raise Ineligible("pyyaml_missing")
+	base_text = _read_text(base)
 	ours_text = _read_text(ours)
 	theirs_text = _read_text(theirs)
 	marked = _run_merge_file(ours, base, theirs)
 	merged, ours_resolved, theirs_resolved, affected = _resolve(marked)
-	_validate(merged, ours_text, theirs_text, ours_resolved, theirs_resolved, affected)
+	_validate(merged, ours_text, theirs_text, ours_resolved, theirs_resolved, affected, base_text)
 	return merged
 
 

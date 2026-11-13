@@ -12524,6 +12524,7 @@ sync_contract_list_union_merge() {
     if ! git worktree add --quiet --detach "${wt}" \
         "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
       rm -rf "${tmpdir}" 2>/dev/null || true
+      rm -rf "${wt}" 2>/dev/null || true
       echo "::warning::${log_prefix} outcome=failed reason=worktree"
       return 1
     fi

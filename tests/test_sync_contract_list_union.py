@@ -223,3 +223,25 @@ def test_mixed_indentation_inside_hunk_is_ineligible(tmp_path: Path) -> None:
 	theirs = _append_after(BASE, READ_BASE, "    - b.py:y\n")
 	proc, out = _run(tmp_path, BASE, ours, theirs)
 	_assert_ineligible(proc, out, "hunk_non_list_line")
+
+
+def test_both_sides_replacing_a_base_entry_is_ineligible(tmp_path: Path) -> None:
+	# Both sides replaced the same base entry: not an append, so the union
+	# (which would drop the base entry) must not be written.
+	pytest.importorskip("yaml")
+	ours = BASE.replace(READ_BASE, "  - backend/app/leaderboards/api.py:replaced_ours\n")
+	theirs = BASE.replace(READ_BASE, "  - backend/app/leaderboards/api.py:replaced_theirs\n")
+	proc, out = _run(tmp_path, BASE, ours, theirs)
+	_assert_ineligible(proc, out, "list_not_union")
+
+
+def test_delete_plus_append_on_one_side_is_ineligible(tmp_path: Path) -> None:
+	# Ours removed the base entry and appended another; theirs only appended.
+	# A union would bring the deleted entry back, so the path is ineligible.
+	pytest.importorskip("yaml")
+	ours = BASE.replace(READ_BASE, "  - backend/app/leaderboards/api.py:read_ours\n")
+	theirs = _append_after(BASE, READ_BASE, "  - backend/app/fantasy/rollup.py:read_theirs\n")
+	proc, out = _run(tmp_path, BASE, ours, theirs)
+	assert proc.returncode == 3, (proc.returncode, proc.stderr)
+	assert "reason=list_not_union" in proc.stderr or "reason=hunk_one_sided" in proc.stderr, proc.stderr
+	assert not out.exists()
