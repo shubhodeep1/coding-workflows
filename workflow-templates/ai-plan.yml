@@ -80,7 +80,7 @@ jobs:
       needs.plan.result == 'success' &&
       vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
       vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN != 'false'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Sign plan approval
         env:

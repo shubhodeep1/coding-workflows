@@ -100,7 +100,7 @@ jobs:
           github.event.workflow_run.head_branch == github.event.repository.default_branch)) &&
         (github.event.workflow_run.name != 'Nightly Validation Self-Test' ||
          github.event.workflow_run.head_branch == github.event.repository.default_branch)))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 45 minutes of intake work plus up to HEAL_INTAKE_QUEUE_MAX_WAIT_SECONDS
     # (80 minutes) waiting for its turn in the report queue, plus up to 26
     # minutes of reproduction (WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES, capped
@@ -377,7 +377,7 @@ jobs:
       github.event_name == 'schedule' &&
       vars.WORKFLOW_HEAL_ENABLED != 'false' &&
       vars.HEAL_SCOPE_RECOVERY_ENABLED != 'false'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -408,7 +408,7 @@ jobs:
     # through the unchanged intake, serialised with every other intake run.
     needs: recovery-candidates
     if: needs.recovery-candidates.outputs.count != '' && needs.recovery-candidates.outputs.count != '0'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 95 minutes of scan work plus up to 80 minutes in the report queue.
     timeout-minutes: 175
     concurrency:
@@ -601,7 +601,7 @@ jobs:
       github.event_name == 'schedule' &&
       vars.WORKFLOW_HEAL_ENABLED != 'false' &&
       vars.WORKFLOW_HEAL_VERIFY_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read

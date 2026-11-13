@@ -307,7 +307,7 @@ env:
 
 jobs:
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Serialize notices across pull_request and workflow_dispatch runs for
     # the same PR; a second gate must see the first gate's marker before POST.
     concurrency:
@@ -783,7 +783,7 @@ jobs:
 
   post-merge-validate-dispatch:
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # claude_branch_review-mode skip: claude/* branches are operator-driven
     # and never carry orchestrator-managed sub-issues, so the validate
     # dispatch is unnecessary. Belt-and-braces — the label-scoped iteration
@@ -1013,7 +1013,7 @@ jobs:
 
   post-merge-force-poll:
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ needs.gate.outputs.post_merge_dispatch == 'true' && needs.gate.outputs.claude_branch_review != 'true' }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1105,7 +1105,7 @@ jobs:
 
   deterministic-skip-merge:
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ needs.gate.outputs.deterministic_skip == 'true' }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1576,7 +1576,7 @@ jobs:
   # emits this skip_reason (actionlint rejects a constant `if: false`).
   claude-fixer-auto-merge:
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ needs.gate.outputs.skip_reason == 'claude_fixer_auto_merge_retired' }}
     steps:
       - name: Legacy direct convergence merge disabled
@@ -1595,7 +1595,7 @@ jobs:
     # concurrency lock, one GET /pulls/{n} (linked issues and the reporter's
     # PR payload), then the label and comment writes.
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     concurrency:
       group: fingerprint-cap-${{ github.repository }}-${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.run_id }}
       cancel-in-progress: false
@@ -1907,7 +1907,7 @@ jobs:
     # "codex-agent" so cross-references in internal-review.yml / status
     # checks / required-checks rules don't break.
     name: ${{ needs.gate.outputs.claude_branch_review == 'true' && 'codex-agent (claude-branch-review)' || 'codex-agent' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Sized to accommodate the resolver step's 170-min cap plus the
     # pre-resolver work (~24 min observed on run 25629086684: disk
     # cleanup, checkout, OpenCode install, runtime workspace setup,

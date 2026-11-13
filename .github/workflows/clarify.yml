@@ -34,7 +34,7 @@ jobs:
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, fromJson('"/reclarify\n<!-- ai:pr-dependency-released:"'))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, fromJson('"/reclarify\n<!-- ai:partial-delivery-restart:"')))
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     concurrency:
       # NOTE: cancel-in-progress: true means if a /reclarify comment arrives
@@ -2478,7 +2478,7 @@ jobs:
     if: >-
       always() && needs.clarify.result == 'failure' &&
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       id-token: write

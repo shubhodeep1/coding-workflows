@@ -14,6 +14,20 @@ name: CI
     branches: ["**"]
   push:
     branches: [main, stable, "orchestrator/project-*"]
+  # Nightly runner-image canary (Q12: A, stuck-backlog plan Phase 1): the
+  # runner-image-canary job in nightly-validation-selftest.yml calls this
+  # workflow with runner_image: ubuntu-latest, so a GitHub runner image change
+  # shows up before the ubuntu-26.04 pin moves. Push and pull_request runs
+  # have no inputs and stay on the pin. Steps guarded on github.event_name
+  # (budget-watch, the PR-only checks) do not run under the caller's
+  # schedule / workflow_dispatch event.
+  workflow_call:
+    inputs:
+      runner_image:
+        description: "Runner label for every job; empty means the pinned ubuntu-26.04 (used by the nightly runner-image canary)."
+        type: string
+        required: false
+        default: ""
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -53,7 +67,7 @@ jobs:
     # under its 15-minute timeout; it may still pass budget-watch's 11m15s
     # warning line. The first pick for that step, tests-promote-stall-and-review,
     # was cancelled at its 20-minute timeout on the PR head run 41097621008.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 15
     # The actionlint tarball cache key (#9056) reads these values through the
     # `env` context, so they are set at job level. The `Install actionlint`
@@ -577,7 +591,7 @@ jobs:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -1050,7 +1064,7 @@ jobs:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -1526,7 +1540,7 @@ jobs:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -1651,6 +1665,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_step_scripts_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_runner_image_pin_contract.py
 
       - name: Review autofix retired Claude-fixer hand-off and validate target_ref contract tests
         run: |
@@ -2123,7 +2138,7 @@ jobs:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -2784,7 +2799,7 @@ jobs:
     # tests-hooks-and-orchestrator instead of group 0.
     # Since #9214, the CI wiring guard part 2 step runs in
     # tests-release-and-log-analysis instead of group 0.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
       fail-fast: false
@@ -3504,7 +3519,7 @@ jobs:
       - tests-promote-stall-and-review
       - tests-release-and-log-analysis
       - orchestrate-poll
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -3542,7 +3557,7 @@ jobs:
       - tests-release-and-log-analysis
       - orchestrate-poll
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 5
     steps:
       - name: Require every CI job to succeed

@@ -93,7 +93,7 @@ env:
 
 jobs:
   poll:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     concurrency:
       # Only one poller per repo at a time; newer runs queue instead of
       # killing the active run (which may be mid-way through conflict
@@ -2225,7 +2225,7 @@ jobs:
   claude_pool_daily_usage:
     needs: poll
     if: ${{ !cancelled() && needs.poll.outputs.claude_pool_daily_due == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     concurrency:
       # A queued poll run can finish before this job saves the day's marker;

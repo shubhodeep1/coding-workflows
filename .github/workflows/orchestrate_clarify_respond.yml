@@ -61,7 +61,7 @@ jobs:
         )
       ) &&
       contains(github.event.comment.body, 'Clarification required')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     concurrency:
       group: ai-orchestrate-clarify-respond-${{ github.event.issue.number }}

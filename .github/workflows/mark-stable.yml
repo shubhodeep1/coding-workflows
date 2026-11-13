@@ -36,7 +36,7 @@ jobs:
   # gate (test-and-mark-stable.yml) on stable automatically.
   # ──────────────────────────────────────────────────────────────────
   source:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     outputs:
       branch: ${{ steps.detect.outputs.branch }}
@@ -125,7 +125,7 @@ jobs:
 
   resolve-version:
     needs: [source]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The full-history checkout (fetch-depth: 0, for the tag list) took 87s
     # on 2026-10-15 02:21 and passed 2 minutes at 10:04, cancelling the
     # release after stable had already moved (run 38717659089).
@@ -261,7 +261,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   validate-scripts:
     needs: [source, resolve-version]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 45, not 30: the orchestrate-poll module is this job's critical path
     # even after sharding, and shards can be slower on a cold runner than
     # on a warm one. At 30 the serial suite in the test-and-mark-stable
@@ -643,7 +643,7 @@ jobs:
 
   validate:
     needs: [source, resolve-version]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 45, not 5: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
     # (default 30 minutes, maximum 40) for a pending `CI / lint` run; the
     # extra 5 minutes cover checkout and the tag preflight so the gate can
@@ -734,7 +734,7 @@ jobs:
 
   release:
     needs: [source, resolve-version, validate, validate-scripts]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 50, not 10: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
     # (default 30 minutes) for a pending `CI / lint` run, and the tag-push
     # retries still have to fit after it. A job timeout fails closed.

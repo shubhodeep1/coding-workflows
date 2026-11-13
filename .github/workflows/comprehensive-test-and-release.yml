@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   phase2-collect-and-analyze-logs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     outputs:
       report_file: ${{ steps.phase2.outputs.report_file }}
@@ -263,7 +263,7 @@ jobs:
 
   phase3-dispatch-orchestrator:
     needs: phase2-collect-and-analyze-logs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     outputs:
       tracking_issue: ${{ steps.phase3.outputs.tracking_issue }}
