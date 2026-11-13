@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/install_semble.sh:137-159 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `local semble_install_elapsed_ms=0` initializer in mark_available and mark_unavailable is dead code, because the next arithmetic assignment always overwrites it.\n  WHY: It is not a runtime defect, only a maintainability nit (reported as NIT).\n- scripts/build_semble_wrapper.sh:65 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The inline `index_ms` clamp lacks the non-numeric guard that `_semble_elapsed_ms` in scripts/semble_helpers.sh:115-134 has.\n  WHY: The inputs come from helpers that always return numeric values, so there is no runtime defect (reported as NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description lists `.github/workflows/ci.yml` (`sf_now_ms()` step timer reads EPOCHREALTIME) as changed.\n  expected_change_site: .github/workflows/ci.yml, `sf_now_ms()`\n  confidence=5\n  flagged_by: [openai_gpt-6-luna, anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: The PR diff has no hunk for .github/workflows/ci.yml. The change is already on the base tree (from main #9252 / #9246 cherry-pick), so only the PR description is stale. Severity NIT.\n- requirement: The six scripts that still read `date +%s%3N` first now read bash's `EPOCHREALTIME` first (`review_merge_train.sh`, `review_conflict_resolve.sh`).\n  expected_change_site: scripts/review_merge_train.sh::_mt_now_ms, scripts/review_conflict_resolve.sh::_resolver_terminal_now_ms\n  confidence=5\n  flagged_by: [openai_gpt-6-luna, anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: The PR diff has no hunk for either script, but both already read EPOCHREALTIME on the tree. The changelog fragment lists six scripts while this PR touches four. Severity NIT.\n- requirement: The two tests that simulate \"no usable clock\" by breaking date now also unset EPOCHREALTIME.\n  expected_change_site: tests/test_review_conflict_resolve_terminal_record.py::test_failing_date_still_emits_and_preserves_rc, tests/test_semble_helpers.py::test_semble_elapsed_ms_clamps_negative_duration_to_zero\n  confidence=5\n  flagged_by: [openai_gpt-6-luna, minimax_minimax-m3]\n  EVIDENCE: The PR diff has no hunk for either test file. The conflict-resolver test already unsets EPOCHREALTIME on the tree, but the Semble test does not, so its fake `date` is bypassed. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: The PR description lists `review_merge_train.sh` (`_mt_now_ms`), `review_conflict_resolve.sh` (`_resolver_terminal_now_ms`), `ci.yml` and the two test files as changed.\n  Expected change site: those files.\n  Evidence of absence: The PR diff has no hunk for any of them. The changes are already on the base tree, so only the PR description is stale. The changelog fragment lists six scripts, but this PR touches four.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/install_semble.sh:137-159 | severity=NIT | confidence=2\n  PROBLEM: The `local semble_install_elapsed_ms=0` initializer in mark_available and mark_unavailable is dead code.\n  WHY: The value is always overwritten before use, so there is no runtime failure.\n- scripts/build_semble_wrapper.sh:65 | severity=NIT | confidence=1\n  PROBLEM: The inline clamp lacks the non-numeric guard that `_semble_elapsed_ms` has.\n  WHY: The inputs are always numeric, so there is no runtime defect.\n\nTASK_GAP:\n- Requirement: The PR description \"Changes\" bullet lists ci.yml, review_merge_train.sh, review_conflict_resolve.sh, tests/test_review_conflict_resolve_terminal_record.py and tests/test_semble_helpers.py as changed.\n  Expected change site: those five files.\n  Evidence of absence: pr_changed_files.txt and the PR diff contain no hunks for them. The code is already on the tree, so only the description is stale.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"The ci.yml step timer reads EPOCHREALTIME.\"\n  Expected change site: `.github/workflows/ci.yml`, `sf_now_ms()`.\n  Evidence of absence: The PR diff has no hunk for `.github/workflows/ci.yml`. The checkout already has EPOCHREALTIME in `sf_now_ms()`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"The six scripts that still read `date +%s%3N` first now read bash's `EPOCHREALTIME` first.\"\n  Expected change site: `scripts/review_merge_train.sh::_mt_now_ms` and `scripts/review_conflict_resolve.sh::_resolver_terminal_now_ms`.\n  Evidence of absence: The PR diff has no hunk for either script. Both already read EPOCHREALTIME in the checkout.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"The two tests that simulate 'no usable clock' by breaking date now also unset EPOCHREALTIME.\"\n  Expected change site: `tests/test_review_conflict_resolve_terminal_record.py::test_failing_date_still_emits_and_preserves_rc` and `tests/test_semble_helpers.py::test_semble_elapsed_ms_clamps_negative_duration_to_zero`.\n  Evidence of absence: The PR diff has no hunk for either test. The conflict-resolver test already unsets EPOCHREALTIME, but the Semble test does not.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "92472dd368dc8801a41616319567ca5d84b38e6edfcd2fb8961d50c1f1d27f32",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9345,
+    "run_id": "43323954991",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43323954991",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113072109_1bb7830d6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9345,
+    "run_id": "43323954991"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T07:21:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
