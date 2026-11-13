@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Several merged changes to scripts or GitHub Actions workflows also added issue-named files under `changelog.d/`. When planning a user-visible workflow or operational behavior change, check the repository\u2019s changelog conventions and include an entry where appropriate.",
+  "fingerprint": "1851ed561ec9f0819750681a9fb8032c15195834d0e573eee9e26c2057bfb5a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43348734205",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43348734205",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9203",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9227",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9248",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9252",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9365",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9259",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9267",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9279",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9281",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9371"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261113024901_289c1ff624",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow and script changes commonly include a matching `changelog.d/` entry.",
+  "timestamps": {
+    "created_at": "2026-11-13T02:49:01Z",
+    "promoted_at": "2026-11-13T02:49:41Z",
+    "superseded_at": null
+  }
+}
