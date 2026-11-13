@@ -204,17 +204,26 @@ def test_render_cli_without_failing_tests_is_unchanged() -> None:
 
 def test_intake_freezes_failing_tests_before_the_diagnosis() -> None:
 	text = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
-	extract_at = text.index('heal-scope failing-tests --log-files "${LOG_DIR}"/run-*-job-*.txt')
-	assert text.index('SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"') < extract_at < text.index("jq -n --arg crash")
+	# Anchor on the FAILING_TESTS_JSON assignment: the cause-grouping helper
+	# (_heal_cause_key) runs an earlier copy of the same command for the dedup
+	# cause key only, so a bare command match would find that copy first.
+	extract_at = text.index('FAILING_TESTS_JSON="$(python3 "${HEAL_PY}" heal-scope failing-tests --log-files "${LOG_DIR}"/run-*-job-*.txt')
+	freeze_at = text.index('SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"')
+	assert freeze_at < extract_at < text.index("jq -n --arg crash")
+	cause_key_at = text.find('cause_tests="$(python3 "${HEAL_PY}" heal-scope failing-tests --log-files "${LOG_DIR}"/run-*-job-*.txt')
+	if cause_key_at >= 0:
+		assert cause_key_at < freeze_at
 	assert text.index("failing_tests: $failing_tests") < text.index("# --- Run the diagnosis model")
 	assert "failing_tests: (.failing_tests // {names: [], files: []})" in text
 
 
-def _run_scope_freeze(log_dir: Path, runtime_dir: Path, *, linked_env: bool = True) -> subprocess.CompletedProcess:
+def _run_scope_freeze(log_dir: Path, runtime_dir: Path, *, linked_env: bool = True, extra_env: dict[str, str] | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess:
 	"""Run the intake's real freeze block (helper through the chmod) in bash.
 
 	linked_env=False leaves out the variables the linked-run helpers (#8360)
 	read, to prove the block still runs when they are unset (#8377).
+	extra_env and cwd (suspect-commit scope, P4) add variables and run the block
+	inside a git checkout; existing callers pass neither.
 	"""
 	if shutil.which("jq") is None:
 		pytest.skip("jq is required to run the intake's scope-freeze block")
@@ -235,7 +244,9 @@ def _run_scope_freeze(log_dir: Path, runtime_dir: Path, *, linked_env: bool = Tr
 	}
 	if linked_env:
 		env.update({"MAX_LINKED_RUNS": "0", "SOURCE_KIND": "", "SELF_REPO": SELF_REPO, "SCOPE_LINKED_WORKFLOWS_ENABLED": "true"})
-	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=True)
+	if extra_env:
+		env.update(extra_env)
+	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=True, cwd=str(cwd) if cwd is not None else None)
 
 
 def test_scope_freeze_writes_empty_runs_when_the_report_names_no_run() -> None:
@@ -1032,3 +1043,251 @@ def test_workflow_sets_the_flag_with_a_true_default() -> None:
 	text = LW_INTAKE_WORKFLOW.read_text(encoding="utf-8")
 	line = "      WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED: ${{ vars.WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED || 'true' }}\n"
 	assert text.count(line) == 2  # intake and recovery-scan jobs
+
+
+# ---------------------------------------------------------------------------
+# Suspect-commit scope (P4 of the heal evidence plan, Refs #8434)
+# ---------------------------------------------------------------------------
+# Release run 40876853022 regressed through scripts/implement_step_prepush_test_gate.sh
+# and workflow-templates/.claude/hooks/prepush_affected_tests.py, both outside
+# the frozen scope. Behind WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED the files changed
+# since the failing workflow's last green run (compare files[]) join the frozen
+# scope as `suspect_files`. These replays run the intake's real freeze block in
+# a temp git checkout with a fake `gh` on PATH.
+
+SS_RUN_ID = 40876853022
+SS_WORKFLOW_ID = 118204331
+SS_GREEN_SHA = "c" * 40
+SS_INCIDENT_PATHS = ("scripts/implement_step_prepush_test_gate.sh", "workflow-templates/.claude/hooks/prepush_affected_tests.py")
+SS_FAKE_GH = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${FAKE_GH_LOG}"
+case "$*" in
+	*"/compare/"*) cat "${FAKE_GH_COMPARE}" ;;
+	*"/actions/workflows/"*) cat "${FAKE_GH_RUNS}" ;;
+	*) exit 1 ;;
+esac
+"""
+
+
+def _ss_compare_doc() -> dict:
+	"""The P3 compare fixture (shaped like run 40876853022's range), extended with the excluded cases."""
+	doc = json.loads((REPO_ROOT / "tests" / "fixtures" / "heal" / "p3_compare_last_green_failing.json").read_text(encoding="utf-8"))
+	doc["files"] = doc["files"] + [
+		{"filename": "workflow-templates/.claude/hooks/prepush_affected_tests.py", "status": "modified", "changes": 20},
+		{"filename": ".claude/settings.json", "status": "modified", "changes": 300},
+		{"filename": ".github/ai/WORKFLOW.md", "status": "modified", "changes": 250},
+		{"filename": "scripts/missing_at_scope.sh", "status": "added", "changes": 200},
+		{"filename": "scripts/new_name.sh", "previous_filename": "scripts/old_name.sh", "status": "renamed", "changes": 5},
+	]
+	return doc
+
+
+def _ss_setup(tmp: Path) -> tuple[Path, str, Path, Path, dict[str, str]]:
+	"""A checkout holding the incident files, the verified-run records and a fake gh; returns (repo, sha, logs, runtime, env)."""
+	repo = tmp / "repo"
+	files = {
+		**{path: "#!/usr/bin/env bash\n" for path in SS_INCIDENT_PATHS},
+		".github/workflows/internal-implement.yml": "name: x\n",
+		".github/workflows/ci.yml": "name: CI\n",
+		"scripts/new_name.sh": "#!/usr/bin/env bash\n",
+		"scripts/old_name.sh": "#!/usr/bin/env bash\n",
+		"prompts/old-gate-note.txt": "note\n",
+		".claude/settings.json": "{}\n",
+		".github/ai/WORKFLOW.md": "x\n",
+		"docs/heal-intake.md": "x\n",
+		"tests/test_prepush_affected_tests.py": "def test_x() -> None:\n\tpass\n",
+	}
+	for path, text in files.items():
+		(repo / path).parent.mkdir(parents=True, exist_ok=True)
+		(repo / path).write_text(text, encoding="utf-8")
+	subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+	subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "scope"], check=True)
+	sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+	log_dir, runtime_dir, bin_dir = tmp / "logs", tmp / "runtime", tmp / "bin"
+	for directory in (log_dir, runtime_dir, bin_dir):
+		directory.mkdir()
+	(log_dir / f"run-{SS_RUN_ID}.json.verified").write_text(json.dumps({"run_id": SS_RUN_ID, "path": ".github/workflows/test-and-mark-stable.yml",
+		"referenced_paths": [".github/workflows/ci.yml"]}))
+	(log_dir / f"run-{SS_RUN_ID}-info.json").write_text(json.dumps({"id": SS_RUN_ID, "head_sha": sha, "head_branch": "main", "workflow_id": SS_WORKFLOW_ID,
+		"created_at": "2026-10-27T09:40:12Z", "head_repository": {"full_name": SELF_REPO}, "repository": {"full_name": SELF_REPO}}))
+	summaries = tmp / "run_summaries.json"
+	summaries.write_text(json.dumps([{"run_id": SS_RUN_ID}]))
+	(tmp / "runs.json").write_text(json.dumps({"total_count": 1, "workflow_runs": [{"id": 40800000001, "head_sha": SS_GREEN_SHA, "created_at": "2026-10-26T08:00:00Z", "conclusion": "success"}]}))
+	(tmp / "compare.json").write_text(json.dumps(_ss_compare_doc()))
+	gh = bin_dir / "gh"
+	gh.write_text(SS_FAKE_GH)
+	gh.chmod(0o755)
+	env = {
+		"PATH": f"{bin_dir}:/usr/bin:/bin:/usr/local/bin", "SUSPECT_SCOPE_ENABLED": "true", "HEAD_SHA": sha, "HEAD_BRANCH": "main",
+		"SUMMARIES_FILE": str(summaries), "FAKE_GH_LOG": str(tmp / "gh.log"), "FAKE_GH_COMPARE": str(tmp / "compare.json"), "FAKE_GH_RUNS": str(tmp / "runs.json"),
+	}
+	return repo, sha, log_dir, runtime_dir, env
+
+
+def _ss_gh_calls(tmp: Path) -> list[str]:
+	log = tmp / "gh.log"
+	return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+
+def _ss_render_input(frozen_file: Path, key: str) -> dict:
+	"""Run _open_issue's own scope-input jq program (as shipped) on the frozen snapshot."""
+	text = LW_INTAKE_SCRIPT.read_text(encoding="utf-8")
+	opening = 'jq --arg key "${scope_workflows_key}" \''
+	start = text.index(opening) + len(opening)
+	program = text[start:text.index("' \\\n", start)]
+	out = subprocess.run(["jq", "--arg", "key", key, program, str(frozen_file)], capture_output=True, text=True, check=True).stdout
+	return json.loads(out)
+
+
+def _ss_skip_without_jq() -> None:
+	if shutil.which("jq") is None or shutil.which("git") is None:
+		pytest.skip("jq and git are required to run the intake's scope-freeze block")
+
+
+def test_suspect_scope_replay_of_run_40876853022_adds_the_incident_files_and_the_marker_verifies(tmp_path: Path) -> None:
+	_ss_skip_without_jq()
+	repo, sha, log_dir, runtime_dir, env = _ss_setup(tmp_path)
+	result = _run_scope_freeze(log_dir, runtime_dir, extra_env=env, cwd=repo)
+	assert "scope_inputs_freeze_failed" not in result.stderr
+	assert "WORKFLOW_HEAL suspect_scope outcome=added reason=ok paths=4 calls=2 source=fetched" in result.stderr
+	frozen_file = runtime_dir / "scope_inputs_frozen.json"
+	frozen = json.loads(frozen_file.read_text(encoding="utf-8"))
+	# Ranked by changes; removed, renamed-old, .claude/, .github/ai/, missing and non-pipeline paths are left out.
+	assert frozen["suspect_files"] == ["scripts/implement_step_prepush_test_gate.sh", "workflow-templates/.claude/hooks/prepush_affected_tests.py",
+		"scripts/new_name.sh", ".github/workflows/internal-implement.yml"]
+	calls = _ss_gh_calls(tmp_path)
+	assert len(calls) == 2
+	assert "/actions/workflows/" in calls[0] and f"/compare/{SS_GREEN_SHA}...{sha}" in calls[1]
+	assert all("--method GET" in call for call in calls)
+	handoff = json.loads((runtime_dir / "suspect_scope" / "handoff.json").read_text(encoding="utf-8"))
+	assert handoff["green_sha"] == SS_GREEN_SHA and handoff["failing_sha"] == sha and handoff["workflow_id"] == str(SS_WORKFLOW_ID)
+	assert "patch" not in json.dumps(handoff["compare"])
+	render_input = _ss_render_input(frozen_file, "self_workflows")
+	assert render_input["suspect_files"] == frozen["suspect_files"]
+	# A consumer scope never receives suspect files.
+	assert "suspect_files" not in _ss_render_input(frozen_file, "consumer_workflows")
+	inputs = tmp_path / "scope_inputs.json"
+	inputs.write_text(json.dumps(render_input))
+	marker = subprocess.run([sys.executable, str(HEAL_PY), "heal-scope", "render", "--input-json", str(inputs), "--checkout", str(repo), "--ref", sha],
+		capture_output=True, text=True, check=True).stdout.strip()
+	assert marker == (f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,scripts/implement_step_prepush_test_gate.sh,"
+		"workflow-templates/.claude/hooks/prepush_affected_tests.py,scripts/new_name.sh,.github/workflows/internal-implement.yml,"
+		f"tests/**,changelog.d/*.md runs={SELF_REPO}:{SS_RUN_ID} -->")
+	marker_file = tmp_path / "marker.txt"
+	marker_file.write_text(marker + "\n")
+	checked = subprocess.run([sys.executable, str(HEAL_PY), "heal-scope", "check-marker", "--marker-file", str(marker_file)], capture_output=True, text=True, check=False)
+	assert checked.returncode == 0 and json.loads(checked.stdout)["status"] == "valid"
+	verified = heal.verify_heal_scope(body=marker, author_login="bot", last_edited_at=None, labels=[heal.HEAL_LABEL], pipeline_login="bot")
+	assert verified["status"] == "verified" and all(path in verified["paths"] for path in SS_INCIDENT_PATHS)
+
+
+def test_suspect_scope_uses_p3_compare_files_without_calls(tmp_path: Path) -> None:
+	_ss_skip_without_jq()
+	repo, _sha, log_dir, runtime_dir, env = _ss_setup(tmp_path)
+	p3_files = tmp_path / "compare_files.json"
+	p3_files.write_text(json.dumps(heal.parse_suspect_compare(_ss_compare_doc())["files"]))
+	result = _run_scope_freeze(log_dir, runtime_dir, extra_env={**env, "SUSPECT_COMPARE_FILES_FILE": str(p3_files)}, cwd=repo)
+	assert "WORKFLOW_HEAL suspect_scope outcome=added reason=ok paths=4 calls=0 source=p3" in result.stderr
+	assert _ss_gh_calls(tmp_path) == []
+	frozen = json.loads((runtime_dir / "scope_inputs_frozen.json").read_text(encoding="utf-8"))
+	assert frozen["suspect_files"][:2] == list(SS_INCIDENT_PATHS)
+	# P3 data writes no handoff: P3 already has its own compare.
+	assert not (runtime_dir / "suspect_scope" / "handoff.json").read_text(encoding="utf-8")
+
+
+def test_suspect_scope_switch_off_is_byte_identical_and_silent(tmp_path: Path) -> None:
+	_ss_skip_without_jq()
+	repo, _sha, log_dir, runtime_dir, env = _ss_setup(tmp_path)
+	snapshots = {}
+	for label, switch in (("unset", None), ("false", "false"), ("True", "True")):
+		run_env = {key: value for key, value in env.items() if key != "SUSPECT_SCOPE_ENABLED"}
+		if switch is not None:
+			run_env["SUSPECT_SCOPE_ENABLED"] = switch
+		run_dir = tmp_path / f"runtime-{label}"
+		run_dir.mkdir()
+		result = _run_scope_freeze(log_dir, run_dir, extra_env=run_env, cwd=repo)
+		assert "suspect_scope" not in result.stderr
+		assert not (run_dir / "suspect_scope").exists()
+		snapshots[label] = (run_dir / "scope_inputs_frozen.json").read_bytes()
+	assert snapshots["unset"] == snapshots["false"] == snapshots["True"]
+	assert b"suspect_files" not in snapshots["unset"]
+	assert _ss_gh_calls(tmp_path) == []
+
+
+@pytest.mark.parametrize(("change", "reason"), [
+	({"SOURCE_REPO": LW_CONSUMER_REPO}, "consumer_report"),
+	({"HEAD_SHA": "not-a-sha"}, "invalid_input"),
+	({"SUMMARIES_FILE": "/nonexistent/summaries.json"}, "run_unavailable"),
+	({"HEAD_SHA": "e" * 40}, "run_unavailable"),
+])
+def test_suspect_scope_ineligible_reports_make_no_call(tmp_path: Path, change: dict, reason: str) -> None:
+	_ss_skip_without_jq()
+	repo, _sha, log_dir, runtime_dir, env = _ss_setup(tmp_path)
+	result = _run_scope_freeze(log_dir, runtime_dir, extra_env={**env, **change}, cwd=repo)
+	assert f"WORKFLOW_HEAL suspect_scope outcome=skipped reason={reason} paths=0 calls=0 source=none" in result.stderr
+	assert _ss_gh_calls(tmp_path) == []
+	assert "suspect_files" not in json.loads((runtime_dir / "scope_inputs_frozen.json").read_text(encoding="utf-8"))
+
+
+def test_suspect_scope_fork_head_and_missing_commit_make_no_call(tmp_path: Path) -> None:
+	_ss_skip_without_jq()
+	repo, sha, log_dir, runtime_dir, env = _ss_setup(tmp_path)
+	info = log_dir / f"run-{SS_RUN_ID}-info.json"
+	doc = json.loads(info.read_text())
+	info.write_text(json.dumps({**doc, "head_repository": {"full_name": "forker/coding-workflows"}}))
+	result = _run_scope_freeze(log_dir, runtime_dir, extra_env=env, cwd=repo)
+	assert "WORKFLOW_HEAL suspect_scope outcome=skipped reason=foreign_head paths=0 calls=0 source=none" in result.stderr
+	info.write_text(json.dumps(doc))
+	elsewhere = tmp_path / "elsewhere"
+	subprocess.run(["git", "init", "-q", str(elsewhere)], check=True)
+	result = _run_scope_freeze(log_dir, runtime_dir, extra_env=env, cwd=elsewhere)
+	assert "WORKFLOW_HEAL suspect_scope outcome=skipped reason=scope_commit_unavailable paths=0 calls=0 source=none" in result.stderr
+	assert _ss_gh_calls(tmp_path) == []
+
+
+def test_suspect_scope_fails_open_on_a_failed_compare(tmp_path: Path) -> None:
+	_ss_skip_without_jq()
+	repo, _sha, log_dir, runtime_dir, env = _ss_setup(tmp_path)
+	(tmp_path / "compare.json").write_text("not json")
+	result = _run_scope_freeze(log_dir, runtime_dir, extra_env=env, cwd=repo)
+	assert "WORKFLOW_HEAL suspect_scope outcome=partial reason=malformed paths=0 calls=2 source=fetched" in result.stderr
+	assert "scope_inputs_freeze_failed" not in result.stderr
+	assert "suspect_files" not in json.loads((runtime_dir / "scope_inputs_frozen.json").read_text(encoding="utf-8"))
+
+
+def test_freeze_filter_adds_suspect_files_only_when_non_empty() -> None:
+	if shutil.which("jq") is None:
+		pytest.skip("jq is required to run the intake's scope-freeze filter")
+	args = {"failing_tests": {"names": [], "files": []}, "engine_runs": [], "engine_paths": [], "linked_paths": [],
+		"runs": [f"{SELF_REPO}:1"], "self_workflows": [".github/workflows/ci.yml"], "consumer_workflows": [], "changed": []}
+
+	def freeze(extra: dict) -> str:
+		cmd = ["jq", "-n", "--arg", "crash", ""]
+		for key, value in {**args, **extra}.items():
+			cmd += ["--argjson", key, json.dumps(value)]
+		return subprocess.run([*cmd, _lw_freeze_filter()], capture_output=True, text=True, check=True).stdout
+
+	baseline = freeze({})
+	assert freeze({"suspect_files": []}) == baseline
+	nine = [f"scripts/s{index}.sh" for index in range(9)]
+	widened = json.loads(freeze({"suspect_files": nine}))
+	assert widened["suspect_files"] == nine[:heal.HEAL_SUSPECT_SCOPE_MAX]
+	assert {key: value for key, value in widened.items() if key != "suspect_files"} == json.loads(baseline)
+
+
+def test_suspect_scope_intake_wiring() -> None:
+	text = LW_INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert 'SUSPECT_SCOPE_ENABLED="${WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED:-false}"' in text
+	freeze = text.index('jq -n --arg crash "${PAYLOAD_CRASH_FILE}"')
+	assert text.index("\n_heal_scope_linked_paths ||") < text.index("\n_heal_scope_suspect_paths ||") < freeze
+	assert '--argjson suspect_files "${SUSPECT_SCOPE_PATHS_JSON:-[]}"' in text
+	runner = text.split("\n_heal_scope_suspect_paths()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert "gh api" not in runner and "gh_retry" not in runner
+	assert runner.count('python3 "${HEAL_PY}" suspect-scope') == 1 and "GH_RETRY_MAX_ATTEMPTS=1" in runner
+	assert '[ "${suspect_scope_switch}" = true ] || return 0' in runner
+	suspect_commits = text.split("\n_heal_build_suspect_commits()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert '--compare-json "${suspect_dir}/compare_cache.json"' in suspect_commits
+	workflow = LW_INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	line = "      WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED: ${{ vars.WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED || 'false' }}\n"
+	assert workflow.count(line) == 2  # intake and recovery-scan jobs

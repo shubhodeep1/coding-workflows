@@ -1044,17 +1044,17 @@ def test_source_repo_without_its_conflict_set_still_fails_closed(tmp_path):
 # --- Second paired live hook: prepush_affected_tests.py (#8973) ---
 #
 # PR #8436 (run 42355218108) failed closed with sandbox_path_host_only on
-# .claude/hooks/prepush_affected_tests.py: the paired-live mirroring and the
-# guard-hook template merge covered only pr_merge_status_guard.py. The xfail
-# below records the paired-live half of the gap only while PAIRED_LIVE_COPIES
-# lacks the pair, so it turns into an ordinary regression test as soon as the
-# pair lands (on this branch or on the base CI merges in). The guard tests
-# lock the sandbox boundary, so a fix cannot get there by admitting the live
-# hook or taking it from base.
+# .claude/hooks/prepush_affected_tests.py. PAIRED_LIVE_COPIES now pairs that
+# live hook with its workflow-templates/ twin, so when both are unmerged with
+# identical stages the template goes to the resolver and the runner mirrors it
+# onto the live copy. The paired-live report test below locks that pairing,
+# and the guard tests lock the sandbox boundary: the live hook is never
+# admitted to the sandbox and never taken from base on an integration branch.
+# The clean-template host-only merge gap is tracked by the strict xfail in
+# tests/test_conflict_guard_hook_template_merge.py.
 
 PREPUSH_HOOK = ".claude/hooks/prepush_affected_tests.py"
 PREPUSH_HOOK_TEMPLATE = "workflow-templates/" + PREPUSH_HOOK
-PREPUSH_GAP_REASON = "#8973: guard-hook template merge covers only pr_merge_status_guard.py; scripts outside heal scope"
 WORKSPACE_PY = SCRIPT.parent / "review_untrusted_workspace.py"
 
 
@@ -1066,19 +1066,14 @@ def _workspace_module():
 	return module
 
 
-# True only while the paired-live gap is still open in the code under test.
-_PREPUSH_PAIR_GAP_OPEN = _workspace_module().PAIRED_LIVE_COPIES.get(PREPUSH_HOOK) != PREPUSH_HOOK_TEMPLATE
-
-
 def test_prepush_hook_pair_fixture_conflicts_on_both_paths(tmp_path):
-	"""The xfail below must fail only because of the gap, not the fixture."""
+	"""The fixture must leave both paths unmerged, the shape the paired-live report test relies on."""
 	repo = tmp_path / "repo"
 	repo.mkdir()
 	_paired_hook_conflict(repo, False, hook_rel=PREPUSH_HOOK)
 	assert sorted(_unmerged(repo)) == sorted([PREPUSH_HOOK, PREPUSH_HOOK_TEMPLATE])
 
 
-@pytest.mark.xfail(_PREPUSH_PAIR_GAP_OPEN, strict=True, raises=AssertionError, reason=PREPUSH_GAP_REASON)
 def test_prepush_hook_pair_is_listed_in_paired_live_report(tmp_path):
 	repo = tmp_path / "repo"
 	repo.mkdir()
@@ -1093,9 +1088,7 @@ def test_prepush_hook_pair_is_listed_in_paired_live_report(tmp_path):
 	env = {**_git_env(), "PYTHONDONTWRITEBYTECODE": "1"}
 	report = subprocess.run(["python3", str(WORKSPACE_PY), "paired-live-copies", str(repo), str(conflicted), str(unmerged_z),
 		str(pairs), str(model_paths)], env=env, capture_output=True, text=True, check=False, timeout=120)
-	# A CLI crash is a harness failure, not the expected gap.
-	if report.returncode != 0:
-		raise RuntimeError(f"paired-live-copies failed: {report.stderr}")
+	assert report.returncode == 0, report.stderr
 	assert _workspace_module().PAIRED_LIVE_COPIES.get(PREPUSH_HOOK) == PREPUSH_HOOK_TEMPLATE
 	assert pairs.read_text(encoding="utf-8") == f"{PREPUSH_HOOK}\t{PREPUSH_HOOK_TEMPLATE}\n"
 	assert model_paths.read_text(encoding="utf-8") == f"{PREPUSH_HOOK_TEMPLATE}\n"

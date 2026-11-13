@@ -355,7 +355,7 @@ def test_workflow_uses_per_run_groups_and_queue_steps() -> None:
 	assert workflow["concurrency"]["cancel-in-progress"] is False
 	scan = workflow["jobs"]["recovery-scan"]
 	assert scan["concurrency"]["group"] == "${{ vars.HEAL_INTAKE_QUEUE_ENABLED != 'false' && format('workflow-failure-heal-recovery-scan-{0}', github.run_id) || 'workflow-failure-heal-intake' }}"
-	for job_name, run_step, job_token, timeout in (("intake", "Run workflow failure heal intake", "intake", 130), ("recovery-scan", "Run heal-scope recovery scan", "recovery-scan", 175)):
+	for job_name, run_step, job_token, timeout in (("intake", "Run workflow failure heal intake", "intake", 156), ("recovery-scan", "Run heal-scope recovery scan", "recovery-scan", 175)):
 		job = workflow["jobs"][job_name]
 		assert job["timeout-minutes"] == timeout
 		assert job["env"]["HEAL_INTAKE_QUEUE_ENABLED"] == "${{ vars.HEAL_INTAKE_QUEUE_ENABLED || 'true' }}"

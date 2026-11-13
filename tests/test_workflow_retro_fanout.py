@@ -156,6 +156,21 @@ sys.exit(0)
 	_write_exec(bin_dir / "codex", codex_script)
 
 
+def _install_mock_cat(bin_dir: Path, real_cat: str) -> None:
+	"""PATH `cat` shim that fails when any argument contains $MOCK_CAT_FAIL_MATCH."""
+	cat_script = f"""#!/usr/bin/env bash
+if [ -n "${{MOCK_CAT_FAIL_MATCH:-}}" ]; then
+	for arg in "$@"; do
+		case "$arg" in
+			*"${{MOCK_CAT_FAIL_MATCH}}"*) exit 1 ;;
+		esac
+	done
+fi
+exec "{real_cat}" "$@"
+"""
+	_write_exec(bin_dir / "cat", cat_script)
+
+
 RETRO_BODY = "\n".join(
 	[
 		"## Weekly Retro",
@@ -213,6 +228,9 @@ def _run_fanout(
 	consumer_repos: list[str],
 	extra_env: dict | None = None,
 	run_from_temp_dir: bool = False,
+	cat_fail_match: str | None = None,
+	sanitize_fail_match: str | None = None,
+	sanitize_corrupt_match: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
 	with tempfile.TemporaryDirectory(prefix="retro-fanout-test-") as td:
 		tmp_path = Path(td)
@@ -225,6 +243,23 @@ def _run_fanout(
 		support_root = tmp_path / "support"
 		support_root.mkdir()
 		staged_script = _stage_support_tree(support_root)
+		if cat_fail_match is not None:
+			real_cat = shutil.which("cat")
+			assert real_cat, "cat not found on PATH"
+			_install_mock_cat(bin_dir, real_cat)
+		if sanitize_fail_match is not None:
+			# Appended after the real definition, so this override wins when
+			# the fan-out script sources the staged gh_helpers.sh.
+			with (support_root / "scripts" / "gh_helpers.sh").open("a", encoding="utf-8") as helpers:
+				helpers.write(
+					'\nsanitize_codex_prompt_file() { case "${1:-}" in *"${MOCK_SANITIZE_FAIL_MATCH}"*) return 1 ;; esac; return 0; }\n'
+				)
+		if sanitize_corrupt_match is not None:
+			# A sanitizer that reports success but leaves invalid UTF-8 behind.
+			with (support_root / "scripts" / "gh_helpers.sh").open("a", encoding="utf-8") as helpers:
+				helpers.write(
+					'\nsanitize_codex_prompt_file() { case "${1:-}" in *"${MOCK_SANITIZE_CORRUPT_MATCH}"*) printf \'\\377\' >> "$1" ;; esac; return 0; }\n'
+				)
 		# workflow_retro.py reads ai-memory run events from the workspace's
 		# origin (a git fetch per repo); a workspace without a remote fails
 		# that read open at once instead of fetching from the real origin.
@@ -255,6 +290,12 @@ def _run_fanout(
 				"CODEX_RETRY_BACKOFF_BASE_SECS": "1",
 			}
 		)
+		if cat_fail_match is not None:
+			env["MOCK_CAT_FAIL_MATCH"] = cat_fail_match
+		if sanitize_fail_match is not None:
+			env["MOCK_SANITIZE_FAIL_MATCH"] = sanitize_fail_match
+		if sanitize_corrupt_match is not None:
+			env["MOCK_SANITIZE_CORRUPT_MATCH"] = sanitize_corrupt_match
 		env.update(extra_env or {})
 		proc = subprocess.run(
 			["bash", str(staged_script)],
@@ -512,6 +553,102 @@ def test_fanout_marks_repo_failed_when_existing_tracker_reopen_or_edit_fails() -
 		assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo status=failed" in proc.stdout
 		assert len(final_state.get("codex_calls", [])) == 1
 		assert final_state.get("comment_payloads", []) == []
+
+
+def _active_report(repos: list[str]) -> dict:
+	return {
+		"runs": [
+			{
+				"repository": repo,
+				"run_id": idx + 1,
+				"workflow_name": f"Workflow {idx + 1}",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 60,
+				"created_at": _recent_iso(days_ago=1),
+			}
+			for idx, repo in enumerate(repos)
+		],
+		"summary": {},
+		"scope": {},
+		"errors": [],
+	}
+
+
+def _assert_bad_repo_failed_good_repo_posted(proc: subprocess.CompletedProcess[str], final_state: dict, warning: str) -> None:
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert warning in proc.stdout
+	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/bad-repo status=failed" in proc.stdout
+	# Only good-repo reached the model; bad-repo failed closed before it.
+	assert len(final_state.get("codex_calls", [])) == 1
+	good_lines = [
+		line
+		for line in proc.stdout.splitlines()
+		if line.startswith("WORKFLOW_RETRO_FANOUT_V1: repo=owner/good-repo week=")
+	]
+	assert any("status=posted" in line for line in good_lines), proc.stdout
+	assert "retro-fanout: attempted=2 failed=1" in proc.stdout
+
+
+def test_fanout_prompt_assembly_failure_skips_model_call_and_continues() -> None:
+	state = {"issue_list_responses": [[]], "next_issue_number": 9400}
+	proc, final_state = _run_fanout(
+		state,
+		report=_active_report(["owner/bad-repo", "owner/good-repo"]),
+		consumer_repos=["owner/bad-repo", "owner/good-repo"],
+		# Fails the `cat "${ctx_file}"` in the middle of the prompt group.
+		cat_fail_match="owner__bad-repo-context.md",
+	)
+	_assert_bad_repo_failed_good_repo_posted(
+		proc,
+		final_state,
+		"::warning::retro-fanout: prompt assembly failed for owner/bad-repo; skipping the model call.",
+	)
+
+
+def test_fanout_sanitizer_failure_skips_model_call_and_continues() -> None:
+	state = {"issue_list_responses": [[]], "next_issue_number": 9500}
+	proc, final_state = _run_fanout(
+		state,
+		report=_active_report(["owner/bad-repo", "owner/good-repo"]),
+		consumer_repos=["owner/bad-repo", "owner/good-repo"],
+		sanitize_fail_match="owner__bad-repo-prompt.txt",
+	)
+	_assert_bad_repo_failed_good_repo_posted(
+		proc,
+		final_state,
+		"::warning::retro-fanout: prompt sanitization failed for owner/bad-repo; skipping the model call.",
+	)
+
+
+def test_fanout_invalid_utf8_after_sanitizer_skips_model_call_and_continues() -> None:
+	state = {"issue_list_responses": [[]], "next_issue_number": 9700}
+	proc, final_state = _run_fanout(
+		state,
+		report=_active_report(["owner/bad-repo", "owner/good-repo"]),
+		consumer_repos=["owner/bad-repo", "owner/good-repo"],
+		sanitize_corrupt_match="owner__bad-repo-prompt.txt",
+	)
+	_assert_bad_repo_failed_good_repo_posted(
+		proc,
+		final_state,
+		"::warning::retro-fanout: prompt for owner/bad-repo is not valid UTF-8 after sanitization; skipping the model call.",
+	)
+
+
+def test_fanout_comment_assembly_failure_posts_nothing() -> None:
+	state = {"issue_list_responses": [[]], "next_issue_number": 9600}
+	proc, final_state = _run_fanout(
+		state,
+		report=_active_report(["owner/active-repo"]),
+		consumer_repos=["owner/active-repo"],
+		cat_fail_match="owner__active-repo-retro.md",
+	)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "::warning::retro-fanout: retro comment assembly failed for owner/active-repo." in proc.stdout
+	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo status=failed" in proc.stdout
+	assert len(final_state.get("codex_calls", [])) == 1
+	assert final_state.get("comment_payloads", []) == []
 
 
 def main() -> int:

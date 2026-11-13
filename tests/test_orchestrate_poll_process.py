@@ -836,6 +836,7 @@ def _run_poller(
 	issue_labels: dict[int, list[str]] | None = None,
 	issue_comments: dict[int, list[str | dict]] | None = None,
 	issue_bodies: dict[int, str] | None = None,
+	issue_titles: dict[int, str] | None = None,
 	issue_events: dict[int, list[dict]] | None = None,
 	issue_events_after_first_get: dict[int, list[dict]] | None = None,
 	issue_authors: dict[int, dict] | None = None,
@@ -951,6 +952,7 @@ def _run_poller(
 		issue_labels = {10: ["ai:merged"]}
 	issue_comments = issue_comments or {}
 	issue_bodies = issue_bodies or {}
+	issue_titles = issue_titles or {}
 	issue_authors = issue_authors or {}
 	issue_events = issue_events or {}
 	issue_events_after_first_get = issue_events_after_first_get or {}
@@ -1395,6 +1397,11 @@ esac
 			issues[str(inum)] = {
 				"labels": list(labels),
 				"comments": issue_comment_entries,
+				# A real issue always has a title; the implementation-failed
+				# re-issue loop defers an issue whose title reads empty (BUG-002).
+				# issue_titles overrides it (an empty string reads as no title,
+				# for paths that test a fallback title).
+				"title": issue_titles.get(inum, f"Issue {inum}"),
 				"body": issue_bodies.get(inum, f"Issue {inum}"),
 				"closed": bool(issue_closed.get(inum, False)),
 				"author_login": str(issue_authors.get(inum, {}).get("login", "octocat")),
@@ -1733,13 +1740,21 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'list':
 				if il_label not in labels:
 					continue
 				try:
-					out.append({
+					il_entry = {
 						'number': int(inum),
 						'labels': [{'name': l} for l in labels],
 						'body': idata.get('body', ''),
-					})
+					}
 				except (TypeError, ValueError):
 					continue
+				# Issue #8955: the close sweep asks for the issue author.
+				if 'author' in str(il_json_fields or '').split(','):
+					il_author_entry = store.get('issue_authors', {}).get(str(inum))
+					if il_author_entry is not None:
+						il_entry['author'] = {'login': str((il_author_entry.get('user') or {}).get('login', ''))}
+					else:
+						il_entry['author'] = {'login': str(idata.get('author_login', 'octocat'))}
+				out.append(il_entry)
 			print(json.dumps(out))
 			sys.exit(0)
 	print('[]')
@@ -2205,6 +2220,9 @@ if args[0] == 'api':
 				issue_payload['number'] = issue_num
 			if re.search(r'(?m)^\s*state\s*$', query):
 				issue_payload['state'] = issue_state
+			# Issue #8808: issue createdAt (opt-in per issue via issue_created_at).
+			if re.search(r'(?m)^\s*createdAt\s*$', query):
+				issue_payload['createdAt'] = str((store.get('issue_created_at') or {}).get(str(issue_num), '2026-01-01T00:00:00Z'))
 			if re.search(r'(?m)^\s*body\s*$', query):
 				issue_payload['body'] = issue.get('body', '')
 			# Opt-in issue author fields (issue #7228) override the per-issue defaults.
@@ -2295,6 +2313,10 @@ if args[0] == 'api':
 							},
 						})
 				issue_payload['timelineItems'] = {'nodes': timeline_nodes}
+				# Issue #8808: opt-in truncated timeline (more than the last 50
+				# cross-references).
+				if str(issue_num) in {str(n) for n in store.get('issue_timeline_truncated', [])}:
+					issue_payload['timelineItems']['pageInfo'] = {'hasPreviousPage': True}
 			repo[f'i{alias_num}'] = issue_payload
 		print(json.dumps({'data': {'repository': repo}}))
 		sys.exit(0)
@@ -2526,6 +2548,22 @@ if args[0] == 'api':
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)$', path)
+	if m and method == 'PATCH' and store.get('record_issue_state_patch') and any(f.startswith('state=') for f in fields):
+		# Issue #8808: heal stale auto-close (state=closed, state_reason=completed).
+		# Opt-in so other fixtures' state PATCHes (tracking-issue auto-close,
+		# plan-split close) keep the generic handling below.
+		num = int(m.group(1))
+		if num in set(store.get('fail_issue_state_patch_for', [])):
+			print('forced issue PATCH failure', file=sys.stderr)
+			sys.exit(1)
+		issue = get_issue(m.group(1))
+		patch = dict(f.split('=', 1) for f in fields if '=' in f)
+		if patch.get('state') == 'closed':
+			issue['closed'] = True
+		store.setdefault('issue_state_patch_calls', []).append({'issue': num, **patch})
+		save()
+		print(json.dumps({'number': num, 'state': patch.get('state', '')}))
+		sys.exit(0)
 	if m and method == 'PATCH' and any(f.startswith('body=') for f in fields):
 		# Issue body write (pipeline plan grant, Q108).
 		num = int(m.group(1))
@@ -3199,7 +3237,8 @@ if args[0] == 'api':
 			else:
 				print(json.dumps(result))
 			sys.exit(0)
-		result = {'workflow_runs': runs, 'total_count': len(runs)}
+		# Issue #8808: opt-in total_count above the page (a busy branch).
+		result = {'workflow_runs': runs, 'total_count': len(runs) + int(store.get('workflow_runs_total_count_extra', 0) or 0)}
 		if jq:
 			import subprocess as _sp
 			p = _sp.run(['jq', '-r', jq], input=json.dumps(result), capture_output=True, text=True)
@@ -8482,6 +8521,310 @@ def test_security_pass_fix_successor_malformed_state_is_inconclusive() -> None:
 		assert result.stdout.splitlines() == ["2", "2"]
 		assert not api_call_path.exists()
 
+def _rb_reissue_body(tracking: int, replaces: int, *, local_id: str = "phase1") -> str:
+	return (
+		"Redo the phase.\r\n\r\n---\r\n**Orchestrator metadata** (do not edit)\r\n"
+		f"- Tracking issue: #{tracking}\r\n"
+		"- Integration branch: `orchestrator/project-8969`\r\n"
+		f"- Local ID: `{local_id}`\r\n\r\n---\r\n"
+		"**Review-blocked reissue metadata**\r\n"
+		f"- Replaces: #{replaces} (PR #8972 closed — approach rework)\r\n"
+		"- Type: review-blocked-reissue"
+	)
+
+
+def _rb_reissue_xref(number: int, body: str, labels: list[str], *, pr: bool = False, repo: str = "owner/repo", state: str = "open") -> dict:
+	issue: dict = {
+		"number": number,
+		"state": state,
+		"body": body,
+		"labels": [{"name": name} for name in labels],
+		"repository_url": f"https://api.github.com/repos/{repo}",
+		"pull_request": {"url": f"https://api.github.com/repos/{repo}/pulls/{number}"} if pr else None,
+	}
+	return {"event": "cross-referenced", "source": {"type": "issue", "issue": issue}}
+
+
+def _run_rb_reissue_harness(timeline_pages: list | None, script_tail: str, state: dict | None = None) -> subprocess.CompletedProcess:
+	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helpers = _extract_bash_function(
+		poller_source, "resolve_review_blocked_reissue_successor() {"
+	) + _extract_bash_function(poller_source, "adopt_review_blocked_reissue_successor() {")
+	with tempfile.TemporaryDirectory() as temp_dir:
+		temp_path = Path(temp_dir)
+		timeline_path = temp_path / "timeline.json"
+		state_path = temp_path / "state.json"
+		state_path.write_text(json.dumps(state or {}), encoding="utf-8")
+		if timeline_pages is None:
+			fake = 'gh_retry_to_file() { : > "$1"; return 1; }\n'
+		else:
+			timeline_path.write_text("".join(json.dumps(page) for page in timeline_pages), encoding="utf-8")
+			fake = f'gh_retry_to_file() {{ cp {str(timeline_path)!r} "$1"; }}\n'
+		harness = (
+			"set -euo pipefail\n"
+			f"STATE_FILE={str(state_path)!r}\n"
+			f"RUNTIME_DIR={str(temp_path)!r}\n"
+			"TRACKING_NUM=8969\nWAVE_IDX=0\nGITHUB_REPOSITORY=owner/repo\n"
+			+ fake
+			+ helpers
+			+ "\n"
+			+ script_tail
+			+ f"\necho STATE=$(jq -c . {str(state_path)!r})\n"
+		)
+		harness_path = temp_path / "harness.sh"
+		harness_path.write_text(harness, encoding="utf-8")
+		return subprocess.run(["bash", str(harness_path)], capture_output=True, text=True, check=False)
+
+
+_RB_RESOLVE_TAIL = 'rc=0; out="$(resolve_review_blocked_reissue_successor 8970)" || rc=$?; echo "rc=${rc}"; echo "out=${out}"\n'
+
+
+def test_rb_reissue_successor_resolves_review_pipeline_reissue() -> None:
+	"""Regression for project #8969 (2026-11-07): review_rb_judge.sh reissued
+	wave issue #8970 as #8994, the poller never mapped it, and the wave judge
+	opened duplicate #8995.  The resolver must find #8994 (and not the judge's
+	own redo, whose body has no ``Replaces`` line) from #8970's timeline."""
+	result = _run_rb_reissue_harness(
+		[
+			[
+				_rb_reissue_xref(8969, "tracking body", ["ai:orchestrator-tracking"]),
+				_rb_reissue_xref(8972, "Closes #8970", ["ai:engine-claude"], pr=True),
+			],
+			[
+				_rb_reissue_xref(8994, _rb_reissue_body(8969, 8970), ["ai:merged", "ai:orchestrator-managed"], state="closed"),
+				_rb_reissue_xref(8995, "Phase 1 redo.\n- Tracking issue: #8969\nSee #8970.", ["ai:done", "ai:orchestrator-managed"]),
+			],
+		],
+		_RB_RESOLVE_TAIL,
+	)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	assert "rc=0" in lines
+	out = json.loads(next(line for line in lines if line.startswith("out="))[4:])
+	assert out == {"number": 8994, "state": "closed", "labels": ["ai:merged", "ai:orchestrator-managed"]}
+
+
+def test_rb_reissue_successor_rejects_untrusted_or_mismatched_sources() -> None:
+	body = _rb_reissue_body(8969, 8970)
+	result = _run_rb_reissue_harness(
+		[
+			[
+				# No ai:orchestrator-managed label: forged markers are not enough.
+				_rb_reissue_xref(9001, body, []),
+				# A PR, not an issue.
+				_rb_reissue_xref(9002, body, ["ai:orchestrator-managed"], pr=True),
+				# Another repository.
+				_rb_reissue_xref(9003, body, ["ai:orchestrator-managed"], repo="other/repo"),
+				# Another project.
+				_rb_reissue_xref(9004, _rb_reissue_body(1234, 8970), ["ai:orchestrator-managed"]),
+				# Replaces a different issue whose number starts with 8970.
+				_rb_reissue_xref(9005, _rb_reissue_body(8969, 89701), ["ai:orchestrator-managed"]),
+				# Older than the closed issue.
+				_rb_reissue_xref(8000, body, ["ai:orchestrator-managed"]),
+				# Missing the reissue type marker.
+				_rb_reissue_xref(9006, body.replace("- Type: review-blocked-reissue", ""), ["ai:orchestrator-managed"]),
+			]
+		],
+		_RB_RESOLVE_TAIL,
+	)
+	assert result.returncode == 0, result.stderr
+	assert "rc=1" in result.stdout.splitlines()
+
+
+def test_rb_reissue_successor_picks_highest_match_and_fails_open_on_lookup_error() -> None:
+	body = _rb_reissue_body(8969, 8970)
+	result = _run_rb_reissue_harness(
+		[[_rb_reissue_xref(8994, body, ["ai:orchestrator-managed"]), _rb_reissue_xref(8999, body, ["ai:orchestrator-managed"])]],
+		_RB_RESOLVE_TAIL,
+	)
+	assert result.returncode == 0, result.stderr
+	assert '"number":8999' in result.stdout
+
+	failed = _run_rb_reissue_harness(None, _RB_RESOLVE_TAIL)
+	assert failed.returncode == 0, failed.stderr
+	assert "rc=2" in failed.stdout.splitlines()
+
+
+def _rb_reissue_state() -> dict:
+	return {
+		"issue_number_map": {"phase1": 8970, "phase1-redo": 8995},
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "phase1", "github_issue": 8970, "status": "closed", "last_seen_phase": "ai:closed", "status_since_ts": 1, "stall_recovery_count": 2},
+					{"id": "phase1-redo", "github_issue": 8995, "status": "done"},
+				],
+			},
+			{"wave": 2, "issues": [{"id": "phase2", "github_issue": None, "status": "pending"}]},
+		],
+	}
+
+
+def test_rb_reissue_adoption_repoints_wave_entry_once() -> None:
+	result = _run_rb_reissue_harness(
+		[],
+		'rc=0; lid="$(adopt_review_blocked_reissue_successor 8970 8994)" || rc=$?; echo "adopt=${rc}:${lid}"\n'
+		'rc=0; adopt_review_blocked_reissue_successor 8970 8994 || rc=$?; echo "again=${rc}"\n',
+		state=_rb_reissue_state(),
+	)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	assert "adopt=0:phase1" in lines
+	assert "again=3" in lines
+	state = json.loads(next(line for line in lines if line.startswith("STATE="))[6:])
+	assert state["issue_number_map"] == {"phase1": 8994, "phase1-redo": 8995}
+	entry = state["waves"][0]["issues"][0]
+	assert entry["github_issue"] == 8994
+	assert entry["status"] == "pending"
+	assert entry["last_seen_phase"] == ""
+	assert entry["stall_recovery_count"] == 0
+	assert state["waves"][0]["issues"][1] == {"id": "phase1-redo", "github_issue": 8995, "status": "done"}
+
+
+def test_rb_reissue_adoption_refuses_tracked_successor_and_terminal_entries() -> None:
+	state = _rb_reissue_state()
+	state["waves"][0]["issues"].append({"id": "phase1-b", "github_issue": 8971, "status": "merged"})
+	state["waves"][0]["issues"].append({"id": "phase1-c", "github_issue": 8973, "status": "skipped"})
+	result = _run_rb_reissue_harness(
+		[],
+		'rc=0; adopt_review_blocked_reissue_successor 8970 8995 || rc=$?; echo "tracked=${rc}"\n'
+		'rc=0; adopt_review_blocked_reissue_successor 8971 9100 || rc=$?; echo "merged=${rc}"\n'
+		'rc=0; adopt_review_blocked_reissue_successor 8973 9101 || rc=$?; echo "skipped=${rc}"\n'
+		'rc=0; adopt_review_blocked_reissue_successor 7777 9102 || rc=$?; echo "absent=${rc}"\n',
+		state=state,
+	)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	for expected in ("tracked=3", "merged=1", "skipped=1", "absent=1"):
+		assert expected in lines, result.stdout
+	after = json.loads(next(line for line in lines if line.startswith("STATE="))[6:])
+	assert after == state
+
+
+def test_rb_reissue_adoption_replaces_orphan_entry_for_successor() -> None:
+	"""A successor the orphan sweep injected as ``orphan-rb-<n>`` into the
+	current wave does not block adoption; the orphan entry is removed."""
+	state = _rb_reissue_state()
+	state["waves"][0]["issues"].append({"id": "orphan-rb-8994", "github_issue": 8994, "status": "in_progress"})
+	result = _run_rb_reissue_harness(
+		[],
+		'rc=0; lid="$(adopt_review_blocked_reissue_successor 8970 8994)" || rc=$?; echo "adopt=${rc}:${lid}"\n',
+		state=state,
+	)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	assert "adopt=0:phase1" in lines
+	after = json.loads(next(line for line in lines if line.startswith("STATE="))[6:])
+	ids = [entry["id"] for entry in after["waves"][0]["issues"]]
+	assert ids == ["phase1", "phase1-redo"]
+	assert after["waves"][0]["issues"][0]["github_issue"] == 8994
+
+
+def test_rb_reissue_adoption_seeds_successor_pr_state() -> None:
+	"""Wiring guard: the adoption loop gives the successor a PR_STATES_JSON
+	entry so check-wave-status does not read a closed successor whose PR
+	merged before ai:merged landed as closed-without-merge."""
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	adopt = source.index('adopt_review_blocked_reissue_successor "${_rb_reissue_closed}" "${_rb_reissue_num}"')
+	seed = source.index('PR_STATES_JSON="$(printf \'%s\' "${PR_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}"')
+	wave_status = source.index('--pr-states-json "${PR_STATES_JSON}"')
+	assert adopt < seed < wave_status
+
+
+def _run_rb_reissue_adoption_loop(xref_stub: str, fetch_stub: str, pr_states: str = "{}") -> dict:
+	"""Run the real adoption loop (candidate loop through its unset line) with
+	stubbed helpers; return the JSON maps it hands to check-wave-status."""
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = source.index('  for _rb_reissue_candidate in ${RB_REISSUE_ADOPTION_CANDIDATES[@]+')
+	end = source.index("\n", source.index("  unset _rb_reissue_candidate", start)) + 1
+	loop = source[start:end]
+	jq_field = _extract_bash_function(source, "_jq_field()\n{")
+	succ = json.dumps({"number": 8994, "state": "closed", "labels": ["ai:orchestrator-managed"]})
+	harness = (
+		"set -euo pipefail\n"
+		"TRACKING_NUM=8969\n"
+		"ISSUE_NUMS=' 8970 8995'\n"
+		f"PR_STATES_JSON={pr_states!r}\nLABELS_JSON='{{}}'\nISSUE_STATES_JSON='{{}}'\n"
+		"RB_REISSUE_ADOPTION_STATE_CHANGED=false\n"
+		f"RB_REISSUE_ADOPTION_CANDIDATES=(\"8970\"$'\\t'{succ!r})\n"
+		"adopt_review_blocked_reissue_successor() { echo phase1; }\n"
+		"add_healing_note() { :; }\n"
+		"post_state_comment() { :; }\n"
+		"_pr_json_is_issue_implementation_pr() { return 0; }\n"
+		+ xref_stub + "\n" + fetch_stub + "\n" + jq_field + "\n" + loop
+		+ 'printf \'PR=%s\\nISSUES=%s\\n\' "${PR_STATES_JSON}" "${ISSUE_STATES_JSON}"\n'
+	)
+	with tempfile.TemporaryDirectory() as temp_dir:
+		harness_path = Path(temp_dir) / "harness.sh"
+		harness_path.write_text(harness, encoding="utf-8")
+		result = subprocess.run(["bash", str(harness_path)], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	return {
+		"stdout": result.stdout,
+		"pr": json.loads(next(line for line in lines if line.startswith("PR="))[3:]),
+		"issues": json.loads(next(line for line in lines if line.startswith("ISSUES="))[7:]),
+	}
+
+
+def test_rb_reissue_adoption_inconclusive_pr_lookup_does_not_read_as_unmerged() -> None:
+	"""A failed successor PR lookup must not be seeded as merged:false, which
+	check-wave-status reads as closed-without-merge (duplicate redo).  The
+	successor counts as open for that tick and a warning is logged."""
+	ok_fetch = '_fetch_pr_json() { echo \'{"state":"closed","merged_at":"2026-11-07T18:00:00Z"}\'; }'
+	for xref, fetch in (
+		("_issue_cross_ref_pr_numbers_unique() { return 1; }", ok_fetch),
+		("_issue_cross_ref_pr_numbers_unique() { echo 9003; }", "_fetch_pr_json() { echo '{}'; }"),
+	):
+		out = _run_rb_reissue_adoption_loop(xref, fetch)
+		assert "8994" not in out["pr"], out
+		assert out["issues"]["8994"] == "open", out
+		assert "outcome=inconclusive successor=8994 reason=successor_pr_lookup_failed" in out["stdout"]
+
+	merged = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { echo 9003; }", ok_fetch)
+	assert merged["pr"]["8994"] == {"state": "closed", "merged": True}
+	assert merged["issues"]["8994"] == "closed"
+	assert "reason=successor_pr_lookup_failed" not in merged["stdout"]
+
+	no_pr = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { :; }", ok_fetch)
+	assert no_pr["pr"]["8994"] == {"state": "unknown", "merged": False}
+	assert no_pr["issues"]["8994"] == "closed"
+
+
+def test_rb_reissue_adoption_rechecks_stale_unknown_pr_entry() -> None:
+	"""An orphan-rb successor the reconcile loop already read may carry a
+	default {state: unknown, merged: false} entry from a failed lookup.  The
+	adoption loop must look the PR up again instead of trusting it."""
+	stale = '{"8994":{"state":"unknown","merged":false}}'
+	ok_fetch = '_fetch_pr_json() { echo \'{"state":"closed","merged_at":"2026-11-07T18:00:00Z"}\'; }'
+	merged = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { echo 9003; }", ok_fetch, stale)
+	assert merged["pr"]["8994"] == {"state": "closed", "merged": True}
+	assert merged["issues"]["8994"] == "closed"
+
+	failed = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { return 1; }", ok_fetch, stale)
+	assert failed["issues"]["8994"] == "open", failed
+	assert "reason=successor_pr_lookup_failed" in failed["stdout"]
+
+	authoritative = '{"8994":{"state":"closed","merged":true}}'
+	kept = _run_rb_reissue_adoption_loop("_issue_cross_ref_pr_numbers_unique() { return 1; }", ok_fetch, authoritative)
+	assert kept["pr"]["8994"] == {"state": "closed", "merged": True}
+	assert "reason=successor_pr_lookup_failed" not in kept["stdout"]
+
+
+def test_rb_reissue_adoption_runs_before_wave_status_and_persists_state() -> None:
+	"""Wiring guard: the lookup sits in the reconcile loop and the adoption
+	runs, and is persisted, before the first check-wave-status read."""
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	lookup = source.index('_rb_reissue_json="$(resolve_review_blocked_reissue_successor "${inum}")"')
+	adopt = source.index('adopt_review_blocked_reissue_successor "${_rb_reissue_closed}" "${_rb_reissue_num}"')
+	persist = source.index('if [ "${RB_REISSUE_ADOPTION_STATE_CHANGED}" = "true" ]; then\n    post_state_comment || true')
+	wave_status = source.index('WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \\\n    --state-file "${STATE_FILE}" \\\n    --labels-json "${LABELS_JSON}" \\\n    --issue-states-json')
+	assert lookup < adopt < persist < wave_status
+	reset = source.index("  RB_REISSUE_ADOPTION_CANDIDATES=()\n  RB_REISSUE_ADOPTION_STATE_CHANGED=false\n  for inum in ${ISSUE_NUMS}; do")
+	assert reset < lookup
+
+
 def _security_pass_fixing_state_with_closed_fix_issue() -> dict:
 	state = _base_state(status="security-pass-fixing")
 	state.update(
@@ -8720,6 +9063,8 @@ def test_security_pass_implementation_failed_fix_with_resolved_blockers_is_reiss
 		issue_closed={701: True},
 		issue_comments={700: [_security_pass_post_codex_fixup_comment(700, 701)]},
 		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		# No source title, so the re-issue uses its deterministic fallback.
+		issue_titles={700: ""},
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
@@ -18988,13 +19333,17 @@ def _run_target_merge_helper_rules(tmp_path: Path) -> None:
 	helper = tmp_path / "helper.sh"
 	helper.write_text(script[start:end] + "\n", encoding="utf-8")
 
-	def run(base: str, default: str, declared: str, managed: str) -> str:
+	def run(base: str, default: str, declared: str, managed: str, triage: str | None = None) -> str:
 		pr_json = json.dumps({"base": {"ref": base}}) if base is not None else "{}"
+		if triage is None:
+			call = '_pr_json_base_is_target_merge 10 "$2" "$3" "$4" "$5"'
+		else:
+			call = '_pr_json_base_is_target_merge 10 "$2" "$3" "$4" "$5" "$6"'
 		proc = subprocess.run(
 			[
 				"bash", "-c",
-				'source "$1"; if _pr_json_base_is_target_merge 10 "$2" "$3" "$4" "$5"; then echo "yes:${_TARGET_MERGE_REASON}"; else echo no; fi',
-				"_", str(helper), pr_json, default, declared, managed,
+				'source "$1"; if ' + call + '; then echo "yes:${_TARGET_MERGE_REASON}"; else echo no; fi',
+				"_", str(helper), pr_json, default, declared, managed, triage or "",
 			],
 			check=True, capture_output=True, text=True,
 		)
@@ -19009,6 +19358,187 @@ def _run_target_merge_helper_rules(tmp_path: Path) -> None:
 	assert run("", "main", "", "true") == "no"
 	assert run(None, "main", "", "true") == "no"
 	assert run("Main", "main", "", "false") == "no"
+	# Issue #8955: the optional sixth argument (check-triage marker PR head).
+	assert run("ai/issue-9", "main", "", "false", "ai/issue-9") == "yes:check_triage_pr_branch"
+	assert run("ai/issue-9", "main", "", "false", "") == "no"
+	assert run("ai/issue-9", "main", "", "false", "ai/issue-8") == "no"
+	assert run("AI/issue-9", "main", "", "false", "ai/issue-9") == "no"
+	# Existing rules still win over the triage branch.
+	assert run("main", "main", "", "false", "main") == "yes:default_branch"
+	assert run("", "main", "", "false", "ai/issue-9") == "no"
+
+
+# ---------------------------------------------------------------------------
+# Issue #8955: ai:check-triage issues close when their fix PR merges into the
+# head branch of the failing PR their `check-failure-triage:pr=<N>` marker
+# names (close_merged_issues_sweep, reason=check_triage_pr_branch).
+# ---------------------------------------------------------------------------
+
+_TRIAGE_PIPELINE_LOGIN = "github-actions[bot]"
+
+
+def _triage_issue_body(pr: int = 970, extra: str = "") -> str:
+	return (
+		f"<!-- check-failure-triage:pr={pr} -->\n"
+		"Check `lint` failed on PR #970.\n\n---\n\nDiagnosis.\n" + extra
+	)
+
+
+def _triage_fix_pr(number: int = 971, base: str = "ai/issue-9") -> dict:
+	return {
+		"number": number,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-11-07T05:00:00Z",
+		"baseRefName": base,
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"body": "Fix.\n\nCloses #10\n",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+
+
+def _triage_marker_pr(number: int = 970, head: str = "ai/issue-9", head_repo: str | None = None) -> dict:
+	pr = {
+		"number": number,
+		"state": "open",
+		"merged": False,
+		"baseRefName": "main",
+		"headRefName": head,
+		"headRefFromApi": head,
+		"body": "Fixes #9",
+	}
+	if head_repo is not None:
+		pr["headRepoFullName"] = head_repo
+	return pr
+
+
+def _run_triage_sweep(labels: list[str], *, author: str = _TRIAGE_PIPELINE_LOGIN, body: str | None = None,
+		marker_pr: dict | None = None, fix_pr: dict | None = None, linked: bool = True) -> dict:
+	prs = [fix_pr or _triage_fix_pr(), marker_pr or _triage_marker_pr()]
+	return _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: labels},
+		issue_bodies={10: body if body is not None else _triage_issue_body()},
+		issue_authors={10: {"login": author, "association": "NONE"}},
+		issue_linked_prs={10: 971} if linked else {},
+		prs=prs,
+		mock_gh_issue_list_label_filter=True,
+	)
+
+
+def test_close_merged_sweep_closes_done_check_triage_issue_merged_into_marker_pr_branch():
+	result = _run_triage_sweep(["ai:check-triage", "ai:done"])
+	assert 10 in result.get("closed_issues", []), result["stdout"]
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=check_triage candidate_pr=971 accepted reason=check_triage_pr_branch"
+	) in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=971 origin=check_triage status=closed" in result["stdout"]
+	assert "Found 1 open issue(s) with ai:check-triage" in result["stdout"]
+
+
+def test_close_merged_sweep_closes_ready_check_triage_issue_merged_into_marker_pr_branch():
+	result = _run_triage_sweep(["ai:check-triage", "ai:ready-to-merge"])
+	assert 10 in result.get("closed_issues", []), result["stdout"]
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=ready_label candidate_pr=971 accepted reason=check_triage_pr_branch"
+	) in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=971 origin=ready_label status=closed" in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_rejects_non_pipeline_author():
+	result = _run_triage_sweep(["ai:check-triage", "ai:done"], author="someone-else")
+	assert 10 not in result.get("closed_issues", [])
+	assert "origin=check_triage candidate_pr=971 rejected=non_target_base" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=check_triage no_merged_pr_found non_target_base_seen=true" in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_rejects_foreign_marker_head():
+	result = _run_triage_sweep(["ai:check-triage", "ai:done"], marker_pr=_triage_marker_pr(head_repo="attacker/repo"))
+	assert 10 not in result.get("closed_issues", [])
+	assert "origin=check_triage candidate_pr=971 rejected=non_target_base" in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_rejects_duplicate_marker_and_other_branch():
+	dup = _run_triage_sweep(["ai:check-triage", "ai:done"], body=_triage_issue_body(extra="<!-- check-failure-triage:pr=970 -->\n"))
+	assert 10 not in dup.get("closed_issues", [])
+	other = _run_triage_sweep(["ai:check-triage", "ai:done"], fix_pr=_triage_fix_pr(base="ai/issue-8"))
+	assert 10 not in other.get("closed_issues", [])
+	assert "rejected=non_target_base base=ai/issue-8" in other["stdout"]
+
+
+def test_close_merged_sweep_check_triage_rejects_fork_headed_candidate():
+	fork_fix = _triage_fix_pr()
+	fork_fix["headRepoFullName"] = "attacker/repo"
+	result = _run_triage_sweep(["ai:check-triage", "ai:done"], fix_pr=fork_fix)
+	assert 10 not in result.get("closed_issues", []), result["stdout"]
+	assert "origin=check_triage candidate_pr=971 rejected=non_target_base" in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_marker_fetch_failure_defers():
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:check-triage", "ai:merged"]},
+		issue_bodies={10: _triage_issue_body()},
+		issue_authors={10: {"login": _TRIAGE_PIPELINE_LOGIN, "association": "NONE"}},
+		issue_linked_prs={10: 971},
+		prs=[_triage_fix_pr()],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 triage_marker_pr=970 rejected=check_triage_pr_fetch_failed" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label pr_fetch_failed — skipping this cycle." in result["stdout"] + result["stderr"]
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=971 rejected=check_triage_pr_fetch_failed" in result["stdout"]
+	assert "candidate_pr=971 rejected=non_target_base" not in result["stdout"]
+
+
+def test_close_merged_sweep_check_triage_marker_fetch_failure_tags_later_bound_candidates():
+	second_fix = _triage_fix_pr(number=972)
+	second_fix["headRefName"] = "ai/issue-10-retry"
+	second_fix["headRefFromApi"] = "ai/issue-10-retry"
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:check-triage", "ai:merged"]},
+		issue_bodies={10: _triage_issue_body()},
+		issue_authors={10: {"login": _TRIAGE_PIPELINE_LOGIN, "association": "NONE"}},
+		issue_linked_prs={10: [971, 972]},
+		prs=[_triage_fix_pr(), second_fix],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), result["stdout"]
+	assert result["stdout"].count("triage_marker_pr=970 rejected=check_triage_pr_fetch_failed") == 1, result["stdout"]
+	for pr in (971, 972):
+		assert f"origin=merged_label candidate_pr={pr} rejected=check_triage_pr_fetch_failed" in result["stdout"], result["stdout"]
+	assert "rejected=non_target_base" not in result["stdout"], result["stdout"]
+
+
+def test_close_merged_sweep_pending_check_triage_issue_is_silent():
+	result = _run_triage_sweep(["ai:check-triage", "ai:implementing"], linked=False)
+	assert 10 not in result.get("closed_issues", [])
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=check_triage no_merged_pr_found non_target_base_seen=false — pending, leaving open." in result["stdout"]
+	assert "leaving open and alerting" not in result["stdout"] + result["stderr"]
+
+
+def test_close_merged_sweep_check_triage_contract():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("close_merged_issues_sweep() {")
+	body = script[start:script.index("\nreconcile_managed_issue_labels() {", start)]
+	assert '--label "ai:check-triage"' in body
+	assert body.count("--json number,labels,body,author") == 3
+	assert 'normalize("check_triage")' in body
+	assert 'set_issue_phase_label "${issue_num}" "ai:merged"' in body
+	# The triage branch is resolved only after the five-argument check rejects.
+	first_check = body.index('_pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}"; then')
+	assert first_check < body.index("_close_sweep_check_triage_branch")
+	# Standalone stall recovery keeps the five-argument call (non-goal).
+	assert '_pr_json_base_is_target_merge "${issue_num}" "${_stall_nt_pr_json}" "${_STALL_STANDALONE_DEFAULT_BRANCH}" "${_stall_nt_declared}" "${_stall_nt_managed}"; then' in script
 
 
 def test_reconciliation_uses_implementation_pr_masked_by_later_mention():
@@ -25268,16 +25798,20 @@ def test_wave_dispatch_gate_invokes_verifier_against_integration_ref():
 	assert "verifier exited ${_gate_exit} (unexpected)" in script, (
 		"wave-dispatch gate warning must surface unexpected verifier exit codes while preserving fail-open dispatch"
 	)
-	assert "trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT" in script, (
-		"wave-dispatch gate must protect temp-file cleanup with an EXIT trap"
+	assert "trap '_orch_poll_cycle_exit_rc=$?; rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true; _orch_poll_cycle_on_exit \"${_orch_poll_cycle_exit_rc}\" || true' EXIT" in script, (
+		"wave-dispatch gate must protect temp-file cleanup with an EXIT trap chained to the "
+		"ORCH_POLL_CYCLE_SUMMARY exit handler"
 	)
 	assert script.index(
-		"trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT"
+		"trap '_orch_poll_cycle_exit_rc=$?; rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true; _orch_poll_cycle_on_exit \"${_orch_poll_cycle_exit_rc}\" || true' EXIT"
 	) < script.index('_gate_fp_file="$(mktemp'), (
 		"wave-dispatch gate must register cleanup before allocating temp files"
 	)
 	assert 'trap - EXIT' in script, (
 		"wave-dispatch gate must clear its temporary EXIT trap after explicit cleanup"
+	)
+	assert "            trap - EXIT\n            _orch_poll_cycle_install_exit_trap || true\n" in script, (
+		"wave-dispatch gate must reinstall the ORCH_POLL_CYCLE_SUMMARY EXIT trap right after clearing its own"
 	)
 	# Failure-path side effects: stall cycle bump, tracking comment,
 	# telegram alert.
@@ -30993,6 +31527,225 @@ def test_persist_orch_revise_option_block_is_shown_only_when_a_revise_can_run():
 			assert proc.stdout == ("BEGIN\n" + fragment + "END" if shown else "BEGINEND"), case_id
 			# Never starts Python, so the judge prompt is byte-identical with the switch off.
 			assert py == [], case_id
+
+
+# --------------------------------------------------------------------------
+# Stale auto-close of held run-sourced heal issues (issue #8808)
+# --------------------------------------------------------------------------
+
+_HEAL_STALE_PLAN_ID = 880801
+_HEAL_STALE_FP = "a" * 64
+
+
+def _heal_stale_issue_body() -> str:
+	return (
+		f"<!-- workflow-failure-heal:fp={_HEAL_STALE_FP} -->\n"
+		"<!-- workflow-failure-heal:gen=1 -->\n"
+		f"<!-- workflow-failure-heal:root={_HEAL_STALE_FP} -->\n"
+		"<!-- workflow-failure-heal:source=owner/repo#run -->\n"
+		"<!-- workflow-failure-heal:classification=workflow-defect -->\n"
+		"<!-- workflow-failure-heal:workflow=.github/workflows/ci.yml -->\n\n"
+		"- **Target branch:** `main`\n\n## Automated workflow failure heal (generation 1 of max 3)\n"
+	)
+
+
+def _heal_stale_runs(count: int, conclusion: str = "success") -> list[dict]:
+	return [{"id": 9100 + i, "html_url": f"https://github.com/owner/repo/actions/runs/{9100 + i}",
+		"head_sha": f"{i + 1:040x}", "head_branch": "main", "event": "push", "status": "completed",
+		"conclusion": conclusion, "created_at": f"2026-02-0{i + 1}T00:00:00Z"} for i in range(count)]
+
+
+def _heal_stale_comments(extra: list | None = None) -> list:
+	plan = _heal_cf_plan_comment("HEAL_COUNTERFACTUAL: UNVERIFIED: the step timeline is missing")
+	plan["id"] = _HEAL_STALE_PLAN_ID
+	hold = {"body": ("Automatic approval withheld.\n\n<!-- ai:heal-counterfactual-hold:v1 issue=501 "
+		f"plan_comment={_HEAL_STALE_PLAN_ID} result=UNVERIFIED source=plan -->"),
+		"user": {"login": _PLAN_GATE_LOGIN}, "author_association": "NONE", "created_at": "2026-01-01T00:00:01Z"}
+	return [plan, hold, *(extra or []), _standalone_awaiting_approval_state_comment()]
+
+
+def _heal_stale_tick(comments: list | None = None, env: dict | None = None, runs: list | None = None,
+		store_extra: dict | None = None) -> dict:
+	return _run_poller(
+		state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval", "ai:workflow-heal"]},
+		issue_comments={501: comments if comments is not None else _heal_stale_comments()},
+		issue_bodies={501: _heal_stale_issue_body()},
+		mock_gh_issue_list_label_filter=True,
+		env_overrides=env or {},
+		mock_store_extra={"workflow_runs_by_file": {"ci.yml": runs if runs is not None else _heal_stale_runs(5)},
+			"issue_created_at": {"501": "2026-01-01T00:00:00Z"}, "record_issue_state_patch": True, **(store_extra or {})},
+	)
+
+
+def _heal_stale_markers(result: dict) -> list[str]:
+	return [c.get("body", "") for c in result["issues"]["501"]["comments"]
+		if "<!-- ai:heal-stale-close:v1 issue=501 " in c.get("body", "")]
+
+
+def test_standalone_held_heal_issue_with_green_runs_closes_in_one_tick() -> None:
+	result = _heal_stale_tick()
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "501") == [], log
+	assert "STALL_SKIP issue=501 reason=heal_counterfactual_hold phase=ai:awaiting-approval action=none" in log
+	assert "HEAL_STALE_CLOSE issue=501 outcome=closed reason=workflow_green green_runs=5" in log
+	assert result.get("issue_state_patch_calls", []) == [
+		{"issue": 501, "state": "closed", "state_reason": "completed"}], log
+	markers = _heal_stale_markers(result)
+	assert len(markers) == 1, log
+	assert markers[0].rstrip().endswith(
+		"<!-- ai:heal-stale-close:v1 issue=501 workflow=ci.yml branch=main green_runs=5 newest_run=9104 -->")
+	assert "https://github.com/owner/repo/actions/runs/9100" in markers[0]
+	# A just-closed issue gets no poller hold notice.
+	assert not [c for c in result["issues"]["501"]["comments"] if " source=poller -->" in c.get("body", "")], log
+	# Labels are left as they are.
+	assert "ai:awaiting-approval" in result["issues"]["501"]["labels"]
+
+
+def test_standalone_held_heal_issue_stale_close_second_tick_posts_no_duplicate() -> None:
+	first = _heal_stale_tick()
+	marker = _heal_stale_markers(first)[0]
+	posted = {"body": marker, "user": {"login": _PLAN_GATE_LOGIN}, "author_association": "NONE",
+		"created_at": "2026-03-01T00:00:00Z"}
+	second = _heal_stale_tick(comments=_heal_stale_comments([posted]))
+	log = second["stdout"] + second["stderr"]
+	assert _heal_stale_markers(second) == [marker], log
+	assert "HEAL_STALE_CLOSE issue=501 outcome=closed" in log
+	assert second.get("issue_state_patch_calls", []) == [
+		{"issue": 501, "state": "closed", "state_reason": "completed"}], log
+
+
+def test_standalone_heal_stale_close_flag_false_keeps_the_hold() -> None:
+	result = _heal_stale_tick(env={"HEAL_STALE_AUTO_CLOSE_ENABLED": "false"})
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=skipped reason=disabled green_runs=0" in log
+	assert result.get("issue_state_patch_calls", []) == []
+	assert _heal_stale_markers(result) == []
+	assert "STALL_SKIP issue=501 reason=heal_counterfactual_hold" in log
+
+
+def test_standalone_heal_stale_close_invalid_flag_and_integers_use_defaults() -> None:
+	result = _heal_stale_tick(env={"HEAL_STALE_AUTO_CLOSE_ENABLED": "maybe", "HEAL_STALE_GREEN_RUNS": "abc",
+		"HEAL_STALE_MIN_AGE_HOURS": "-3"})
+	log = result["stdout"] + result["stderr"]
+	assert "::warning::HEAL_STALE_AUTO_CLOSE_ENABLED has invalid value; treating as true" in log
+	assert "::warning::HEAL_STALE_GREEN_RUNS must be a positive integer; defaulting to 5" in log
+	assert "::warning::HEAL_STALE_MIN_AGE_HOURS must be a non-negative integer; defaulting to 24" in log
+	assert "HEAL_STALE_CLOSE issue=501 outcome=closed reason=workflow_green green_runs=5" in log
+
+
+def test_standalone_heal_stale_close_keeps_with_too_few_green_runs() -> None:
+	result = _heal_stale_tick(runs=_heal_stale_runs(4))
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=too_few_green_runs green_runs=4" in log
+	assert result.get("issue_state_patch_calls", []) == []
+	assert _heal_stale_markers(result) == [], log
+
+
+def test_standalone_heal_stale_close_keeps_with_open_refs_linked_issue_branch_pr() -> None:
+	# A `Refs`-linked open ai/issue-<n> PR never sets willCloseTarget, so
+	# linked_pr is null; the open-head check still keeps the issue.
+	result = _heal_stale_tick(store_extra={"issue_linked_prs": {"501": [8801]},
+		"prs": [{"number": 8801, "state": "open", "merged": False, "willCloseTarget": False,
+			"headRefName": "ai/issue-501", "baseRefName": "main", "mergeable": True, "mergeable_state": "clean"}]})
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=open_pr" in log
+	assert result.get("issue_state_patch_calls", []) == []
+	assert _heal_stale_markers(result) == [], log
+
+
+def test_standalone_heal_stale_close_keeps_on_malformed_run_entry() -> None:
+	runs = _heal_stale_runs(5)
+	runs.append({**runs[0], "id": 9200, "created_at": "not-a-date"})
+	result = _heal_stale_tick(runs=runs)
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=runs_unavailable" in log
+	assert result.get("issue_state_patch_calls", []) == []
+
+
+def test_standalone_heal_stale_close_caps_green_runs_at_ninety() -> None:
+	result = _heal_stale_tick(env={"HEAL_STALE_GREEN_RUNS": "150"})
+	log = result["stdout"] + result["stderr"]
+	assert "::warning::HEAL_STALE_GREEN_RUNS above 90 cannot be met; using 90" in log
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=too_few_green_runs green_runs=5" in log
+
+
+def test_standalone_heal_stale_close_busy_branch_page_cut_short_still_closes() -> None:
+	# #8352: the newest page is all after the anchor and total_count is far
+	# larger; the green page alone is enough.
+	result = _heal_stale_tick(store_extra={"workflow_runs_total_count_extra": 400})
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=closed reason=workflow_green green_runs=5" in log
+	assert result.get("issue_state_patch_calls", []) == [
+		{"issue": 501, "state": "closed", "state_reason": "completed"}], log
+
+
+def test_standalone_heal_stale_close_failed_patch_posts_marker_once_and_retries_only_the_close() -> None:
+	first = _heal_stale_tick(store_extra={"fail_issue_state_patch_for": [501]})
+	log = first["stdout"] + first["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=close_failed green_runs=5" in log
+	markers = _heal_stale_markers(first)
+	assert len(markers) == 1, log
+	posted = {"body": markers[0], "user": {"login": _PLAN_GATE_LOGIN}, "author_association": "NONE",
+		"created_at": "2026-03-01T00:00:00Z"}
+	second = _heal_stale_tick(comments=_heal_stale_comments([posted]))
+	log = second["stdout"] + second["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=closed reason=workflow_green" in log
+	assert _heal_stale_markers(second) == markers, log
+	assert second.get("issue_state_patch_calls", []) == [
+		{"issue": 501, "state": "closed", "state_reason": "completed"}], log
+
+
+def test_standalone_heal_stale_close_keeps_when_the_timeline_is_truncated() -> None:
+	# More than the last 50 cross-references: an older ai/issue-<n> PR could
+	# be past the window, so the linked PR is unknown and the issue is kept.
+	result = _heal_stale_tick(store_extra={"issue_timeline_truncated": [501]})
+	log = result["stdout"] + result["stderr"]
+	assert "HEAL_STALE_CLOSE issue=501 outcome=kept reason=linked_pr_unknown" in log
+	assert result.get("issue_state_patch_calls", []) == []
+	assert _heal_stale_markers(result) == [], log
+
+
+def test_heal_stale_close_wiring() -> None:
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'HEAL_STALE_AUTO_CLOSE_ENABLED="${HEAL_STALE_AUTO_CLOSE_ENABLED:-true}"' in poller
+	assert 'HEAL_STALE_GREEN_RUNS="${HEAL_STALE_GREEN_RUNS:-5}"' in poller
+	assert 'HEAL_STALE_MIN_AGE_HOURS="${HEAL_STALE_MIN_AGE_HOURS:-24}"' in poller
+	# The check runs in the hold branch, before the hold notice.
+	hold = poller.split('if [ "${gate_reason}" = "heal_counterfactual_hold" ]; then', 1)[1].split("    return 1\n", 1)[0]
+	assert hold.index("_heal_stale_close_check ") < hold.index("_heal_counterfactual_hold_notify ")
+	assert 'if [ "${HEAL_STALE_CLOSE_OUTCOME:-}" != "closed" ]; then' in hold
+	# The batched details map carries the issue createdAt (no new call).
+	assert "          state\n          createdAt\n          body\n" in poller
+	assert "created_at: (.value.createdAt // null)," in poller
+	body = poller.split("_heal_stale_close_check()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert "-f state=closed -f state_reason=completed" in body
+	assert "-f branch=" in body and "-f event=push" in body and "-f status=completed" in body
+	assert "STALL_MANAGED_LINKED_PR_CACHE" in body
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	for line in ("HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}",
+			"HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}",
+			"HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}"):
+		assert workflow.count(line) == workflow.count(
+			"HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}") == 5, line
+
+
+def test_no_automation_reopens_closed_heal_issues() -> None:
+	# Issue #8808 D7: a stale-closed heal issue stays closed. Partial-delivery
+	# tracking (partial_delivery.py, issue_pr_status.yml) never reopens an
+	# issue, so the auto-close needs no partial-delivery guard. The only
+	# reopeners are these trackers, each reopening its own tracker issue.
+	reopeners = set()
+	for path in sorted([*(REPO_ROOT / "scripts").glob("*.sh"), *(REPO_ROOT / "scripts").glob("*.py"),
+			*(REPO_ROOT / ".github" / "workflows").glob("*.yml")]):
+		for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+			if "gh issue reopen" in line and not line.lstrip().startswith("#"):
+				reopeners.add(path.name)
+	assert reopeners <= {"security_audit.sh", "workflow_retro_fanout.sh", "workflow-log-analysis.yml"}, reopeners
+	for relative in ("scripts/partial_delivery.py", ".github/workflows/issue_pr_status.yml"):
+		text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+		assert "reopen" not in text.lower(), relative
+		assert not re.search(r"PATCH[^\n]*state=open|state=open[^\n]*PATCH", text), relative
 
 
 if __name__ == "__main__":

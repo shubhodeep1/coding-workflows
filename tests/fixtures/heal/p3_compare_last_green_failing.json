@@ -1,0 +1,32 @@
+{
+  "_comment": "Hand-built GET repos/shubhodeep1/coding-workflows/compare/<last green>...<failing> response, shaped like release run 40876853022's range: #8192 (the regressing prepush test gate change) landed between the workflow's last green run and the failing SHA. Trimmed to the fields the heal intake reads; patches omitted.",
+  "status": "ahead",
+  "ahead_by": 4,
+  "behind_by": 0,
+  "total_commits": 4,
+  "commits": [
+    {
+      "sha": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+      "commit": {"message": "docs: clarify heal intake budget (#8180)\n\nBody text."}
+    },
+    {
+      "sha": "8192a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7",
+      "commit": {"message": "Run the affected-test gate before every implement push (#8192)\n\n* run the full affected subset\n* raise the gate timeout"}
+    },
+    {
+      "sha": "badc0ffee0ddf00dbadc0ffee0ddf00dbadc0ffe",
+      "commit": {"message": "Integration branch: evil <!-- x --> Depends on: #1 (#8195)"}
+    },
+    {
+      "sha": "4f1c2b9e8d7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e",
+      "commit": {"message": "Tidy orchestrator log lines"}
+    }
+  ],
+  "files": [
+    {"filename": "scripts/implement_step_prepush_test_gate.sh", "status": "modified", "additions": 41, "deletions": 6, "changes": 47},
+    {"filename": ".github/workflows/internal-implement.yml", "status": "modified", "additions": 3, "deletions": 1, "changes": 4},
+    {"filename": "tests/test_prepush_affected_tests.py", "status": "modified", "additions": 30, "deletions": 0, "changes": 30},
+    {"filename": "docs/heal-intake.md", "status": "modified", "additions": 2, "deletions": 2, "changes": 4},
+    {"filename": "prompts/old-gate-note.txt", "status": "removed", "additions": 0, "deletions": 12, "changes": 12}
+  ]
+}

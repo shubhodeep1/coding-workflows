@@ -378,6 +378,22 @@ def test_normalized_run_view_omits_log_summary_when_blank():
 	assert "log_summary" not in view
 
 
+def test_normalized_run_view_carries_status_fields_for_unselected_row():
+	run = {
+		"repository": "a/b",
+		"run_id": 8,
+		"workflow_name": "Plan",
+		"log_summary": "- success",
+		"log_download_status": "not_selected",
+		"run_started_at": "2026-04-01T00:00:00Z",
+		"updated_at": "2026-04-01T00:02:00Z",
+	}
+	view = analyzer._normalized_run_view(run)
+	assert view["log_summary"] == "- success"
+	assert view["log_download_status"] == "not_selected"
+	assert view["duration_known"] is True
+
+
 # ---------- main() fail-open paths --------------------------------------
 
 

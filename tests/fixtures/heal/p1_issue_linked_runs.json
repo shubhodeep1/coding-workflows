@@ -1,0 +1,153 @@
+{
+	"_comment": "Hand-built in the shape of GET repos/{repo}/issues/{n} and GET repos/{repo}/actions/runs?created=<window>&per_page=100 for the 2026-10-27 release-gate incident (#8475).",
+	"issue": {
+		"url": "https://api.github.com/repos/shubhodeep1/coding-workflows/issues/8301",
+		"html_url": "https://github.com/shubhodeep1/coding-workflows/issues/8301",
+		"id": 3550012345,
+		"node_id": "I_kwDOAbCdEf8301",
+		"number": 8301,
+		"title": "E2E smoke test: add a greeting helper (release gate 2026-10-27T09:41Z)",
+		"user": {
+			"login": "workflow-bot",
+			"type": "User"
+		},
+		"labels": [
+			{
+				"name": "ai:e2e-smoke-test"
+			}
+		],
+		"state": "closed",
+		"locked": false,
+		"comments": 6,
+		"created_at": "2026-10-27T09:41:31Z",
+		"updated_at": "2026-10-27T11:02:44Z",
+		"closed_at": "2026-10-27T11:02:44Z",
+		"author_association": "OWNER",
+		"body": "Release-gate smoke test issue."
+	},
+	"runs_page": {
+		"total_count": 4,
+		"workflow_runs": [
+			{
+				"id": 40877120011,
+				"name": "AI Implement",
+				"node_id": "WFR_kwLO40877120011",
+				"head_branch": "main",
+				"head_sha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+				"path": ".github/workflows/ai-implement.yml",
+				"display_title": "E2E smoke test: add a greeting helper (release gate 2026-10-27T09:41Z)",
+				"run_number": 11,
+				"event": "issue_comment",
+				"status": "completed",
+				"conclusion": "cancelled",
+				"workflow_id": 101000011,
+				"url": "https://api.github.com/repos/shubhodeep1/coding-workflows/actions/runs/40877120011",
+				"html_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40877120011",
+				"created_at": "2026-10-27T09:58:31Z",
+				"updated_at": "2026-10-27T11:02:41Z",
+				"run_attempt": 1,
+				"run_started_at": "2026-10-27T09:58:31Z",
+				"repository": {
+					"id": 812345678,
+					"name": "coding-workflows",
+					"full_name": "shubhodeep1/coding-workflows"
+				},
+				"head_repository": {
+					"id": 812345678,
+					"name": "coding-workflows",
+					"full_name": "shubhodeep1/coding-workflows"
+				}
+			},
+			{
+				"id": 40877050007,
+				"name": "AI Plan",
+				"node_id": "WFR_kwLO40877050007",
+				"head_branch": "main",
+				"head_sha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+				"path": ".github/workflows/ai-plan.yml",
+				"display_title": "E2E smoke test: add a greeting helper (release gate 2026-10-27T09:41Z)",
+				"run_number": 7,
+				"event": "issue_comment",
+				"status": "completed",
+				"conclusion": "success",
+				"workflow_id": 101000007,
+				"url": "https://api.github.com/repos/shubhodeep1/coding-workflows/actions/runs/40877050007",
+				"html_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40877050007",
+				"created_at": "2026-10-27T09:44:02Z",
+				"updated_at": "2026-10-27T09:57:50Z",
+				"run_attempt": 1,
+				"run_started_at": "2026-10-27T09:44:02Z",
+				"repository": {
+					"id": 812345678,
+					"name": "coding-workflows",
+					"full_name": "shubhodeep1/coding-workflows"
+				},
+				"head_repository": {
+					"id": 812345678,
+					"name": "coding-workflows",
+					"full_name": "shubhodeep1/coding-workflows"
+				}
+			},
+			{
+				"id": 40877040003,
+				"name": "Orchestrator Poll",
+				"node_id": "WFR_kwLO40877040003",
+				"head_branch": "main",
+				"head_sha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+				"path": ".github/workflows/orchestrate-poll.yml",
+				"display_title": "Orchestrator Poll",
+				"run_number": 3,
+				"event": "schedule",
+				"status": "completed",
+				"conclusion": "success",
+				"workflow_id": 101000003,
+				"url": "https://api.github.com/repos/shubhodeep1/coding-workflows/actions/runs/40877040003",
+				"html_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40877040003",
+				"created_at": "2026-10-27T09:50:00Z",
+				"updated_at": "2026-10-27T09:51:12Z",
+				"run_attempt": 1,
+				"run_started_at": "2026-10-27T09:50:00Z",
+				"repository": {
+					"id": 812345678,
+					"name": "coding-workflows",
+					"full_name": "shubhodeep1/coding-workflows"
+				},
+				"head_repository": {
+					"id": 812345678,
+					"name": "coding-workflows",
+					"full_name": "shubhodeep1/coding-workflows"
+				}
+			},
+			{
+				"id": 40877060009,
+				"name": "AI Implement",
+				"node_id": "WFR_kwLO40877060009",
+				"head_branch": "main",
+				"head_sha": "1111111111111111111111111111111111111111",
+				"path": ".github/workflows/ai-implement.yml",
+				"display_title": "E2E smoke test: add a greeting helper (release gate 2026-10-27T09:41Z)",
+				"run_number": 9,
+				"event": "issue_comment",
+				"status": "completed",
+				"conclusion": "success",
+				"workflow_id": 101000009,
+				"url": "https://api.github.com/repos/someone-else/coding-workflows/actions/runs/40877060009",
+				"html_url": "https://github.com/someone-else/coding-workflows/actions/runs/40877060009",
+				"created_at": "2026-10-27T09:59:00Z",
+				"updated_at": "2026-10-27T10:10:00Z",
+				"run_attempt": 1,
+				"run_started_at": "2026-10-27T09:59:00Z",
+				"repository": {
+					"id": 812345678,
+					"name": "coding-workflows",
+					"full_name": "someone-else/coding-workflows"
+				},
+				"head_repository": {
+					"id": 812345678,
+					"name": "coding-workflows",
+					"full_name": "someone-else/coding-workflows"
+				}
+			}
+		]
+	}
+}

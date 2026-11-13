@@ -140,8 +140,12 @@ def test_summary_script_appends_the_marker_last() -> None:
 def test_docs_register_the_switch_and_log_prefixes() -> None:
 	readme = README.read_text(encoding="utf-8")
 	assert re.search(r"^\| `AUTOFIX_SKIP_CLEAN_SAME_HEAD` \| No \| `true` \| review_autofix \|", readme, re.MULTILINE)
-	fragment = FRAGMENT.read_text(encoding="utf-8")
-	assert '<!-- agents: section="Stable log prefixes (contractual)" -->' in fragment
+	# Read the rendered agents text so the check survives the release fold,
+	# which moves the fragment into agents.md and deletes it.
+	sys.path.insert(0, str(Path(__file__).resolve().parent))
+	from agents_doc import agents_text
+
+	fragment = agents_text()
 	for prefix in ("AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK", "AUTOFIX_CLEAN_SAME_HEAD_MARKER"):
 		assert f"LOG_PREFIX.name={prefix}" in fragment
 
