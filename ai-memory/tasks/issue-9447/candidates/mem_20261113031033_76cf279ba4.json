@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Did run 43343930604, the run that reported `orchestrate-poll (0)` at 15m55s, use a commit that already contains f84bf24 (PR #9268 for issue #9214)?\nBackground: `.github/workflows/ci.yml` (lines 2527-2539 and 2785-2786) says #9214 moved \"Regression tests wired by the CI wiring guard (part 2)\" from group 0 to `tests-release-and-log-analysis`. That was the step #8980 and #9021 identified as the heaviest one in group 0. Since that move, group 0 runs only the shared steps, its fifth of `tests/test_orchestrate_poll_process.py`, and the 11-test step \"Orchestrate poll implementation-failed regression fast-fail\" (`if: strategy.job-index == 0`). The repository doesn't record the run's commit, and I can't read the run's step timings from here.\nChoices:\n- A) Yes, the run includes #9268, so group 0 is still too slow after that move and something else has to change. (RECOMMENDED: also choose this if you don't know, since it's the safer assumption)\n- B) No, the run is from before #9268, so the #9214 move already covers it. Make no step move: add a dated comment beside the existing #9214 note in `ci.yml` plus a `changelog.d` entry, and let the next budget-watch run measure the result.\n- C) Unknown. Planning should look up the run's head SHA and step timings first, then follow A or B.\nQ2: Group 0 now has only one step of its own, the fast-fail step, and it can't be moved unchanged. Which fix do you want? (Applies only if Q1 = A or C; if Q1 = B, skip it.)\nBackground: the fast-fail step reads `/tmp/orchestrate_poll_fast_fail_tests.txt`, which \"Derive orchestrate poll test subsets\" writes. `tests/test_ci_poll_test_sharding.py::test_fast_fail_subset_runs_in_group_zero_only` asserts `if: strategy.job-index == 0`. All of groups 1-4 have recorded totals above 15 minutes (#8805, #8772, #8472, #8980).\nChoices:\n- A) Keep the fast-fail step in the matrix and change only its `if:` guard to a different poll group, leaving its name and body as they are. The planner picks the group with the fewest pinned tests and updates the contract test. **Note:** this moves load into a group that budget-watch has already flagged.\n- B) Move the fast-fail step, with its name and body unchanged, to the non-matrix 20-minute job with the most headroom. Put a verbatim copy of \"Derive orchestrate poll test subsets\" in front of it there, keep the original derive step in `orchestrate-poll` (the slice step still needs it), and update the contract test and the comment trail in `ci.yml`. (RECOMMENDED)\n- C) Move no step. Only record the measurement (comment plus `changelog.d` entry) and leave group 0 as it is until step timings can be read.\nSources:\n- None (no web search was needed; all evidence comes from `.github/workflows/ci.yml`, `tests/test_ci_poll_test_sharding.py`, `tests/test_orchestrate_poll_process.py` and `changelog.d/9214-ci-wiring-part2-to-release-job.md` in the repository).",
+  "fingerprint": "ccf23446195821f1f2626bbdb8b59200dccd1b96d1c4443eeba0eb76de6f65ad",
+  "lineage": {
+    "issue_number": 9447,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43352786434",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43352786434",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261113031033_76cf279ba4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9447,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43352786434"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9447 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-13T03:10:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
