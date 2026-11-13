@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-13T17:29:14Z",
+  "issue_number": 9450,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=tests/test_gh_api_write_guard.py:1-1; cited_path=tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_workflow_checkout_integration_ref_audit.py; files_touched=.github/workflows/ci.yml, changelog.d/9450-ci-release-triage-security-step-to-poll-group-0.md, tests/test_ci_poll_test_sharding.py.",
+  "phase": "review_autofix",
+  "pr_number": 9455,
+  "record_id": "lesson_20261113172914_d33e3a1c53",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_agents_fragment_contract.py, tests/test_files_touched_scope_guard.py, tests/test_workflow_checkout_integration_ref_audit.py",
+    "tests/test_gh_api_write_guard.py",
+    ".github/workflows/ci.yml",
+    "changelog.d/9450-ci-release-triage-security-step-to-poll-group-0.md",
+    "tests/test_ci_poll_test_sharding.py"
+  ]
+}
