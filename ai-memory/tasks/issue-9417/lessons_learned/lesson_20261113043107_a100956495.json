@@ -1,0 +1,24 @@
+{
+  "discovered_at": "2026-11-13T04:31:07Z",
+  "issue_number": 9417,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=scripts/dependency_wait_resume.py:75-83; cited_path=scripts/dependency_wait_resume.py, scripts/workflow_failure_heal.py, scripts/orchestrate_lib.py, tests/test_dependency_wait_resume.py; files_touched=.github/workflows/ci.yml, .github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p12-contract-list-union.md, changelog.d/stuck-states-p12-contract-list-union.md, docs/INVENTORY.md, scripts/orchestrate_poll_process.sh, scripts/sync_contract_list_union.py, tests/test_orchestrate_poll_process.py, tests/test_sync_contract_list_union.py.",
+  "phase": "review_autofix",
+  "pr_number": 9427,
+  "record_id": "lesson_20261113043107_a100956495",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/dependency_wait_resume.py, scripts/workflow_failure_heal.py, scripts/orchestrate_lib.py, tests/test_dependency_wait_resume.py",
+    "scripts/dependency_wait_resume.py",
+    ".github/workflows/ci.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/stuck-states-p12-contract-list-union.md",
+    "changelog.d/stuck-states-p12-contract-list-union.md",
+    "docs/INVENTORY.md",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/sync_contract_list_union.py",
+    "tests/test_orchestrate_poll_process.py",
+    "tests/test_sync_contract_list_union.py"
+  ]
+}

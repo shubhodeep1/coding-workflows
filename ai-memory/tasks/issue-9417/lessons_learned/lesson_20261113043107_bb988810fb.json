@@ -1,0 +1,24 @@
+{
+  "discovered_at": "2026-11-13T04:31:07Z",
+  "issue_number": 9417,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=scripts/stage_support_for_phase.sh:80-126, 150-154, 199-208, 329-344; cited_path=.github/workflows/clarify.yml, .github/workflows/plan.yml, scripts/run_plan_codex.sh, scripts/stage_support_for_phase.sh, agents.d/stuck-states-p2b-implement-support-scripts.md, tests/test_acceptance_check.py, tests/test_evidence_broker.py, tests/test_evidence_pack.py, tests/test_workflow_untrusted_input_contract.py; files_touched=.github/workflows/ci.yml, .github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p12-contract-list-union.md, changelog.d/stuck-states-p12-contract-list-union.md, docs/INVENTORY.md, scripts/orchestrate_poll_process.sh, scripts/sync_contract_list_union.py, tests/test_orchestrate_poll_process.py, tests/test_sync_contract_list_union.py.",
+  "phase": "review_autofix",
+  "pr_number": 9427,
+  "record_id": "lesson_20261113043107_bb988810fb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/clarify.yml, .github/workflows/plan.yml, scripts/run_plan_codex.sh, scripts/stage_support_for_phase.sh, agents.d/stuck-states-p2b-implement-support-scripts.md, tests/test_acceptance_check.py, tests/test_evidence_broker.py, tests/test_evid",
+    "scripts/stage_support_for_phase.sh",
+    ".github/workflows/ci.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/stuck-states-p12-contract-list-union.md",
+    "changelog.d/stuck-states-p12-contract-list-union.md",
+    "docs/INVENTORY.md",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/sync_contract_list_union.py",
+    "tests/test_orchestrate_poll_process.py",
+    "tests/test_sync_contract_list_union.py"
+  ]
+}
