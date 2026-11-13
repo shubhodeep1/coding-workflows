@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_gh_retry_stdout_isolation.py:242 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: `test_closed_reader_does_not_rerun_a_successful_command` fails at `assert rc_line.startswith(\"rc=\") and rc_line != \"rc=0\"` (run 43085267118, job 130747872621, \"merge-train step shard rest\"). Under the ubuntu-26.04 runner's uutils coreutils `cat` (`inner_cat=0`, `cat_closed=141`), the closed-pipe status comes back as `rc=0`, so `tests-hooks-and-orchestrator` fails and the required `lint` check stays red.\n  WHY: Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT and z-ai_glm-5_3-flash rated it MAJOR, so the highest is used. Both reviewers say this PR did not cause the failure: the file does not reference pr_checks_lib, and the fix belongs in `gh_retry` or in a separate change that makes the test portable. Both also say loosening the assertion would only suppress the symptom, and the merge stays blocked until then.\n- tests/test_review_checkout_head_diagnostics.py:264 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: `test_head_moved_after_switch_reports_skipped_stale` fails at `assert fields[\"fetch_ms\"].isdigit() and fields[\"switch_ms\"].isdigit()` (run 43085267118, `orchestrate-poll (1)`, job 130747873570). The diagnostics summary reports `fetch_ms=na`, and `'na'.isdigit()` is False, so the required `lint` check stays red.\n  WHY: Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT and z-ai_glm-5_3-flash rated it MAJOR, so the highest is used. Both reviewers say the review-checkout timing code is not in this PR's changed files and the test does not reference pr_checks_lib. It needs a re-run or a separate triage change, not an edit in this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_gh_retry_stdout_isolation.py:line 242, assert rc_line.startswith(\"rc=\") and rc_line != \"rc=0\" in test_closed_reader_does_not_rerun_a_successful_command | severity=NIT | confidence=4\n  PROBLEM: The required check tests-hooks-and-orchestrator (run 43085267118, job 130747872621) fails at this assertion with rc=0. The ubuntu-26.04 image uses uutils coreutils cat (inner_cat=0, cat_closed=141), and because that dependency failed, the required lint check is red.\n  WHY: Under uutils cat, the closed-pipe status 141 does not come back through gh_retry, so the \"merge-train step shard rest\" step exits 1. The file does not reference pr_checks_lib, so this PR did not cause it. Loosening the assertion would hide the problem; the fix belongs in gh_retry or in a separate change that makes the test portable.\n- tests/test_review_checkout_head_diagnostics.py:line 264, assert fields[\"fetch_ms\"].isdigit() and fields[\"switch_ms\"].isdigit() in test_head_moved_after_switch_reports_skipped_stale | severity=NIT | confidence=4\n  PROBLEM: The required check orchestrate-poll (1) (run 43085267118, job 130747873570) fails here because the diagnostics summary reports fetch_ms=na, which also keeps the required lint check red.\n  WHY: 'na'.isdigit() is False, so the pytest step exits 1. The review-checkout timing code is not in this PR's changed files, so it needs a re-run or a separate triage issue, not an edit in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_gh_retry_stdout_isolation.py:line 242, `assert rc_line.startswith(\"rc=\") and rc_line != \"rc=0\"` in `test_closed_reader_does_not_rerun_a_successful_command` | severity=MAJOR | confidence=5\n  PROBLEM: Fails on the PR head (run 43085267118, job 130747872621, \"merge-train step shard rest\"). Under the ubuntu-26.04 runner's uutils coreutils `cat` (`inner_cat=0`, `cat_closed=141`), the closed-pipe status comes back as `rc=0`, which turns the required `lint` check red and blocks the merge. The file is not touched by this PR, and the fix belongs in `gh_retry` or in making the test portable; loosening the assertion would be symptom suppression.\n  WHY: `PIPESTATUS[0]` is 0 after the reader closes under uutils `cat`, so pytest exits 1, `tests-hooks-and-orchestrator` fails, and `lint` stays red.\n- tests/test_review_checkout_head_diagnostics.py:line 264, `assert fields[\"fetch_ms\"].isdigit() and fields[\"switch_ms\"].isdigit()` in `test_head_moved_after_switch_reports_skipped_stale` | severity=MAJOR | confidence=5\n  PROBLEM: Fails on the PR head (run 43085267118, `orchestrate-poll (1)`, job 130747873570) because the summary reports `fetch_ms=na`; the other 13 tests in the module pass. The review-checkout timing code is not in this PR's changed files, so it needs a re-run or a triage change outside this PR. It is the second dependency keeping `lint` red.\n  WHY: `fields[\"fetch_ms\"]` is `\"na\"` in the failing job, so the assertion raises, the `orchestrate-poll` job fails, and `lint` stays red.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "77dcf5884553a0c03a9e072269cd98b8f672ebac6044c40df43b881378fa3214",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9262,
+    "run_id": "43385076609",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43385076609",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113150511_a1d8570b2a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9262,
+    "run_id": "43385076609"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T15:05:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
