@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-13T09:52:33Z",
+  "tick_at": "2026-11-13T10:27:38Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 7
+    "tracking_issues": 6
   },
   "tracking_issues": [
     {
@@ -37,7 +37,7 @@
     },
     {
       "current_wave": 4,
-      "integration_ahead_by": "73",
+      "integration_ahead_by": "74",
       "issue_counts": {
         "closed": 1,
         "done": 1,
@@ -98,7 +98,7 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "15",
+      "integration_ahead_by": "16",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -119,7 +119,7 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "7",
+      "integration_ahead_by": "8",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -137,27 +137,6 @@
       "title": "[Orchestrator] Stop runner-image drift, red-main cascades and queue-driven re-dispatch from jamming the pipeline",
       "total_waves": 3,
       "wave_complete": false
-    },
-    {
-      "current_wave": 1,
-      "integration_ahead_by": "0",
-      "issue_counts": {
-        "closed": 2,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 9460,
-      "project_complete": true,
-      "status": "failed",
-      "title": "[Orchestrator] [E2E Orchestrate Smoke 43385957741] Parallel canary file updates",
-      "total_waves": 1,
-      "wave_complete": true
     }
   ]
 }
