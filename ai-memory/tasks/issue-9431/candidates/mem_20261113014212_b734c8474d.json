@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9431,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9431\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9441\",\"pr_number\":9441,\"branch\":\"ai/issue-9431\",\"run_id\":\"43343200079\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43343200079\",\"changed_files\":[\"changelog.d/render-prompt-env-placeholder-secret-leak.md\",\"scripts/render_prompt.sh\",\"scripts/review_apply_fixes.sh\",\"scripts/review_run_reviewers.sh\",\"tests/test_render_prompt_foundation.py\"]}",
+  "fingerprint": "7639ada51b71e127a8c687e516abff81d67296b7f66104d3e05804b035e4eaf6",
+  "lineage": {
+    "issue_number": 9431,
+    "parent_ids": [],
+    "pr_number": 9441,
+    "run_id": "43343200079",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43343200079",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9441"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261113014212_b734c8474d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9431,
+    "level": "run",
+    "pr_number": 9441,
+    "run_id": "43343200079"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9431: https://github.com/shubhodeep1/coding-workflows/pull/9441",
+  "timestamps": {
+    "created_at": "2026-11-13T01:42:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
