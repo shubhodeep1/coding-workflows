@@ -3934,6 +3934,14 @@ class MovedHeal9420StepsContractTest(unittest.TestCase):
 				self.assertNotIn(name, GROUP_PINNED_STEPS)
 				for _owner, step in self.owning_steps(name):
 					self.assertNotIn("if", step)
+					self.assertNotIn("continue-on-error", step)
+
+	def test_source_and_target_jobs_keep_their_timeout(self) -> None:
+		# The issue forbids raising timeout-minutes to absorb the move.
+		jobs = self.jobs()
+		for job_id in {HEAL_9420_SOURCE_JOB_ID, *(target for target, _m in MOVED_HEAL_9420_STEPS.values())}:
+			with self.subTest(job=job_id):
+				self.assertEqual(jobs[job_id].get("timeout-minutes"), 20)
 
 	def test_each_step_still_names_its_modules(self) -> None:
 		for name, (_job_id, modules) in MOVED_HEAL_9420_STEPS.items():
