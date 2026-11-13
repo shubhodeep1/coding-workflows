@@ -5,13 +5,26 @@
   "entry_id": "processed_command_9369_6839076042_approved",
   "issue_number": 9369,
   "metadata": {
+    "branch": "ai/issue-9369",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "agents.d/9369-review-blocked-stale-clear.md",
+      "changelog.d/9369-review-blocked-stale-clear.md",
+      "scripts/review_autofix_step_post_editor_summary.sh",
+      "tests/test_review_blocked_stale_clear.py"
+    ],
+    "issue_number": 9369,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9369",
+    "pr_number": 9429,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9429",
+    "run_attempt": "1",
+    "run_id": "43329800487",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43329800487"
   },
   "run_attempt": 1,
   "run_id": "43329800487",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-12T23:37:52Z",
+  "status": "completed",
+  "timestamp": "2026-11-13T00:21:44Z",
   "workflow": "implement"
 }
