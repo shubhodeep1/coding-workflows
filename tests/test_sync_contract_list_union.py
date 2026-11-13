@@ -245,3 +245,21 @@ def test_delete_plus_append_on_one_side_is_ineligible(tmp_path: Path) -> None:
 	assert proc.returncode == 3, (proc.returncode, proc.stderr)
 	assert "reason=list_not_union" in proc.stderr or "reason=hunk_one_sided" in proc.stderr, proc.stderr
 	assert not out.exists()
+
+
+def test_bare_base_list_first_entry_appends_merge(tmp_path: Path) -> None:
+	# A bare ``read_entrypoints:`` key in the merge base loads as None; both
+	# sides adding their first entry is still a pure append and must merge.
+	yaml = pytest.importorskip("yaml")
+	base = BASE.replace(READ_BASE, "")
+	anchor = "read_entrypoints:\n"
+	ours = _append_after(base, anchor, "  - backend/app/leaderboards/api.py:read_ours\n")
+	theirs = _append_after(base, anchor, "  - backend/app/fantasy/rollup.py:read_theirs\n")
+	proc, out = _run(tmp_path, base, ours, theirs)
+	assert proc.returncode == 0, proc.stderr
+	merged = yaml.safe_load(out.read_text(encoding="utf-8"))
+	assert merged["read_entrypoints"] == [
+		"backend/app/leaderboards/api.py:read_ours",
+		"backend/app/fantasy/rollup.py:read_theirs",
+	]
+	assert merged["write_entrypoints"] == yaml.safe_load(base)["write_entrypoints"]

@@ -256,7 +256,11 @@ def _validate(merged: str, ours_text: str, theirs_text: str, ours_resolved: str,
 		base_data = _load_mapping(base_text)
 		for key in sorted(affected):
 			base_list = base_data.get(key)
-			if not isinstance(base_list, list):
+			# A bare key (``read_entrypoints:`` with no items) or an absent key
+			# has no base entries, so the append-only rule holds vacuously.
+			if base_list is None:
+				base_list = []
+			elif not isinstance(base_list, list):
 				raise Ineligible("list_not_union")
 			base_items = {_canonical(item) for item in base_list}
 			ours_items = {_canonical(item) for item in ours_data.get(key)}
