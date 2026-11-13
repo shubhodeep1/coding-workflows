@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:451 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The supersede check requires the status object's `url` to end in `/statuses/<head_sha>`, but GitHub's commit-status response usually puts the individual status resource there (`/statuses/<status-id>`), so the check rejects the status that the lookup at line 440 already scoped to the head SHA.\n  WHY: A real newer `ai-review/head-gate` success status is classified as `status_sha_mismatch`, so the failed `review / gate` check stays blocking and the PR #9168 recovery does not work. The test fixture at `tests/test_pr_checks_lib_required_filter.py:880` encodes the same URL assumption. (Source severity is MAJOR, mapped here to high.)\n- .github/workflows/ci.yml:lint job roll-up step (run 43085267118, job 130768195671) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The required `lint` check on head 18c58be is red because its dependency jobs `tests-hooks-and-orchestrator` (job 130747872621) and `orchestrate-poll (1)` (job 130747873570) failed. The failing step is cut off in both logs, and the visible tails show only PASS lines and fixture `##[error]` output from passing tests.\n  WHY: `lint` is in the default required set, so auto-merge stays refused with `required_checks_failed` until those jobs are re-run green. The failure cannot be mapped to any hunk in this PR, and `.github/workflows/ci.yml` is not changed by this PR. Both reviewers rated it NIT, mapped here to low, and raised it only for visibility.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml (not changed by this PR; `lint` aggregator job, run 43085267118, job 130768195671) | severity=NIT | confidence=2\n  PROBLEM: The required `lint` check on head 18c58be219db is red because its dependency jobs `tests-hooks-and-orchestrator` (job 130747872621) and `orchestrate-poll (1)` (job 130747873570) failed. The failing step is cut off, and none of the visible output maps to scripts/pr_checks_lib.sh, tests/test_pr_checks_lib_required_filter.py or the two fragments.\n  WHY: `lint` is in the default required set, so auto-merge stays refused with `required_checks_failed` until those jobs are re-run green. No code edit inside this PR's files_touched can fix it, and it is reported only because CI failures must be surfaced.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/pr_checks_lib.sh:451 | severity=MAJOR | confidence=5\n  PROBLEM: The supersede check expects the status `url` to end in `/statuses/<head_sha>`, but GitHub's commit-status `url` usually points to `/statuses/<status-id>`, so the check rejects the status that the lookup at line 440 already scoped to the head SHA.\n  WHY: A real newer `ai-review/head-gate` success status is classified as `status_sha_mismatch`, so the failed `review / gate` check stays blocking and the PR #9168 recovery does not work. The fixture at `tests/test_pr_checks_lib_required_filter.py:880` encodes the same assumption.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:lint job roll-up step (run 43085267118, job 130768195671) | severity=NIT | confidence=2\n  PROBLEM: The required `lint` check on head 18c58be is red because dependency jobs `tests-hooks-and-orchestrator` (job 130747872621) and `orchestrate-poll (1)` (job 130747873570) failed. The failing step is truncated in both logs, and the visible tails show only PASS lines and fixture `##[error]` output from passing tests.\n  WHY: The failure cannot be mapped to any hunk in this PR, and `.github/workflows/ci.yml` is not changed by it. It is surfaced for the editor only, because prior rounds found it was not caused by this PR and needs a job re-run or a read of the full log.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0adb8b307081c7b648bbf5403fa5bd13f14e4e837450bbf853fae9c4a845b0d6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9262,
+    "run_id": "43149469481",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43149469481",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113025218_5cd1b6c26b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9262,
+    "run_id": "43149469481"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T02:52:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
