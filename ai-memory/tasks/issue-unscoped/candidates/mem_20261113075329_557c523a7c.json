@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #9362: \"Move its slowest steps ... into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, a step moved out of the `static-checks` job (the `Validation self-test unit tests` step)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The step remains in `static-checks` at line 578, and the PR runs its 23 commands in four concurrent lanes instead of moving the step to another job. Job id, step name and `timeout-minutes` are unchanged and no new required job is added. The approved plan documents the deviation. Reviewers rated it a NIT, not a defect. Confidence differs across reviewers (2, 4, 2).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: Issue #9362 says \"Move its slowest steps ... into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, a step moved from `static-checks` to another job.\nEvidence of absence: the PR keeps the step in `static-checks` and runs its 23 commands in four concurrent lanes. The ci.yml comments and the approved plan explain the choice. The step overloaded both jobs it was moved to before (#8472, run 41097621008), and the other 20-minute jobs are already near budget-watch's 15-minute line. The issue's hard constraints still hold. This is a documented deviation, not a defect.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps ... into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, the `Validation self-test unit tests` step.\nEvidence of absence: The step remains in `static-checks` at line 578. The PR changes its commands to run in four concurrent lanes but does not move the step to another job.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: .github/workflows/ci.yml \u2014 a step moved out of the `static-checks` job\nEvidence of absence: No hunk in the PR diff moves a step between jobs. The \"Validation self-test unit tests\" step stays in `static-checks` (ci.yml:578) and runs its commands in four concurrent lanes in place. The job id, step name and `timeout-minutes: 15` are unchanged, and the deviation is the approved plan's recorded choice, corroborated by the ci.yml comment block at lines 552-577. Recorded at minimal weight; not a blocking gap.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d2c8d2905eb6a1cb45bd640feab9c4af23e0ebff3fd5aae7cc352d5a6031f181",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9368,
+    "run_id": "43319179130",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43319179130",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113075329_557c523a7c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9368,
+    "run_id": "43319179130"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T07:53:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
