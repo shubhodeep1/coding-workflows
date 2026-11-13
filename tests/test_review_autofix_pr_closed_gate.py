@@ -31,6 +31,7 @@ CHECKOUT_STEP_SCRIPT = "review_autofix_step_checkout_pr_head_branch.sh"
 PR_CLOSED_GATE = "env.PR_CLOSED != 'true'"
 WORKSPACE_PATH_RE = re.compile(r"(\$\{?|env\.)WORKSPACE_PATH\b")
 WORKSPACE_PATH_GUARD_RE = re.compile(r"\[\[?\s+-[nz]\s+\"?\$\{?WORKSPACE_PATH\b")
+FAIL_CLOSED_GUARD_TEXT = "Review workspace is unavailable"
 RACE_REFERENCE = (
 	"a PR merged or closed before codex-agent starts leaves WORKSPACE_PATH unset "
 	"(#9419, run 43147436812)"
@@ -139,8 +140,14 @@ def test_workspace_dependent_steps_after_pr_state_check_are_pr_closed_gated():
 		if PR_CLOSED_GATE in _step_if(step):
 			continue
 		# Issue #9419 step 3: an always() step is allowed only if its run body
-		# checks WORKSPACE_PATH (`[ -n/-z "${WORKSPACE_PATH...` ) before use.
-		if "always()" in _step_if(step) and WORKSPACE_PATH_GUARD_RE.search(str(step.get("run") or "")):
+		# checks WORKSPACE_PATH (`[ -n/-z "${WORKSPACE_PATH...` ) before any
+		# other use, and is not the checkout script's fail-closed guard (which
+		# exits 1 when WORKSPACE_PATH is unset and would reintroduce the race).
+		run_body = str(step.get("run") or "")
+		guard = WORKSPACE_PATH_GUARD_RE.search(run_body)
+		first_use = WORKSPACE_PATH_RE.search(run_body)
+		fail_closed = CHECKOUT_STEP_SCRIPT in body or FAIL_CLOSED_GUARD_TEXT in body
+		if "always()" in _step_if(step) and guard and first_use and guard.start() < first_use.start() and not fail_closed:
 			continue
 		ungated.append(name)
 	assert CHECKOUT_STEP in checked, (
