@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:(the `lint` aggregate job, run 43085267118, job 130768195671) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The required `lint` check on head 18c58be2 is red because two jobs it depends on failed: 130747872621 (tests-hooks-and-orchestrator) and 130747873570 (orchestrate-poll (1)). The step reports \"CI jobs that did not succeed: tests-hooks-and-orchestrator, orchestrate-poll\".\n  WHY: `lint` is a required check, so `_pr_checks_completed` returns blocking and auto-merge refuses with `reason=required_checks_failed`. This PR's supersede rule only covers `review / gate`, so it does not lift the block. The captured log tails end on PASS lines, their `##[error]` lines are intentional fixture output, and the failing step is not in either log. The reviewer says no in-scope code change is known to fix it and the jobs need a re-run or a full log read. The source gave SEVERITY: NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml (the `lint` aggregate job, run 43085267118, job 130768195671) | severity=NIT | confidence=2\n  PROBLEM: The required `lint` check on head 18c58be2 is red because two jobs it depends on failed: 130747872621 (tests-hooks-and-orchestrator) and 130747873570 (orchestrate-poll (1)). The step reports \"CI jobs that did not succeed: tests-hooks-and-orchestrator, orchestrate-poll\". Both log tails end on PASS lines, and their `##[error]` lines are intentional fixture output (the #2734 fixtures in `tests/test_lint_pr_body_auto_close.py` and the integration-fingerprint fixture in orchestrate-poll). The failing step is not in either captured log.\n  WHY: `lint` is required, so `_pr_checks_completed` returns blocking and auto-merge refuses with `reason=required_checks_failed`. The supersede rule only covers `review / gate`. The jobs need a re-run or a full log read, and no in-scope code change is known to fix this. This was raised as a CI / check-run failure that maps to no hunk in the PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e67347617b57579d9a1d288d4294e67ba4c40456135b4a2296072eba1eabfbf2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9262,
+    "run_id": "43329587251",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43329587251",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113071113_5877780b60",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9262,
+    "run_id": "43329587251"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-13T07:11:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
