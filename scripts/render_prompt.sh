@@ -323,8 +323,10 @@ fi
 # Security finding #9399 (render-prompt-env-indirection-secret-leak): the loop
 # below resolves every {{NAME}} token in the prompt from the environment via
 # bash indirection. Reviewer/editor bodies embed raw PR diff and comment text,
-# so a PR author could add `{{GH_TOKEN}}` and get the PAT rendered into the
-# prompt (and into python's argv). Two guards:
+# so a PR author could add a GH_TOKEN placeholder (the name in double braces)
+# and get the PAT rendered into the prompt (and into python's argv). This
+# comment spells no complete secret-like token so an unguarded renderer cannot
+# expand it while the diff is reviewed. Two guards:
 #  1. Untrusted bodies -- marked by the caller with
 #     RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED or RENDER_PROMPT_SKIP_SYNTAX_VALIDATION
 #     -- get no environment lookup at all. Only the four built-ins passed above

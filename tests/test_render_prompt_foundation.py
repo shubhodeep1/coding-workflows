@@ -1548,7 +1548,8 @@ def test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt() -> Non
 
 # Env-secret guard cases (security finding #9399). render_prompt.sh used to
 # resolve every {{NAME}} token from the environment; reviewer/editor bodies embed
-# raw PR diff and comment text, so a PR author could add `{{GH_TOKEN}}` and get
+# raw PR diff and comment text, so a PR author could add a GH_TOKEN placeholder
+# (the name in double braces) and get
 # the PAT rendered into the prompt. These cases pin the guards: untrusted bodies
 # get no env lookup, trusted templates never resolve secret-like names,
 # render_prompt.py drops secret-like --var names, and the reviewer/editor render
@@ -1561,6 +1562,11 @@ REVIEW_APPLY_FIXES_SH = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 SECRET_SENTINEL = "sentinel-secret-9399"
 PLAIN_SENTINEL = "plain-leak-9399"
 UNTRUSTED_FLAG_VARS = ("RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED", "RENDER_PROMPT_SKIP_SYNTAX_VALIDATION")
+# Built by concatenation (like the REFERENCE_* tokens above) so this file holds
+# no complete secret-like placeholder: a renderer without the #9399 guard would
+# fill it from the environment when this file is embedded in a review prompt.
+GH_TOKEN_PLACEHOLDER = "{{" + "GH_TOKEN" + "}}"
+OPENROUTER_API_KEY_PLACEHOLDER = "{{" + "OPENROUTER_API_KEY" + "}}"
 
 
 def _guard_base_env() -> dict[str, str]:
@@ -1592,7 +1598,7 @@ def _assert_untrusted_body_has_no_env_lookup(flag_names: tuple[str, ...]) -> Non
 		tmp_path = Path(tmp)
 		body = tmp_path / "reviewer_prompt_body.txt"
 		body.write_text(
-			"diff line {{GH_TOKEN}}\n"
+			f"diff line {GH_TOKEN_PLACEHOLDER}\n"
 			"other line {{PLAIN_VAR}}\n"
 			"{{SERENA_TOOL_HINTS}}\n",
 			encoding="utf-8",
@@ -1607,7 +1613,7 @@ def _assert_untrusted_body_has_no_env_lookup(flag_names: tuple[str, ...]) -> Non
 		assert SECRET_SENTINEL not in result.stdout, result.stdout
 		assert SECRET_SENTINEL not in result.stderr, result.stderr
 		assert PLAIN_SENTINEL not in result.stdout, result.stdout
-		assert "{{GH_TOKEN}}" in result.stdout, result.stdout
+		assert GH_TOKEN_PLACEHOLDER in result.stdout, result.stdout
 		assert "{{PLAIN_VAR}}" in result.stdout, result.stdout
 		assert "serena-hint-9399" in result.stdout, result.stdout
 
@@ -1628,7 +1634,7 @@ def test_untrusted_body_still_renders_model_family_overlay() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		body = tmp_path / "reviewer_prompt_body.txt"
-		body.write_text("body {{GH_TOKEN}}\n{{MODEL_FAMILY_OVERLAY}}\n", encoding="utf-8")
+		body.write_text(f"body {GH_TOKEN_PLACEHOLDER}\n{{{{MODEL_FAMILY_OVERLAY}}}}\n", encoding="utf-8")
 		env = _guard_base_env()
 		env["MODEL_FAMILY_OVERLAY"] = "overlay-text-9399"
 		for flag_name in UNTRUSTED_FLAG_VARS:
@@ -1648,6 +1654,8 @@ def test_trusted_render_denies_secret_like_names_and_keeps_plain_names() -> None
 		"gh_token": "sentinel-lower-9399",
 		"SENTRY_DSN": "sentinel-dsn-9399",
 		"UPSTREAM_BEARER": "sentinel-bearer-9399",
+		"SERVICE_AUTH": "sentinel-auth-9399",
+		"SESSION_COOKIE": "sentinel-cookie-9399",
 	}
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
@@ -1676,7 +1684,7 @@ def test_trusted_prelude_assembly_path_keeps_env_lookup() -> None:
 		templates_dir = tmp_path / "prompts" / "_templates"
 		templates_dir.mkdir(parents=True)
 		template = templates_dir / "secret-guard-prelude-probe.txt"
-		template.write_text("plain {{PLAIN_VAR}}\nsecret {{GH_TOKEN}}\n", encoding="utf-8")
+		template.write_text(f"plain {{{{PLAIN_VAR}}}}\nsecret {GH_TOKEN_PLACEHOLDER}\n", encoding="utf-8")
 		env = _guard_base_env()
 		env["PROMPT_PRELUDE_REFACTOR_ENABLED"] = "true"
 		env["PLAIN_VAR"] = "plain-value-9399"
@@ -1684,14 +1692,17 @@ def test_trusted_prelude_assembly_path_keeps_env_lookup() -> None:
 		assert result.returncode == 0, result.stderr
 		assert "plain plain-value-9399" in result.stdout, result.stdout
 		assert SECRET_SENTINEL not in result.stdout, result.stdout
-		assert "{{GH_TOKEN}}" in result.stdout, result.stdout
+		assert GH_TOKEN_PLACEHOLDER in result.stdout, result.stdout
 
 
 def test_render_prompt_py_ignores_secret_like_var() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		template = tmp_path / "secret-guard-py-probe.txt"
-		template.write_text("secret {{GH_TOKEN}}\nkey {{OPENROUTER_API_KEY}}\nplain {{PLAIN_VAR}}\n", encoding="utf-8")
+		template.write_text(
+			f"secret {GH_TOKEN_PLACEHOLDER}\nkey {OPENROUTER_API_KEY_PLACEHOLDER}\nplain {{{{PLAIN_VAR}}}}\n",
+			encoding="utf-8",
+		)
 		result = subprocess.run(
 			[
 				sys.executable,
@@ -1715,7 +1726,8 @@ def test_render_prompt_py_ignores_secret_like_var() -> None:
 		assert SECRET_SENTINEL not in result.stderr, result.stderr
 		assert "sentinel-openrouter-9399" not in result.stdout, result.stdout
 		assert "sentinel-openrouter-9399" not in result.stderr, result.stderr
-		assert "secret {{GH_TOKEN}}" in result.stdout, result.stdout
+		assert f"secret {GH_TOKEN_PLACEHOLDER}" in result.stdout, result.stdout
+		assert f"key {OPENROUTER_API_KEY_PLACEHOLDER}" in result.stdout, result.stdout
 		assert "plain plain-value-9399" in result.stdout, result.stdout
 		assert "GH_TOKEN" in result.stderr, result.stderr
 
@@ -1805,6 +1817,7 @@ def main() -> int:
 	test_render_prompt_py_reports_non_utf8_prompt_without_traceback()
 	test_render_prompt_sh_reports_non_utf8_prompt_without_traceback()
 	test_render_prompt_py_reports_unexpected_exception_without_traceback()
+	test_render_prompt_py_escapes_multiline_unexpected_exception_message()
 	print("OK: render prompt foundation assertions hold")
 	# Imported here so pytest does not collect these cases twice; run as a
 	# script, sys.path[0] is tests/.

@@ -43,7 +43,8 @@ IDENTITY_RECALL_TEMPLATE_FILE_NAME = "_identity_recall.txt"
 ROLE_GOAL_LINE_RE = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$")
 # Security finding #9399: placeholder values for these names (and the
 # suffix/prefix/substring rules in _is_secret_like_variable_name) are never
-# rendered, so a `{{GH_TOKEN}}` token embedded in an untrusted PR diff cannot
+# rendered, so a GH_TOKEN placeholder (the name in double braces) embedded in
+# an untrusted PR diff cannot
 # pull a credential into the prompt even when an older staged render_prompt.sh
 # still passes it as --var. Keep in sync with
 # render_prompt_env_name_is_secret_like in scripts/render_prompt.sh.
