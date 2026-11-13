@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cIf `${GITHUB_EVENT_NAME}` is `pull_request` or `pull_request_target` \u2026 read `.pull_request.head.sha`\u201d from the issue\u2019s reporter-change approach.\n  expected_change_site: `scripts/workflow_failure_heal_autofix_report.sh`, run-head selection around lines 374-378.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The event predicate accepts only `pull_request`; the test at `tests/test_workflow_failure_heal.py:5278` also expects `pull_request_target` to keep the PR head. The issue does not defer or exclude `pull_request_target`. (severity=NIT as stated by the source.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cIf `${GITHUB_EVENT_NAME}` is `pull_request` or `pull_request_target` \u2026 read `.pull_request.head.sha`\u201d from the issue\u2019s reporter-change approach.\n  Expected change site: `scripts/workflow_failure_heal_autofix_report.sh`, run-head selection around lines 374-378.\n  Evidence of absence: The event predicate accepts only `pull_request`; the test at `tests/test_workflow_failure_heal.py:5278` also expects `pull_request_target` to keep the PR head. The issue does not defer or exclude `pull_request_target`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c5f80b8459dcf35785eb325c10c52d7c0ad163e16dfffe8aa89a164fae45ea09",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9278,
+    "run_id": "43159169456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43159169456",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113150135_c0cee7676d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9278,
+    "run_id": "43159169456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-13T15:01:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
