@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"After a rollback, neither `auto-release-stable.yml` nor the `promote-main-to-stable.yml` cycle releases until a release is cut deliberately.\"\n  expected_change_site: `.github/workflows/promote-main-to-stable.yml`, `promote` job, and/or `scripts/orchestrate_poll_process.sh`, where the poller dispatches that job.\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The hold check is implemented in scripts/promote_main_cycle.sh, which correctly gates the scheduled cycle job. However, the promote job itself (triggered by the poller dispatching a `promote` run after validating a `comprehensive-test-pending` label) lacks this hold check. The poller can still dispatch this job with a `target_sha` after `rollback_stable.sh` has finished its drain loop and moved the tags; the promote job then advances `stable` and its release job clears the hold, re-shipping the regression, The hold check gates the scheduled `cycle` job, but the separate `promote` job has no hold check (`.github/workflows/promote-main-to-stable.yml:155-162, 208-258`). The poller can dispatch that job with `target_sha` (`scripts/orchestrate_poll_process.sh:15379-15385`), allowing it to advance `stable` and run the release gate while the hold is active. `README.md:4774-4785` documents this ungated path and a manual workaround, but the code does not enforce the stated hold requirement. (Both reviewers rated SEVERITY: MAJOR.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\"\n  Expected change site: .github/workflows/promote-main-to-stable.yml, promote job\n  Evidence of absence: The hold check is implemented in scripts/promote_main_cycle.sh, which correctly gates the scheduled cycle job. However, the promote job itself (triggered by the poller dispatching a `promote` run after validating a `comprehensive-test-pending` label) lacks this hold check. The poller can still dispatch this job with a `target_sha` after `rollback_stable.sh` has finished its drain loop and moved the tags; the promote job then advances `stable` and its release job clears the hold, re-shipping the regression. The documentation in README.md and the agents fragment correctly identify this as a residual gap requiring an operator workaround, but the implementation does not fully satisfy the requirement to gate the promote-main-to-stable.yml cycle in its entirety.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"After a rollback, neither `auto-release-stable.yml` nor the `promote-main-to-stable.yml` cycle releases until a release is cut deliberately.\"\n  Expected change site: `.github/workflows/promote-main-to-stable.yml`, `promote` job, and/or `scripts/orchestrate_poll_process.sh`, where the poller dispatches that job.\n  Evidence of absence: The hold check gates the scheduled `cycle` job, but the separate `promote` job has no hold check (`.github/workflows/promote-main-to-stable.yml:155-162, 208-258`). The poller can dispatch that job with `target_sha` (`scripts/orchestrate_poll_process.sh:15379-15385`), allowing it to advance `stable` and run the release gate while the hold is active. `README.md:4774-4785` documents this ungated path and a manual workaround, but the code does not enforce the stated hold requirement.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a37bbafe2c14709e10891d31e348ef275ef92d6f802ddbff9197230f1f37b58f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9359,
+    "run_id": "43326598800",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43326598800",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113070413_749ba343ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9359,
+    "run_id": "43326598800"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T07:04:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
