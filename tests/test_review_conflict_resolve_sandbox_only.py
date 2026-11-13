@@ -1050,8 +1050,8 @@ def test_source_repo_without_its_conflict_set_still_fails_closed(tmp_path):
 # onto the live copy. The paired-live report test below locks that pairing,
 # and the guard tests lock the sandbox boundary: the live hook is never
 # admitted to the sandbox and never taken from base on an integration branch.
-# The clean-template host-only merge gap is tracked by the strict xfail in
-# tests/test_conflict_guard_hook_template_merge.py.
+# Since #9014 the host-only template merge also covers this pair; the
+# ordinary tests in tests/test_conflict_guard_hook_template_merge.py lock it.
 
 PREPUSH_HOOK = ".claude/hooks/prepush_affected_tests.py"
 PREPUSH_HOOK_TEMPLATE = "workflow-templates/" + PREPUSH_HOOK
