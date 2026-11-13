@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:7339 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: On head 6ea36343, the CI check \"orchestrate-poll (1)\" failed in test_security_pass_cap_converts_low_keep_fixing_to_advisory with \"poller did not exit within 180s; process group killed\", after the poller had printed \"Project complete!\".\n  WHY: The reviewer rated this NIT, which is mapped to low here, and found no link to this PR: the PR does not change the script or the test, the solc block does not run when SANDBOX_SOLC_VERSIONS is empty, the other five CI jobs passed, and workflow failure heal issue #9199 already tracks it. The reviewer's next step is to re-run the shard on the PR head and on merge-base 507ba62a. minimax_minimax-m3 also said in prose that it does not trace to this PR.\n- scripts/codex_isolated_exec.sh:218-223 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `sandbox_solc_resolve_versions` checks `$(uname -m)` inside the container to decide whether to skip installing Solidity compilers.\n  WHY: The reviewer rated this NIT, which is mapped to low here. The reviewer says it is safe because `docker build` always matches the host, but calls the check inside the shell helper redundant and brittle compared with checking during the Dockerfile build.\n- scripts/resolve_integration_ref.sh:595-597 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The resolver captures `helper_err` via `mktemp` and then always runs `cat \"${helper_err}\" >&2`.\n  WHY: The reviewer rated this NIT, which is mapped to low here. A failure after `mktemp` and before `cat` (for example a race or a disk error) is not handled. The reviewer calls this minor because a `cat` failure would just exit the step under set -e.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:line 7339, def test_security_pass_cap_converts_low_keep_fixing_to_advisory (CI check \"orchestrate-poll (1)\"; the \"lint\" job only collects that result) | severity=NIT | confidence=2\n  PROBLEM: On head 6ea36343 the check failed with \"poller did not exit within 180s; process group killed\". The poller had already printed \"Project complete!\", so it hung while shutting down.\n  WHY: The 180 s test timeout kills the poller during shutdown, but the reviewer found no link to this PR:\n    - The PR changes neither scripts/orchestrate_poll_process.sh nor this test file.\n    - With SANDBOX_SOLC_VERSIONS empty, sandbox_solc_resolve_versions returns at its first check.\n    - The new in-container solc block runs only when /opt/solc/hardhat-nodejs/compilers-v2/linux-amd64 exists.\n    - The other five CI jobs passed.\n    - Workflow failure heal issue #9199 already tracks this failure.\n    The reviewer lists it only because a failed check counts as a known failure. Next step: re-run the shard on the PR head and on merge-base 507ba62a, and treat it as this PR's defect only if it passes on the base and fails on the head.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/codex_isolated_exec.sh:lines 218-223 | severity=NIT | confidence=3\n  PROBLEM: The script checks `$(uname -m)` inside `sandbox_solc_resolve_versions` to decide whether to skip installing Solidity compilers.\n  WHY: The `image`/`image-context` actions run on the host and `run` runs inside the container. Relying on `uname -m` inside the container script could give inconsistent behavior if the build and run environments were mismatched. It is safe here because `docker build` always matches the host, but checking inside the shell helper is redundant and brittle compared with checking during the Dockerfile build.\n- scripts/resolve_integration_ref.sh:lines 595-597 | severity=NIT | confidence=2\n  PROBLEM: The resolver captures `helper_err` via `mktemp` and then unconditionally executes `cat \"${helper_err}\" >&2`.\n  WHY: If `mktemp` fails, `cat` might be called with an empty or non-existent path. `helper_err` is checked after `mktemp`, but a later failure (for example a race or a disk error) before `cat` is not handled. This is minor because a `cat` failure would just exit the shell step if set -e is active, but the code lacks robust error handling.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f400cc1f42c7049278eb8bc58140ce6b70b70a8838443b68290c421c49d0c4d0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "43333886615",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43333886615",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113075646_170d18dabd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "43333886615"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-13T07:56:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
