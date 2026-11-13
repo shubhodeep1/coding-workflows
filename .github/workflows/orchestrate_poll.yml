@@ -602,6 +602,14 @@ jobs:
 
           echo "PYTHONDONTWRITEBYTECODE=1" >> "$GITHUB_ENV"
 
+          # Stuck-states P12: scripts/sync_contract_list_union.py needs PyYAML,
+          # which setup-python 3.12 does not ship. Pinned and never fatal: when
+          # the install fails the contract-list union pre-resolver fails open
+          # (reason=pyyaml_missing) and the LLM conflict resolver runs as before.
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet 'pyyaml==6.0.2' \
+            || echo "::warning::PyYAML install failed; contract-list union pre-resolver will fail open"
+
       - name: Validate required environment variables
         id: validate_env
         if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
@@ -1559,6 +1567,9 @@ jobs:
           MAX_VALIDATION_FIX_BATCH_CYCLES: ${{ vars.MAX_VALIDATION_FIX_BATCH_CYCLES || '30' }}
           BRANCH_REBUILD_ENABLED: ${{ vars.BRANCH_REBUILD_ENABLED || 'false' }}
           INTEGRATION_CONFLICT_PARK_ENABLED: ${{ vars.INTEGRATION_CONFLICT_PARK_ENABLED || 'true' }}
+          # Stuck-states P12: resolve db/contracts entrypoint-list append
+          # conflicts in the integration sync without the LLM resolver.
+          ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED: ${{ vars.ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED || 'true' }}
           INTEGRATION_CONFLICT_PARK_GATE_CAP: ${{ vars.INTEGRATION_CONFLICT_PARK_GATE_CAP || vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}
           BRANCH_REBUILD_THRESHOLD_HOURS: ${{ vars.BRANCH_REBUILD_THRESHOLD_HOURS || '24' }}
           BRANCH_REBUILD_COOLDOWN_HOURS: ${{ vars.BRANCH_REBUILD_COOLDOWN_HOURS || '48' }}
@@ -1754,6 +1765,9 @@ jobs:
           MAX_VALIDATION_FIX_BATCH_CYCLES: ${{ vars.MAX_VALIDATION_FIX_BATCH_CYCLES || '30' }}
           BRANCH_REBUILD_ENABLED: ${{ vars.BRANCH_REBUILD_ENABLED || 'false' }}
           INTEGRATION_CONFLICT_PARK_ENABLED: ${{ vars.INTEGRATION_CONFLICT_PARK_ENABLED || 'true' }}
+          # Stuck-states P12: resolve db/contracts entrypoint-list append
+          # conflicts in the integration sync without the LLM resolver.
+          ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED: ${{ vars.ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED || 'true' }}
           INTEGRATION_CONFLICT_PARK_GATE_CAP: ${{ vars.INTEGRATION_CONFLICT_PARK_GATE_CAP || vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}
           BRANCH_REBUILD_THRESHOLD_HOURS: ${{ vars.BRANCH_REBUILD_THRESHOLD_HOURS || '24' }}
           BRANCH_REBUILD_COOLDOWN_HOURS: ${{ vars.BRANCH_REBUILD_COOLDOWN_HOURS || '48' }}
