@@ -33216,8 +33216,8 @@ fi
 
     # Issues check-stalls skipped because they carry a human-gated latch
     # label (orchestrate_lib.STALL_RECOVERY_LATCH_LABELS —
-    # ai:destructive-blocked / ai:scope-blocked).  implement.yml refuses
-    # to redispatch those until a human removes the label, so no recovery
+    # ai:destructive-blocked / ai:scope-blocked / ai:workflow-heal-escalated).
+    # No automated path clears those until a human removes the label, so no recovery
     # action can move them; log one stable line per issue so the pause
     # is visible in the poll log instead of silent.  `.latched` is
     # additive on the check-stalls payload — older payloads (or the
