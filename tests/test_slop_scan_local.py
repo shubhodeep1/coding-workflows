@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures" / "slop_scan"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
-import slop_scan_local
+import slop_scan_local  # noqa: E402
 
 
 def _result_for_fixture(path: Path) -> dict:
@@ -122,6 +122,65 @@ def test_python3_heredoc_findings_map_back_to_shell_line_numbers(tmp_path: Path)
 	assert finding["path"] == "scripts/example.sh"
 	assert finding["line"] == 7
 	assert finding["source_kind"] == "python_heredoc"
+
+
+def test_non_constant_expression_statement_without_ast_str(tmp_path: Path) -> None:
+	"""Python 3.14 removed ast.Str; a `print(1)` statement must not crash the scan (#9233)."""
+	import ast as real_ast
+	import json
+	import types
+
+	removed_names = {"Str", "Num", "Bytes", "NameConstant", "Ellipsis"}
+
+	class _AstWithoutLegacyNodes(types.ModuleType):
+		def __getattr__(self, name):
+			if name in removed_names:
+				raise AttributeError(f"module 'ast' has no attribute {name!r}")
+			return getattr(real_ast, name)
+
+	python_file = tmp_path / "scripts" / "example.py"
+	python_file.parent.mkdir(parents=True, exist_ok=True)
+	python_file.write_text(
+		"import os\n\n"
+		"print(1)\n\n\n"
+		"def remove_temp_file(path):\n"
+		"\tprint(path)\n"
+		"\ttry:\n"
+		"\t\tos.unlink(path)\n"
+		"\texcept:\n"
+		"\t\tpass\n",
+		encoding="utf-8",
+	)
+	changed_files = tmp_path / "changed.txt"
+	changed_files.write_text("scripts/example.py\n", encoding="utf-8")
+	output_file = tmp_path / "out" / "result.json"
+
+	original_ast = slop_scan_local.ast
+	original_argv = sys.argv
+	slop_scan_local.ast = _AstWithoutLegacyNodes("ast")
+	try:
+		result = slop_scan_local.collect_scan_result(["scripts/example.py"], tmp_path)
+		assert result["collection_status"] == "ok"
+		assert "errors" not in result
+		assert any(finding["rule_id"] == "empty_catch_file_op" for finding in result["findings"])
+
+		sys.argv = [
+			"slop_scan_local.py",
+			"--changed-files",
+			str(changed_files),
+			"--repo-root",
+			str(tmp_path),
+			"--output",
+			str(output_file),
+		]
+		assert slop_scan_local.main() == 0
+	finally:
+		slop_scan_local.ast = original_ast
+		sys.argv = original_argv
+
+	written = json.loads(output_file.read_text(encoding="utf-8"))
+	assert written["scanned_files"] == ["scripts/example.py"]
+	assert any(finding["rule_id"] == "empty_catch_file_op" for finding in written["findings"])
 
 
 def test_temporary_test_dir_falls_back_to_repo_root_when_system_temp_is_unusable() -> None:

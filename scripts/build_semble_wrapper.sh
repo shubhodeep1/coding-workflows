@@ -27,7 +27,8 @@ semble_build_now_ms()
 {
 	local semble_build_now_value="" semble_build_now_realtime="${EPOCHREALTIME:-}"
 	# Bash's own clock first: on ubuntu-26.04 runners (Rust uutils coreutils)
-	# `date +%s%3N` sometimes returned a reading one digit short (#9240).
+	# `date +%s%3N` gave readings that went backwards within a run, or
+	# sometimes a reading one digit short (#9240).
 	# `date` stays as the fallback for bash < 5. Always returns 0.
 	if [[ "${semble_build_now_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
 		printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
@@ -38,6 +39,7 @@ semble_build_now_ms()
 		printf '%s\n' "${semble_build_now_value}"
 		return 0
 	fi
+	# Whole seconds when `date` has no %3N; 0 when no clock is usable.
 	semble_build_now_value="$(date +%s 2>/dev/null || true)"
 	if [[ "${semble_build_now_value}" =~ ^[0-9]+$ ]]; then
 		printf '%s\n' "$(( 10#${semble_build_now_value} * 1000 ))"
@@ -59,6 +61,7 @@ semble_bootstrap_event()
 	event_mode="$(printf '%s' "${SEMBLE_BOOTSTRAP_MODE:-eager}" | tr '[:upper:]' '[:lower:]')"
 	case "${event_mode}" in lazy|eager) ;; *) event_mode=eager ;; esac
 	index_ms="$(( $(semble_build_now_ms) - SEMBLE_BUILD_START_MS ))"
+	# A clock that fails mid-run reads 0; never report a negative duration.
 	[ "${index_ms}" -ge 0 ] || index_ms=0
 	if [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] && [[ "${GITHUB_RUN_ATTEMPT:-1}" =~ ^[0-9]+$ ]]; then
 		run_field=" run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
