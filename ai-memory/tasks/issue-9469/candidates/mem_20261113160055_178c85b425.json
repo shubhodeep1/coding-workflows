@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The issue's fix (move the slowest step into the job with the most headroom) would run the system-Python tests on setup-python 3.12 and lose the #9233 coverage. Which fix should the plan use for shard 11 taking 15m16s of its 20 minutes?\nChoices:\nA) Add shards to the `system-python-shard` matrix list (for example 24 to 32). This is the method the job's comment documents. It adds no new job ID and leaves `timeout-minutes` at 20, so it is consistent with the issue's limits. (RECOMMENDED)\nB) Keep 24 shards and spread the slowest test functions more evenly across them, instead of using the plain `NR % total == index` split. The step's `--durations=15` output shows which functions are slowest. The step script changes and the contract test assertions on `'NR % total == n'` must be updated with it.\nC) Do what the issue literally says: move the `System-Python test shard` step, unchanged, into the job with the most headroom. That job uses setup-python 3.12 and has no shard matrix, so the step would no longer test the runner interpreter or split its tests. **Note:** this breaks `SystemPythonJobTest` and reverses #9233's intent.",
+  "fingerprint": "b0438831b09c95718f1f80a58b9100008ec87a643f7988eac7d15bedf4c2d2a0",
+  "lineage": {
+    "issue_number": 9469,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43438327513",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43438327513",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261113160055_178c85b425",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9469,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43438327513"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9469 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-13T16:00:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
