@@ -69,6 +69,9 @@ LOG_EXPORT_CATEGORIES = ("errors", "slow", "recent")
 LOG_EXCERPT_MAX_CHARS = 4000
 SLOW_RUNS_PER_REPO = 10
 DEFAULT_SUCCESS_SAMPLE_RATE = 0.07
+# Upper bound on the slots select_notable_runs_for_logs() reserves for sampled
+# successful runs when notable runs would otherwise fill --max-log-runs.
+SUCCESS_SAMPLE_MAX_RESERVE_FRACTION = 0.1
 LOG_ARCHIVE_FETCH_RETRIES = 3
 LOG_ARCHIVE_FETCH_BACKOFF_SECONDS = 1.0
 MISSING_LOG_ARCHIVE_MARKER = "partial_data:missing_log_archive"
@@ -1357,7 +1360,7 @@ def select_notable_runs_for_logs(
         reverse=True,
     )
 
-    ordered: list[dict[str, Any]] = []
+    notable_ordered: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
     for bucket in (failed_runs, retried_runs, slow_runs):
         for run in bucket:
@@ -1365,34 +1368,54 @@ def select_notable_runs_for_logs(
             if identity in seen:
                 continue
             seen.add(identity)
-            ordered.append(run)
-            if len(ordered) >= max_log_runs:
-                return ordered
+            notable_ordered.append(run)
+
+    # Eligible successful runs outside every notable bucket, in eligible order.
+    success_runs = [
+        run for run in eligible
+        if (run.get("conclusion") or "").lower() == "success" and _run_identity(run) not in seen
+    ]
+
+    # Success reserve (analysis/workflow-optimization-2026-10-08.md, Executive
+    # Summary #4 / Top action #2): with notable runs filling the cap first, the
+    # report showed 124/1,000 runs with parsed telemetry, a 7% configured
+    # success sample and 0 sampled successes, so no success baseline existed.
+    # Hold back a bounded number of slots for sampled successes. With a single
+    # slot (max_log_runs == 1) a failure keeps it, as before.
+    success_reserve = 0
+    if success_sample_rate > 0 and success_runs and max_log_runs >= 2:
+        success_reserve = min(
+            math.ceil(len(success_runs) * success_sample_rate),
+            max(1, math.floor(max_log_runs * SUCCESS_SAMPLE_MAX_RESERVE_FRACTION)),
+        )
+    ordered = notable_ordered[: max_log_runs - success_reserve]
+    notable_head_count = len(ordered)
 
     # Random sampling of successful runs for baseline visibility
-    if success_sample_rate > 0 and len(ordered) < max_log_runs:
-        success_runs = [
-            run for run in eligible
-            if (run.get("conclusion") or "").lower() == "success" and _run_identity(run) not in seen
-        ]
-        if success_runs:
-            sample_count = max(1, math.ceil(len(success_runs) * success_sample_rate))
-            remaining_slots = max_log_runs - len(ordered)
-            sample_count = min(sample_count, remaining_slots)
-            seed = _deterministic_seed(eligible)
-            rng = random.Random(seed)
-            sampled = rng.sample(success_runs, min(sample_count, len(success_runs)))
-            sampled = _sort_runs_by_created_desc(sampled)
-            for run in sampled:
-                identity = _run_identity(run)
-                if identity in seen:
-                    continue
-                seen.add(identity)
-                run["_success_sampled"] = True
-                ordered.append(run)
-                if len(ordered) >= max_log_runs:
-                    break
+    sampled_selected: list[dict[str, Any]] = []
+    if success_sample_rate > 0 and success_runs and len(ordered) < max_log_runs:
+        sample_count = max(1, math.ceil(len(success_runs) * success_sample_rate))
+        remaining_slots = max_log_runs - len(ordered)
+        sample_count = min(sample_count, remaining_slots)
+        seed = _deterministic_seed(eligible)
+        rng = random.Random(seed)
+        sampled = rng.sample(success_runs, min(sample_count, len(success_runs)))
+        sampled = _sort_runs_by_created_desc(sampled)
+        for run in sampled:
+            identity = _run_identity(run)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            run["_success_sampled"] = True
+            sampled_selected.append(run)
+            if len(ordered) + len(sampled_selected) >= max_log_runs:
+                break
 
+    # Give reserve slots the sample did not use back to the remaining notable
+    # runs, in bucket order (failed, retried, slow).
+    free_slots = max(0, max_log_runs - notable_head_count - len(sampled_selected))
+    ordered.extend(notable_ordered[notable_head_count : notable_head_count + free_slots])
+    ordered.extend(sampled_selected)
     return ordered
 
 

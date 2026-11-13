@@ -77,6 +77,14 @@
 # (activation_open_prs_json);
 # when code gaps exist, one source-key search before creating the fix issue;
 # one comment, at most one fix-issue create, and the operator-step writer's calls.
+# Write reconciliation (CONSIST-001, workflow-optimization-2026-10-08), only
+# after a failed write: a failed fix-issue create reruns the marker search once
+# and is never retried (search lag could hide the issue it created); a failed
+# verdict POST lists the target issue's comments once and retries the POST once
+# only when no trusted comment ends in the same marker (no retry when the
+# listing fails). Logs: outcome=fix_issue_reused reason=create_failed_recheck,
+# outcome=verdict_comment_reconciled, op=verdict_comment_retry,
+# op=verdict_comment_recheck outcome=lookup_failed.
 # The tracked-symlink listing (activation_tracked_symlinks_json) is local git
 # only and makes no GitHub API call.
 #
@@ -88,6 +96,9 @@
 # of work that is already under review. When every code gap is tagged, no fix
 # issue is searched for or opened.
 # POSTs are single-attempt: retrying after a lost response can duplicate writes.
+# The one exception is the verdict comment, which is retried once, and only
+# after a successful listing shows no trusted comment ending in its marker
+# (see the write-reconciliation note above). The fix-issue create is never retried.
 # Log: ACTIVATION_VERIFY mode= item= verdict= code_gaps= operator_gaps= outcome= reason=
 set -uo pipefail
 
@@ -366,13 +377,62 @@ print(json.dumps({"exempt": exempt, "other": other}))
 PY
 }
 
+# The author trust rule shared by the fix-issue and verdict-comment lookups:
+# the workflow bot, or an OWNER, MEMBER or COLLABORATOR. Prepended to a jq
+# program, so the predicate is defined once.
+# shellcheck disable=SC2016  # jq program text, not a shell expansion.
+activation_trusted_author_jq_def='def activation_trusted_author: (.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null); '
+
+# Searches for this run's activation-fix issue (marker on the first body line,
+# trusted author, not a pull request). Prints nothing.
+# Returns 0 when found, 1 when not found, 2 when the lookup failed or the
+# response is malformed.
+activation_lookup_fix_issue()
+{
+	local activation_fix_lookup_key="$1" activation_fix_search_response
+	if ! activation_fix_search_response="$(gh_retry gh api "search/issues?q=repo%3A${REPOSITORY}%20in%3Abody%20%22ai%3Aactivation-fix%3Av1%20source%3D${activation_fix_lookup_key}%22&per_page=100" 2>/dev/null)" \
+		|| ! printf '%s' "${activation_fix_search_response}" | jq -e \
+		'(.items | type) == "array" and (.total_count | type) == "number" and .total_count <= 100' >/dev/null 2>&1; then
+		return 2
+	fi
+	if printf '%s' "${activation_fix_search_response}" | jq -e --arg marker "<!-- ai:activation-fix:v1 source=${activation_fix_lookup_key} -->" \
+		"${activation_trusted_author_jq_def}"'[.items[] | select(.pull_request == null) | select(activation_trusted_author) | select((.body // "") | split("\n")[0] | rtrimstr("\r") == $marker)] | length > 0' >/dev/null 2>&1; then
+		return 0
+	fi
+	return 1
+}
+
+# Looks for a trusted comment on issue $1 whose last non-blank line is exactly
+# the marker $2. Prints nothing.
+# Returns 0 when found, 1 when not found, 2 when the listing failed or is
+# malformed (the caller then must not retry the POST: fail closed against
+# duplicates).
+activation_find_posted_verdict_comment()
+{
+	local activation_verdict_comment_target="$1" activation_verdict_comment_marker="$2" activation_verdict_comment_listing
+	# CLAUDE.md §14 audit: this read runs only after a failed verdict POST.
+	# None of the existing calls (linked-issue read, PR files, open pull
+	# requests, fix-issue search) returns the target issue's comments.
+	if ! activation_verdict_comment_listing="$(gh_retry gh api --paginate --slurp "repos/${REPOSITORY}/issues/${activation_verdict_comment_target}/comments?per_page=100" 2>/dev/null)" \
+		|| ! printf '%s' "${activation_verdict_comment_listing}" | jq -e 'type == "array" and all(.[]; type == "array")' >/dev/null 2>&1; then
+		return 2
+	fi
+	if printf '%s' "${activation_verdict_comment_listing}" | jq -e --arg marker "${activation_verdict_comment_marker}" \
+		"${activation_trusted_author_jq_def}"'[.[][] | select(type == "object") | select(activation_trusted_author) | select((.body | type) == "string")
+			| select(.body | gsub("\r"; "") | sub("[[:space:]]+$"; "") | split("\n") | last == $marker)] | length > 0' >/dev/null 2>&1; then
+		return 0
+	fi
+	return 1
+}
+
 activation_main()
 {
 	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file activation_model_rc=0
+	local activation_fix_lookup_rc activation_fix_recheck_rc activation_verdict_posted activation_expected_marker activation_verdict_recheck_rc
 	local activation_symlinks_context activation_context_tmp activation_open_prs_context
 	local activation_issue_gaps activation_in_flight_prs
 	local verdict code_gaps operator_gaps model reasoning comment_body fix_body steps_file tg_level item_label
-	local activation_files_json activation_files_response activation_existing_fix activation_fix_lookup_ok
+	local activation_files_json activation_files_response activation_fix_lookup_ok
 	local activation_engine_labels="" activation_sync_label=""
 	local activation_exempt_json activation_split_json
 	if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ]; then
@@ -599,23 +659,39 @@ activation_main()
 	if [ "${activation_issue_gaps}" -gt 0 ]; then
 		# Neither the linked-issue read nor the PR-files call can detect a fix issue
 		# from an earlier run whose verdict comment failed.
-		if ! activation_existing_fix="$(gh_retry gh api "search/issues?q=repo%3A${REPOSITORY}%20in%3Abody%20%22ai%3Aactivation-fix%3Av1%20source%3D${key}%22&per_page=100" 2>/dev/null)" \
-			|| ! printf '%s' "${activation_existing_fix}" | jq -e \
-			'(.items | type) == "array" and (.total_count | type) == "number" and .total_count <= 100' >/dev/null 2>&1; then
+		activation_fix_lookup_rc=0
+		activation_lookup_fix_issue "${key}" || activation_fix_lookup_rc=$?
+		if [ "${activation_fix_lookup_rc}" -eq 2 ]; then
 			activation_fix_lookup_ok="false"
 			echo "::warning::Activation fix-issue lookup failed for ${key}; no new issue will be created until it can be checked."
-		elif printf '%s' "${activation_existing_fix}" | jq -e --arg marker "<!-- ai:activation-fix:v1 source=${key} -->" \
-			'[.items[] | select(.pull_request == null) | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null)) | select((.body // "") | split("\n")[0] | rtrimstr("\r") == $marker)] | length > 0' >/dev/null 2>&1; then
+		elif [ "${activation_fix_lookup_rc}" -eq 0 ]; then
 			activation_log "mode=${mode} item=${item} outcome=fix_issue_reused"
 			# Continue with operator steps and the missing verdict comment.
 		else
-			fix_body="$(jq -r --arg key "${key}" --arg label "${item_label}" '
+			# The jq variable is not named $label: "label" is a reserved keyword in
+			# jq 1.6, which then fails to compile the filter.
+			fix_body="$(jq -r --arg key "${key}" --arg source_label "${item_label}" '
 				"<!-- ai:activation-fix:v1 source=" + $key + " -->\n"
-				+ "## Activation gaps\n\nActivation verification of " + $label
+				+ "## Activation gaps\n\nActivation verification of " + $source_label
 				+ " found these gaps that code in this repository can close. Close each one with the smallest change; do not change unrelated behaviour.\n\n"
 				+ ([.gaps[] | select(.kind == "code" and .open_pr == null) | "- **" + .title + "**\n  Evidence: " + .evidence + "\n  Fix: " + .fix] | join("\n"))
 			' "${verdict_file}")"
+			activation_fix_recheck_rc=0
 			if ! gh api "repos/${REPOSITORY}/issues" -f title="Activation gaps after ${item_label}" -f body="${fix_body}" >/dev/null 2>&1; then
+				# The create may have landed even though the call failed, so recheck
+				# the marker once. Do NOT retry the create: search indexing lag can
+				# hide an issue the failed call actually created, and a retry would
+				# open a duplicate.
+				# CLAUDE.md §14 audit: this search runs only after a failed create;
+				# the first search was taken before the create, so no existing call
+				# can show the issue it may have opened.
+				echo "::warning::Activation fix-issue create failed for ${key}; rechecking the marker before giving up."
+				activation_lookup_fix_issue "${key}" || activation_fix_recheck_rc=$?
+				if [ "${activation_fix_recheck_rc}" -eq 0 ]; then
+					activation_log "mode=${mode} item=${item} outcome=fix_issue_reused reason=create_failed_recheck"
+				fi
+			fi
+			if [ "${activation_fix_recheck_rc}" -ne 0 ]; then
 				echo "::warning::Could not open the activation-fix issue for ${key}."
 				activation_log "mode=${mode} item=${item} outcome=skip reason=fix_issue_failed"
 				_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} has ${activation_issue_gaps} code gap(s), but the fix issue could not be opened; nothing will implement them until verification is re-run." "WARNING"
@@ -655,7 +731,39 @@ activation_main()
 		+ (if (.gaps | length) > 0 then "Gaps:\n" + ([.gaps[] | "- [" + .kind + "] " + .title + (if .open_pr != null then " (fix in progress in open PR #" + (.open_pr | tostring) + ")" else "" end)] | join("\n")) + "\n\n" else "" end)
 		+ (if $lookup_ok then "<!-- ai:activation:v1 verdict=" + .verdict + " source=" + $key + " -->" else "Code-gap follow-up is pending: the GitHub fix-issue lookup failed. The activation verdict is not finalized; retry verification.\n\n<!-- ai:activation:v1 partial=true source=" + $key + " -->" end)
 	' "${verdict_file}")"
-	if ! gh api "repos/${REPOSITORY}/issues/${target_issue}/comments" -f body="${comment_body}" >/dev/null 2>&1; then
+	activation_verdict_posted="false"
+	if gh api "repos/${REPOSITORY}/issues/${target_issue}/comments" -f body="${comment_body}" >/dev/null 2>&1; then
+		activation_verdict_posted="true"
+	else
+		# The POST may have landed even though the call failed. Check the
+		# issue's comments for the exact marker this run posts before retrying
+		# once; when the listing fails, do not retry (fail closed against a
+		# duplicate verdict).
+		activation_expected_marker="${comment_body##*$'\n'}"
+		activation_verdict_recheck_rc=2
+		case "${activation_expected_marker}" in
+			"<!-- ai:activation:v1 "*" source=${key} -->")
+				activation_verdict_recheck_rc=0
+				activation_find_posted_verdict_comment "${target_issue}" "${activation_expected_marker}" || activation_verdict_recheck_rc=$?
+				;;
+		esac
+		case "${activation_verdict_recheck_rc}" in
+			0)
+				activation_log "mode=${mode} item=${item} outcome=verdict_comment_reconciled"
+				activation_verdict_posted="true"
+				;;
+			1)
+				activation_log "mode=${mode} item=${item} op=verdict_comment_retry"
+				if gh api "repos/${REPOSITORY}/issues/${target_issue}/comments" -f body="${comment_body}" >/dev/null 2>&1; then
+					activation_verdict_posted="true"
+				fi
+				;;
+			*)
+				activation_log "mode=${mode} item=${item} op=verdict_comment_recheck outcome=lookup_failed"
+				;;
+		esac
+	fi
+	if [ "${activation_verdict_posted}" != "true" ]; then
 		echo "::warning::Could not post the activation verdict on #${target_issue}."
 		activation_log "mode=${mode} item=${item} outcome=skip reason=verdict_comment_failed"
 		return 0

@@ -258,7 +258,7 @@ def test_orchestrator_tracking_issues_are_skipped_in_label_close_loop() -> None:
 	assert "ORCH_ALIAS_FRAGMENT" in text, (
 		"Expected batched GraphQL detection of orchestrator-related issues"
 	)
-	assert ' i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }' in text, (
+	assert ' i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body author { login } }' in text, (
 		"Expected aliased GraphQL fragment that fetches labels+body in one call"
 	)
 
@@ -456,6 +456,16 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
     *"i0: issue("*) printf '%s' "${FAKE_CLASSIFY_JSON}"; exit 0 ;;
   esac
 fi
+if [ "$1" = "api" ] && [[ "$2" == repos/*/pulls/* ]]; then
+  # Issue #8955: the check-triage marker PR read; the step's --jq shape is
+  # returned verbatim from FAKE_TRIAGE_PULL_JSON.
+  printf 'api_pull %s\n' "${2##*/}" >> "${CALLS_LOG}"
+  if [ "${FAKE_TRIAGE_PULL_FAIL:-0}" = "1" ]; then
+    exit 1
+  fi
+  printf '%s' "${FAKE_TRIAGE_PULL_JSON}"
+  exit 0
+fi
 printf '{}'
 """
 
@@ -474,8 +484,11 @@ def _closing_json(nodes: list[dict]) -> str:
 	)
 
 
-def _issue_node(number: int, labels: list[str] | None = None, body: str = "") -> dict:
-	return {"number": number, "body": body, "labels": {"nodes": [{"name": n} for n in (labels or [])]}}
+def _issue_node(number: int, labels: list[str] | None = None, body: str = "", author: str | None = None) -> dict:
+	node = {"number": number, "body": body, "labels": {"nodes": [{"name": n} for n in (labels or [])]}}
+	if author is not None:
+		node["author"] = {"login": author}
+	return node
 
 
 def _parse_github_env(path: Path) -> dict[str, str]:
@@ -513,12 +526,18 @@ def _run_status_sync(
 	author_login: str = "pipeline-bot",
 	gh_login: str = "pipeline-bot",
 	gh_user_fail: bool = False,
+	copy_orchestrate_lib: bool = False,
+	triage_pull_json: str = "{}",
+	triage_pull_fail: bool = False,
 ) -> dict:
 	tmp = Path(tempfile.mkdtemp(prefix="issue-pr-status-"))
 	try:
 		(tmp / "scripts").mkdir()
 		(tmp / "bin").mkdir()
 		shutil.copy(GH_HELPERS, tmp / "scripts" / "gh_helpers.sh")
+		if copy_orchestrate_lib:
+			# orchestrate_lib.py imports only the standard library at load time.
+			shutil.copy(REPO_ROOT / "scripts" / "orchestrate_lib.py", tmp / "scripts" / "orchestrate_lib.py")
 		(tmp / "scripts" / "label_helpers.sh").write_text(_LABEL_HELPERS_STUB, encoding="utf-8")
 		(tmp / "scripts" / "memory_helpers.sh").write_text(_MEMORY_HELPERS_STUB, encoding="utf-8")
 		fake_gh = tmp / "bin" / "gh"
@@ -558,6 +577,8 @@ def _run_status_sync(
 			"PR_AUTHOR_LOGIN": author_login,
 			"FAKE_GH_LOGIN": gh_login,
 			"FAKE_GH_USER_FAIL": "1" if gh_user_fail else "0",
+			"FAKE_TRIAGE_PULL_JSON": triage_pull_json,
+			"FAKE_TRIAGE_PULL_FAIL": "1" if triage_pull_fail else "0",
 		}
 		update = subprocess.run(
 			["bash", "-c", _step_script("Update linked issue labels when PR closes")],
@@ -1056,3 +1077,110 @@ if __name__ == "__main__":
 	test_extract_helper_ignores_fragment_urls_but_keeps_issue_links()
 	test_completion_gate_uses_event_default_branch_without_run_interpolation()
 	print("PASS")
+
+
+# ---------------------------------------------------------------------------
+# Issue #8955: a check-triage fix PR merged into the failing PR's head branch
+# completes the ai:check-triage issue (reason=check_triage_pr_branch).
+# ---------------------------------------------------------------------------
+
+_TRIAGE_ISSUE = 5104
+_TRIAGE_BODY = "<!-- check-failure-triage:pr=5102 -->\nCheck failed on PR #5102.\n\n---\n\nDiagnosis.\n"
+_TRIAGE_PULL_OK = json.dumps({"head_ref": "ai/issue-5099", "head_repo": "o/r"})
+
+
+def _run_triage_sync(
+	*,
+	labels: list[str] | None = None,
+	author: str = "pipeline-bot",
+	base_ref: str = "ai/issue-5099",
+	pull_json: str = _TRIAGE_PULL_OK,
+	pull_fail: bool = False,
+	via_classify: bool = False,
+	body: str = _TRIAGE_BODY,
+) -> dict:
+	node = _issue_node(_TRIAGE_ISSUE, labels=labels if labels is not None else ["ai:check-triage", "ai:ready-to-merge"], body=body, author=author)
+	return _run_status_sync(
+		merged=True,
+		base_ref=base_ref,
+		default_branch="main",
+		head_ref=f"ai/issue-{_TRIAGE_ISSUE}",
+		body="" if via_classify else f"Fixes #{_TRIAGE_ISSUE}",
+		closing_nodes=[] if via_classify else [node],
+		classify_nodes=[node] if via_classify else None,
+		copy_orchestrate_lib=True,
+		triage_pull_json=pull_json,
+		triage_pull_fail=pull_fail,
+	)
+
+
+def _assert_triage_untouched(result: dict) -> None:
+	assert _label_calls(result) == [], result
+	assert _close_calls(result) == [], result
+	assert _finalize_calls(result) == [], result
+	assert f"issue #{_TRIAGE_ISSUE} labels, state and lineage left unchanged" in result["update_out"], result["update_out"]
+
+
+def test_check_triage_merge_into_marker_pr_branch_closes_issue() -> None:
+	if _jq_missing("test_check_triage_merge_into_marker_pr_branch_closes_issue"):
+		return
+	for via_classify in (False, True):
+		result = _run_triage_sync(via_classify=via_classify)
+		assert _label_calls(result) == [f"label {_TRIAGE_ISSUE} ai:merged"], (via_classify, result)
+		assert _close_calls(result) == [f"close {_TRIAGE_ISSUE}"], (via_classify, result)
+		assert "api_pull 5102" in result["calls"], (via_classify, result)
+		assert "reason=check_triage_pr_branch" in result["update_out"], result["update_out"]
+		finalize = _finalize_calls(result)
+		assert len(finalize) == 1 and f"--issue-number {_TRIAGE_ISSUE}" in finalize[0], finalize
+
+
+def test_check_triage_merge_into_unrelated_branch_leaves_issue_unchanged() -> None:
+	if _jq_missing("test_check_triage_merge_into_unrelated_branch_leaves_issue_unchanged"):
+		return
+	result = _run_triage_sync(base_ref="claude/other-branch")
+	_assert_triage_untouched(result)
+	assert "reason=ref_mismatch" in result["update_out"]
+
+
+def test_check_triage_fork_marker_head_leaves_issue_unchanged() -> None:
+	if _jq_missing("test_check_triage_fork_marker_head_leaves_issue_unchanged"):
+		return
+	result = _run_triage_sync(pull_json=json.dumps({"head_ref": "ai/issue-5099", "head_repo": "attacker/r"}))
+	_assert_triage_untouched(result)
+	assert "reason=foreign_marker_head" in result["update_out"]
+
+
+def test_check_triage_failed_pull_read_leaves_issue_unchanged() -> None:
+	if _jq_missing("test_check_triage_failed_pull_read_leaves_issue_unchanged"):
+		return
+	result = _run_triage_sync(pull_fail=True)
+	_assert_triage_untouched(result)
+	assert "reason=pull_read_failed" in result["update_out"]
+
+
+def test_check_triage_non_pipeline_author_or_label_makes_no_pull_read() -> None:
+	if _jq_missing("test_check_triage_non_pipeline_author_or_label_makes_no_pull_read"):
+		return
+	result = _run_triage_sync(author="someone-else")
+	_assert_triage_untouched(result)
+	assert "reason=no_trusted_marker" in result["update_out"]
+	assert not any(c.startswith("api_pull") for c in result["calls"]), result
+	plain = _run_triage_sync(labels=["ai:ready-to-merge"])
+	_assert_triage_untouched(plain)
+	assert not any(c.startswith("api_pull") or c == "api_user" for c in plain["calls"]), plain
+	assert "Check-triage completion not applied" not in plain["update_out"]
+
+
+def test_check_triage_completion_contract() -> None:
+	update_step = _step_script("Update linked issue labels when PR closes")
+	assert 'target_merge_reason="check_triage_pr_branch"' in update_step
+	assert update_step.count("add_issue_bodies_from_json \"$(printf") == 3
+	assert update_step.count("add_issue_triage_meta_from_json \"$(printf") == 3
+	assert 'pulls/${_triage_marker_pr}' in update_step
+	assert 'pulls/${PR_NUMBER}' not in update_step
+	assert "python3 scripts/orchestrate_lib.py check-triage-target-pr" in update_step
+	assert '[ "${target_merge_reason}" = "check_triage_pr_branch" ]; }' in update_step
+	# The fallback runs only after the existing chain and before the
+	# "not a target merge" skip.
+	assert update_step.index('target_merge_reason="managed_no_child_metadata"') < update_step.index('target_merge_reason="check_triage_pr_branch"')
+	assert update_step.index('target_merge_reason="check_triage_pr_branch"') < update_step.index("(not a target merge;")

@@ -291,6 +291,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_init_runtime_workspace.sh` — body of the review_autofix.yml "Initialize runtime workspace" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_mark_ready_to_merge.sh` — body of the review_autofix.yml "Mark linked issues ready to merge" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_prepush_test_gate.sh` — body of the review_autofix.yml "Pre-push affected-test gate" step (one repair turn through `review_apply_fixes.sh --repair-turn`), and the shared `gate` / `repair-prompt` / `allow-list` entry point the conflict resolver and the heal editor call (issue #8201).
+- `scripts/review_autofix_step_checkout_pr_head_branch.sh` — body of the review_autofix.yml "Checkout PR head branch" step (sourced by the step; the step passes the repository as `REVIEW_HEAD_CHECKOUT_REPOSITORY`; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
@@ -379,6 +380,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/workflow_failure_heal_pr_reconcile.sh` — When a coding-workflows pull request closes, close the heal PRs stacked on its head branch (source not merged) or move their heal commits onto the source base and re-point them (source merged).
 - `scripts/workflow_failure_heal_report.sh` — Report a human-needed escalation from a consumer (or this repo) to coding-workflows with linked failed runs and the wrapper release pin.
 - `scripts/workflow_failure_heal_verify.sh` — Hourly post-merge verification of closed heal issues (`heal-verify` job, off by default): the first decisive run after the fix merged posts a `held` marker, or reopens the heal with `## Fix did not hold` and escalates a second recurrence (P7, Refs #8434).
+- `scripts/workflow_log_analysis_deliver_report.sh` — Run by the `deliver-report` job of `workflow-log-analysis.yml`: opens one pull request into the default branch for a run's `auto/workflow-log-analysis-report-<run_id>-<run_attempt>` branch, renaming the report on a path collision, linting the PR body for auto-close keywords, and failing closed without GH_PAT, on a non-default ref, or when the run branch changes paths outside the analysis docs (Refs #8963).
 - `scripts/workflow_retro.py` — Build weekly workflow-retro context from workflow-log-analysis telemetry.
 - `scripts/workflow_retro_fanout.sh` — Post weekly workflow retros to consumer repositories from the centralized fan-out job.
 - `scripts/workflow_wrapper_refs.py` — Render consumer workflow wrappers with immutable reusable-workflow references.

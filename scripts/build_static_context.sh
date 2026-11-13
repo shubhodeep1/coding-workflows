@@ -81,6 +81,14 @@
 # canonical=index|inline|absent bytes=<n>`, plus ` canonical_reason=<r>`, the
 # ` fallback=inline reason=<r>` and ` agents=absent` suffixes as above.
 #
+# `agents-index-canonical <out> <host_file> <sandbox_path>` (issue #8954)
+# writes `emit_agents_index --canonical` for a trusted host file, so the review
+# workflow (which cannot source this script) can index the rendered support
+# agents.md and point the model at its read-only sandbox mount. The same checks
+# apply: a regular non-symlink host file and a sandbox path under
+# /support/static-context/. Any failure writes empty output and exits 0; any
+# other argument count exits 2. Needs neither instructions nor pipeline file.
+#
 # Inputs (read from CWD): unattended_system_instructions.md, ai_pipeline.md,
 # agents.md, README.md. For the implement phase, also reads
 # "${RUNTIME_DIR}/agents_canonical.md" if present (consumer-repo flow).
@@ -90,11 +98,17 @@ set -euo pipefail
 static_context_usage() {
 	echo "Usage: $0 <phase> <output-file>" >&2
 	echo "       $0 agents-index <output-file> [agents.md|AGENTS.md]" >&2
-	echo "  phase: clarify | plan | implement | readme | agents-index" >&2
+	echo "       $0 agents-index-canonical <output-file> <host-file> <sandbox-path>" >&2
+	echo "  phase: clarify | plan | implement | readme | agents-index | agents-index-canonical" >&2
 	exit 2
 }
 
-if [ "$#" -ne 2 ] && { [ "$#" -ne 3 ] || [ "${1:-}" != agents-index ]; }; then
+if [ "${1:-}" = agents-index-canonical ]; then
+	# Issue #8954: exactly <out> <host_file> <sandbox_path>.
+	if [ "$#" -ne 4 ]; then
+		static_context_usage
+	fi
+elif [ "$#" -ne 2 ] && { [ "$#" -ne 3 ] || [ "${1:-}" != agents-index ]; }; then
 	static_context_usage
 fi
 
@@ -103,7 +117,12 @@ output="$2"
 # Optional third argument of the agents-index phase (issue #8269): the agents
 # file to index, so a caller that reads AGENTS.md first indexes that file.
 static_context_agents_index_file_arg=""
-if [ "$#" -eq 3 ]; then
+static_context_canonical_index_host_file=""
+static_context_canonical_index_sandbox_path=""
+if [ "${phase}" = agents-index-canonical ]; then
+	static_context_canonical_index_host_file="$3"
+	static_context_canonical_index_sandbox_path="$4"
+elif [ "$#" -eq 3 ]; then
 	case "$3" in
 		agents.md|AGENTS.md)
 			static_context_agents_index_file_arg="$3"
@@ -119,12 +138,12 @@ if [ -L "${output}" ] || { [ -e "${output}" ] && [ ! -f "${output}" ]; }; then
 	exit 1
 fi
 
-if [ "${phase}" != readme ] && [ "${phase}" != agents-index ] && { [ -L unattended_system_instructions.md ] || [ -L ai_pipeline.md ]; }; then
+if [ "${phase}" != readme ] && [ "${phase}" != agents-index ] && [ "${phase}" != agents-index-canonical ] && { [ -L unattended_system_instructions.md ] || [ -L ai_pipeline.md ]; }; then
 	echo "::error::Required static context input is a symbolic link; refusing to assemble the prompt." >&2
 	exit 1
 fi
 
-if [ "${phase}" != readme ] && [ "${phase}" != agents-index ] && { [ ! -f unattended_system_instructions.md ] || [ ! -f ai_pipeline.md ]; }; then
+if [ "${phase}" != readme ] && [ "${phase}" != agents-index ] && [ "${phase}" != agents-index-canonical ] && { [ ! -f unattended_system_instructions.md ] || [ ! -f ai_pipeline.md ]; }; then
 	echo "Missing required input file(s): unattended_system_instructions.md and/or ai_pipeline.md" >&2
 	exit 1
 fi
@@ -841,8 +860,13 @@ case "${phase}" in
 			emit_agents_index
 		} > "${output}"
 		;;
+	agents-index-canonical)
+		{
+			emit_agents_index --canonical "${static_context_canonical_index_host_file}" "${static_context_canonical_index_sandbox_path}"
+		} > "${output}"
+		;;
 	*)
-		echo "Unknown phase: ${phase} (expected clarify | plan | implement | readme | agents-index)" >&2
+		echo "Unknown phase: ${phase} (expected clarify | plan | implement | readme | agents-index | agents-index-canonical)" >&2
 		exit 2
 		;;
 esac
