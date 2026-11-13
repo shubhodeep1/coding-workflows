@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:84-91, 130-136 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The reviewer reported that the negative-elapsed guard in _orch_poll_cycle_project_flush and _orch_poll_cycle_on_exit is correct, and recorded this under CORRECTNESS & LOGIC as a NIT with no defect.\n  WHY: The source said \"It does not fail; the change is correct.\" It rated the entry SEVERITY: NIT, ISSUE_CONFIDENCE: 1. NIT is mapped to low, which is not a source-stated severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:84-91, 130-136 | severity=NIT | confidence=1\n  PROBLEM: The fix correctly captures the difference into a new local and assigns to the elapsed variable only when the difference is >= 0. The reviewer reported that it matches the issue's specification and leaves _orch_poll_cycle_now_ms untouched.\n  WHY: The source said \"It does not fail; the change is correct.\"\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "e4f368b06b426fe49189e49c43536ddbe534de4e2ec66e166f95badf19b897cc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9336,
+    "run_id": "43159146513",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43159146513",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113135753_0e24cb4dc4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9336,
+    "run_id": "43159146513"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-13T13:57:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
