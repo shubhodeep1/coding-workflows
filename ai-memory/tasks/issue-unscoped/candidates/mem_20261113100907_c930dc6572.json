@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:927-1008 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `_PLAN_GRANT_LEAD_BACKTICK_RE` begins with `^\\s*`, so indented sub-bullets with a leading backticked identifier (e.g. `  - `build_payload`: wraps the call`) are treated as missing root-level files.\n  WHY: An otherwise approvable plan is held with `path_not_granted` and `replannable: true`, and a replan can repeat the same wording. Reviewers rated it NIT; the hold is safe. Confidence ranged from 3 to 4.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A missing path holds the plan as replannable.\" (issue #9387, step 2)\n  expected_change_site: scripts/files_touched_scope_guard.py, `extract_plan_file_paths()` (lines 994-1010) and `_plan_grant_missing_root_path()` (lines 930-946)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The root-level missing-path fallback at lines 1006-1008 runs only when `_PLAN_GRANT_LEAD_BACKTICK_RE` matches a leading backticked token, so a missing extensionless root file written as `- VERSION` is not added to `missing_paths` and the plan is not held; the new test `test_plan_gate_missing_root_extensionless_path_hold_is_replannable` covers only the backticked form. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT (confidence 2, documented limitation); the others rated it MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/files_touched_scope_guard.py:927, 998-1008 | severity=NIT | confidence=3\n  PROBLEM: The `^\\s*` regex also matches indented sub-bullets with a leading backticked code identifier such as `build_payload`, and `_plan_grant_missing_root_path` then records it as a missing root file.\n  WHY: The plan is held with `path_not_granted` and `replannable: true`, costing extra replan cycles. It is a safe hold, not a wrong approval.\n- TASK_GAP:\n  Requirement: \"A missing path holds the plan as replannable.\" (spec item 2)\n  Expected change site: `scripts/files_touched_scope_guard.py`, `extract_plan_file_paths()` and `_plan_grant_missing_root_path()`\n  Evidence of absence: A missing root-level extensionless file written as `- VERSION` is not held, because the root check at lines 1006-1008 needs a backticked token. The reviewer rated this a deliberate, documented limitation, not a spec violation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- HARDENING_SUGGESTIONS: anchor `_PLAN_GRANT_LEAD_BACKTICK_RE` at column 0 (about 1 line changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:955 | severity=NIT | confidence=3\n  PROBLEM: `_PLAN_GRANT_LEAD_BACKTICK_RE` uses a `^\\s*` anchor, which matches indented sub-bullets.\n  WHY: An indented bullet naming an extensionless backticked identifier is parsed as a missing root file, causing an unnecessary `path_not_granted` hold with `replannable: true`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/files_touched_scope_guard.py:927, 998-1008 | severity=NIT | confidence=4\n  PROBLEM: `_PLAN_GRANT_LEAD_BACKTICK_RE` begins with `^\\s*`, so indented sub-bullets with an extensionless backticked token match and are written to `missing_out` by `_plan_grant_missing_root_path`.\n  WHY: An approvable plan becomes a `path_not_granted` hold with `replannable: true`, and the replan reproduces the same wording.\n- TASK_GAP:\n  Requirement: \"A missing path holds the plan as replannable.\" (issue #9387, step 2)\n  Expected change site: scripts/files_touched_scope_guard.py, `extract_plan_file_paths` near lines 994-1008 and `_plan_grant_missing_root_path` near lines 930-946\n  Evidence of absence: `_plan_grant_path(\"VERSION\")` returns `\"\"`, and the fallback at line 1006 needs `lead_token`, which only matches a backticked leading token. A `- VERSION` bullet is added as a candidate at line 996, but `_plan_grant_missing_root_path` is never called, so the plan is approved instead of held. The new test covers only the backticked form.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/files_touched_scope_guard.py:927-928, 998-1008 | severity=NIT | confidence=3\n  PROBLEM: The root-path matcher accepts indented list items because it begins with `^\\s*`, e.g. `  - `build_payload`: wraps the call`.\n  WHY: `_plan_grant_missing_root_path` treats the token as a missing path in a git checkout, so the plan gate holds with `path_not_granted` and a replan repeats the hold.\n- TASK_GAP:\n  Requirement: \u201cA missing path holds the plan as replannable.\u201d\n  Expected change site: scripts/files_touched_scope_guard.py, `extract_plan_file_paths()` and the root-level missing-path handling.\n  Evidence of absence: The parser accepts a bullet's first token without backticks at lines 994-997, but the root fallback at lines 1006-1008 runs only when `_PLAN_GRANT_LEAD_BACKTICK_RE` matches. A missing `- VERSION` is omitted from `missing_paths` and the plan is not held. The added test covers only the backticked form.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:927, 930-946, 998-1010 | severity=NIT | confidence=3\n  PROBLEM: `_PLAN_GRANT_LEAD_BACKTICK_RE` is anchored with `^\\s*`, so an indented sub-bullet with a leading backticked prose identifier matches, and `_plan_grant_missing_root_path` appends it to `missing_out`.\n  WHY: In `run_plan_auto_approval_gate` a non-empty `missing_paths` turns an approvable plan into a `path_not_granted` hold with `replannable: true`. The hold is safe, but the replan can repeat the same wording.\n- TASK_GAP:\n  Requirement: \"A missing path holds the plan as replannable\" (issue #9387, item 2; the grant must never silently drop a listed extensionless file).\n  Expected change site: scripts/files_touched_scope_guard.py, extract_plan_file_paths() root-level fallback (lines 1004-1010) and _plan_grant_missing_root_path()\n  Evidence of absence: The parser reads a bullet's first token when it has no backticks (line 994-996, `_PLAN_GRANT_BULLET_RE`), but the root-level fallback at lines 1006-1008 needs a backticked leading token. For `- VERSION` (absent from the checkout), `_plan_grant_path` and `_plan_grant_missing_path` both return \"\", so `VERSION` is not added to `missing_paths` and the gate approves. The new test covers only the backticked form.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "47d57b672be662509b0074af26c550698a5bbb84eca977422d82caabcf570139",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9389,
+    "run_id": "43374624695",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43374624695",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113100907_c930dc6572",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9389,
+    "run_id": "43374624695"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-13T10:09:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
