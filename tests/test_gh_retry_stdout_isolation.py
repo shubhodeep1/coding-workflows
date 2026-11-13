@@ -226,26 +226,38 @@ def test_stdout_buffer_mktemp_failure_does_not_run_the_command(tmp_path: Path) -
 	assert _leftover_temp_files(tmp_path) == []
 
 
+def _output_larger_than_any_pipe() -> int:
+	"""Bytes that cannot fit in a pipe even after the writer enlarges it."""
+	try:
+		pipe_max = int(Path("/proc/sys/fs/pipe-max-size").read_text(encoding="utf-8").strip())
+	except (OSError, ValueError):
+		pipe_max = 1024 * 1024
+	return max(8 * 1024 * 1024, 4 * pipe_max)
+
+
 def test_closed_reader_does_not_rerun_a_successful_command(tmp_path: Path) -> None:
-	# 1 MiB of output into a reader that exits at once: the reader goes away
-	# long before the output is written (1 MiB is far more than a pipe
-	# buffer, so the replay must hit the closed pipe). The command already
-	# succeeded, so it must not be run again; the undelivered output is
-	# reported as a non-zero status. The reader is `true`, not `head -c 1`:
-	# the Rust coreutils `head` on ubuntu-26.04 runners reads all of its
-	# input before exiting, so the writer never saw a closed pipe and the
-	# test got rc=0 there although gh_retry behaved correctly.
-	big = "x" * (1024 * 1024)
+	# More output than any pipe holds, into a reader that takes one byte and
+	# exits: the reader goes away before the output is written. The command
+	# already succeeded, so it must not be run again; the undelivered output is
+	# reported as a non-zero status. The size matters: Rust coreutils' cat
+	# (ubuntu-26.04) grows its stdout pipe to pipe-max-size (1 MiB by default)
+	# and splices up to 1 MiB in one call, so a 1 MiB output landed in the pipe
+	# whole and the copy returned 0 before the reader left. That is ordinary
+	# pipe behaviour, not a gh_retry defect.
+	big = "x" * _output_larger_than_any_pipe()
 	env = _setup(tmp_path, [(big, "", 0)])
 	result = _run(
 		tmp_path,
 		env,
-		"gh_retry gh api repos/o/r | true\n"
+		"gh_retry gh api repos/o/r | { IFS= read -r -n 1 _ || true; }\n"
 		'echo "rc=${PIPESTATUS[0]}"',
 	)
 	assert _calls(tmp_path) == 1, result.stderr
 	rc_line = result.stdout.strip()
-	assert rc_line.startswith("rc=") and rc_line != "rc=0", (rc_line, result.stderr, _closed_pipe_diagnostics(tmp_path, env))
+	# 141 = 128 + SIGPIPE (13): the `cat` replay inside gh_retry is killed by
+	# SIGPIPE and gh_retry returns that status. subprocess.run keeps its
+	# default restore_signals=True, so SIGPIPE is SIG_DFL in the child bash.
+	assert rc_line == "rc=141", (rc_line, result.stderr, _closed_pipe_diagnostics(tmp_path, env))
 	assert _leftover_temp_files(tmp_path) == []
 
 
@@ -680,3 +692,64 @@ def test_summary_unknown_flag_never_logs_dash_prefixed_value(tmp_path: Path) -> 
 	assert out == "gh issue create (flags: --project --title)"
 	assert "PRIVATE_SENTINEL" not in out
 	assert _summary(tmp_path, "gh", "api", "--paginate", "--slurp", "repos/o/r/x") == "gh api repos/o/r/x (flags: --paginate --slurp)"
+
+
+# --- Issue #9227: the replay status must not depend on cat. -----------------
+# ubuntu-26.04 runners ship a cat that exits 0 after its reader closes the
+# pipe, so gh_retry's replay (then `cat file`) reported rc=0 there.
+
+
+def test_closed_reader_status_does_not_depend_on_cat_exit_status(tmp_path: Path) -> None:
+	big = "x" * (1024 * 1024)
+	env = _setup(tmp_path, [(big, "", 0)])
+	real_cat = shutil.which("cat")
+	assert real_cat, "no cat on PATH"
+	fake_cat = tmp_path / "bin" / "cat"
+	# Behaves like the runner's cat: SIGPIPE ignored and always exit 0 once
+	# every argument is a readable file. Exits 1 otherwise, so the fake gh's
+	# `cat "${count_file}" 2>/dev/null || echo 0` still counts calls.
+	fake_cat.write_text(
+		"#!/usr/bin/env bash\n"
+		'for arg in "$@"; do\n'
+		'\t[ -f "${arg}" ] && [ -r "${arg}" ] || exit 1\n'
+		"done\n"
+		"trap '' PIPE\n"
+		f"'{real_cat}' \"$@\" 2>/dev/null\n"
+		"exit 0\n",
+		encoding="utf-8",
+	)
+	fake_cat.chmod(0o755)
+	result = _run(
+		tmp_path,
+		env,
+		"gh_retry gh api repos/o/r | head -c 1 > /dev/null\n"
+		'echo "rc=${PIPESTATUS[0]}"',
+	)
+	assert _calls(tmp_path) == 1, result.stderr
+	rc_line = result.stdout.strip()
+	# 141 = SIGPIPE in the replay subshell; 1 = printf EPIPE when SIGPIPE is ignored.
+	assert rc_line in ("rc=141", "rc=1"), (rc_line, result.stderr)
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_replay_keeps_nul_bytes_and_trailing_newlines(tmp_path: Path) -> None:
+	payload = "a\\b\0c  \n\n\0\0tail\n\n\n"
+	env = _setup(tmp_path, [(payload, "", 0)])
+	result = _run(tmp_path, env, "gh_retry gh api repos/o/r")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == payload
+	assert result.stderr == ""
+	assert _calls(tmp_path) == 1
+	assert _leftover_temp_files(tmp_path) == []
+
+
+@pytest.mark.parametrize("payload", ["a\\b\0", "\0", "x\n\0\0"])
+def test_replay_of_output_ending_in_nul_is_not_duplicated(tmp_path: Path, payload: str) -> None:
+	# A trailing NUL makes the last `read -d ''` hit EOF with no data, so the
+	# post-loop branch must be skipped and the final chunk emitted once.
+	env = _setup(tmp_path, [(payload, "", 0)])
+	result = _run(tmp_path, env, "gh_retry gh api repos/o/r")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == payload
+	assert _calls(tmp_path) == 1
+	assert _leftover_temp_files(tmp_path) == []
