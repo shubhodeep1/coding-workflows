@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9447,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9447\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9453\",\"pr_number\":9453,\"branch\":\"ai/issue-9447\",\"run_id\":\"43367817812\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43367817812\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/9447-orchestrate-poll-budget-predates-9214.md\"]}",
+  "fingerprint": "9512c8f874e0a3b7be0ba351f3c5869f651a07117e7c9e63149adb627762b4ae",
+  "lineage": {
+    "issue_number": 9447,
+    "parent_ids": [],
+    "pr_number": 9453,
+    "run_id": "43367817812",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43367817812",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9453"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261113061435_095e6a1661",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9447,
+    "level": "run",
+    "pr_number": 9453,
+    "run_id": "43367817812"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9447: https://github.com/shubhodeep1/coding-workflows/pull/9453",
+  "timestamps": {
+    "created_at": "2026-11-13T06:14:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
