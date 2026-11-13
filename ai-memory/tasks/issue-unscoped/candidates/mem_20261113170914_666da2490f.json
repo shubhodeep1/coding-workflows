@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_post_editor_summary.sh:366-477 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Removing the stale label reads first and deletes later, and nothing serializes it against the cap-label writer. \"Lines 366-368 read the label and cap comments; lines 453-457 decide whether the cap is stale; line 477 then deletes the label. In .github/workflows/review_autofix.yml, fingerprint-cap-block uses concurrency group fingerprint-cap-* at lines 1599-1602, while codex-agent uses the separate pr-autofix-* group at lines 1925-1947.\"\n  WHY: A fingerprint-cap-block job can add ai:review-blocked and post a new cap comment after this step's GraphQL read but before its DELETE. The DELETE then removes the label that was just applied, and later runs can treat that cap as already applied without restoring the label. The source stated SEVERITY: MAJOR, mapped here to high; no other reviewer gave a severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_post_editor_summary.sh:366-477 | severity=MAJOR | confidence=4\n  PROBLEM: The stale-label removal is a read-then-delete sequence that is not serialized against the cap-label writer. \"Lines 366-368 read the label and cap comments; lines 453-457 decide whether the cap is stale; line 477 then deletes the label. In .github/workflows/review_autofix.yml, fingerprint-cap-block uses concurrency group fingerprint-cap-* at lines 1599-1602, while codex-agent uses the separate pr-autofix-* group at lines 1925-1947.\"\n  WHY: A fingerprint-cap-block job can add ai:review-blocked and post a new cap comment after this step's GraphQL read but before its DELETE. The DELETE then removes the newly applied blocking label, and later runs can treat that cap as already applied without restoring the label.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2487a089b4b5d36ac7db34d0a85ad9743dd917def1bb1ee9078956287633488c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9429,
+    "run_id": "43407436587",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43407436587",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113170914_666da2490f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9429,
+    "run_id": "43407436587"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-13T17:09:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
