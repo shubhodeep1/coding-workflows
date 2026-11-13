@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "The repository has explicit CI coverage for wiring test files and for poll-test sharding. When adding or reorganizing tests, inspect tests/test_ci_wires_every_test_file.py and the relevant .github/workflows/ci.yml job so the tests are actually run in CI.",
+  "fingerprint": "441f2dcab3079036f9c97fd926553033fbe93c1f37c1b66dc093b0bc11a33ef5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43407705537",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43407705537",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8963",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9378",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9405",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9411",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9432",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8967",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9386",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9407",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9426",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9446"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261113103840_5ec57c4fc0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "CI test additions may require checking both test-file wiring and sharding configuration.",
+  "timestamps": {
+    "created_at": "2026-11-13T10:38:40Z",
+    "promoted_at": "2026-11-13T10:39:20Z",
+    "superseded_at": null
+  }
+}
