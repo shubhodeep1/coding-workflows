@@ -910,7 +910,8 @@ if [ "${TRIAGE_STAGE}" = "transient-rerun" ]; then
 	# checkout_fetch or abandoned), request one rerun-failed-jobs POST through
 	# ci_cancelled_rerun.rerun_failed_jobs (201 required, no retry, response body
 	# never printed). The triage issue is still posted as before; a passing
-	# re-run lets check_triage_resolution.py close it (path=open_head_rerun).
+	# re-run lets check_triage_resolution.py close it (path=open_head_rerun) the
+	# next time an existing gate caller (clarify, plan, unblock judge) runs.
 	# Every outcome logs one line and exits 0 (fail open).
 	transient_rerun_run=""
 	transient_rerun_switch="$(printf '%s' "${CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED:-}" | tr '[:upper:]' '[:lower:]')"

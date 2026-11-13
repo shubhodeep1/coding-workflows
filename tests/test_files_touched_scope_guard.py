@@ -2254,6 +2254,37 @@ def test_plan_gate_missing_extensionless_path_hold_is_replannable() -> None:
 		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
 
 
+def test_plan_gate_missing_root_extensionless_path_hold_is_replannable() -> None:
+	# #9387: a root-level extensionless file the checkout lacks, listed as a
+	# Files bullet's leading backticked token, holds the plan as replannable.
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "scripts").mkdir()
+		plan = "## Files likely to change\n- `scripts/a.sh`\n- `VERSION` - bump the version\n"
+		# Not a git checkout: nothing is reported, as before.
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		(root / ".git").mkdir()
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+		assert record["denied_paths"] == ["VERSION"] and record.get("replannable") is True, record
+		assert body is None
+		# Prose naming a root token, or a token that is not the bullet's lead, never counts.
+		for prose in ("- Update `VERSION` notes\n", "- `scripts/a.sh` reads `VERSION`\n", "- `VERSION` is read\n"):
+			code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n" + prose,
+				_pipeline_meta(), cwd=root)
+			assert code == 0 and record["reason"] == "pipeline_plan_grant", (prose, record)
+		# An existing root directory is never missing; an existing file is granted.
+		(root / "bin").mkdir()
+		code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n- `bin`\n",
+			_pipeline_meta(), cwd=root)
+		assert record.get("denied_paths") != ["bin"], record
+		(root / "VERSION").write_text("1.0\n", encoding="utf-8")
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		assert body is not None and "  - VERSION\n" in body
+
+
 def test_plan_gate_missing_extensionless_hold_without_loaded_metadata_fails_closed() -> None:
 	# #9387: no protected path and the files_touched gate off leave the issue
 	# metadata unread; the heal-route check still runs, and unknown metadata
