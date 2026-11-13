@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-13T07:22:22Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/ci.yml:3267; cited_path=.github/workflows/ci.yml; files_touched=changelog.d/9215-bash-clock-ms-timers.md, scripts/build_semble_wrapper.sh, scripts/install_semble.sh, scripts/review_autofix_step_checkout_pr_head_branch.sh, scripts/semble_helpers.sh, tests/test_ci_poll_test_sharding.py, tests/test_gh_retry_stdout_isolation.py.",
+  "phase": "review_autofix",
+  "pr_number": 9345,
+  "record_id": "lesson_20261113072222_0d0fd26455",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    "changelog.d/9215-bash-clock-ms-timers.md",
+    "scripts/build_semble_wrapper.sh",
+    "scripts/install_semble.sh",
+    "scripts/review_autofix_step_checkout_pr_head_branch.sh",
+    "scripts/semble_helpers.sh",
+    "tests/test_ci_poll_test_sharding.py",
+    "tests/test_gh_retry_stdout_isolation.py"
+  ]
+}
