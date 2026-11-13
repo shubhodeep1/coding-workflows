@@ -377,7 +377,10 @@ def _workflow() -> str:
 
 def test_capture_sites_use_the_paged_lookup() -> None:
 	wf = _workflow()
-	assert wf.count('find_latest_scoped_run_field "${TEST_REPO}"') == 3
+	# Three run-ID capture sites, plus wait-clarify's one-page html_url read
+	# on timeout (issue #9223), which is scoped by the same issue title.
+	assert wf.count('find_latest_scoped_run_field "${TEST_REPO}"') == 4
+	assert wf.count('"Clarif" "${ISSUE_TITLE}" "html_url" 1') == 1
 	# Clarify and Implement scope by the smoke issue's title, like Plan does.
 	assert wf.count('"${name_re}" "${ISSUE_TITLE:-}" "id"') == 2
 	for step_id in ("wait-clarify", "wait-implement"):
