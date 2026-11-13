@@ -455,12 +455,14 @@ for node in reversed(comments.get("nodes") or []):
 	if cap_support != clean_support:
 		emit("remove", "support_changed", cap_head, cap_support)
 	emit("kept", "same_head_support", cap_head, cap_support)
-if not_pr_target is not None:
-	emit("kept", "cap_not_pr_target", not_pr_target[0], not_pr_target[1])
 total = comments.get("totalCount")
 if isinstance(total, int) and total > len(comments.get("nodes") or []):
-	# An older cap marker may sit outside the newest-100 window (one-read budget).
-	emit("kept", "cap_marker_out_of_window")
+	# An older cap marker (possibly one that labeled this PR) may sit outside
+	# the newest-100 window (one-read budget), so this wins over
+	# cap_not_pr_target; a skipped linked-issue cap's SHAs are still logged.
+	emit("kept", "cap_marker_out_of_window", *(not_pr_target or ("none", "none")))
+if not_pr_target is not None:
+	emit("kept", "cap_not_pr_target", not_pr_target[0], not_pr_target[1])
 emit("kept", "no_cap_marker")
 PY
 )"

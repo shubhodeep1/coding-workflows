@@ -320,6 +320,16 @@ def test_cap_marker_out_of_window_is_logged_distinctly(tmp_path: Path) -> None:
 	_assert_line(result, "kept", "no_cap_marker")
 
 
+def test_linked_issue_cap_with_more_comments_logs_out_of_window(tmp_path: Path) -> None:
+	# A PR-labeling cap may sit past the newest-100 window, so cap_not_pr_target cannot be claimed.
+	comments = [_cap_comment(head=OTHER_HEAD, target=ISSUE_TARGET_LINE)]
+	result, calls, _ = _run(tmp_path, _graphql(comments, total_count=250))
+	_assert_line(result, "kept", "cap_marker_out_of_window", OTHER_HEAD, SUPPORT)
+	assert _deletes(calls) == []
+	result, calls, _ = _run(tmp_path, _graphql(comments, total_count=1))
+	_assert_line(result, "kept", "cap_not_pr_target", OTHER_HEAD, SUPPORT)
+
+
 def test_delete_404_counts_as_already_absent(tmp_path: Path) -> None:
 	result, calls, _ = _run(tmp_path, _graphql([_cap_comment(head=OTHER_HEAD)]), FAKE_GH_DELETE_404="1")
 	_assert_line(result, "removed", "already_absent", OTHER_HEAD, SUPPORT)
