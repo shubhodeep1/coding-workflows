@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Assert no step whose `run:` dereferences `WORKSPACE_PATH`, or that sources `review_autofix_step_checkout_pr_head_branch.sh`, lacks a `PR_CLOSED` gate (an always() step is allowed only if its body checks `WORKSPACE_PATH` before use).\" (Linked issue #9419, Implementation Steps, bullet 3.)\n  expected_change_site: tests/test_review_autofix_pr_closed_gate.py, `test_workspace_dependent_steps_after_pr_state_check_are_pr_closed_gated` (lines 128-148)\n  confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The ungated check at lines 138-139 (`if PR_CLOSED_GATE not in _step_if(step): ungated.append(name)`) has no exception for `always()` steps whose body checks `WORKSPACE_PATH` before use, so every step that references `WORKSPACE_PATH` is flagged; the test is stricter than specified (a superset), no such step exists today, the test is green, and runtime behaviour is unaffected; reviewer severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_pr_closed_gate.py:line 32 | (HARDENING_SUGGESTION; no severity/confidence stated)\n  PROBLEM: WORKSPACE_PATH_RE uses a capture group (parentheses) that is never utilized, as .search() does not rely on group 1.\n  WHY: Suggested minimal fix: WORKSPACE_PATH_RE = re.compile(r\"(?:\\$\\{?|env\\.)WORKSPACE_PATH\\b\"); estimated lines changed: 1; HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: always()-step allowance from Implementation Step 3 not implemented in the structural test\n  Requirement: \"Assert no step whose `run:` dereferences `WORKSPACE_PATH`, or that sources `review_autofix_step_checkout_pr_head_branch.sh`, lacks a `PR_CLOSED` gate (an always() step is allowed only if its body checks `WORKSPACE_PATH` before use).\" (Linked issue #9419, Implementation Steps, bullet 3.)\n  Expected change site: tests/test_review_autofix_pr_closed_gate.py, `test_workspace_dependent_steps_after_pr_state_check_are_pr_closed_gated` (lines 128-148)\n  Evidence of absence: The ungated check at lines 138-139 (`if PR_CLOSED_GATE not in _step_if(step): ungated.append(name)`) has no exception for `always()` steps whose body checks `WORKSPACE_PATH` before use. The test is stricter than specified, so a future legitimate `always()` step would fail CI. No such step exists today, and runtime behaviour is unaffected.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "77d2ddcb5a4b603a1ba374aa13ec8720018319a227fd7b8160901cd789f3e64b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9428,
+    "run_id": "43364809743",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43364809743",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261113094822_e5d94f7974",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9428,
+    "run_id": "43364809743"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-13T09:48:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
