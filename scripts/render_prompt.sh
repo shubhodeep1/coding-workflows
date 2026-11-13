@@ -334,8 +334,18 @@ fi
 # fail-open requires both flags. Placeholder substitution for the static
 # scaffolding still runs. Default (unset) keeps
 # include assembly for every trusted template render.
+#
+# Security (#9399, #9431, #9465): either untrusted-body flag below marks a body
+# that embeds PR-diff / comment text, so its `{{NAME}}` tokens are
+# attacker-chosen. In that mode the open-ended environment lookup in the
+# placeholder loop is skipped entirely; only the explicit vars appended before
+# the loop are substituted and every other `{{NAME}}` stays literal. The
+# reviewer/editor callers (review_run_reviewers.sh, review_apply_fixes.sh) need
+# only those explicit vars.
+_render_untrusted_body_mode=false
 case "${RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED:-}" in
 	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		_render_untrusted_body_mode=true
 		if [ "${INPUT_ALREADY_ASSEMBLED_FLAG_ADDED}" != "true" ]; then
 			RENDER_ARGS+=(--input-already-assembled)
 			INPUT_ALREADY_ASSEMBLED_FLAG_ADDED=true
@@ -351,6 +361,7 @@ esac
 # Default (unset) keeps the strict syntax gate for every static template render.
 case "${RENDER_PROMPT_SKIP_SYNTAX_VALIDATION:-}" in
 	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		_render_untrusted_body_mode=true
 		RENDER_ARGS+=(--skip-syntax-validation)
 		;;
 esac
@@ -379,6 +390,11 @@ while IFS= read -r placeholder_name; do
 	[ -n "${placeholder_name}" ] || continue
 	# Explicitly appended vars above win; skip before touching the environment.
 	if [ -n "${RENDER_VARS_SEEN[${placeholder_name}]+x}" ]; then
+		continue
+	fi
+	# Untrusted body: never read the environment for an attacker-chosen name
+	# (#9399/#9431/#9465). No NOTE either, so diff text cannot flood stderr.
+	if [ "${_render_untrusted_body_mode}" = "true" ]; then
 		continue
 	fi
 	if placeholder_env_name_is_credential_like "${placeholder_name}"; then
