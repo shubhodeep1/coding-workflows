@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Then run tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py with the installed interpreter and confirm both pass.\"\n  expected_change_site: Verification results for tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py (a check, not a code change)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR acceptance table marks tests/test_orchestrate_poll_process.py \"not run\" or timed out, and tests/test_implement_post_codex_recovery.py \"unmet\", with 4 failures that are inherited from the merge-base. CI on head 91574249255b5d469b284cc25a33b6f4a434ca15 shows 23 check-runs with 0 failed and 0 incomplete, so no code defect is implied. Severity disagreement: openai_gpt-6-luna said MAJOR, and the other reviewers said NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP\n- Requirement: Make the shim's shebang use the interpreter running the tests, with the rest of the body unchanged.\n  Expected change site: `tests/test_orchestrate_poll_process.py`, the `_write_exec(bin_dir / \"python3\", ...)` call.\n  Evidence of absence: Not absent. Lines 3464-3466 use `f\"#!{sys.executable}\\n\"`, and `sys` is imported at module level.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\nTASK_GAP\n- Requirement: Check that no other test in `tests/` writes a `#!/usr/bin/python3` shebang.\n  Expected change site: any file under `tests/`.\n  Evidence of absence: Not absent. A search of `tests/` for `#!/usr/bin/python3` returns no matches. The only remaining `/usr/bin/python3` text is the explanatory comment at line 3464.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\nTASK_GAP\n- Requirement: Run `tests/test_orchestrate_poll_process.py` and `tests/test_implement_post_codex_recovery.py` with the installed interpreter and confirm both pass.\n  Expected change site: a verification step, not a code change.\n  Evidence of absence: A clean local pass could not be confirmed. The pre-push gate shows the orchestrate-poll test timed out. The 4 failures it flagged in `tests/test_implement_post_codex_recovery.py` also fail on the merge-base. CI on the head commit reports 23 check-runs with 0 failed and 0 incomplete.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\n- Requirement: \"Then run tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py with the installed interpreter and confirm both pass.\"\n  Expected change site: Verification results for tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py (not a code change).\n  Evidence of absence: The PR acceptance table marks tests/test_implement_post_codex_recovery.py as \"unmet\" and tests/test_orchestrate_poll_process.py as \"not run\". The pre-push gate reports 1 caused failure (test_files_touched_scope_guard.py, from the sandbox-excluded `.github/ai/label_contract.v1.json` and `noexec` `/tmp`). It reports 2 inherited failures (test_ci_poll_test_sharding.py, and 4 tests in test_implement_post_codex_recovery.py that also fail on the merge-base). It reports 2 unverified (test_orchestrate_poll_process.py timed out, test_orchestrate_poll_promote_cycle.py baseline_timeout). All of this points to sandbox/CI environment limits, not a defect introduced by this PR. CI shows 23/23 green on head commit 91574249255b5d469b284cc25a33b6f4a434ca15. Closing the gap needs a full-checkout CI run, not a code change.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP\n- Requirement: \"Then run tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py with the installed interpreter and confirm both pass.\"\n  Expected change site: Verification results for both named test files.\n  Evidence of absence: The PR description's acceptance table marks tests/test_orchestrate_poll_process.py \"not run\" and tests/test_implement_post_codex_recovery.py \"unmet\". The available test-gate results also report a timeout for the former and inherited failures for the latter, so the requested passing results are not confirmed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP\n- Requirement: \"Then run tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py with the installed interpreter and confirm both pass.\"\n  Expected change site: Verification evidence for tests/test_orchestrate_poll_process.py and tests/test_implement_post_codex_recovery.py (a check, not a code change).\n  Evidence of absence: The PR description's pre-push gate records tests/test_orchestrate_poll_process.py as \"unverified (timeout)\" and tests/test_implement_post_codex_recovery.py as \"unmet\" with 4 failing tests (test_review_pipeline_integration_chain_module_runs_clean, test_validator_capture_aggregates_multiple_files_before_nonzero_exit, test_validator_diagnostic_surfaces_offending_lines, test_validator_offending_bytes_redacts_secrets). It reports these as inherited (also failing on the merge-base). No run on the PR head confirms both files pass. Mitigating evidence: all 23 check-runs on head 91574249255b5d469b284cc25a33b6f4a434ca15 pass with 0 failed and 0 incomplete, and the recovery-test failures do not involve the edited shim. Two prior editor passes (PR comments entry[3] and entry[8]) deferred this same gap citing sandbox exclusions (.github/ai/label_contract.v1.json, .github/ai/write_guards.v1.json, missing yaml module, noexec /tmp). The author never accepted the deferral, so it is carried forward.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ffc31053ab2a7fabaccf6756816420a18f59f0572f8c0b74935c5b7aa5c6b008",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9390,
+    "run_id": "43489708333",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43489708333",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114060127_55d0db9cc5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9390,
+    "run_id": "43489708333"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-14T06:01:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
