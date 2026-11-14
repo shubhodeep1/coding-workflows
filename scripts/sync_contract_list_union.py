@@ -267,6 +267,14 @@ def _validate(merged: str, ours_text: str, theirs_text: str, ours_resolved: str,
 			theirs_items = {_canonical(item) for item in theirs_data.get(key)}
 			if not (base_items <= ours_items and base_items <= theirs_items):
 				raise Ineligible("list_not_union")
+			# Base entries must also keep their relative order on both sides
+			# (an ordered subsequence): a reorder is not an append, so a
+			# reorder-plus-append conflict goes to the LLM resolver too.
+			base_seq = [_canonical(item) for item in base_list]
+			for side_list in (ours_data.get(key), theirs_data.get(key)):
+				remaining = iter(_canonical(item) for item in side_list)
+				if not all(any(entry == candidate for candidate in remaining) for entry in base_seq):
+					raise Ineligible("list_not_union")
 	# Every other top-level key must equal git's auto-merged value. The
 	# token is list_not_union because the merge would change more than the
 	# union of the entrypoint lists.

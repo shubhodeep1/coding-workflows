@@ -263,3 +263,15 @@ def test_bare_base_list_first_entry_appends_merge(tmp_path: Path) -> None:
 		"backend/app/fantasy/rollup.py:read_theirs",
 	]
 	assert merged["write_entrypoints"] == yaml.safe_load(base)["write_entrypoints"]
+
+
+def test_reorder_plus_append_is_ineligible(tmp_path: Path) -> None:
+	# Base [a, b]; ours reorders to [b, a] and appends c, theirs appends d.
+	# Every base entry survives as a set, but a reorder is not an append, so
+	# the path must go to the LLM resolver instead of taking ours' order.
+	pytest.importorskip("yaml")
+	base = "collection: x\nread_entrypoints:\n  - a.py:a\n  - b.py:b\nwrite_entrypoints:\n  - w.py:w\n"
+	ours = base.replace("  - a.py:a\n  - b.py:b\n", "  - b.py:b\n  - a.py:a\n  - c.py:c\n")
+	theirs = base.replace("  - a.py:a\n  - b.py:b\n", "  - a.py:a\n  - b.py:b\n  - d.py:d\n")
+	proc, out = _run(tmp_path, base, ours, theirs, path="db/contracts/x.yml")
+	_assert_ineligible(proc, out, "list_not_union")
