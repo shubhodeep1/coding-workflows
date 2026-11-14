@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:796-805 and 5223-5229 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR directly edits agents.md, which is outside the approved file grant in the plan.\n  WHY: It breaches the implementation scope-contract, which restricts changes to scripts/review_conflict_prepare.sh, the two named tests, changelog.d/9004-paired-hook-template-merge.md, tests/**, changelog.d/* and agents.d/*. Source severity was MAJOR. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) found the hunks acceptable as corrections of existing stale text.\n- agents.d/9004-paired-hook-template-merge.md:1-21 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The fragment documents the static GUARD_HOOK_TEMPLATE_PAIRS array as the source of the hook pairs, but the script primarily uses PAIRED_LIVE_COPIES from the trusted support checkout and only falls back to the static list.\n  WHY: An operator could edit the static list expecting it to be the source of truth. Source severity was NIT.\n- scripts/review_conflict_prepare.sh:304-306, 430-435 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The minimax reviewer reported, as a false positive, the claim that the merge function takes no optional pair arguments and the call site does not iterate.\n  WHY: The reviewer says line 306 takes the optional pair, defaulting to the guard pair, and the call site at line 435 passes each pair from the loop at lines 430-453. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Give the function the pair as optional arguments, defaulting to the guard pair, with all checks unchanged.\"\n  expected_change_site: scripts/review_conflict_prepare.sh, _conflict_prepare_guard_hook_pairs (or the actual merge function it calls) function signature\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer says the LAST RUN DIFF shows the merge preparation function signature does not accept the pair as optional arguments. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 refuted this: line 306 of _conflict_prepare_guard_hook_template_merge takes `${1:-GUARD_HOOK_LIVE_PATH}` and `${2:-GUARD_HOOK_TEMPLATE_PATH}`.\n- requirement: \"At the call site (line 333), run it for each pair whose live path is in the allowlist.\"\n  expected_change_site: scripts/review_conflict_prepare.sh, call-site loop\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer says the LAST RUN DIFF does not show the call-site loop (around the originally referenced line 333) iterating over the pairs. Other reviewers cite a loop at lines 430-453 that does this.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:796-805 and 5223-5229 | severity=MAJOR | confidence=4\n  PROBLEM: The PR directly edits agents.md, which is outside the approved file grant in the plan.\n  WHY: This is a breach of the implementation scope-contract. The pipeline grant restricts changes to scripts/review_conflict_prepare.sh, tests/test_conflict_guard_hook_template_merge.py, tests/test_review_conflict_resolve_sandbox_only.py, changelog.d/9004-paired-hook-template-merge.md, tests/**, changelog.d/* and agents.d/*.\n- agents.d/9004-paired-hook-template-merge.md:1-21 | severity=NIT | confidence=4\n  PROBLEM: The documented source of truth in agents.md (via this fragment) is inaccurate. It suggests the conflict resolver stage hooks from the static GUARD_HOOK_TEMPLATE_PAIRS array, whereas the script primarily uses PAIRED_LIVE_COPIES from the trusted support checkout, only falling back to the static list.\n  WHY: This is a documentation accuracy issue that could lead an operator to modify the static list expecting it to be the source of truth, rather than the primary PAIRED_LIVE_COPIES list.\n- TASK_GAP:\n  Requirement: \"Give the function the pair as optional arguments, defaulting to the guard pair, with all checks unchanged.\"\n  Expected change site: scripts/review_conflict_prepare.sh, _conflict_prepare_guard_hook_pairs (or the actual merge function it calls) function signature\n  Evidence of absence: The LAST RUN DIFF shows the function signature for the merge preparation logic does not accept the pair as optional arguments as requested; it remains focused on generating the list or its signature remains unchanged in a way that doesn't accept the requested arguments.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP:\n  Requirement: \"At the call site (line 333), run it for each pair whose live path is in the allowlist.\"\n  Expected change site: scripts/review_conflict_prepare.sh, call-site loop\n  Evidence of absence: The LAST RUN DIFF does not show an update to the call-site loop (around the originally referenced line 333) to iterate over the pairs and execute the merge for each pair as required by the issue description.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_conflict_prepare.sh:304-306, 430-435 | severity=NIT | confidence=5\n  PROBLEM: The reviewer reports that the cross-pollination claim from google_gemini-3_1-flash-lite (merge function lacks optional pair arguments and call site does not iterate) is a false positive. Gemini conflated `_conflict_prepare_guard_hook_pairs` (line 258) with `_conflict_prepare_guard_hook_template_merge` (line 304).\n  WHY: It does not fail. Line 306 reads `ghm_live=\"${1:-${GUARD_HOOK_LIVE_PATH}}\" ghm_tpl=\"${2:-${GUARD_HOOK_TEMPLATE_PATH}}\"`. The call site at line 435 passes each pair from the per-iteration loop at lines 430-453.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "d5570e1c0b6627a3a7cb369247d189ca689a5ad93ec4b78214505a43808758ff",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9445,
+    "run_id": "43508265152",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43508265152",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114154841_30a410a2b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9445,
+    "run_id": "43508265152"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-14T15:48:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
