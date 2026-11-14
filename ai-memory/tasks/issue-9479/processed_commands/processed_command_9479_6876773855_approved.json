@@ -5,13 +5,26 @@
   "entry_id": "processed_command_9479_6876773855_approved",
   "issue_number": 9479,
   "metadata": {
+    "branch": "ai/issue-9479",
+    "changed_files": [
+      "agents.d/9479-security-pass-retire-superseded-followups.md",
+      "changelog.d/9479-security-pass-retire-superseded-followups.md",
+      "scripts/review_enable_auto_merge.sh",
+      "scripts/review_single_issue_security_pass.sh",
+      "tests/test_single_issue_security_pass.py"
+    ],
+    "issue_number": 9479,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9479",
+    "pr_number": 9498,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9498",
+    "run_attempt": "1",
+    "run_id": "43591477417",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43591477417"
   },
   "run_attempt": 1,
   "run_id": "43591477417",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-14T15:44:54Z",
+  "status": "completed",
+  "timestamp": "2026-11-14T16:17:26Z",
   "workflow": "implement"
 }
