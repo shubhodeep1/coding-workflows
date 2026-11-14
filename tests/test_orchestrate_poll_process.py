@@ -15308,6 +15308,131 @@ def test_standalone_stall_recovery_runs_check_triage_gate_for_non_target_base():
 	assert "STALL_CHECK_TRIAGE_GATE issue=501 fix_pr=419 outcome=skip reason=disabled" not in gate_result["stdout"]
 
 
+def _run_standalone_ready_to_merge_tick_9482(
+	*,
+	pr_overrides: dict,
+	stall_recovery_count: int,
+	env_overrides: dict[str, str] | None = None,
+	mock_stall_judge_json: dict | None = None,
+) -> dict:
+	"""Issue #9482 shape: standalone ai:ready-to-merge issue #823 whose
+	implementation PR #825 targets an integration branch, so GitHub never
+	sets willCloseTarget and the GraphQL linked_pr lookups miss it."""
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:ready-to-merge",
+			"status_since_ts": 1,
+			"stall_recovery_count": stall_recovery_count,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	pr = {
+		"number": 825,
+		"body": "Closes #823",
+		"baseRefName": "orchestrator/project-768",
+		"headRefName": "ai/issue-823",
+		"headRefFromApi": "ai/issue-823",
+		"headSha": "0000000000000000000000000000000000000825",
+		"willCloseTarget": False,
+	}
+	pr.update(pr_overrides)
+	return _run_poller(
+		state=_base_state(status="complete"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 823: ["ai:ready-to-merge"]},
+		issue_comments={823: [standalone_state_comment]},
+		issue_linked_prs={823: 825},
+		mock_gh_issue_list_label_filter=True,
+		enable_stall_human_terminalization="false",
+		env_overrides=env_overrides,
+		mock_stall_judge_json=mock_stall_judge_json,
+		prs=[pr],
+	)
+
+
+_MERGED_PR_9482 = {
+	"state": "closed",
+	"merged": True,
+	"merged_at": "2026-11-10T04:34:00Z",
+}
+
+
+def test_standalone_ready_to_merge_skips_recovery_when_linked_pr_merged_into_integration_branch():
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides=_MERGED_PR_9482,
+		stall_recovery_count=2,
+		mock_stall_judge_json={
+			"action": "attempt_merge",
+			"justification": "must not be reached",
+			"target_pr": 825,
+			"head_ref": "ai/issue-823",
+		},
+	)
+	assert "linked PR #825 is MERGED" in result["stdout"]
+	assert "STALL_SKIP issue=823 reason=linked_pr_merged pr=825 phase=ai:ready-to-merge" in result["stdout"]
+	standalone_state = _extract_latest_standalone_state(result["issues"]["823"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 2
+	assert not any(
+		"Stall Judge" in str(comment.get("body", ""))
+		for comment in result["issues"]["823"]["comments"]
+	)
+	assert result.get("merged_prs", []) == []
+	assert result.get("merge_calls", []) == []
+
+
+def test_stall_judge_diagnostics_report_merged_linked_pr_and_keep_escalation():
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides=_MERGED_PR_9482,
+		stall_recovery_count=2,
+		env_overrides={"ENABLE_STALL_MERGED_PR_GUARD": "false"},
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "cannot tell whether PR #825 merged",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	judge_comments = [
+		str(comment.get("body", ""))
+		for comment in result["issues"]["823"]["comments"]
+		if "Stall Judge" in str(comment.get("body", ""))
+	]
+	assert judge_comments, result["stdout"]
+	judge_body = judge_comments[-1]
+	assert '"state":"merged"' in judge_body
+	assert '"merged":true' in judge_body
+	assert '"merged_at":"2026-11-10T04:34:00Z"' in judge_body
+	assert "**Decision (effective):** escalate_human" in judge_body
+	assert "ai:needs-human" in result["issues"]["823"]["labels"]
+	assert "normalized to 'attempt_merge'" not in result["stdout"]
+	assert "Stall judge action 'escalate_human' kept for issue #823: linked PR #825 is merged" in result["stdout"]
+
+
+def test_standalone_ready_to_merge_open_linked_pr_still_attempts_merge():
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides={
+			"state": "open",
+			"merged": False,
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+		stall_recovery_count=0,
+	)
+	assert "reason=linked_pr_merged" not in result["stdout"]
+	assert "Action: attempt_merge" in result["stdout"]
+	standalone_state = _extract_latest_standalone_state(result["issues"]["823"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	# attempt_merge reuses the PR the merged-guard fallback already resolved,
+	# so the tick fetches pulls/825 no more often than before #9482 (resolver
+	# + fresh-push + merge-freshness reads); a second resolver call would add one.
+	assert sum(path.endswith("/pulls/825") for path in result["api_calls"]) <= 3
+
+
 def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
