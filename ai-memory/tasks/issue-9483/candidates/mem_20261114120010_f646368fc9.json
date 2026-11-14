@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: Option A is the only choice that fixes the gate in code. B is a settings change in each consumer repo, which this pipeline can't make, so it would recur on every new consumer. C leaves the gate `pending` forever, which is what stalled both PRs. `scripts/review_head_gate.sh` already posts the `ai-review/head-gate` context through `review_head_gate_post_status` (lines 14-36), and it doesn't yet mention `update-workflows`, `workflow-integrity` or `ai-update-workflows/verify`. So A extends an existing mechanism. It must fail closed: any missing, failed, stale or unreadable signal keeps the gate `pending`.\nQ2: Option A extends the audit that already exists. `.github/workflows/audit_consumer_drift.yml` runs once a day (`cron: '0 8 * * *'`, line 10). `scripts/audit_consumer_drift.py` counts staleness from when the PR opened, using `SYNC_PR_STALE_AFTER_SECONDS = 3 * 24 * 60 * 60` (line 720) and `_sync_pull_request_is_stale` (line 723). Each new update PR resets that clock, so btc_sweeper never looked stale through three closed PRs. Counting from the tag time of the first release newer than the pin, and running every 6 hours, actually enforces the 24-hour limit. C would add a second workflow doing the same job as the existing audit.\nQ3: Option A makes the failure loud without blocking a human merge, as fix 2 asks. In `.github/workflows/update_workflows.yml`, the verify step posts the success status (lines 2425-2443) before it tries `gh pr merge --auto` (line 2450). The failed attempt only logs `::warning::` (line 2454). B would flip a valid verification to failure and block the human fallback. C stays green, which is how this went unnoticed.\n\nEXECUTION PLAN (required for any non-letter decision):\nNo lettered decision needs an execution plan. Constraints the planner must keep for the chosen letters:\nQ1:\n  strategy: (letter A)\n  inputs:\n    - scripts/review_head_gate.sh (`REVIEW_HEAD_GATE_CONTEXT`, `review_head_gate_post_status`, `review_head_gate_main`)\n    - `.github/workflows/update_workflows.yml`, where the verify job posts `VERIFY_STATUS_CONTEXT` on `PUSHED_SHA` (lines 2425-2431)\n  steps:\n    - Post `success` for the head gate only when all of these hold. The PR head ref starts with `auto/update-workflows-`. The head repository is the base repository, not a fork. The current live head SHA equals the SHA being gated. That exact SHA has the `ai-update-workflows/verify` status in state `success`, and has a `workflow-integrity` check that completed with conclusion `success`.\n    - If any lookup fails or returns something unexpected, keep `pending`. Log one `REVIEW_HEAD_GATE mode=updater_exempt ... outcome=<posted|skipped> reason=<...>` line, keeping the script's existing `REVIEW_HEAD_GATE` prefix style.\n    - Read the status and check data with as few calls as possible: one combined-status read and one check-runs read for that SHA (\u00a714).\n    - Add contract tests for each case: all signals pass, verify missing, verify failed, integrity missing or failed, wrong branch prefix, fork head, head moved, and API error.\n  reversibility: Behind a new default-on variable, `REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED` (default `true`). Setting it to `false` restores today's behaviour.\nQ2:\n  strategy: (letter A)\n  inputs:\n    - scripts/audit_consumer_drift.py (`SYNC_PR_STALE_AFTER_SECONDS`, `_sync_pull_request_is_stale`, the `DRIFT_REPAIR ... stale=` logging at line 991)\n    - .github/workflows/audit_consumer_drift.yml (cron at line 10, its existing WARNING alert path)\n    - .github/ai/consumer_repos.json\n  steps:\n    - Keep `SYNC_PR_STALE_AFTER_SECONDS` and its current behaviour (\u00a710). Add a separate pin-age check alongside it.\n    - For each consumer, find its pinned release and the first `v*` release tag newer than that pin. Take that tag's time from this repository's tags. Flag the consumer when now minus that time is 24 hours or more. Make the threshold a new constant or variable with a default of 86400 seconds.\n    - Raise the alert whether or not an update PR is open.\n    - If the pin or tag time can't be found, flag the consumer (fail closed), like the existing rule that a missing timestamp counts as stale.\n    - Change the cron to every 6 hours, for example `'0 */6 * * *'`. Send the new condition through the workflow's existing alert or Telegram path, not a new channel.\n    - Add contract tests with made-up tags and timestamps: 23 hours behind (no alert), 25 hours behind with an open PR (alert), three closed PRs before an open one (alert, counted from the first newer tag), and an unknown pin (alert).\n  reversibility: Raise the threshold variable, or restore the daily cron.\nQ3:\n  strategy: (letter A)\n  inputs:\n    - `.github/workflows/update_workflows.yml`: the `verify_publish` step (lines 2448-2460), the \"Mark verify failure\" step (lines 2462-2489, which runs when `steps.verify_publish.outcome != 'success'` and posts `failure`), and \"Verify summary\"\n  steps:\n    - Keep `verify_publish` successful when only the auto-merge attempt fails. It already writes `auto_merge=failed` to its outputs.\n    - Add a separate later step gated on `steps.verify_publish.outputs.auto_merge == 'failed'`. It prints `::error::UPDATER_PR_VERIFY outcome=merge_blocked reason=auto_merge_failed pr=<n> head=<sha>`, sends a Telegram alert through the repo's existing `TG_BOT_SECRET` pattern (skipped with a log line when unset), and exits 1.\n    - \"Mark verify failure\" must never run on this path, so the success status stays on the PR for a human merge. Add a contract test that checks this.\n    - Mention `read:org` in the error text only as a possible cause. Fix 1 (the REST `PATCH` update) still lands separately.\n  reversibility: Removing the new step brings back today's warning-only behaviour. The verify status is never changed by this step.\n\nESCALATION (required for any ESCALATE decision):\nNone.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\nNone. Telegram uses the existing optional `TG_BOT_SECRET`. While it is unset, the alert is skipped with a logged reason, and the job still fails with the `::error::` line.",
+  "fingerprint": "e6aba62a6d3b0e3bb16f64fb567a8e25c42fcc388c619e66c7dc2e7e9d61b0d1",
+  "lineage": {
+    "issue_number": 9483,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43568914990",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43568914990",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9483"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261114120010_f646368fc9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9483,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43568914990"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9483",
+  "timestamps": {
+    "created_at": "2026-11-14T12:00:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
