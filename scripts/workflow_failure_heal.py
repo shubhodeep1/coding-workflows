@@ -1887,6 +1887,7 @@ def build_autofix_failure_payload(
 	changed_files: Iterable[str] | None = None,
 	failure_marker_author: str | None = None,
 	repeated_failure_reason: str | None = None,
+	run_head_sha: str | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a failed review/autofix run on a PR.
 
@@ -1909,6 +1910,15 @@ def build_autofix_failure_payload(
 	report repeats (the gate's trusted ``fingerprint_cap_reason`` or the
 	trusted head markers). It is sent only for ``identical_failure_cap``
 	reports and only when it is a well-formed reason token.
+
+	``run_head_sha`` is the failed run's own head, read by the reporter from
+	the ``pull_request`` event payload (issue #9250). When it is 40 hex it
+	replaces the PR's current head in ``head_sha`` and in the failure-marker
+	lookup, so a run whose PR head moved while it ran still verifies. It is
+	untrusted: the intake checks it against ``actions/runs/{id}.head_sha``
+	(``verify_run``) and requires it to be the PR head or one of its ancestors
+	(``bind_report_claims`` with ``--head-ancestor``). ``head_branch`` stays
+	the PR's.
 	"""
 	now = now or _utc_now()
 	body = sanitize_text(pr.get("body"))
@@ -1916,6 +1926,9 @@ def build_autofix_failure_payload(
 	run_number = _positive_int(run_id)
 	head_sha = str(pr.get("head", {}).get("sha") or "").lower() if isinstance(pr.get("head"), dict) else ""
 	head_branch = str(pr.get("head", {}).get("ref") or "") if isinstance(pr.get("head"), dict) else ""
+	reported_run_head = str(run_head_sha or "").strip().lower()
+	if is_valid_sha(reported_run_head):
+		head_sha = reported_run_head
 	payload: dict[str, Any] = {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
@@ -9079,6 +9092,7 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 		changed_files=_read_path_list(args.changed_files_file),
 		failure_marker_author=args.failure_marker_author or None,
 		repeated_failure_reason=args.repeated_failure_reason or None,
+		run_head_sha=args.run_head_sha or None,
 	)
 	validate_payload(payload)
 	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -11270,6 +11284,11 @@ def build_parser() -> argparse.ArgumentParser:
 		"--repeated-failure-reason",
 		default="",
 		help="for identical_failure_cap reports: the failure reason the cap repeats",
+	)
+	p.add_argument(
+		"--run-head-sha",
+		default="",
+		help="the failed run's own head SHA (pull_request event payload); replaces the PR head in head_sha and the marker lookup when it is 40 hex",
 	)
 	p.set_defaults(func=_cmd_build_autofix_payload)
 
