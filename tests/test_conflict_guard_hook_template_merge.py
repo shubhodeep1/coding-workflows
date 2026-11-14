@@ -409,6 +409,61 @@ def test_prepush_hook_integration_sync_conflict_is_resolved_from_template() -> N
 		_assert_resolved_from_template(repo, live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
 
 
+def _make_dual_conflict(repo: Path) -> None:
+	"""Leave ``repo`` mid-merge with both paired live hooks conflicted in step with their templates."""
+	pairs = ((LIVE, TEMPLATE), (PREPUSH_LIVE, PREPUSH_TEMPLATE))
+	_git(repo, "init", "-q", "-b", "main")
+	_git(repo, "config", "user.name", "t")
+	_git(repo, "config", "user.email", "t@t")
+	_git(repo, "config", "core.fileMode", "true")
+	for live_rel, template_rel in pairs:
+		_write(repo, live_rel, "old\n")
+		_write(repo, template_rel, _body())
+	_write(repo, "other.txt", "base\n", 0o644)
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "base")
+	_git(repo, "checkout", "-q", "-b", "feat")
+	for live_rel, template_rel in pairs:
+		_write(repo, live_rel, _body(change_first="ours first line"))
+		_write(repo, template_rel, _body(change_first="ours first line"))
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "ours")
+	_git(repo, "checkout", "-q", "main")
+	for live_rel, template_rel in pairs:
+		_write(repo, live_rel, _body(change_last="theirs last line"))
+		_write(repo, template_rel, _body(change_last="theirs last line"))
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "theirs")
+	_git(repo, "checkout", "-q", "feat")
+	merge = _git(repo, "merge", "--no-commit", "--no-ff", "main", check=False)
+	assert merge.returncode != 0, "fixture must produce a conflicted merge"
+	for live_rel, _template_rel in pairs:
+		assert _git(repo, "ls-files", "-u", "--", live_rel).stdout.strip(), f"{live_rel} must be unmerged"
+
+
+def test_both_paired_hooks_conflicting_are_resolved_in_one_pass() -> None:
+	tmpdir = tempfile.TemporaryDirectory()
+	with tmpdir:
+		tmp = Path(tmpdir.name)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_make_dual_conflict(repo)
+		region = _guard_and_union_region(_prepare_text()) + _hook_only_commit_region(_prepare_text())
+		result, github_env, _ = _run(
+			repo, tmp, region=region, head_ref="orchestrator/project-9008", integration_sync=True,
+		)
+		out = result.stdout + result.stderr
+		assert result.returncode == 0, out
+		assert "Guard-hook template merge: resolved " + LIVE in result.stdout, out
+		assert "Guard-hook template merge: resolved " + PREPUSH_LIVE in result.stdout, out
+		assert result.stdout.index("resolved " + LIVE) < result.stdout.index("resolved " + PREPUSH_LIVE), out
+		assert "REGION_FELL_THROUGH" not in result.stdout, out
+		assert "CONFLICT_RESOLVED=true" in github_env.read_text(encoding="utf-8").splitlines()
+		assert len(_git(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()) == 3
+		_assert_resolved_from_template(repo)
+		_assert_resolved_from_template(repo, live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
+
+
 def test_prepush_hook_only_conflict_is_resolved_and_committed() -> None:
 	tmpdir, tmp, repo = _with_repo(live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
 	with tmpdir:
