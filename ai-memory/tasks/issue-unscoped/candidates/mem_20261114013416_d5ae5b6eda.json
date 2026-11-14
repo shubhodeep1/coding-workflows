@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_post_editor_summary.sh:387 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The Python script fetches only `comments(last:100)`, so on a PR with more than 100 comments the newest failure-cap marker can fall outside the fetched window and is not found.\n  WHY: On PRs with long discussion threads the script may log `cap_marker_out_of_window` and leave a stale `ai:review-blocked` label, even though the failure marker exists further back (the source severity MAJOR is mapped to high).\n- scripts/review_autofix_step_post_editor_summary.sh:345-350 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A race already existed and the new comment documents it: `fingerprint-cap-block` runs in its own concurrency group and adds the label before posting its cap comment. A cap that lands between this step's GraphQL read (line 372) and its DELETE (line 483) can have its label removed even though that head should stay capped.\n  WHY: The label is lost if a concurrent `fingerprint-cap-block` run adds it after the read but before the DELETE, so the head is still capped by marker but no longer has the label (the source severity NIT is mapped to low; the race was already in the original PR and the last run diff only documents it).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Find the newest trusted `review-autofix-failure-cap:v1` marker. The label should be removed when that marker's head or support differs from the clean marker.\"\n  expected_change_site: `review_blocked_stale_clear()` in `scripts/review_autofix_step_post_editor_summary.sh`\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The query at lines 372\u2013374 fetches only `comments(last:100)`, so when there are more than 100 comments the function does not scan the older ones. If the newest trusted cap marker is older than those 100 comments, lines 464\u2013469 keep the label with `cap_marker_out_of_window` and never compare that marker's head or support to the clean marker. A stale label therefore stays on the PR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_post_editor_summary.sh:387 | severity=MAJOR | confidence=5\n  PROBLEM: The Python script relies on `comments(last:100)` to locate the newest failure-cap marker. If the total number of PR comments exceeds 100, the newest failure-cap marker might reside outside the fetched 100 comments, causing the function to fail to find it even if it exists.\n  WHY: On PRs with long discussion threads, the script may log `cap_marker_out_of_window` and leave a stale `ai:review-blocked` label on the PR even if the failure marker exists but is older than the last 100 comments.\n- TASK_GAP\n  Requirement: \"Find the newest trusted `review-autofix-failure-cap:v1` marker. The label should be removed when that marker's head or support differs from the clean marker.\"\n  Expected change site: `review_blocked_stale_clear()` in `scripts/review_autofix_step_post_editor_summary.sh`\n  Evidence of absence: The implementation requests `comments(last:100)`. When the total comment count exceeds 100, the function does not scan comments older than the newest 100, meaning it cannot satisfy the requirement to remove the stale label if the newest failure-cap marker happens to be older than the 100-comment threshold.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_post_editor_summary.sh:lines 345-350 (LAST RUN DIFF comments describing the race), runtime window is between the GraphQL read (line 372) and the DELETE (line 483) | severity=NIT | confidence=3\n  PROBLEM: The new comment correctly documents an existing race: `fingerprint-cap-block` runs in its own concurrency group and adds the label before posting its cap comment, so a cap that lands between this step's read and DELETE can have its label removed even though that head should stay capped. This race was already present in the original PR; the LAST RUN DIFF just documents it.\n  WHY: a concurrent `fingerprint-cap-block` run that posts the label after the read but before the DELETE will lose the label, leaving the head flagged-as-capped-by-marker but unflagged-as-capped-by-label.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Find the newest trusted `review-autofix-failure-cap:v1` marker\" and remove the label when that marker's head or support differs from the clean marker.\n  Expected change site: `review_blocked_stale_clear()` in `scripts/review_autofix_step_post_editor_summary.sh`.\n  Evidence of absence: The query at lines 372\u2013374 fetches only `comments(last:100)`. If the newest trusted cap marker is older than those 100 comments, lines 464\u2013469 keep the label with `cap_marker_out_of_window` without comparing that marker's head or support to the clean marker. Thus, a stale label remains when a PR has more than 100 comments and its latest cap marker is outside the fetched window.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bf88ef3bc4bc0edcef74d572a62efb720a44cf138717019ab0b74fd55f8b7567",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9429,
+    "run_id": "43451320415",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43451320415",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114013416_d5ae5b6eda",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9429,
+    "run_id": "43451320415"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-14T01:34:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
