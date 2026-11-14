@@ -20,6 +20,16 @@ name: Security Audit
         required: false
         default: ""
         type: string
+      audit_diff_since:
+        description: "Single-issue security pass delta re-audit (stuck-states P5a): last audited head of the PR. A request only; the audit verifies it against the pipeline's PR markers and otherwise audits in full. Empty = full audit."
+        required: false
+        default: ""
+        type: string
+      prior_findings:
+        description: "Single-issue security pass delta re-audit: id of the pipeline's findings result comment whose stored findings are verified again. A request only, verified like audit_diff_since. Empty = none."
+        required: false
+        default: ""
+        type: string
   # Consumer repos run this workflow through the synced
   # workflow-templates/ai-security-audit.yml wrapper (called @stable).
   workflow_call:
@@ -29,6 +39,14 @@ name: Security Audit
         default: ""
         type: string
       pr_number:
+        required: false
+        default: ""
+        type: string
+      audit_diff_since:
+        required: false
+        default: ""
+        type: string
+      prior_findings:
         required: false
         default: ""
         type: string
@@ -304,6 +322,34 @@ jobs:
             echo "SECURITY_AUDIT_DIFF_HEAD=${AUDIT_DATA_SHA}"
           } >> "$GITHUB_ENV"
 
+      - name: Resolve single-issue security pass delta
+        # Stuck-states P5a: a review gate that already has a completed audit of
+        # an older PR head requests a delta re-audit. The trusted support copy
+        # of the helper verifies the request against the pipeline's PR markers
+        # (ancestry, author, stored-findings sha256) and only then narrows the
+        # scope via GITHUB_ENV; on any doubt it writes nothing and the audit
+        # runs in full. Never runs a script from audit-data.
+        if: inputs.pr_number != '' && inputs.audit_diff_since != '' && env.SECURITY_AUDIT_TARGET_REF != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SECURITY_PASS_PR_NUMBER: ${{ inputs.pr_number }}
+          SECURITY_PASS_DELTA_SINCE_INPUT: ${{ inputs.audit_diff_since || '' }}
+          SECURITY_PASS_PRIOR_FINDINGS_INPUT: ${{ inputs.prior_findings || '' }}
+          SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
+        run: |
+          set -uo pipefail
+          SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}"
+          SECURITY_PASS_AUDIT_CHECKOUT="${GITHUB_WORKSPACE}/audit-data"
+          export SECURITY_PASS_HEAD_SHA SECURITY_PASS_AUDIT_CHECKOUT
+          if [ ! -f "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" ]; then
+            echo "::warning::review_single_issue_security_pass.sh is not in the audit support checkout; auditing in full."
+            exit 0
+          fi
+          bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" delta
+
       - name: Install Codex CLI
         uses: ./.github/actions/install-codex
 
@@ -422,6 +468,15 @@ jobs:
           # first 64 KiB here for diagnosis (Refs #8204). runner.temp is outside
           # both checkouts, so the audited branch cannot pre-create this path.
           SECURITY_AUDIT_CLAUDE_REJECTED_OUT: ${{ runner.temp }}/security-audit-claude-rejected.txt
+          # Single-issue security pass (stuck-states P5a): surviving findings
+          # for the PR report, which stores them for the next delta re-audit.
+          SECURITY_AUDIT_PASS_FINDINGS_OUT: ${{ inputs.pr_number != '' && format('{0}/single-pass-findings.json', runner.temp) || '' }}
+          # Single-issue security pass (stuck-states P5b): a PR audit files one
+          # consolidated follow-up per cycle; the helper re-validates the PR
+          # number and falls back to one issue per finding. 'false' restores
+          # one issue per finding.
+          SECURITY_AUDIT_PASS_PR_NUMBER: ${{ inputs.pr_number || '' }}
+          SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           # The single-issue security pass reads the summary line from this log.
@@ -469,6 +524,11 @@ jobs:
           SECURITY_PASS_AUDIT_BRANCH: ${{ env.AUDIT_BRANCH }}
           SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
+          # Stuck-states P5a delta carry-forward. SECURITY_PASS_DELTA_SINCE and
+          # SECURITY_PASS_PRIOR_FINDINGS_FILE arrive through GITHUB_ENV from
+          # "Resolve single-issue security pass delta".
+          SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
+          SECURITY_PASS_FINDINGS_FILE: ${{ format('{0}/single-pass-findings.json', runner.temp) }}
         run: |
           set -uo pipefail
           SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}"

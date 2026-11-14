@@ -2400,7 +2400,9 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	assert 'echo "STAGED_SUPPORT_LEDGER=${STAGED_SUPPORT_LEDGER}"' in stage_block
 	assert 'echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"' in stage_block
 	assert 'echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"' in stage_block
-	assert 'install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"' in stage_block
+	# P2b: the run dir copies from the bundle (or scripts/ under the kill switch).
+	assert 'install -m 0755 "${support_run_src}/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"' in stage_block
+	assert 'support_run_src="scripts"' in stage_block
 	assert 'for _staged_support_path in "${_staged_support_installed_paths[@]}"; do' in stage_block
 	assert 'git diff --quiet HEAD -- "${_staged_support_path}"' in stage_block
 	assert "IMPLEMENT_STAGED_SUPPORT_LEDGER ref=${SCRIPT_REF} overwritten_tracked_files=" in stage_block
@@ -2865,9 +2867,9 @@ def test_guard_handler_fails_open_without_gh_helpers() -> None:
 def test_guard_handler_gh_retry_wiring_contract() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
 	handler = _implement_guard_handler_text()
-	assert 'install -m 0644 scripts/gh_helpers.sh "${RUNTIME_DIR}/gh_helpers.sh"' in stage_block
-	assert stage_block.index('install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"') < stage_block.index(
-		'install -m 0644 scripts/gh_helpers.sh "${RUNTIME_DIR}/gh_helpers.sh"'
+	assert 'install -m 0644 "${support_run_src}/gh_helpers.sh" "${RUNTIME_DIR}/gh_helpers.sh"' in stage_block
+	assert stage_block.index('install -m 0755 "${support_run_src}/implement_handle_guard_block.sh" "${RUNTIME_DIR}/implement_handle_guard_block.sh"') < stage_block.index(
+		'install -m 0644 "${support_run_src}/gh_helpers.sh" "${RUNTIME_DIR}/gh_helpers.sh"'
 	)
 	assert 'GUARD_BLOCK_GH_HELPERS_FILE="$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh"' in handler
 	assert 'source "${GUARD_BLOCK_GH_HELPERS_FILE}" && declare -F gh_retry' in handler
@@ -2887,7 +2889,7 @@ def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:
 	assert "/tmp/scope_comment.md" not in _implement_guard_handler_text()
 	assert "/tmp/destructive_comment.md" not in _implement_guard_handler_text()
 	assert "implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh" in stage_block
-	assert 'install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"' in stage_block
+	assert 'install -m 0755 "${support_run_src}/implement_handle_guard_block.sh" "${RUNTIME_DIR}/implement_handle_guard_block.sh"' in stage_block
 	assert workflow.find("- name: Stage workflow support files") < workflow.find("- name: Commit changes") < workflow.find("- name: Destructive-commit guard — label + alert on rejection")
 	assert _extract_run_script("Destructive-commit guard — label + alert on rejection") == (
 		'set -euo pipefail\nbash "${RUNTIME_DIR}/implement_handle_guard_block.sh"\n'

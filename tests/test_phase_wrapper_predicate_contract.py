@@ -153,6 +153,8 @@ RECLARIFY_CASES = (
 	("/reclarify", True),
 	("/reclarify [auto-requeued-by-poller]\n<!-- ai:reclarify-replay:v1 source=1 -->", True),
 	("/reclarify\n<!-- ai:security-dependency-released:7 -->", True),
+	# Stuck-states P8c: the unmerged-predecessor release (posted with GH_PAT).
+	("/reclarify\n<!-- AI_SECURITY_DEPENDENCY_RELEASED_V1 reason=predecessor_unmerged issue=7 depends_on=6 -->", True),
 	("please run /reclarify later", False),
 	("Clarification blocked: human input required.\n\nProvide the input, then run /reclarify or continue with /answer.", False),
 	("text\n/reclarify\n<!-- ai:clarification-questions -->", False),

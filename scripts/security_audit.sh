@@ -254,6 +254,20 @@ security_audit_require_writable_destination() {
 	fi
 }
 
+# Prior-findings prompt block, shared by findings-json mode and the
+# branch-scoped issues audit (single-issue security pass delta re-audit).
+security_audit_append_prior_findings_prompt() {
+	echo || return 1
+	echo "Previously reported findings for this project (earlier fix cycles; their fixes have merged into the audited head):" || return 1
+	echo "=== BEGIN UNTRUSTED PRIOR FINDINGS ===" || return 1
+	cat "${PRIOR_FINDINGS_PROMPT_FILE}" || return 1
+	echo "=== END UNTRUSTED PRIOR FINDINGS ===" || return 1
+	echo "Rules for previously reported findings:" || return 1
+	echo "- Verify each one against the current code. If it is still exploitable, re-emit it with the SAME finding_id and the current line number." || return 1
+	echo "- If it is resolved, omit it. Never report a resolved finding again under a new finding_id." || return 1
+	echo "- Report every remaining instance of the same defect class in the scoped files (sibling code paths, other venues, adapters, handlers) as its own finding. The fix loop converges only when a class is cleared, not one line." || return 1
+}
+
 security_audit_append_prompt_context() {
 	echo || return 1
 	echo "Current UTC date: $(date -u +%F)" || return 1
@@ -283,20 +297,19 @@ security_audit_append_prompt_context() {
 		echo || return 1
 		cat "${OVERSIZED_PROMPT_FILE}" || return 1
 	fi
+	if [ "${SECURITY_AUDIT_OUTPUT_MODE}" != "findings-json" ] && [ -n "${SECURITY_AUDIT_TARGET_REF}" ] \
+			&& [ -s "${PRIOR_FINDINGS_PROMPT_FILE}" ]; then
+		# Branch-scoped issues audit (single-issue security pass delta
+		# re-audit): same prior-findings block as findings-json mode, without
+		# the project-pass money lens.
+		security_audit_append_prior_findings_prompt || return 1
+	fi
 	if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 		echo || return 1
 		echo "Project-pass security and money-handling lens:" || return 1
 		cat "${SECURITY_AUDIT_MONEY_LENS_FILE}" || return 1
 		if [ -s "${PRIOR_FINDINGS_PROMPT_FILE}" ]; then
-			echo || return 1
-			echo "Previously reported findings for this project (earlier fix cycles; their fixes have merged into the audited head):" || return 1
-			echo "=== BEGIN UNTRUSTED PRIOR FINDINGS ===" || return 1
-			cat "${PRIOR_FINDINGS_PROMPT_FILE}" || return 1
-			echo "=== END UNTRUSTED PRIOR FINDINGS ===" || return 1
-			echo "Rules for previously reported findings:" || return 1
-			echo "- Verify each one against the current code. If it is still exploitable, re-emit it with the SAME finding_id and the current line number." || return 1
-			echo "- If it is resolved, omit it. Never report a resolved finding again under a new finding_id." || return 1
-			echo "- Report every remaining instance of the same defect class in the scoped files (sibling code paths, other venues, adapters, handlers) as its own finding. The fix loop converges only when a class is cleared, not one line." || return 1
+			security_audit_append_prior_findings_prompt || return 1
 		fi
 		if [ -s "${FIX_CYCLE_DIFFS_PROMPT_FILE}" ]; then
 			echo || return 1
@@ -378,14 +391,25 @@ if [ -n "${SECURITY_AUDIT_DIFF_SINCE}" ] && [ -z "${SECURITY_AUDIT_DIFF_BASE}" ]
 	exit 1
 fi
 # Optional JSON array of findings reported by earlier audits of the same
-# project (findings-json mode only).  Their files are added to the audit
+# project (findings-json mode, or a branch-scoped issues audit with
+# SECURITY_AUDIT_TARGET_REF set: the single-issue security pass delta re-audit,
+# stuck-states P5a).  Their files are added to the audit
 # scope and the list is appended to the prompt so the model verifies each one
 # against the current code and reports remaining instances of the same class
 # instead of re-discovering the project from scratch.
 SECURITY_AUDIT_PRIOR_FINDINGS="${SECURITY_AUDIT_PRIOR_FINDINGS:-}"
-if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
-	echo "SECURITY_AUDIT_PRIOR_FINDINGS is only valid in findings-json mode" >&2
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ] \
+		&& [ -z "${SECURITY_AUDIT_TARGET_REF:-}" ]; then
+	echo "SECURITY_AUDIT_PRIOR_FINDINGS is only valid in findings-json mode or with SECURITY_AUDIT_TARGET_REF" >&2
 	exit 1
+fi
+# Optional destination (issues mode only, default empty) for the surviving
+# findings of this audit as a JSON array. The single-issue security pass
+# report persists them on the PR so the next delta re-audit can carry them
+# forward. A write failure only warns; it never fails the audit.
+SECURITY_AUDIT_PASS_FINDINGS_OUT="${SECURITY_AUDIT_PASS_FINDINGS_OUT:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" != "issues" ]; then
+	SECURITY_AUDIT_PASS_FINDINGS_OUT=""
 fi
 # Optional JSON array of findings that an operator (`/security-pass-waive`) or
 # the orchestrator's security-pass exhaustion judge accepted as known risks
@@ -521,6 +545,33 @@ if [ -n "${SECURITY_AUDIT_TARGET_REF}" ]; then
 	if ! git check-ref-format --branch "${SECURITY_AUDIT_TARGET_REF}" >/dev/null 2>&1; then
 		echo "SECURITY_AUDIT_TARGET_REF must be a valid branch name" >&2
 		exit 1
+	fi
+fi
+
+# Consolidated follow-up (stuck-states P5b): a single-issue security pass audit
+# (issues mode, SECURITY_AUDIT_TARGET_REF set, SECURITY_AUDIT_PASS_PR_NUMBER a
+# valid PR number) files ONE follow-up issue per cycle that lists every new
+# finding, instead of one issue per finding. Both variables default here (§8),
+# so a security-audit.yml that does not export the PR number keeps the
+# per-finding path exactly. SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED=false
+# restores one issue per finding.
+SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED="${SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED:-true}"
+SECURITY_AUDIT_PASS_PR_NUMBER="${SECURITY_AUDIT_PASS_PR_NUMBER:-}"
+if [ -n "${SECURITY_AUDIT_PASS_PR_NUMBER}" ] && ! [[ "${SECURITY_AUDIT_PASS_PR_NUMBER}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_PASS_PR_NUMBER must be a positive integer; filing one follow-up per finding"
+	SECURITY_AUDIT_PASS_PR_NUMBER=""
+fi
+SECURITY_AUDIT_CONSOLIDATE_ACTIVE="false"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_TARGET_REF}" ] \
+		&& [ -n "${SECURITY_AUDIT_PASS_PR_NUMBER}" ] \
+		&& security_audit_flag_enabled "${SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED}"; then
+	SECURITY_AUDIT_CONSOLIDATE_ACTIVE="true"
+fi
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ]; then
+	if [ "${SECURITY_AUDIT_CONSOLIDATE_ACTIVE}" = "true" ]; then
+		echo "security-audit: followup_mode=consolidated pr=${SECURITY_AUDIT_PASS_PR_NUMBER}"
+	else
+		echo "security-audit: followup_mode=per_finding pr=${SECURITY_AUDIT_PASS_PR_NUMBER:-none}"
 	fi
 fi
 
@@ -707,6 +758,9 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 		echo "::warning::security-audit: SECURITY_AUDIT_FIX_CYCLE_DIFFS file is missing; the audit runs without the newly introduced code section"
 		SECURITY_AUDIT_FIX_CYCLE_DIFFS=""
 	fi
+elif [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
+	# Branch-scoped issues audit (single-issue security pass delta re-audit).
+	security_audit_require_file "prior-findings-preflight" "${SECURITY_AUDIT_PRIOR_FINDINGS}"
 fi
 
 LAST_AUDITED_SHA=""
@@ -3318,7 +3372,10 @@ python3 - \
 	"${AUDIT_SCOPE_HEAD_SHA}" \
 	"${AUDIT_SCOPE_BASE_SHA}" \
 	"${SECURITY_AUDIT_TARGET_REF}" \
-	"${OVERSIZED_EXPORT_DIR}/manifest.json" <<'PY'
+	"${OVERSIZED_EXPORT_DIR}/manifest.json" \
+	"${SECURITY_AUDIT_PASS_FINDINGS_OUT}" \
+	"${SECURITY_AUDIT_CONSOLIDATE_ACTIVE}" \
+	"${SECURITY_AUDIT_PASS_PR_NUMBER}" <<'PY'
 from __future__ import annotations
 
 import base64
@@ -3346,6 +3403,19 @@ head_sha = sys.argv[13].strip()
 last_audited_sha = sys.argv[14].strip()
 target_ref = sys.argv[15].strip()
 oversized_manifest = json.loads(Path(sys.argv[16]).read_text(encoding="utf-8"))
+# Optional (single-issue security pass, stuck-states P5a): surviving-findings
+# export for the PR report. Empty means no export.
+pass_findings_out = sys.argv[17].strip() if len(sys.argv) > 17 else ""
+# Optional (single-issue security pass, stuck-states P5b): one consolidated
+# follow-up issue per cycle. The shell already validated both values; check
+# again so a malformed argument can only fall back to the per-finding path.
+consolidate_pr_number = sys.argv[19].strip() if len(sys.argv) > 19 else ""
+consolidate_active = (
+	len(sys.argv) > 18
+	and sys.argv[18].strip() == "true"
+	and bool(target_ref)
+	and re.fullmatch(r"[1-9][0-9]{0,9}", consolidate_pr_number) is not None
+)
 
 
 def load_json(path: Path, *, label: str):
@@ -3378,8 +3448,27 @@ for page in existing_followups:
 		existing_followup_issues.append(page)
 
 marker_regex = re.compile(re.escape(followup_marker_prefix) + r"([^>]+) -->")
+# A consolidated follow-up (stuck-states P5b) opens with one marker line per
+# finding. Only that leading block counts: a marker quoted further down the
+# body (finding prose) never does. A legacy body has one leading marker, so
+# this adds nothing to the `marker_regex.search` result above.
+leading_marker_regex = re.compile(r"^" + re.escape(followup_marker_prefix) + r"([^<>\r\n]+) -->$")
+
+
+def leading_marker_ids(body: str) -> list[str]:
+	ids: list[str] = []
+	for raw_line in body.split("\n"):
+		line_match = leading_marker_regex.fullmatch(raw_line.rstrip())
+		if line_match is None:
+			break
+		ids.append(line_match.group(1).strip())
+	return ids
+
 existing_finding_ids: set[str] = set()
 existing_finding_numbers: dict[str, int] = {}
+# Issue state per finding ID, so the consolidated follow-up can depend on an
+# open same-file predecessor (stuck-states P5b).
+existing_finding_open: dict[str, bool] = {}
 now_utc = datetime.now(timezone.utc)
 
 for issue in existing_followup_issues:
@@ -3389,11 +3478,13 @@ for issue in existing_followup_issues:
 	match = marker_regex.search(body)
 	if match is None:
 		continue
-	finding_id = match.group(1).strip()
-	if finding_id:
-		existing_finding_ids.add(finding_id)
-		if isinstance(issue.get("number"), int) and issue["number"] > 0:
-			existing_finding_numbers[finding_id] = issue["number"]
+	issue_finding_ids = [match.group(1).strip(), *leading_marker_ids(body)]
+	for finding_id in dict.fromkeys(issue_finding_ids):
+		if finding_id:
+			existing_finding_ids.add(finding_id)
+			if isinstance(issue.get("number"), int) and issue["number"] > 0:
+				existing_finding_numbers[finding_id] = issue["number"]
+				existing_finding_open[finding_id] = str(issue.get("state") or "").lower() == "open"
 
 # Every surviving finding without a marked follow-up gets its own issue; there
 # is no per-run or per-week cap.
@@ -3408,6 +3499,15 @@ for finding in findings:
 		skipped_existing_count += 1
 		continue
 	planned_followups.append(finding)
+
+consolidate_marker_id_regex = re.compile(r"[^<>\s](?:[^<>\r\n]*[^<>\s])?")
+if consolidate_active and not all(
+	consolidate_marker_id_regex.fullmatch(str(finding.get("finding_id") or "")) for finding in planned_followups
+):
+	# A finding ID that cannot sit on its own marker line would cut the leading
+	# block short; file one issue per finding instead.
+	print("::warning::security-audit: a finding_id cannot be written as a consolidated marker line; filing one follow-up per finding")
+	consolidate_active = False
 
 if target_ref:
 	scope_line = f"- Audit scope: branch `{target_ref}` changes since its merge-base with the default branch (`{last_audited_sha}`..`{head_sha}`)"
@@ -3449,8 +3549,9 @@ comment_lines = [
 	f"- Suppressed invalid findings: {int(summary.get('suppressed_invalid', 0))}",
 	f"- Suppressed out-of-scope findings: {int(summary.get('suppressed_out_of_scope', 0))}",
 	*([f"- Suppressed upstream-managed findings (reported below, not filed; fix them in coding-workflows): {int(summary.get('suppressed_upstream_managed', 0))}"] if summary.get("suppressed_upstream_managed") else []),
-	f"- New follow-up issues planned this run: {len(planned_followups)}",
+	f"- New follow-up issues planned this run: {(1 if planned_followups else 0) if consolidate_active else len(planned_followups)}",
 	f"- Findings skipped because a marked follow-up issue already exists: {skipped_existing_count}",
+	*([f"- Follow-up mode: consolidated ({len(planned_followups)} findings in one issue)"] if consolidate_active and planned_followups else []),
 ]
 
 if findings:
@@ -3502,7 +3603,13 @@ for idx, finding in enumerate(findings):
 	file_key = hashlib.sha256(str(finding["file"]).encode("utf-8")).hexdigest()
 	finding_id = str(finding["finding_id"])
 	if finding_id in existing_finding_ids:
-		index_lines.append(f"-\t-\t{file_key}\t{existing_finding_numbers.get(finding_id, 0)}\n")
+		# The title column of an existing row carries `open` for an open issue
+		# (read only by the consolidated `Depends on` choice), else `-`.
+		existing_state = "open" if existing_finding_open.get(finding_id) else "-"
+		index_lines.append(f"-\t{existing_state}\t{file_key}\t{existing_finding_numbers.get(finding_id, 0)}\n")
+		continue
+	if consolidate_active:
+		# Filed below as one consolidated issue (stuck-states P5b).
 		continue
 	title = truncate_title(
 		f"[security-audit] {finding['finding_id']}: {finding['severity']} {finding['file']}:{finding['line']}"
@@ -3534,6 +3641,80 @@ for idx, finding in enumerate(findings):
 	body_path.write_text("\n".join(body_lines) + "\n", encoding="utf-8")
 	index_lines.append(f"{body_path}\t{title}\t{file_key}\t0\n")
 
+followup_create_count = len(planned_followups)
+if consolidate_active:
+	followup_create_count = 0
+	if planned_followups:
+		consolidated_body_path = followup_body_dir / "followup-consolidated.md"
+		consolidated_title = truncate_title(
+			f"[security-audit] PR #{consolidate_pr_number}: {len(planned_followups)} findings at {head_sha[:12]}"
+		)
+		consolidated_header = [
+			*(f"{followup_marker_prefix}{finding['finding_id']} -->" for finding in planned_followups),
+			f"Refs #{tracker_number}",
+			"",
+			"Generated by `.github/workflows/security-audit.yml`.",
+			"",
+			f"- Pull request: #{consolidate_pr_number}",
+			f"- Audited head: `{head_sha}`",
+			# resolve_integration_ref.sh reads this line, so clarify / plan /
+			# implement check out the audited branch and the fix PR targets it.
+			f"- Integration branch: `{target_ref}`",
+			"",
+			"## Findings",
+		]
+
+		def consolidated_body(text_cap: int | None) -> str:
+			def capped(value: object) -> str:
+				text = str(value)
+				if text_cap is None or len(text) <= text_cap:
+					return text
+				return text[:text_cap] + " [truncated]"
+
+			lines = list(consolidated_header)
+			for number, finding in enumerate(planned_followups, 1):
+				lines += [
+					"",
+					f"### {number}. {finding['finding_id']}",
+					"",
+					f"- Category: `{finding['owasp_or_stride_category']}`",
+					f"- Severity: `{finding['severity']}`",
+					f"- Confidence: `{finding['confidence']}/10`",
+					f"- Location: `{finding['file']}:{finding['line']}`",
+					"",
+					"**Exploit scenario**",
+					"",
+					capped(finding["exploit_scenario"]),
+					"",
+					"**Recommendation**",
+					"",
+					capped(finding["recommendation"]),
+				]
+			if text_cap is not None:
+				lines += [
+					"",
+					"_Finding text was truncated to fit the issue body limit; the security audit tracker comment lists every finding in full._",
+				]
+			return "\n".join(lines) + "\n"
+
+		# GitHub caps issue bodies at 65,536 characters; keep every marker line
+		# and shorten the per-finding prose when the body would exceed 60,000.
+		consolidated_text = consolidated_body(None)
+		for text_cap in (2000, 500, 100, 0):
+			if len(consolidated_text) <= 60000:
+				break
+			consolidated_text = consolidated_body(text_cap)
+		consolidated_body_path.write_text(consolidated_text, encoding="utf-8")
+		consolidated_file_keys = list(
+			dict.fromkeys(
+				hashlib.sha256(str(finding["file"]).encode("utf-8")).hexdigest() for finding in planned_followups
+			)
+		)
+		# Existing-finding rows come first, so the create loop knows every
+		# same-file predecessor before it picks the one `Depends on`.
+		index_lines.append(f"{consolidated_body_path}\t{consolidated_title}\tmulti:{'+'.join(consolidated_file_keys)}\t0\n")
+		followup_create_count = 1
+
 followup_index_path.write_text("".join(index_lines), encoding="utf-8")
 finding_ids_b64 = base64.b64encode(
 	json.dumps([finding["finding_id"] for finding in findings], ensure_ascii=True).encode("ascii")
@@ -3543,12 +3724,29 @@ followup_summary_env_path.write_text(
 		[
 			f"SURVIVING_FINDINGS_COUNT={shlex.quote(str(len(findings)))}",
 			f"SURVIVING_FINDING_IDS_B64={shlex.quote(finding_ids_b64)}",
-			f"FOLLOWUP_CREATE_COUNT={shlex.quote(str(len(planned_followups)))}",
+			f"FOLLOWUP_CREATE_COUNT={shlex.quote(str(followup_create_count))}",
 		]
 	)
 	+ "\n",
 	encoding="utf-8",
 )
+if pass_findings_out:
+	pass_finding_fields = (
+		"finding_id", "owasp_or_stride_category", "severity", "confidence",
+		"file", "line", "exploit_scenario", "recommendation",
+	)
+	pass_findings_export = [
+		{key: finding.get(key) for key in pass_finding_fields if key in finding}
+		for finding in findings
+		if isinstance(finding, dict)
+	]
+	pass_findings_path = Path(pass_findings_out)
+	pass_findings_tmp = pass_findings_path.with_name(pass_findings_path.name + ".tmp")
+	try:
+		pass_findings_tmp.write_text(json.dumps(pass_findings_export, ensure_ascii=True), encoding="utf-8")
+		pass_findings_tmp.replace(pass_findings_path)
+	except OSError as exc:
+		print(f"::warning::security-audit: could not write the single-issue security pass findings export: {exc}")
 PY
 
 gh_retry gh issue comment "${TRACKER_NUMBER}" \
@@ -3556,6 +3754,13 @@ gh_retry gh issue comment "${TRACKER_NUMBER}" \
 	--body-file "${TRACKER_COMMENT_FILE}"
 
 declare -A LAST_FOLLOWUP_BY_FILE=()
+# Highest open follow-up per file (existing open issues and issues filed in
+# this run); only the consolidated `Depends on` choice reads it.
+declare -A LAST_OPEN_FOLLOWUP_BY_FILE=()
+# Highest follow-up per file in any state; LAST_FOLLOWUP_BY_FILE keeps the
+# last-listed row for the per-finding chain, so the consolidated closed
+# fallback reads this map instead.
+declare -A LAST_ANY_FOLLOWUP_BY_FILE=()
 while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLLOWUP_EXISTING_NUMBER; do
 	if [ "${FOLLOWUP_EXISTING_NUMBER}" != "0" ]; then
 		[[ "${FOLLOWUP_EXISTING_NUMBER}" =~ ^[1-9][0-9]*$ ]] || {
@@ -3563,10 +3768,49 @@ while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLL
 			exit 1
 		}
 		LAST_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_EXISTING_NUMBER}"
+		if [ "${FOLLOWUP_TITLE}" = "open" ] \
+				&& { [ -z "${LAST_OPEN_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]:-}" ] \
+					|| [ "${FOLLOWUP_EXISTING_NUMBER}" -gt "${LAST_OPEN_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]}" ]; }; then
+			LAST_OPEN_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_EXISTING_NUMBER}"
+		fi
+		if [ -z "${LAST_ANY_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]:-}" ] \
+				|| [ "${FOLLOWUP_EXISTING_NUMBER}" -gt "${LAST_ANY_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]}" ]; then
+			LAST_ANY_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_EXISTING_NUMBER}"
+		fi
 		continue
 	fi
 	[ -n "${FOLLOWUP_BODY_PATH}" ] || continue
-	if [ -n "${LAST_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]:-}" ]; then
+	FOLLOWUP_FILE_KEYS=("${FOLLOWUP_FILE_KEY}")
+	if [[ "${FOLLOWUP_FILE_KEY}" == multi:* ]]; then
+		# Consolidated follow-up (stuck-states P5b): it touches several files but
+		# may carry only one `Depends on` line (scripts/security_dependency.py
+		# treats repeated lines as held), so depend on the highest-numbered
+		# same-file predecessor across all of them that is still open. A closed
+		# predecessor would release the hold (once ai:merged) while another
+		# file's open predecessor is still being fixed, so a closed one is used
+		# only when none is open. Known limit: with open predecessors in several
+		# files only the highest-numbered one is depended on, so merging it
+		# releases the hold even while a lower-numbered one is still open.
+		IFS='+' read -r -a FOLLOWUP_FILE_KEYS <<< "${FOLLOWUP_FILE_KEY#multi:}"
+		FOLLOWUP_DEPENDS_ON=""
+		FOLLOWUP_DEPENDS_ON_ANY=""
+		for FOLLOWUP_MULTI_KEY in "${FOLLOWUP_FILE_KEYS[@]}"; do
+			FOLLOWUP_MULTI_PREDECESSOR="${LAST_OPEN_FOLLOWUP_BY_FILE[${FOLLOWUP_MULTI_KEY}]:-}"
+			if [[ "${FOLLOWUP_MULTI_PREDECESSOR}" =~ ^[1-9][0-9]*$ ]] \
+					&& { [ -z "${FOLLOWUP_DEPENDS_ON}" ] || [ "${FOLLOWUP_MULTI_PREDECESSOR}" -gt "${FOLLOWUP_DEPENDS_ON}" ]; }; then
+				FOLLOWUP_DEPENDS_ON="${FOLLOWUP_MULTI_PREDECESSOR}"
+			fi
+			FOLLOWUP_MULTI_PREDECESSOR="${LAST_ANY_FOLLOWUP_BY_FILE[${FOLLOWUP_MULTI_KEY}]:-}"
+			if [[ "${FOLLOWUP_MULTI_PREDECESSOR}" =~ ^[1-9][0-9]*$ ]] \
+					&& { [ -z "${FOLLOWUP_DEPENDS_ON_ANY}" ] || [ "${FOLLOWUP_MULTI_PREDECESSOR}" -gt "${FOLLOWUP_DEPENDS_ON_ANY}" ]; }; then
+				FOLLOWUP_DEPENDS_ON_ANY="${FOLLOWUP_MULTI_PREDECESSOR}"
+			fi
+		done
+		FOLLOWUP_DEPENDS_ON="${FOLLOWUP_DEPENDS_ON:-${FOLLOWUP_DEPENDS_ON_ANY}}"
+		if [ -n "${FOLLOWUP_DEPENDS_ON}" ]; then
+			printf '\n- Depends on: #%s\n' "${FOLLOWUP_DEPENDS_ON}" >> "${FOLLOWUP_BODY_PATH}"
+		fi
+	elif [ -n "${LAST_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]:-}" ]; then
 		printf '\n- Depends on: #%s\n' "${LAST_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]}" >> "${FOLLOWUP_BODY_PATH}"
 	fi
 	# An ambiguous create result aborts: the next run reconciles by the
@@ -3588,7 +3832,11 @@ while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLL
 		echo "security-audit: unverified follow-up number; refusing to break chain" >&2
 		exit 1
 	}
-	LAST_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_NUMBER}"
+	for FOLLOWUP_MULTI_KEY in "${FOLLOWUP_FILE_KEYS[@]}"; do
+		LAST_FOLLOWUP_BY_FILE["${FOLLOWUP_MULTI_KEY}"]="${FOLLOWUP_NUMBER}"
+		LAST_OPEN_FOLLOWUP_BY_FILE["${FOLLOWUP_MULTI_KEY}"]="${FOLLOWUP_NUMBER}"
+		LAST_ANY_FOLLOWUP_BY_FILE["${FOLLOWUP_MULTI_KEY}"]="${FOLLOWUP_NUMBER}"
+	done
 done < "${FOLLOWUP_INDEX_FILE}"
 
 if [ -n "${SECURITY_AUDIT_TARGET_REF}" ]; then

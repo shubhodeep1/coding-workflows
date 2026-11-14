@@ -367,7 +367,7 @@ def _run_phase4b_with_pr_states(
 	      fi
 	      case "${run_state}" in
 	        queued|in_progress)
-	          printf 'HTTP/2 200\\n\\n{"id":20,"status":"%s","conclusion":null}\\n' "${run_state}"
+	          printf 'HTTP/2 200\\n\\n{"id":20,"status":"%s","conclusion":null,"run_started_at":"2026-10-03T00:00:00Z"}\\n' "${run_state}"
 	          return 0 ;;
 	      esac
 	      printf 'HTTP/2 200\\n\\n{"id":20,"status":"completed","conclusion":"success"}\\n' ;;
@@ -456,7 +456,18 @@ def test_phase4b_unknown_state_cannot_authorize_completed_run() -> None:
 
 
 def test_phase4b_reset_beyond_deadline_fails_closed() -> None:
+	# The adopted run was never read (the PR read stayed rate-limited), so it
+	# was never seen queued either: an API stall is not reported as a
+	# runner-queue timeout, with the queued grace on (default) or off.
 	result, output, requests = _run_phase4b_with_pr_states(["limit"], reset="x-ratelimit-reset: 99999")
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	assert "status=retry_queued_timeout" not in output
+	assert "stayed queued" not in result.stdout
+	assert "run" not in requests
+	result, output, requests = _run_phase4b_with_pr_states(
+		["limit"], reset="x-ratelimit-reset: 99999", extra_env=_LEGACY_QUEUE_ENV,
+	)
 	assert result.returncode != 0
 	assert "status=retry_timeout" in output
 	assert "run" not in requests
@@ -479,6 +490,9 @@ def test_phase4b_four_ordinary_state_failures_still_break() -> None:
 
 _QUEUE_BUDGET_ENV = {"E2E_JOB_TIMEOUT_MINUTES": "300", "PHASE_TIMEOUT": "30",
 	"PHASE7_WAIT_BUDGET_MINUTES": "10", "E2E_FINALIZATION_RESERVE_MINUTES": "20"}
+# The legacy queued-poll extension (pre stuck-states P4) runs only with the
+# queued grace switched off.
+_LEGACY_QUEUE_ENV = {"E2E_PHASE4B_QUEUED_GRACE_ENABLED": "false"}
 
 
 def test_phase4b_queued_retry_run_extends_the_deadline() -> None:
@@ -486,7 +500,7 @@ def test_phase4b_queued_retry_run_extends_the_deadline() -> None:
 	# 25 minutes. 110 queued polls (~27 min) then completion must pass.
 	result, output, _ = _run_phase4b_with_pr_states(
 		["open"] * 400, run_states=["queued"] * 110 + ["completed"],
-		extra_env={**_QUEUE_BUDGET_ENV, "E2E_JOB_STARTED_EPOCH": "1000"},
+		extra_env={**_QUEUE_BUDGET_ENV, **_LEGACY_QUEUE_ENV, "E2E_JOB_STARTED_EPOCH": "1000"},
 	)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "status=success_after_retry" in output
@@ -494,7 +508,8 @@ def test_phase4b_queued_retry_run_extends_the_deadline() -> None:
 
 def test_phase4b_queue_extension_needs_a_recorded_job_start() -> None:
 	result, output, _ = _run_phase4b_with_pr_states(
-		["open"] * 400, run_states=["queued"] * 110 + ["completed"], extra_env=_QUEUE_BUDGET_ENV,
+		["open"] * 400, run_states=["queued"] * 110 + ["completed"],
+		extra_env={**_QUEUE_BUDGET_ENV, **_LEGACY_QUEUE_ENV},
 	)
 	assert result.returncode != 0
 	assert "status=retry_timeout" in output
@@ -506,7 +521,7 @@ def test_phase4b_queue_extension_stops_at_the_job_budget_ceiling() -> None:
 	# which starts at 1000: about 200 s beyond the 25-minute base deadline.
 	result, output, _ = _run_phase4b_with_pr_states(
 		["open"] * 400, run_states=["queued"] * 300,
-		extra_env={**_QUEUE_BUDGET_ENV, "E2E_JOB_TIMEOUT_MINUTES": "105", "E2E_JOB_STARTED_EPOCH": "0"},
+		extra_env={**_QUEUE_BUDGET_ENV, **_LEGACY_QUEUE_ENV, "E2E_JOB_TIMEOUT_MINUTES": "105", "E2E_JOB_STARTED_EPOCH": "0"},
 	)
 	assert result.returncode != 0
 	assert "status=retry_timeout" in output
@@ -515,6 +530,156 @@ def test_phase4b_queue_extension_stops_at_the_job_budget_ceiling() -> None:
 	extended, cap = int(match.group(1)), int(match.group(2))
 	assert 0 < cap <= 200
 	assert extended == cap
+
+
+# ── Stuck states P4 (Refs #8291): queued grace, default on ──
+# The fake clock starts at 1000, so the retry wait starts at 1000 and the
+# base deadline (EDITOR_RETRY_BUDGET_MINUTES=25) is 2500.
+_GRACE_JOB_ENV = {**_QUEUE_BUDGET_ENV, "E2E_JOB_STARTED_EPOCH": "1000"}
+
+
+def _queued_seconds(stdout: str) -> int:
+	match = re.search(r"stayed queued for (\d+)s, past E2E_RETRY_QUEUED_GRACE_MINUTES=(\d+)", stdout)
+	assert match, stdout
+	return int(match.group(1))
+
+
+def test_phase4b_queued_grace_budget_starts_when_the_run_leaves_the_queue() -> None:
+	# 100 queued polls (25 min) then a 25-minute run: the legacy extension
+	# (deadline 3985) would time out; the run budget counts from 2515 (4015).
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 100 + ["in_progress"] * 99 + ["completed"],
+		extra_env=_GRACE_JOB_ENV,
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+	assert ("Retry review run #20 left the queue after 1515s (run_started_at=2026-10-03T00:00:00Z); "
+		"EDITOR_RETRY_BUDGET_MINUTES=25 now counts from here") in result.stdout
+	assert result.stdout.count("left the queue") == 1
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 100 + ["in_progress"] * 99 + ["completed"],
+		extra_env={**_GRACE_JOB_ENV, **_LEGACY_QUEUE_ENV},
+	)
+	assert "status=retry_timeout" in output
+
+
+def test_phase4b_queued_grace_cap_has_its_own_reason() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 300, extra_env=_GRACE_JOB_ENV,
+	)
+	assert result.returncode != 0
+	assert "status=retry_queued_timeout" in output
+	assert "status=retry_timeout" not in output
+	assert _queued_seconds(result.stdout) == 1800
+	assert "(deadline capped at 1800s)" in result.stdout
+	assert "deadline extended by" not in result.stdout
+	assert "did not complete within" not in result.stdout
+	# No extra API call: one run GET per poll, and each poll reads the PR once.
+	lines = requests.splitlines()
+	assert lines.count("run") == lines.count("pr") == 119
+
+
+def test_phase4b_queued_grace_running_budget_still_reports_retry_timeout() -> None:
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 10 + ["in_progress"] * 300, extra_env=_GRACE_JOB_ENV,
+	)
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	assert "status=retry_queued_timeout" not in output
+	assert "Retry review run did not complete within 25 minutes" in result.stdout
+	assert "Retry review run #20 queued 165s, ran 1500s." in result.stdout
+
+
+def test_phase4b_queued_grace_latch_is_never_reset() -> None:
+	# A run that flips back to queued after starting cannot stretch the deadline.
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["in_progress"] + ["queued", "in_progress"] * 200, extra_env=_GRACE_JOB_ENV,
+	)
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	assert result.stdout.count("left the queue") == 1
+	assert "Retry review run #20 queued 15s, ran 1500s." in result.stdout
+
+
+def test_phase4b_queued_grace_stops_at_the_job_ceiling() -> None:
+	# Ceiling = 0 + (105 - 30 - 10 - 20) min = 2700: between base 2500 and grace 2800.
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 300,
+		extra_env={**_QUEUE_BUDGET_ENV, "E2E_JOB_TIMEOUT_MINUTES": "105", "E2E_JOB_STARTED_EPOCH": "0"},
+	)
+	assert result.returncode != 0
+	assert "status=retry_queued_timeout" in output
+	# 1700 is not a multiple of the 15 s poll, so the last sleep ends at 1710.
+	assert 1700 <= _queued_seconds(result.stdout) < 1715
+	assert "(deadline capped at 1700s)" in result.stdout
+
+
+def test_phase4b_queued_grace_without_job_start_keeps_the_base_deadline() -> None:
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 300, extra_env=_QUEUE_BUDGET_ENV,
+	)
+	assert result.returncode != 0
+	assert "status=retry_queued_timeout" in output
+	assert _queued_seconds(result.stdout) == 1500
+
+
+def test_phase4b_queued_grace_minutes_validation() -> None:
+	for bad in ("abc", "0", "-5", "123456", "07"):
+		result, output, _ = _run_phase4b_with_pr_states(
+			["open"] * 400, run_states=["queued"] * 300,
+			extra_env={**_GRACE_JOB_ENV, "E2E_RETRY_QUEUED_GRACE_MINUTES": bad},
+		)
+		assert "::warning::E2E_RETRY_QUEUED_GRACE_MINUTES must be a positive integer" in result.stdout, bad
+		assert "falling back to 30" in result.stdout
+		warning = next(line for line in result.stdout.splitlines() if "::warning::E2E_RETRY_QUEUED_GRACE_MINUTES" in line)
+		# The raw repo-variable value never reaches the workflow-command line.
+		assert bad not in warning or bad == "0"
+		assert "status=retry_queued_timeout" in output
+		assert _queued_seconds(result.stdout) == 1800, bad
+	# A valid value below the editor budget never shortens the base deadline.
+	for value, seconds in (("5", 1500), ("40", 2400)):
+		result, output, _ = _run_phase4b_with_pr_states(
+			["open"] * 400, run_states=["queued"] * 300,
+			extra_env={**_GRACE_JOB_ENV, "E2E_RETRY_QUEUED_GRACE_MINUTES": value},
+		)
+		assert "::warning::E2E_RETRY_QUEUED_GRACE_MINUTES" not in result.stdout
+		assert _queued_seconds(result.stdout) == seconds
+
+
+def test_phase4b_queued_grace_switch_parsing() -> None:
+	for value in ("TRUE", "true", "1", "yes", "On", ""):
+		result, output, _ = _run_phase4b_with_pr_states(
+			["open"] * 400, run_states=["queued"] * 300,
+			extra_env={**_QUEUE_BUDGET_ENV, "E2E_PHASE4B_QUEUED_GRACE_ENABLED": value},
+		)
+		assert "status=retry_queued_timeout" in output, value
+		assert "deadline extended by" not in result.stdout
+	for value in ("false", "0", "off", "no", "nonsense"):
+		result, output, _ = _run_phase4b_with_pr_states(
+			["open"] * 400, run_states=["queued"] * 300,
+			extra_env={**_QUEUE_BUDGET_ENV, "E2E_PHASE4B_QUEUED_GRACE_ENABLED": value,
+				"E2E_RETRY_QUEUED_GRACE_MINUTES": "abc"},
+		)
+		assert "status=retry_timeout" in output, value
+		assert "deadline extended by 0s (cap 0s)" in result.stdout
+		assert "left the queue" not in result.stdout
+		# Legacy output is unchanged: the grace value is not even validated.
+		assert "E2E_RETRY_QUEUED_GRACE_MINUTES" not in result.stdout
+
+
+def test_phase4b_queued_grace_static_contract() -> None:
+	workflow = _read_workflow()
+	job = _e2e_job(workflow)
+	assert "      E2E_PHASE4B_QUEUED_GRACE_ENABLED: ${{ vars.E2E_PHASE4B_QUEUED_GRACE_ENABLED || 'true' }}\n" in job
+	assert "      E2E_RETRY_QUEUED_GRACE_MINUTES: ${{ vars.E2E_RETRY_QUEUED_GRACE_MINUTES || '30' }}\n" in job
+	assert "#   retry_queued_timeout     — retry run still queued past E2E_RETRY_QUEUED_GRACE_MINUTES" in job
+	script = (REPO_ROOT / "scripts" / "stable_e2e_step_verify_bait_removed.sh").read_text(encoding="utf-8")
+	assert '"${E2E_PHASE4B_QUEUED_GRACE_ENABLED:-true}"' in script
+	assert '"${E2E_RETRY_QUEUED_GRACE_MINUTES:-30}"' in script
+	assert script.count("actions/runs/${RETRY_RUN_ID}") == 1
+	assert 'echo "status=retry_queued_timeout" >> "$GITHUB_OUTPUT"' in script
+	# run_started_at is only logged after a strict ISO-8601 match.
+	assert "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" in script
 
 
 def test_phase0a_installs_pytest_before_running_the_hot_poller_test() -> None:

@@ -13,6 +13,14 @@ name: Auto release stable
 # cancelled gate never counts). See scripts/auto_release_stable.sh for the
 # decision order.
 #
+# Release-blocker reporters (stuck-states P4, Refs #8291): before its normal
+# skip or dispatch line, the script sends one `release_blocker` heal report
+# per tick (last_gate_failed, release_in_flight or stable_release_stale) once
+# the condition has persisted past its RELEASE_BLOCKER_* threshold. The
+# report carries an OIDC report identity (hence `id-token: write`) and a
+# failed delivery sends a Telegram WARNING. RELEASE_BLOCKER_HEAL_ENABLED=false
+# turns the reporters off; the release decision itself never changes.
+#
 # Promotion of `main` to `stable` stays with promote-main-to-stable.yml:
 # its daily cycle job proves `main` first, and an operator can still run it
 # by hand.
@@ -28,6 +36,7 @@ name: Auto release stable
 permissions:
   contents: read
   actions: write
+  id-token: write
 
 # Shares the promote job's group so the check-then-dispatch here can never
 # interleave with a poller-driven promotion (which fast-forwards stable and
@@ -53,6 +62,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           AUTO_RELEASE_STABLE_ENABLED: ${{ vars.AUTO_RELEASE_STABLE_ENABLED || 'true' }}
           AUTO_RELEASE_STABLE_MAX_ATTEMPTS: ${{ vars.AUTO_RELEASE_STABLE_MAX_ATTEMPTS || '3' }}
+          RELEASE_BLOCKER_HEAL_ENABLED: ${{ vars.RELEASE_BLOCKER_HEAL_ENABLED || 'true' }}
+          RELEASE_BLOCKER_GATE_FAILED_MIN_AGE_SECS: ${{ vars.RELEASE_BLOCKER_GATE_FAILED_MIN_AGE_SECS || '86400' }}
+          RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS: ${{ vars.RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS || '21600' }}
+          RELEASE_BLOCKER_STABLE_STALE_SECS: ${{ vars.RELEASE_BLOCKER_STABLE_STALE_SECS || '86400' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
         run: |
           set -euo pipefail
           bash scripts/auto_release_stable.sh

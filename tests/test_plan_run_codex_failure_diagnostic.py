@@ -109,9 +109,12 @@ def _diagnostic_lines(stderr: str) -> list[str]:
 
 def test_step_keeps_heal_route_and_runner_call() -> None:
 	body = _body()
-	assert 'python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}"' in body
+	# plan.yml runs the support bundle copies (stuck-states plan P2a); the
+	# `:-scripts` default keeps these tests on the temp checkout's scripts/.
+	support = "${SUPPORT_SCRIPTS_DIR:-scripts}"
+	assert f'python3 "{support}/workflow_failure_heal.py" heal-route --issue-json "${{ISSUE_META_FILE}}"' in body
 	assert "echo '::error::Heal route classification failed' >&2" in body
-	assert "bash scripts/run_plan_codex.sh" in body
+	assert f'bash "{support}/run_plan_codex.sh"' in body
 	assert "${{" not in body
 
 

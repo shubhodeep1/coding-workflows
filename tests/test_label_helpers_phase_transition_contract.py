@@ -63,6 +63,14 @@ def test_security_pass_labels_are_in_the_resilient_phase_set() -> None:
 		assert f'["{label}"]=' in text
 
 
+def test_waiting_on_dependency_label_is_in_the_resilient_phase_set() -> None:
+	text = _script_text()
+	match = re.search(r"^_AI_PHASE_LABELS='(\[.*?\])'$", text, flags=re.M)
+	assert match is not None
+	assert "ai:waiting-on-dependency" in json.loads(match.group(1))
+	assert '["ai:waiting-on-dependency"]="fbca04"' in text
+
+
 # --- Behavioural harness ----------------------------------------------------
 
 _FAKE_GH = r'''#!/usr/bin/env python3
@@ -374,6 +382,21 @@ def test_phase_swap_get_failure_falls_back_to_single_post() -> None:
 	assert _api_calls(calls, "PUT") == []
 
 
+def test_phase_swap_removes_waiting_on_dependency_label() -> None:
+	if not _jq_available():
+		return
+	final: list[str] = []
+	rc, outcome, _stderr, calls = _run_swap(
+		["ai:waiting-on-dependency", "ai:orchestrator-managed"], "ai:planning",
+		final_labels=final,
+	)
+	assert rc == 0
+	assert outcome == "applied"
+	assert _delete_paths(calls) == ["repos/o/r/issues/5/labels/ai%3Awaiting-on-dependency"]
+	assert "ai:waiting-on-dependency" not in final
+	assert "ai:planning" in final
+
+
 def test_phase_swap_never_deletes_target_already_present() -> None:
 	if not _jq_available():
 		return
@@ -517,11 +540,13 @@ if __name__ == "__main__":
 	test_set_issue_phase_label_resilient_contract()
 	test_ensure_label_exists_backward_compatible_contract()
 	test_security_pass_labels_are_in_the_resilient_phase_set()
+	test_waiting_on_dependency_label_is_in_the_resilient_phase_set()
 	test_phase_swap_keeps_label_added_after_get()
 	test_phase_swap_delete_404_is_already_removed()
 	test_phase_swap_delete_error_warns_without_changing_outcome()
 	test_phase_swap_post_failure_skips_deletes()
 	test_phase_swap_get_failure_falls_back_to_single_post()
+	test_phase_swap_removes_waiting_on_dependency_label()
 	test_phase_swap_never_deletes_target_already_present()
 	test_ensure_label_exists_cache_is_declared_with_resource_guard()
 	test_ensure_label_exists_cache_same_repo_and_label_creates_once()

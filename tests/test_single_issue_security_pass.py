@@ -35,6 +35,8 @@ with open(os.environ["FAKE_GH_LOG"], "a") as log:
 args = sys.argv[1:]
 fail = os.environ.get("FAKE_GH_FAIL", "")
 if args[:2] == ["workflow", "run"]:
+	if "reject_delta_inputs" in fail and any(arg.startswith(("audit_diff_since=", "prior_findings=")) for arg in args):
+		sys.exit(1)
 	sys.exit(1 if "dispatch" in fail else 0)
 if args[:2] == ["api", "user"]:
 	if "identity" in fail:
@@ -102,6 +104,10 @@ if args[:2] == ["merge-base", "--is-ancestor"]:
 	if os.environ.get("FAKE_GIT_INCOMPLETE_ANCESTRY") == "true" and not os.path.exists(os.environ.get("FAKE_GIT_UNSHALLOW_MARKER", "")):
 		sys.exit(1)
 	sys.exit(0 if args[2] in os.environ.get("FAKE_GIT_ANCESTORS", "").split(",") and args[3] == os.environ.get("FAKE_GIT_HEAD", "c" * 40) else 1)
+if args[:1] == ["diff"] and "--name-only" in args and "FAKE_GIT_DIFF_FILES" in os.environ:
+	print("\n".join(name for name in os.environ["FAKE_GIT_DIFF_FILES"].split(",") if name))
+	sys.exit(0)
+print("FAKE_GIT unmatched: " + " ".join(args), file=sys.stderr)
 sys.exit(1)
 '''
 
@@ -174,7 +180,7 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		SUPPORT_SCRIPTS_DIR=str(support),
 		GITHUB_WORKSPACE=str(tmp_path),
 	)
-	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_FOLLOWUP_STALE_HOURS", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS", "SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY"):
+	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_FOLLOWUP_STALE_HOURS", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS", "SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY", "FAKE_GIT_DIFF_FILES", "GITHUB_ENV", "SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED", "SECURITY_PASS_DELTA_SINCE", "SECURITY_PASS_PRIOR_FINDINGS_FILE", "SECURITY_PASS_FINDINGS_FILE", "SECURITY_PASS_DELTA_SINCE_INPUT", "SECURITY_PASS_PRIOR_FINDINGS_INPUT", "SECURITY_PASS_AUDIT_CHECKOUT"):
 		run_env.pop(name, None)
 	run_env["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] = "0"
 	# The pass defaults to off; tests that exercise it opt in, and None unsets a name.
@@ -259,7 +265,8 @@ def test_first_clean_review_dispatches_the_audit(tmp_path: Path) -> None:
 	stale = [_comment(_marker("clean", OLD, 1)), _comment(_marker("clean", HEAD, 1), association="NONE", login="someone")]
 	result, calls, output = _run(tmp_path, "gate", comments=stale)
 	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=2" in result.stdout
-	assert ["workflow", "run", "ai-security-audit.yml", "-R", "o/r", "--ref", "main", "-f", "ref=ai/issue-7", "-f", "pr_number=42"] in calls
+	# A trusted clean result for an older head requests a delta re-audit (P5a).
+	assert ["workflow", "run", "ai-security-audit.yml", "-R", "o/r", "--ref", "main", "-f", "ref=ai/issue-7", "-f", "pr_number=42", "-f", f"audit_diff_since={OLD}"] in calls
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
 	assert posted and posted[0][-1].endswith(_marker("pending", HEAD, 2))
 
@@ -1212,3 +1219,374 @@ def test_skip_step_holds_when_python_ignores_safe_path(tmp_path: Path) -> None:
 	assert ["api", "user", "--jq", '.login // ""'] not in calls
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 	assert not any(any("/statuses/" in arg for arg in call) for call in calls)
+
+
+# ----- Delta re-audit with prior-finding carry-forward (stuck-states P5a) -----
+LEGACY_DISPATCH = ["workflow", "run", "ai-security-audit.yml", "-R", "o/r", "--ref", "main", "-f", "ref=ai/issue-7", "-f", "pr_number=42"]
+NEW_HEAD = "e" * 40
+
+
+def _audit_dispatches(calls: list) -> list:
+	return [call for call in calls if call[:3] == ["workflow", "run", "ai-security-audit.yml"]]
+
+
+def _audited_lines(findings: list) -> str:
+	raw = json.dumps(findings, separators=(",", ":")).encode("utf-8")
+	digest = __import__("hashlib").sha256(raw).hexdigest()
+	return f"Audited findings (base64 JSON): {base64.b64encode(raw).decode('ascii')}\nAudited findings sha256: {digest}"
+
+
+def _prior_finding(finding_id: str = "F-9", file: str = "a.py", severity: str = "high") -> dict:
+	return {
+		"finding_id": finding_id, "owasp_or_stride_category": "A01", "severity": severity, "confidence": 9,
+		"file": file, "line": 3, "exploit_scenario": "x", "recommendation": "y",
+	}
+
+
+def _findings_result(head: str, cycle: int, findings: list, payload: str | None = None) -> str:
+	ids = base64.b64encode(json.dumps([f["finding_id"] for f in findings]).encode("ascii")).decode("ascii")
+	lines = payload if payload is not None else _audited_lines(findings)
+	return f"## result\n\nFinding IDs (base64 JSON): {ids}\n\n{lines}\n\n" + f"<!-- ai:single-issue-security-pass:v1 status=findings head={head} cycle={cycle} -->"
+
+
+def test_delta_dispatch_from_a_findings_result_sends_since_and_comment_id(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5, age_hours=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH + ["-f", f"audit_diff_since={OLD}", "-f", "prior_findings=5"]]
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert f"delta re-audit of the changes since `{OLD}`" in posted[-1][-1]
+	assert posted[-1][-1].endswith("\n\n" + _marker("pending", HEAD, 2))
+	assert f"delta_since={OLD}" in result.stdout
+
+
+@pytest.mark.parametrize("comments", [
+	[],
+	[_comment(_marker("failed", HEAD, 1))],
+	[_comment(_marker("clean", OLD, 1)), _comment(_marker("findings", HEAD, 2), comment_id=2), _comment(_marker("failed", HEAD, 3), comment_id=3)],
+])
+def test_no_older_completed_result_keeps_todays_dispatch(tmp_path: Path, comments: list) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH]
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "delta re-audit" not in posted[-1][-1]
+
+
+def test_delta_switch_off_keeps_todays_dispatch_and_comment(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5, age_hours=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED": "false"})
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH]
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert posted[-1][-1] == (
+		"body=## Single-issue security pass\n\nAuto-merge waits for the security audit of `" + HEAD + "` (cycle 2 of 5). "
+		"Findings become follow-up issues against this branch; a clean audit re-runs the review, which then merges.\n\n" + _marker("pending", HEAD, 2)
+	)
+
+
+def test_exhausted_head_retry_stays_a_full_audit(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_findings_result(OLD, 5, [_prior_finding()]), comment_id=5)])
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "reason=exhausted_retry" in result.stdout
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH]
+
+
+def test_rejected_delta_dispatch_falls_back_to_legacy_arguments(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5, age_hours=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GH_FAIL": "reject_delta_inputs"})
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert "outcome=delta_fallback reason=dispatch_rejected" in result.stdout
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH + ["-f", f"audit_diff_since={OLD}", "-f", "prior_findings=5"], LEGACY_DISPATCH]
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "delta re-audit" not in posted[-1][-1] and posted[-1][-1].endswith(_marker("pending", HEAD, 2))
+
+
+def test_double_dispatch_failure_takes_the_dispatch_failed_path(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5, age_hours=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GH_FAIL": "dispatch"})
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=dispatch_failed\n"
+	assert "outcome=delta_fallback" in result.stdout and len(_audit_dispatches(calls)) == 2
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert posted[-1][-1].endswith(_marker("failed", HEAD, 2))
+
+
+def _delta(tmp_path: Path, comments: list, env: dict | None = None):
+	github_env = tmp_path / "github_env"
+	github_env.write_text("", encoding="utf-8")
+	run_env = {
+		"GITHUB_ENV": str(github_env), "RUNNER_TEMP": str(tmp_path),
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_DELTA_SINCE_INPUT": OLD, "SECURITY_PASS_PRIOR_FINDINGS_INPUT": "5",
+		"FAKE_GIT_ANCESTORS": OLD,
+	}
+	run_env.update(env or {})
+	result, calls, _ = _run(tmp_path, "delta", comments=comments, env=run_env)
+	return result, calls, github_env.read_text(encoding="utf-8")
+
+
+def test_delta_mode_narrows_after_verifying_a_trusted_findings_result(tmp_path: Path) -> None:
+	prior = [_prior_finding()]
+	result, calls, written = _delta(tmp_path, [_comment(_findings_result(OLD, 1, prior), comment_id=5)])
+	prior_file = tmp_path / "single-pass-prior-findings.json"
+	assert written == (
+		f"SECURITY_AUDIT_DIFF_SINCE={OLD}\nSECURITY_PASS_DELTA_SINCE={OLD}\n"
+		f"SECURITY_AUDIT_PRIOR_FINDINGS={prior_file}\nSECURITY_PASS_PRIOR_FINDINGS_FILE={prior_file}\n"
+	)
+	assert json.loads(prior_file.read_text(encoding="utf-8")) == prior
+	assert f"mode=delta pr=42 head={HEAD} outcome=delta since={OLD} prior_findings=1" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_delta_mode_clean_source_sends_since_only(tmp_path: Path) -> None:
+	result, _, written = _delta(tmp_path, [_comment(_marker("clean", OLD, 1), comment_id=5)], env={"SECURITY_PASS_PRIOR_FINDINGS_INPUT": ""})
+	assert written == f"SECURITY_AUDIT_DIFF_SINCE={OLD}\nSECURITY_PASS_DELTA_SINCE={OLD}\n"
+	assert "outcome=delta" in result.stdout
+
+
+@pytest.mark.parametrize("comments, env, reason", [
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED": "false"}, "disabled"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"SECURITY_PASS_DELTA_SINCE_INPUT": ""}, "no_delta_input"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"SECURITY_PASS_DELTA_SINCE_INPUT": HEAD}, "no_delta_input"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"SECURITY_PASS_DELTA_SINCE_INPUT": NEW_HEAD}, "input_mismatch"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"SECURITY_PASS_PRIOR_FINDINGS_INPUT": "6"}, "input_mismatch"),
+	([_comment(_marker("clean", OLD, 1), comment_id=5)], {}, "input_mismatch"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5, login="someone")], {}, "input_mismatch"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()], payload=_audited_lines([_prior_finding()]).replace("sha256: ", "sha256: 0")[:-1]), comment_id=5)], {}, "prior_findings_unverifiable"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()], payload=_audited_lines([_prior_finding("F-10")]).split("\n")[0] + "\n" + _audited_lines([_prior_finding()]).split("\n")[1]), comment_id=5)], {}, "prior_findings_unverifiable"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()], payload=""), comment_id=5)], {}, "prior_findings_unverifiable"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"FAKE_GIT_ANCESTORS": ""}, "not_ancestor"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5)], {"FAKE_GIT_HEAD": NEW_HEAD}, "checkout_mismatch"),
+	([_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5), _comment(_marker("findings", HEAD, 2), comment_id=6)], {}, "input_mismatch"),
+])
+def test_delta_mode_fails_open_to_a_full_audit(tmp_path: Path, comments: list, env: dict, reason: str) -> None:
+	result, _, written = _delta(tmp_path, comments, env=env)
+	assert result.returncode == 0 and written == ""
+	assert f"outcome=full reason={reason}" in result.stdout
+
+
+def _carry_report(tmp_path: Path, env: dict | None = None, prior: list | None = None, current: list | None = None, security_issues=None, findings: str | None = None):
+	prior_file = tmp_path / "prior.json"
+	prior_file.write_text(json.dumps(prior if prior is not None else [_prior_finding()]), encoding="utf-8")
+	current_findings = current if current is not None else []
+	findings_file = tmp_path / "current.json"
+	findings_file.write_text(json.dumps(current_findings), encoding="utf-8")
+	count = findings if findings is not None else str(len(current_findings))
+	run_env = {
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": count,
+		"SECURITY_PASS_FINDING_IDS_B64": base64.b64encode(json.dumps([f["finding_id"] for f in current_findings]).encode("ascii")).decode("ascii"),
+		"SECURITY_PASS_DELTA_SINCE": OLD, "SECURITY_PASS_PRIOR_FINDINGS_FILE": str(prior_file),
+		"SECURITY_PASS_FINDINGS_FILE": str(findings_file), "FAKE_GIT_DIFF_FILES": "b.py",
+	}
+	run_env.update(env or {})
+	if security_issues is None:
+		security_issues = [[{"state": "open", "body": _followup_body(finding_id="F-9"), "user": {"login": "owner"}}]]
+	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 2))], env=run_env, security_issues=security_issues)
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	return result, calls, posted[-1][-1][5:] if posted else ""
+
+
+def _ids_in(body: str) -> list:
+	line = next(line for line in body.splitlines() if line.startswith("Finding IDs (base64 JSON): "))
+	return json.loads(base64.b64decode(line.split(": ", 1)[1]))
+
+
+def test_untouched_open_prior_finding_is_carried_into_a_zero_finding_delta(tmp_path: Path) -> None:
+	result, calls, body = _carry_report(tmp_path)
+	assert body.endswith(_marker("findings", HEAD, 2, ()).split("\n")[-1])
+	assert "## Single-issue security pass: 1 finding(s)" in body and _ids_in(body) == ["F-9"]
+	assert f"Carried forward (file untouched since `{OLD}`, follow-up open): F-9" in body
+	assert _audited_lines([_prior_finding()]) in body
+	assert "outcome=findings cycle=2 findings=1" in result.stdout
+	# Findings below the cycle cap wait for the follow-up merge, as today.
+	assert not any(call[:3] == ["workflow", "run", "ai-review.yml"] for call in calls)
+
+
+def test_carried_result_round_trips_through_delta_and_keeps_the_gate_holding(tmp_path: Path) -> None:
+	_, _, body = _carry_report(tmp_path, current=[_prior_finding("F-1", file="b.py", severity="critical")])
+	assert _ids_in(body) == ["F-1", "F-9"]
+	stored = [_prior_finding("F-1", file="b.py", severity="critical"), _prior_finding()]
+	assert _audited_lines(stored) in body
+	delta_dir = tmp_path / "delta"
+	delta_dir.mkdir()
+	result, _, written = _delta(delta_dir, [_comment(body, comment_id=8)], env={
+		"SECURITY_PASS_HEAD_SHA": NEW_HEAD, "FAKE_GIT_HEAD": NEW_HEAD, "SECURITY_PASS_DELTA_SINCE_INPUT": HEAD,
+		"SECURITY_PASS_PRIOR_FINDINGS_INPUT": "8", "FAKE_GIT_ANCESTORS": HEAD,
+	})
+	assert f"SECURITY_AUDIT_DIFF_SINCE={HEAD}" in written and "prior_findings=2" in result.stdout
+	assert json.loads((delta_dir / "single-pass-prior-findings.json").read_text(encoding="utf-8")) == stored
+	gate_dir = tmp_path / "gate"
+	gate_dir.mkdir()
+	issues = [[{"state": "open", "body": _followup_body(finding_id=fid), "user": {"login": "owner"}} for fid in ("F-1", "F-9")]]
+	_, _, output = _run(gate_dir, "gate", comments=[_comment(_marker("pending", HEAD, 2), comment_id=1), _comment(body, comment_id=8)], security_issues=issues)
+	assert output == "hold=true\nhold_reason=awaiting_followups\n"
+
+
+@pytest.mark.parametrize("env, issues", [
+	({"FAKE_GIT_DIFF_FILES": "a.py"}, None),
+	({"FAKE_GIT_DIFF_FILES": "c.py,a.py"}, None),
+	({}, [[{"state": "open", "body": _followup_body(finding_id="F-8"), "user": {"login": "owner"}}]]),
+	({}, [[{"state": "open", "body": _followup_body(finding_id="F-9"), "user": {"login": "someone"}}]]),
+])
+def test_touched_or_closed_prior_finding_is_resolved(tmp_path: Path, env: dict, issues) -> None:
+	result, calls, body = _carry_report(tmp_path, env=env, security_issues=issues)
+	assert body.startswith("## Single-issue security pass: clean") and "Carried forward" not in body
+	assert ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"] in calls
+
+
+def test_re_reported_prior_finding_is_not_carried_twice(tmp_path: Path) -> None:
+	_, calls, body = _carry_report(tmp_path, current=[_prior_finding()])
+	assert _ids_in(body) == ["F-9"] and "Carried forward" not in body
+	assert not any("repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call for call in calls)
+
+
+def test_listing_failure_carries_every_candidate(tmp_path: Path) -> None:
+	_, _, body = _carry_report(tmp_path, env={"FAKE_GH_FAIL": "followups", "FAKE_GIT_DIFF_FILES": "c.py"}, prior=[_prior_finding(), _prior_finding("F-7", file="b.py")])
+	assert sorted(_ids_in(body)) == ["F-7", "F-9"]
+	assert "follow-up state unverifiable" in body
+
+
+def test_git_failure_carries_every_prior_finding_with_an_open_followup(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _followup_body(finding_id=fid), "user": {"login": "owner"}} for fid in ("F-7", "F-9")]]
+	_, _, body = _carry_report(tmp_path, env={"FAKE_GIT_DIFF_FILES": None}, prior=[_prior_finding(), _prior_finding("F-7", file="b.py")], security_issues=issues)
+	assert sorted(_ids_in(body)) == ["F-7", "F-9"]
+
+
+def test_over_cap_audited_findings_are_omitted(tmp_path: Path) -> None:
+	big = dict(_prior_finding("F-1", file="b.py"), exploit_scenario="z" * 60000)
+	result, _, body = _carry_report(tmp_path, current=[big], prior=[_prior_finding("F-1", file="b.py")])
+	assert _ids_in(body) == ["F-1"] and "Audited findings" not in body
+	assert "reason=prior_findings_omitted" in result.stdout
+
+
+def test_full_audit_findings_are_stored_for_the_next_delta(tmp_path: Path) -> None:
+	current = [_prior_finding("F-1", file="b.py")]
+	_, _, body = _carry_report(tmp_path, current=current, env={"SECURITY_PASS_DELTA_SINCE": None, "SECURITY_PASS_PRIOR_FINDINGS_FILE": None})
+	assert _audited_lines(current) in body and "Carried forward" not in body
+
+
+def test_delta_switch_off_report_body_is_unchanged(tmp_path: Path) -> None:
+	_, calls, body = _carry_report(tmp_path, env={"SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED": "false"})
+	assert body == (
+		f"## Single-issue security pass: clean\n\nThe audit of `{HEAD}` found nothing to fix. The review re-runs and merges this head.\n\n"
+		+ _marker("clean", HEAD, 2)
+	)
+	findings_dir = tmp_path / "findings"
+	findings_dir.mkdir()
+	_, _, findings_body = _carry_report(findings_dir, env={"SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED": "false"}, current=[_prior_finding("F-1", file="b.py")])
+	assert "Audited findings" not in findings_body and "Carried forward" not in findings_body
+	assert findings_body.endswith(_marker("findings", HEAD, 2, ("F-1",)))
+
+
+def test_delta_audit_wiring() -> None:
+	workflow = yaml.safe_load(AUDIT.read_text(encoding="utf-8"))
+	triggers = workflow.get("on", workflow.get(True))
+	for trigger in ("workflow_dispatch", "workflow_call"):
+		for name in ("audit_diff_since", "prior_findings"):
+			assert triggers[trigger]["inputs"][name]["default"] == "" and triggers[trigger]["inputs"][name]["type"] == "string"
+	steps = _steps(AUDIT, "security-audit")
+	names = list(steps)
+	delta = steps["Resolve single-issue security pass delta"]
+	assert names.index("Verify audit data and resolve scope") + 1 == names.index("Resolve single-issue security pass delta") < names.index("Run security audit")
+	assert delta["if"] == "inputs.pr_number != '' && inputs.audit_diff_since != '' && env.SECURITY_AUDIT_TARGET_REF != ''"
+	assert delta["continue-on-error"] is True
+	assert "${{" not in delta["run"]
+	assert 'bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" delta' in delta["run"]
+	assert "audit-data/scripts" not in delta["run"]
+	assert delta["env"]["SECURITY_PASS_DELTA_SINCE_INPUT"] == "${{ inputs.audit_diff_since || '' }}"
+	assert delta["env"]["SECURITY_PASS_PRIOR_FINDINGS_INPUT"] == "${{ inputs.prior_findings || '' }}"
+	assert delta["env"]["SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED"] == "${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}"
+	assert delta["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
+	run = steps["Run security audit"]
+	assert run["env"]["SECURITY_AUDIT_PASS_FINDINGS_OUT"] == "${{ inputs.pr_number != '' && format('{0}/single-pass-findings.json', runner.temp) || '' }}"
+	report = steps["Report single-issue security pass"]
+	assert report["env"]["SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED"] == delta["env"]["SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED"]
+	assert report["env"]["SECURITY_PASS_FINDINGS_FILE"] == "${{ format('{0}/single-pass-findings.json', runner.temp) }}"
+	template = AUDIT_TEMPLATE.read_text(encoding="utf-8")
+	assert "audit_diff_since: ${{ inputs.audit_diff_since || '' }}" in template
+	assert "prior_findings: ${{ inputs.prior_findings || '' }}" in template
+	template_inputs = yaml.safe_load(template)
+	template_triggers = template_inputs.get("on", template_inputs.get(True))
+	assert {"audit_diff_since", "prior_findings"} <= set(template_triggers["workflow_dispatch"]["inputs"])
+	review_text = expanded_review_autofix_text()
+	assert review_text.count("SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}") >= 4
+
+
+def test_findings_source_without_stored_payload_keeps_todays_dispatch(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()], payload=""), comment_id=5, age_hours=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH]
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "delta re-audit" not in posted[-1][-1] and "delta_since=" not in result.stdout
+
+
+def test_carry_forward_diff_lists_rename_sources() -> None:
+	text = (Path(__file__).resolve().parents[1] / "scripts" / "review_single_issue_security_pass.sh").read_text(encoding="utf-8")
+	assert 'diff --no-renames --name-only "${carry_since}..${head_sha}"' in text
+
+
+# Stuck-states P5b: one consolidated follow-up per cycle carries one leading
+# `<!-- ai:security-finding:<id> -->` line per finding.
+def _consolidated_body(finding_ids: tuple[str, ...], branch: str = "ai/issue-7", trailer: str = "") -> str:
+	markers = "".join(f"<!-- ai:security-finding:{finding_id} -->\n" for finding_id in finding_ids)
+	return f"{markers}Refs #9000\n\n- Pull request: #42\n- Integration branch: `{branch}`\n\n## Findings\n{trailer}"
+
+
+def test_consolidated_followup_covers_every_leading_marker(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1", "F-2")), "user": {"login": "owner"}}]]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=awaiting_followups\n"
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+
+
+def test_consolidated_followup_missing_an_id_still_pages(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1",)), "user": {"login": "owner"}}]]
+	result, _, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+@pytest.mark.parametrize("trailer", [
+	"Quoted: <!-- ai:security-finding:F-2 -->\n",
+	"<!-- ai:security-finding:F-2 -->\n",
+])
+def test_marker_outside_the_leading_block_does_not_count(tmp_path: Path, trailer: str) -> None:
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1",), trailer=trailer), "user": {"login": "owner"}}]]
+	result, _, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+@pytest.mark.parametrize("login, state", [("other", "open"), ("owner", "closed")])
+def test_consolidated_followup_from_other_author_or_closed_does_not_count(tmp_path: Path, login: str, state: str) -> None:
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	issues = [[{"state": state, "body": _consolidated_body(("F-1", "F-2")), "user": {"login": login}}]]
+	result, _, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+@pytest.mark.parametrize("issues", [
+	[[{"state": "open", "body": _consolidated_body(("F-1", "F-2")), "user": {"login": "owner"}}]],
+	[[]],
+])
+def test_findings_head_never_merges_with_or_without_consolidated_followup(tmp_path: Path, issues: list) -> None:
+	# Severity gating is unchanged: a findings result for this head holds the merge.
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output.startswith("hold=true\n")
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_prior_finding_covered_by_second_consolidated_marker_is_carried(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1", "F-9")), "user": {"login": "owner"}}]]
+	_, _, body = _carry_report(tmp_path, security_issues=issues)
+	assert _ids_in(body) == ["F-9"]
+	assert f"Carried forward (file untouched since `{OLD}`, follow-up open): F-9" in body
+
+
+def test_prior_finding_quoted_below_the_leading_block_is_not_carried(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _consolidated_body(("F-1",), trailer="<!-- ai:security-finding:F-9 -->\n"), "user": {"login": "owner"}}]]
+	_, _, body = _carry_report(tmp_path, security_issues=issues)
+	assert "## Single-issue security pass: clean" in body

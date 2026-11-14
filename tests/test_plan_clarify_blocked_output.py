@@ -278,7 +278,7 @@ def test_clarify_workflow_detects_and_escalates_blocked_output() -> None:
 def test_clarify_agent_runs_only_in_isolated_container() -> None:
 	wf = _read(CLARIFY_WF)
 	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
-	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"' in wf
+	assert 'bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"' in wf
 	assert "codex_helpers.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do" in wf
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in wf
 	assert "--network none --read-only --cap-drop ALL --security-opt no-new-privileges" in runner
@@ -578,9 +578,12 @@ def test_engine_steps_resolve_the_role_and_guard_the_credential() -> None:
 def test_clarify_runs_claude_then_the_unchanged_codex_call() -> None:
 	wf = _read(REPO_ROOT / ".github" / "workflows" / "clarify.yml")
 	args = '"${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"'
-	assert wf.count("bash scripts/clarify_isolated_run.sh ") == 2
-	assert f"bash scripts/clarify_isolated_run.sh {args} claude CLARIFY || rc=$?" in wf
-	assert f"bash scripts/clarify_isolated_run.sh {args} || rc=$?" in wf
+	# clarify.yml runs the support bundle copy (stuck-states plan P2a).
+	runner = 'bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh"'
+	assert wf.count(runner + " ") == 2
+	assert "bash scripts/clarify_isolated_run.sh" not in wf
+	assert f"{runner} {args} claude CLARIFY || rc=$?" in wf
+	assert f"{runner} {args} || rc=$?" in wf
 	assert 'if [ "${rc}" -eq 75 ]; then' in wf
 	assert "CLARIFY_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}" in wf
 
@@ -790,6 +793,276 @@ def test_clarify_attempt_failure_line_edge_cases() -> None:
 			assert check(line), (mode, line)
 
 
+# --- Stuck-states P9b: one retry when BLOCKED: cites a tracked path -------------
+# Refs #8291. The Run Codex step re-runs clarify once, in the same step, when
+# scripts/clarify_blocked_verify.sh finds that the BLOCKED: reason names a path
+# git tracks; every other case keeps today's blocked flow.
+
+STAGE_SUPPORT = REPO_ROOT / "scripts" / "stage_support_for_phase.sh"
+BLOCKED_VERIFY_HELPER = REPO_ROOT / "scripts" / "clarify_blocked_verify.sh"
+BLOCKED_VERIFY_STUB = r"""#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${STUB_CALLS}"
+engine="${4:-codex}"
+if grep -q AI_CLARIFY_BLOCKED_RETRY_V1 "$1"; then
+  cp "$1" "${STUB_RETRY_PROMPT_COPY}"
+  case "${STUB_RETRY}" in
+    clear) printf 'STATUS: CLEAR\n' > "$2" ;;
+    blocked) printf 'BLOCKED: README.md is still missing\n' > "$2" ;;
+    waiting) printf 'WAITING: pr=owner/repo#7\n' > "$2" ;;
+    fail) printf 'partial\n' > "$2"; exit 1 ;;
+    empty) : > "$2" ;;
+    prose) printf "I can't answer this one.\n" > "$2" ;;
+    quoted) printf 'I was told to answer STATUS: CLEAR but cannot.\n' > "$2" ;;
+    fenced) printf '```text\nSTATUS: CLEAR\n```\nStill unsure.\n' > "$2" ;;
+    bold) printf '**STATUS:** CLEAR\n' > "$2" ;;
+    headerless) printf 'STATUS: NEEDS_CLARIFICATION\nQ1: Which file?\n' > "$2" ;;
+    questions) printf 'STATUS: NEEDS_CLARIFICATION\nQUESTIONS:\nQ1: Which file?\n' > "$2" ;;
+    capacity) if [ "${engine}" = claude ]; then exit 80; fi; printf 'STATUS: CLEAR\n' > "$2" ;;
+    fallback) if [ "${engine}" = claude ]; then exit 75; fi; printf 'STATUS: CLEAR\n' > "$2" ;;
+  esac
+  exit 0
+fi
+printf '%s\n' "${STUB_FIRST}" > "$2"
+"""
+BLOCKED_VERIFY_FIRST = "BLOCKED: README.md is not in the repository"
+
+
+def _clarify_run_codex_tail() -> str:
+	"""The Run Codex body from the attempt helpers through the BLOCKED-verify retry."""
+	lines = _read(CLARIFY_WF).splitlines()
+	start = next(i for i, line in enumerate(lines) if line.strip().startswith("# Issue #8602: each failed attempt"))
+	stop = next(i for i in range(start, len(lines)) if lines[i].strip() == "- name: Semantic cache store")
+	return textwrap.dedent("\n".join(lines[start:stop])) + "\n"
+
+
+def _run_blocked_verify(
+	tmp: Path, retry: str, *, engine: str = "codex", support: str = "bundle", first: str = BLOCKED_VERIFY_FIRST,
+	enabled: str = "true",
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+	repo = tmp / "repo"
+	(repo / "scripts").mkdir(parents=True)
+	(repo / "README.md").write_text("readme\n", encoding="utf-8")
+	git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+	subprocess.run(git + ["init", "-q"], cwd=repo, check=True)
+	subprocess.run(git + ["add", "README.md"], cwd=repo, check=True)
+	subprocess.run(git + ["commit", "-q", "-m", "fixture"], cwd=repo, check=True)
+	# The legacy path runs the checkout copy; the bundle path never does.
+	(repo / "scripts" / "clarify_isolated_run.sh").write_text(BLOCKED_VERIFY_STUB, encoding="utf-8")
+	bundle = tmp / "bundle"
+	bundle.mkdir()
+	(bundle / "clarify_isolated_run.sh").write_text(BLOCKED_VERIFY_STUB, encoding="utf-8")
+	if support == "bundle":
+		(bundle / "clarify_blocked_verify.sh").write_text(_read(BLOCKED_VERIFY_HELPER), encoding="utf-8")
+	(tmp / "rt").mkdir()
+	(tmp / "p.txt").write_text("prompt\n", encoding="utf-8")
+	env = {
+		"PATH": "/usr/bin:/bin",
+		"HOME": str(tmp),
+		"PYTHONDONTWRITEBYTECODE": "1",
+		"CLARIFY_ENGINE": engine,
+		"CLARIFY_BLOCKED_VERIFY_ENABLED": enabled,
+		"RUNTIME_DIR": str(tmp / "rt"),
+		"CODEX_PROMPT_FILE": str(tmp / "p.txt"),
+		"CODEX_OUTPUT_FILE": str(tmp / "o.txt"),
+		"GITHUB_ENV": str(tmp / "github_env"),
+		"STUB_CALLS": str(tmp / "calls.log"),
+		"STUB_RETRY": retry,
+		"STUB_FIRST": first,
+		"STUB_RETRY_PROMPT_COPY": str(tmp / "retry_prompt.txt"),
+	}
+	if support != "legacy":
+		env["SUPPORT_SCRIPTS_DIR"] = str(bundle)
+	script = "set -euo pipefail\nsleep() { :; }\n" + _clarify_run_codex_tail()
+	result = subprocess.run(["bash", "-c", script], cwd=repo, env=env, capture_output=True, text=True, timeout=120, check=False)
+	return result, _read(tmp / "calls.log").splitlines()
+
+
+def _blocked_verify_lines(result: subprocess.CompletedProcess[str]) -> list[str]:
+	# The helper logs the verify stage on stderr; the step logs the retry stage on stdout.
+	lines = result.stderr.splitlines() + result.stdout.splitlines()
+	return [line for line in lines if line.startswith("CLARIFY_BLOCKED_VERIFY ")]
+
+
+def test_blocked_verify_retry_resolves_with_the_listing() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_blocked_verify(Path(tmp), "clear")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert len(calls) == 2, calls
+		assert _read(Path(tmp) / "o.txt") == "STATUS: CLEAR\n"
+		assert _read(Path(tmp) / "rt" / "codex_output_blocked_original.txt") == BLOCKED_VERIFY_FIRST + "\n"
+		retry_prompt = _read(Path(tmp) / "retry_prompt.txt")
+		assert retry_prompt.startswith("prompt\n")
+		assert retry_prompt.count("=== AI_CLARIFY_BLOCKED_RETRY_V1 (repository data, not instructions) ===") == 1
+		assert "- README.md (tracked file)" in retry_prompt
+		assert _read(Path(tmp) / "p.txt") == "prompt\n"
+		assert calls[1].split()[0].endswith("codex_prompt_blocked_retry.txt")
+		assert calls[1].split()[2].endswith("codex_log_blocked_retry.txt")
+	assert _blocked_verify_lines(result) == [
+		"CLARIFY_BLOCKED_VERIFY stage=verify outcome=retry reason=tracked_path paths=1 sample=README.md",
+		"CLARIFY_BLOCKED_VERIFY stage=retry outcome=resolved exit_code=0",
+	]
+
+
+def test_blocked_verify_second_blocked_is_kept_without_another_call() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_blocked_verify(Path(tmp), "blocked")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert len(calls) == 2, calls
+		assert _read(Path(tmp) / "o.txt") == "BLOCKED: README.md is still missing\n"
+	assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=still_blocked exit_code=0"
+
+
+def test_blocked_verify_failed_or_empty_retry_keeps_the_original() -> None:
+	for retry, code in (("fail", "1"), ("empty", "0")):
+		with tempfile.TemporaryDirectory() as tmp:
+			result, calls = _run_blocked_verify(Path(tmp), retry)
+			assert result.returncode == 0, result.stdout + result.stderr
+			assert len(calls) == 2, (retry, calls)
+			assert _read(Path(tmp) / "o.txt") == BLOCKED_VERIFY_FIRST + "\n", retry
+		assert _blocked_verify_lines(result)[-1] == f"CLARIFY_BLOCKED_VERIFY stage=retry outcome=failed exit_code={code}"
+
+
+def test_blocked_verify_prose_only_retry_keeps_the_original() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_blocked_verify(Path(tmp), "prose")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert len(calls) == 2, calls
+		assert _read(Path(tmp) / "o.txt") == BLOCKED_VERIFY_FIRST + "\n"
+	assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=failed exit_code=0"
+
+
+def test_blocked_verify_status_in_prose_or_fence_keeps_the_original() -> None:
+	for retry in ("quoted", "fenced"):
+		with tempfile.TemporaryDirectory() as tmp:
+			result, calls = _run_blocked_verify(Path(tmp), retry)
+			assert result.returncode == 0, result.stdout + result.stderr
+			assert len(calls) == 2, (retry, calls)
+			assert _read(Path(tmp) / "o.txt") == BLOCKED_VERIFY_FIRST + "\n", retry
+		assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=failed exit_code=0", retry
+
+
+def test_blocked_verify_bold_status_line_resolves() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, _ = _run_blocked_verify(Path(tmp), "bold")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert _read(Path(tmp) / "o.txt") == "**STATUS:** CLEAR\n"
+	assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=resolved exit_code=0"
+
+
+def test_blocked_verify_needs_clarification_requires_questions() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, _ = _run_blocked_verify(Path(tmp), "headerless")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert _read(Path(tmp) / "o.txt") == BLOCKED_VERIFY_FIRST + "\n"
+	assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=failed exit_code=0"
+	with tempfile.TemporaryDirectory() as tmp:
+		result, _ = _run_blocked_verify(Path(tmp), "questions")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert _read(Path(tmp) / "o.txt") == "STATUS: NEEDS_CLARIFICATION\nQUESTIONS:\nQ1: Which file?\n"
+	assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=resolved exit_code=0"
+
+
+def test_blocked_verify_claude_capacity_on_retry_keeps_the_original() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_blocked_verify(Path(tmp), "capacity", engine="claude")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert [call.split()[3:] for call in calls] == [["claude", "CLARIFY"], ["claude", "CLARIFY"]]
+		assert _read(Path(tmp) / "o.txt") == BLOCKED_VERIFY_FIRST + "\n"
+		github_env = Path(tmp) / "github_env"
+		assert not github_env.exists() or "CLAUDE_CAPACITY_WAIT" not in _read(github_env)
+	assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=failed exit_code=80"
+
+
+def test_blocked_verify_claude_unavailable_retry_falls_back_to_codex() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_blocked_verify(Path(tmp), "fallback", engine="claude")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert [call.split()[3:] for call in calls] == [["claude", "CLARIFY"], ["claude", "CLARIFY"], []]
+		assert _read(Path(tmp) / "o.txt") == "STATUS: CLEAR\n"
+	assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=resolved exit_code=0"
+
+
+def test_blocked_verify_skips_without_the_bundle_helper() -> None:
+	for support, reason in (("legacy", "legacy_support"), ("missing", "helper_missing")):
+		with tempfile.TemporaryDirectory() as tmp:
+			result, calls = _run_blocked_verify(Path(tmp), "clear", support=support)
+			assert result.returncode == 0, result.stdout + result.stderr
+			assert len(calls) == 1, (support, calls)
+			assert _read(Path(tmp) / "o.txt") == BLOCKED_VERIFY_FIRST + "\n"
+		assert _blocked_verify_lines(result) == [
+			f"CLARIFY_BLOCKED_VERIFY stage=verify outcome=skip reason={reason} paths=0 sample=none"
+		], support
+
+
+def test_blocked_verify_skip_line_is_silent_when_off_or_fenced() -> None:
+	cases = (
+		{"support": "legacy", "enabled": "false"},
+		{"support": "missing", "enabled": "OFF"},
+		{"support": "legacy", "first": "```text\nBLOCKED: README.md\n```\nSTATUS: CLEAR"},
+	)
+	for case in cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			result, calls = _run_blocked_verify(Path(tmp), "clear", **case)
+			assert result.returncode == 0, (case, result.stdout + result.stderr)
+			assert len(calls) == 1, (case, calls)
+		assert _blocked_verify_lines(result) == [], case
+
+
+def test_blocked_verify_leaves_other_outputs_and_the_off_switch_alone() -> None:
+	cases = (
+		{"first": "STATUS: CLEAR"},
+		{"first": "BLOCKED: need the production API key"},
+		{"enabled": "false"},
+	)
+	for case in cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			result, calls = _run_blocked_verify(Path(tmp), "clear", **case)
+			assert result.returncode == 0, (case, result.stdout + result.stderr)
+			assert len(calls) == 1, (case, calls)
+			assert not (Path(tmp) / "rt" / "codex_prompt_blocked_retry.txt").exists(), case
+		lines = _blocked_verify_lines(result)
+		assert all("stage=retry" not in line for line in lines), (case, lines)
+
+
+def test_blocked_verify_is_wired_and_staged() -> None:
+	wf = _read(CLARIFY_WF)
+	assert "CLARIFY_BLOCKED_VERIFY_ENABLED: ${{ vars.CLARIFY_BLOCKED_VERIFY_ENABLED || 'true' }}" in wf
+	run_codex = wf.split("- name: Run Codex", 1)[1].split("- name: Semantic cache store", 1)[0]
+	assert "CLARIFY_BLOCKED_VERIFY_ENABLED" in run_codex
+	assert 'clarify_bv_helper="${SUPPORT_SCRIPTS_DIR}/clarify_blocked_verify.sh"' in run_codex
+	assert "scripts/clarify_blocked_verify.sh" not in wf
+	stage = _read(STAGE_SUPPORT)
+	block = re.search(r"^\tclarify\)\n(.*?)^\t\t;;", stage, re.MULTILINE | re.DOTALL)
+	assert block
+	optional = re.search(r"stage_support_optional_scripts=\((.*?)\)", block.group(1), re.DOTALL)
+	assert optional and "clarify_blocked_verify.sh" in optional.group(1).split()
+	required = re.search(r"stage_support_required_scripts=\((.*?)\)", block.group(1), re.DOTALL)
+	assert required and "clarify_blocked_verify.sh" not in required.group(1).split()
+
+
+# The helper's own cases live in tests/test_clarify_blocked_verify.py and are
+# collected here, since CI already runs this file and ci.yml was outside the
+# P9b file grant. A name clash would hide a test, so it fails loudly.
+def _collect_clarify_blocked_verify_cases() -> None:
+	spec = importlib.util.spec_from_file_location(
+		"clarify_blocked_verify_cases", Path(__file__).resolve().parent / "test_clarify_blocked_verify.py",
+	)
+	assert spec and spec.loader
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 10, f"only {collected} clarify BLOCKED-verify cases collected"
+
+
+_collect_clarify_blocked_verify_cases()
+
+
 # Issue #9120: a blocked ai:check-triage issue alerts at WARNING, not CRITICAL,
 # and its comment says the unblock judge re-checks the failing check. The first
 # line and the Reason: line stay byte-identical (scripts/unblock_judge.sh reads both).
@@ -886,3 +1159,206 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+# ---------------------------------------------------------------------------
+# Stuck-states P8a-2 (Refs #8291): WAITING: lines park the issue on its dependency
+# ---------------------------------------------------------------------------
+
+WAITING_SENTENCE = (
+	"Sequencing wait: when the only blocker is another pull request that has not merged, an upstream change "
+	"not yet in the `shubhodeep1/coding-workflows` `@stable` release, or another issue in this repository that "
+	"must be finished first, emit exactly one line `WAITING: pr=<owner>/<repo>#<N>`, "
+	"`WAITING: release=shubhodeep1/coding-workflows@stable contains=shubhodeep1/coding-workflows#<N>` or "
+	"`WAITING: issue=<owner>/<repo>#<N>` instead of `BLOCKED:`. `pr` names this repository or "
+	"`shubhodeep1/coding-workflows`; `issue` names this repository and never this issue."
+)
+WAIT_HELPER = REPO_ROOT / "scripts" / "dependency_wait_resume.py"
+
+
+def _step_body(workflow: Path, step_name: str) -> str:
+	"""The dedented run: body of one step, with the github.* expressions this suite needs filled in."""
+	lines = _read(workflow).splitlines()
+	start = next(i for i, line in enumerate(lines) if line.strip() == f"- name: {step_name}")
+	stop = next(i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("- name: "))
+	block = lines[start:stop]
+	run = next(i for i, line in enumerate(block) if line.strip() == "run: |")
+	body = textwrap.dedent("\n".join(block[run + 1:])) + "\n"
+	for expr, value in (
+		("${{ github.repository }}", "owner/repo"),
+		("${{ github.server_url }}", "https://github.com"),
+		("${{ github.run_id }}", "1"),
+	):
+		body = body.replace(expr, value)
+	assert "${{" not in body
+	return body
+
+
+def _step_text(workflow: Path, step_name: str) -> str:
+	text = _read(workflow)
+	start = text.index(f"      - name: {step_name}\n")
+	end = text.find("\n      - name:", start + 1)
+	return text[start:end]
+
+
+def _norm(text: str) -> str:
+	return " ".join(text.split())
+
+
+def test_waiting_rule_is_in_every_live_and_template_prompt() -> None:
+	for path in (
+		PROMPT_PLAN, PROMPT_CLARIFY, REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt",
+		REPO_ROOT / "prompts" / "_templates" / "mode-clarify.txt", PLAN_RUNNER, CLARIFY_WF,
+	):
+		assert WAITING_SENTENCE in _norm(_read(path)), path
+	for path in (PROMPT_PLAN, REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt", PLAN_RUNNER):
+		assert WAITING_SENTENCE + " Emit no plan with it, and end with `STATUS: NOT_CLEAR`." in _norm(_read(path)), path
+	for path in (PROMPT_CLARIFY, REPO_ROOT / "prompts" / "_templates" / "mode-clarify.txt"):
+		assert "Or, for a sequencing wait:\nWAITING: <target>\n" in _read(path)
+	assert "Or, for a sequencing wait (point 10):\n          WAITING: <target>\n" in _read(CLARIFY_WF)
+
+
+def _run_parse(tmp: Path, workflow: Path, step: str, output: str, *, helper: bool = True, enabled: str = "true") -> dict[str, str]:
+	(tmp / "rt").mkdir(exist_ok=True)
+	bundle = tmp / "bundle"
+	bundle.mkdir(exist_ok=True)
+	if helper:
+		(bundle / "dependency_wait_resume.py").write_text(_read(WAIT_HELPER), encoding="utf-8")
+	(tmp / "o.txt").write_text(output, encoding="utf-8")
+	for name in ("go", "ge"):
+		(tmp / name).write_text("", encoding="utf-8")
+	env = {
+		"PATH": "/usr/bin:/bin", "HOME": str(tmp), "CODEX_OUTPUT_FILE": str(tmp / "o.txt"), "RUNTIME_DIR": str(tmp / "rt"),
+		"SUPPORT_SCRIPTS_DIR": str(bundle), "GITHUB_OUTPUT": str(tmp / "go"), "GITHUB_ENV": str(tmp / "ge"),
+		"GITHUB_REPOSITORY": "owner/repo", "ISSUE_NUMBER": "5", "DEPENDENCY_WAIT_RESUME_ENABLED": enabled,
+		"PLAN_SELF_CHECK_ENABLED": "true",
+	}
+	result = subprocess.run(["bash", "-c", _step_body(workflow, step)], env=env, capture_output=True, text=True, timeout=60, check=False)
+	assert result.returncode == 0, result.stdout + result.stderr
+	outputs: dict[str, str] = {}
+	lines = _read(tmp / "go").splitlines()
+	index = 0
+	while index < len(lines):
+		key, sep, value = lines[index].partition("=")
+		if not sep and "<<" in lines[index]:
+			key, delim = lines[index].split("<<", 1)
+			end = lines.index(delim, index + 1)
+			outputs[key] = "\n".join(lines[index + 1:end])
+			index = end + 1
+			continue
+		outputs[key] = value
+		index += 1
+	outputs["_stderr"] = result.stderr
+	outputs["_stdout"] = result.stdout
+	return outputs
+
+
+PARSE_STEPS = ((CLARIFY_WF, "Parse Codex output"), (PLAN_WF, "Parse planning output"))
+
+
+def test_waiting_line_is_parsed_before_blocked_in_both_parse_steps() -> None:
+	for workflow, step in PARSE_STEPS:
+		text = _step_text(workflow, step)
+		assert "DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}" in text
+		assert text.index("parse-waiting") < text.index("BLOCKED_REASON=\"$(perl")
+		assert '[ -f "${DEP_WAIT_HELPER}" ] && [ ! -L "${DEP_WAIT_HELPER}" ]' in text
+		assert "DEPENDENCY_WAIT_PARK op=parse outcome=skip reason=helper_missing" in text
+		with tempfile.TemporaryDirectory() as td:
+			valid = _run_parse(Path(td), workflow, step, "STATUS: CLEAR\nBLOCKED: other\nWAITING: pr=owner/repo#7\n")
+		assert valid["blocked"] == "true" and valid["needs_clarification"] == "false"
+		assert valid["blocked_reason"] == "WAITING: pr:owner/repo#7"
+		assert (valid["waiting"], valid["waiting_kind"], valid["waiting_repo"], valid["waiting_number"]) == ("true", "pr", "owner/repo", "7")
+		with tempfile.TemporaryDirectory() as td:
+			invalid = _run_parse(Path(td), workflow, step, "WAITING: pr=other/repo#7\nBLOCKED: the real reason\n")
+		assert invalid["waiting"] == "false" and invalid["blocked"] == "true" and invalid["blocked_reason"] == "the real reason"
+		with tempfile.TemporaryDirectory() as td:
+			missing = _run_parse(Path(td), workflow, step, "STATUS: CLEAR\nWAITING: pr=owner/repo#7\n", helper=False)
+		assert missing["waiting"] == "false" and missing["blocked"] == "true"
+		assert missing["blocked_reason"] == "WAITING: pr=owner/repo#7"
+		assert "reason=helper_missing" in missing["_stdout"]
+		with tempfile.TemporaryDirectory() as td:
+			off = _run_parse(Path(td), workflow, step, "WAITING: pr=owner/repo#7\n", enabled="false")
+		assert off["waiting"] == "false" and off["blocked"] == "true"
+		with tempfile.TemporaryDirectory() as td:
+			fenced = _run_parse(Path(td), workflow, step, "```\nWAITING: pr=owner/repo#7\n```\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n")
+		assert fenced["waiting"] == "false" and fenced["blocked"] == "false"
+
+
+PARK_STUBS = {
+	"gh_helpers.sh": 'gh_retry() { echo "gh_retry $*" >> "${STUB_LOG}"; }\n',
+	"label_helpers.sh": 'ensure_label_exists() { echo "ensure_label_exists $*" >> "${STUB_LOG}"; }\n',
+	"tg_helpers.sh": 'tg_send_tracked() { echo "tg $3 $2" | head -1 >> "${STUB_LOG}"; }\n',
+	"dependency_wait_resume.py": (
+		"import json, os, sys\n"
+		"open(os.environ['STUB_LOG'], 'a').write('park ' + ' '.join(sys.argv[1:]) + '\\n')\n"
+		"print(json.dumps({'status': os.environ['STUB_PARK_STATUS'], 'target': 'pr:owner/repo#7'}))\n"
+	),
+}
+HANDLER_STEPS = ((CLARIFY_WF, "Handle blocked clarification output", "clarify"), (PLAN_WF, "Handle blocked planning output", "plan"))
+
+
+def _run_handler(tmp: Path, workflow: Path, step: str, *, status: str, waiting: str = "true") -> list[str]:
+	bundle = tmp / "bundle"
+	bundle.mkdir()
+	for name, text in PARK_STUBS.items():
+		(bundle / name).write_text(text, encoding="utf-8")
+	(tmp / "rt").mkdir()
+	env = {
+		"PATH": "/usr/bin:/bin", "HOME": str(tmp), "SUPPORT_SCRIPTS_DIR": str(bundle), "RUNTIME_DIR": str(tmp / "rt"),
+		"STUB_LOG": str(tmp / "log"), "STUB_PARK_STATUS": status, "ISSUE_NUMBER": "5", "ISSUE_URL": "https://github.com/owner/repo/issues/5",
+		"BLOCKED_REASON": "WAITING: pr:owner/repo#7", "WAITING_PARSED": waiting, "WAITING_KIND": "pr",
+		"WAITING_REPO": "owner/repo", "WAITING_NUMBER": "7", "PLAN_COMMENT_FILE": str(tmp / "rt" / "plan_comment.md"),
+	}
+	result = subprocess.run(["bash", "-c", _step_body(workflow, step)], env=env, capture_output=True, text=True, timeout=60, check=False)
+	assert result.returncode == 0, result.stdout + result.stderr
+	return _read(tmp / "log").splitlines()
+
+
+def test_blocked_handlers_park_a_wait_and_fall_back_to_blocked() -> None:
+	for workflow, step, phase in HANDLER_STEPS:
+		text = _step_text(workflow, step)
+		for row in ("WAITING_PARSED:", "WAITING_KIND:", "WAITING_REPO:", "WAITING_NUMBER:",
+			"DEPENDENCY_WAIT_RESUME_ENABLED: ${{ vars.DEPENDENCY_WAIT_RESUME_ENABLED || 'true' }}",
+			"DEPENDENCY_WAIT_ESCALATE_DAYS: ${{ vars.DEPENDENCY_WAIT_ESCALATE_DAYS || '7' }}"):
+			assert row in text, (step, row)
+		with tempfile.TemporaryDirectory() as td:
+			parked = _run_handler(Path(td), workflow, step, status="parked")
+		assert parked[0] == "ensure_label_exists ai:waiting-on-dependency owner/repo"
+		assert parked[1].startswith("park park --repo owner/repo --issue-number 5 --kind pr --target-repo owner/repo --number 7 ")
+		assert f"--phase {phase} --run-url https://github.com/owner/repo/actions/runs/1" in parked[1]
+		assert "--remove-label ai:blocked" in parked[2] and "--add-label" not in parked[2]
+		assert parked[3].startswith("tg CRITICAL ") and "waiting on dependency for issue #5: pr:owner/repo#7" in parked[3]
+		assert len(parked) == 4 and not any("ai:blocked owner/repo" in line for line in parked)
+		with tempfile.TemporaryDirectory() as td:
+			fallback = _run_handler(Path(td), workflow, step, status="already_resolved")
+		assert "ensure_label_exists ai:blocked owner/repo" in fallback
+		assert any("--add-label ai:blocked" in line for line in fallback)
+		assert any("(dependency wait not parked: already_resolved)" in line for line in fallback if line.startswith("tg "))
+		with tempfile.TemporaryDirectory() as td:
+			plain = _run_handler(Path(td), workflow, step, status="parked", waiting="false")
+		assert not any(line.startswith("park ") for line in plain) and "ensure_label_exists ai:blocked owner/repo" in plain
+
+
+def test_waiting_helper_is_optional_for_clarify_and_plan_staging() -> None:
+	stage = _read(STAGE_SUPPORT)
+	for phase in ("clarify", "plan"):
+		block = re.search(r"^\t" + phase + r"\)\n(.*?)^\t\t;;", stage, re.MULTILINE | re.DOTALL)
+		assert block
+		optional = re.search(r"stage_support_optional_scripts=\((.*?)\)", block.group(1), re.DOTALL)
+		assert optional and "dependency_wait_resume.py" in optional.group(1).split()
+		required = re.search(r"stage_support_required_scripts=\((.*?)\)", block.group(1), re.DOTALL)
+		assert required and "dependency_wait_resume.py" not in required.group(1).split()
+	for workflow in (CLARIFY_WF, PLAN_WF):
+		assert "scripts/dependency_wait_resume.py" not in _read(workflow)
+
+
+def test_blocked_verify_retry_accepts_a_waiting_answer() -> None:
+	run_codex = _read(CLARIFY_WF).split("- name: Run Codex", 1)[1].split("- name: Semantic cache store", 1)[0]
+	assert "if (/^\\s*WAITING:\\s*\\S/i) { $blocked = 1; exit; }" in run_codex
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_blocked_verify(Path(tmp), "waiting")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert len(calls) == 2, calls
+		assert _read(Path(tmp) / "o.txt") == "WAITING: pr=owner/repo#7\n"
+	assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=still_blocked exit_code=0"
+	assert "^\\s*WAITING:\\s*.+$" in _read(CLARIFY_WF)

@@ -63,6 +63,35 @@
 #           so the next review merges or escalates.
 #           Findings become follow-up issues that target
 #           the PR branch; their merges push to the PR and start a new review.
+#           Delta carry-forward (stuck-states P5a,
+#           SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED, default true): after a
+#           delta audit, a prior finding that was not re-reported, whose file is
+#           untouched since the delta base and whose follow-up is still open is
+#           carried into the result (a follow-up listing or git failure carries
+#           every such candidate), so a delta audit that reports 0 cannot publish
+#           `clean` while it stays unfixed. A findings result also stores the
+#           audited findings above the marker (`Audited findings (base64 JSON):`
+#           and `Audited findings sha256:`, omitted over 40,000 encoded bytes)
+#           so the next delta audit can verify them.
+#   delta   Run by security-audit.yml before the audit when the gate requested
+#           a delta re-audit. The dispatch inputs `audit_diff_since` and
+#           `prior_findings` are requests: this mode re-derives them from the
+#           pipeline account's markers, checks ancestry in the audit-data
+#           checkout and the stored findings' sha256, and only then writes
+#           SECURITY_AUDIT_DIFF_SINCE / SECURITY_AUDIT_PRIOR_FINDINGS (plus
+#           SECURITY_PASS_DELTA_SINCE / SECURITY_PASS_PRIOR_FINDINGS_FILE for the
+#           report) to GITHUB_ENV. Anything else writes nothing, so the audit
+#           runs in full (`mode=delta outcome=full reason=<r>`).
+#
+# Delta dispatch (gate): when SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED is not
+# `false`, the dispatch is not an exhausted-head retry and the latest trusted
+# completed (clean/findings) marker is for an older head, the gate adds
+# `-f audit_diff_since=<that head>` and, for findings,
+# `-f prior_findings=<that comment id>`. A rejected delta dispatch (a consumer
+# wrapper without the inputs) is retried once with today's arguments
+# (`outcome=delta_fallback reason=dispatch_rejected`). The first cycle, the
+# exhausted-head retry and the switch off keep today's exact arguments, so the
+# final exhausted-head audit stays a full merge-base..head audit.
 #
 # Marker (last non-empty line of a comment by the pipeline account; any other
 # author is ignored):
@@ -80,8 +109,11 @@
 # issue listing only for current-head findings in gate mode, then one dispatch
 # and up to SECURITY_PASS_PENDING_MARKER_ATTEMPTS pending-marker POSTs (default 3,
 # valid range 1-10; backoff base defaults to 5s, range 0-30s), or one label
-# write. report: one PR read to bind the audit inputs, one /user
-# identity read, one paginated comments read, one comment and at most one dispatch.
+# write. A rejected delta dispatch adds one dispatch (the legacy retry).
+# report: one PR read to bind the audit inputs, one /user
+# identity read, one paginated comments read, one comment and at most one dispatch,
+# plus one paginated open ai:security listing only when a delta audit left
+# carry-forward candidates. delta: one /user read and one paginated comments read.
 #
 # Log: SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=
 set -uo pipefail
@@ -267,15 +299,38 @@ single_pass_review_workflow()
 	fi
 }
 
-# Input: PR head ref and JSON array of current finding IDs. Output: integer
-# count of IDs covered by matching open follow-ups. The PR
-# payload and cached PR comments lack issue state, and LINKED_ISSUES_JSON lists
-# issues the PR closes, not audit follow-ups. Only gate-mode current-head
-# findings call this: one paginated issues listing (one API call per page).
-# An incomplete or malformed listing returns 1 so the gate holds and pages.
-single_pass_open_followups()
+# Delta re-audit source (stuck-states P5a). Input: the TSV printed by
+# single_pass_markers and the current head. Output:
+# `<head>\t<comment_id>\t<status>\t<cycle>` of the latest trusted completed
+# (clean/findings) marker, or nothing when there is none, when it is for the
+# current head (conservative: a completed result for this head must not be
+# superseded by an older one) or when a findings marker has no valid comment id.
+# No API calls.
+single_pass_delta_source()
 {
-	local followup_ref="$1" expected_ids="$2" followup_file followup_total
+	local delta_markers_tsv="$1" delta_current_head="$2"
+	printf '%s\n' "${delta_markers_tsv}" | awk -F'\t' -v h="${delta_current_head}" '
+		NF >= 5 && ($3 == "clean" || $3 == "findings") { line = $4 "\t" $2 "\t" $3 "\t" $5; last_head = $4; last_status = $3; last_id = $2 }
+		END {
+			if (line == "" || last_head == h) exit 0
+			if (last_status == "findings" && last_id !~ /^[1-9][0-9]*$/) exit 0
+			print line
+		}'
+}
+
+# Input: PR head ref and JSON array of finding IDs. Output: JSON array of the
+# IDs covered by matching open follow-ups. An issue covers every ID in its
+# leading marker block: the run of `<!-- ai:security-finding:<id> -->` lines
+# from line 1 (one line in a legacy per-finding body, one per finding in a
+# stuck-states P5b consolidated body). A marker further down never counts. The PR
+# payload and cached PR comments lack issue state, and LINKED_ISSUES_JSON lists
+# issues the PR closes, not audit follow-ups. Gate-mode current-head findings
+# (through single_pass_open_followups) and report-mode delta carry-forward
+# call this: one paginated issues listing (one API call per page).
+# An incomplete or malformed listing returns 1 so the caller fails closed.
+single_pass_open_followup_ids()
+{
+	local followup_ref="$1" expected_ids="$2" followup_file followup_covered
 	followup_file="$(mktemp)" || return 1
 	if ! { if type gh_retry >/dev/null 2>&1; then
 		gh_retry gh api --paginate --slurp "repos/${REPOSITORY}/issues?labels=ai:security&state=open&per_page=100"
@@ -287,7 +342,7 @@ single_pass_open_followups()
 		rm -f "${followup_file}"
 		return 1
 	fi
-	if ! followup_total="$(jq -r --arg ref "${followup_ref}" --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" --argjson ids "${expected_ids}" '
+	if ! followup_covered="$(jq -c --arg ref "${followup_ref}" --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" --argjson ids "${expected_ids}" '
 		[.[][] | select(type == "object" and .pull_request == null and .user.login == $author and .state == "open")
 		| select((.body | type) == "string")
 		| select(.body | split("\n") | any(.[];
@@ -297,14 +352,26 @@ single_pass_open_followups()
 			  else "" end
 			| gsub("^\\s+|\\s+$"; "") | sub("^`"; "") | sub("`$"; "")
 			| gsub("^\\s+|\\s+$"; "") | . == $ref))
-		| .body | split("\n")[0]] as $issue_markers
-		| [$ids[] | select(. as $id | any($issue_markers[]; . == ("<!-- ai:security-finding:" + $id + " -->")))] | length
+		| .body | split("\n")
+		| (map(gsub("\\s+$"; "") | test("^<!-- ai:security-finding:[^<>]+ -->$")) | index(false)) as $block_end
+		| .[0:($block_end // length)] | map(gsub("\\s+$"; ""))] | flatten as $issue_markers
+		| [$ids[] | select(. as $id | any($issue_markers[]; . == ("<!-- ai:security-finding:" + $id + " -->")))]
 	' "${followup_file}" 2>/dev/null)"; then
 		rm -f "${followup_file}"
 		return 1
 	fi
 	rm -f "${followup_file}"
-	printf '%s\n' "${followup_total}"
+	printf '%s\n' "${followup_covered}"
+}
+
+# Input: PR head ref and JSON array of current finding IDs. Output: integer
+# count of IDs covered by matching open follow-ups (see
+# single_pass_open_followup_ids). Only gate-mode current-head findings call it.
+single_pass_open_followups()
+{
+	local followup_covered_ids
+	followup_covered_ids="$(single_pass_open_followup_ids "$1" "$2")" || return 1
+	jq -er 'length' <<< "${followup_covered_ids}" 2>/dev/null || return 1
 }
 
 single_pass_marker_age_hours()
@@ -324,6 +391,8 @@ single_pass_gate()
 	local pattern="${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"
 	local state base head_ref head_sha head_repo labels linked skip_json markers latest latest_status latest_head latest_created
 	local cycles_used next_cycle age_hours workflow body extensions effective_max completed_findings failed_marker_unrecorded="false"
+	local delta_source="" delta_since="" delta_comment_id="" delta_status="" delta_note="" dispatch_ok="false"
+	local -a dispatch_args=() delta_dispatch_args=()
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
 	[[ "${stale_hours}" =~ ^[1-9][0-9]*$ ]] || stale_hours=6
 	[[ "${followup_stale_hours}" =~ ^[1-9][0-9]*$ ]] || followup_stale_hours=24
@@ -512,7 +581,52 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 		return 0
 	fi
 	workflow="$(single_pass_audit_workflow)"
-	if ! gh workflow run "${workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f ref="${head_ref}" -f pr_number="${PR_NUMBER}" >/dev/null 2>&1; then
+	dispatch_args=(workflow run "${workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f ref="${head_ref}" -f pr_number="${PR_NUMBER}")
+	# Delta re-audit (stuck-states P5a): never for the exhausted-head retry, so
+	# the final audit of an exhausted head stays a full merge-base..head audit.
+	if [ "${SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED:-true}" != "false" ] && [ "${exhausted_retry}" != "true" ]; then
+		delta_source="$(single_pass_delta_source "${markers}" "${head_sha}")"
+		if [ -n "${delta_source}" ]; then
+			delta_since="$(printf '%s' "${delta_source}" | cut -f1)"
+			delta_comment_id="$(printf '%s' "${delta_source}" | cut -f2)"
+			delta_status="$(printf '%s' "${delta_source}" | cut -f3)"
+			# A findings result without the stored payload (posted before P5a,
+			# or omitted over the size cap) can never be verified by the audit,
+			# so request a full audit instead of announcing a delta re-audit.
+			if [ "${delta_status}" = "findings" ] && ! jq -e --argjson id "${delta_comment_id}" \
+				'any(.[]?; type == "object" and .id == $id and ((.body // "") | test("(^|\n)Audited findings sha256: [0-9a-f]{64}")))' \
+				"${comments}" >/dev/null 2>&1; then
+				delta_since=""
+			fi
+		fi
+		if [ -n "${delta_since}" ]; then
+			delta_dispatch_args=("${dispatch_args[@]}" -f audit_diff_since="${delta_since}")
+			if [ "${delta_status}" = "findings" ]; then
+				delta_dispatch_args+=(-f prior_findings="${delta_comment_id}")
+			fi
+		fi
+	fi
+	if [ -n "${delta_since}" ]; then
+		if gh "${delta_dispatch_args[@]}" >/dev/null 2>&1; then
+			dispatch_ok="true"
+			delta_note="This is a delta re-audit of the changes since \`${delta_since}\`, the last audited head"
+			if [ "${delta_status}" = "findings" ]; then
+				delta_note+="; its open findings are verified again or carried forward."
+			else
+				delta_note+="."
+			fi
+		else
+			# A consumer wrapper that predates the delta inputs rejects them;
+			# retry once with today's arguments instead of burning a cycle.
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=delta_fallback reason=dispatch_rejected cycle=${next_cycle} workflow=${workflow}"
+			if gh "${dispatch_args[@]}" >/dev/null 2>&1; then
+				dispatch_ok="true"
+			fi
+		fi
+	elif gh "${dispatch_args[@]}" >/dev/null 2>&1; then
+		dispatch_ok="true"
+	fi
+	if [ "${dispatch_ok}" != "true" ]; then
 		if [ "${exhausted_retry}" = "true" ]; then
 			# Record the failed retry as a used head attempt (head_attempts counts
 			# failed markers above the cap), so repeated dispatch failures reach
@@ -562,7 +676,9 @@ $(single_pass_marker pending "${head_sha}" "${next_cycle}")"
 		body="## Single-issue security pass
 
 Auto-merge waits for the security audit of \`${head_sha}\` (cycle ${next_cycle} of ${effective_max}). Findings become follow-up issues against this branch; a clean audit re-runs the review, which then merges.
-
+${delta_note:+
+${delta_note}
+}
 $(single_pass_marker pending "${head_sha}" "${next_cycle}")"
 	fi
 	if ! single_pass_post_pending_marker "${body}"; then
@@ -571,8 +687,151 @@ $(single_pass_marker pending "${head_sha}" "${next_cycle}")"
 		single_pass_output true pending_marker_failed
 		return 1
 	fi
-	single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=dispatched cycle=${next_cycle} workflow=${workflow}$([ "${exhausted_retry}" = "true" ] && printf ' reason=exhausted_retry')"
+	single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=dispatched cycle=${next_cycle} workflow=${workflow}$([ "${exhausted_retry}" = "true" ] && printf ' reason=exhausted_retry')$([ -n "${delta_note}" ] && printf ' delta_since=%s' "${delta_since}")"
 	single_pass_output true audit_dispatched
+}
+
+# Shared by report and delta: the pipeline identity, then the
+# installation-token fallback (SECURITY_PASS_AUTHOR_LOGIN_FALLBACK).
+single_pass_resolve_author()
+{
+	# No other report/delta-side call provides the identity of the comment author.
+	SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
+		SECURITY_PASS_AUTHOR_LOGIN="${SECURITY_PASS_AUTHOR_LOGIN_FALLBACK:-}"
+	fi
+	[ -n "${SECURITY_PASS_AUTHOR_LOGIN}" ]
+}
+
+single_pass_delta_full()
+{
+	single_pass_log "mode=delta pr=${SECURITY_PASS_PR_NUMBER:-} head=${SECURITY_PASS_HEAD_SHA:-} outcome=full reason=$1"
+}
+
+# `delta` mode (stuck-states P5a): decide whether this audit may be narrowed to
+# the changes since the last audited head. Fails open to a full audit: on any
+# doubt it writes nothing to GITHUB_ENV.
+single_pass_delta_resolve()
+{
+	local pr_number="${SECURITY_PASS_PR_NUMBER:-}" head_sha="${SECURITY_PASS_HEAD_SHA:-}"
+	local since="${SECURITY_PASS_DELTA_SINCE_INPUT:-}" prior_input="${SECURITY_PASS_PRIOR_FINDINGS_INPUT:-}"
+	local checkout="${SECURITY_PASS_AUDIT_CHECKOUT:-${GITHUB_WORKSPACE:-.}/audit-data}"
+	local delta_comments_file delta_markers delta_resolved source_head source_id source_status source_cycle
+	local delta_payload_line delta_payload_b64 delta_payload_digest prior_out delta_prior_count=0 ancestor_rc=0
+	if [ "${SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED:-true}" = "false" ]; then
+		single_pass_delta_full disabled
+		return 0
+	fi
+	if ! [[ "${since}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${pr_number}" =~ ^[0-9]+$ ]] \
+		|| [ "${since}" = "${head_sha}" ]; then
+		single_pass_delta_full no_delta_input
+		return 0
+	fi
+	if [ -z "${GITHUB_ENV:-}" ]; then
+		single_pass_delta_full github_env_unset
+		return 0
+	fi
+	if [ -n "${GITHUB_WORKSPACE:-}" ] && [ -f "${GITHUB_WORKSPACE}/scripts/gh_helpers.sh" ]; then
+		# shellcheck source=/dev/null
+		source "${GITHUB_WORKSPACE}/scripts/gh_helpers.sh"
+	fi
+	if ! single_pass_resolve_author; then
+		single_pass_delta_full author_unverifiable
+		return 0
+	fi
+	delta_comments_file="$(mktemp)" || { single_pass_delta_full comments_unverifiable; return 0; }
+	# No earlier step in the audit job reads the PR comments.
+	if ! { { if type gh_retry >/dev/null 2>&1; then
+		gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${pr_number}/comments?per_page=100"
+	else
+		gh api --paginate "repos/${REPOSITORY}/issues/${pr_number}/comments?per_page=100"
+	fi; } 2>/dev/null | jq -s 'add // []' > "${delta_comments_file}" 2>/dev/null; } \
+		|| ! jq -e 'type == "array"' "${delta_comments_file}" >/dev/null 2>&1 \
+		|| ! delta_markers="$(single_pass_markers "${delta_comments_file}")"; then
+		rm -f "${delta_comments_file}"
+		single_pass_delta_full comments_unverifiable
+		return 0
+	fi
+	delta_resolved="$(single_pass_delta_source "${delta_markers}" "${head_sha}")"
+	source_head="$(printf '%s' "${delta_resolved}" | cut -f1)"
+	source_id="$(printf '%s' "${delta_resolved}" | cut -f2)"
+	source_status="$(printf '%s' "${delta_resolved}" | cut -f3)"
+	source_cycle="$(printf '%s' "${delta_resolved}" | cut -f4)"
+	# The dispatch inputs are a request; only the trusted markers decide.
+	if [ -z "${delta_resolved}" ] || [ "${source_head}" != "${since}" ] \
+		|| { [ "${source_status}" = "findings" ] && [ "${prior_input}" != "${source_id}" ]; } \
+		|| { [ "${source_status}" = "clean" ] && [ -n "${prior_input}" ]; }; then
+		rm -f "${delta_comments_file}"
+		single_pass_delta_full input_mismatch
+		return 0
+	fi
+	if [ "$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" != "${head_sha}" ]; then
+		rm -f "${delta_comments_file}"
+		single_pass_delta_full checkout_mismatch
+		return 0
+	fi
+	git -C "${checkout}" merge-base --is-ancestor "${since}" "${head_sha}" 2>/dev/null || ancestor_rc=$?
+	if [ "${ancestor_rc}" -ne 0 ]; then
+		rm -f "${delta_comments_file}"
+		single_pass_delta_full not_ancestor
+		return 0
+	fi
+	prior_out=""
+	if [ "${source_status}" = "findings" ]; then
+		delta_payload_line="$(jq -r --argjson id "${source_id}" --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" --arg marker "$(single_pass_marker findings "${source_head}" "${source_cycle}")" '
+			[.[] | select(type == "object" and .id == $id and .user.login == $author and (.body | type) == "string")
+			| .body | split("\n") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))
+			| select(.[-1] == $marker)]
+			| if length == 1 then .[0] else empty end
+			| [map(select(startswith("Audited findings (base64 JSON): ")) | ltrimstr("Audited findings (base64 JSON): ")),
+			   map(select(startswith("Audited findings sha256: ")) | ltrimstr("Audited findings sha256: "))]
+			| if (.[0] | length) == 1 and (.[1] | length) == 1 then .[0][0] + "\t" + .[1][0] else empty end
+		' "${delta_comments_file}" 2>/dev/null)" || delta_payload_line=""
+		rm -f "${delta_comments_file}"
+		delta_payload_b64="$(printf '%s' "${delta_payload_line}" | cut -f1)"
+		delta_payload_digest="$(printf '%s' "${delta_payload_line}" | cut -f2)"
+		prior_out="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/single-pass-prior-findings.json"
+		if [ -z "${delta_payload_line}" ] || ! [[ "${delta_payload_b64}" =~ ^[A-Za-z0-9+/=]+$ ]] || ! [[ "${delta_payload_digest}" =~ ^[0-9a-f]{64}$ ]] \
+			|| ! delta_prior_count="$(PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import base64, binascii, hashlib, json, os, sys
+try:
+	raw = base64.b64decode(sys.argv[1], validate=True)
+except (binascii.Error, ValueError):
+	sys.exit(1)
+if hashlib.sha256(raw).hexdigest() != sys.argv[2]:
+	sys.exit(1)
+try:
+	data = json.loads(raw.decode("utf-8"))
+except (UnicodeDecodeError, json.JSONDecodeError):
+	sys.exit(1)
+if not isinstance(data, list) or not data or not all(
+	isinstance(item, dict) and isinstance(item.get("file"), str) and item["file"].strip() for item in data
+):
+	sys.exit(1)
+tmp = sys.argv[3] + ".tmp"
+with open(tmp, "wb") as handle:
+	handle.write(raw)
+os.replace(tmp, sys.argv[3])
+print(len(data))
+' "${delta_payload_b64}" "${delta_payload_digest}" "${prior_out}" 2>/dev/null)"; then
+			single_pass_delta_full prior_findings_unverifiable
+			return 0
+		fi
+	else
+		rm -f "${delta_comments_file}"
+	fi
+	if ! {
+		printf 'SECURITY_AUDIT_DIFF_SINCE=%s\n' "${since}"
+		printf 'SECURITY_PASS_DELTA_SINCE=%s\n' "${since}"
+		if [ -n "${prior_out}" ]; then
+			printf 'SECURITY_AUDIT_PRIOR_FINDINGS=%s\n' "${prior_out}"
+			printf 'SECURITY_PASS_PRIOR_FINDINGS_FILE=%s\n' "${prior_out}"
+		fi
+	} >> "${GITHUB_ENV}"; then
+		single_pass_delta_full github_env_write_failed
+		return 0
+	fi
+	single_pass_log "mode=delta pr=${pr_number} head=${head_sha} outcome=delta since=${since} prior_findings=${delta_prior_count}"
 }
 
 single_pass_report()
@@ -581,6 +840,12 @@ single_pass_report()
 	local findings="${SECURITY_PASS_FINDINGS:-}" default_branch="${DEFAULT_BRANCH:-}" comments_file status cycle body review_workflow pr_head report_ids report_ids_invalid="false"
 	local extensions=0
 	local max_cycles="${MAX_SECURITY_PASS_CYCLES:-5}"
+	local delta_on="false" carry_since="${SECURITY_PASS_DELTA_SINCE:-}" carry_prior="${SECURITY_PASS_PRIOR_FINDINGS_FILE:-}"
+	local current_ids_json="" carry_touched carry_git_ok carry_candidates="[]" carry_open carry_listing_ok="true" carried="[]" carried_count=0 carried_ids=""
+	local audited_json="" audited_b64="" audited_digest=""
+	if [ "${SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED:-true}" != "false" ]; then
+		delta_on="true"
+	fi
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
 	if ! [[ "${pr_number}" =~ ^[0-9]+$ ]] || ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
 		single_pass_log "mode=report pr=${pr_number} outcome=skip reason=missing_input"
@@ -611,12 +876,7 @@ single_pass_report()
 		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=pr_head_mismatch"
 		return 0
 	fi
-	# No other report-side call provides the identity of the comment author.
-	SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
-	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
-		SECURITY_PASS_AUTHOR_LOGIN="${SECURITY_PASS_AUTHOR_LOGIN_FALLBACK:-}"
-	fi
-	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
+	if ! single_pass_resolve_author; then
 		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=author_unverifiable"
 		return 0
 	fi
@@ -651,6 +911,67 @@ single_pass_report()
 		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=pending_unverifiable"
 		return 0
 	fi
+	if [ "${delta_on}" = "true" ] && [ "${outcome}" = "success" ] && [[ "${findings}" =~ ^[0-9]+$ ]]; then
+		current_ids_json="$(printf '%s' "${SECURITY_PASS_FINDING_IDS_B64:-}" | base64 -d 2>/dev/null | jq -c --argjson count "${findings}" 'select(type == "array" and length == $count and (unique | length) == length and all(.[]; type == "string" and length > 0 and test("^[^<>\\r\\n]+$")))' 2>/dev/null)" || current_ids_json=""
+		# Delta carry-forward (stuck-states P5a): only after a delta audit that
+		# was given prior findings.
+		if [[ "${carry_since}" =~ ^[0-9a-f]{40}$ ]] && [ -n "${carry_prior}" ] && [ -r "${carry_prior}" ]; then
+			carry_git_ok="true"
+			if ! carry_touched="$(git -C "${GITHUB_WORKSPACE:-.}/audit-data" diff --no-renames --name-only "${carry_since}..${head_sha}" 2>/dev/null)"; then
+				# Fail closed: without the touched-file list every prior finding
+				# that was not re-reported is carried.
+				carry_git_ok="false"
+				carry_touched=""
+			fi
+			carry_candidates="$(jq -c --argjson current "${current_ids_json:-[]}" --argjson git_ok "${carry_git_ok}" \
+				--argjson touched "$(printf '%s' "${carry_touched}" | jq -R -s -c 'split("\n") | map(select(length > 0))')" '
+				[.[]? | select(type == "object" and (.finding_id | type) == "string" and (.finding_id | test("^[^<>\\r\\n]+$")) and (.file | type) == "string")
+				| select(.finding_id as $f | any($current[]; . == $f) | not)
+				| select(($git_ok | not) or ((.file | gsub("^\\s+|\\s+$"; "") | ltrimstr("./")) as $p | any($touched[]; . == $p) | not))]
+				| unique_by(.finding_id)
+			' "${carry_prior}" 2>/dev/null)" || carry_candidates="[]"
+			if [ "$(jq -r 'length' <<< "${carry_candidates}" 2>/dev/null || echo 0)" -gt 0 ]; then
+				if carry_open="$(single_pass_open_followup_ids "${SECURITY_PASS_AUDIT_BRANCH}" "$(jq -c '[.[].finding_id]' <<< "${carry_candidates}")")"; then
+					carried="$(jq -c --argjson open "${carry_open}" '[.[] | select(.finding_id as $f | any($open[]; . == $f))]' <<< "${carry_candidates}" 2>/dev/null)" || carried="${carry_candidates}"
+				else
+					# Fail closed: an unverifiable listing carries every candidate.
+					carry_listing_ok="false"
+					carried="${carry_candidates}"
+				fi
+			fi
+			carried_count="$(jq -r 'length' <<< "${carried}" 2>/dev/null || echo 0)"
+			if [ "${carried_count}" -gt 0 ]; then
+				carried_ids="$(jq -r '[.[].finding_id] | join(", ")' <<< "${carried}")"
+				findings=$((findings + carried_count))
+				status="findings"
+				if [ -n "${current_ids_json}" ]; then
+					SECURITY_PASS_FINDING_IDS_B64="$(jq -c --argjson add "$(jq -c '[.[].finding_id]' <<< "${carried}")" '. + $add' <<< "${current_ids_json}" | tr -d '
+' | base64 | tr -d '
+')"
+				fi
+				single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=carried carried=${carried_count} since=${carry_since} listing_ok=${carry_listing_ok}"
+			fi
+		fi
+		if [ "${status}" = "findings" ]; then
+			# Store the audited findings for the next cycle's delta re-audit.
+			if [ -n "${SECURITY_PASS_FINDINGS_FILE:-}" ] && [ -r "${SECURITY_PASS_FINDINGS_FILE}" ] \
+				&& audited_json="$(jq -c --argjson carried "${carried}" '
+					select(type == "array" and all(.[]; type == "object"))
+					| [(. + $carried)[] | {finding_id, owasp_or_stride_category, severity, confidence, file, line, exploit_scenario, recommendation} | with_entries(select(.value != null))]
+					| unique_by(.finding_id) | select(length > 0)
+				' "${SECURITY_PASS_FINDINGS_FILE}" 2>/dev/null)" && [ -n "${audited_json}" ]; then
+				audited_b64="$(printf '%s' "${audited_json}" | base64 | tr -d '
+')"
+				audited_digest="$(printf '%s' "${audited_json}" | sha256sum | cut -d' ' -f1)"
+				if [ "${#audited_b64}" -gt 40000 ] || ! [[ "${audited_digest}" =~ ^[0-9a-f]{64}$ ]]; then
+					audited_b64=""
+				fi
+			fi
+			if [ -z "${audited_b64}" ]; then
+				single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=findings reason=prior_findings_omitted"
+			fi
+		fi
+	fi
 	case "${status}" in
 		clean) body="## Single-issue security pass: clean
 
@@ -664,6 +985,16 @@ The audit of \`${head_sha}\` filed follow-up issues against this branch. Their m
 			else
 				report_ids_invalid="true"
 				echo "::warning::Audit finding IDs are missing or invalid; re-dispatching review so the gate can alert instead of silencing these findings."
+			fi
+			if [ -n "${carried_ids}" ]; then
+				if [ "${carry_listing_ok}" = "true" ]; then
+					body+=$'\n\n'"Carried forward (file untouched since \`${carry_since}\`, follow-up open): ${carried_ids}"
+				else
+					body+=$'\n\n'"Carried forward (file untouched since \`${carry_since}\`, follow-up state unverifiable): ${carried_ids}"
+				fi
+			fi
+			if [ -n "${audited_b64}" ]; then
+				body+=$'\n\n'"Audited findings (base64 JSON): ${audited_b64}"$'\n'"Audited findings sha256: ${audited_digest}"
 			fi ;;
 		*) body="## Single-issue security pass: audit failed
 
@@ -691,8 +1022,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 			single_pass_gate
 			;;
 		report) single_pass_report ;;
+		delta) single_pass_delta_resolve ;;
 		*)
-			echo "usage: $0 gate|status|report" >&2
+			echo "usage: $0 gate|status|report|delta" >&2
 			exit 2
 			;;
 	esac

@@ -56,8 +56,69 @@ Tick API budget (CLAUDE.md §15): at most one identity read (none with
 comment write per ticked key. No per-entry reads and no compare calls: the
 ancestor check is local git.
 
+Resolving released entries (stuck-states P10, Refs #8291):
+
+  operator_step_issue.py resolve --repo OWNER/REPO [--trusted-login LOGIN]
+
+The poller (`.github/workflows/orchestrate_poll.yml`, step "Resolve released
+operator steps") runs it on every tick. It ticks an entry only when its key is
+`pr-<n>` or `project-<n>`, its authoritative comment (highest id by the
+pipeline login) has a source-sha line and no done/resolved marker, and every
+unticked step is a release step: its `Stays off until then:` value starts
+with `@stable contains` (RELEASE_CONDITION_RE, kept in sync with
+scripts/activation_verify.sh), or it has no such line and its title is a
+release verb naming `stable` or the consumer sync. A step whose own dormant
+line names anything else is a human step whatever its title says, a
+title-only step whose title names a secret, token, credential, password,
+variable, setting, permission, account or key is a human step too, and an
+entry that also holds a real human step (a secret, a setting) is never ticked. Containment is `GET compare/<source>...stable`:
+only `ahead` or `identical` count; `behind`, `diverged` or an unreadable
+status do not. Compares are cached per commit and capped at
+MAX_RESOLVE_COMPARES per run, oldest entry first; the first compare error
+(for example a 404 in a repository with no `stable` tag) halts the rest of
+the run's compares. Ticking appends one superseding comment (every `- [ ]`
+becomes `- [x]`, plus `<!-- ai:operator-step:resolved release=stable
+status=ahead|identical -->`); `tick` treats that marker as done.
+When no unticked step is left on any entry (and at least one entry exists),
+the tracker was not reopened by a person (`state_reason` `reopened`), and a
+re-read of the comments shows no change, it posts one
+`<!-- ai:operator-step:auto-closed -->` comment (skipped when a trusted one
+newer than every entry already exists, i.e. an earlier close PATCH failed)
+and closes the tracker as `completed`. One more comment read after the
+close reopens the tracker (`state=open`, reason `reopened_after_close`) when
+an entry was written in between; `upsert` re-runs its open-tracker listing
+after posting and reopens a tracker that is no longer listed, so an entry
+never sits on a closed tracker. Both checks fail safe: a failed read after
+the close reopens the tracker before exiting 2 (reason
+`after_close_read_failed`), and a failed `upsert` re-listing or reopen exits 3
+(entry posted, tracker state unknown). This
+narrows the close race; it does not make it atomic. A tracker the pipeline reopened is then
+treated like one a person reopened and is never closed again. Kill switch
+`OPERATOR_STEP_AUTO_RESOLVE_ENABLED` (default `true`): `false` makes it a
+no-op with no API call. Output is one JSON line: `issue`, `ticked`,
+`skipped` (`{reason: count}`), `compares`, `unticked`, `closed`. Each key logs
+`OPERATOR_STEP_RESOLVE key= outcome=ticked|already_done|not_release|
+no_source_sha|deferred|not_contained|compare_failed status=` and the close
+decision logs `OPERATOR_STEP_RESOLVE op=close issue= outcome=closed|open
+reason=` on stderr. The needs-human digest is never touched.
+
+Resolve API budget (CLAUDE.md §14): one tracker listing (and nothing else
+when no tracker is open); with a tracker, at most one identity read (none
+with `--trusted-login`), one paginated comment read, at most
+MAX_RESOLVE_COMPARES compare calls, one comment write per ticked key, and,
+only when closing, two more paginated comment reads, one single-issue read
+of the tracker right before the close (a reopen during the tick keeps it
+open, reason `reopened`), at most one comment write and one issue PATCH (a
+second PATCH only to reopen). Every pipeline reopen sends
+`state_reason=reopened` explicitly. `upsert` adds one open-tracker listing,
+and a PATCH only to reopen, after it posts an entry. The poller's
+tracking-issue listing and the dependency-wait GraphQL return neither this
+tracker nor its comments.
+
 Output is one JSON line: `issue`, `url`, `created`, `entries`. Exit 0 on
-success, 1 on bad arguments, 2 when a GitHub call failed.
+success, 1 on bad arguments, 2 when a GitHub call failed, 3 when `upsert`
+posted its entry but the open-tracker re-check after the post (or the reopen
+it triggered) failed (output `{"error": ..., "posted": true}`).
 
 GitHub API budget (CLAUDE.md §15): one identity read, bounded tracker list
 retries, a label lookup and issue create only when absent, and one paginated
@@ -84,8 +145,44 @@ never auto-releases a parked item.
   operator_step_issue.py needs-human prune --repo OWNER/REPO [--trusted-login LOGIN]
 
 `park` prints `issue`, `url`, `item`, `outcome` (parked|updated|skip),
-`newly_parked`, `entries`, `overflow`. The caller sends the single CRITICAL
-alert when `newly_parked` is true; this module never talks to Telegram.
+`newly_parked`, `entries`, `overflow` and `parking`: the digest entry's
+`parked=` stamp, the literal `overflow` when the item is only in the overflow
+list or dropped count, or null on the disabled path. This module never talks
+to Telegram.
+
+At most one persisted CRITICAL alert attempt per parking (stuck-states P6b,
+Refs #8291). The caller (unblock judge, poller project park) runs, after
+every successful park that returns a `parking`:
+
+  operator_step_issue.py needs-human alert-claim --repo OWNER/REPO --item N
+      --parking STAMP|overflow [--trusted-login LOGIN]
+  operator_step_issue.py needs-human alert-confirm --repo OWNER/REPO --item N
+      --parking STAMP|overflow --comment-id ID --message-id ID
+
+The caller first checks that Telegram can send at CRITICAL (no claim
+otherwise). `alert-claim` reads the item's comments; a claim comment by the
+pipeline login whose last non-empty line is
+`<!-- ai:unblock-park-alert:v1 item=N parked=<STAMP|overflow> state=attempted|confirmed[ message=ID] -->`
+for the same parking (or for `overflow`, which covers a later entry stamp)
+means the attempt was already made: `claimed` false, reason
+`already_attempted`. Otherwise it posts one `state=attempted` claim, re-reads
+the comments, and wins only when its claim is the lowest-id matching trusted
+claim (`lost_race` / `claim_unverified` otherwise). Only a winner sends, once,
+with no retry; a numeric Telegram message id is then recorded in place with
+`alert-confirm` (`state=confirmed message=ID`). Any write or re-read failure
+exits 2 and the caller does not send: a lost page is preferred to a duplicate
+one, and the digest stays the durable notice. The comment's `created_at` is
+the attempt time. The `ai:unblock` prefix keeps the claim out of the unblock
+scan's new-evidence check and out of the judge's round count. Each outcome
+logs `NEEDS_HUMAN_ALERT item= parking= outcome=claimed|skip|confirmed|failed
+reason=` on stderr. The kill switch below makes both a no-op.
+
+Alert API budget (CLAUDE.md §15), per call: alert-claim makes at most one
+identity read (none with --trusted-login), two paginated comment reads on the
+item and one comment POST (one read and no write when already attempted);
+alert-confirm makes one comment PATCH. The judge's run-start comment read is
+minutes stale and the digest listing carries no item comments, so neither can
+answer the claim question.
 `prune` drops entries whose item is no longer open with `ai:needs-human`
 (merged, closed or cleared by a person) and promotes overflow items into
 free slots; whenever it read the digest it prints `items`, the item numbers the
@@ -156,6 +253,16 @@ class UsageError(Exception):
 
 class ApiError(Exception):
 	"""A GitHub call failed: exit 2."""
+
+
+class TrackerRecheckError(ApiError):
+	"""`upsert` posted its entry, but the open-tracker re-check after the post failed: exit 3.
+
+	The entry is on the tracker; only whether the tracker is still open is
+	unknown (or a reopen failed). A distinct exit code lets the caller warn
+	accurately and keep its own follow-up (activation_verify.sh still posts its
+	verdict comment) instead of treating the entry write as lost.
+	"""
 
 
 def _clean(value: object, limit: int = MAX_FIELD) -> str:
@@ -249,6 +356,12 @@ def render_entry(key: str, source: str, steps: list[dict], source_sha: str | Non
 		instructions = _clean(step.get("instructions"))
 		for instruction_line in instructions.split("\n"):
 			if instruction_line.strip():
+				# Only the line rendered from `dormant_until` may have the
+				# dormant-line shape: resolve's _unticked_steps reads a step's
+				# last indented line as its condition, so an instruction line
+				# that looks like one is prefixed and can never pass for it.
+				if DORMANT_LINE_RE.match(instruction_line.strip()):
+					instruction_line = "Note: " + instruction_line.strip()
 				lines.append(f"  {instruction_line.rstrip()}")
 		dormant = _clean(step.get("dormant_until"), 300)
 		if dormant:
@@ -293,6 +406,39 @@ def load_steps(path: str) -> list[dict]:
 	if len(steps) > MAX_STEPS:
 		raise UsageError(f"--steps-file exceeds {MAX_STEPS} operator steps")
 	return steps
+
+
+def _reopen_tracker_after_post(repo: str, number: int) -> None:
+	"""Reopen the tracker when `resolve` closed it while this entry was posted.
+
+	Stuck-states P10 close race: `resolve` re-reads the comments before and
+	after its close PATCH, but an entry posted after that last read lands on a
+	closed tracker that no later run lists. CLAUDE.md section 14 audit: the
+	only state this writer already reads is the open-tracker listing, so it
+	re-runs that listing once (no new endpoint) and reopens the tracker when
+	it is no longer listed. Reopening is idempotent with `resolve`'s own
+	reopen, and the reopened tracker is never closed automatically again.
+	A failed listing or a failed reopen raises TrackerRecheckError (exit 3):
+	the entry is already posted, but whether the tracker is still open is
+	unknown, so the caller warns a person (activation_verify.sh sends its
+	WARNING and still posts the verdict comment; the unblock judge records
+	`ops_failed`) instead of silently stranding the entry on a closed tracker.
+	The re-listing asks for 100 issues so a crowded label listing cannot hide
+	an open tracker and trigger a needless reopen.
+	"""
+	try:
+		listed = json.loads(_gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=100"]) or "[]")
+	except (ApiError, ValueError) as exc:
+		print(f"OPERATOR_STEP_RESOLVE op=upsert_recheck issue={number} outcome=error reason=listing_failed ({type(exc).__name__})", file=sys.stderr)
+		raise TrackerRecheckError(f"operator-step entry posted, but the tracker re-listing after the post failed: {type(exc).__name__}") from exc
+	if any(isinstance(issue, dict) and issue.get("number") == number for issue in (listed if isinstance(listed, list) else [])):
+		return
+	try:
+		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open", "-f", "state_reason=reopened"])
+	except ApiError as exc:
+		print(f"OPERATOR_STEP_RESOLVE op=upsert_recheck issue={number} outcome=error reason=reopen_failed", file=sys.stderr)
+		raise TrackerRecheckError(f"operator-step entry posted on closed tracker #{number}, and reopening it failed") from exc
+	print(f"OPERATOR_STEP_RESOLVE op=upsert_recheck issue={number} outcome=reopened reason=closed_during_post", file=sys.stderr)
 
 
 def upsert(repo: str, key: str, source: str, steps: list[dict], source_sha: str | None = None) -> dict:
@@ -359,6 +505,7 @@ def upsert(repo: str, key: str, source: str, steps: list[dict], source_sha: str 
 		}
 		if (matches[-1]["body"] if matches else legacy.get(key, "")).replace("\r\n", "\n").rstrip() != entry:
 			_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={entry}"])
+			_reopen_tracker_after_post(repo, number)
 		# Never patch the oldest comment with a proposal from a stale listing:
 		# a later writer's higher-id comment would otherwise be lost.
 		return {
@@ -445,7 +592,7 @@ def tick(repo: str, stable_sha: str, repo_dir: str = ".", trusted_login: str | N
 		body = str(latest[key].get("body") or "").replace("\r\n", "\n")
 		lines = [line.strip() for line in body.split("\n")]
 		source_match = SOURCE_SHA_RE.match(lines[1]) if len(lines) > 1 else None
-		if any(DONE_RE.match(line) for line in lines):
+		if any(DONE_RE.match(line) or RESOLVED_RE.match(line) for line in lines):
 			outcome = "already_done"
 		elif not source_match:
 			outcome = "no_source_sha"
@@ -459,6 +606,267 @@ def tick(repo: str, stable_sha: str, repo_dir: str = ".", trusted_login: str | N
 		else:
 			result["skipped"][outcome] = result["skipped"].get(outcome, 0) + 1
 		print(f"OPERATOR_STEP_TICK key={key} outcome={outcome} stable={stable_sha[:7]}", file=sys.stderr)
+	return result
+
+
+# --- resolving released entries (stuck-states P10) -----------------------------
+
+# Keep in sync with RELEASE_CONDITION_RE in scripts/activation_verify.sh (a test checks parity).
+RELEASE_CONDITION_RE = re.compile(r"^@?stable\s+contains\b", re.I)
+RESOLVED_RE = re.compile(r"^<!-- ai:operator-step:resolved release=stable status=(ahead|identical) -->$")
+RELEASE_STEP_TITLE_RE = re.compile(
+	r"^(?:promote|tag|release|publish|cut|sync|propagate|roll out)\b[^\n]{0,200}?"
+	r"(?:@stable|\bstable\b|ai update workflows|update[ _-]workflows|wrapper sync|consumer sync)",
+	re.I,
+)
+RELEASE_ENTRY_KEY_RE = re.compile(r"^(?:pr|project)-[1-9][0-9]{0,9}$")
+AUTO_CLOSED_MARKER = "<!-- ai:operator-step:auto-closed -->"
+AUTO_CLOSED_TEXT = (
+	"Every step listed here is done, so the poller closed this issue. "
+	"A new operator step opens a new issue."
+)
+# A title-only release step (no dormant line) must not name something only a
+# person can supply: "Publish the DEPLOY_TOKEN secret to stable" stays a human step.
+# Letter-only lookarounds instead of `\b`: `_` is a regex word character, so
+# `\b` never fires inside SCREAMING_SNAKE names such as `NPM_TOKEN` or `API_KEY`.
+HUMAN_OBJECT_TITLE_RE = re.compile(
+	r"(?<![A-Za-z])(?:secrets?|tokens?|credentials?|passwords?|variables?|settings?|permissions?|accounts?|keys?)(?![A-Za-z])",
+	re.I,
+)
+MAX_RESOLVE_COMPARES = 10
+RELEASE_REF = "stable"
+UNTICKED_STEP_RE = re.compile(r"^- \[ \] \*\*(.*)\*\*$")
+DORMANT_LINE_RE = re.compile(r"^Stays off until then: `(.*)`\.$")
+
+
+def operator_step_auto_resolve_enabled() -> bool:
+	return os.environ.get("OPERATOR_STEP_AUTO_RESOLVE_ENABLED", "true").strip().lower() != "false"
+
+
+def _unticked_steps(body: str) -> list[tuple[str, str]]:
+	"""(title, dormant text) per `- [ ] **Title**` line.
+
+	render_entry writes the dormant line last in a step, so only the step's
+	last indented line counts; an instruction line cannot stand in for it.
+	"""
+	steps: list[list] = []
+	current: list | None = None
+	for raw in str(body or "").replace("\r\n", "\n").split("\n"):
+		if raw.startswith("- ["):
+			match = UNTICKED_STEP_RE.match(raw.rstrip())
+			current = [match.group(1), []] if match else None
+			if current is not None:
+				steps.append(current)
+		elif current is not None and raw.startswith("  ") and raw.strip():
+			current[1].append(raw.strip())
+		elif current is not None and raw.strip():
+			current = None
+	result = []
+	for title, indented in steps:
+		dormant_match = DORMANT_LINE_RE.match(indented[-1]) if indented else None
+		result.append((title, dormant_match.group(1) if dormant_match else ""))
+	return result
+
+
+def _is_release_entry(body: str) -> bool:
+	"""True when at least one step is unticked and every unticked step is a release step."""
+	steps = _unticked_steps(body)
+	return bool(steps) and all(
+		# The step's own dormant line decides; a release-verb title counts only
+		# for a step that has no dormant line, so a human step such as "Sync the
+		# DEPLOY_TOKEN secret to the stable environment" (dormant `DEPLOY_TOKEN`)
+		# is never ticked. `dormant_until` is optional, so a title-only step also
+		# must not name a secret, token, variable, setting or similar. A `_` goes
+		# in at each camelCase boundary first, so `npmToken` or `apiKey` count too.
+		RELEASE_CONDITION_RE.match(dormant)
+		or (not dormant and RELEASE_STEP_TITLE_RE.match(title)
+			and not HUMAN_OBJECT_TITLE_RE.search(re.sub(r"(?<=[a-z])(?=[A-Z])", "_", title)))
+		for title, dormant in steps
+	)
+
+
+def _count_unticked(body: str) -> int:
+	return sum(1 for line in str(body or "").replace("\r\n", "\n").split("\n") if line.startswith("- [ ]"))
+
+
+def _release_status(repo: str, sha: str, cache: dict[str, str]) -> str:
+	"""ahead | identical | behind | diverged | unknown for `<sha>...stable`; ApiError propagates."""
+	if sha not in cache:
+		raw = _gh(["api", f"repos/{repo}/compare/{sha}...{RELEASE_REF}", "--jq", ".status"]).strip()
+		cache[sha] = raw if raw in ("ahead", "identical", "behind", "diverged") else "unknown"
+	return cache[sha]
+
+
+def _render_resolved(body: str, status: str, source_sha: str) -> str:
+	lines = [
+		"- [x]" + line[len("- [ ]"):] if line.startswith("- [ ]") else line
+		for line in body.replace("\r\n", "\n").rstrip().split("\n")
+	]
+	lines += [
+		"",
+		f"<!-- ai:operator-step:resolved release={RELEASE_REF} status={status} -->",
+		f"Done: the `{RELEASE_REF}` tag includes the merge `{source_sha[:7]}` (compare status `{status}`); ticked by the poller.",
+	]
+	return "\n".join(lines)
+
+
+def _resolve_open_state(latest: dict[str, dict], legacy: list[tuple[str, str]], ticked: set[str]) -> tuple[int, int]:
+	"""(unticked steps, entry count): authoritative comments first, legacy body sections otherwise."""
+	unticked = 0
+	for key, comment in latest.items():
+		if key not in ticked:
+			unticked += _count_unticked(str(comment.get("body") or ""))
+	for key, text in legacy:
+		if key not in latest:
+			unticked += _count_unticked(text)
+	return unticked, len(set(latest) | {key for key, _ in legacy})
+
+
+def _resolve_log(**fields: object) -> None:
+	print("OPERATOR_STEP_RESOLVE " + " ".join(f"{name}={value}" for name, value in fields.items()), file=sys.stderr)
+
+
+def _tracker_still_closable(repo: str, number: int) -> bool:
+	"""True when a fresh read shows the tracker open and not reopened.
+
+	CLAUDE.md section 14 audit: the tick's only tracker read is the listing at
+	its start, and the comment reads carry no issue state, so one single-issue
+	GET right before the close is the only way to see a reopen made during the
+	tick. An unreadable response raises ApiError, so nothing is closed.
+	"""
+	try:
+		current = json.loads(_gh(["api", f"repos/{repo}/issues/{number}"]) or "{}")
+	except ValueError as exc:
+		raise ApiError(f"unreadable operator-step tracker: {exc}") from exc
+	if not isinstance(current, dict):
+		raise ApiError("unreadable operator-step tracker: expected an issue object")
+	return current.get("state") == "open" and str(current.get("state_reason") or "") != "reopened"
+
+
+def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX_RESOLVE_COMPARES) -> dict:
+	if not REPO_RE.match(repo):
+		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
+	result: dict = {"issue": None, "ticked": [], "skipped": {}, "compares": 0, "unticked": None, "closed": False}
+	if not operator_step_auto_resolve_enabled():
+		_resolve_log(op="resolve", outcome="skip", reason="disabled")
+		result["reason"] = "disabled"
+		return result
+	listing = _gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"])
+	try:
+		issues = json.loads(listing or "[]")
+	except ValueError as exc:
+		raise ApiError(f"unreadable issue list: {exc}") from exc
+	candidates = find_issues(issues)
+	if not candidates:
+		return result
+	tracker = candidates[0]
+	number = tracker.get("number")
+	if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+		raise ApiError("unreadable issue list: operator-step tracker has no issue number")
+	result["issue"] = number
+	login = (trusted_login or "").strip() or _gh(["api", "user", "--jq", ".login"]).strip()
+	if not login:
+		raise ApiError("operator-step resolve identity is unavailable")
+	latest = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+	cache: dict[str, str] = {}
+	halted = False
+	resolved: set[str] = set()
+	for key in sorted(latest, key=lambda entry_key: latest[entry_key]["id"]):
+		body = str(latest[key].get("body") or "").replace("\r\n", "\n")
+		raw_lines = body.split("\n")
+		lines = [line.strip() for line in raw_lines]
+		source_match = SOURCE_SHA_RE.match(lines[1]) if len(lines) > 1 else None
+		status = "-"
+		if any(DONE_RE.match(line) or RESOLVED_RE.match(line) for line in lines) or not any(line.startswith("- [ ]") for line in raw_lines):
+			outcome = "already_done"
+		elif not RELEASE_ENTRY_KEY_RE.match(key) or not _is_release_entry(body):
+			outcome = "not_release"
+		elif not source_match:
+			outcome = "no_source_sha"
+		else:
+			sha = source_match.group(1)
+			if halted or (sha not in cache and result["compares"] >= max_compares):
+				outcome = "deferred"
+			else:
+				try:
+					if sha not in cache:
+						result["compares"] += 1
+					status = _release_status(repo, sha, cache)
+				except ApiError:
+					# Fail closed: nothing is ticked on an unreadable compare, and
+					# the rest of this run's compares are skipped.
+					halted = True
+					outcome = "compare_failed"
+				else:
+					outcome = "ticked" if status in ("ahead", "identical") else "not_contained"
+		if outcome == "ticked":
+			_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={_render_resolved(body, status, sha)}"])
+			result["ticked"].append(key)
+			resolved.add(key)
+		else:
+			result["skipped"][outcome] = result["skipped"].get(outcome, 0) + 1
+		_resolve_log(key=key, outcome=outcome, status=status)
+	legacy = parse_entries(str(tracker.get("body") or ""))
+	unticked, entry_count = _resolve_open_state(latest, legacy, resolved)
+	result["unticked"] = unticked
+	if entry_count == 0:
+		reason = "no_entries"
+	elif unticked > 0:
+		reason = "unticked"
+	elif str(tracker.get("state_reason") or "") == "reopened":
+		# A person (or the pipeline's close-race reopen) reopened the tracker:
+		# never close it again automatically.
+		reason = "reopened"
+	else:
+		recheck_comments = load_entry_comments(repo, number)
+		recheck_latest = _authoritative_entry_comments(recheck_comments, login)
+		recheck_unticked, _ = _resolve_open_state(recheck_latest, legacy, set())
+		if recheck_unticked != 0 or set(recheck_latest) - set(latest):
+			reason = "recheck_changed"
+		elif not _tracker_still_closable(repo, number):
+			# The listing above is minutes of round trips old: a person who
+			# closed and reopened the tracker meanwhile keeps it open.
+			reason = "reopened"
+		else:
+			newest_entry = max((comment["id"] for comment in recheck_latest.values()), default=0)
+			already_posted = any(
+				isinstance(comment.get("id"), int) and comment["id"] > newest_entry
+				and (comment.get("user") if isinstance(comment.get("user"), dict) else {}).get("login") == login
+				and str(comment.get("body") or "").replace("\r\n", "\n").split("\n", 1)[0].strip() == AUTO_CLOSED_MARKER
+				for comment in recheck_comments
+			)
+			if not already_posted:
+				_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={AUTO_CLOSED_MARKER}\n{AUTO_CLOSED_TEXT}"])
+			# Known residual: the fresh read above and this PATCH are not atomic
+			# (the issues API has no conditional update), so a person who reopens
+			# the tracker in the gap between them is overwritten by this close.
+			_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=closed", "-f", "state_reason=completed"])
+			result["closed"] = True
+			reason = "closed"
+			# The re-read above is not atomic with the close: an entry written
+			# in between would sit on a closed tracker no later run lists. One
+			# more read after the close reopens it, and upsert's own re-listing
+			# (_reopen_tracker_after_post) covers a post whose listing is read
+			# after this close. This narrows the window; it does not close it:
+			# a post whose re-listing ran before the close PATCH and that lands
+			# after this read is not seen by either check.
+			try:
+				after_close = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+			except ApiError:
+				# Fail safe: without the read, a racing entry cannot be ruled
+				# out, so reopen the tracker before reporting the error.
+				try:
+					_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open", "-f", "state_reason=reopened"])
+				except ApiError:
+					_resolve_log(op="close", issue=number, outcome="closed", reason="after_close_reopen_failed")
+					raise
+				_resolve_log(op="close", issue=number, outcome="open", reason="after_close_read_failed")
+				raise
+			if any(key not in recheck_latest or comment["id"] != recheck_latest[key]["id"] for key, comment in after_close.items()):
+				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open", "-f", "state_reason=reopened"])
+				result["closed"] = False
+				reason = "reopened_after_close"
+	_resolve_log(op="close", issue=number, outcome="closed" if result["closed"] else "open", reason=reason)
 	return result
 
 
@@ -476,6 +884,14 @@ NEEDS_HUMAN_ENTRY_RE = re.compile(
 )
 NEEDS_HUMAN_OVERFLOW_RE = re.compile(r"^<!-- ai:needs-human:overflow items=([0-9,]*) dropped=([0-9]+) -->$")
 NEEDS_HUMAN_STOP_RE = re.compile(r"^[a-z][a-z-]{0,63}$")
+_NEEDS_HUMAN_PARKING_PATTERN = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z|overflow"
+NEEDS_HUMAN_PARKING_RE = re.compile(rf"^(?:{_NEEDS_HUMAN_PARKING_PATTERN})$")
+NEEDS_HUMAN_ALERT_MARKER_RE = re.compile(
+	rf"^<!-- ai:unblock-park-alert:v1 item=([1-9][0-9]{{0,9}}) parked=({_NEEDS_HUMAN_PARKING_PATTERN}) "
+	r"state=(attempted|confirmed)(?: message=([1-9][0-9]{0,19}))? -->$"
+)
+NEEDS_HUMAN_ALERT_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
+NEEDS_HUMAN_ALERT_TEXT = "Needs-human alert attempt recorded for this parking; the needs-human digest lists this item."
 NEEDS_HUMAN_INTRO = (
 	"Every automated judge round is spent for the items below. They stay open and wait "
 	"for a person to decide. An entry disappears once its item is merged or closed, or "
@@ -630,7 +1046,8 @@ def needs_human_park(
 	log_reason = reason_text.split(" ", 1)[0] if reason_text else stop
 	if not needs_human_enabled():
 		_needs_human_log(item, kind, log_reason, "skip")
-		return {"issue": None, "url": "", "item": item, "outcome": "skip", "reason": "disabled", "newly_parked": False}
+		return {"issue": None, "url": "", "item": item, "outcome": "skip", "reason": "disabled", "newly_parked": False,
+			"parking": None}
 	login = _resolve_login(trusted_login)
 	if not item_labeled:
 		# Label first: prune keys on the label, so an entry is never listed without it.
@@ -683,7 +1100,7 @@ def _needs_human_park_digest(repo: str, item: int, kind: str, stop: str, reason_
 				continue
 			_needs_human_log(item, kind, log_reason, "parked")
 			return {"issue": number, "url": created.get("html_url", ""), "item": item, "outcome": "parked",
-				"newly_parked": True, "entries": 1, "overflow": 0}
+				"newly_parked": True, "entries": 1, "overflow": 0, "parking": stamp}
 		body = str(digest.get("body") or "")
 		entries, overflow, dropped = parse_digest(body)
 		if newly_parked is None:
@@ -708,8 +1125,14 @@ def _needs_human_park_digest(repo: str, item: int, kind: str, stop: str, reason_
 		raise ApiError(f"needs-human digest did not converge after {MAX_UPSERT_ATTEMPTS} attempts")
 	outcome = "parked" if newly_parked else "updated"
 	_needs_human_log(item, kind, log_reason, outcome)
+	# The parking identity comes from the rendered body: an entry the body
+	# limit spilled into overflow is an overflow parking (prune later promotes
+	# it with a fresh stamp, which an `overflow` alert claim still covers).
+	rendered_entries = parse_digest(new_body)[0]
+	parking = rendered_entries[item]["parked"] if item in rendered_entries else "overflow"
 	return {"issue": int(digest["number"]) if digest else None, "url": (digest or {}).get("html_url", ""), "item": item,
-		"outcome": outcome, "newly_parked": bool(newly_parked), "entries": len(entries), "overflow": len(overflow)}
+		"outcome": outcome, "newly_parked": bool(newly_parked), "entries": len(entries), "overflow": len(overflow),
+		"parking": parking}
 
 
 def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | None = None) -> dict:
@@ -798,6 +1221,112 @@ def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | No
 		"entries": len(entries), "overflow": len(overflow), "items": sorted(set(entries) | set(overflow))}
 
 
+# --- at most one persisted alert attempt per parking (stuck-states P6b) -------
+
+
+def _needs_human_alert_log(item: object, parking: object, outcome: str, reason: str) -> None:
+	safe_parking = re.sub(r"[^A-Za-z0-9_.:-]", "_", str(parking))[:40] or "none"
+	safe_reason = re.sub(r"[^A-Za-z0-9_.:-]", "_", reason)[:80] or "none"
+	print(f"NEEDS_HUMAN_ALERT item={item} parking={safe_parking} outcome={outcome} reason={safe_reason}", file=sys.stderr)
+
+
+def _validate_alert_args(repo: str, item: object, parking: object) -> None:
+	if not REPO_RE.match(repo or ""):
+		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
+	if not isinstance(item, int) or isinstance(item, bool) or item < 1:
+		raise UsageError("--item must be a positive issue or PR number")
+	if not isinstance(parking, str) or not NEEDS_HUMAN_PARKING_RE.match(parking):
+		raise UsageError(f"--parking must be an ISO UTC stamp (YYYY-MM-DDTHH:MM:SSZ) or 'overflow', got {parking!r}")
+
+
+def render_alert_claim(item: int, parking: str, state: str, message_id: str | None = None) -> str:
+	message = f" message={message_id}" if message_id else ""
+	return f"{NEEDS_HUMAN_ALERT_TEXT}\n\n<!-- ai:unblock-park-alert:v1 item={item} parked={parking} state={state}{message} -->"
+
+
+def alert_claims(comments: object, trusted_login: str, item: int, parking: str) -> list[dict]:
+	"""Trusted claims for this parking, lowest comment id first.
+
+	Only the pipeline login counts, and only when the marker is the last
+	non-empty line with the same item. An `overflow` claim covers every
+	parking of the item (a promoted overflow item gets a fresh stamp)."""
+	found: list[dict] = []
+	for comment in comments if isinstance(comments, list) else []:
+		if not isinstance(comment, dict):
+			continue
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		comment_id = comment.get("id")
+		if (not trusted_login or user.get("login") != trusted_login
+				or not isinstance(comment_id, int) or isinstance(comment_id, bool)):
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").replace("\r\n", "\n").split("\n") if line.strip()]
+		match = NEEDS_HUMAN_ALERT_MARKER_RE.match(lines[-1]) if lines else None
+		if not match or int(match.group(1)) != item:
+			continue
+		if match.group(2) != parking and match.group(2) != "overflow":
+			continue
+		found.append({"id": comment_id, "parked": match.group(2), "state": match.group(3), "message": match.group(4)})
+	return sorted(found, key=lambda claim: claim["id"])
+
+
+def needs_human_alert_claim(repo: str, item: int, parking: str, trusted_login: str | None = None,
+		now: str | None = None) -> dict:
+	_validate_alert_args(repo, item, parking)
+	result: dict = {"item": item, "parking": parking, "claimed": False}
+	if not needs_human_enabled():
+		_needs_human_alert_log(item, parking, "skip", "disabled")
+		return dict(result, reason="disabled")
+	login = _resolve_login(trusted_login)
+	existing = alert_claims(load_entry_comments(repo, item), login, item, parking)
+	if existing:
+		_needs_human_alert_log(item, parking, "skip", "already_attempted")
+		return dict(result, reason="already_attempted", state=existing[0]["state"], comment_id=existing[0]["id"])
+	try:
+		raw = _gh(["api", f"repos/{repo}/issues/{item}/comments", "-f", f"body={render_alert_claim(item, parking, 'attempted')}"])
+		created = json.loads(raw or "{}")
+	except (ApiError, ValueError) as exc:
+		_needs_human_alert_log(item, parking, "failed", "claim_write_failed")
+		raise ApiError(f"needs-human alert claim write failed: {exc}") from exc
+	comment_id = created.get("id") if isinstance(created, dict) else None
+	if not isinstance(comment_id, int) or isinstance(comment_id, bool) or comment_id <= 0:
+		_needs_human_alert_log(item, parking, "failed", "claim_write_failed")
+		raise ApiError("needs-human alert claim write returned no comment id")
+	try:
+		claims = alert_claims(load_entry_comments(repo, item), login, item, parking)
+	except ApiError:
+		_needs_human_alert_log(item, parking, "failed", "claim_reread_failed")
+		raise
+	claim_ids = [claim["id"] for claim in claims]
+	if comment_id not in claim_ids:
+		_needs_human_alert_log(item, parking, "skip", "claim_unverified")
+		return dict(result, reason="claim_unverified", comment_id=comment_id)
+	if claim_ids[0] != comment_id:
+		_needs_human_alert_log(item, parking, "skip", "lost_race")
+		return dict(result, reason="lost_race", comment_id=comment_id)
+	attempted_at = now or (created.get("created_at") if isinstance(created.get("created_at"), str) else "") or _now_iso()
+	_needs_human_alert_log(item, parking, "claimed", "won")
+	return dict(result, claimed=True, comment_id=comment_id, alert_attempted_at=attempted_at)
+
+
+def needs_human_alert_confirm(repo: str, item: int, parking: str, comment_id: str, message_id: str) -> dict:
+	_validate_alert_args(repo, item, parking)
+	for flag, value in (("--comment-id", comment_id), ("--message-id", message_id)):
+		if not isinstance(value, str) or not NEEDS_HUMAN_ALERT_ID_RE.match(value):
+			raise UsageError(f"{flag} must be a positive decimal id of at most 20 digits, got {value!r}")
+	result: dict = {"item": item, "parking": parking, "comment_id": int(comment_id), "confirmed": False}
+	if not needs_human_enabled():
+		_needs_human_alert_log(item, parking, "skip", "disabled")
+		return dict(result, reason="disabled")
+	body = render_alert_claim(item, parking, "confirmed", message_id)
+	try:
+		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/comments/{comment_id}", "-f", f"body={body}"])
+	except ApiError:
+		_needs_human_alert_log(item, parking, "failed", "confirm_write_failed")
+		raise
+	_needs_human_alert_log(item, parking, "confirmed", "sent")
+	return dict(result, confirmed=True, message_id=message_id)
+
+
 def main(argv: list[str] | None = None) -> int:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True)
@@ -812,6 +1341,9 @@ def main(argv: list[str] | None = None) -> int:
 	tick_cmd.add_argument("--stable-sha", required=True)
 	tick_cmd.add_argument("--repo-dir", default=".")
 	tick_cmd.add_argument("--trusted-login", default="")
+	resolve_cmd = sub.add_parser("resolve")
+	resolve_cmd.add_argument("--repo", required=True)
+	resolve_cmd.add_argument("--trusted-login", default="")
 	digest_cmd = sub.add_parser("needs-human")
 	digest_sub = digest_cmd.add_subparsers(dest="digest_command", required=True)
 	park_cmd = digest_sub.add_parser("park")
@@ -826,13 +1358,30 @@ def main(argv: list[str] | None = None) -> int:
 	prune_cmd = digest_sub.add_parser("prune")
 	prune_cmd.add_argument("--repo", required=True)
 	prune_cmd.add_argument("--trusted-login", default="")
+	claim_cmd = digest_sub.add_parser("alert-claim")
+	claim_cmd.add_argument("--repo", required=True)
+	claim_cmd.add_argument("--item", required=True, type=int)
+	claim_cmd.add_argument("--parking", required=True)
+	claim_cmd.add_argument("--trusted-login", default="")
+	confirm_cmd = digest_sub.add_parser("alert-confirm")
+	confirm_cmd.add_argument("--repo", required=True)
+	confirm_cmd.add_argument("--item", required=True, type=int)
+	confirm_cmd.add_argument("--parking", required=True)
+	confirm_cmd.add_argument("--comment-id", required=True)
+	confirm_cmd.add_argument("--message-id", required=True)
 	args = parser.parse_args(argv)
 	try:
 		if args.command == "needs-human" and args.digest_command == "park":
 			result = needs_human_park(args.repo, args.item, args.kind, args.stop, args.reason, args.link,
 				args.trusted_login or None, args.item_labeled)
-		elif args.command == "needs-human":
+		elif args.command == "needs-human" and args.digest_command == "alert-claim":
+			result = needs_human_alert_claim(args.repo, args.item, args.parking, args.trusted_login or None)
+		elif args.command == "needs-human" and args.digest_command == "alert-confirm":
+			result = needs_human_alert_confirm(args.repo, args.item, args.parking, args.comment_id, args.message_id)
+		elif args.command == "needs-human" and args.digest_command == "prune":
 			result = needs_human_prune(args.repo, args.trusted_login or None)
+		elif args.command == "resolve":
+			result = resolve(args.repo, args.trusted_login or None)
 		elif args.command == "tick":
 			result = tick(args.repo, args.stable_sha, args.repo_dir, args.trusted_login or None)
 		else:
@@ -840,6 +1389,10 @@ def main(argv: list[str] | None = None) -> int:
 	except UsageError as exc:
 		print(json.dumps({"error": str(exc)}))
 		return 1
+	except TrackerRecheckError as exc:
+		# Before ApiError: the entry was posted; only the tracker re-check failed.
+		print(json.dumps({"error": str(exc), "posted": True}))
+		return 3
 	except ApiError as exc:
 		print(json.dumps({"error": str(exc)}))
 		return 2

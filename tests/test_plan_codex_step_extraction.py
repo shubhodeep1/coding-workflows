@@ -44,13 +44,16 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # (tele-funtoken-msg-scoring#4992; 260 -> 269 lines, 17_142 -> 17_830 bytes).
 # Merging #8339 and #8327 keeps both additions (260 -> 261 lines,
 # 17_142 -> 17_308 bytes); with #8335 the prompt is 270 lines, 17_996 bytes.
+# Stuck-states P8a-2 (Refs #8291) added the one-line `WAITING:` sequencing-wait
+# rule beside the BLOCKED rule (270 -> 271 lines, 17_996 -> 18_734 bytes).
 # Consumer tele-funtoken-msg-scoring #5101 reworded rule 10 so the Scope-mode
 # lines stay out of the Files section (270 lines, 17_996 -> 18_031 bytes).
+# Merging both keeps the two changes (271 lines, 18_769 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"a9ce63aafa64bb6cc8ab48e98a3b5b941c417c789228f16836a8bcee70e76ece"
+	"2cf0762fe4ee095fca0eed68e8135ef5f8fe19ef20003689f57142dbb76c01e2"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 18_031
-PRE_EXTRACTION_PROMPT_LINES = 270
+PRE_EXTRACTION_PROMPT_BYTES = 18_769
+PRE_EXTRACTION_PROMPT_LINES = 271
 
 
 # Issue #9266: the step runs the runner through a wrapper that prints one
@@ -110,17 +113,23 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	assert 'TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"' in PLAN_RUNNER.read_text(encoding="utf-8")
 	# Heal issues (#6463) collect verified evidence and switch the runner to
 	# the isolated planner before it starts; ordinary issues run it unchanged.
+	# plan.yml runs the support bundle copies (stuck-states plan P2a); the
+	# `:-scripts` default keeps the kill-switch path on the checkout's scripts/.
+	support = "${SUPPORT_SCRIPTS_DIR:-scripts}"
+	# Issue #9266 wraps the runner call in a failure diagnostic; both of its
+	# calls run the support bundle copy.
+	runner_call = f'          bash "{support}/run_plan_codex.sh"\n'
 	assert step.split("        run: |\n", 1)[1] == (
-		'          if ! heal_route="$(python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}")"; then\n'
+		f'          if ! heal_route="$(python3 "{support}/workflow_failure_heal.py" heal-route --issue-json "${{ISSUE_META_FILE}}")"; then\n'
 		"            echo '::error::Heal route classification failed' >&2\n"
 		'            exit 1\n'
 		'          fi\n'
 		'          if [ "${heal_route}" = true ]; then\n'
 		"            echo 'HEAL_ROUTE=true' >> \"${GITHUB_ENV}\"\n"
-		'            HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md" bash scripts/workflow_failure_heal_evidence.sh\n'
+		f'            HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${{RUNTIME_DIR}}/heal_evidence.md" WORKFLOW_HEAL_PY="{support}/workflow_failure_heal.py" bash "{support}/workflow_failure_heal_evidence.sh"\n'
 		'            export HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md"\n'
 		"          fi\n"
-		+ PLAN_RUNNER_FAILURE_DIAGNOSTIC
+		+ PLAN_RUNNER_FAILURE_DIAGNOSTIC.replace("bash scripts/run_plan_codex.sh", runner_call.strip())
 	)
 	# Issue #9266: the failure diagnostic wrapper took the step past 2,000
 	# bytes; the limit only guards against inlining the runner again.
