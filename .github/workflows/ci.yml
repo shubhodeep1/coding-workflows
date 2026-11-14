@@ -716,21 +716,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_gh_api_write_guard.py
 
-      - name: Pre-push affected-test gate tests
-        run: |
-          set -euo pipefail
-          ruff check --select E,F --ignore E501 workflow-templates/.claude/hooks/prepush_affected_tests.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_prepush_affected_tests.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_prepush_test_gate.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_prepush_test_gate.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_attempt_journal.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_acceptance_check.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_postmerge_verify.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_budget.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_orchestrator.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_evidence_pack.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_evidence_broker.py
-
       - name: Claude engine decision tests
         run: |
           set -euo pipefail
@@ -2813,6 +2798,8 @@ jobs:
     # tests-hooks-and-orchestrator instead of group 0.
     # Since #9214, the CI wiring guard part 2 step runs in
     # tests-release-and-log-analysis instead of group 0.
+    # Since #9391, group 3 also pins the pre-push affected-test gate step
+    # (moved from tests-hooks-and-orchestrator).
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -3383,6 +3370,34 @@ jobs:
             echo "::error::single-file module tests failed: ${sf_failed[*]}"
             exit 1
           fi
+
+      # Moved from tests-hooks-and-orchestrator, which took 15m32s of its 20
+      # minutes on main (run 43220859648, budget-watch issue #9391). The run's
+      # step timings could not be read, so this step was picked by test and
+      # subprocess counts (about 472 tests and 57 subprocess sites, the largest
+      # step in that job that had never moved and is not split), an estimate,
+      # not a measurement. Group 3 carried the lightest pinned load (the
+      # single-file module step) after #9037 moved two steps to group 4. The
+      # step needs only temp git repos, no Node, no git history beyond HEAD and
+      # no prepared .claude/ live copies (it lints and tests the
+      # workflow-templates/ hook copy); ruff comes from this job's Install
+      # Python CI dependencies step. Name and body unchanged; the step runs once
+      # per CI run.
+      - name: Pre-push affected-test gate tests
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          ruff check --select E,F --ignore E501 workflow-templates/.claude/hooks/prepush_affected_tests.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_prepush_affected_tests.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_prepush_test_gate.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_prepush_test_gate.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_attempt_journal.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_acceptance_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_postmerge_verify.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_budget.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_orchestrator.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_evidence_pack.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_evidence_broker.py
 
       # Moved from tests-release-and-log-analysis, which took 17m51s of its 20
       # minutes on main (run 39230958248, budget-watch issue #7689). Earlier
