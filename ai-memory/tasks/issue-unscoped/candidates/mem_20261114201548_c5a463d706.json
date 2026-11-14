@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.sh:371-414 | severity=medium | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The placeholder loop in `collect_prompt_placeholders` uses `${!placeholder_name}` indirect expansion, which raises \"bad substitution\" for names that are not valid Bash variable names.\n  WHY: A \"bad substitution\" error would crash the whole prompt-rendering script. Severity was not stated by the source, so medium is a placeholder. Two other reviewers (minimax_minimax-m3 and z-ai_glm-5_3-flash) examined the empty-name case and found the guard at scripts/render_prompt.sh:390 skips it, but they did not address names with illegal characters.\n- scripts/render_prompt.sh:389 | severity=high | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `placeholder_env_name_is_credential_like` relies on a denylist of variable-name patterns that is not exhaustive.\n  WHY: An attacker-controlled placeholder name could match a sensitive environment variable that the denylist misses, leaking a runner secret into the model prompt. The source labelled this SEVERITY: MAJOR, which is mapped here to high.\n- scripts/render_prompt.py:1415-1426 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `except Exception` branch in main() prints `str(exc)` in full with no length cap in the ERROR line.\n  WHY: A multi-KB exception message would produce an oversized single log line in workflow logs that the log-analysis pipeline later parses. The source labelled this SEVERITY: NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/render_prompt.sh:371-414 | confidence=2\n  PROBLEM: The placeholder loop in `collect_prompt_placeholders` uses `${!placeholder_name}` indirect expansion on names that may be invalid Bash variable names.\n  WHY: A \"bad substitution\" error would crash the script.\n- scripts/render_prompt.sh:389 | severity=MAJOR | confidence=2\n  PROBLEM: `placeholder_env_name_is_credential_like` relies on a non-exhaustive denylist of credential-like name patterns.\n  WHY: A placeholder name matching an unlisted sensitive environment variable could leak a runner secret into the model prompt.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/render_prompt.py:1415-1426 | severity=NIT | confidence=3\n  PROBLEM: `str(exc)` is printed in full with no length cap in the unexpected-exception ERROR line. The source also cites render_prompt.sh:404-407 in this context.\n  WHY: A large message lands verbatim in workflow logs that the log-analysis pipeline parses, inflating log lines.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "008768bb69ef9d9bec715609dc44a177564e92071c94cbeac4f23075d8f47dfb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9356,
+    "run_id": "43541117030",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43541117030",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114201548_c5a463d706",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9356,
+    "run_id": "43541117030"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-14T20:15:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
