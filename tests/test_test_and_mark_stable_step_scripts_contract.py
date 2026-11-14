@@ -560,6 +560,30 @@ def test_clarify_wait_timeout_prints_issue_and_run_url() -> None:
 		assert "no non-skipped Clarify run titled" in stdout, stdout
 
 
+def test_clarify_wait_timeout_with_cancelled_comment_prints_one_run_url() -> None:
+	_skip_without_bash_and_jq()
+	import tempfile
+
+	cancelled = "AI clarification workflow was cancelled/timed out for https://github.com/o/r/issues/42. Run: https://github.com/o/r/actions/runs/7"
+	runs = [
+		_clarify_run(7, "https://github.com/o/r/actions/runs/7", "2026-11-13T00:01:00Z"),
+		_clarify_run(9, "https://github.com/o/r/actions/runs/9", "2026-11-13T00:02:00Z"),
+	]
+	# A newer run exists: only the newest run is named, not the cancelled one.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout, _ = _run_clarify_wait(Path(tmp), [_comment(cancelled)], runs=runs, timeout_minutes="0")
+		assert rc == 1
+		assert "status=timeout" in output
+		assert "Issue: https://github.com/o/r/issues/42" in stdout
+		assert re.findall(r"https://\S+/actions/runs/\d+", stdout) == ["https://github.com/o/r/actions/runs/9"], stdout
+	# No newest run found: the cancelled run is the one URL printed.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout, _ = _run_clarify_wait(Path(tmp), [_comment(cancelled)], runs=[], timeout_minutes="0")
+		assert rc == 1
+		assert "status=timeout" in output
+		assert re.findall(r"https://\S+/actions/runs/\d+", stdout) == ["https://github.com/o/r/actions/runs/7"], stdout
+
+
 def test_clarify_and_alt_model_timeouts_print_issue_url() -> None:
 	steps = _all_steps(_raw())
 	clarify = _step(steps, CLARIFY_STEP)["run"]
