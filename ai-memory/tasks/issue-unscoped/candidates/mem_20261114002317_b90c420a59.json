@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The reporter-change approach says to read `.pull_request.head.sha` when `GITHUB_EVENT_NAME` is `pull_request` or `pull_request_target`.\n  expected_change_site: `scripts/workflow_failure_heal_autofix_report.sh`, run-head selection block.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The event-name check accepts only `pull_request` (lines 374-378). The reporter test also treats `pull_request_target` as unusable and expects the PR-head fallback, so that event does not get the requested run-head handling. Severity is NIT.\n- requirement: Reporter must use the run's own head for `pull_request` events so `verify_run` passes when the PR head moved during the run.\n  expected_change_site: `scripts/workflow_failure_heal_autofix_report.sh` run-head block (lines ~349-388) and `scripts/workflow_failure_heal.py` `build_autofix_failure_payload` (~line 1926).\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer's own evidence says the implementation is \"Present in LAST RUN DIFF and PR DIFF\". The guard `[ \"${FAILURE_REASON}\" != \"identical_failure_cap\" ]` excludes cap reports. The event value is read only when `GITHUB_EVENT_NAME=pull_request`, the file is readable, the SHA matches `^[0-9a-f]{40}$`, and `.pull_request.number` equals `${PR}`. The `REPORT_RUN_HEAD_SHA` override is validated the same way. `build_autofix_failure_payload` re-checks the value with `is_valid_sha`. The reviewer says all issue deliverables are present. Severity is NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Reporter must use the run's own head for `pull_request` events so `verify_run` passes when the PR head moved during the run.\n  Expected change site: `scripts/workflow_failure_heal_autofix_report.sh` run-head block (lines ~349-388) and `scripts/workflow_failure_heal.py` `build_autofix_failure_payload` (~line 1926).\n  Evidence of absence: Present in LAST RUN DIFF and PR DIFF. The guard `[ \"${FAILURE_REASON}\" != \"identical_failure_cap\" ]` correctly excludes cap reports. The event SHA and the override are both validated. `build_autofix_failure_payload` re-checks the value with `is_valid_sha`, and `head_branch` stays the PR's. All issue deliverables (Goals 1-3, Implementation Steps 1-5, all Tests) are present.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The reporter-change approach says to read `.pull_request.head.sha` when `GITHUB_EVENT_NAME` is `pull_request` or `pull_request_target`.\n  Expected change site: `scripts/workflow_failure_heal_autofix_report.sh`, run-head selection block.\n  Evidence of absence: The event-name check accepts only `pull_request` (lines 374-378). The reporter test also treats `pull_request_target` as unusable and expects the PR-head fallback, so that event does not receive the requested run-head handling.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d42b54757aaa069ca56071804cd7cfcf1685100fb239a97fc8ca183cbc92bb1e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9278,
+    "run_id": "43414498824",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43414498824",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114002317_b90c420a59",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9278,
+    "run_id": "43414498824"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-14T00:23:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
