@@ -1,0 +1,39 @@
+name: ChatGPT pool token
+description: |
+  Fetch one ChatGPT account for this job from the claude-pool-broker Worker
+  (POST /v1/chatgpt) with the job's GitHub OIDC token, and write its
+  auth.json (refresh token stripped, mode 0600) to
+  $RUNNER_TEMP/chatgpt-pool/<NAME>/auth.json; codex_home is that directory.
+  Mode `status` reads GET /v1/chatgpt/status instead and outputs the
+  per-account metadata as `status` JSON, writing no token. The broker URL and
+  read audience come from .github/ai/claude_engine.json. Never fails the job:
+  any problem is available=false with a reason. The job needs
+  `permissions: id-token: write`. The post step deletes the directory.
+
+inputs:
+  mode:
+    description: "`token` (default) writes one account's auth.json; `status` outputs the pool metadata only."
+    required: false
+    default: "token"
+  config_path:
+    description: claude_engine.json to read. Empty uses the copy shipped with this action.
+    required: false
+    default: ""
+
+outputs:
+  available:
+    description: "`true` when an account was written (token) or the status was read (status)."
+  reason:
+    description: Why (selected, status, broker_not_configured, oidc_unavailable, broker_refused_<code>, broker_refused_chatgpt_pool_empty, broker_unavailable_<http>, ...).
+  account:
+    description: The chosen account name (token mode); empty otherwise.
+  codex_home:
+    description: The directory holding auth.json (token mode); empty otherwise.
+  status:
+    description: Compact JSON of per-account metadata (status mode; never a token); empty otherwise.
+
+runs:
+  using: node24
+  main: main.js
+  post: post.js
+  post-if: always()

@@ -14,6 +14,10 @@ stdout, diagnostics to stderr):
   * ``config [--key K]`` — the normalised ``.github/ai/claude_engine.json``
     (defaults for a missing file, unreadable JSON, or an invalid value), or
     one top-level value of it.
+  * ``pool-health`` / ``pool-usage [--chatgpt-status JSON] [--chatgpt-reason R]
+    [--chatgpt-stale-hours H]`` — the hourly near-cap alert and the daily
+    usage report from probe records on stdin; the ChatGPT flags add the
+    ChatGPT account block (trial plan Phase 4).
   * ``resolve --role R [--model-hint M] [--effort-hint E]`` — the engine,
     model, effort and tool profile of one role, and where the engine came
     from (``label:<name>``, ``var:AI_ENGINE_<R>``, ``var:AI_ENGINE`` or
@@ -40,6 +44,12 @@ stdout, diagnostics to stderr):
   * ``choose [--gate G] < probes.json`` — the usable accounts under the
     gate, the one whose spare 7-day quota expires soonest first (ties to the
     alphabetically first name), or why none is usable.
+  * ``chatgpt-slot --config F [--override V] [--model M] [--replaces R]`` —
+    whether the ChatGPT account review slot is on (fail closed), as one
+    ``enabled=… model=… replaces=… reasoning=… source=… reason=…`` line.
+  * ``chatgpt-classify --events T [--exit-code N] [--field F]`` — one
+    ``codex exec --json`` run of that slot: ``ok``, ``auth_rejected``,
+    ``quota_exhausted`` or ``run_failed`` (reason codes only).
 
 Exit codes: 0 success; 1 the input describes a failure (``extract`` found
 no result); 2 invalid arguments or input.
@@ -195,6 +205,122 @@ WORKFLOW_DENY_MARKER = "/.github/workflows/"
 
 class EngineError(ValueError):
 	"""Invalid input to an engine subcommand."""
+
+
+# --- ChatGPT account review-panel slot (trial plan Phase 2, Refs #8969) ------
+# The slot never runs Claude, so its role stays out of ROLES (which drives the
+# Claude role defaults and claude_engine.json normalisation).
+CHATGPT_ROLES: tuple[str, ...] = ("PANEL_REVIEWER_CHATGPT",)
+CHATGPT_SLOT_DEFAULTS: dict[str, str] = {"model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}
+CHATGPT_MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}$")
+CHATGPT_REPLACES_RE = re.compile(r"^[a-z0-9-]+/[a-z0-9._-]+$")
+CHATGPT_REASONING: tuple[str, ...] = ("none", "low", "medium", "high", "xhigh")
+CHATGPT_AUTH_RE = re.compile(
+	r"\b40[13]\b|unauthori[sz]ed|forbidden|\blog ?in\b|refresh[_ ]token|token (?:is )?(?:invalid|expired|revoked)|authenticat",
+	re.IGNORECASE,
+)
+CHATGPT_QUOTA_RE = re.compile(r"\b429\b|usage[_ ]limit|rate[_ -]?limit|quota|too many requests", re.IGNORECASE)
+
+
+def resolve_chatgpt_slot(config_path: Path, override: str = "", model_var: str = "", replaces_var: str = "") -> dict[str, Any]:
+	"""Whether the ChatGPT review slot is on, failing closed.
+
+	Only a JSON boolean ``true`` for ``reviewer_slot_enabled`` (or an override
+	of exactly ``true``) turns it on. A missing or unreadable file, invalid
+	JSON, a non-object, a non-boolean switch, an invalid model / replaces /
+	reasoning value, or an override other than empty, ``true`` or ``false``
+	keeps it off. Printed values are always validated (or the defaults), so
+	they are safe to write to a step output.
+	"""
+	values = dict(CHATGPT_SLOT_DEFAULTS)
+	errors: list[str] = []
+	switch = False
+	source = "default"
+	raw: Any = None
+	try:
+		raw = json.loads(config_path.read_text(encoding="utf-8"))
+	except FileNotFoundError:
+		errors.append("config_missing")
+	except (OSError, ValueError):
+		errors.append("config_invalid")
+	if not errors:
+		source = "file"
+		if not isinstance(raw, dict):
+			errors.append("config_invalid")
+		else:
+			flag = raw.get("reviewer_slot_enabled", False)
+			if isinstance(flag, bool):
+				switch = flag
+			else:
+				errors.append("config_invalid")
+			checks = (("model", CHATGPT_MODEL_RE), ("replaces", CHATGPT_REPLACES_RE))
+			for key, pattern in checks:
+				if key in raw:
+					value = raw[key]
+					if isinstance(value, str) and pattern.fullmatch(value):
+						values[key] = value
+					else:
+						errors.append("config_invalid")
+			if "reasoning" in raw:
+				if raw["reasoning"] in CHATGPT_REASONING:
+					values["reasoning"] = raw["reasoning"]
+				else:
+					errors.append("config_invalid")
+	for key, value, pattern in (("model", model_var, CHATGPT_MODEL_RE), ("replaces", replaces_var, CHATGPT_REPLACES_RE)):
+		value = (value or "").strip()
+		if not value:
+			continue
+		if pattern.fullmatch(value):
+			values[key] = value
+		else:
+			errors.append("var_invalid")
+	override = (override or "").strip()
+	if override in ("true", "false"):
+		switch = override == "true"
+		source = "var"
+	elif override:
+		errors.append("var_invalid")
+	enabled = switch and not errors
+	reason = "ok" if enabled else (errors[0] if errors else "switch_off")
+	return {"enabled": enabled, **values, "source": source, "reason": reason}
+
+
+def classify_chatgpt_events(text: str, exit_code: int | None) -> dict[str, str]:
+	"""Classify one ``codex exec --json`` run of the ChatGPT slot.
+
+	``auth_rejected``: an ``error`` / ``turn.failed`` event naming a 401/403,
+	an unauthorized, login or refresh failure. ``quota_exhausted``: one naming
+	a 429, usage limit, rate limit or quota. ``ok``: exit code 0 with an agent
+	message and no ``turn.failed`` event, checked first, so a non-terminal
+	error the run recovered from does not discard it. Anything else is
+	``run_failed``. Returns
+	reason codes only, never event text.
+	"""
+	messages: list[str] = []
+	has_agent_message = False
+	for event in read_events(text):
+		event_type = event.get("type")
+		if event_type in ("error", "turn.failed"):
+			error = event.get("error")
+			message = event.get("message")
+			if isinstance(error, dict):
+				message = error.get("message", message)
+			elif isinstance(error, str):
+				message = error
+			messages.append(str(message or ""))
+		elif event_type == "item.completed":
+			item = event.get("item")
+			if isinstance(item, dict) and item.get("type") in ("agent_message", "assistant_message"):
+				has_agent_message = True
+	# A completed run wins over earlier non-terminal errors Codex recovered from.
+	if exit_code == 0 and has_agent_message and not any(event.get("type") == "turn.failed" for event in read_events(text)):
+		return {"outcome": "ok", "reason": "ok"}
+	joined = "\n".join(messages)
+	if messages and CHATGPT_AUTH_RE.search(joined):
+		return {"outcome": "failed", "reason": "auth_rejected"}
+	if messages and CHATGPT_QUOTA_RE.search(joined):
+		return {"outcome": "failed", "reason": "quota_exhausted"}
+	return {"outcome": "failed", "reason": "run_failed"}
 
 
 # --- support files ---------------------------------------------------------
@@ -905,7 +1031,168 @@ def _window_summary(probe: dict[str, Any], name: str, label: str, gate: float, n
 	return text
 
 
-def pool_health(probes: list[dict[str, Any]], gate: float, now: float | None = None) -> dict[str, Any]:
+# --- ChatGPT account pool status (trial plan Phase 4, Refs #8969) -----------
+# Input: the one-line `status` output of .github/actions/chatgpt-pool-token in
+# `mode: status` ({"accounts": [...], "gate": n}, never a token). Every field
+# is re-validated here and only the named ones are read, so a stray key is
+# never rendered. Parsing never raises.
+CHATGPT_STATUS_DEFAULT_GATE = 0.9  # mirrors the broker's DEFAULT_CHATGPT_GATE
+CHATGPT_STATUS_DEFAULT_STALE_HOURS = 12.0
+CHATGPT_STATUS_MAX_ACCOUNTS = 64
+# The broker's wire contract (`^[A-Z0-9_]+$`, no length cap); always fullmatch,
+# so a trailing newline never passes.
+CHATGPT_STATUS_NAME_RE = re.compile(r"^[A-Z0-9_]+$")
+CHATGPT_STATUS_CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+CHATGPT_STATUS_REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+# Outcomes that are not a refresh failure: `ok`, and `quota_exhausted` (the
+# account resets on its own; reported as gated, not as a failure).
+CHATGPT_STATUS_NON_FAILURE_OUTCOMES: tuple[str, ...] = ("ok", "quota_exhausted")
+
+
+def _chatgpt_status_number(value: Any) -> float | None:
+	"""A finite, non-negative usage fraction, or ``None``."""
+	if not _is_number(value) or value < 0:
+		return None
+	return float(value)
+
+
+def _chatgpt_status_parse(raw: str | None) -> tuple[list[dict[str, Any]], float, str | None]:
+	"""``(accounts, gate, error)`` from the action's ``status`` JSON.
+
+	Empty input is ``([], default gate, None)``; JSON that is not an object
+	with an ``accounts`` list is ``([], default gate, "status_invalid")``.
+	Entries whose ``account`` is not ``[A-Z0-9_]+`` are dropped, at most
+	CHATGPT_STATUS_MAX_ACCOUNTS are kept, sorted by name. A ``gate`` outside
+	(0, 1] is CHATGPT_STATUS_DEFAULT_GATE.
+	"""
+	gate = CHATGPT_STATUS_DEFAULT_GATE
+	if raw is None or not str(raw).strip():
+		return [], gate, None
+	try:
+		body = json.loads(raw)
+	except (ValueError, TypeError, RecursionError):
+		return [], gate, "status_invalid"
+	if not isinstance(body, dict) or not isinstance(body.get("accounts"), list):
+		return [], gate, "status_invalid"
+	value = body.get("gate")
+	if _is_number(value) and 0 < value <= 1:
+		gate = float(value)
+	accounts: list[dict[str, Any]] = []
+	seen: set[str] = set()
+	for entry in body["accounts"]:
+		if len(accounts) >= CHATGPT_STATUS_MAX_ACCOUNTS:
+			break
+		if not isinstance(entry, dict):
+			continue
+		name = entry.get("account")
+		if not isinstance(name, str) or not CHATGPT_STATUS_NAME_RE.fullmatch(name) or name in seen:
+			continue
+		seen.add(name)
+		usage = entry.get("usage") if isinstance(entry.get("usage"), dict) else {}
+		outcome = entry.get("last_outcome")
+		if outcome == "":
+			outcome = None  # never refreshed: reported as stale, not as a failed refresh
+		if outcome is not None:
+			# A value outside the safe character set is still a non-ok outcome.
+			outcome = outcome if isinstance(outcome, str) and CHATGPT_STATUS_CODE_RE.fullmatch(outcome) else "unknown"
+		reason = entry.get("reason")
+		accounts.append({
+			"account": name,
+			"last_refresh": entry.get("last_refresh") if isinstance(entry.get("last_refresh"), str) else None,
+			"last_outcome": outcome,
+			"five_hour": _chatgpt_status_number(usage.get("five_hour")),
+			"weekly": _chatgpt_status_number(usage.get("weekly")),
+			"usable": entry.get("usable") is True,
+			"reason": reason if isinstance(reason, str) and CHATGPT_STATUS_CODE_RE.fullmatch(reason) else None,
+		})
+	accounts.sort(key=lambda item: item["account"])
+	return accounts, gate, None
+
+
+def _chatgpt_status_refresh_epoch(value: Any) -> float | None:
+	"""Epoch seconds of an ISO-8601 ``last_refresh``; ``None`` when missing, naive or invalid."""
+	if not isinstance(value, str) or not value.strip():
+		return None
+	text = value.strip()
+	if text.endswith(("Z", "z")):
+		text = text[:-1] + "+00:00"
+	try:
+		parsed = datetime.datetime.fromisoformat(text)
+	except ValueError:
+		return None
+	if parsed.tzinfo is None or parsed.utcoffset() is None:
+		return None
+	return parsed.astimezone(datetime.timezone.utc).timestamp()
+
+
+def _chatgpt_status_stale_hours(value: Any) -> float:
+	if not _is_number(value) or value <= 0:
+		return CHATGPT_STATUS_DEFAULT_STALE_HOURS
+	return float(value)
+
+
+def _chatgpt_status_assess(entry: dict[str, Any], gate: float, stale_hours: float, now: float) -> tuple[str, list[str], bool]:
+	"""``(display line, causes, warning)`` of one ChatGPT account.
+
+	``warning`` (a person must act): a rejected login, a failed refresh
+	(any outcome other than ``ok`` / ``quota_exhausted``), or a refresh that
+	is missing or at least ``stale_hours`` old. Usage at or above ``gate``
+	and ``quota_exhausted`` are causes too, but reset on their own.
+	"""
+	name = entry["account"]
+	parts = []
+	for key, label in (("five_hour", "5h"), ("weekly", "weekly")):
+		usage = entry.get(key)
+		parts.append(f"{label} {round(usage * 100)}%" if usage is not None else f"{label} ?")
+	refreshed_at = _chatgpt_status_refresh_epoch(entry.get("last_refresh"))
+	age_hours = None if refreshed_at is None else max((now - refreshed_at) / 3600, 0.0)
+	parts.append("never refreshed" if age_hours is None else f"refreshed {age_hours:.1f}h ago")
+	outcome = entry.get("last_outcome")
+	parts.append(f"last outcome {outcome or 'unknown'}")
+	causes: list[str] = []
+	warning = False
+	if outcome == "auth_failed":
+		causes.append(f"login rejected (auth_failed); save a new CHATGPT_POOL_AUTH_{name}")
+		warning = True
+	elif outcome is not None and outcome not in CHATGPT_STATUS_NON_FAILURE_OUTCOMES:
+		causes.append(f"last refresh failed ({outcome})")
+		warning = True
+	if age_hours is None:
+		causes.append("stale (never refreshed)")
+		warning = True
+	elif age_hours >= stale_hours:
+		causes.append(f"stale (last refresh {age_hours:.1f}h ago)")
+		warning = True
+	if any(entry.get(key) is not None and entry[key] >= gate for key in ("five_hour", "weekly")):
+		causes.append(f"at or above the {round(gate * 100)}% usage gate")
+	if outcome == "quota_exhausted":
+		causes.append("quota exhausted")
+	return f"{name}: {', '.join(parts)}", causes, warning
+
+
+def _chatgpt_status_lines(accounts: list[dict[str, Any]], gate: float, stale_hours: float, now: float) -> tuple[list[str], list[str], bool]:
+	"""``(lines, flagged names, warning)``: one line per account, causes appended."""
+	lines: list[str] = []
+	flagged: list[str] = []
+	warning = False
+	for entry in accounts:
+		line, causes, needs_person = _chatgpt_status_assess(entry, gate, stale_hours, now)
+		if causes:
+			flagged.append(entry["account"])
+			line += "".join(f"; {cause}" for cause in causes)
+		warning = warning or needs_person
+		lines.append(line)
+	return lines, flagged, warning
+
+
+def pool_health(
+	probes: list[dict[str, Any]],
+	gate: float,
+	now: float | None = None,
+	*,
+	chatgpt_status: str | None = None,
+	chatgpt_stale_hours: float = CHATGPT_STATUS_DEFAULT_STALE_HOURS,
+) -> dict[str, Any]:
 	"""One operator-facing reading of the pool for the hourly near-cap alert (#6951).
 
 	Input: the probe records ``parse_probe`` produced for every account in the
@@ -923,6 +1210,13 @@ def pool_health(probes: list[dict[str, Any]], gate: float, now: float | None = N
 	the reference for the hours. ``text`` is empty when ``alert`` is false.
 	Never raises on a malformed record: a record without a name is reported
 	as ``?``.
+
+	``chatgpt_status`` (the chatgpt-pool-token ``status`` JSON, trial plan
+	Phase 4) adds ``chatgpt_accounts``, ``chatgpt_alerts`` (names with any
+	cause, see ``_chatgpt_status_assess``) and ``chatgpt_warning`` (a person
+	must act). ``claude_alert`` is the Claude-only verdict; ``alert`` is true
+	when either pool alerts. With ChatGPT alerts, ``text`` gets a
+	``ChatGPT pool:`` block after the Claude text; without, it is unchanged.
 	"""
 	now = _now_seconds(now)
 	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
@@ -952,7 +1246,7 @@ def pool_health(probes: list[dict[str, Any]], gate: float, now: float | None = N
 		if rejected and (known is None or known < gate):
 			parts.insert(0, f"usage limit reached ({_reset_note(probe.get('resets_at'), now)})")
 		lines.append(f"{name}: {', '.join(parts) if parts else 'at the gate'}")
-	alert = bool(gated or auth_failed)
+	claude_alert = bool(gated or auth_failed)
 	# Earliest time a gated account is usable again (issue #7370): the
 	# capacity-wait section of the alert names it.
 	usable_times = [
@@ -963,8 +1257,8 @@ def pool_health(probes: list[dict[str, Any]], gate: float, now: float | None = N
 	next_usable_at = _format_reset(earliest_usable) if usable_times else ""
 	next_usable_in = (_format_reset_in(earliest_usable, now) or "") if usable_times else ""
 	text = ""
-	if alert:
-		total = len(ordered)
+	total = len(ordered)
+	if claude_alert:
 		headline = f"Claude pool: {len(gated)} of {total} account(s) at or above the {round(gate * 100)}% usage gate"
 		if auth_failed:
 			headline += f", {len(auth_failed)} with a rejected token"
@@ -972,9 +1266,24 @@ def pool_health(probes: list[dict[str, Any]], gate: float, now: float | None = N
 		text = "\n".join([headline, *lines])
 		if failed:
 			text += "\nProbe failed (not counted): " + ", ".join(failed)
+	chatgpt_accounts, chatgpt_gate, _ = _chatgpt_status_parse(chatgpt_status)
+	chatgpt_lines, chatgpt_alerts, chatgpt_warning = _chatgpt_status_lines(
+		chatgpt_accounts, chatgpt_gate, _chatgpt_status_stale_hours(chatgpt_stale_hours), now
+	)
+	if chatgpt_alerts:
+		chatgpt_usable = sum(1 for entry in chatgpt_accounts if entry["usable"])
+		block = "\n".join([
+			f"ChatGPT pool: {len(chatgpt_alerts)} of {len(chatgpt_accounts)} account(s) need attention; {chatgpt_usable} usable.",
+			*chatgpt_lines,
+		])
+		text = f"{text}\n{block}" if text else block
 	return {
-		"alert": alert,
-		"accounts": total if alert else len(ordered),
+		"alert": claude_alert or bool(chatgpt_alerts),
+		"claude_alert": claude_alert,
+		"chatgpt_accounts": len(chatgpt_accounts),
+		"chatgpt_alerts": chatgpt_alerts,
+		"chatgpt_warning": bool(chatgpt_alerts) and chatgpt_warning,
+		"accounts": total,
 		"gated": gated,
 		"auth_failed": auth_failed,
 		"probe_failed": failed,
@@ -990,7 +1299,15 @@ def _usage_percent(probe: dict[str, Any], name: str, label: str, gate: float, no
 	return _window_summary(probe, name, label, gate, now) or f"{label} ?"
 
 
-def pool_usage_report(probes: list[dict[str, Any]], gate: float, now: float | None = None) -> dict[str, Any]:
+def pool_usage_report(
+	probes: list[dict[str, Any]],
+	gate: float,
+	now: float | None = None,
+	*,
+	chatgpt_status: str | None = None,
+	chatgpt_reason: str | None = None,
+	chatgpt_stale_hours: float = CHATGPT_STATUS_DEFAULT_STALE_HOURS,
+) -> dict[str, Any]:
 	"""The once-a-day Claude pool usage message: every account, in one message.
 
 	Input: the probe records ``parse_probe`` produced (the ``probes`` output of
@@ -1003,6 +1320,15 @@ def pool_usage_report(probes: list[dict[str, Any]], gate: float, now: float | No
 	``pool_health`` it lists every account, below the gate too, and ``text`` is
 	never empty. Never raises on a malformed record: a record without a name is
 	reported as ``?``.
+
+	ChatGPT section (trial plan Phase 4), after a blank line: a
+	``ChatGPT accounts:`` headline and one line per account for a
+	``chatgpt_status`` with accounts; ``ChatGPT accounts: unavailable
+	(<reason>).`` for an unreadable status (``status_invalid``) or for an
+	empty status with ``chatgpt_reason`` (the action's ``reason`` output);
+	nothing for a status with no accounts, or neither input. Adds the
+	``chatgpt_accounts`` and ``chatgpt_alerts`` counts. The Claude text is
+	unchanged and the ChatGPT input never raises.
 	"""
 	now = _now_seconds(now)
 	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
@@ -1038,7 +1364,32 @@ def pool_usage_report(probes: list[dict[str, Any]], gate: float, now: float | No
 		headline += f", {counts['probe_failed']} not probed"
 	if not ordered:
 		headline = "Claude pool daily usage: no probe results"
-	return {"accounts": len(ordered), **counts, "text": "\n".join([headline + ".", *lines])}
+	text = "\n".join([headline + ".", *lines])
+	chatgpt_accounts, chatgpt_gate, chatgpt_error = _chatgpt_status_parse(chatgpt_status)
+	chatgpt_lines, chatgpt_alerts, _ = _chatgpt_status_lines(
+		chatgpt_accounts, chatgpt_gate, _chatgpt_status_stale_hours(chatgpt_stale_hours), now
+	)
+	section = ""
+	if chatgpt_error:
+		section = f"ChatGPT accounts: unavailable ({chatgpt_error})."
+	elif chatgpt_accounts:
+		chatgpt_usable = sum(1 for entry in chatgpt_accounts if entry["usable"])
+		chatgpt_headline = f"ChatGPT accounts: {len(chatgpt_accounts)} account(s), {chatgpt_usable} usable"
+		if chatgpt_alerts:
+			chatgpt_headline += f", {len(chatgpt_alerts)} needing attention"
+		section = "\n".join([chatgpt_headline + ".", *chatgpt_lines])
+	elif not (chatgpt_status or "").strip() and (chatgpt_reason or "").strip():
+		reason = chatgpt_reason.strip()
+		section = f"ChatGPT accounts: unavailable ({reason if CHATGPT_STATUS_REASON_RE.fullmatch(reason) else 'unknown'})."
+	if section:
+		text += "\n\n" + section
+	return {
+		"accounts": len(ordered),
+		**counts,
+		"chatgpt_accounts": len(chatgpt_accounts),
+		"chatgpt_alerts": len(chatgpt_alerts),
+		"text": text,
+	}
 
 
 # --- command line ------------------------------------------------------------
@@ -1217,7 +1568,7 @@ def cmd_pool_health(args: argparse.Namespace) -> int:
 		gate = config["gate_utilization"]
 	if not (0 < gate <= 1):
 		raise EngineError("gate must be in (0, 1]")
-	_print_json(pool_health(probes, gate))
+	_print_json(pool_health(probes, gate, chatgpt_status=args.chatgpt_status, chatgpt_stale_hours=args.chatgpt_stale_hours))
 	return 0
 
 
@@ -1234,7 +1585,33 @@ def cmd_pool_usage(args: argparse.Namespace) -> int:
 		gate = config["gate_utilization"]
 	if not (0 < gate <= 1):
 		raise EngineError("gate must be in (0, 1]")
-	_print_json(pool_usage_report(probes, gate))
+	_print_json(
+		pool_usage_report(
+			probes,
+			gate,
+			chatgpt_status=args.chatgpt_status,
+			chatgpt_reason=args.chatgpt_reason,
+			chatgpt_stale_hours=args.chatgpt_stale_hours,
+		)
+	)
+	return 0
+
+
+def cmd_chatgpt_slot(args: argparse.Namespace) -> int:
+	slot = resolve_chatgpt_slot(Path(args.config), args.override, args.model, args.replaces)
+	print(
+		f"enabled={'true' if slot['enabled'] else 'false'} model={slot['model']} replaces={slot['replaces']} "
+		f"reasoning={slot['reasoning']} source={slot['source']} reason={slot['reason']}"
+	)
+	return 0
+
+
+def cmd_chatgpt_classify(args: argparse.Namespace) -> int:
+	verdict = classify_chatgpt_events(_read_text(args.events), args.exit_code)
+	if args.field:
+		print(verdict[args.field])
+	else:
+		_print_json(verdict)
 	return 0
 
 
@@ -1301,12 +1678,30 @@ def build_parser() -> argparse.ArgumentParser:
 	p = sub.add_parser("pool-health")
 	p.add_argument("--gate", type=float, default=None)
 	p.add_argument("--config", default="")
+	p.add_argument("--chatgpt-status", default="")
+	p.add_argument("--chatgpt-stale-hours", type=float, default=CHATGPT_STATUS_DEFAULT_STALE_HOURS)
 	p.set_defaults(func=cmd_pool_health)
 
 	p = sub.add_parser("pool-usage")
 	p.add_argument("--gate", type=float, default=None)
 	p.add_argument("--config", default="")
+	p.add_argument("--chatgpt-status", default="")
+	p.add_argument("--chatgpt-reason", default="")
+	p.add_argument("--chatgpt-stale-hours", type=float, default=CHATGPT_STATUS_DEFAULT_STALE_HOURS)
 	p.set_defaults(func=cmd_pool_usage)
+
+	p = sub.add_parser("chatgpt-slot")
+	p.add_argument("--config", required=True)
+	p.add_argument("--override", default="")
+	p.add_argument("--model", default="")
+	p.add_argument("--replaces", default="")
+	p.set_defaults(func=cmd_chatgpt_slot)
+
+	p = sub.add_parser("chatgpt-classify")
+	p.add_argument("--events", required=True)
+	p.add_argument("--exit-code", type=int, default=None)
+	p.add_argument("--field", choices=("outcome", "reason"), default="")
+	p.set_defaults(func=cmd_chatgpt_classify)
 	return parser
 
 

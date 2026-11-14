@@ -1377,7 +1377,7 @@ SANDBOX WORKSPACE LIMITS
 
 You work in a filtered copy of the checkout. Top-level dot-directories are
 excluded except for ".github/workflows/", ".github/actions/" and the files
-".github/ai/claude_engine.json" and ".claude/hooks/gh_api_write_guard.py".
+".github/ai/claude_engine.json", ".github/ai/chatgpt_pool.json" and ".claude/hooks/gh_api_write_guard.py".
 "scripts/claude_settings.json.tmpl" is also admitted. In particular,
 ".claude/commands/" files are admitted only when their twins exist in the
 verified workflow-support checkout. ".claude/docs/<name>.md" reference
@@ -1616,7 +1616,7 @@ If additional context is required beyond what is inlined, you may read:
 - files imported by the changed code
 - the original bug report file located under ${PREVIOUS_REVIEWS_DIR}
 - do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
-- The editor workspace contains only admitted source paths, including selected .claude/commands/ files, selected .claude/docs/ reference files, .claude/hooks/gh_api_write_guard.py and .github/ai/claude_engine.json when present. Do not create excluded paths; if a finding needs one, list it under Ignored suggestions with reason "sandbox-excluded path".
+- The editor workspace contains only admitted source paths, including selected .claude/commands/ files, selected .claude/docs/ reference files, .claude/hooks/gh_api_write_guard.py, .github/ai/claude_engine.json and .github/ai/chatgpt_pool.json when present. Do not create excluded paths; if a finding needs one, list it under Ignored suggestions with reason "sandbox-excluded path".
 - Creating a directory symlink, an unadmitted directory under .github/ or .claude/, a directory with a secret-like name, or a case variant of an excluded build/cache directory aborts the whole transfer of your edits. Exact excluded build/cache names are omitted.
 The bug report may contain important context about the problem being fixed.
 

@@ -9299,6 +9299,9 @@ def test_review_editor_prompt_explains_sandbox_limits() -> None:
 	assert "edit both copies in the same run so they stay byte-identical" in block
 	assert 'new ".claude/docs/" files' in block and "cannot be created" in block
 	assert "selected .claude/docs/ reference files" in apply_fixes
+	# PR #9112 / issue #9111: the editor may create or edit .github/ai/chatgpt_pool.json.
+	assert '".github/ai/chatgpt_pool.json"' in block
+	assert ".github/ai/chatgpt_pool.json when present" in apply_fixes
 	assert "`" not in block and "$" not in block and "\\" not in block
 	spec = importlib.util.spec_from_file_location("review_untrusted_workspace_test", REPO_ROOT / "scripts/review_untrusted_workspace.py")
 	assert spec is not None and spec.loader is not None
@@ -9306,6 +9309,9 @@ def test_review_editor_prompt_explains_sandbox_limits() -> None:
 	spec.loader.exec_module(workspace_module)
 	assert not workspace_module.allowed(".claude/commands/audit-plans.md")
 	assert not workspace_module.allowed(".github/ai/other.json")
+	with mock.patch.dict(os.environ):
+		os.environ.pop("REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED", None)
+		assert workspace_module.allowed(".github/ai/chatgpt_pool.json")
 	assert not workspace_module.allowed(".claude/hooks/pr_merge_status_guard.py")
 	assert workspace_module.allowed(".github/workflows/x.yml")
 	assert workspace_module.allowed(".claude/hooks/gh_api_write_guard.py")
@@ -9516,6 +9522,123 @@ def test_review_other_sandbox_transfer_failure_evidence() -> None:
 			assert resolver_result.returncode == 7, resolver_result.stderr
 			assert resolver_result.stderr == f"::error::Conflict resolver sandbox transfer failed; refusing to accept output.{expected}\n"
 			assert resolver_result.stdout == ("transfer_rollback_failed\n" if diagnostic == "transfer_rollback_failed" else "sandbox_transfer_failed\n")
+
+
+def _load_review_workspace_module(module_name: str):
+	spec = importlib.util.spec_from_file_location(module_name, REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+def test_review_isolation_admits_chatgpt_pool_config_behind_flag() -> None:
+	"""PR #9112 / issue #9111: .github/ai/chatgpt_pool.json is admitted behind an on-by-default off switch.
+
+	No pytest fixtures: main() runs this file under plain python3 in CI.
+	"""
+	module = _load_review_workspace_module("review_workspace_chatgpt_pool_flag")
+	flag = "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED"
+	assert module.CHATGPT_POOL_CONFIG_FLAG == flag
+	with mock.patch.dict(os.environ):
+		os.environ.pop(flag, None)
+		assert module.allowed(".github/ai/chatgpt_pool.json")
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			for value in ("", "true", "TRUE", "True"):
+				os.environ[flag] = value
+				assert module.allowed(".github/ai/chatgpt_pool.json"), value
+				# Every other .github/ai/ path stays rejected, including a case variant.
+				assert not module.allowed(".github/ai/other.json")
+				assert not module.allowed(".github/ai/WORKFLOW.md")
+				assert not module.allowed(".github/ai/ChatGPT_pool.json")
+				assert not module.allowed(".github/ai/chatgpt_pool.json/x")
+				assert module.allowed(".github/ai/claude_engine.json")
+			for value in ("false", "False", "FALSE"):
+				os.environ[flag] = value
+				assert not module.allowed(".github/ai/chatgpt_pool.json"), value
+				assert module.allowed(".github/ai/claude_engine.json")
+				assert not module.allowed(".github/ai/other.json")
+		assert stderr.getvalue() == ""
+		module._chatgpt_pool_config_flag_warned = False
+		os.environ[flag] = "maybe"
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			assert not module.allowed(".github/ai/chatgpt_pool.json")
+			assert not module.allowed(".github/ai/chatgpt_pool.json")
+		err = stderr.getvalue()
+		assert err == "::warning::REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED has an unrecognised value; .github/ai/chatgpt_pool.json stays out of the review sandbox\n"
+		assert "maybe" not in err
+		os.environ[flag] = " true "
+		with contextlib.redirect_stderr(io.StringIO()):
+			assert not module.allowed(".github/ai/chatgpt_pool.json")
+
+
+def test_review_isolation_transfers_new_chatgpt_pool_config() -> None:
+	"""PR #9112 / issue #9111: an editor-created or edited chatgpt_pool.json survives transfer unless the flag is false."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	flag = "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED"
+	# ("false", True): with the switch off, an existing host file stays out of
+	# the sandbox and is never overwritten by an editor write.
+	for flag_value, existing in ((None, False), ("false", False), (None, True), ("false", True)):
+		with tempfile.TemporaryDirectory() as td:
+			root = Path(td)
+			host = root / "host"
+			source = root / "isolated" / "source"
+			source.mkdir(parents=True)
+			(host / ".github/ai").mkdir(parents=True)
+			(host / ".github/ai/claude_engine.json").write_text("{}\n")
+			if existing:
+				(host / ".github/ai/chatgpt_pool.json").write_text('{"enabled": false}\n')
+			subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+			subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
+			manifest = root / "isolated" / "baseline.json"
+			env = {**_git_clean_env()}
+			env.pop(flag, None)
+			if flag_value is not None:
+				env[flag] = flag_value
+
+			def run(action: str) -> subprocess.CompletedProcess[str]:
+				return subprocess.run(
+					[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+					env=env, capture_output=True, text=True, check=False,
+				)
+
+			assert run("snapshot").returncode == 0
+			assert (source / ".github/ai/chatgpt_pool.json").exists() is (existing and flag_value != "false")
+			assert run("refresh").returncode == 0
+			(source / ".github/ai/chatgpt_pool.json").write_text('{"enabled": true}\n')
+			(source / ".github/ai/other.json").write_text("{}\n")
+			result = run("transfer")
+			assert result.returncode == 0, result.stderr
+			assert not (host / ".github/ai/other.json").exists()
+			if flag_value == "false" and existing:
+				assert (host / ".github/ai/chatgpt_pool.json").read_text() == '{"enabled": false}\n'
+			elif flag_value == "false":
+				assert not (host / ".github/ai/chatgpt_pool.json").exists()
+			else:
+				assert (host / ".github/ai/chatgpt_pool.json").read_text() == '{"enabled": true}\n'
+
+
+def test_review_isolation_snapshot_logs_unrecognised_chatgpt_pool_flag() -> None:
+	"""PR #9112 / issue #9111: snapshot (whose stderr reaches the Actions log) warns on a mistyped switch."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		(host / ".github/ai").mkdir(parents=True)
+		(host / ".github/ai/claude_engine.json").write_text("{}\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
+		(root / "isolated" / "source").mkdir(parents=True)
+		env = {**_git_clean_env(), "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED": "flase"}
+		result = subprocess.run(
+			[sys.executable, str(workspace_helper), "snapshot", str(host), str(root / "isolated" / "source"), str(root / "isolated" / "baseline.json")],
+			env=env, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "::warning::REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED has an unrecognised value" in result.stderr
+		assert "flase" not in result.stderr
 
 
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:
@@ -10864,7 +10987,8 @@ def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
 	raw = WORKFLOW.read_text(encoding="utf-8")
 	pre_review = [line for line in raw.splitlines() if "env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'" in line]
 	# 19 since #8427 P3: the switch-gated done-check prepare and label steps.
-	assert len(pre_review) == 19, len(pre_review)
+	# 21 since #9052: the review findings record write and upload steps.
+	assert len(pre_review) == 21, len(pre_review)
 	for line in pre_review:
 		assert line.lstrip().startswith("if: "), line
 		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in line, line
@@ -10886,7 +11010,7 @@ def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
 		"Telegram success",
 	):
 		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in _step_block(name), name
-	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 28
+	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 30
 
 
 def test_post_sync_test_repair_commit_is_pushed() -> None:
