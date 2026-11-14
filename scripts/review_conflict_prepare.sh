@@ -224,23 +224,40 @@ fi
 # The pair list is read only from the trusted support checkout
 # (${SUPPORT_SCRIPTS_DIR}/review_untrusted_workspace.py), never from the PR
 # worktree, and every pair must be .claude/hooks/<name> ->
-# workflow-templates/.claude/hooks/<name>.  When it cannot be read, only the
-# built-in GUARD_HOOK_LIVE_PATH / GUARD_HOOK_TEMPLATE_PATH pair is handled
-# (the pre-#9014 behaviour).
+# workflow-templates/.claude/hooks/<name>.  When it cannot be read, the
+# static GUARD_HOOK_TEMPLATE_PAIRS list below (equal to PAIRED_LIVE_COPIES)
+# is used instead (#9004; before it only the guard pair was handled).
 # CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED (default true, defaulted here:
 # review_autofix.yml does not forward it) is the kill switch for every pair.
 # Log keys: "Guard-hook template merge: pair_source=..." and
 # "Guard-hook template merge: skipped reason=<r> path=<live>".
 # Return codes: 0 resolved and staged; 1 refused, path untouched;
 # 2 staged result failed verification (fatal).
+# The function takes an optional <live> <template> pair and defaults to the
+# guard pair; the call site runs it for every pair
+# _conflict_prepare_guard_hook_pairs returns whose live path is unmerged
+# (issues #9004, #9014).
 GUARD_HOOK_LIVE_PATH=".claude/hooks/pr_merge_status_guard.py"
 GUARD_HOOK_TEMPLATE_PATH="workflow-templates/.claude/hooks/pr_merge_status_guard.py"
+# Static "live:template" pairs, equal to
+# review_untrusted_workspace.PAIRED_LIVE_COPIES
+# (tests/test_conflict_guard_hook_template_merge.py locks the equality).
+# Used when the support checkout's list cannot be read, so every paired live
+# hook stays covered without it (#9004).
+GUARD_HOOK_TEMPLATE_PAIRS=(
+  "${GUARD_HOOK_LIVE_PATH}:${GUARD_HOOK_TEMPLATE_PATH}"
+  ".claude/hooks/prepush_affected_tests.py:workflow-templates/.claude/hooks/prepush_affected_tests.py"
+  ".claude/hooks/gh_api_write_guard.py:workflow-templates/.claude/hooks/gh_api_write_guard.py"
+  ".claude/hooks/pr_watch_guard.py:workflow-templates/.claude/hooks/pr_watch_guard.py"
+  ".claude/hooks/session-start.sh:workflow-templates/.claude/hooks/session-start.sh"
+)
 # Writes one "live<TAB>template" line per pair to "$1".  Pairs come from
 # PAIRED_LIVE_COPIES in the trusted support checkout only (no default to the
-# PR worktree's scripts/); otherwise the built-in pair above is used.
+# PR worktree's scripts/); otherwise the static GUARD_HOOK_TEMPLATE_PAIRS
+# list above is used.
 _conflict_prepare_guard_hook_pairs()
 {
-  local ghp_out="$1" ghp_raw="" ghp_reason="" ghp_live="" ghp_tpl="" ghp_count=0
+  local ghp_out="$1" ghp_raw="" ghp_reason="" ghp_live="" ghp_tpl="" ghp_count=0 ghp_pair=""
   local ghp_module="${SUPPORT_SCRIPTS_DIR:-}/review_untrusted_workspace.py"
   : > "${ghp_out}"
   if [ -z "${SUPPORT_SCRIPTS_DIR:-}" ] || [ ! -f "${ghp_module}" ] || [ -L "${ghp_module}" ]; then
@@ -274,7 +291,10 @@ for live, tpl in pairs.items():
     fi
   fi
   if [ -n "${ghp_reason}" ]; then
-    printf '%s\t%s\n' "${GUARD_HOOK_LIVE_PATH}" "${GUARD_HOOK_TEMPLATE_PATH}" > "${ghp_out}"
+    : > "${ghp_out}"
+    for ghp_pair in "${GUARD_HOOK_TEMPLATE_PAIRS[@]}"; do
+      printf '%s\t%s\n' "${ghp_pair%%:*}" "${ghp_pair#*:}" >> "${ghp_out}"
+    done
     echo "Guard-hook template merge: pair_source=fallback reason=${ghp_reason}"
   else
     echo "Guard-hook template merge: pair_source=paired_live_copies pairs=${ghp_count}"
