@@ -346,8 +346,10 @@ echo "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=$([ -n "${clean_marker_suffix}" ] &
 #   fingerprint-cap-* concurrency group and adds the label before it posts
 #   its cap comment, so a cap landing between this read and the DELETE can
 #   lose its label. The gate's cap skip counts failure markers, not the label,
-#   so that head stays capped. Closing the window needs a second read (beyond
-#   the Q1=A budget) or a review_autofix.yml change (the issue's §27 limit).
+#   so that head stays capped. A second read (beyond the Q1=A budget) would
+#   only narrow the window, since a read-then-DELETE pair is never atomic;
+#   closing it needs serialization with fingerprint-cap-block (a shared
+#   concurrency group, i.e. a review_autofix.yml change, the issue's §27 limit).
 #   Never returns non-zero; linked issues are not touched.
 # Log: REVIEW_BLOCKED_STALE_CLEAR pr=<n> outcome=removed|kept|error
 #   reason=<token> cap_head=<sha|none> cap_support=<sha|none>
