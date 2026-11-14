@@ -49,6 +49,12 @@
 #   CHECK_TRIAGE_STAGE                        all (default), collect, diagnose, route,
 #                                             or supersede (close the stale issue the
 #                                             collect stage recorded, issue #8671)
+#   CHECK_TRIAGE_STAGE=transient-rerun        (issue #9387) one rerun-failed-jobs request for
+#                                             a transient failure of the triaged workflow run;
+#                                             always exits 0 (fail open)
+#   CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED      transient-rerun stage switch: default true (unset,
+#                                             empty or true in any case); "false" turns it off;
+#                                             any other value turns it off with a warning
 #   CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED      "false" keeps a blocked triage issue from an
 #                                             older PR head as a duplicate instead of
 #                                             superseding it (default true; issue #8671)
@@ -682,7 +688,7 @@ if [ -z "${TRUSTED_SUPPORT_DIR}" ] ||
 	exit 1
 fi
 case "${TRIAGE_STAGE}" in
-	all|collect|diagnose|route|supersede|supersede-check) ;;
+	all|collect|diagnose|route|supersede|supersede-check|transient-rerun) ;;
 	*) log "error invalid_stage"; exit 1 ;;
 esac
 
@@ -894,6 +900,153 @@ if [ "${TRIAGE_STAGE}" = "route" ]; then
 		exit 0
 	fi
 	triage_upstream_send || true
+	exit 0
+fi
+
+if [ "${TRIAGE_STAGE}" = "transient-rerun" ]; then
+	# Issue #9387: runs right after collect with GH_PAT (Actions write). When the
+	# triaged workflow run's first attempt failed only for a transient reason
+	# (ci_cancelled_rerun.classify_runner_shutdown: shutdown, action_resolution,
+	# checkout_fetch or abandoned), request one rerun-failed-jobs POST through
+	# ci_cancelled_rerun.rerun_failed_jobs (201 required, no retry, response body
+	# never printed). The triage issue is still posted as before; a passing
+	# re-run lets check_triage_resolution.py close it (path=open_head_rerun) the
+	# next time an existing gate caller (clarify, plan, unblock judge) runs.
+	# Every outcome logs one line and exits 0 (fail open).
+	transient_rerun_run=""
+	transient_rerun_switch="$(printf '%s' "${CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED:-}" | tr '[:upper:]' '[:lower:]')"
+	case "${transient_rerun_switch}" in
+		''|true) transient_rerun_enabled=true ;;
+		false) transient_rerun_enabled=false ;;
+		*)
+			transient_rerun_enabled=false
+			echo "::warning::CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED is not true or false; transient check re-runs are off"
+			;;
+	esac
+	if [ "${transient_rerun_enabled}" != "true" ]; then
+		log "op=transient_rerun outcome=skip reason=disabled run= verdict=none"
+		exit 0
+	fi
+	if [ "${HISTORICAL_MODE}" = "true" ] || [ -n "${HIST_RUN_ID}" ]; then
+		log "op=transient_rerun outcome=skip reason=historical run= verdict=none"
+		exit 0
+	fi
+	transient_rerun_prefix="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/"
+	transient_rerun_rest="${CHECK_DETAILS_URL#"${transient_rerun_prefix}"}"
+	if [ "${transient_rerun_rest}" = "${CHECK_DETAILS_URL}" ] ||
+		! [[ "${transient_rerun_rest}" =~ ^([1-9][0-9]{0,19})([/?#]|$) ]]; then
+		log "op=transient_rerun outcome=skip reason=no_workflow_run run= verdict=none"
+		exit 0
+	fi
+	transient_rerun_run="${BASH_REMATCH[1]}"
+	if ! [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+		log "op=transient_rerun outcome=skip reason=head_sha_invalid run=${transient_rerun_run} verdict=none"
+		exit 0
+	fi
+	transient_rerun_helper="${PWD}/scripts/ci_cancelled_rerun.py"
+	if [ ! -f "${transient_rerun_helper}" ] || [ -L "${transient_rerun_helper}" ]; then
+		log "op=transient_rerun outcome=skip reason=helper_unavailable run=${transient_rerun_run} verdict=none"
+		exit 0
+	fi
+	# API hygiene (GitHub API call rules): the audited existing calls are collect's base-gate
+	# `actions/runs/<id> --jq .workflow_id` read and
+	# collect_pr_check_runs_context.py. That base-gate read runs in another
+	# step, only on the base-gate path, and is not kept in triage_metadata.json,
+	# so this stage makes its own single run GET (for run_attempt, head_sha,
+	# status and conclusion). The other reads are the helper's existing bounded
+	# attempt-1 jobs and annotation reads (at most 1 + 10 GETs, 30 s each).
+	transient_rerun_rc=0
+	transient_rerun_out="$(PYTHONDONTWRITEBYTECODE=1 timeout 420 python3 -I -B - \
+		"${transient_rerun_helper}" "${REPO}" "${transient_rerun_run}" "${HEAD_SHA}" <<'PY'
+import contextlib
+import importlib.util
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+
+TRANSIENT_VERDICTS = ("shutdown", "action_resolution", "checkout_fetch", "abandoned")
+
+
+def emit(outcome, reason, verdict="none"):
+	if not isinstance(verdict, str) or not re.fullmatch(r"[a-z_]{1,40}", verdict):
+		verdict = "unknown"
+	print(f"{outcome} {reason} {verdict}")
+	sys.exit(0)
+
+
+def main():
+	helper_path, repo, run_id_text, head_sha = sys.argv[1:5]
+	run_id = int(run_id_text)
+	spec = importlib.util.spec_from_file_location("ci_cancelled_rerun_for_triage", helper_path)
+	if spec is None or spec.loader is None:
+		emit("skip", "helper_unavailable")
+	helper = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(helper)
+	response = subprocess.run(["gh", "api", f"repos/{repo}/actions/runs/{run_id}"],
+		capture_output=True, text=True, timeout=30, check=False)
+	if response.returncode != 0:
+		emit("fail_open", "run_unreadable")
+	try:
+		run = json.loads(response.stdout)
+	except ValueError:
+		emit("fail_open", "run_unreadable")
+	run_repo = (run.get("repository") or {}).get("full_name") if isinstance(run, dict) and isinstance(run.get("repository"), dict) else None
+	if (not isinstance(run, dict) or run.get("id") != run_id or run.get("head_sha") != head_sha
+			or not isinstance(run_repo, str) or run_repo.lower() != repo.lower()):
+		emit("skip", "run_mismatch")
+	if run.get("status") != "completed" or run.get("conclusion") != "failure":
+		emit("skip", "run_not_failed")
+	if type(run.get("run_attempt")) is not int or run["run_attempt"] != 1:
+		emit("skip", "attempt_cap")
+	# The helper's own stdout (its decision lines) is discarded; only the
+	# final token line below is printed. Its switch warnings go to stderr.
+	with contextlib.redirect_stdout(io.StringIO()):
+		verdict = helper.classify_runner_shutdown(
+			repo, run_id,
+			helper.action_resolution_rerun_enabled(os.environ.get("CI_ACTION_RESOLUTION_RERUN_ENABLED")),
+			helper.checkout_fetch_rerun_enabled(os.environ.get("CI_CHECKOUT_FETCH_RERUN_ENABLED")),
+			helper.abandoned_job_rerun_enabled(os.environ.get("CI_ABANDONED_JOB_RERUN_ENABLED")),
+		)
+	if verdict not in TRANSIENT_VERDICTS:
+		emit("skip", "not_transient", verdict)
+	with contextlib.redirect_stdout(io.StringIO()):
+		requested = helper.rerun_failed_jobs(repo, run_id) is True
+	if requested:
+		emit("requested", "transient", verdict)
+	emit("fail_open", "post_not_201", verdict)
+
+
+try:
+	main()
+except SystemExit:
+	raise
+except BaseException:  # noqa: BLE001 - fail open; the reason never carries data
+	print("fail_open error none")
+PY
+	)" || transient_rerun_rc=$?
+	transient_rerun_outcome=""
+	transient_rerun_reason=""
+	transient_rerun_verdict=""
+	read -r transient_rerun_outcome transient_rerun_reason transient_rerun_verdict <<< "${transient_rerun_out}" || true
+	transient_rerun_outcome="${transient_rerun_outcome//[^a-z_]/}"
+	transient_rerun_reason="${transient_rerun_reason//[^a-z_0-9]/}"
+	transient_rerun_verdict="${transient_rerun_verdict//[^a-z_]/}"
+	case "${transient_rerun_outcome}" in
+		requested|skip|fail_open) ;;
+		*)
+			transient_rerun_outcome="fail_open"
+			if [ "${transient_rerun_rc}" -eq 124 ]; then
+				transient_rerun_reason="timeout"
+			else
+				transient_rerun_reason="error"
+			fi
+			transient_rerun_verdict="none"
+			;;
+	esac
+	log "op=transient_rerun outcome=${transient_rerun_outcome} reason=${transient_rerun_reason:-error} run=${transient_rerun_run} verdict=${transient_rerun_verdict:-none}"
 	exit 0
 fi
 

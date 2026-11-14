@@ -254,6 +254,9 @@ jobs:
       CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED || 'true' }}
       # Issue #8671: supersede a blocked triage issue from an older PR head.
       CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED: ${{ vars.CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED || 'true' }}
+      # Issue #9387: one rerun-failed-jobs request when the triaged run failed
+      # only for a transient reason; "false" turns the transient-rerun stage off.
+      CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED: ${{ vars.CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED || 'true' }}
       # Issue #9120: re-run a first-attempt run whose failed jobs only hit a
       # github.com release-download 502/503/504 once, instead of filing an issue.
       CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED || 'true' }}
@@ -448,11 +451,16 @@ jobs:
           mkdir -p scripts
 
           _fetched=()
-          for f in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py workflow_failure_heal.py; do
+          for f in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py workflow_failure_heal.py ci_cancelled_rerun.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               if [ "${f}" = "render_prompt.py" ]; then
                 echo "::notice::Optional ${f} absent; render_prompt.sh resolves it elsewhere or uses the bundled renderer."
+                continue
+              fi
+              if [ "${f}" = "ci_cancelled_rerun.py" ]; then
+                # Optional (#9387): without it the transient-rerun stage skips.
+                echo "::notice::Optional ${f} absent; transient check re-runs are skipped."
                 continue
               fi
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
@@ -525,6 +533,11 @@ jobs:
           install -m 0755 .codex-workflow-src/scripts/collect_pr_check_runs_context.py "${trusted_dir}/scripts/collect_pr_check_runs_context.py"
           # Historical mode redacts job logs with redact-stream before diagnosis.
           install -m 0755 .codex-workflow-src/scripts/workflow_failure_heal.py "${trusted_dir}/scripts/workflow_failure_heal.py"
+          # The transient-rerun stage imports its classifier and re-run request
+          # from this helper (#9387); optional, the stage skips without it.
+          if [ -f .codex-workflow-src/scripts/ci_cancelled_rerun.py ] && [ ! -L .codex-workflow-src/scripts/ci_cancelled_rerun.py ]; then
+            install -m 0755 .codex-workflow-src/scripts/ci_cancelled_rerun.py "${trusted_dir}/scripts/ci_cancelled_rerun.py"
+          fi
           install -m 0755 .codex-workflow-src/scripts/clarify_isolated_run.sh "${trusted_dir}/scripts/clarify_isolated_run.sh"
           install -m 0755 .codex-workflow-src/scripts/sandbox_image.sh "${trusted_dir}/scripts/sandbox_image.sh"
           install -m 0755 .codex-workflow-src/scripts/clarify_base_image_preseed.sh "${trusted_dir}/scripts/clarify_base_image_preseed.sh"
@@ -637,6 +650,30 @@ jobs:
           CHECK_TRIAGE_HISTORICAL_RUN_ID: ${{ inputs.historical_run_id }}
           CHECK_TRIAGE_HISTORICAL_JOB_ID: ${{ inputs.historical_job_id }}
           CHECK_TRIAGE_HISTORICAL_REPRO_DIR: ${{ inputs.historical_repro_artifact_prefix != '' && format('{0}/historical_repro', env.RUNTIME_DIR) || '' }}
+        run: |
+          set -euo pipefail
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
+          bash scripts/check_failure_triage.sh
+
+      # Issue #9387: when the triaged workflow run's first attempt failed only
+      # for a transient reason (runner shutdown, action resolution, checkout
+      # fetch, abandoned job), request one rerun-failed-jobs with GH_PAT. The
+      # stage always exits 0 and the triage issue is still posted; a passing
+      # re-run lets the resolution gate close it (path=open_head_rerun).
+      - name: Re-run transient check failure
+        id: transient_rerun
+        if: ${{ steps.collect_triage.outputs.ready == 'true' && inputs.historical_run_id == '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          CHECK_TRIAGE_STAGE: transient-rerun
+          CHECK_TRIAGE_HEAD_SHA: ${{ inputs.head_sha }}
+          CHECK_TRIAGE_DETAILS_URL: ${{ inputs.details_url }}
+          CHECK_TRIAGE_HISTORICAL_RUN_ID: ${{ inputs.historical_run_id }}
+          CHECK_TRIAGE_HISTORICAL_JOB_ID: ${{ inputs.historical_job_id }}
+          CI_ACTION_RESOLUTION_RERUN_ENABLED: ${{ vars.CI_ACTION_RESOLUTION_RERUN_ENABLED || 'true' }}
+          CI_CHECKOUT_FETCH_RERUN_ENABLED: ${{ vars.CI_CHECKOUT_FETCH_RERUN_ENABLED || 'true' }}
+          CI_ABANDONED_JOB_RERUN_ENABLED: ${{ vars.CI_ABANDONED_JOB_RERUN_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"

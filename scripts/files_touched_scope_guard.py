@@ -832,11 +832,40 @@ _PLAN_GRANT_BARE_FILE_RE = re.compile(
 _PLAN_GRANT_FILE_SEGMENT_RE = re.compile(r"^(?:\.[A-Za-z0-9_-][A-Za-z0-9._-]*|[^.].*\.[A-Za-z][A-Za-z0-9]*)$")
 
 
+def _plan_grant_checkout_state(path: str) -> str:
+	"""``"file"``, ``"missing"`` or ``"other"`` for a repo-relative path (#9387).
+
+	Read with os.lstat relative to the current directory, which is the planning
+	checkout: plan.yml and the poller (orchestrate_poll_process.sh) run the
+	guard from the repository checkout. Only a regular file is ``"file"``; a
+	symlink is never followed and, like a directory or any other type, is
+	``"other"``; a path under a symlinked parent directory is ``"other"`` too,
+	so a grant never reaches through a link. Run from anywhere else the answer is ``"missing"`` or
+	``"other"``, which keeps today's behaviour or holds the plan, and never
+	widens a grant.
+	"""
+	try:
+		parts = path.split("/")
+		for depth in range(1, len(parts)):
+			# os.lstat follows symlinks in parent components; refuse them.
+			if stat.S_ISLNK(os.lstat("/".join(parts[:depth])).st_mode):
+				return "other"
+		mode = os.lstat(path).st_mode
+	except (FileNotFoundError, NotADirectoryError):
+		return "missing"
+	except (OSError, ValueError):
+		return "other"
+	return "file" if stat.S_ISREG(mode) else "other"
+
+
 def _plan_grant_path(raw: str) -> str:
 	"""A plan token as an exact repo-relative file path, or "" when it is not one.
 
 	Directories, globs, absolute or parent paths, URLs and anything outside a
-	plain path alphabet are rejected: they can never be an exact grant.
+	plain path alphabet are rejected: they can never be an exact grant. An
+	extensionless last segment (no ``.``) that the name rules reject is still
+	granted when the path is a regular file in the planning checkout
+	(_plan_grant_checkout_state, #9387); a directory or symlink never is.
 	"""
 	# Only `*` is stripped: `_` is part of names such as `__init__.py`.
 	path = normalize_path(_plan_path_token(raw.strip().strip("*")))
@@ -851,19 +880,103 @@ def _plan_grant_path(raw: str) -> str:
 	if _PLAN_GRANT_BARE_FILE_RE.match(last):
 		return path
 	if len(segments) == 1 and not _PLAN_GRANT_ROOT_FILE_RE.match(path):
+		if "." not in last and _plan_grant_checkout_state(path) == "file":
+			return path
 		return ""
 	if not _PLAN_GRANT_FILE_SEGMENT_RE.match(last) or last.endswith(".d"):
+		if "." not in last and _plan_grant_checkout_state(path) == "file":
+			return path
 		return ""
 	return path
 
 
-def extract_plan_file_paths(plan_text: str) -> list[str]:
+def _plan_grant_missing_path(raw: str) -> str:
+	"""A plan token naming an extensionless file absent from the checkout, else "".
+
+	Such a path is neither granted nor silently dropped: the plan gate holds the
+	plan as replannable (#9387). The syntax checks repeat _plan_grant_path's on
+	purpose (kept separate so that function's existing lines stay unchanged);
+	keep the two in step. The path must be nested and its first segment an
+	existing checkout directory, so prose tokens such as ``owner/repo`` never
+	count.
+	"""
+	path = normalize_path(_plan_path_token(raw.strip().strip("*")))
+	if not path or len(path) > 512 or path.endswith("/") or path.startswith("/") or "//" in path:
+		return ""
+	segments = path.split("/")
+	if len(segments) < 2:
+		return ""
+	if any(seg in {"", ".", ".."} or not _PLAN_GRANT_SEGMENT_RE.match(seg) for seg in segments):
+		return ""
+	if segments[0].startswith("-") or any(char in path for char in _GLOB_CHARS):
+		return ""
+	last = segments[-1]
+	if "." in last or _PLAN_GRANT_BARE_FILE_RE.match(last):
+		return ""
+	try:
+		if not stat.S_ISDIR(os.lstat(segments[0]).st_mode):
+			return ""
+	except (OSError, ValueError):
+		return ""
+	return path if _plan_grant_checkout_state(path) == "missing" else ""
+
+
+# A Files bullet that opens with one backticked token, alone or followed by a
+# dash, colon or parenthesis (`- `VERSION``, `- `VERSION` - bump it`), presents
+# that token as a listed path rather than prose (#9387). Only a top-level
+# (column 0) bullet counts: an indented sub-bullet annotates a listed file
+# with identifiers (`  - `build_payload`: wraps it`), not root file names.
+_PLAN_GRANT_LEAD_BACKTICK_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+`([^`\n]+)`\s*(?:$|[-:(–—])")
+# The same shape without backticks (`- VERSION`, `- VERSION - bump it`,
+# `- VERSION: bump it`); used only for a line with no backticks (#9387). The
+# bare token must be upper case (`VERSION`, `LICENSE`, `CODEOWNERS`), so a
+# label word in prose (`- Tests: add cases`, `- Docs - explain it`, `- None -
+# no files need edits`) never counts; NONE, TBD and TODO are excluded too.
+_PLAN_GRANT_LEAD_BARE_RE = re.compile(
+	r"^(?:[-*+]|\d+[.)])\s+\**(?!(?:NONE|TBD|TODO)(?![A-Z0-9_]))[A-Z][A-Z0-9_]*\**(?:\s*$|\s*[:(]|\s+[-–—])")
+
+
+def _plan_grant_missing_root_path(raw: str) -> str:
+	"""A root-level extensionless file name absent from the checkout, else "" (#9387).
+
+	The nested rule (_plan_grant_missing_path) needs an existing first
+	directory; a root name has none, so the caller only asks for a bullet's
+	top-level leading token (_PLAN_GRANT_LEAD_BACKTICK_RE, or
+	_PLAN_GRANT_LEAD_BARE_RE on a line without backticks), and the current
+	directory must be a git checkout (``.git`` present). Run from anywhere else
+	nothing is reported, which keeps the previous behaviour.
+	"""
+	path = normalize_path(_plan_path_token(raw.strip().strip("*")))
+	if not path or len(path) > 255 or "/" in path or not _PLAN_GRANT_SEGMENT_RE.match(path):
+		return ""
+	if path.startswith("-") or "." in path or any(char in path for char in _GLOB_CHARS):
+		return ""
+	if _PLAN_GRANT_BARE_FILE_RE.match(path) or not os.path.lexists(".git"):
+		return ""
+	if path.lower() in {"none", "tbd", "todo"}:
+		# A no-change or placeholder entry (`- `None` - no edits`), not a file.
+		return ""
+	return path if _plan_grant_checkout_state(path) == "missing" else ""
+
+
+def extract_plan_missing_file_paths(plan_text: str) -> list[str]:
+	"""Extensionless files a plan's Files section lists that the checkout lacks (#9387)."""
+	missing: list[str] = []
+	extract_plan_file_paths(plan_text, missing_out=missing)
+	return missing
+
+
+def extract_plan_file_paths(plan_text: str, *, missing_out: list[str] | None = None) -> list[str]:
 	"""Exact file paths a plan's Files section lists (empty without a section).
 
 	Reads backticked spans, a bullet's first token when the bullet has no
 	backticks, and bare protected-path tokens. Only tokens that are exact file
 	paths are kept (see _plan_grant_path); a listed directory or glob is
 	dropped here and still holds the plan through the protected-path check.
+	An extensionless token counts only when it is a regular file in the
+	planning checkout. With ``missing_out`` (a list), each rejected token that
+	_plan_grant_missing_path reports as a missing extensionless file is
+	appended to it once (#9387).
 	"""
 	section = _plan_files_section(plan_text or "")
 	if section is None:
@@ -895,11 +1008,22 @@ def extract_plan_file_paths(plan_text: str) -> list[str]:
 		if bullet:
 			candidates.append(bullet.group(1))
 		candidates.extend(match.group(1) for match in _PLAN_PATH_TOKEN_RE.finditer(line))
+		lead_token = _PLAN_GRANT_LEAD_BACKTICK_RE.match(line)
+		lead_raw = lead_token.group(1) if lead_token else ""
+		if not lead_raw and bullet and "`" not in line and _PLAN_GRANT_LEAD_BARE_RE.match(line):
+			lead_raw = bullet.group(1)
 		for raw in candidates:
 			path = _plan_grant_path(raw)
 			if path and path not in seen:
 				seen.add(path)
 				paths.append(path)
+			elif not path and isinstance(missing_out, list):
+				missing_path = _plan_grant_missing_path(raw)
+				if not missing_path and lead_raw and raw == lead_raw:
+					# A root-level name only as the bullet's leading token (#9387).
+					missing_path = _plan_grant_missing_root_path(raw)
+				if missing_path and missing_path not in missing_out:
+					missing_out.append(missing_path)
 	return paths
 
 
@@ -998,7 +1122,9 @@ def _plan_hold_replannable(plan_text: str, protected: list[str], denied: list[st
 	"""True when a path_not_granted hold would approve without its non-exact tokens."""
 	if not denied or not isinstance(metadata, dict):
 		return False
-	if not all(path.endswith("/") or any(char in path for char in _GLOB_CHARS) for path in denied):
+	# A missing extensionless file (#9387) counts like a non-exact token.
+	if not all(path.endswith("/") or any(char in path for char in _GLOB_CHARS)
+			or _plan_grant_missing_path(path) == path for path in denied):
 		return False
 	if _issue_on_heal_route(metadata.get("body") or "", metadata.get("labels")):
 		return False
@@ -1032,6 +1158,12 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 
 	A ``path_not_granted`` hold held only by directory or glob tokens, which
 	would approve without them, adds ``replannable: true`` (#8339).
+
+	A plan that would approve but lists an extensionless file missing from
+	the planning checkout (extract_plan_missing_file_paths) is held with
+	``path_not_granted``, those paths denied and ``replannable: true``; no
+	grant body is written. On the heal route ``replannable`` stays false
+	(#9387).
 	"""
 	protected: list[str] = []
 	grant_proposed = False
@@ -1044,6 +1176,9 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 		if not plan_text.strip():
 			raise ValueError("empty plan")
 		protected = extract_plan_automation_paths(plan_text)
+		# Extensionless files the plan lists that the checkout lacks (#9387).
+		missing_paths = extract_plan_missing_file_paths(plan_text)
+		missing_hold = False
 		flag_on = _flag_enabled(flag_value)
 		grant: object = None
 		metadata = None
@@ -1093,7 +1228,18 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 					fetch_origin if repo else None)
 				proposed = evaluate_plan_auto_approval(protected, proposed_grant, flag_enabled=flag_on,
 					allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
-				if proposed[0] == PLAN_DECISION_APPROVE:
+				# #9387: the proposal would approve but for the missing
+				# extensionless files the plan lists.
+				proposal_held_by_missing = bool(missing_paths) and (proposed[0] == PLAN_DECISION_APPROVE
+					or evaluate_plan_auto_approval([path for path in protected if path not in missing_paths],
+						proposed_grant, flag_enabled=flag_on, allow_workflow_edits=allow_workflow_edits,
+						issue_number=issue_number)[0] == PLAN_DECISION_APPROVE)
+				if proposal_held_by_missing:
+					decision, reason, denied = PLAN_DECISION_HOLD, "path_not_granted", list(missing_paths)
+					# Not replannable on the heal route, as below.
+					replannable = not _issue_on_heal_route(metadata.get("body") or "", metadata.get("labels"))
+					missing_hold = True
+				elif proposed[0] == PLAN_DECISION_APPROVE:
 					with open(grant_body_out, "w", encoding="utf-8") as handle:
 						handle.write(proposed_body)
 					decision, reason, denied = PLAN_DECISION_APPROVE, PIPELINE_PLAN_GRANT_REASON, []
@@ -1108,12 +1254,14 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 		# pipeline plan grant is skipped: its block is written from this plan.
 		# Without issue metadata (the poller's cache had no body) there is no
 		# list to compare, so the check is skipped; implement still enforces.
+		loaded_meta = metadata
 		if decision == PLAN_DECISION_APPROVE and not grant_proposed and issue_meta_file \
 				and plan_files_touched_gate_active():
 			issue_meta = metadata
 			if issue_meta is None:
 				with open(issue_meta_file, encoding="utf-8") as handle:
 					issue_meta = json.load(handle)
+			loaded_meta = issue_meta
 			# The issue's own changelog / agents fragments are allowed, as the
 			# implement guard allows them, so an auto-heal plan that adds the
 			# required fragment is not parked for a human.
@@ -1141,7 +1289,24 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 			elif outside:
 				decision, reason, denied = PLAN_DECISION_HOLD, PLAN_FILES_TOUCHED_GATE_REASON, outside
 			auto_heal_companions = companions_used and decision == PLAN_DECISION_APPROVE
-		if decision == PLAN_DECISION_HOLD and reason == "path_not_granted":
+		# #9387: any other approval of a plan that lists missing extensionless
+		# files holds too; replannable unless the issue is on the heal route.
+		if decision == PLAN_DECISION_APPROVE and not grant_proposed and missing_paths:
+			decision, reason, denied = PLAN_DECISION_HOLD, "path_not_granted", list(missing_paths)
+			if not isinstance(loaded_meta, dict) and issue_meta_file:
+				# No protected path and the files_touched gate off: read the
+				# issue metadata here so the heal-route check still runs.
+				try:
+					with open(issue_meta_file, encoding="utf-8") as handle:
+						loaded_meta = json.load(handle)
+				except (OSError, UnicodeDecodeError, ValueError):
+					loaded_meta = None
+			# Unknown metadata fails closed (not replannable), as in _plan_hold_replannable.
+			replannable = isinstance(loaded_meta, dict) and not _issue_on_heal_route(
+				loaded_meta.get("body") or "", loaded_meta.get("labels"))
+			missing_hold = True
+			auto_heal_companions = False
+		if decision == PLAN_DECISION_HOLD and reason == "path_not_granted" and not missing_hold:
 			# The counterfactual approval would be a proposed pipeline plan
 			# grant when the proposal produced this hold, and the real gate
 			# skips the files_touched check for that; otherwise it runs as
