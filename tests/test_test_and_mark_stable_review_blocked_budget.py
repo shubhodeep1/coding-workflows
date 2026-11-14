@@ -116,7 +116,8 @@ def test_default_serial_budget_leaves_required_headroom() -> None:
 	timeout_match = re.search(r"^\s+timeout-minutes:\s+(\d+)\s*$", job, re.MULTILINE)
 	assert timeout_match is not None
 	job_timeout = int(timeout_match.group(1))
-	assert job_timeout == _integer_contract_value(job, "E2E_JOB_TIMEOUT_MINUTES") == 300
+	# 360 is GitHub's hosted-runner maximum (#9480).
+	assert job_timeout == _integer_contract_value(job, "E2E_JOB_TIMEOUT_MINUTES") == 360
 
 	phase_timeout = _workflow_dispatch_integer_default(workflow, "phase_timeout")
 	plan_timeout = _workflow_dispatch_integer_default(workflow, "plan_timeout")
@@ -175,7 +176,7 @@ def test_budget_guard_clamps_review_step_timeout_before_serial_math() -> None:
 	phase_timeout = _workflow_dispatch_integer_default(workflow, "phase_timeout")
 	plan_timeout = _workflow_dispatch_integer_default(workflow, "plan_timeout")
 	review_timeout = _workflow_dispatch_integer_default(workflow, "review_timeout")
-	review_step_override = _workflow_dispatch_integer_default(workflow, "review_step_timeout") + 30
+	review_step_override = _workflow_dispatch_integer_default(workflow, "review_step_timeout") + 90
 	review_handoff_budget = _integer_contract_value(job, "REVIEW_PHASE_HANDOFF_BUDGET_MINUTES")
 	shared_budget = (
 		(2 * phase_timeout)
@@ -186,8 +187,10 @@ def test_budget_guard_clamps_review_step_timeout_before_serial_math() -> None:
 		+ _integer_contract_value(job, "E2E_FINALIZATION_RESERVE_MINUTES")
 	)
 	job_timeout = _integer_contract_value(job, "E2E_JOB_TIMEOUT_MINUTES")
+	# Unclamped, the override would exceed the 360-minute job limit (#9480);
+	# the 90-minute clamp keeps it inside.
 	assert shared_budget + max(review_timeout, review_step_override) > job_timeout
-	assert shared_budget + max(review_timeout, min(review_step_override, 90) + review_handoff_budget) > job_timeout
+	assert shared_budget + max(review_timeout, min(review_step_override, 90) + review_handoff_budget) <= job_timeout
 
 
 def _prerequisites_budget_block(workflow: str) -> str:
@@ -234,13 +237,19 @@ def test_prepush_gate_stall_minutes_is_validated_and_budgeted() -> None:
 def test_prepush_gate_stall_budget_defaults_fit_and_bad_values_fail() -> None:
 	result = _run_prerequisites_budget()
 	assert result.returncode == 0, result.stdout + result.stderr
-	assert "E2E conservative serial budget: 300/300 minutes" in result.stdout
+	assert "E2E conservative serial budget: 300/360 minutes" in result.stdout
 
 	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="abc")
 	assert result.returncode == 1
 	assert "positive integers" in result.stdout
 
-	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="36")
+	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="96")
+	assert result.returncode == 1
+	assert "require 361m" in result.stdout
+	assert "prepush-gate-extra(66)" in result.stdout
+
+	# The guard still fails closed against a smaller job limit.
+	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="36", E2E_JOB_TIMEOUT_MINUTES="300")
 	assert result.returncode == 1
 	assert "require 301m" in result.stdout
 	assert "prepush-gate-extra(6)" in result.stdout
@@ -248,7 +257,7 @@ def test_prepush_gate_stall_budget_defaults_fit_and_bad_values_fail() -> None:
 	# A value at or below PHASE_TIMEOUT adds nothing.
 	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="10")
 	assert result.returncode == 0, result.stdout + result.stderr
-	assert "E2E conservative serial budget: 295/300 minutes" in result.stdout
+	assert "E2E conservative serial budget: 295/360 minutes" in result.stdout
 
 
 def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
@@ -878,6 +887,173 @@ def test_phase4_deadline_check_uses_extension_and_logs_once() -> None:
 	agents = agents_text()
 	assert "- `E2E_REVIEW_DEADLINE_EXTENDED`" in agents
 	assert "LOG_PREFIX.name=E2E_REVIEW_DEADLINE_EXTENDED" in agents
+
+
+# ── Phase 4 runner wait (#9480) ──────────────────────────────────────────
+_RW_START = 1_000_000
+# Ceiling = start + (115 - 25 - 30 - 10 - 20) min = start + 30 min; the base
+# deadline is start + max(5, 5 + 5) min = start + 10 min.
+_RW_ENV = {
+	"E2E_JOB_TIMEOUT_MINUTES": "115", "EDITOR_RETRY_BUDGET_MINUTES": "25", "PHASE_TIMEOUT": "30",
+	"PHASE7_WAIT_BUDGET_MINUTES": "10", "E2E_FINALIZATION_RESERVE_MINUTES": "20",
+	"REVIEW_TIMEOUT": "5", "REVIEW_STEP_TIMEOUT": "5", "REVIEW_PHASE_HANDOFF_BUDGET_MINUTES": "5",
+	"POLL_INTERVAL": "60", "E2E_JOB_STARTED_EPOCH": str(_RW_START),
+}
+# The clock stubs go before the body: the base deadline and ceiling are
+# computed before the gh API helper is sourced.
+_RW_CLOCK_STUB = r"""
+date() {
+  if [ "${1:-}" = -d ]; then command date "$@"; return; fi
+  printf '%s\n' "$(<"${RUNNER_TEMP}/clock")"
+}
+sleep() { printf '%s\n' "$(( $(<"${RUNNER_TEMP}/clock") + $1 ))" > "${RUNNER_TEMP}/clock"; }
+"""
+_RW_STUB = r"""
+gh_api_safe_quiet_print() {
+  local response="" entry=""
+  entry=$(jq -c --argjson now "$(<"${RUNNER_TEMP}/clock")" '(map(select($now < .until)) | first) // last' "${RUNNER_TEMP}/timeline.json")
+  case "$1" in
+    */actions/runs?branch=*) response=$(printf '%s' "$entry" | jq -c '{workflow_runs: [.run]}') ;;
+    */actions/runs/*/jobs?*)
+      if [ "$(printf '%s' "$entry" | jq -r '.jobs == null')" = true ]; then return 1; fi
+      response=$(printf '%s' "$entry" | jq -c '.jobs') ;;
+    */actions/jobs/*/logs) response="static log" ;;
+    */pulls/*/comments) response='[]' ;;
+    */pulls/*) response='{"head":{"sha":"cccccccccccccccccccccccccccccccccccccccc"}}' ;;
+    *) echo "Unexpected API read: $1" >&2; return 1 ;;
+  esac
+  if [ "${2:-}" = --jq ]; then
+    printf '%s' "$response" | jq -cr "$3"
+  else
+    printf '%s' "$response"
+  fi
+}
+"""
+
+
+def _rw_run(status: str, conclusion: str | None = None) -> dict:
+	return {"id": 30, "name": "Internal Review", "path": "internal-review.yml", "event": "pull_request",
+		"head_sha": "c" * 40, "created_at": "2026-11-14T00:00:00Z", "updated_at": "2026-11-14T00:00:00Z",
+		"status": status, "conclusion": conclusion}
+
+
+def _rw_jobs(*jobs: dict) -> dict:
+	return {"total_count": len(jobs), "jobs": list(jobs)}
+
+
+def _rw_queued_job() -> dict:
+	return {"id": 300, "name": "review / gate", "status": "queued", "conclusion": None, "steps": []}
+
+
+def _rw_active_job(started_epoch: int) -> dict:
+	started = _phase4_iso(started_epoch)
+	return {"id": 301, "name": "review / codex-agent", "status": "in_progress", "conclusion": None,
+		"steps": [{"name": "Run reviewer models", "status": "in_progress", "conclusion": None, "started_at": started}]}
+
+
+def _run_phase4_runner_wait(timeline: list[dict]) -> tuple[subprocess.CompletedProcess[str], str]:
+	"""Run the real Phase 4 body against a fake clock; ``timeline`` entries apply until ``until``."""
+	step = _phase4_step(_read_workflow())
+	body = textwrap.dedent(step.split("        run: |\n", 1)[1])
+	body = _RW_CLOCK_STUB + body.replace(". ./scripts/comprehensive_test_and_release_gh_api.sh", _RW_STUB, 1)
+	with tempfile.TemporaryDirectory() as temp:
+		root = Path(temp)
+		(root / "clock").write_text(f"{_RW_START}\n", encoding="utf-8")
+		(root / "timeline.json").write_text(json.dumps(timeline), encoding="utf-8")
+		env = os.environ.copy()
+		for name in ("BAIT_SHA", "BAIT_CREATED_AT", "E2E_JOB_STARTED_EPOCH", "JOBS_JSON", "RUN_ID", "RUN_STATUS"):
+			env.pop(name, None)
+		env.update({"RUNNER_TEMP": temp, "GITHUB_OUTPUT": str(root / "output"), "TEST_REPO": "owner/repo",
+			"ISSUE_NUMBER": "12", "PR_NUMBER": "13", "TZ": "UTC", **_RW_ENV})
+		result = subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60, check=False)
+		output = (root / "output").read_text(encoding="utf-8") if (root / "output").exists() else ""
+		return result, output
+
+
+def test_phase4_runner_wait_helper_and_extension() -> None:
+	queued = json.dumps(_rw_jobs(_rw_queued_job()))
+	assert _phase4_active(IDLE="9999", JOBS_JSON=queued)["rc"] == "0"
+	both = json.dumps(_rw_jobs(_rw_queued_job(), {"id": 2, "status": "in_progress", "steps": []}))
+	assert _phase4_active(IDLE="9999", JOBS_JSON=both)["rc"] == "1"
+	done = json.dumps(_rw_jobs({"id": 2, "status": "completed", "steps": []}))
+	assert _phase4_active(IDLE="9999", JOBS_JSON=done)["rc"] == "1"
+	for broken in ("", "not json", "{}", '{"jobs":null}'):
+		assert _phase4_active(IDLE="9999", JOBS_JSON=broken)["rc"] == "1"
+	assert _phase4_active(IDLE="9999", JOBS_JSON=queued, BAIT_UNCOVERED_RUN_IDS="20")["rc"] == "1"
+	assert _phase4_active(IDLE="9999", JOBS_JSON=queued, NOW=str(_PHASE4_DEFAULT_CEILING))["rc"] == "1"
+	block = _phase4_deadline_extension_block(_read_workflow())
+	assert block.index("review_waiting_for_runner() {") < block.index("review_phase_deadline_extension_allowed() {")
+	assert "JOBS_STEP_JSON" not in block[block.index("review_waiting_for_runner() {"):block.index("review_phase_deadline_extension_allowed() {")]
+
+
+def test_phase4_pending_run_waiting_for_runner_is_not_a_stall() -> None:
+	# Pending for 20 minutes (4x REVIEW_TIMEOUT, past the base deadline),
+	# then completes successfully before the ceiling.
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 1200, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": _rw_run("completed", "success"), "jobs": _rw_jobs()},
+	])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=30"]
+	assert "Review phase stalled" not in result.stdout
+	assert f"E2E_REVIEW_RUNNER_WAIT run=30 status=pending outcome=waiting since={_RW_START + 5}" in result.stdout
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=started waited_seconds=\d+", result.stdout)
+	assert "(waiting for runner " in result.stdout
+	assert result.stdout.count("outcome=waiting") == 1
+
+
+def test_phase4_in_progress_run_with_only_queued_jobs_is_not_a_stall() -> None:
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 1200, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_queued_job())},
+		# Active for 3 minutes, inside the harness's 5-minute inactivity limit.
+		{"until": _RW_START + 1380, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_active_job(_RW_START + 1200))},
+		{"until": _RW_START + 99999, "run": _rw_run("completed", "success"), "jobs": _rw_jobs()},
+	])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=30"]
+	assert "Review phase stalled" not in result.stdout
+	assert "E2E_REVIEW_RUNNER_WAIT run=30 status=in_progress outcome=waiting" in result.stdout
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=started waited_seconds=1[12]\d\d", result.stdout)
+
+
+def test_phase4_runner_wait_past_ceiling_names_the_queue() -> None:
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 99999, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+	])
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert output.splitlines() == ["status=timeout"]
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=ceiling waited_seconds=\d+", result.stdout)
+	assert re.search(r"::error::Review run 30 was still waiting for a runner after 2\d minutes \(ceiling reached\); "
+		r"the hosted-runner queue, not the review, blocked the release", result.stdout)
+	assert "Review phase exceeded its 10-minute total wall-clock budget" in result.stdout
+	assert "Review phase stalled" not in result.stdout
+	assert "E2E_REVIEW_DEADLINE_EXTENDED run=30 status=pending" in result.stdout
+
+
+def test_phase4_active_step_without_state_change_still_stalls() -> None:
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_active_job(_RW_START))},
+	])
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert output.splitlines() == ["status=timeout"]
+	assert "Review phase stalled" in result.stdout
+	assert "E2E_REVIEW_RUNNER_WAIT" not in result.stdout
+
+
+def test_phase4_runner_wait_missing_jobs_json_keeps_inactivity_rules() -> None:
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": None},
+	])
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert output.splitlines() == ["status=timeout"]
+	assert "Review phase stalled" in result.stdout
+	assert "E2E_REVIEW_RUNNER_WAIT" not in result.stdout
+
+
+def test_phase4_runner_wait_prefix_is_registered() -> None:
+	agents = agents_text()
+	assert "- `E2E_REVIEW_RUNNER_WAIT`" in agents
+	assert "LOG_PREFIX.name=E2E_REVIEW_RUNNER_WAIT" in agents
 
 
 def test_success_transitions_and_unconditional_cleanup_are_preserved() -> None:

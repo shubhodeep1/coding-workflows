@@ -574,7 +574,10 @@ jobs:
     # The conservative serial-budget check in Validate prerequisites must stay
     # aligned with this hard runner limit. Defaults reserve 20 minutes for deep
     # verification, analysers, aggregation, and unconditional cleanup.
-    timeout-minutes: 300
+    # 360 is GitHub's maximum for a hosted-runner job and cannot go higher;
+    # it was raised from 300 so Phase 4 can wait out a hosted-runner queue
+    # for the review run (Refs #9480).
+    timeout-minutes: 360
     concurrency:
       group: e2e-smoke-test-${{ inputs.test_repo || github.repository }}
       cancel-in-progress: true
@@ -610,17 +613,17 @@ jobs:
       # above 90m so a typo cannot suppress stall detection until the
       # e2e-smoke-test job timeout kills the run.
       REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 75 }}
-      E2E_JOB_TIMEOUT_MINUTES: 300
+      E2E_JOB_TIMEOUT_MINUTES: 360
       # Phase 3b inactivity limit while the watched Implement run's current
       # step is "Pre-push affected-test gate" (issue #8244). That one step
       # ran 31 minutes in run 40610855593 (two gate runs plus a repair turn);
       # implement.yml gives it timeout-minutes: 60 and
       # scripts/implement_step_prepush_test_gate.sh sizes it to 3300 s. The
-      # default is 35, not 60: 60 would push the conservative serial budget
-      # below past the 300-minute job timeout, which #8244 forbids raising.
-      # To give the gate its full 55 minutes, raise this value and
-      # E2E_JOB_TIMEOUT_MINUTES (plus the job's timeout-minutes) together in
-      # one PR; the budget check fails closed if only this one is raised.
+      # default is 35, not 60: #8244 sized it to fit the conservative serial
+      # budget below inside the then-300-minute job timeout. The job is now
+      # at GitHub's 360-minute hosted-runner maximum (#9480), which cannot go
+      # higher, so any extra gate budget must fit inside that limit; the
+      # budget check fails closed if this value is raised past it.
       PREPUSH_GATE_STEP_STALL_MINUTES: 35
       REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
       EDITOR_RETRY_BUDGET_MINUTES: 25
