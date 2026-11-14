@@ -63,6 +63,17 @@
 #           so the next review merges or escalates.
 #           Findings become follow-up issues that target
 #           the PR branch; their merges push to the PR and start a new review.
+#           After a clean marker it retires the branch's open follow-ups
+#           (#9479): their PRs into the head ref are closed and the issues are
+#           closed as not_planned. Failures only log
+#           outcome=followup_retire_failed; the clean result still stands.
+#   followup-guard
+#           Run by review_enable_auto_merge.sh for the reviewed PR
+#           (PR_PAYLOAD_FILE = its /pulls/<n> JSON). Prints
+#           SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow|refuse|unverifiable.
+#           Refuses (and comments once) when the PR's base is the head branch
+#           of an open standalone PR whose current head has a status=clean
+#           marker as its latest completed result.
 #
 # Marker (last non-empty line of a comment by the pipeline account; any other
 # author is ignored):
@@ -82,8 +93,16 @@
 # valid range 1-10; backoff base defaults to 5s, range 0-30s), or one label
 # write. report: one PR read to bind the audit inputs, one /user
 # identity read, one paginated comments read, one comment and at most one dispatch.
+# A clean report adds one paginated open ai:security issue listing, one
+# paginated pulls?base=<head ref> listing when a follow-up matches, and one
+# comment plus one close per retired issue or PR. followup-guard: none for a PR
+# into the default or an integration branch; otherwise one head-filtered pulls
+# listing, one /user read, one paginated parent comments read, at most one
+# paginated read of this PR's comments (skipped when PR_ISSUE_COMMENTS_FILE is
+# usable) and at most one comment.
 #
 # Log: SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=
+#      (followup_guard adds parent=; retirement adds item=, issues=, prs=)
 set -uo pipefail
 
 SECURITY_PASS_MARKER_RE='^<!-- ai:single-issue-security-pass:v1 status=(pending|clean|findings|failed) head=([0-9a-f]{40}) cycle=([1-9][0-9]*) -->$'
@@ -267,15 +286,17 @@ single_pass_review_workflow()
 	fi
 }
 
-# Input: PR head ref and JSON array of current finding IDs. Output: integer
-# count of IDs covered by matching open follow-ups. The PR
-# payload and cached PR comments lack issue state, and LINKED_ISSUES_JSON lists
-# issues the PR closes, not audit follow-ups. Only gate-mode current-head
-# findings call this: one paginated issues listing (one API call per page).
-# An incomplete or malformed listing returns 1 so the gate holds and pages.
-single_pass_open_followups()
+# Input: PR head ref. Output: JSON array of {number, marker} for the open
+# pipeline-authored ai:security issues whose `Integration branch:` line is that
+# ref; `marker` is the body's first line when it is an
+# `<!-- ai:security-finding:<id> -->` marker, otherwise "". The PR payload and
+# cached PR comments lack issue state, and LINKED_ISSUES_JSON lists issues the
+# PR closes, not audit follow-ups. One paginated issues listing (one API call
+# per page), shared by the gate's follow-up count and the report's clean-audit
+# retirement. An incomplete or malformed listing returns 1.
+single_pass_followup_issues()
 {
-	local followup_ref="$1" expected_ids="$2" followup_file followup_total
+	local followup_ref="$1" followup_file followup_list
 	followup_file="$(mktemp)" || return 1
 	if ! { if type gh_retry >/dev/null 2>&1; then
 		gh_retry gh api --paginate --slurp "repos/${REPOSITORY}/issues?labels=ai:security&state=open&per_page=100"
@@ -287,7 +308,7 @@ single_pass_open_followups()
 		rm -f "${followup_file}"
 		return 1
 	fi
-	if ! followup_total="$(jq -r --arg ref "${followup_ref}" --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" --argjson ids "${expected_ids}" '
+	if ! followup_list="$(jq -c --arg ref "${followup_ref}" --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" '
 		[.[][] | select(type == "object" and .pull_request == null and .user.login == $author and .state == "open")
 		| select((.body | type) == "string")
 		| select(.body | split("\n") | any(.[];
@@ -297,14 +318,120 @@ single_pass_open_followups()
 			  else "" end
 			| gsub("^\\s+|\\s+$"; "") | sub("^`"; "") | sub("`$"; "")
 			| gsub("^\\s+|\\s+$"; "") | . == $ref))
-		| .body | split("\n")[0]] as $issue_markers
-		| [$ids[] | select(. as $id | any($issue_markers[]; . == ("<!-- ai:security-finding:" + $id + " -->")))] | length
-	' "${followup_file}" 2>/dev/null)"; then
+		| {number: (.number // null), marker: (.body | split("\n")[0] | if test("^<!-- ai:security-finding:[^<>\\r\\n]+ -->$") then . else "" end)}]
+	' "${followup_file}" 2>/dev/null)" || [ -z "${followup_list}" ]; then
 		rm -f "${followup_file}"
 		return 1
 	fi
 	rm -f "${followup_file}"
+	printf '%s\n' "${followup_list}"
+}
+
+# Input: PR head ref and JSON array of current finding IDs. Output: integer
+# count of IDs covered by matching open follow-ups (single_pass_followup_issues).
+# Only gate-mode current-head findings call this. A failed listing returns 1 so
+# the gate holds and pages.
+single_pass_open_followups()
+{
+	local followup_ref="$1" expected_ids="$2" followup_issues followup_total
+	followup_issues="$(single_pass_followup_issues "${followup_ref}")" || return 1
+	if ! followup_total="$(jq -r --argjson ids "${expected_ids}" '
+		[.[].marker] as $issue_markers
+		| [$ids[] | select(. as $id | any($issue_markers[]; . == ("<!-- ai:security-finding:" + $id + " -->")))] | length
+	' <<< "${followup_issues}" 2>/dev/null)"; then
+		return 1
+	fi
 	printf '%s\n' "${followup_total}"
+}
+
+# Called by single_pass_report after a status=clean marker for <head_sha> is
+# posted. The clean audit supersedes every earlier finding on this branch, so
+# its open follow-up issues (pipeline-authored, first-line finding marker,
+# `Integration branch:` == <head_ref>) and their open PRs into <head_ref> are
+# closed; otherwise their merges would move the clean head (#9479, PR #9356).
+# Matches PRs by the implement branch convention ai/issue-<n>, same repository.
+# API budget: the shared issues listing, one paginated pulls?base= listing only
+# when an issue matches, then a comment and a close per retired item. Fails
+# open: every failure logs outcome=followup_retire_failed and it returns 0.
+single_pass_retire_followups()
+{
+	local retire_pr="$1" retire_ref="$2" retire_sha="$3" retire_issues retire_issue_json retire_listing retire_prs_file retire_prs="" retire_ref_uri
+	local retire_item retire_body retire_issue_count=0 retire_pr_count=0
+	local retire_marker="<!-- ai:single-issue-security-pass-followup-retired:v1 head=${retire_sha} -->"
+	if ! retire_listing="$(single_pass_followup_issues "${retire_ref}")" \
+		|| ! retire_issue_json="$(jq -c '[.[] | select((.number | type) == "number" and .number >= 1 and (.number | floor) == .number and (.marker | type) == "string" and (.marker | length) > 0) | .number] | unique' <<< "${retire_listing}" 2>/dev/null)" \
+		|| ! retire_issues="$(jq -r '.[]' <<< "${retire_issue_json}" 2>/dev/null)"; then
+		echo "::warning::Could not list the security follow-ups of PR #${retire_pr}; superseded follow-ups stay open, and the merge-side guard refuses their PRs."
+		single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followup_retire_failed reason=listing_failed"
+		return 0
+	fi
+	if [ -z "${retire_issues}" ]; then
+		return 0
+	fi
+	# The issues listing carries no PR state or base, and the report's
+	# pulls/<n> read covers only the audited PR, so one batched listing of the
+	# open PRs into this branch finds the follow-up PRs (no per-issue reads).
+	retire_ref_uri="$(jq -rn --arg r "${retire_ref}" '$r | @uri' 2>/dev/null)" || retire_ref_uri=""
+	retire_prs_file="$(mktemp 2>/dev/null)" || retire_prs_file=""
+	if [ -n "${retire_ref_uri}" ] && [ -n "${retire_prs_file}" ] \
+		&& { if type gh_retry >/dev/null 2>&1; then
+			gh_retry gh api --paginate --slurp "repos/${REPOSITORY}/pulls?state=open&base=${retire_ref_uri}&per_page=100"
+		else
+			gh api --paginate --slurp "repos/${REPOSITORY}/pulls?state=open&base=${retire_ref_uri}&per_page=100"
+		fi; } > "${retire_prs_file}" 2>/dev/null \
+		&& retire_prs="$(jq -r --arg ref "${retire_ref}" --arg repo "${REPOSITORY}" --argjson issues "${retire_issue_json}" '
+			if type == "array" and all(.[]; type == "array") then . else error("shape") end
+			| [.[][] | select(type == "object" and .state == "open" and .base.ref == $ref and .head.repo.full_name == $repo)
+			| select((.number | type) == "number" and (.head.ref | type) == "string")
+			| . as $p
+			| select(any($issues[]; . as $n | $p | .head.ref | test("^ai/issue-" + ($n | tostring) + "([-/].*)?$")))
+			| .number] | unique | .[]
+		' "${retire_prs_file}" 2>/dev/null)"; then
+		:
+	else
+		retire_prs=""
+		echo "::warning::Could not list the open PRs into ${retire_ref}; superseded follow-up PRs stay open, and the merge-side guard refuses them."
+		single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followup_retire_failed reason=pr_listing_failed"
+	fi
+	[ -n "${retire_prs_file}" ] && rm -f "${retire_prs_file}"
+	while IFS= read -r retire_item; do
+		[[ "${retire_item}" =~ ^[1-9][0-9]*$ ]] || continue
+		retire_body="## Superseded by a clean security audit
+
+The single-issue security audit of \`${retire_sha}\` on PR #${retire_pr} came back clean, so this follow-up PR is superseded and closed.
+
+${retire_marker}"
+		if ! gh api "repos/${REPOSITORY}/issues/${retire_item}/comments" -f body="${retire_body}" >/dev/null 2>&1; then
+			single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followup_retire_failed reason=comment_failed item=${retire_item}"
+			continue
+		fi
+		if ! gh api -X PATCH "repos/${REPOSITORY}/pulls/${retire_item}" -f state=closed >/dev/null 2>&1; then
+			single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followup_retire_failed reason=pr_close_failed item=${retire_item}"
+			continue
+		fi
+		retire_pr_count=$((retire_pr_count + 1))
+	done <<< "${retire_prs}"
+	# Issues close even when their PR could not be closed: no later clean
+	# report retries this head, and the merge-side guard refuses that PR.
+	while IFS= read -r retire_item; do
+		[[ "${retire_item}" =~ ^[1-9][0-9]*$ ]] || continue
+		retire_body="## Superseded by a clean security audit
+
+The clean single-issue security audit of \`${retire_sha}\` (PR #${retire_pr}) superseded this finding, so it is closed as not planned.
+
+${retire_marker}"
+		if ! gh api "repos/${REPOSITORY}/issues/${retire_item}/comments" -f body="${retire_body}" >/dev/null 2>&1; then
+			single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followup_retire_failed reason=comment_failed item=${retire_item}"
+			continue
+		fi
+		if ! gh api -X PATCH "repos/${REPOSITORY}/issues/${retire_item}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
+			single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followup_retire_failed reason=issue_close_failed item=${retire_item}"
+			continue
+		fi
+		retire_issue_count=$((retire_issue_count + 1))
+	done <<< "${retire_issues}"
+	single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followups_retired issues=${retire_issue_count} prs=${retire_pr_count}"
+	return 0
 }
 
 single_pass_marker_age_hours()
@@ -675,12 +802,154 @@ The audit of \`${head_sha}\` did not finish. The review re-runs and starts the n
 		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=comment_write_failed cycle=${cycle}"
 		return 0
 	fi
+	if [ "${status}" = "clean" ]; then
+		# Retire before the re-dispatch below so a superseded follow-up PR has
+		# the smallest window to merge into (and move) the clean head.
+		single_pass_retire_followups "${pr_number}" "${SECURITY_PASS_AUDIT_BRANCH}" "${head_sha}"
+	fi
 	if { [ "${status}" != "findings" ] || [ "${report_ids_invalid}" = "true" ] || [ "${cycle}" -ge "$((max_cycles + extensions))" ]; } && [ -n "${default_branch}" ]; then
 		review_workflow="$(single_pass_review_workflow)"
 		gh workflow run "${review_workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f pr_number="${pr_number}" >/dev/null 2>&1 \
 			|| echo "::warning::Could not re-dispatch ${review_workflow} for PR #${pr_number}; the next review event picks the result up."
 	fi
 	single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=${status} cycle=${cycle} findings=${findings:-unknown}"
+}
+
+single_pass_followup_guard_emit()
+{
+	local guard_outcome="$1" guard_reason="$2" guard_parent="${3:-}" guard_head="${4:-}" guard_extra="${5:-}"
+	single_pass_log "mode=followup_guard pr=${PR_NUMBER:-} parent=${guard_parent} head=${guard_head} outcome=${guard_outcome} reason=${guard_reason}${guard_extra:+ ${guard_extra}}"
+	echo "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=${guard_outcome}"
+}
+
+# `followup-guard` mode (#9479): a PR whose base is a standalone PR's head
+# branch must not merge once that branch's current head has a completed
+# status=clean audit, since the merge would move the clean head. Prints
+# SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow|refuse|unverifiable.
+single_pass_followup_merge_guard()
+{
+	local guard_payload="${PR_PAYLOAD_FILE:-}" guard_pattern="${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"
+	local guard_base guard_default guard_owner guard_ref_uri guard_parents guard_parent guard_parent_number guard_parent_head
+	local guard_comments_file guard_markers guard_status guard_hold_marker guard_body guard_existing="" guard_dedupe_file
+	if [ -f "$(dirname -- "${BASH_SOURCE[0]}")/gh_helpers.sh" ]; then
+		# shellcheck source=/dev/null
+		source "$(dirname -- "${BASH_SOURCE[0]}")/gh_helpers.sh" 2>/dev/null || true
+	fi
+	if ! [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] || [ ! -s "${guard_payload}" ] \
+		|| ! jq -e 'type == "object"' "${guard_payload}" >/dev/null 2>&1; then
+		single_pass_followup_guard_emit unverifiable missing_input
+		return 0
+	fi
+	guard_base="$(jq -r '.base.ref // "" | strings' "${guard_payload}" 2>/dev/null)" || guard_base=""
+	guard_default="${DEFAULT_BRANCH:-}"
+	if [ -z "${guard_default}" ]; then
+		guard_default="$(jq -r '.base.repo.default_branch // "" | strings' "${guard_payload}" 2>/dev/null)" || guard_default=""
+	fi
+	if [ -z "${guard_base}" ]; then
+		single_pass_followup_guard_emit allow no_base
+		return 0
+	fi
+	if [ -n "${guard_default}" ] && [ "${guard_base}" = "${guard_default}" ]; then
+		single_pass_followup_guard_emit allow default_base
+		return 0
+	fi
+	if printf '%s\n' "${guard_base}" | grep -Eq -- "${guard_pattern}" 2>/dev/null; then
+		single_pass_followup_guard_emit allow integration_base
+		return 0
+	fi
+	if [ -z "${guard_default}" ]; then
+		# Only synthetic payloads lack base.repo.default_branch.
+		single_pass_followup_guard_emit allow default_branch_unknown
+		return 0
+	fi
+	# Neither the follow-up PR payload nor any other call in this path names the
+	# PR whose head is this base branch; one head-filtered listing finds it.
+	guard_owner="${REPOSITORY%%/*}"
+	guard_ref_uri="$(jq -rn --arg r "${guard_base}" '$r | @uri' 2>/dev/null)" || guard_ref_uri=""
+	if [ -z "${guard_ref_uri}" ] || ! guard_parents="$({ if type gh_retry >/dev/null 2>&1; then
+			gh_retry gh api "repos/${REPOSITORY}/pulls?state=open&head=${guard_owner}:${guard_ref_uri}&per_page=100"
+		else
+			gh api "repos/${REPOSITORY}/pulls?state=open&head=${guard_owner}:${guard_ref_uri}&per_page=100"
+		fi; } 2>/dev/null)" \
+		|| ! guard_parent="$(jq -c --arg ref "${guard_base}" --arg repo "${REPOSITORY}" --arg base "${guard_default}" '
+			if type == "array" then . else error("shape") end
+			| [.[] | select(type == "object" and .head.repo.full_name == $repo and .head.ref == $ref and .base.ref == $base)]
+			| first // {}
+		' <<< "${guard_parents}" 2>/dev/null)"; then
+		single_pass_followup_guard_emit unverifiable parent_lookup_failed
+		return 0
+	fi
+	if [ "${guard_parent}" = "{}" ]; then
+		single_pass_followup_guard_emit allow no_standalone_parent
+		return 0
+	fi
+	guard_parent_number="$(jq -r '.number // "" | tostring' <<< "${guard_parent}" 2>/dev/null)" || guard_parent_number=""
+	guard_parent_head="$(jq -r '.head.sha // "" | tostring' <<< "${guard_parent}" 2>/dev/null)" || guard_parent_head=""
+	if ! [[ "${guard_parent_number}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${guard_parent_head}" =~ ^[0-9a-f]{40}$ ]]; then
+		single_pass_followup_guard_emit unverifiable parent_lookup_failed
+		return 0
+	fi
+	# The review job's /user result is not exported to this helper.
+	SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
+		SECURITY_PASS_AUTHOR_LOGIN="${SECURITY_PASS_AUTHOR_LOGIN_FALLBACK:-}"
+	fi
+	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
+		single_pass_followup_guard_emit unverifiable author_unverifiable "${guard_parent_number}" "${guard_parent_head}"
+		return 0
+	fi
+	guard_comments_file="$(mktemp 2>/dev/null)" || guard_comments_file=""
+	if [ -z "${guard_comments_file}" ] || ! { { if type gh_retry >/dev/null 2>&1; then
+			gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${guard_parent_number}/comments?per_page=100"
+		else
+			gh api --paginate "repos/${REPOSITORY}/issues/${guard_parent_number}/comments?per_page=100"
+		fi; } 2>/dev/null | jq -s 'add // []' > "${guard_comments_file}" 2>/dev/null; } \
+		|| ! jq -e 'type == "array"' "${guard_comments_file}" >/dev/null 2>&1 \
+		|| ! guard_markers="$(single_pass_markers "${guard_comments_file}")"; then
+		[ -n "${guard_comments_file}" ] && rm -f "${guard_comments_file}"
+		single_pass_followup_guard_emit unverifiable markers_unverifiable "${guard_parent_number}" "${guard_parent_head}"
+		return 0
+	fi
+	rm -f "${guard_comments_file}"
+	guard_status="$(printf '%s\n' "${guard_markers}" | awk -F'\t' -v h="${guard_parent_head}" '$4 == h && $3 != "pending" { s = $3 } END { print s }')"
+	if [ "${guard_status}" != "clean" ]; then
+		single_pass_followup_guard_emit allow "parent_head_${guard_status:-unaudited}" "${guard_parent_number}" "${guard_parent_head}"
+		return 0
+	fi
+	guard_hold_marker="<!-- ai:single-issue-security-pass-followup-hold:v1 parent=${guard_parent_number} head=${guard_parent_head} -->"
+	guard_dedupe_file="${PR_ISSUE_COMMENTS_FILE:-}"
+	if [ -z "${guard_dedupe_file}" ] || [ ! -s "${guard_dedupe_file}" ] || ! jq -e 'type == "array"' "${guard_dedupe_file}" >/dev/null 2>&1; then
+		guard_dedupe_file="$(mktemp 2>/dev/null)" || guard_dedupe_file=""
+		if [ -n "${guard_dedupe_file}" ]; then
+			{ if type gh_retry >/dev/null 2>&1; then
+				gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"
+			else
+				gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"
+			fi; } 2>/dev/null | jq -s 'add // []' > "${guard_dedupe_file}" 2>/dev/null || true
+		fi
+	fi
+	if [ -n "${guard_dedupe_file}" ]; then
+		guard_existing="$(jq -r --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" --arg m "${guard_hold_marker}" '
+			[.[]? | select(type == "object" and .user.login == $author)
+			| (.body // "") | strings | split("\n") | map(select(test("\\S"))) | last // "" | gsub("^\\s+|\\s+$"; "")
+			| select(. == $m)] | length
+		' "${guard_dedupe_file}" 2>/dev/null)" || guard_existing=""
+		[ "${guard_dedupe_file}" != "${PR_ISSUE_COMMENTS_FILE:-}" ] && rm -f "${guard_dedupe_file}"
+	fi
+	if [[ "${guard_existing}" =~ ^[1-9][0-9]*$ ]]; then
+		single_pass_followup_guard_emit refuse parent_head_clean "${guard_parent_number}" "${guard_parent_head}" "comment=existing"
+		return 0
+	fi
+	guard_body="## Merge held: the target branch passed its security audit
+
+This PR targets \`${guard_base}\`, the head branch of PR #${guard_parent_number}. The single-issue security audit of \`${guard_parent_head}\` came back clean, so merging this follow-up would move the audited head. Auto-merge stays off and the PR is left open; close it if the clean audit superseded it.
+
+${guard_hold_marker}"
+	if ! gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${guard_body}" >/dev/null 2>&1; then
+		single_pass_followup_guard_emit refuse parent_head_clean "${guard_parent_number}" "${guard_parent_head}" "comment=failed"
+		return 0
+	fi
+	single_pass_followup_guard_emit refuse parent_head_clean "${guard_parent_number}" "${guard_parent_head}" "comment=posted"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
@@ -691,8 +960,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 			single_pass_gate
 			;;
 		report) single_pass_report ;;
+		followup-guard) single_pass_followup_merge_guard ;;
 		*)
-			echo "usage: $0 gate|status|report" >&2
+			echo "usage: $0 gate|status|report|followup-guard" >&2
 			exit 2
 			;;
 	esac

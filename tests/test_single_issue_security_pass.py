@@ -53,6 +53,18 @@ if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in args:
 		sys.exit(1)
 	print(open(os.environ["FAKE_GH_SECURITY_ISSUES"]).read(), end="")
 	sys.exit(0)
+if args[0] == "api" and any(arg.startswith("repos/o/r/pulls?state=open&base=") for arg in args):
+	if "branch_prs" in fail:
+		sys.exit(1)
+	print(open(os.environ["FAKE_GH_BRANCH_PRS"]).read(), end="")
+	sys.exit(0)
+if args[0] == "api" and any(arg.startswith("repos/o/r/pulls?state=open&head=") for arg in args):
+	if "head_prs" in fail:
+		sys.exit(1)
+	print(open(os.environ["FAKE_GH_HEAD_PRS"]).read(), end="")
+	sys.exit(0)
+if args[:3] == ["api", "-X", "PATCH"]:
+	sys.exit(1 if "close" in fail else 0)
 if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
 	if "comment_write" in fail and (fail != "comment_write_once" or sum(
 		json.loads(line)[:2] == args[:2] for line in open(os.environ["FAKE_GH_LOG"])
@@ -132,7 +144,7 @@ def _pr(base: str = "main", head_ref: str = "ai/issue-7", head_repo: str = "o/r"
 	}
 
 
-def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | None = None, env: dict | None = None, skip: bool = False, security_issues: list | str | None = None):
+def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | None = None, env: dict | None = None, skip: bool = False, security_issues: list | str | None = None, branch_prs: list | str | None = None, head_prs: list | str | None = None):
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir(exist_ok=True)
 	gh = bin_dir / "gh"
@@ -149,8 +161,11 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	(tmp_path / "pr.json").write_text(json.dumps(pr or _pr()), encoding="utf-8")
 	(tmp_path / "comments.json").write_text(json.dumps(comments or []), encoding="utf-8")
 	if security_issues is None:
-		security_issues = [[{"state": "open", "body": _followup_body(), "user": {"login": login}} for login in ("owner", "github-actions[bot]")]]
+		security_issues = [[{"number": number, "state": "open", "body": _followup_body(), "user": {"login": login}} for number, login in ((101, "owner"), (102, "github-actions[bot]"))]]
 	(tmp_path / "security_issues.json").write_text(security_issues if isinstance(security_issues, str) else json.dumps(security_issues), encoding="utf-8")
+	for name, payload in (("branch_prs.json", branch_prs), ("head_prs.json", head_prs)):
+		payload = [] if payload is None else payload
+		(tmp_path / name).write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
 	log = tmp_path / "calls.log"
 	log.write_text("", encoding="utf-8")
 	output = tmp_path / "output"
@@ -162,6 +177,8 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		FAKE_GH_COMMENTS=str(tmp_path / "comments.json"),
 		FAKE_GH_SECURITY_ISSUES=str(tmp_path / "security_issues.json"),
 		FAKE_GH_PR=str(tmp_path / "pr.json"),
+		FAKE_GH_BRANCH_PRS=str(tmp_path / "branch_prs.json"),
+		FAKE_GH_HEAD_PRS=str(tmp_path / "head_prs.json"),
 		FAKE_GIT_HEAD=HEAD,
 		GITHUB_OUTPUT=str(output),
 		REPOSITORY="o/r",
@@ -857,7 +874,7 @@ def test_report_retries_transient_comment_listing(tmp_path: Path) -> None:
 		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "0",
 	})
 	assert "outcome=clean" in result.stdout
-	assert sum("--paginate" in call for call in calls) == 2
+	assert sum("--paginate" in call and "repos/o/r/issues/42/comments?per_page=100" in call for call in calls) == 2
 
 
 def test_last_cycle_findings_redispatch_for_exhaustion(tmp_path: Path) -> None:
@@ -1212,3 +1229,212 @@ def test_skip_step_holds_when_python_ignores_safe_path(tmp_path: Path) -> None:
 	assert ["api", "user", "--jq", '.login // ""'] not in calls
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 	assert not any(any("/statuses/" in arg for arg in call) for call in calls)
+
+
+# --- #9479: retire superseded follow-ups after a clean audit -----------------
+
+REVIEW_DISPATCH = ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"]
+ISSUE_CLOSE = ["-f", "state=closed", "-f", "state_reason=not_planned"]
+
+
+def _issue(number: int, body: str, login: str = "owner") -> dict:
+	return {"number": number, "state": "open", "body": body, "user": {"login": login}}
+
+
+def _branch_pr(number: int, head_ref: str, base: str = "ai/issue-7", head_repo: str = "o/r") -> dict:
+	return {"number": number, "state": "open", "base": {"ref": base}, "head": {"ref": head_ref, "sha": OLD, "repo": {"full_name": head_repo}}}
+
+
+def _patches(calls: list) -> list:
+	return [call for call in calls if call[:3] == ["api", "-X", "PATCH"]]
+
+
+def _audit_report(tmp_path: Path, outcome: str = "success", findings: str = "0", env: dict | None = None, **kwargs):
+	report_env = {
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": outcome, "SECURITY_PASS_FINDINGS": findings,
+		"SECURITY_PASS_FINDING_IDS_B64": base64.b64encode(json.dumps([f"F-{n}" for n in range(1, int(findings or 0) + 1)]).encode("ascii")).decode("ascii"),
+	}
+	report_env.update(env or {})
+	return _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 2))], env=report_env, **kwargs)
+
+
+def test_clean_report_retires_superseded_followups(tmp_path: Path) -> None:
+	issues = [[
+		_issue(9399, _followup_body(finding_id="F-1")),
+		_issue(9400, _followup_body(branch="ai/issue-8", finding_id="F-2")),
+		_issue(9401, _followup_body(finding_id="F-3"), login="mallory"),
+		_issue(9402, "- Integration branch: `ai/issue-7`"),
+	]]
+	prs = [[
+		_branch_pr(9404, "ai/issue-9399"),
+		_branch_pr(9405, "ai/issue-9399", head_repo="fork/r"),
+		_branch_pr(9406, "ai/issue-93990"),
+		_branch_pr(9407, "ai/issue-9400"),
+		_branch_pr(9408, "ai/issue-9399-retry", base="main"),
+	]]
+	result, calls, _ = _audit_report(tmp_path, security_issues=issues, branch_prs=prs)
+	assert result.returncode == 0
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert posted[-1][-1].endswith(_marker("clean", HEAD, 2))
+	assert REVIEW_DISPATCH in calls
+	assert ["api", "--paginate", "--slurp", "repos/o/r/pulls?state=open&base=ai%2Fissue-7&per_page=100"] in calls
+	assert _patches(calls) == [
+		["api", "-X", "PATCH", "repos/o/r/pulls/9404", "-f", "state=closed"],
+		["api", "-X", "PATCH", "repos/o/r/issues/9399", *ISSUE_CLOSE],
+	]
+	for number in (9404, 9399):
+		comment = next(call for call in calls if call[:2] == ["api", f"repos/o/r/issues/{number}/comments"])
+		assert HEAD in comment[-1]
+		assert comment[-1].endswith(f"<!-- ai:single-issue-security-pass-followup-retired:v1 head={HEAD} -->")
+	# Retirement runs before the review re-dispatch.
+	assert calls.index(["api", "-X", "PATCH", "repos/o/r/issues/9399", *ISSUE_CLOSE]) < calls.index(REVIEW_DISPATCH)
+	assert "outcome=followups_retired issues=1 prs=1" in result.stdout
+	assert result.stdout.strip().splitlines()[-1].startswith("SINGLE_ISSUE_SECURITY_PASS mode=report pr=42 head=" + HEAD + " outcome=clean")
+
+
+@pytest.mark.parametrize("issue", [
+	_issue(9400, _followup_body(branch="ai/issue-8")),
+	_issue(9401, _followup_body(), login="mallory"),
+	_issue(9402, "Some text\n- Integration branch: `ai/issue-7`"),
+	{"number": 9403, "state": "open", "body": _followup_body(), "user": {"login": "owner"}, "pull_request": {"url": "x"}},
+])
+def test_clean_report_leaves_unrelated_issues_open(tmp_path: Path, issue: dict) -> None:
+	prs = [[_branch_pr(9404, f"ai/issue-{issue['number']}")]]
+	result, calls, _ = _audit_report(tmp_path, security_issues=[[issue]], branch_prs=prs)
+	assert result.returncode == 0 and "outcome=clean" in result.stdout
+	assert _patches(calls) == []
+	assert not any(any(str(arg).startswith("repos/o/r/pulls?state=open&base=") for arg in call) for call in calls)
+	assert REVIEW_DISPATCH in calls
+
+
+def test_clean_report_followup_listing_failure_still_posts_marker_and_redispatches(tmp_path: Path) -> None:
+	result, calls, _ = _audit_report(tmp_path, env={"FAKE_GH_FAIL": "followups"})
+	assert result.returncode == 0
+	assert "outcome=followup_retire_failed reason=listing_failed" in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert posted[-1][-1].endswith(_marker("clean", HEAD, 2))
+	assert REVIEW_DISPATCH in calls
+	assert _patches(calls) == []
+	assert "outcome=clean" in result.stdout
+
+
+def test_clean_report_pr_listing_failure_still_closes_the_issue(tmp_path: Path) -> None:
+	result, calls, _ = _audit_report(tmp_path, env={"FAKE_GH_FAIL": "branch_prs"}, security_issues=[[_issue(9399, _followup_body())]])
+	assert result.returncode == 0 and "reason=pr_listing_failed" in result.stdout
+	assert _patches(calls) == [["api", "-X", "PATCH", "repos/o/r/issues/9399", *ISSUE_CLOSE]]
+	assert REVIEW_DISPATCH in calls
+
+
+def test_clean_report_close_failures_fail_open(tmp_path: Path) -> None:
+	result, calls, _ = _audit_report(tmp_path, env={"FAKE_GH_FAIL": "close"}, security_issues=[[_issue(9399, _followup_body())]], branch_prs=[[_branch_pr(9404, "ai/issue-9399")]])
+	assert result.returncode == 0
+	assert "reason=pr_close_failed item=9404" in result.stdout
+	assert "reason=issue_close_failed item=9399" in result.stdout
+	assert "outcome=followups_retired issues=0 prs=0" in result.stdout
+	assert REVIEW_DISPATCH in calls and "outcome=clean" in result.stdout
+
+
+@pytest.mark.parametrize("outcome, findings", [("success", "2"), ("failure", "")])
+def test_findings_or_failed_report_never_retires_followups(tmp_path: Path, outcome: str, findings: str) -> None:
+	result, calls, _ = _audit_report(tmp_path, outcome, findings, security_issues=[[_issue(9399, _followup_body())]], branch_prs=[[_branch_pr(9404, "ai/issue-9399")]])
+	assert result.returncode == 0
+	assert _patches(calls) == []
+	assert not any("repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call for call in calls)
+
+
+FOLLOWUP_PR = _pr(base="ai/issue-7", head_ref="ai/issue-9399")
+PARENT_PR = {"number": 42, "state": "open", "base": {"ref": "main"}, "head": {"ref": "ai/issue-7", "sha": HEAD, "repo": {"full_name": "o/r"}}}
+HOLD_MARKER = f"<!-- ai:single-issue-security-pass-followup-hold:v1 parent=42 head={HEAD} -->"
+
+
+def _guard(tmp_path: Path, parent_comments: list, followup_comments: list | None = None, pr: dict | None = None, head_prs: list | None = None, env: dict | None = None):
+	followup_file = tmp_path / "followup_comments.json"
+	followup_file.write_text(json.dumps(followup_comments or []), encoding="utf-8")
+	guard_env = {"PR_NUMBER": "77", "PR_ISSUE_COMMENTS_FILE": str(followup_file), "GH_RETRY_MAX_ATTEMPTS": "1"}
+	guard_env.update(env or {})
+	return _run(tmp_path, "followup-guard", pr=pr or FOLLOWUP_PR, comments=parent_comments, head_prs=[PARENT_PR] if head_prs is None else head_prs, env=guard_env)
+
+
+def _hold_posts(calls: list) -> list:
+	return [call for call in calls if call[:2] == ["api", "repos/o/r/issues/77/comments"]]
+
+
+def test_followup_merge_guard_refuses_into_clean_audited_head(tmp_path: Path) -> None:
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("pending", HEAD, 2)), _comment(_marker("clean", HEAD, 2), comment_id=2)])
+	assert result.returncode == 0
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=refuse" in result.stdout.splitlines()
+	assert "mode=followup_guard pr=77 parent=42 head=" + HEAD + " outcome=refuse reason=parent_head_clean comment=posted" in result.stdout
+	assert ["api", "repos/o/r/pulls?state=open&head=o:ai%2Fissue-7&per_page=100"] in calls
+	posts = _hold_posts(calls)
+	assert len(posts) == 1 and posts[0][-1].endswith(HOLD_MARKER) and HEAD in posts[0][-1]
+
+
+def test_followup_merge_guard_comments_once(tmp_path: Path) -> None:
+	result, calls, _ = _guard(
+		tmp_path,
+		[_comment(_marker("clean", HEAD, 2))],
+		followup_comments=[_comment("## Merge held\n\n" + HOLD_MARKER + "\n")],
+	)
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=refuse" in result.stdout.splitlines()
+	assert "comment=existing" in result.stdout
+	assert _hold_posts(calls) == []
+
+
+def test_followup_merge_guard_ignores_forged_clean_and_hold_markers(tmp_path: Path) -> None:
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2), login="mallory")])
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], followup_comments=[_comment(HOLD_MARKER, login="mallory")])
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=refuse" in result.stdout.splitlines()
+	assert len(_hold_posts(calls)) == 1
+
+
+def test_followup_merge_guard_allows_when_latest_marker_is_findings(tmp_path: Path) -> None:
+	comments = [_comment(_marker("clean", HEAD, 2)), _comment(_marker("pending", HEAD, 3), comment_id=2), _comment(_marker("findings", HEAD, 3), comment_id=3)]
+	result, calls, _ = _guard(tmp_path, comments)
+	assert result.returncode == 0
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
+	assert "reason=parent_head_findings" in result.stdout
+	assert _hold_posts(calls) == []
+	# A clean result for an older head does not cover the current one.
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", OLD, 1))])
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
+	assert "reason=parent_head_unaudited" in result.stdout
+	# A PR into the default branch makes no API call at all.
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], pr=_pr())
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
+	assert "reason=default_base" in result.stdout and calls == []
+	# So does a PR into an orchestrator integration branch.
+	result, calls, _ = _guard(tmp_path, [], pr=_pr(base="orchestrator/project-9", head_ref="ai/issue-9399"))
+	assert "reason=integration_base" in result.stdout and calls == []
+
+
+def test_followup_merge_guard_allows_without_a_standalone_parent(tmp_path: Path) -> None:
+	parent = dict(PARENT_PR, base={"ref": "release/v1"})
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], head_prs=[parent])
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
+	assert "reason=no_standalone_parent" in result.stdout
+
+
+@pytest.mark.parametrize("env, reason", [
+	({"FAKE_GH_FAIL": "head_prs"}, "parent_lookup_failed"),
+	({"FAKE_GH_FAIL": "identity"}, "author_unverifiable"),
+	({"FAKE_GH_FAIL": "comments_once"}, "markers_unverifiable"),
+])
+def test_followup_merge_guard_parent_lookup_failure_is_unverifiable(tmp_path: Path, env: dict, reason: str) -> None:
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env=env)
+	assert result.returncode == 0
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=unverifiable" in result.stdout.splitlines()
+	assert f"reason={reason}" in result.stdout
+	assert _hold_posts(calls) == []
+
+
+def test_auto_merge_helper_runs_followup_guard_before_merge() -> None:
+	text = (ROOT / "scripts" / "review_enable_auto_merge.sh").read_text(encoding="utf-8")
+	head_bound = text.index('if [ -z "${_orch_pr_head_sha}" ] || [ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_SHA}" ]; then')
+	guard = text.index('review_single_issue_security_pass.sh" followup-guard')
+	status = text.index('review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success', head_bound)
+	assert head_bound < guard < status
+	assert guard < text.index("gh_retry gh pr merge")
+	assert 'if [ "${_followup_guard_result}" != "allow" ]; then' in text[guard:status]
+	assert "exit 0" in text[guard:status]

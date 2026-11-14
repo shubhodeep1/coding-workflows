@@ -252,6 +252,30 @@ if [ -z "${_orch_pr_head_sha}" ] || [ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_
 	exit 0
 fi
 
+# Superseded security follow-up guard (#9479): a PR whose base is a standalone
+# PR's head branch must not merge once that branch's current head passed its
+# single-issue security audit (the merge would move the clean head). Runs
+# before the success status so a refused PR gets neither status nor merge
+# labels. No API call for PRs into the default or an integration branch.
+# Anything but `allow` (helper missing, lookup failure) fails closed; the next
+# review run or the review sweep retries.
+_followup_guard_result=""
+_followup_guard_output=""
+_followup_guard_payload="$(mktemp 2>/dev/null || true)"
+if [ -n "${_followup_guard_payload}" ] && [ -f "${SCRIPT_DIR}/review_single_issue_security_pass.sh" ] \
+	&& printf '%s' "${_ORCH_PR_META_JSON}" > "${_followup_guard_payload}"; then
+	_followup_guard_output="$(REPOSITORY="${GITHUB_REPOSITORY}" PR_NUMBER="${PR_NUMBER}" PR_PAYLOAD_FILE="${_followup_guard_payload}" \
+		bash "${SCRIPT_DIR}/review_single_issue_security_pass.sh" followup-guard)" || _followup_guard_output=""
+	printf '%s\n' "${_followup_guard_output}" | grep '^SINGLE_ISSUE_SECURITY_PASS ' || true
+	_followup_guard_result="$(printf '%s\n' "${_followup_guard_output}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=//p' | tail -n 1)" || _followup_guard_result=""
+fi
+[ -n "${_followup_guard_payload}" ] && rm -f "${_followup_guard_payload}"
+if [ "${_followup_guard_result}" != "allow" ]; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse reason=security_followup_guard_${_followup_guard_result:-unavailable}"
+	echo "::warning::Auto-merge not enabled for PR #${PR_NUMBER}: the security follow-up guard returned '${_followup_guard_result:-unavailable}' (its base branch's head passed a clean security audit, or that could not be verified). The PR stays open."
+	exit 0
+fi
+
 # This step runs only after a clean review tail and a non-holding security
 # pass; post for the verified head before any merge or manual-merge path.
 review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
