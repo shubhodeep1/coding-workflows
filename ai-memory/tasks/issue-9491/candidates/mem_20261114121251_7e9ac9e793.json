@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update the smoke canary marker in `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `orchestrator/project-9490` @ `edc833587f8e8ad95c79479fcaf37b6576c7956c` (Integration branch mismatch: false).\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_e2e_editor_smoke_canary.py\nACCEPTANCE: post-merge none: this is a smoke-test canary data file with no post-merge workflow tied to it\n\n## Functions or modules to implement\nNone. This is a data-only edit. In `tests/e2e_smoke_canary.txt`, line 2 changes from `decompose-run: 41445772297` to `decompose-run: 43445515854`. Line 1 stays exactly `status: ok`. The file keeps a single trailing LF and has exactly 2 lines.\n\n## Data structures affected\nOnly the canary text file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Edit only the canary file, not the advisory test list\n- Chosen: change line 2 of `tests/e2e_smoke_canary.txt` and nothing else.\n- Alternatives considered: also editing the advisory \"Expected files\" tests.\n- Why: those tests mention `e2e_smoke_canary`, but none of them pins the run ID or the `decompose-run` value. A search for `41445772297` and `decompose-run` in `tests/*.py` found no matches. The issue also requires that `git diff --stat` shows only the canary file.\n\n## Security considerations\nNo trust boundary, endpoint or external input is involved. There is no abuse case beyond editing the sibling file `tests/e2e_smoke_canary_b.txt` by mistake, which is out of scope.\n\n## Potential risks or edge cases\n- The trailing newline could be dropped. `wc -l` must report 2.\n- CRLF line endings could be introduced. The file must stay LF only.\n- Conflict note: the advisory \"Expected files\" list includes test files that need no change. This plan leaves them alone, as the issue's acceptance criteria require.\n\n## Testing considerations\nCheck that:\n- `sed -n 1p` prints `status: ok`.\n- `sed -n 2p` prints `decompose-run: 43445515854`.\n- `wc -l` prints 2.\n- `git diff --stat` lists only `tests/e2e_smoke_canary.txt`.\n\nThen run `tests/test_e2e_editor_smoke_canary.py`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for exactly one line in one file to change, and the existing canary file is updated in place. No helpers, scripts or tests are needed. Following the \u00a76 priorities (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), the complete change and the minimal change are the same here.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this is a smoke-test canary data file with no post-merge workflow tied to it\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_e2e_editor_smoke_canary.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "2e6c0b84a88479a8665b5fa064f960f9992bb26e568612747fdea2b5801bc10a",
+  "lineage": {
+    "issue_number": 9491,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43573486049",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43573486049",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9491"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261114121251_7e9ac9e793",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9491,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43573486049"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9491",
+  "timestamps": {
+    "created_at": "2026-11-14T12:12:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
