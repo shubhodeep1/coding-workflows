@@ -797,6 +797,8 @@ def test_seed_human_latch_labels_cover_repo_latch_sets() -> None:
 	import workflow_failure_heal
 
 	assert dwr.SEED_HUMAN_LATCH_LABELS == set(workflow_failure_heal.HUMAN_NEEDED_LABELS) | set(orchestrate_lib.STALL_RECOVERY_LATCH_LABELS)
+	# The heal escalation label is a seed latch but must never start a heal report.
+	assert workflow_failure_heal.ESCALATED_LABEL not in workflow_failure_heal.HUMAN_NEEDED_LABELS
 	assert set(orchestrate_lib.STALL_RECOVERY_LATCH_LABELS) <= dwr.SEED_HUMAN_LATCH_LABELS
 	assert dwr.NEEDS_HUMAN_LABEL in dwr.SEED_HUMAN_LATCH_LABELS
 

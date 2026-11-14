@@ -825,6 +825,43 @@ def _read_task_files(sandbox: Path) -> dict[str, dict]:
 	return task_files
 
 
+_CONTRACT_LIST_BASE = (
+	"collection: x\n"
+	"purpose: Poller sandbox contract.\n"
+	"read_entrypoints:\n"
+	"  - backend/a.py:read_a\n"
+	"write_entrypoints:\n"
+	"  - backend/a.py:write_a\n"
+)
+
+
+def _add_contract_list_conflict(sandbox: Path) -> None:
+	"""Commit a db/contracts/x.yml base on main, merge it into the sandbox
+	integration branch, then append a different read entrypoint on each
+	branch (stuck-states P12 fixture). Leaves ``main`` checked out."""
+	env = _git_test_env()
+	contract = sandbox / "db" / "contracts" / "x.yml"
+	contract.parent.mkdir(parents=True, exist_ok=True)
+
+	def _git(*args: str) -> None:
+		subprocess.run(["git", "-C", str(sandbox), "-c", "commit.gpgsign=false", *args], check=True, env=env,
+			stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+	_git("checkout", "-q", "main")
+	contract.write_text(_CONTRACT_LIST_BASE, encoding="utf-8")
+	_git("add", "db/contracts/x.yml")
+	_git("commit", "-qm", "contract base")
+	_git("checkout", "-q", "orchestrator/project-192")
+	_git("merge", "-q", "--no-edit", "main")
+	for branch_name, entry in (("orchestrator/project-192", "backend/b.py:read_b"), ("main", "backend/c.py:read_c")):
+		_git("checkout", "-q", branch_name)
+		contract.write_text(_CONTRACT_LIST_BASE.replace(
+			"  - backend/a.py:read_a\n", "  - backend/a.py:read_a\n  - " + entry + "\n"), encoding="utf-8")
+		_git("add", "db/contracts/x.yml")
+		_git("commit", "-qm", branch_name + " contract append")
+	_git("checkout", "-q", "main")
+
+
 def _run_poller(
 	*,
 	state: dict,
@@ -856,6 +893,7 @@ def _run_poller(
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
 	mock_local_integration_content_conflict: bool = False,
+	mock_local_contract_list_conflict: bool = False,
 	blocked_check_shas: list[str] | None = None,
 	validation_workflow_runs: list[dict] | None = None,
 	issue_closed: dict[int, bool] | None = None,
@@ -1039,6 +1077,11 @@ def _run_poller(
 				conflict_fixture_path.write_text(branch_content + "\n", encoding="utf-8")
 				subprocess.run(["git", "-C", str(sandbox), "add", "scripts/integration_conflict_fixture.txt"], check=True, env=_git_test_env())
 				subprocess.run(["git", "-C", str(sandbox), "commit", "-qm", branch_name + " conflict"], check=True, env=_git_test_env())
+		if mock_local_contract_list_conflict:
+			# Stuck-states P12: both branches append a different entry to the
+			# same read_entrypoints list of db/contracts/x.yml after a shared
+			# base, so the local `git merge` conflicts only on that list.
+			_add_contract_list_conflict(sandbox)
 		if mock_rb_judge_prompt_cap is not None:
 			# Exercise the same skip branch without passing a >1 MiB issue
 			# body through the fixture's executable gh/jq wrappers (ARG_MAX).
@@ -30971,7 +31014,13 @@ def test_integration_test_repair_wiring_and_poll_workflow_forwarding():
 	assert fn.count("gh workflow run") == 1
 	assert "_has_active_autofix_run" not in fn and "_safe_gh_jq" not in fn and "gh api" not in fn
 	calls = script.count('_dispatch_integration_test_repair "${TRACKING_NUM:-}"')
-	assert calls == 4, calls
+	assert calls == 5, calls
+	# Stuck-states P12: the fifth dispatch is the contract-list-union success
+	# path, which runs test repair like the plain merge (Refs #9432).
+	union = script[script.index('if sync_contract_list_union_merge "${integration_branch}" "${default_branch}"; then'):]
+	union = union[:union.index("    return 0")]
+	assert 'mark_integration_sync_clean "${default_branch}"' in union
+	assert '_dispatch_integration_test_repair "${TRACKING_NUM:-}" "${integration_branch}" "" "${default_branch}"' in union
 	clean_calls = re.findall(r'mark_integration_sync_clean "\$\{default_branch\}"\n\s+_dispatch_integration_test_repair ', script)
 	assert len(clean_calls) == 3, len(clean_calls)
 	rtm = script[script.index('echo "  PR #${RTM_PR} merged directly."'):]
@@ -32782,6 +32831,102 @@ def test_no_automation_reopens_closed_heal_issues() -> None:
 		text = (REPO_ROOT / relative).read_text(encoding="utf-8")
 		assert "reopen" not in text.lower(), relative
 		assert not re.search(r"PATCH[^\n]*state=open|state=open[^\n]*PATCH", text), relative
+
+
+def _contract_list_union_run(**kwargs) -> dict:
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		mock_local_contract_list_conflict=True,
+		mock_git_push_success=True,
+		**kwargs,
+	)
+
+
+def test_integration_sync_contract_list_union_merges_without_dispatch():
+	# Stuck-states P12: a 409 whose only conflict is an append to a
+	# db/contracts entrypoint list is merged and pushed by the poller
+	# itself; the conflict resolver is not dispatched.
+	try:
+		import yaml  # noqa: F401
+	except ImportError:
+		raise unittest.SkipTest("PyYAML not available in test environment")
+	result = _contract_list_union_run(merge_tree_conflict_paths=["db/contracts/x.yml"])
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SYNC_LIST_UNION_V1:" in combined_log and "outcome=merged" in combined_log, combined_log[-3000:]
+	assert result["review_dispatches"] == []
+	assert any("HEAD:refs/heads/orchestrator/project-192" in call for call in result.get("git_push_calls", []))
+	sync = result["latest_state"]["sync"]
+	assert sync["last_sync_outcome"] == "merged-deterministic"
+	assert sync["status"] == "active"
+	assert sync["last_list_union_paths"] == ["db/contracts/x.yml"]
+	assert sync["last_conflict_paths"] == []
+	assert sync["last_list_union_at"]
+	assert int(result["latest_state"].get("integration_conflict_unresolved_ticks", 0) or 0) == 0
+	bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	resolved = [b for b in bodies if "## ✅ Integration sync auto-resolved (contract list union)" in b]
+	assert len(resolved) == 1
+	assert "- `db/contracts/x.yml`" in resolved[0]
+	assert not any("## ⚠️ Integration sync conflict" in b for b in bodies)
+
+
+def test_integration_sync_contract_list_union_mixed_paths_falls_open():
+	# A conflict on any non-contract path keeps the legacy conflict path,
+	# without creating a worktree or pushing.
+	result = _contract_list_union_run(merge_tree_conflict_paths=["db/contracts/x.yml", "backend/app.py"])
+	combined_log = result["stdout"] + result["stderr"]
+	assert "outcome=ineligible reason=non_contract_path" in combined_log
+	assert not any("HEAD:refs/heads/orchestrator/project-192" in call for call in result.get("git_push_calls", []))
+	assert not any("sync-list-union-wt-" in " ".join(call) for call in result.get("git_worktree_add_calls", []))
+	sync = result["latest_state"]["sync"]
+	assert sync["status"] == "conflict"
+	assert sync["last_sync_outcome"] == "conflict"
+	assert "last_list_union_paths" not in sync
+	bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("## ⚠️ Integration sync conflict" in b for b in bodies)
+	assert not any("contract list union" in b for b in bodies)
+
+
+def test_integration_sync_contract_list_union_disabled_matches_legacy():
+	# ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED=false restores the legacy path
+	# exactly: no union attempt, no log line, the conflict comment.
+	result = _contract_list_union_run(
+		merge_tree_conflict_paths=["db/contracts/x.yml"],
+		env_overrides={"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "false"},
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SYNC_LIST_UNION_V1" not in combined_log
+	assert not any("HEAD:refs/heads/orchestrator/project-192" in call for call in result.get("git_push_calls", []))
+	sync = result["latest_state"]["sync"]
+	assert sync["status"] == "conflict"
+	assert sync["last_conflict_paths"] == ["db/contracts/x.yml"]
+	assert "last_list_union_paths" not in sync
+	bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("## ⚠️ Integration sync conflict" in b and "- `db/contracts/x.yml`" in b for b in bodies)
+	assert not any("contract list union" in b for b in bodies)
+
+
+def test_integration_sync_contract_list_union_wiring_contract():
+	# The flag defaults to true in the poller and both poll env blocks, the
+	# helper is resolved fail-open (not a required staged script), and the
+	# union attempt runs before the conflict state is recorded.
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED="${ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED:-true}"' in poller
+	assert '"${ORCH_SCRIPTS_ROOT}/sync_contract_list_union.py"' in poller
+	sync_body = poller.split("sync_default_into_integration_branch() {", 1)[1].split("\n}\n", 1)[0]
+	assert sync_body.index('if sync_contract_list_union_merge "${integration_branch}" "${default_branch}"; then') \
+		< sync_body.index('"last_sync_outcome": "conflict"')
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	line = "ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED: ${{ vars.ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED || 'true' }}"
+	assert workflow.count(line) == workflow.count(
+		"INTEGRATION_CONFLICT_PARK_ENABLED: ${{ vars.INTEGRATION_CONFLICT_PARK_ENABLED || 'true' }}") == 2
+	assert "python3 -m pip install --quiet 'pyyaml==6.0.2'" in workflow
 
 
 if __name__ == "__main__":

@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Dependency-wait seeding now also skips blocked issues labelled `ai:workflow-heal-escalated` (Refs #9432).** `scripts/dependency_wait_resume.py` no longer moves an `ai:blocked` issue that carries the heal pipeline's escalation label to `ai:waiting-on-dependency`, so the poller can no longer auto-answer it past that human latch. The seed latch set is now `workflow_failure_heal.HUMAN_NEEDED_LABELS` plus `orchestrate_lib.STALL_RECOVERY_LATCH_LABELS`, and a test keeps it equal to that union. No new GitHub call, env var, marker or log value is added.
