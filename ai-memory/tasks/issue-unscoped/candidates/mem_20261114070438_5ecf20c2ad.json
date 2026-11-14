@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml`, placement of the five steps removed from `tests-promote-stall-and-review` (three at ci.yml:1525-1547 in tests-heal-plan-and-validation, two at ci.yml:2532-2595 in tests-release-and-log-analysis)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: In-file comments at ci.yml:1525-1529 and ci.yml:2532-2536 say step timings were unreadable and the pick is an estimate from test and subprocess counts, so the diff does not show the moved steps were the slowest or that the destination jobs have the most headroom, and the steps are split across two jobs. Hard constraints are met (steps moved unchanged, names kept, no `timeout-minutes` raised, no new job ids). All reviewers rated it NIT. The next budget-watch run on main will measure both jobs.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, in the placement of the five steps removed from `tests-promote-stall-and-review`.\n  Evidence of absence: Step timings were unreadable. In-file comments at lines 1525\u20131529 and 2532\u20132536 say the pick is an estimate. Hard constraints are met. The issue permits an unmeasured pick, and the next budget-watch run on main will measure both jobs. Earlier passes deferred this for the same reason.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, placement of the five steps removed from tests-promote-stall-and-review\n  Evidence of absence: Steps are split between tests-heal-plan-and-validation and tests-release-and-log-analysis (lines 1525\u20131547 and 2532\u20132553). Comments say timings were unreadable and the selection was estimated. The explicit requirement for timing-based selection was not met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, placement of the five steps removed from `tests-promote-stall-and-review`\n  Evidence of absence: Comments at `.github/workflows/ci.yml:1525-1528`, `:2534-2536` and the changelog fragment admit the pick is an estimate from test and subprocess counts. Hard constraints are satisfied, and `MovedPromote9363StepsContractTest` at `tests/test_ci_poll_test_sharding.py:2500` pins the new owners. The gap is about the quality of the headroom decision. The next budget-watch run on main will measure both jobs.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, placement of the steps removed from `tests-promote-stall-and-review`.\n  Evidence of absence: The five steps are split between `tests-heal-plan-and-validation` and `tests-release-and-log-analysis` (lines 1525\u20131547 and 2532\u20132553). Comments say timings were unreadable and the selection was estimated, so the diff neither identifies the slowest steps nor establishes the most-headroom destination.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml \u2014 placement of the five steps removed from tests-promote-stall-and-review (three at ci.yml:1525-1547 in tests-heal-plan-and-validation, two at ci.yml:2532-2595 in tests-release-and-log-analysis).\n  Evidence of absence: Comments (ci.yml:1526-1528 and ci.yml:2533-2536) say timings were not readable and the pick is an estimate, so neither the slowest steps nor the most-headroom job is established, and the steps are split across two jobs. Prior autofix passes deferred this because no timing data exists in the repo. The next budget-watch run on main is the stated verification. Carried as a deferred residual.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8a6bf651849143f0b056a5514ff76200dcd61d668a4f9f5b0f73d4afa7bdefe0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9367,
+    "run_id": "43451326463",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43451326463",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114070438_5ecf20c2ad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9367,
+    "run_id": "43451326463"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-14T07:04:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
