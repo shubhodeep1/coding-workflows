@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh:lines 80-93\n  PROBLEM: (Hardening suggestion, HARDENING_RISK_SCORE: 1) The header comment block documents the new PR_CHECKS_GATE_SUPERSEDED log line but leaves out the two new global variables PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE and PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE_KEY.\n  WHY: Suggested minimal fix: add a header paragraph about both variables. It should say they are written only on a successful GET user read that matches the regex, that a failed or invalid read is never cached, and that both persist across _pr_checks_completed calls in the same shell. Estimated lines changed: 6-8.\n- scripts/pr_checks_lib.sh:line 481 (gate_sup_token_fp computation)\n  PROBLEM: (Hardening suggestion, HARDENING_RISK_SCORE: 1) sha256sum is part of GNU coreutils, so on systems that only have shasum -a 256 the cache never turns on.\n  WHY: Suggested minimal fix: add a shasum fallback: gate_sup_token_fp=\"$(printf '%s|%s' \"${GH_TOKEN:-}\" \"${GITHUB_TOKEN:-}\" | (sha256sum || shasum -a 256) 2>/dev/null | cut -c1-64)\". Estimated lines changed: 2.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/pr_checks_lib.sh:header comment block at lines 80-93\n  PROBLEM: (Hardening suggestion, HARDENING_RISK_SCORE: 1) The header comment documents the new PR_CHECKS_GATE_SUPERSEDED log line but not the two new shell-global cache variables PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE and PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE_KEY.\n  WHY: A future caller who reads only the header cannot tell that these variables exist or that they persist across calls in the same shell. Suggested minimal fix: add a short header block covering four points. The first variable holds the cached login. The second holds the sha256 fingerprint of GH_TOKEN|GITHUB_TOKEN that keys it. Both are written only on a successful, regex-matching GET user read, and a failed or invalid read is never cached. Both persist across _pr_checks_completed calls in the same shell. Estimated lines changed: 6-8.\n- scripts/pr_checks_lib.sh:gate_sup_token_fp computation around line 481\n  PROBLEM: (Hardening suggestion, HARDENING_RISK_SCORE: 1) The fingerprint uses only sha256sum, so on systems that ship only shasum -a 256 (stock macOS, some minimal containers) it comes back empty.\n  WHY: With an empty key, `[ -n \"${gate_sup_token_fp}\" ]` is false at both the cache-check and cache-update sites. The cache then silently never engages and every poll repeats GET user, which is the rate-limit behaviour the previous autofix run was meant to remove. Suggested fix: if the result is empty, fall back to `shasum -a 256 2>/dev/null | cut -c1-64` (or openssl dgst -sha256). Estimated lines changed: 2-3.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/pr_checks_lib.sh:line 481 (`gate_sup_token_fp=\"$(printf '%s|%s' \"${GH_TOKEN:-}\" \"${GITHUB_TOKEN:-}\" | sha256sum 2>/dev/null | cut -c1-64)\"`)\n  PROBLEM: (Hardening suggestion, HARDENING_RISK_SCORE: 1) sha256sum is part of GNU coreutils. On systems that ship only `shasum -a 256` (e.g. local macOS runs of `review_rb_judge.sh` / `unblock_judge.sh`), the pipe fails, `2>/dev/null` hides the error, and the fingerprint stays empty.\n  WHY: The cache then never engages and every merge-wait poll repeats the `GET user` read. Suggested minimal fix: if `gate_sup_token_fp` is empty after `sha256sum`, fall back to `shasum -a 256 | cut -c1-64`. Estimated lines changed: 2.\n- scripts/pr_checks_lib.sh:header comment block, lines 83-90\n  PROBLEM: (Hardening suggestion, HARDENING_RISK_SCORE: 1) The two new globals `PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE` / `PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE_KEY` are documented only in an inline comment at line 474, not in the header block that documents the other `PR_CHECKS_*` variables (see lines 45-82).\n  WHY: A future editor reading only the header would not know these variables exist or that they are written once per token. Suggested minimal fix: add a short header paragraph that names both variables. It should say the first holds the cached self login and the second holds the sha256 fingerprint of `GH_TOKEN|GITHUB_TOKEN` that keys it. It should also say both are written only after a successful, regex-valid `GET user` read, that a failed read is never cached, and that both persist across `_pr_checks_completed` calls in the same shell. Estimated lines changed: 5.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "25cd3c9d4daddec1529effedaf418e8289d3ce4b3bd8ae62cec4cab2ad838200",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9262,
+    "run_id": "43562834883",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43562834883",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114155356_e8a5959cbd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9262,
+    "run_id": "43562834883"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-14T15:53:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
