@@ -60,6 +60,10 @@ REVIEW_PHASE_BASE_DEADLINE="${REVIEW_PHASE_DEADLINE}"
 REVIEW_PHASE_DEADLINE_CEILING="${REVIEW_PHASE_DEADLINE}"
 REVIEW_PHASE_HANDOFF_PENDING=0
 REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=0
+# Runner-wait stretch (#9480): set while the watched run waits for a
+# runner, cleared when it starts, completes or is replaced.
+REVIEW_RUNNER_WAIT_SINCE=""
+REVIEW_RUNNER_WAIT_RUN_ID=""
 if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] \
     && [[ "${E2E_JOB_TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]] \
     && [[ "${EDITOR_RETRY_BUDGET_MINUTES:-}" =~ ^[0-9]+$ ]] \
@@ -71,6 +75,29 @@ if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] \
     REVIEW_PHASE_DEADLINE_CEILING="${REVIEW_PHASE_BASE_DEADLINE}"
   fi
 fi
+# Returns 0 when the watched review run is waiting for a runner (#9480):
+# a queued-like run status, or in_progress with no job in progress and
+# at least one job queued/waiting/pending. JOBS_JSON is reassigned on
+# every in_progress poll that has a known run ID (|| echo "" on a failed
+# read), so under that condition it holds this poll's response or is
+# empty; it is read only then. JOBS_STEP_JSON (fetched only for runs that
+# are not in_progress) is never read, and no gh call is made here. An
+# empty or unreadable jobs JSON returns 1, so the normal inactivity rules
+# apply (fail closed).
+review_waiting_for_runner() {
+  local rw_run_id="${RUN_ID:-}" rw_status="${RUN_STATUS:-}" rw_jobs="${JOBS_JSON:-}"
+  [[ "$rw_run_id" =~ ^[0-9]+$ ]] || return 1
+  case ",${BAIT_UNCOVERED_RUN_IDS:-}," in
+    *",${rw_run_id},"*) return 1 ;;
+  esac
+  case "$rw_status" in
+    queued|pending|waiting|requested) return 0 ;;
+    in_progress) ;;
+    *) return 1 ;;
+  esac
+  [ -n "$rw_jobs" ] || return 1
+  printf '%s' "$rw_jobs" | jq -e '(.jobs | type == "array") and ([.jobs[] | select(.status == "in_progress")] | length) == 0 and ([.jobs[] | select(.status == "queued" or .status == "waiting" or .status == "pending")] | length) > 0' >/dev/null 2>&1
+}
 # Returns 0 when the loop may keep polling past the base deadline.
 # Reads the state of the run polled last (RUN_ID, RUN_STATUS, IDLE,
 # CURRENT_STEP_STARTED_AT); the inactivity and per-step stall checks
@@ -96,6 +123,8 @@ review_phase_deadline_extension_allowed() {
     in_progress) ;;
     *) return 1 ;;
   esac
+  # An in_progress run whose jobs all still wait for a runner (#9480).
+  if review_waiting_for_runner; then return 0; fi
   if [[ "$ext_idle" =~ ^[0-9]+$ ]] && [[ "$ext_inactivity" =~ ^[0-9]+$ ]] && [ "$ext_idle" -lt "$ext_inactivity" ]; then
     return 0
   fi
@@ -320,6 +349,11 @@ while true; do
         REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=1
       fi
     else
+      if [ -n "$REVIEW_RUNNER_WAIT_SINCE" ] && review_waiting_for_runner; then
+        rw_waited=$((NOW - REVIEW_RUNNER_WAIT_SINCE))
+        echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=ceiling waited_seconds=${rw_waited}"
+        echo "::error::Review run ${RUN_ID} was still waiting for a runner after $((rw_waited / 60)) minutes (ceiling reached); the hosted-runner queue, not the review, blocked the release"
+      fi
       echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget$(e2e_watched_run_urls)"
       echo "status=timeout" >> "$GITHUB_OUTPUT"
       exit 1
@@ -479,6 +513,13 @@ while true; do
     if [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then REVIEW_PHASE_HANDOFF_PENDING=0; fi
 
     echo "  Review run #${RUN_ID}: status=${RUN_STATUS}, conclusion=${RUN_CONCLUSION}"
+    # A run that completes straight out of a runner wait (#9480) leaves
+    # the wait here, before the completed-run exits below.
+    if [ "$RUN_STATUS" = "completed" ] && [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ] && [ "${REVIEW_RUNNER_WAIT_RUN_ID}" = "${RUN_ID}" ]; then
+      echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=started waited_seconds=$((NOW - REVIEW_RUNNER_WAIT_SINCE))"
+      REVIEW_RUNNER_WAIT_SINCE=""
+      REVIEW_RUNNER_WAIT_RUN_ID=""
+    fi
 
     if [ "$RUN_STATUS" = "completed" ]; then
       if [ "$RUN_CONCLUSION" = "success" ]; then
@@ -795,6 +836,25 @@ while true; do
     PREV_STATE="$CUR_STATE"
   fi
 
+  # Runner wait (#9480): time the watched review run spends waiting for
+  # a runner is never inactivity. The wall clock stays bounded by the
+  # #8004 deadline ceiling checked at the top of the loop.
+  if review_waiting_for_runner; then
+    if [ "${REVIEW_RUNNER_WAIT_RUN_ID}" != "${RUN_ID}" ]; then
+      REVIEW_RUNNER_WAIT_SINCE="$NOW"
+      REVIEW_RUNNER_WAIT_RUN_ID="$RUN_ID"
+      echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} status=${RUN_STATUS} outcome=waiting since=${REVIEW_RUNNER_WAIT_SINCE} ceiling=${REVIEW_PHASE_DEADLINE_CEILING}"
+    fi
+    LAST_ACTIVITY=$NOW
+    IDLE=0
+  elif [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ]; then
+    if [ "${REVIEW_RUNNER_WAIT_RUN_ID}" = "${RUN_ID}" ]; then
+      echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=started waited_seconds=$((NOW - REVIEW_RUNNER_WAIT_SINCE))"
+    fi
+    REVIEW_RUNNER_WAIT_SINCE=""
+    REVIEW_RUNNER_WAIT_RUN_ID=""
+  fi
+
   # Inactivity timeout. When BAIT_SHA is set and the loop
   # never matched a review run for that SHA, surface a
   # distinct status so verify-bait-removed's failure isn't
@@ -851,7 +911,11 @@ while true; do
   fi
 
   REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
-  echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — step: ${CURRENT_STEP:-?}, head: ${PR_HEAD_SHA:0:7}, reviews: ${REVIEW_COMMENT_COUNT}, log: ${LOG_SIZE}b"
+  RUNNER_WAIT_SUFFIX=""
+  if [ -n "${REVIEW_RUNNER_WAIT_SINCE}" ]; then
+    RUNNER_WAIT_SUFFIX=" (waiting for runner $(( (NOW - REVIEW_RUNNER_WAIT_SINCE) / 60 ))m)"
+  fi
+  echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — step: ${CURRENT_STEP:-?}, head: ${PR_HEAD_SHA:0:7}, reviews: ${REVIEW_COMMENT_COUNT}, log: ${LOG_SIZE}b${RUNNER_WAIT_SUFFIX}"
   sleep "$POLL_INTERVAL"
   ELAPSED=$((ELAPSED + POLL_INTERVAL))
 done
