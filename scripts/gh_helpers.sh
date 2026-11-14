@@ -2413,7 +2413,9 @@ autofix_retrigger_has_inflight_peer()
 	[[ "${peer_zq_cutoff}" =~ ^[0-9]+$ ]] || peer_zq_cutoff=0
 	peer_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
 	if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
-		zombie_queued_log_ignored autofix_inflight_peer "${peer_zq_cutoff}" <<< "${response}"
+		# Log only runs this guard would otherwise count: review-family
+		# workflow paths, never the current run.
+		zombie_queued_log_ignored autofix_inflight_peer "${peer_zq_cutoff}" <<< "$(printf '%s' "${response}" | jq -c --arg current "${current_run_id}" '[.workflow_runs[]? | select(type == "object" and ((.id | tostring) != $current) and ((.path // "") | tostring | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")))]' 2>/dev/null || echo '[]')"
 	fi
 	if ! peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" --argjson zq_cutoff "${peer_zq_cutoff}" "${peer_zq_def}"'
 		[

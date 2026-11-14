@@ -179,7 +179,7 @@ def test_cli_accepts_the_raw_api_shapes(tmp_path: Path) -> None:
 	(tmp_path / "runs.json").write_text(json.dumps({"workflow_runs": []}), encoding="utf-8")
 	result = subprocess.run(
 		[sys.executable, str(SCRIPT), "select", "--search-file", str(tmp_path / "search.json"), "--details-file", str(tmp_path / "details.json"),
-		 "--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"],
+		"--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"],
 		capture_output=True, text=True, check=False,
 	)
 	assert result.returncode == 0, result.stdout
@@ -949,6 +949,9 @@ def test_fresh_queued_and_in_progress_judge_runs_still_hold_the_scan() -> None:
 
 
 def test_zombie_filter_can_be_disabled(monkeypatch) -> None:
+	# Load first so the lazy load cannot overwrite the patched hours, and so
+	# teardown restores the real loaded value for later tests.
+	scan._zombie_lib()
 	monkeypatch.setitem(scan._ZOMBIE_LIB_STATE, "hours", 0)
 	wedged = {"id": 9, "display_title": "Unblock judge #4", "status": "queued", "created_at": _iso(200)}
 	assert scan._busy_items([wedged], NOW, dt.timedelta(minutes=60)) == {4}

@@ -1259,7 +1259,9 @@ def test_release_holds_pr_for_review_run_that_changes_status_mid_listing(tmp_pat
 		(fixtures / "actions_runs_after_switch.json").write_text(
 			json.dumps({"workflow_runs": [dict(run, status=after)]}), encoding="utf-8")
 		(fixtures / "actions_runs_switch_at").write_text(str(switch_at), encoding="utf-8")
-		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log)
+		# The fixed-date fixture is far older than 24h, so the wedged-queued
+		# rule (issue #9473) is switched off to observe the status flip alone.
+		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log, ZOMBIE_RUN_MAX_QUEUED_HOURS="0")
 		assert result.returncode == 0, (switch_at, result.stderr)
 		assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr, (switch_at, result.stderr)
 		assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout, (switch_at, result.stdout)
@@ -1298,7 +1300,8 @@ def test_release_holds_pr_for_review_run_that_changes_status_twice_mid_listing(t
 			(fixtures / "actions_runs_after_switch2.json").write_text(
 				json.dumps({"workflow_runs": [dict(run, status=third)]}), encoding="utf-8")
 			(fixtures / "actions_runs_switch2_at").write_text(str(switch2_at), encoding="utf-8")
-			result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log)
+			# See the single-switch test: the wedged-queued rule (issue #9473) is off here.
+			result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log, ZOMBIE_RUN_MAX_QUEUED_HOURS="0")
 			case = (statuses, switch_at, switch2_at)
 			assert result.returncode == 0, (case, result.stderr)
 			assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr, (case, result.stderr)

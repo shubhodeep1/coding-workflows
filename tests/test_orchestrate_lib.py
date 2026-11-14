@@ -4285,6 +4285,50 @@ def test_log_zombie_run_ignored_dedupes_per_guard():
 		"ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/implement.yml age_h=25 guard=lib_test_guard_b",
 	]
 
+
+def test_wedged_queued_run_needs_a_z_suffixed_created_at():
+	now = 1794650000
+	stamp = _zq_iso_hours_ago(now, 30)
+	assert orchestrate_lib.is_wedged_queued_run({"status": "queued", "created_at": stamp}, now, 24) is True
+	for other in (stamp[:-1] + "+00:00", stamp[:-1]):
+		assert orchestrate_lib.is_wedged_queued_run({"status": "queued", "created_at": other}, now, 24) is False
+
+
+def test_concurrency_snapshot_skips_wedged_queued_runs_under_a_long_threshold():
+	now = 1794650000
+	# This file runs under its own main() (no pytest fixtures), so the env
+	# override is saved and restored by hand.
+	previous_hours = os.environ.pop("ZOMBIE_RUN_MAX_QUEUED_HOURS", None)
+	try:
+		_check_concurrency_snapshot_skips_wedged_queued_runs(now)
+	finally:
+		if previous_hours is None:
+			os.environ.pop("ZOMBIE_RUN_MAX_QUEUED_HOURS", None)
+		else:
+			os.environ["ZOMBIE_RUN_MAX_QUEUED_HOURS"] = previous_hours
+
+
+def _check_concurrency_snapshot_skips_wedged_queued_runs(now):
+	import contextlib
+	import io
+	runs = {"workflow_runs": [
+		{"id": 71, "status": "queued", "name": "Internal: AI Implement", "path": ".github/workflows/internal-implement.yml",
+			"created_at": _zq_iso_hours_ago(now, 25)},
+		{"id": 72, "status": "queued", "name": "Internal: AI Implement", "path": ".github/workflows/internal-implement.yml",
+			"created_at": _zq_iso_hours_ago(now, 23)},
+		{"id": 73, "status": "in_progress", "name": "Internal: AI Implement", "path": ".github/workflows/internal-implement.yml",
+			"created_at": _zq_iso_hours_ago(now, 30), "run_started_at": _zq_iso_hours_ago(now, 30)},
+	]}
+	err = io.StringIO()
+	with contextlib.redirect_stderr(err):
+		snapshot = orchestrate_lib.build_concurrency_snapshot(runs, caps={}, threshold_minutes=3000, now_ts=now)
+	assert snapshot["running_by_state"]["ai:implementing"] == 2
+	assert "ZOMBIE_RUN_IGNORED run=71 " in err.getvalue() and "guard=concurrency_snapshot" in err.getvalue()
+	os.environ["ZOMBIE_RUN_MAX_QUEUED_HOURS"] = "0"
+	snapshot = orchestrate_lib.build_concurrency_snapshot(runs, caps={}, threshold_minutes=3000, now_ts=now)
+	assert snapshot["running_by_state"]["ai:implementing"] == 3
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
 

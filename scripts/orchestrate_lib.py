@@ -545,6 +545,10 @@ def build_concurrency_snapshot(
 		not isinstance(implementing_threshold_minutes, int) or implementing_threshold_minutes < 1
 	):
 		implementing_threshold_minutes = None
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and never takes a cap slot, even
+	# when the threshold above is configured past 24 hours. Read once per call.
+	zombie_hours = zombie_run_max_queued_hours()
 
 	for run in runs:
 		if not isinstance(run, dict):
@@ -559,6 +563,9 @@ def build_concurrency_snapshot(
 			threshold_minutes=threshold_minutes,
 			implementing_threshold_minutes=implementing_threshold_minutes,
 		):
+			continue
+		if is_wedged_queued_run(run, effective_now_ts, zombie_hours):
+			log_zombie_run_ignored(run, "concurrency_snapshot", effective_now_ts)
 			continue
 		counts[state] += 1
 		global_running += 1
@@ -2542,6 +2549,10 @@ def _zombie_run_created_epoch(run: Any) -> int | None:
 	created = run.get("created_at")
 	if created is None:
 		created = run.get("createdAt")
+	# Same parse rule as the jq twin (fromdateiso8601): only Z-suffixed UTC
+	# values parse; offset or naive timestamps keep the run active.
+	if not isinstance(created, str) or not created.endswith("Z"):
+		return None
 	return _parse_iso8601_to_epoch(created)
 
 

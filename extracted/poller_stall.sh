@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 set -euo pipefail
 
 is_truthy() {

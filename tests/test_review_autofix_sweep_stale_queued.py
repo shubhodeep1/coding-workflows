@@ -63,7 +63,7 @@ def run_sweep_reduce(runs: list[dict], cutoff: int, default_branch: str = "main"
 	payload = json.dumps({"workflow_runs": runs})
 	result = subprocess.run(
 		["jq", "-c", "-s", "--argjson", "cutoff", str(cutoff), "--arg", "default_branch", default_branch,
-		 extract_jq_program()],
+		extract_jq_program()],
 		input=payload,
 		capture_output=True,
 		text=True,
@@ -334,8 +334,6 @@ class SweepWorkflowContractTest(unittest.TestCase):
 		self.assertIn("wedge a run in `queued` with zero jobs", self.text)
 
 
-
-
 GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 
 
@@ -393,7 +391,6 @@ class SweepZombieQueuedFloorTest(unittest.TestCase):
 		zombie = text.index("ZOMBIE_RUN_IGNORED run=${stale_run_id}", stale)
 		self.assertIn("guard=review_autofix_sweep", text[zombie:zombie + 200])
 		self.assertIn("ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}", text)
-
 
 
 class SweepDefaultBranchProvenanceContractTest(unittest.TestCase):

@@ -135,7 +135,7 @@ def test_guard_jq_programs_compile_with_the_shared_definitions() -> None:
 	for rel, program in programs:
 		result = subprocess.run(
 			["jq", "-n", "--argjson", "zq_cutoff", "1", "--arg", "me", "1", "--arg", "title", "t",
-			 f"{defs}\nif false then ({program}) else empty end"],
+				f"{defs}\nif false then ({program}) else empty end"],
 			capture_output=True, text=True,
 		)
 		assert result.returncode == 0, (rel, program, result.stderr)
