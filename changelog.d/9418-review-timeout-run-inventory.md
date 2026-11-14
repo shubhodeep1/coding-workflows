@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- When the release gate's Phase 4 review wait times out, the new step "Phase 4d: Review-timeout run inventory" lists the review runs on the smoke branch and the jobs of each unfinished run. A job that is `queued` with `runner=none` means no runner picked it up; a run with no jobs means a workflow-level concurrency group held it. The step only reads and never changes the job result. Release run 43283656910 most likely failed for a transient reason (runner starvation or a wedged queued job), so re-run the release gate. Refs #9418

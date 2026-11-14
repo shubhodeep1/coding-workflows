@@ -396,6 +396,202 @@ def test_orchestrate_capacity_check_reads_emitted_log_line_only() -> None:
 		assert "Could not read 2 job log(s)" in stdout
 
 
+TIMEOUT_INV_STEP = "Phase 4d: Review-timeout run inventory"
+WAIT_REVIEW_STEP = "Phase 4: Wait for review & autofix to complete"
+
+
+def test_review_timeout_inventory_step_follows_wait_review() -> None:
+	"""Issue #9418: the timeout inventory runs right after Phase 4."""
+	names = [s["name"] for s in _e2e_steps(_raw())]
+	idx = names.index(WAIT_REVIEW_STEP)
+	assert names[idx + 1] == TIMEOUT_INV_STEP
+	assert names.index(TIMEOUT_INV_STEP) < names.index("Phase 4c: Soft-error analyser (review_autofix)")
+
+
+def test_review_timeout_inventory_step_is_gated_and_non_blocking() -> None:
+	steps = _e2e_steps(_raw())
+	text = _step(steps, TIMEOUT_INV_STEP)["text"]
+	assert "\n        id: review-timeout-inventory\n" in text
+	assert "\n        if: failure() && steps.wait-review.outputs.status == 'timeout'\n" in text
+	assert "\n        continue-on-error: true\n" in text
+	assert "\n        timeout-minutes: 3\n" in text
+	for key in ("PR_NUMBER", "ISSUE_NUMBER", "BAIT_SHA"):
+		assert f"\n          {key}: ${{{{ " in text, key
+	# The incident run ids live in the comment block directly above the Phase 4d
+	# step; read that block from the raw text so the check does not depend on
+	# which step `_e2e_steps` attaches trailing comments to.
+	raw = _raw()
+	lead = raw[: raw.index(f'\n      - name: "{TIMEOUT_INV_STEP}"\n')].split("\n")
+	comment_lines: list[str] = []
+	for line in reversed(lead):
+		if not line.startswith("      #"):
+			break
+		comment_lines.append(line)
+	comment = "\n".join(reversed(comment_lines))
+	assert "Phase 4d" in comment and "#9418" in comment
+	for run_id in ("43283656910", "43300092840", "43300108598"):
+		assert run_id in comment, run_id
+
+
+def test_review_timeout_inventory_body_lists_runs_and_jobs_fail_soft() -> None:
+	run = _step(_e2e_steps(_raw()), TIMEOUT_INV_STEP)["run"]
+	assert run.startswith("set -euo pipefail\n")
+	assert "${{" not in run
+	assert 'if ! TIMEOUT_INV_RUNS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?branch=' in run
+	assert 'if ! TIMEOUT_INV_JOBS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/runs/${TIMEOUT_INV_RUN_ID}/jobs' in run
+	assert '[[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]' in run
+	assert "^[A-Za-z0-9][A-Za-z0-9_.-]*\\.yml$" in run
+	assert "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" in run
+	assert '[[ "${TIMEOUT_INV_RUN_ID:-}" =~ ^[0-9]+$ ]] || continue' in run
+	assert " -X " not in run and "--method" not in run
+
+
+def _run_timeout_inventory(tmp: Path, runs: list, jobs: dict, env_extra: dict | None = None, fail: bool = False, raw_jobs: dict | None = None) -> tuple[int, str, list[str]]:
+	import json
+
+	bash = shutil.which("bash")
+	assert bash is not None
+	body = _step(_e2e_steps(_raw()), TIMEOUT_INV_STEP)["run"]
+	fixdir = tmp / "fix"
+	fixdir.mkdir()
+	(fixdir / "runs.json").write_text(json.dumps({"workflow_runs": runs}), encoding="utf-8")
+	for run_id, run_jobs in jobs.items():
+		(fixdir / f"jobs-{run_id}.json").write_text(json.dumps({"jobs": run_jobs}), encoding="utf-8")
+	for run_id, raw in (raw_jobs or {}).items():
+		(fixdir / f"jobs-{run_id}.json").write_text(raw, encoding="utf-8")
+	call_log = tmp / "calls.log"
+	stub = (
+		"_safe_gh_jq() {\n"
+		'  local path="$1"; shift\n'
+		'  local filter=""\n'
+		'  if [ "${1:-}" = "--jq" ]; then filter="$2"; fi\n'
+		'  printf "%s\\n" "$path" >> "${CALL_LOG}"\n'
+		'  if [ "${STUB_FAIL:-0}" = "1" ]; then return 1; fi\n'
+		'  local f="${FIXDIR}/runs.json"\n'
+		'  case "$path" in\n'
+		'    */jobs*) local id="${path#*/actions/runs/}"; id="${id%%/*}"; f="${FIXDIR}/jobs-${id}.json"\n'
+		'      [ -f "$f" ] || f="${FIXDIR}/empty-jobs.json" ;;\n'
+		"  esac\n"
+		'  jq -r "$filter" "$f"\n'
+		"}\n"
+	)
+	(fixdir / "empty-jobs.json").write_text('{"jobs": []}', encoding="utf-8")
+	env = {
+		"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+		"HOME": str(tmp),
+		"CALL_LOG": str(call_log),
+		"FIXDIR": str(fixdir),
+		"STUB_FAIL": "1" if fail else "0",
+		"TEST_REPO": "o/r",
+		"REVIEW_WORKFLOW_FILE": "internal-review.yml",
+		"ISSUE_NUMBER": "9410",
+		"PR_NUMBER": "9416",
+		"BAIT_SHA": "9a5e8e8" + "0" * 33,
+	}
+	env.update(env_extra or {})
+	result = subprocess.run(
+		[bash, "-c", stub + body], cwd=str(tmp), env=env, capture_output=True, text=True, check=False, timeout=60
+	)
+	calls = call_log.read_text(encoding="utf-8").splitlines() if call_log.exists() else []
+	return result.returncode, result.stdout, calls
+
+
+def _timeout_inv_run(run_id, event: str, status: str, conclusion=None) -> dict:
+	return {
+		"id": run_id,
+		"event": event,
+		"status": status,
+		"conclusion": conclusion,
+		"head_sha": "9a5e8e8" + "1" * 33,
+		"created_at": "2026-11-12T20:25:03Z",
+		"updated_at": "2026-11-12T22:13:52Z",
+	}
+
+
+def test_review_timeout_inventory_body_runs_with_stubbed_gh() -> None:
+	if shutil.which("bash") is None or shutil.which("jq") is None:
+		raise unittest.SkipTest("bash or jq is not installed")
+	import tempfile
+
+	runs = [
+		_timeout_inv_run(43300092840, "workflow_dispatch", "queued"),
+		_timeout_inv_run(43300108598, "pull_request", "pending"),
+		_timeout_inv_run(43300000001, "pull_request", "completed", "success"),
+		_timeout_inv_run("abc", "pull_request", "queued"),
+	]
+	jobs = {
+		43300092840: [
+			{
+				"name": "review / gate",
+				"status": "queued",
+				"conclusion": None,
+				"created_at": "2026-11-12T20:25:05Z",
+				"started_at": None,
+				"runner_name": None,
+			}
+		]
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _run_timeout_inventory(Path(tmp), runs, jobs)
+		assert rc == 0, out
+		assert len([c for c in calls if "/jobs" not in c]) == 1
+		assert sorted(c for c in calls if "/jobs" in c) == [
+			"repos/o/r/actions/runs/43300092840/jobs?per_page=30",
+			"repos/o/r/actions/runs/43300108598/jobs?per_page=30",
+		]
+		assert "run 43300092840 event=workflow_dispatch status=queued" in out
+		assert "job review___gate status=queued conclusion=null" in out
+		assert "runner=none" in out
+		assert "(no jobs yet" in out
+		assert "run 43300000001 event=pull_request status=completed conclusion=success" in out
+		assert "abc" not in out
+		assert "bait=9a5e8e8" in out
+		for line in out.splitlines():
+			assert not line.startswith("::"), line
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _run_timeout_inventory(Path(tmp), runs, jobs, fail=True)
+		assert rc == 0
+		assert "(review run inventory fetch failed)" in out
+		assert len(calls) == 1
+	for bad in ({"ISSUE_NUMBER": "1; rm"}, {"REVIEW_WORKFLOW_FILE": "../x.yml"}, {"TEST_REPO": "o/r/../x"}):
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, out, calls = _run_timeout_inventory(Path(tmp), runs, jobs, env_extra=bad)
+			assert rc == 0
+			assert "Skipped review-timeout inventory" in out
+			assert calls == []
+	with tempfile.TemporaryDirectory() as tmp:
+		many = [_timeout_inv_run(500 + i, "pull_request", "in_progress") for i in range(7)]
+		rc, out, calls = _run_timeout_inventory(Path(tmp), many, {})
+		assert rc == 0
+		assert len([c for c in calls if "/jobs" in c]) == 5
+		assert out.count("(job lookup skipped: cap of 5 reached)") == 2
+
+
+def test_review_timeout_inventory_job_fetch_failure_is_soft() -> None:
+	if shutil.which("bash") is None or shutil.which("jq") is None:
+		raise unittest.SkipTest("bash or jq is not installed")
+	import tempfile
+
+	runs = [_timeout_inv_run(700, "pull_request", "queued"), _timeout_inv_run(701, "pull_request", "queued")]
+	with tempfile.TemporaryDirectory() as tmp:
+		# A jobs response that is not JSON makes the jq filter, and so the call, fail.
+		rc, out, calls = _run_timeout_inventory(Path(tmp), runs, {}, raw_jobs={700: "not json"})
+		assert rc == 0, out
+		assert "(job fetch failed for run 700)" in out
+		assert "(no jobs yet" in out
+		assert len([c for c in calls if "/jobs" in c]) == 2
+		assert "hint: job status=queued" in out
+
+
+def test_review_timeout_inventory_body_parses_as_bash() -> None:
+	bash = shutil.which("bash")
+	if bash is None:
+		raise unittest.SkipTest("bash is not installed")
+	run = _step(_e2e_steps(_raw()), TIMEOUT_INV_STEP)["run"]
+	result = subprocess.run([bash, "-n"], input=run, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	skipped = 0
