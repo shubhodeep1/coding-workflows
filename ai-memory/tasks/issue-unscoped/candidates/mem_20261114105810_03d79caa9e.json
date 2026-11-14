@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:716-882 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: Two different host files, claude_anthropic_relay.py (line 716) and chatgpt_codex_relay.py (line 882), are bind-mounted at the same container entry point /relay.py, but the sandbox Python registry maps /relay.py only to claude_anthropic_relay.py. As a result RegistryCoverageTest.test_scanned_host_file_matches_the_registry fails at tests/test_sandbox_python_coverage.py:293 with \"AssertionError: 'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'\".\n  WHY: Both reviewers rated this MAJOR, mapped here to high. Five checks fail on head 77814cfa (merge 8add01a): tests-sandbox-python (codex-isolated-codex, review, clarify), tests-hooks-and-orchestrator and tests-system-python (11). That blocks merge for every PR built on base f363904. The defect is inherited and this PR did not introduce it. Issue #9449 forbids changing any workflow or script, so the fix (a registry entry that accepts both basenames, or a separate mount path) belongs in a separate base-branch change and must not be applied in this PR.\n- tests/test_review_chatgpt_reviewer_slot.py:121-147 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: In test_shipped_pool_config_file_is_committed_and_switched_off, `assert default[\"reason\"] != \"config_missing\"` is redundant, because the dict-equality assertion on the next line already forces `reason == \"switch_off\"`.\n  WHY: The source rated this NIT, mapped here to low. Nothing fails at runtime and both assertions hold; the first one adds no signal.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_untrusted_sandbox.sh:line 716, --mount \"type=bind,src=$(realpath \"${support}/claude_anthropic_relay.py\"),dst=/relay.py,readonly\", and line 882, --mount \"type=bind,src=$(realpath \"${support}/chatgpt_codex_relay.py\"),dst=/relay.py,readonly\" | severity=MAJOR | confidence=4\n  PROBLEM: Two different host files are bind-mounted at the same container entry point /relay.py, but the sandbox Python registry maps /relay.py only to claude_anthropic_relay.py. RegistryCoverageTest.test_scanned_host_file_matches_the_registry fails with \"AssertionError: 'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'\" on head 77814cfa (merge commit 8add01a). Five checks fail on it: tests-sandbox-python (codex-isolated-codex, review, clarify), tests-hooks-and-orchestrator and tests-system-python (11). The registry check is at tests/test_sandbox_python_coverage.py:293 per the CI log; that file is not in the review checkout.\n  WHY: The coverage scan fails CI on every PR built on base f363904, so this PR cannot go green or merge. The PR did not cause it, since the coverage scan reads none of its three files. The fix (a registry entry accepting both relay basenames, or a separate mount path) is outside #9449's files_touched and belongs in a separate base-branch fix. The editor must not apply it in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_chatgpt_reviewer_slot.py:lines 121-147 (test_shipped_pool_config_file_is_committed_and_switched_off) | severity=NIT | confidence=3\n  PROBLEM: `assert default[\"reason\"] != \"config_missing\"` is redundant with the next line's dict-equality assertion, which already forces `reason == \"switch_off\"`.\n  WHY: Nothing fails at runtime and both assertions hold. The first assertion is dead weight, and the test still proves the property the issue cares about.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_untrusted_sandbox.sh:lines 716 and 882 (dual bind mounts, dst=/relay.py); registry entry_point '/relay.py' in tests/test_sandbox_python_coverage.py:293 (test lives on the merge-base side; not present on this PR-head checkout) | severity=MAJOR | confidence=4\n  PROBLEM: Five check runs on the PR head (tests-sandbox-python for codex-isolated-codex, review and clarify; tests-hooks-and-orchestrator; tests-system-python shard 11) fail in RegistryCoverageTest.test_scanned_host_file_matches_the_registry with AssertionError: 'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'. The cause is that lines 716 and 882 both mount to dst=/relay.py while the registry lists only claude_anthropic_relay.py for that entry point.\n  WHY: The scan runs on merge ref 8add01a (77814cfa merged into f363904). The registry admits only one basename per entry point, so the check is red and blocks merge on every PR built on this base. The PR diff did not introduce this, and #9449 forbids script changes, so the fix belongs in a separate change and must not be applied here.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a313814f926169db269022aa828578516ba09e17d41aacd9b780d63f04b3716b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9454,
+    "run_id": "43543211078",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43543211078",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114105810_03d79caa9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9454,
+    "run_id": "43543211078"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-14T10:58:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
