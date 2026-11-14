@@ -139,6 +139,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_triage_resolution.py` — Close an ai:check-triage issue once its linked PR merged and the failure is verified fixed on the default branch; otherwise post the failing job's traceback (issue #7095).
 - `scripts/check_integration_pr_readiness.py` — Check whether an orchestrator integration PR is ready to merge based on the tracking issue's sub-issue checkbox state.
 - `scripts/check_resolver_diff.sh` — Validate the output of the AI conflict-resolver step before committing.
+- `scripts/check_workflow_analysis_report.py` — Structure check (required headings, per-repo subsections, minimum size) and data-gap line for the workflow log analysis report (project #9116, P2).
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
 - `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.

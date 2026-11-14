@@ -76,8 +76,18 @@ def _job_block(job_id: str) -> str:
 
 def test_no_commit_step_pushes_to_the_default_branch() -> None:
 	wf = _wf()
-	assert 'git push origin "HEAD:${TARGET_BRANCH}"' not in wf
-	for name in COMMIT_STEPS:
+	# The only default-branch push left is commit_report's legacy push mode
+	# (WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=false, project #9116); the default
+	# PR mode pushes to the run branch.
+	assert wf.count('git push origin "HEAD:${TARGET_BRANCH}"') == 1
+	report_body = _step_run("Commit and push report")
+	push_mode_at = report_body.index('if [ "${report_delivery_mode}" = "push" ]; then')
+	assert push_mode_at < report_body.index('git push origin "HEAD:${TARGET_BRANCH}"')
+	assert 'origin "HEAD:refs/heads/${REPORT_PR_BRANCH}" >"${push_log}" 2>&1' in report_body
+	assert "GH006|GH013|protected branch|push declined|repository rule" in report_body
+	assert "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=failed reason=push_rejected_by_ruleset" in report_body
+	assert "sed -E 's#(https?://)[^/@[:space:]]+@#\\1***@#g'" in report_body
+	for name in COMMIT_STEPS[1:]:
 		body = _step_run(name)
 		assert 'git pull --rebase' not in body, name
 		assert 'HEAD:${TARGET_BRANCH}' not in body, name
@@ -91,7 +101,10 @@ def test_report_branch_is_per_run_and_validated() -> None:
 	body = _step_run("Commit and push report")
 	assert 'REPORT_BRANCH="auto/workflow-log-analysis-report-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in body
 	assert '[[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]]' in body
-	assert 'echo "report_branch=${REPORT_BRANCH}" >> "$GITHUB_OUTPUT"' in body
+	# commit_report reports the branch the report is on (run branch in PR
+	# mode, target branch once merged or in push mode).
+	assert 'report_branch="${REPORT_PR_BRANCH}"' in body
+	assert 'echo "report_branch=${report_branch}"' in body
 	assert 'echo "purged_docs=${purged_docs_list}" >> "$GITHUB_OUTPUT"' in body
 	assert "reason=push_failed" in body
 	for name in ("Commit and push deep audit section", "Commit and push API redundancy section"):
@@ -121,10 +134,13 @@ def test_analyze_job_exposes_delivery_outputs_alongside_existing_ones() -> None:
 	job = _job_block("analyze-commit-notify")
 	assert "report_file: ${{ steps.commit_report.outputs.report_file || steps.analyze.outputs.report_file }}" in job
 	assert "analysis_status: ${{ steps.analyze.outputs.analysis_status }}" in job
-	assert "committed: ${{ steps.commit_report.outputs.committed }}" in job
-	assert "report_branch: ${{ steps.commit_report.outputs.report_branch }}" in job
+	# commit_report (project #9116) delivers the report itself whenever it
+	# sets a delivery outcome, so committed/report_branch reach deliver-report
+	# only when it set none.
+	assert "committed: ${{ steps.commit_report.outputs.delivery == '' && steps.commit_report.outputs.committed || '' }}" in job
+	assert "report_branch: ${{ steps.commit_report.outputs.delivery == '' && steps.commit_report.outputs.report_branch || '' }}" in job
 	assert "purged_docs: ${{ steps.commit_report.outputs.purged_docs }}" in job
-	assert "TG_REPORT_BRANCH: ${{ steps.commit_report.outputs.report_branch }}" in job
+	assert "TG_REPORT_BRANCH: ${{ steps.commit_report.outputs.delivery == '' && steps.commit_report.outputs.report_branch || '' }}" in job
 	assert "a report PR into ${GITHUB_REF_NAME} is being opened" in job
 
 
@@ -151,7 +167,7 @@ def test_deliver_report_job_contract() -> None:
 
 def test_purge_skips_unprocessed_docs_before_git_rm() -> None:
 	body = _step_run("Commit and push report")
-	assert 'purge_processing_report="analysis/recommendation-processing-report.md"' in body
+	assert 'purge_processing_report="${APPLY_ANALYSIS_REPORT_PATH:-analysis/recommendation-processing-report.md}"' in body
 	assert "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc=all reason=processing_report_missing" in body
 	assert 'if [ "${purge_guard_ok}" = "true" ] && cutoff_date=' in body
 	loop = body.split('for old_report in analysis/workflow-optimization-*.md; do', 1)[1]
@@ -476,6 +492,15 @@ OLD_UNPROCESSED = "analysis/workflow-optimization-2020-01-02.md"
 OLD_IN_FLIGHT = "analysis/workflow-optimization-2020-01-03.md"
 
 
+_FAKE_COMMIT_GH = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${FAKE_GH_LOG}"
+if [ "$1 $2" = "pr create" ]; then
+  echo "https://github.com/owner/repo/pull/123"
+fi
+exit 0
+"""
+
+
 def _run_commit_step(tmp: Path, with_processing_report: bool) -> tuple[subprocess.CompletedProcess[str], dict[str, str], str]:
 	env = _env(tmp)
 	files = {
@@ -483,6 +508,7 @@ def _run_commit_step(tmp: Path, with_processing_report: bool) -> tuple[subproces
 		OLD_UNPROCESSED: "b\n",
 		OLD_IN_FLIGHT: "c\n",
 		"scripts/apply_analysis_on_main.sh": f"#!/usr/bin/env bash\necho {OLD_IN_FLIGHT}\n",
+		"scripts/lint_pr_body_auto_close.py": "import sys\nsys.exit(0)\n",
 	}
 	if with_processing_report:
 		files["analysis/recommendation-processing-report.md"] = (
@@ -493,13 +519,27 @@ def _run_commit_step(tmp: Path, with_processing_report: bool) -> tuple[subproces
 	work = tmp / "work"
 	_git(tmp, env, "clone", "-q", url, str(work))
 	_write(work, REPORT, "# new report\n")
-	body = _step_run("Commit and push report").replace("${{ steps.analyze.outputs.report_file }}", REPORT)
+	body = _step_run("Commit and push report")
 	assert "${{" not in body
+	# PR mode (the default): a fake gh opens PR 123 and accepts the merge
+	# request without merging, so the report stays on the run branch.
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text(_FAKE_COMMIT_GH, encoding="utf-8")
+	gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+	(tmp / "runner").mkdir()
 	env.update({
+		"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+		"FAKE_GH_LOG": str(tmp / "gh.log"),
+		"RUNNER_TEMP": str(tmp / "runner"),
 		"GITHUB_REF_TYPE": "branch", "GITHUB_REF_NAME": "main",
 		"GITHUB_RUN_ID": "100", "GITHUB_RUN_ATTEMPT": "1",
 		"GITHUB_OUTPUT": str(tmp / "github_output"),
 		"REPORT_RETENTION_DAYS": "30",
+		"WLA_ANALYZE_REPORT_FILE": REPORT,
+		"WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR": "true",
+		"WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES": "0",
 	})
 	proc = subprocess.run(["bash", "-c", body], cwd=work, env=env, capture_output=True, text=True, timeout=120)
 	assert _git(tmp / "origin.git", env, "rev-parse", "main") == main_before, "main must not move"
@@ -514,13 +554,17 @@ def test_commit_step_purges_only_processed_docs_and_pushes_run_branch() -> None:
 		assert proc.returncode == 0, out
 		assert f"WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc={OLD_UNPROCESSED} reason=unprocessed" in out
 		assert f"WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc={OLD_IN_FLIGHT} reason=in_flight_project" in out
-		assert not _ls_remote_file(tmp, env, RUN_BRANCH, OLD_PROCESSED)
+		# The purge selects only the processed doc, but PR mode (project
+		# #9116) takes the purge deletions out of the report PR before any
+		# merge call, so every doc stays on the run branch.
+		assert "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending count=1" in out
+		assert _ls_remote_file(tmp, env, RUN_BRANCH, OLD_PROCESSED)
 		assert _ls_remote_file(tmp, env, RUN_BRANCH, OLD_UNPROCESSED)
 		assert _ls_remote_file(tmp, env, RUN_BRANCH, OLD_IN_FLIGHT)
 		assert _ls_remote_file(tmp, env, RUN_BRANCH, REPORT)
 		assert "committed=true" in output
 		assert f"report_branch={RUN_BRANCH}" in output
-		assert f"purged_docs={OLD_PROCESSED}\n" in output
+		assert "purged_docs=\n" in output
 
 
 def test_commit_step_skips_purge_without_processing_report() -> None:

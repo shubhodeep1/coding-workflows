@@ -4364,11 +4364,31 @@ jobs:
         timeout-minutes: 265
         env:
           WF_FILE: workflow-log-analysis.yml
+          # Plan P4: with the switch on (default) and TEST_REPO being this
+          # repository, the gate analyses the full repo roster since the last
+          # report (clamped to 7 days) instead of repos_override=TEST_REPO
+          # over one day. Set the repo variable to false to roll back.
+          WORKFLOW_LOG_ANALYSIS_GATE_ALL_REPOS: ${{ vars.WORKFLOW_LOG_ANALYSIS_GATE_ALL_REPOS || 'true' }}
         run: |
           set -euo pipefail
           # Surface audit failures via step outputs + notify instead of
           # failing this job — workflow-log-analysis is observability-only.
           sleep 4
+          # Another repository's copy of the workflow may not declare
+          # since_last_report (an unknown input fails the dispatch) and would
+          # read that repository's roster, so it keeps the single-repo scope.
+          wla_gate_all_repos="$(printf '%s' "${WORKFLOW_LOG_ANALYSIS_GATE_ALL_REPOS:-true}" | tr '[:upper:]' '[:lower:]')"
+          case "${wla_gate_all_repos}" in
+            false|0|no|off)
+              wla_gate_scope_fields=(--field "repos_override=${TEST_REPO}") ;;
+            *)
+              if [ "${TEST_REPO}" != "${GITHUB_REPOSITORY:-}" ]; then
+                echo "::notice::TEST_REPO differs from this repository; workflow-log-analysis keeps repos_override=TEST_REPO."
+                wla_gate_scope_fields=(--field "repos_override=${TEST_REPO}")
+              else
+                wla_gate_scope_fields=(--field since_last_report=true)
+              fi ;;
+          esac
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -4379,7 +4399,7 @@ jobs:
             --dispatch-fail-open \
             --registration-fail-open \
             --field lookback_days=1 \
-            --field "repos_override=${TEST_REPO}" \
+            "${wla_gate_scope_fields[@]}" \
             --field alert_msg_level=SILENT
 
       - name: "Soft-error analyser (workflow-log-analysis)"
