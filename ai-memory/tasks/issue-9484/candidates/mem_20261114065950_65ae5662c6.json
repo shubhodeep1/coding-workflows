@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which operator-step holds should be refused and escalated instead?\nChoices:\n- A: All of them. Never write a `placeholder_retired` hold again. Every operator-step fix-up escalates once, and the hold kind is kept only so existing markers can still be read.\n- B: Only steps that are not \"set a repository variable or secret\". Keep the hold when the verdict's `operator_instructions` say to set a repo Actions variable or secret with exactly that placeholder name. Escalate for any other kind of step, such as a workflow or path grant, pinning an action SHA, or a label repair, where nobody will ever create a variable with that name. (RECOMMENDED)\n- C: Only steps where the verdict's `operator_instructions` name a different variable or secret from the placeholder. Hold on the real name they give instead, and escalate only when no real name can be found.\nQ2: What should \"escalate the item once\" do?\nChoices:\n- A: Post one comment on the item quoting the verdict's `operator_instructions` (the real action needed), add a marker so it is never posted again, and stop judging the item until a person posts its resume command. The `ai:operator-step` issue entry that the verdict already writes stays as it is. (RECOMMENDED)\n- B: Do everything in A, and also send a Telegram alert.\n- C: Do everything in A, and also add the existing human-attention or blocked label to the item (and to its fix-up, e.g. #178).\nQ3: How should holds that are already open (mongo-explorer#51, radateeree-resort.com#174) be handled?\nChoices:\n- A: Change only new holds. The existing ones expire under the 14-day default: #51 around 2026-11-15 and #174 around 2026-11-18. When the judge decides again after expiry, it takes the new escalation path. (RECOMMENDED)\n- B: Also check open `placeholder_retired` holds on the next run, and escalate and close any that match the Q1 rule straight away.",
+  "fingerprint": "a39c047089046b26a90468ae8bff55027482742f2f58dc5e32f93ca1ab5071ac",
+  "lineage": {
+    "issue_number": 9484,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43547063660",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43547063660",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261114065950_65ae5662c6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9484,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43547063660"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9484 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-14T06:59:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
