@@ -104,6 +104,8 @@ def test_trusted_template_denies_credential_like_env_placeholders() -> None:
 		"ACTIONS_RUNTIME_TOKEN": "sentinel-denied-actions-9465",
 		"MY_PAT": "sentinel-denied-my-pat-9465",
 		"GH_REPO_SLUG": "sentinel-denied-gh-prefix-9465",
+		"SERVICE_SIGNINGKEY": "sentinel-denied-fused-key-9465",
+		"MY_APIPAT": "sentinel-denied-fused-pat-9465",
 	}
 	allowed = {
 		"CUSTOM_PLACEHOLDER": "custom-placeholder-value",
@@ -122,11 +124,14 @@ def test_trusted_template_denies_credential_like_env_placeholders() -> None:
 		assert value not in proc.stderr, name
 		assert f"line {name}={{{{{name}}}}}" in proc.stdout, name
 		assert f"{{{{{name}}}}}" in proc.stderr, name
-	# `{{1}}` must not resolve to the script's positional parameter (the
-	# prompt path) via `${!name}`.
-	assert "line 1={{1}}" in proc.stdout
+	# A double-braced `1` must not resolve to the script's positional
+	# parameter (the prompt path) via `${!name}`. Built by concatenation so
+	# this file never carries a contiguous braced token an older renderer
+	# would fill when the file is embedded in a reviewer prompt (#9465).
+	positional_token = "{{" + "1" + "}}"
+	assert f"line 1={positional_token}" in proc.stdout
 	assert str(prompt_file) not in proc.stdout
-	assert "{{1}}" in proc.stderr
+	assert positional_token in proc.stderr
 	for name, value in allowed.items():
 		assert f"line {name}={value}" in proc.stdout, name
 		assert f"{{{{{name}}}}}" not in proc.stderr, name

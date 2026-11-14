@@ -204,7 +204,8 @@ PY
 
 # Security (#9399, #9431, #9465): placeholder names come from the prompt body,
 # and callers render composed bodies that embed untrusted PR-diff / comment /
-# issue text. Without a guard, a literal `{{GH_PAT}}` in that text would make
+# issue text. Without a guard, a double-braced GH_PAT placeholder in that text
+# (written without braces here so an older renderer cannot fill it) would make
 # the indirect expansion below substitute the runner's secret into a prompt
 # sent to a third-party model. No shipped template uses a placeholder whose
 # name looks like a credential, so refusing these names leaves the literal
@@ -242,7 +243,10 @@ placeholder_env_name_is_credential_like()
 	IFS='_' read -r -a name_words <<< "${upper_name}"
 	for name_word in "${name_words[@]}"; do
 		case "${name_word}" in
-			KEY|KEYS|PAT|PASS|PWD|AUTH|SESSION|SIGNING|SIGNATURE|CERT|DSN|URI|CF|OTP)
+			# `*KEY` / `*PAT` also catch fused words such as SIGNINGKEY or
+			# APIPAT; no shipped placeholder word ends in KEY or PAT (PATH does
+			# not match).
+			*KEY|*KEYS|*KEYID|*PAT|*PATS|PASS|PWD|AUTH|SESSION|SIGNING|SIGNATURE|CERT|DSN|URI|CF|OTP)
 				return 0
 				;;
 		esac
@@ -394,7 +398,8 @@ append_render_var "MODEL_FAMILY_OVERLAY" "${MODEL_FAMILY_OVERLAY_BLOCK}"
 
 # Security (#9465): an untrusted body (reviewer / editor prompts that already
 # embed raw PR diff, comment and check-run text) must never choose which
-# environment variables are read. Without this gate a `{{GH_TOKEN}}` (or any
+# environment variables are read. Without this gate a double-braced GH_TOKEN
+# placeholder (or any
 # other exported name the denylist misses) written in a PR comment would be
 # resolved from the review step's environment and sent to third-party model
 # providers, and the value would appear in render_prompt.py's argv. Such
