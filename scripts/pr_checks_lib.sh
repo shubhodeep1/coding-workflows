@@ -88,6 +88,15 @@
 #                            success status for the exact head SHA drops it
 #                            from the blocking set, outcome=skip reason=<token>
 #                            otherwise (the check-run keeps blocking).
+#   PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE / PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE_KEY
+#                          — internal shell globals (not inputs) written by
+#                            _pr_checks_completed: the token's own login for
+#                            the #9212 creator check, keyed on a sha256
+#                            fingerprint of GH_TOKEN|GITHUB_TOKEN. Written only
+#                            after a successful, regex-valid `GET user` read (a
+#                            failed or invalid read is never cached); they
+#                            persist across calls in the same shell, and a
+#                            token change re-reads.
 
 # Built-in default required-check set. Defined set-if-unset so a caller
 # that already declared it (the orchestrator does, near
