@@ -561,11 +561,14 @@ def test_clarify_and_alt_model_timeouts_print_issue_url() -> None:
 	alt = alt_step["run"]
 	_ordered(alt, "Alt-model run timed out before reaching review stage", "Issue: ${GITHUB_SERVER_URL:-https://github.com}/${TEST_REPO}/issues/${ISSUE_NUMBER}", "clarify.yml/runs", "/actions/runs/")
 	assert "ALT_PRE_CLARIFY_RUN_ID: ${{ steps.create.outputs.pre_clarify_run_id }}" in alt_step["text"]
+	# The parallel e2e-smoke-test job's Clarify run must not be picked (#9223).
+	assert "ALT_ISSUE_TITLE: ${{ steps.create.outputs.title }}" in alt_step["text"]
+	assert "select(.display_title == env.ALT_ISSUE_TITLE)" in alt
 	assert "${{" not in alt
 
 
 def main() -> int:
-	tests =[v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	skipped = 0
 	for test in tests:
 		try:

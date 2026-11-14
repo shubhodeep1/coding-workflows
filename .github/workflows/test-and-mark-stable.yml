@@ -5339,6 +5339,7 @@ jobs:
         env:
           ISSUE_NUMBER: ${{ steps.create.outputs.issue_number }}
           ALT_PRE_CLARIFY_RUN_ID: ${{ steps.create.outputs.pre_clarify_run_id }}
+          ALT_ISSUE_TITLE: ${{ steps.create.outputs.title }}
         run: |
           set -euo pipefail
           DEADLINE=$(( $(date +%s) + 4500 ))
@@ -5401,11 +5402,11 @@ jobs:
             sleep 20
           done
           echo "::error::Alt-model run timed out before reaching review stage"
-          # Fail-open diagnostics: one read; only a run URL passes the regex (#9223).
+          # Fail-open diagnostics: one read, scoped to this issue's title; only a run URL passes the regex (#9223).
           echo "  Issue: ${GITHUB_SERVER_URL:-https://github.com}/${TEST_REPO}/issues/${ISSUE_NUMBER}"
           ALT_CLARIFY_RUN_URL=""
           if [[ "${ALT_PRE_CLARIFY_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
-            ALT_CLARIFY_RUN_URL=$(gh api "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=20" --jq "[.workflow_runs[] | select(.id > ${ALT_PRE_CLARIFY_RUN_ID})] | sort_by(.created_at) | last | .html_url // empty" 2>/dev/null || echo "")
+            ALT_CLARIFY_RUN_URL=$(gh api "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=20" --jq "[.workflow_runs[] | select(.id > ${ALT_PRE_CLARIFY_RUN_ID}) | select(.display_title == env.ALT_ISSUE_TITLE)] | sort_by(.created_at) | last | .html_url // empty" 2>/dev/null || echo "")
           fi
           if [[ "$ALT_CLARIFY_RUN_URL" =~ ^https://[^[:space:]]+/actions/runs/[0-9]+$ ]]; then
             echo "  Clarify run: ${ALT_CLARIFY_RUN_URL}"
