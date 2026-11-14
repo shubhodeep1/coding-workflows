@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/sync_contract_list_union.py:270-277 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash, minimax_minimax-m3]\n  PROBLEM: The ordered-subsequence check in `_validate` accepts entries inserted between existing base entries, not only appends. With base `[a, b, c]`, ours `[a, x, b, c]` and theirs `[a, y, b, c]`, `_resolve` produces `[a, x, y, b, c]` and the helper commits it instead of falling back to the conflict resolver. This conflicts with the \"append-only\" and \"two-sided append\" eligibility wording in agents.d/stuck-states-p12-contract-list-union.md line 8.\n  WHY: The reviewers disagree on severity, so the highest is used. openai_gpt-6-luna rated it MAJOR because the resolver is meant to handle appends only. z-ai_glm-5_3-flash and minimax_minimax-m3 rated it NIT because the merge is lossless and deterministic: no base entry is lost and the union check passes. z-ai_glm-5_3-flash treats it as drift between the documented contract and the code. minimax_minimax-m3 says the behaviour already existed before the last run and that issue #9417 does not forbid interior insertions.\n- scripts/sync_contract_list_union.py:270-275 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: This finding rebuts the pass-1 gemini-3_1-flash-lite claim that the shared `remaining` iterator is \"used up\", so duplicate or reordered base entries never match. The reviewer says that claim is incorrect and reports no defect.\n  WHY: `any(entry == candidate for candidate in remaining)` is the standard greedy subsequence idiom, and duplicates are matched by position. `test_reorder_plus_append_is_ineligible` exercises the case and passes. Per their verification notes, anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash independently rejected the same pass-1 claim.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/sync_contract_list_union.py:lines 270-275 (the `iter(...)` subsequence check) | severity=NIT | confidence=5\n  PROBLEM: The pass-1 gemini-3_1-flash-lite claim that the shared `remaining` iterator is \"used up\", so duplicates or reorders can never match, is incorrect. `any()` short-circuits and leaves the iterator just past the match, and duplicates are matched by position.\n  WHY: It does not fail at runtime. `tests/test_sync_contract_list_union.py::test_reorder_plus_append_is_ineligible` (base `[a, b]`, ours `[b, a, c]`, theirs `[a, b, d]`) asserts exit 3 with `reason=list_not_union`, and the gate reports it green.\n- scripts/sync_contract_list_union.py:`_resolve` + `_validate` (the merge construction vs. the agents.d \"two-sided append\" wording) | severity=NIT | confidence=3\n  PROBLEM: The interior insertion (base `[a, b, c]`, ours `[a, x, b, c]`, theirs `[a, y, b, c]`) is accepted as a union. That is broader than the plan's \"only appends\" wording, but it matches the agents.d/stuck-states-p12-contract-list-union.md:8 contract. The behaviour already existed before the last run, and the last run only tightened it by rejecting reorders.\n  WHY: It does not fail at runtime: the merge is valid YAML with no data lost. This is a spec-wording nit, and issue #9417 does not forbid interior insertions. The reviewer reports no TASK_GAP.\n- HARDENING scripts/sync_contract_list_union.py:line 277 (`base_data = _load_mapping(base_text)`): the reviewer checked whether a yaml_parse_failed or empty base leads to the wrong reason token and concluded \"No defect \u2014 flagging as N/A\". HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/sync_contract_list_union.py:270-276, `_validate` checks that base entries remain an ordered subsequence. | severity=MAJOR | confidence=5\n  PROBLEM: The check accepts entries inserted between existing base entries, although the resolver is intended to handle appends only.\n  WHY: With base `[a, b, c]`, ours `[a, x, b, c]` and theirs `[a, y, b, c]`, both sides pass the check. The helper then commits `[a, x, y, b, c]` instead of falling back to the conflict resolver.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/stuck-states-p12-contract-list-union.md:line 8 (\"writes the union only when every `git merge-file` hunk is a two-sided append\") vs scripts/sync_contract_list_union.py:270-277 | severity=NIT | confidence=3\n  PROBLEM: The ordered-subsequence check accepts interior insertions, for example `[a, x, y, b, c]`, so the poller commits. The shipped contract fragment still describes eligibility as \"every hunk is a two-sided append\", so the doc and the code disagree.\n  WHY: There is no runtime failure, because the merged result is lossless and deterministic. The defect is drift in the documented contract, which operators and log analysts rely on.\n- TASK_GAP Requirement: \"the poller merges locally... and dispatches no resolver\" for entrypoint-list append conflicts (issue #9417).\n  Expected change site: scripts/sync_contract_list_union.py `_validate`\n  Evidence of absence: None. The append-only and ordered-subsequence checks at lines 255-277 implement the requirement, and `test_reorder_plus_append_is_ineligible`, `test_issue_3862_shape_merges_union` and `test_bare_base_list_first_entry_appends_merge` lock it in. The reviewer reports NONE.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ce1c3c6d4de7b9b1b1d76455e6cdb0ff207892c2e922e632ba9b64116590ba22",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9427,
+    "run_id": "43563410793",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43563410793",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114161108_e111b5da04",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9427,
+    "run_id": "43563410793"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-14T16:11:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
