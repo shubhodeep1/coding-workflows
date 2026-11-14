@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The source PR (the marker PR) was **closed without merging**, as in btc_sweeper#207 / source PR #85. What should the poll do with the open `ai:check-triage` issue? Today `check_triage_resolution.py` returns `pr_not_merged` for this case (line 441\u2013442), so the issue is never resolved.\nChoices:\nA) Close it automatically as \"not planned\", with a logged reason such as `source_pr_closed_unmerged`, whether or not a fix PR merged into the source PR's head. The failing code never reached the default branch. (RECOMMENDED)\nB) Close it as \"not planned\" only if no fix PR is still open. If one is open, leave the issue open and log the reason.\nC) Leave it open. Log the reason and stop standalone stall recovery from looping on it, so a person decides.\nQ2: The fix PR merged into a non-default base, and that branch reached the default branch some other way, so the gate's integration path returns `integration_pr_missing`. Examples: #750 (project #739 shipped through activation re-issue PR #753) and binance-blessings#400. Which fallback should resolve these?\nChoices:\nA) Resolve when two things hold: the triaged check is green on the default branch, and the fix PR's change is on the default branch. \"On the default branch\" means its merge commit is reachable, or the same patch/tree content is found there. If either check can't be confirmed, leave the issue open and log the reason. (RECOMMENDED)\nB) Resolve when the triaged check is green on the default branch and the project's `ai:orchestrator-tracking` issue is closed or completed. No content check.\nC) Never auto-resolve this shape. Leave the issue open, log `integration_pr_missing`, and stop stall recovery from re-judging it every tick.\nQ3: Should this issue also fix the stall-recovery override from the comment? On binance-blessings#507 the judge decided `escalate_human`, but the effective action became `attempt_merge`. The likely source is `_linked_pr_evidence` in `scripts/orchestrate_lib.py:1855`, which turns any linked PR with `merged=true` into `attempt_merge`, even one merged into a non-default base.\nChoices:\nA) Include it here. Do not derive `attempt_merge` when the linked PR is closed unmerged, or merged into a base that is neither the default branch nor an accepted target branch. In those cases the judge's decision stands. Add a contract test using the #507 shape. (RECOMMENDED)\nB) Leave it out. Open a separate follow-up issue for the override and keep this change to the close sweep and gate sweep.",
+  "fingerprint": "9e12a66a7489aaab92738a0b5e46611bc080a66bc02a0a141aeeaf041a0acedb",
+  "lineage": {
+    "issue_number": 9481,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43546663155",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43546663155",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261114065541_276ad848b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9481,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43546663155"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9481 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-14T06:55:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
