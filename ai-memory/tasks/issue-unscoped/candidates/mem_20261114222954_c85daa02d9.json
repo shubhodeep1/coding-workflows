@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_gh_api_write_guard.py:(no line given) | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR introduces regressions in the GitHub API write guard, shown by multiple failures in tests/test_gh_api_write_guard.py (e.g. test_dispatchable_workflows_match_the_gh_workflow_run_allow_rules).\n  WHY: The reviewer says the workflow change breaks contract guards meant to stop un-gated GitHub API writes. The source labels this severity BLOCKER, mapped here to critical. Sonnet-5.5 and GLM-5.3 reviewed the same failures and found they do not map to the diff.\n- tests/test_pr_watch_guard.py:(no line given) | severity=critical | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR watch guard test fails, which the reviewer reads as a test contract break in the workflow checkout.\n  WHY: The reviewer suggests the sharding change violates the PR watch guard contract. The source labels this severity BLOCKER, mapped here to critical. Sonnet-5.5 and GLM-5.3 found the failure does not map to the diff.\n- tests/test_workflow_checkout_integration_ref_audit.py:(no line given) | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The workflow integration reference audit test failed.\n  WHY: The reviewer suspects the shard count in the workflow definition is inconsistent with the audited integration references. The source labels this severity MAJOR, mapped here to high. Sonnet-5.5 and GLM-5.3 found the failure does not map to the diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Document the workflow sharding change in an `agents.d/` fragment as required by the `test_instructions_point_at_fragments` test contract.\n  expected_change_site: agents.d/9469-system-python-shards.md\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: tests/test_agents_fragment_contract.py fails, which the reviewer reads as a missing agents.d/ fragment. Sonnet-5.5 and GLM-5.3 disputed this: the test reads only CLAUDE.md, workflow-templates/CLAUDE.md and the prompts, none touched by the PR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_gh_api_write_guard.py:(Test suite failure, path0: test_dispatchable_workflows_match_the_gh_workflow_run_allow_rules, etc.) | severity=BLOCKER | confidence=4\n  PROBLEM: The PR introduces regressions in the GitHub API write guard, shown by multiple test failures in tests/test_gh_api_write_guard.py.\n  WHY: The failures indicate the workflow change breaks contract guards meant to protect against unauthorized or un-gated GitHub API writes.\n- tests/test_pr_watch_guard.py:(Test suite failure) | severity=BLOCKER | confidence=3\n  PROBLEM: The PR watch guard mechanism is failing, indicating a test contract break in the workflow checkout.\n  WHY: The reviewer suggests the sharding change altered the environment in a way that violates the PR watch guard contract, potentially enabling forbidden activity or breaking CI validation.\n- tests/test_workflow_checkout_integration_ref_audit.py:(Test suite failure) | severity=MAJOR | confidence=3\n  PROBLEM: The workflow integration reference audit test failed.\n  WHY: The reviewer suggests the sharding change triggered an unexpected state check failure, likely from an inconsistency between the shard count in the workflow definition and the audited integration references.\n- TASK_GAP:\n  Requirement: Document the workflow sharding change in an `agents.d/` fragment as required by the `test_instructions_point_at_fragments` test contract.\n  Expected change site: agents.d/9469-system-python-shards.md\n  Evidence of absence: tests/test_agents_fragment_contract.py fails, indicating an agents.d/ fragment is missing, which the reviewer says workflow configuration changes in this repository require.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d4141c05e64ca3c5c5545edbdeb4e9ab2c7924e3fc489fee884132a3f04223d8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9489,
+    "run_id": "43597083873",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43597083873",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114222954_c85daa02d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9489,
+    "run_id": "43597083873"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-14T22:29:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
