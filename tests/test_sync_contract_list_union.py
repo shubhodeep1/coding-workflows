@@ -275,3 +275,19 @@ def test_reorder_plus_append_is_ineligible(tmp_path: Path) -> None:
 	theirs = base.replace("  - a.py:a\n  - b.py:b\n", "  - a.py:a\n  - b.py:b\n  - d.py:d\n")
 	proc, out = _run(tmp_path, base, ours, theirs, path="db/contracts/x.yml")
 	_assert_ineligible(proc, out, "list_not_union")
+
+
+def test_interior_insertion_on_both_sides_merges_union(tmp_path: Path) -> None:
+	# Base [a, b, c]; ours inserts x and theirs inserts y between a and b.
+	# Every base entry keeps its relative order on both sides and nothing is
+	# removed, so the documented policy (add-only, base order kept) merges it
+	# as [a, x, y, b, c] instead of dispatching the LLM resolver.
+	yaml = pytest.importorskip("yaml")
+	base = "collection: x\nread_entrypoints:\n  - a.py:a\n  - b.py:b\n  - c.py:c\nwrite_entrypoints:\n  - w.py:w\n"
+	ours = base.replace("  - a.py:a\n", "  - a.py:a\n  - x.py:x\n")
+	theirs = base.replace("  - a.py:a\n", "  - a.py:a\n  - y.py:y\n")
+	proc, out = _run(tmp_path, base, ours, theirs, path="db/contracts/x.yml")
+	assert proc.returncode == 0, proc.stderr
+	merged = yaml.safe_load(out.read_text(encoding="utf-8"))
+	assert merged["read_entrypoints"] == ["a.py:a", "x.py:x", "y.py:y", "b.py:b", "c.py:c"]
+	assert merged["write_entrypoints"] == ["w.py:w"]

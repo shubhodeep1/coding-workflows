@@ -7,10 +7,12 @@ contract"). The poller (``sync_contract_list_union_merge`` in
 ``scripts/orchestrate_poll_process.sh``) calls this helper once per
 unmerged ``db/contracts/*.yml`` path of a real ``git merge --no-commit``
 of the default branch into an ``orchestrator/project-*`` branch. When
-every conflict hunk only appends entries to a ``read_entrypoints:`` or
-``write_entrypoints:`` list, the helper writes the union of both sides;
-otherwise it declares the path ineligible and the poller falls back to
-the existing LLM conflict resolver.
+every conflict hunk only adds entries to a ``read_entrypoints:`` or
+``write_entrypoints:`` list (each side keeps every merge-base entry in its
+original relative order; new entries may sit at the end or between base
+entries), the helper writes the union of both sides; otherwise (a removed,
+replaced or reordered base entry, or any other edit) it declares the path
+ineligible and the poller falls back to the existing LLM conflict resolver.
 
 Usage::
 
