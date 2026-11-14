@@ -2776,6 +2776,76 @@ _cleanup_prompt_budget()
 	rm -f "${_state}" 2>/dev/null || true
 }
 
+# _embed_utf8_safe_cut <path> <n>
+#
+# Print <n> reduced (by at most 3 bytes) so that `head -c <n> <path>`
+# never ends inside a multi-byte UTF-8 sequence.  A byte cut mid-character
+# leaves invalid UTF-8 in the prompt, which the Codex CLI's strict stdin
+# reader rejects (#9261).  Only the up-to-4 bytes before offset <n> are
+# inspected with `od`; ASCII or a complete sequence returns <n> unchanged.
+# Fails open: any `od` failure or unexpected output returns <n> unchanged
+# (the pre-#9261 behaviour); `sanitize_codex_prompt_file` remains the
+# last line of defence downstream.
+_embed_utf8_safe_cut()
+{
+	local _cut_path="${1:-}"
+	local _cut_n="${2:-0}"
+	if ! [[ "${_cut_n}" =~ ^[0-9]+$ ]] || [ "${_cut_n}" -le 0 ] || [ -z "${_cut_path}" ]; then
+		printf '%s\n' "${_cut_n}"
+		return 0
+	fi
+	local _cut_window=4
+	if [ "${_cut_n}" -lt 4 ]; then
+		_cut_window="${_cut_n}"
+	fi
+	local _cut_raw
+	if ! _cut_raw="$(od -An -tu1 -j "$(( _cut_n - _cut_window ))" -N "${_cut_window}" -- "${_cut_path}" 2>/dev/null)"; then
+		printf '%s\n' "${_cut_n}"
+		return 0
+	fi
+	local -a _cut_bytes=()
+	read -r -a _cut_bytes <<< "$(printf '%s' "${_cut_raw}" | tr '\n' ' ')" || true
+	if [ "${#_cut_bytes[@]}" -ne "${_cut_window}" ]; then
+		printf '%s\n' "${_cut_n}"
+		return 0
+	fi
+	local _cut_byte
+	for _cut_byte in "${_cut_bytes[@]}"; do
+		if ! [[ "${_cut_byte}" =~ ^[0-9]+$ ]]; then
+			printf '%s\n' "${_cut_n}"
+			return 0
+		fi
+	done
+	# Step back over trailing continuation bytes (0x80..0xBF), at most 3.
+	local _cut_idx=$(( ${#_cut_bytes[@]} - 1 ))
+	local _cut_cont=0
+	while [ "${_cut_idx}" -ge 0 ] && [ "${_cut_cont}" -lt 3 ] \
+		&& [ "${_cut_bytes[${_cut_idx}]}" -ge 128 ] && [ "${_cut_bytes[${_cut_idx}]}" -le 191 ]; do
+		_cut_cont=$(( _cut_cont + 1 ))
+		_cut_idx=$(( _cut_idx - 1 ))
+	done
+	if [ "${_cut_idx}" -lt 0 ]; then
+		printf '%s\n' "${_cut_n}"
+		return 0
+	fi
+	local _cut_lead="${_cut_bytes[${_cut_idx}]}"
+	local _cut_seq_len=0
+	if [ "${_cut_lead}" -ge 192 ] && [ "${_cut_lead}" -le 223 ]; then
+		_cut_seq_len=2
+	elif [ "${_cut_lead}" -ge 224 ] && [ "${_cut_lead}" -le 239 ]; then
+		_cut_seq_len=3
+	elif [ "${_cut_lead}" -ge 240 ] && [ "${_cut_lead}" -le 247 ]; then
+		_cut_seq_len=4
+	fi
+	# Lead byte plus its continuation bytes before <n> do not complete the
+	# sequence: cut before the lead byte instead.
+	if [ "${_cut_seq_len}" -gt 0 ] && [ "${_cut_seq_len}" -gt $(( _cut_cont + 1 )) ]; then
+		printf '%s\n' "$(( _cut_n - _cut_cont - 1 ))"
+		return 0
+	fi
+	printf '%s\n' "${_cut_n}"
+}
+
 # _embed_input_file <path> [byte_cap] [truncate_mode]
 #
 #   byte_cap        — defaults to 100000.  Caller can pass a larger
@@ -2859,6 +2929,10 @@ _embed_input_file()
 				_head_bytes="${_boundary}"
 			fi
 		fi
+		# Never end the shown head inside a multi-byte UTF-8 character
+		# (#9261).  The marker and budget accounting below use the trimmed
+		# count.  A `diff`-mode boundary is a line start, so it is unchanged.
+		_head_bytes="$(_embed_utf8_safe_cut "${_path}" "${_head_bytes}")"
 		head -c "${_head_bytes}" "${_path}"
 		printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s) ...]\n' \
 			"${_size}" "${_head_bytes}" "${_mode}" "${_cap}" "${_budget_remaining}"

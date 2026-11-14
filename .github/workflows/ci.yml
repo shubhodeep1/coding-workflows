@@ -2393,6 +2393,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_prompt_invalid_utf8.py
 
       # Moved again from tests-promote-stall-and-review, which took 16m02s of
       # its 20 minutes on main (run 41704793081, budget-watch issue #8771). It
