@@ -313,7 +313,208 @@ clean_marker_pr="${PR_NUMBER:-}"
 [[ "${clean_marker_head}" =~ ^[0-9a-f]{40}$ ]] || clean_marker_head="unknown"
 echo "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=$([ -n "${clean_marker_suffix}" ] && echo written || echo not_written) reason=${clean_marker_reason} pr=${clean_marker_pr} head=${clean_marker_head}"
 
-if gh_retry gh api repos/${AUTOFIX_STEP_REPOSITORY}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")${sandbox_excluded_marker_suffix}${clean_marker_suffix}" >/dev/null; then
+# Stale ai:review-blocked clear (#9369). The identical-failure cap adds
+# ai:review-blocked to the PR itself and posts a trusted
+# `<!-- review-autofix-failure-cap:v1 head=<sha> ... [support=<sha>] -->`
+# marker, but no review path removed the label again. When the cap came from
+# the harness (the Python 3.14 render_prompt.py crash, fingerprint
+# 83dddbabbcab0d66), the poller re-dispatched the review after the harness
+# fix, the review came back clean, and the label stayed: PR #9218 and
+# PR #9229 needed a human to remove it. After a clean marker is posted, this
+# removes the label only when the newest trusted cap marker names a different
+# head or a different review-support SHA than the clean marker.
+# - Trust rule: the same one the gate uses. Only comments whose lowercased
+#   author login equals the token's own login count (the step's GH_TOKEN is
+#   the gate's GH_PAT), the body must start with the cap writer's
+#   `**AI review/autofix stopped` header, and the marker must be the body's
+#   last non-empty line (the gate's last_line() rule), so an editor summary
+#   that quotes a cap marker never counts. The login is read from the
+#   summary POST response, so no `gh api user` call is made.
+# - Budget (Q1=A): one GraphQL read (labels plus the newest 100 comments),
+#   only after a clean marker posts and only with a trusted login, plus one
+#   REST DELETE only when the label is present and stale.
+# - A cap marker without `support=` compares as `support=none` (Q2=A): the
+#   cap writer omits the field exactly when the clean writer writes `none`.
+# - Fail-safe: a lookup or DELETE failure, a missing login, or a cap marker
+#   older than the newest 100 comments keeps the label (today's behaviour);
+#   the last case logs cap_marker_out_of_window when totalCount exceeds 100.
+# - A cap that labeled linked issues (not this PR) never drives a removal:
+#   the scan skips it and compares the newest cap that labeled this PR; with
+#   none in the window the label is kept (cap_not_pr_target). A 404 DELETE
+#   logs removed/already_absent.
+# - Accepted residual race: fingerprint-cap-block runs under its own
+#   fingerprint-cap-* concurrency group and adds the label before it posts
+#   its cap comment, so a cap landing between this read and the DELETE can
+#   lose its label. The gate's cap skip counts failure markers, not the label,
+#   so that head stays capped. A second read (beyond the Q1=A budget) would
+#   only narrow the window, since a read-then-DELETE pair is never atomic;
+#   closing it needs serialization with fingerprint-cap-block (a shared
+#   concurrency group, i.e. a review_autofix.yml change, the issue's §27 limit).
+#   Never returns non-zero; linked issues are not touched.
+# Log: REVIEW_BLOCKED_STALE_CLEAR pr=<n> outcome=removed|kept|error
+#   reason=<token> cap_head=<sha|none> cap_support=<sha|none>
+#   clean_head=<sha> clean_support=<sha|none>
+review_blocked_stale_clear() {
+  local rbsc_pr="${PR_NUMBER:-}"
+  [[ "${rbsc_pr}" =~ ^[0-9]+$ ]] || rbsc_pr="unknown"
+  local rbsc_clean_head="${clean_marker_head:-unknown}"
+  local rbsc_clean_support="${clean_marker_support:-none}"
+  local rbsc_outcome="kept" rbsc_reason="" rbsc_cap_head="none" rbsc_cap_support="none"
+  local rbsc_login="" rbsc_repo="${AUTOFIX_STEP_REPOSITORY:-}" rbsc_response_file="" rbsc_decision_out="" rbsc_decision="" rbsc_delete_err=""
+  rbsc_login="$(printf '%s' "${review_blocked_clear_post_response:-}" | jq -r '.user.login // ""' 2>/dev/null || true)"
+  rbsc_login="$(printf '%s' "${rbsc_login}" | tr 'A-Z' 'a-z' | tr -d '\r\n')"
+  if ! [[ "${rbsc_login}" =~ ^[a-z0-9][a-z0-9-]{0,38}$ ]]; then
+    rbsc_reason="trusted_login_unavailable"
+  elif ! [[ "${rbsc_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [ "${rbsc_pr}" = "unknown" ]; then
+    rbsc_outcome="error"
+    rbsc_reason="lookup_failed"
+  else
+    rbsc_response_file="$(mktemp "${RUNNER_TEMP:-/tmp}/review_blocked_stale_clear.XXXXXX" 2>/dev/null || true)"
+    if [ -z "${rbsc_response_file}" ] \
+      || ! GH_RETRY_IDEMPOTENT=true gh_retry gh api graphql \
+        -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){labels(first:100){nodes{name}} comments(last:100){totalCount nodes{author{login} body}}}}}' \
+        -f owner="${rbsc_repo%%/*}" -f name="${rbsc_repo#*/}" -F number="${rbsc_pr}" > "${rbsc_response_file}"; then
+      rbsc_outcome="error"
+      rbsc_reason="lookup_failed"
+    else
+      rbsc_decision_out="$(RBSC_RESPONSE_FILE="${rbsc_response_file}" RBSC_TRUSTED_LOGIN="${rbsc_login}" \
+        RBSC_CLEAN_HEAD="${rbsc_clean_head}" RBSC_CLEAN_SUPPORT="${rbsc_clean_support}" \
+        PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' 2>/dev/null || true
+import json
+import os
+import re
+
+
+def emit(decision, reason, cap_head="none", cap_support="none"):
+	print(f"decision={decision}")
+	print(f"reason={reason}")
+	print(f"cap_head={cap_head}")
+	print(f"cap_support={cap_support}")
+	raise SystemExit(0)
+
+
+trusted = os.environ.get("RBSC_TRUSTED_LOGIN", "").strip().lower()
+clean_head = os.environ.get("RBSC_CLEAN_HEAD", "").strip().lower()
+clean_support = os.environ.get("RBSC_CLEAN_SUPPORT", "").strip().lower() or "none"
+try:
+	with open(os.environ["RBSC_RESPONSE_FILE"], encoding="utf-8") as handle:
+		data = json.load(handle)
+except Exception:
+	emit("error", "lookup_failed")
+pr = None
+if isinstance(data, dict) and isinstance(data.get("data"), dict):
+	repo = data["data"].get("repository")
+	if isinstance(repo, dict):
+		pr = repo.get("pullRequest")
+if not isinstance(pr, dict) or not trusted:
+	emit("error", "lookup_failed")
+labels = pr.get("labels") if isinstance(pr.get("labels"), dict) else {}
+label_names = {str(node.get("name") or "") for node in (labels.get("nodes") or []) if isinstance(node, dict)}
+if "ai:review-blocked" not in label_names:
+	emit("kept", "label_absent")
+comments = pr.get("comments") if isinstance(pr.get("comments"), dict) else {}
+# Own-line rule, as in review_autofix.yml's cap check: a marker quoted inside
+# other text never counts.
+marker_re = re.compile(r"^<!-- review-autofix-failure-cap:v1 head=([0-9a-fA-F]{40})((?: [^ >\n]+)*) -->[ \r]*$", re.MULTILINE)
+support_re = re.compile(r"^(?:[0-9a-f]{40}|none)$")
+# The cap labels the PR only when it found no linked issue, and its comment
+# says so (review_autofix.yml labeled_summary). A cap that labeled linked
+# issues did not set this PR label, so it never drives a removal.
+pr_target_re = re.compile(r"^- Labeled `ai:review-blocked`: this pull request", re.MULTILINE)
+# The cap writer's header; an editor summary (or any other trusted comment)
+# never starts with it, as in the gate's SUMMARY_PREFIX check.
+CAP_PREFIX = "**AI review/autofix stopped"
+
+
+def last_line(body):
+	lines = [line.rstrip("\r") for line in body.splitlines() if line.strip()]
+	return lines[-1].strip() if lines else ""
+
+
+not_pr_target = None
+# comments(last:100) is oldest-first; walk newest-first.
+for node in reversed(comments.get("nodes") or []):
+	if not isinstance(node, dict):
+		continue
+	author = node.get("author") if isinstance(node.get("author"), dict) else {}
+	if str(author.get("login") or "").lower() != trusted:
+		continue
+	body = str(node.get("body") or "")
+	# Gate trust rule: the marker is the last non-empty line of a cap comment.
+	marker = marker_re.fullmatch(last_line(body)) if body.startswith(CAP_PREFIX) else None
+	if marker is None:
+		continue
+	cap_head = marker.group(1).lower()
+	cap_support = "none"
+	for field in marker.group(2).split():
+		if field.startswith("support="):
+			cap_support = field[len("support="):].lower()
+	if not support_re.match(cap_support):
+		# A malformed support field never counts as a cap marker (fail safe).
+		continue
+	if not pr_target_re.search(body):
+		# This cap labeled linked issues; an older cap may have labeled the PR
+		# (a later cap never removes the PR label), so keep walking.
+		if not_pr_target is None:
+			not_pr_target = (cap_head, cap_support)
+		continue
+	if cap_head != clean_head:
+		emit("remove", "head_changed", cap_head, cap_support)
+	if cap_support != clean_support:
+		emit("remove", "support_changed", cap_head, cap_support)
+	emit("kept", "same_head_support", cap_head, cap_support)
+total = comments.get("totalCount")
+if isinstance(total, int) and total > len(comments.get("nodes") or []):
+	# An older cap marker (possibly one that labeled this PR) may sit outside
+	# the newest-100 window (one-read budget), so this wins over
+	# cap_not_pr_target; a skipped linked-issue cap's SHAs are still logged.
+	emit("kept", "cap_marker_out_of_window", *(not_pr_target or ("none", "none")))
+if not_pr_target is not None:
+	emit("kept", "cap_not_pr_target", not_pr_target[0], not_pr_target[1])
+emit("kept", "no_cap_marker")
+PY
+)"
+      rbsc_decision="$(printf '%s\n' "${rbsc_decision_out}" | sed -n 's/^decision=\([a-z]*\)$/\1/p' | head -n 1)"
+      rbsc_reason="$(printf '%s\n' "${rbsc_decision_out}" | sed -n 's/^reason=\([a-z_]*\)$/\1/p' | head -n 1)"
+      rbsc_cap_head="$(printf '%s\n' "${rbsc_decision_out}" | grep -E '^cap_head=([0-9a-f]{40}|none)$' | head -n 1 | sed 's/^cap_head=//' || true)"
+      rbsc_cap_support="$(printf '%s\n' "${rbsc_decision_out}" | grep -E '^cap_support=([0-9a-f]{40}|none)$' | head -n 1 | sed 's/^cap_support=//' || true)"
+      rbsc_cap_head="${rbsc_cap_head:-none}"
+      rbsc_cap_support="${rbsc_cap_support:-none}"
+      case "${rbsc_decision}:${rbsc_reason}" in
+        remove:head_changed|remove:support_changed)
+          if rbsc_delete_err="$(GH_RETRY_IDEMPOTENT=true gh_retry gh api -X DELETE "repos/${rbsc_repo}/issues/${rbsc_pr}/labels/ai%3Areview-blocked" 2>&1 >/dev/null)"; then
+            rbsc_outcome="removed"
+          elif [[ "${rbsc_delete_err}" == *"HTTP 404"* || "${rbsc_delete_err}" == *"Label does not exist"* ]]; then
+            # Removed concurrently (a human or another run): the label is gone.
+            rbsc_outcome="removed"
+            rbsc_reason="already_absent"
+          else
+            [ -z "${rbsc_delete_err}" ] || printf '%s\n' "${rbsc_delete_err}" >&2
+            rbsc_outcome="error"
+            rbsc_reason="delete_failed"
+          fi
+          ;;
+        kept:label_absent|kept:no_cap_marker|kept:same_head_support|kept:cap_not_pr_target|kept:cap_marker_out_of_window)
+          rbsc_outcome="kept"
+          ;;
+        *)
+          rbsc_outcome="error"
+          rbsc_reason="lookup_failed"
+          rbsc_cap_head="none"
+          rbsc_cap_support="none"
+          ;;
+      esac
+    fi
+    if [ -n "${rbsc_response_file}" ]; then
+      rm -f "${rbsc_response_file}" 2>/dev/null || true
+    fi
+  fi
+  echo "REVIEW_BLOCKED_STALE_CLEAR pr=${rbsc_pr} outcome=${rbsc_outcome} reason=${rbsc_reason} cap_head=${rbsc_cap_head} cap_support=${rbsc_cap_support} clean_head=${rbsc_clean_head} clean_support=${rbsc_clean_support}"
+  return 0
+}
+
+review_blocked_clear_post_response=""
+if review_blocked_clear_post_response="$(gh_retry gh api repos/${AUTOFIX_STEP_REPOSITORY}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")${sandbox_excluded_marker_suffix}${clean_marker_suffix}")"; then
   echo "Posted editor summary comment."
   # Signal to the failure-comment step (line ~3269) that the
   # editor summary already landed on the PR thread. The generic
@@ -328,6 +529,10 @@ if gh_retry gh api repos/${AUTOFIX_STEP_REPOSITORY}/issues/"${PR_NUMBER}"/commen
   # follow-up for the contradictory-comment regression this
   # signal resolves.
   echo "EDITOR_SUMMARY_POSTED=true" >> "$GITHUB_ENV"
+  # Stale ai:review-blocked clear (#9369); only after a clean marker posts.
+  if [ -n "${clean_marker_suffix}" ]; then
+    review_blocked_stale_clear || true
+  fi
 else
   echo "::warning::Unable to post editor summary comment after retries."
 fi
