@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml \u2014 step selection for tests-hooks-and-orchestrator and target-job/group choice in the orchestrate-poll step block (comment at ci.yml:3345-3356)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR moves one step, `Pre-push affected-test gate tests`, chosen by test and subprocess counts (~472 tests, ~57 subprocess sites) rather than the run's step timings, which could not be read, and the diff does not show that the step is among the slowest or that orchestrate-poll group 3 has the most headroom, but the deviation is disclosed in the workflow comment at .github/workflows/ci.yml:3345-3356, in changelog.d/9391-ci-hooks-prepush-step-to-poll-group-3.md and in the PR description, and budget-watch on main will re-measure after merge. Severity disagreement: MAJOR from google_gemini-3_1-flash-lite, minimax_minimax-m3 and openai_gpt-6-luna, NIT from z-ai_glm-5_3-flash, which treats it as a residual gap accepted across prior cycles.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml (step selection and target-job choice)\nEvidence of absence: The PR moves a single step, `Pre-push affected-test gate tests`, chosen from an estimate based on test and subprocess counts (~472 tests, ~57 subprocess sites) rather than the run's step timings, which were unreadable in the current environment. The workflow, changelog and PR description acknowledge this deviation, and budget-watch on `main` is relied on to re-measure after merge.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml` (selection of step to move and target job/group; orchestrate-poll step block and the rationale comment near lines 3345-3356).\nEvidence of absence: The PR moves one step chosen by test and subprocess counts (about 472 tests and 57 subprocess sites). The workflow comment at `.github/workflows/ci.yml:3345-3356` and the changelog `changelog.d/9391-ci-hooks-prepush-step-to-poll-group-3.md:2` both say the step timings could not be read and the choice is an estimate, not a measurement. The \"job with the most headroom\" criterion was replaced by \"group with the lightest pinned load\", which is a related but distinct metric. No diff hunk selects a step by measured duration, and no per-job headroom measurement of run 43220859648 is cited. The deviation is disclosed in the workflow comment, the changelog and the PR description, and budget-watch on `main` will re-measure after merge. The other issue constraints are met: job and step names are unchanged, `timeout-minutes` is not raised, and no new required job name was added.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\nExpected change site: `.github/workflows/ci.yml`, step selection and target-job choice.\nEvidence of absence: The workflow comment says the run's step timings could not be read and the step was selected using test and subprocess counts as an estimate. The diff does not establish that the selected step was among the slowest or that `orchestrate-poll` group 3 had the most headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml \u2014 step selection for tests-hooks-and-orchestrator and the target-job/group choice in the orchestrate-poll step block (comment at ci.yml:3345-3356).\nEvidence of absence: The PR moves one step chosen by test and subprocess counts (about 472 tests, 57 subprocess sites) rather than from the step timings of run 43220859648, and offers no evidence that orchestrate-poll group 3 has the most headroom. The deviation is disclosed at ci.yml:3345-3356, in changelog.d/9391-ci-hooks-prepush-step-to-poll-group-3.md and in the PR description. All other requirements are met. The gap was accepted as residual across six prior review/autofix cycles on this head, and budget-watch on main re-measures after merge. Re-emitted at NIT only to keep the ledger accurate.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "68c3483488f412599e90d746dac6a20f749c969e8a4d7238f5a02cd8aa3796ea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9397,
+    "run_id": "43418423453",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43418423453",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114001520_6a4b6710f5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9397,
+    "run_id": "43418423453"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-14T00:15:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
