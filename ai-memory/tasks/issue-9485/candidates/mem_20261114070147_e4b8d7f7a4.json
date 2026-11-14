@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the `@stable` sync handle the consumer's `.github/dependabot.yml`?\nChoices:\nA: Create a fully managed `.github/dependabot.yml` only when the consumer has none. If one already exists, leave it alone and log a warning.\nB: Merge into the consumer's file. Add or update `exclude-paths` on the consumer's `github-actions` update entry, or add that entry if missing, and keep all other consumer settings. This is additive only, like the existing `.gitattributes` managed-block sync. (RECOMMENDED)\nC: Overwrite `.github/dependabot.yml` with a file owned entirely by the sync. Any consumer customisations are lost.\nQ2: How much of the `github_actions` updates should the consumer exclude?\nChoices:\nA: Use `exclude-paths` to list exactly the managed wrapper files that the consumer's `WORKFLOW_PROFILE` installs. The consumer's own workflows keep getting `github-actions` bumps. (RECOMMENDED)\nB: Exclude every file name in `workflow-templates/*.yml`, whatever the profile, so the list stays the same across consumers.\nC: Turn off the `github-actions` ecosystem completely in consumers.\n**Note:** C combined with Q1:B means the sync would remove the consumer's own `github-actions` entry, not just add to it. Choose Q1:A or Q1:C if you want C.\nQ3: What should \"bump action versions upstream in coding-workflows\" cover?\nChoices:\nA: A one-time bump of the pinned actions in `workflow-templates/`. Today that is `actions/checkout` v5.1.0 in `workflow-templates/ai-review.yml` (three uses), raised to the version from the issue (v7.0.1).\nB: Add a `.github/dependabot.yml` to coding-workflows itself (`github-actions` ecosystem, covering `.github/workflows/` and `workflow-templates/`). Bumps then arrive as upstream PRs and reach consumers through `@stable`.\nA+B: Do both. (RECOMMENDED)\n**Note:** Dependabot's docs only promise scanning of `.github/workflows/` from the root. Whether it scans `workflow-templates/` as a `directories` entry would have to be checked during planning.\nQ4: What should happen to Dependabot PRs already open against managed wrappers in consumer repos?\nChoices:\nA: Nothing. Once the new config lands, Dependabot stops opening new ones, and existing ones are closed by hand. (RECOMMENDED)\nB: Have the sync close any open Dependabot PRs that touch managed wrapper files, with a comment explaining that those files only change through `@stable`.\nSources:\n- [Dependabot options reference - GitHub Docs](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)\n- [Dependabot can now exclude automatic pull requests for manifests in selected subdirectories - GitHub Changelog](https://github.blog/changelog/2025-08-26-dependabot-can-now-exclude-automatic-pull-requests-for-manifests-in-selected-subdirectories/)",
+  "fingerprint": "9e25053da10725723ef824616ccc8eed07831210e9d7dcebed5a7a97beac7b37",
+  "lineage": {
+    "issue_number": 9485,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43547069391",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43547069391",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261114070147_e4b8d7f7a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9485,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43547069391"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #9485 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-14T07:01:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
