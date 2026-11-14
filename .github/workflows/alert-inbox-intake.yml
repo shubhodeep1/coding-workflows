@@ -1,0 +1,79 @@
+---
+name: Alert Inbox Intake
+
+# Stores one captured workflow alert on the branch `ai/alert-inbox` (alert
+# triage plan, Phase 1, docs/plans/alert-triage-auto-heal-plan.md).
+#
+# Sender: alert_inbox_capture in scripts/alert_inbox_capture.sh, called by
+# tg_send_msg (scripts/tg_helpers.sh) in this repository and in consumer
+# repositories when `capture_enabled` is true in .github/ai/alert_inbox.json.
+# Both switches ship as false, so nothing dispatches here by default.
+#
+# scripts/alert_inbox_store.sh reads the payload only from $GITHUB_EVENT_PATH
+# (no client_payload expression appears in any run: block), validates every
+# field, and writes inbox/<YYYY>/<MM>/<DD>/<HH>/<file>.json with the Contents
+# API using GITHUB_TOKEN (contents: write only; its commits trigger no
+# workflows). The branch only moves forward: no force-push, no deletion.
+#
+# A failed store sends one Telegram notice through tg_send_msg_direct, which
+# is never captured, so an intake failure cannot loop back into the inbox.
+# If scripts/tg_helpers.sh is unavailable (e.g. checkout failed), the step only emits an
+# ::error:: annotation instead.
+
+"on":
+  repository_dispatch:
+    types:
+      - alert-inbox
+
+permissions:
+  contents: write
+
+# One group per run: GitHub keeps only one pending run per group and cancels
+# the rest, so a shared group would drop records in a burst of alerts. Record
+# paths are unique and the store retries a 409 once, so parallel writes are safe.
+concurrency:
+  group: alert-inbox-intake-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+
+jobs:
+  store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Store alert record
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash scripts/alert_inbox_store.sh
+
+      - name: Notify store failure
+        if: failure()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          # Only regex-checked fields are echoed; the alert's message text never is.
+          source_repo="$(jq -r '.client_payload.record.source_repo // "" | if type == "string" then . else "" end' "${GITHUB_EVENT_PATH}" 2>/dev/null)" || source_repo=""
+          [[ "${source_repo}" =~ ^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$ ]] || source_repo="unknown"
+          alert_level="$(jq -r '.client_payload.record.level // "" | if type == "string" then . else "" end' "${GITHUB_EVENT_PATH}" 2>/dev/null)" || alert_level=""
+          case "${alert_level}" in
+            WARNING|ERROR|CRITICAL) ;;
+            *) alert_level="unknown" ;;
+          esac
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::error::Alert inbox intake failed and scripts/tg_helpers.sh is unavailable; no Telegram notice could be sent (${alert_level} alert from ${source_repo})."
+            exit 1
+          fi
+          # shellcheck disable=SC1091
+          source scripts/tg_helpers.sh
+          tg_send_msg_direct "Alert inbox intake could not store a ${alert_level} alert from ${source_repo}. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" "ERROR" >/dev/null

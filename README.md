@@ -2514,6 +2514,32 @@ through `clarify → plan → implement → review`.
   `inconclusive` issue with a fallback body; a failed `gh issue create` or a
   crash of either workflow sends a Telegram CRITICAL.
 
+### Alert inbox capture (Phase 1)
+
+The Telegram Bot API cannot read the bot's own messages back, so alerts are
+captured where they are sent. `tg_send_msg` in `scripts/tg_helpers.sh` reads
+two switches from `.github/ai/alert_inbox.json` (trusted support checkout
+only, both `false` by default) through `scripts/alert_inbox_capture.sh`:
+
+| Switches | WARNING / ERROR | CRITICAL | DEBUG |
+|---|---|---|---|
+| capture off | Telegram (unchanged) | Telegram (unchanged) | Telegram (unchanged) |
+| capture on, routing off | Telegram and inbox | Telegram and inbox | Telegram |
+| capture on, routing on | inbox only; Telegram if capture fails | Telegram and inbox | Telegram |
+
+- A capture is one `repository_dispatch` (`alert-inbox`, `curl --max-time 10`)
+  to coding-workflows with the `GH_TOKEN` already in the job; it never fails the
+  caller. An alert routed only to the inbox returns an empty message id.
+- `.github/workflows/alert-inbox-intake.yml` runs `scripts/alert_inbox_store.sh`,
+  which validates the `alert_inbox.v1` record (`source_repo` must be in
+  `.github/ai/consumer_repos.json` or coding-workflows) and writes
+  `inbox/<YYYY>/<MM>/<DD>/<HH>/<epoch_ms>-<owner-repo>-<run_id>-<id8>.json` on
+  the branch `ai/alert-inbox` (created from an empty root commit on first use;
+  never force-pushed or deleted).
+- `tg_send_msg_direct` sends without capture, for messages the triage system
+  sends about itself; `tg_send_report_msg` is never captured.
+- Logs use the `ALERT_INBOX` prefix. Rollback: set both switches to `false`.
+
 ## Required Secrets
 
 | Secret | Used By | Description |
@@ -2843,6 +2869,8 @@ through `clarify → plan → implement → review`.
 | `THINKING_LEVEL_WORKFLOW_HEAL` | `high` | coding-workflows only. Reasoning effort for the heal diagnosis call. |
 | `VERBOSITY_WORKFLOW_HEAL` | `low` | coding-workflows only. Codex verbosity for the heal diagnosis call. |
 | `PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED` | `true` | Close a CI-repair issue before planning (#7216), or in implement once its CI-triage pull request is no longer open (#7540), when that pull request already merged with the failing check passing |
+| `capture_enabled` (`.github/ai/alert_inbox.json`) | `false` | coding-workflows config, not a repository variable. Alert inbox capture (alert triage Phase 1): when `true`, `tg_send_msg` sends WARNING, ERROR and CRITICAL alerts to the `alert-inbox` intake as well as Telegram. Read only from the trusted support checkout; a missing or invalid file means off. |
+| `route_warning_error_to_inbox` (`.github/ai/alert_inbox.json`) | `false` | coding-workflows config. With `capture_enabled`, WARNING and ERROR alerts go only to the inbox (Telegram when capture fails); CRITICAL still goes to Telegram. |
 
 ## Semantic Cache (Clarification Only)
 

@@ -28,6 +28,16 @@ if ! type curl_gh_api >/dev/null 2>&1; then
 	curl_gh_api() { curl "$@"; }
 fi
 
+# Alert inbox capture (alert triage plan, Phase 1). Resolved next to this file,
+# never from $PWD. When it is missing (e.g. an older staged support set) the
+# routing below stays "off" and every alert goes to Telegram as before.
+_TG_HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd)" || _TG_HELPERS_DIR=""
+if [ -n "${_TG_HELPERS_DIR}" ] && [ -f "${_TG_HELPERS_DIR}/alert_inbox_capture.sh" ] && [ ! -L "${_TG_HELPERS_DIR}/alert_inbox_capture.sh" ]; then
+	# shellcheck source=alert_inbox_capture.sh
+	# shellcheck disable=SC1091
+	source "${_TG_HELPERS_DIR}/alert_inbox_capture.sh" 2>/dev/null || true
+fi
+
 # Resolve chat ID from available env vars
 _tg_chat_id()
 {
@@ -104,6 +114,16 @@ _tg_prepend_level()
 # tg_send_msg — Send a Telegram message, echo the message_id.
 # Usage: msg_id=$(tg_send_msg "Hello world" "ERROR")
 # Level defaults to CRITICAL so new/untagged alerts are always sent.
+#
+# Alert inbox routing (alert triage plan, Phase 1; switches in the trusted
+# .github/ai/alert_inbox.json, see scripts/alert_inbox_capture.sh), applied
+# after the level filter:
+#   capture off, or DEBUG / unknown level -> Telegram only (unchanged)
+#   capture on, routing off              -> Telegram, then capture
+#   capture on, routing on, WARNING/ERROR -> capture only (empty id);
+#                                           Telegram when capture fails
+#   CRITICAL with capture on             -> Telegram, then capture
+# A capture failure never fails the caller.
 # ---------------------------------------------------------------
 tg_send_msg()
 {
@@ -113,6 +133,65 @@ tg_send_msg()
 	if ! _tg_should_send "${level}"; then
 		return 0
 	fi
+	local _tg_inbox_level _tg_inbox_mode="off"
+	_tg_inbox_level="$(printf '%s' "${level}" | tr '[:lower:]' '[:upper:]')"
+	case "${_tg_inbox_level}" in
+		WARNING|ERROR|CRITICAL)
+			if declare -F alert_inbox_mode >/dev/null 2>&1 && declare -F alert_inbox_capture >/dev/null 2>&1; then
+				_tg_inbox_mode="$(alert_inbox_mode 2>/dev/null)" || _tg_inbox_mode="off"
+			fi
+			;;
+	esac
+	case "${_tg_inbox_mode}" in
+		capture|route) ;;
+		*)
+			_tg_send_now "${level}" "${msg}"
+			return 0
+			;;
+	esac
+	if [ "${_tg_inbox_mode}" = "capture" ] || [ "${_tg_inbox_level}" = "CRITICAL" ]; then
+		local _tg_inbox_id="" _tg_inbox_sent="false"
+		_tg_inbox_id="$(_tg_send_now "${level}" "${msg}")" || _tg_inbox_id=""
+		if [ -n "${_tg_inbox_id}" ]; then
+			_tg_inbox_sent="true"
+		fi
+		printf '%s' "${_tg_inbox_id}"
+		alert_inbox_capture "${_tg_inbox_level}" "${msg}" "${_tg_inbox_sent}" >/dev/null || true
+		return 0
+	fi
+	# Route mode, WARNING/ERROR: the inbox replaces Telegram unless capture fails.
+	if alert_inbox_capture "${_tg_inbox_level}" "${msg}" false >/dev/null; then
+		return 0
+	fi
+	_tg_send_now "${level}" "${msg}"
+}
+
+# ---------------------------------------------------------------
+# tg_send_msg_direct — Send a Telegram message without alert inbox capture,
+# echo the message_id. For messages the alert triage system sends about
+# itself (e.g. an alert-inbox intake failure), so they can never loop back
+# into the inbox. Same level filter and CRITICAL default as tg_send_msg.
+# Usage: msg_id=$(tg_send_msg_direct "Inbox intake failed" "ERROR")
+# ---------------------------------------------------------------
+tg_send_msg_direct()
+{
+	local msg="$1"
+	local level="${2:-CRITICAL}"
+	if ! _tg_should_send "${level}"; then
+		return 0
+	fi
+	_tg_send_now "${level}" "${msg}"
+}
+
+# ---------------------------------------------------------------
+# _tg_send_now LEVEL MSG — the Telegram send used by tg_send_msg and
+# tg_send_msg_direct (no level filter, no capture): prefix, credential
+# check, sendMessage, echo the message_id.
+# ---------------------------------------------------------------
+_tg_send_now()
+{
+	local level="$1"
+	local msg="$2"
 	# Prepend level prefix
 	msg="$(_tg_prepend_level "${level}" "${msg}")"
 	local chat_id

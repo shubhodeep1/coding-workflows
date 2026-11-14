@@ -47,6 +47,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 ## Workflows
 
+- `.github/workflows/alert-inbox-intake.yml` — GitHub Actions workflow: Alert Inbox Intake (stores one `repository_dispatch` `alert-inbox` record on the `ai/alert-inbox` branch; alert triage Phase 1).
 - `.github/workflows/audit_consumer_drift.yml` — GitHub Actions workflow: Audit Consumer Drift.
 - `.github/workflows/auto-release-stable.yml` — GitHub Actions workflow: Auto release stable.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
@@ -117,6 +118,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/ai_labels.py` — AI label contract utilities for workflow phase transitions and repair.
 - `scripts/ai_memory.py` — CLI for AI memory operations used by GitHub workflows.
 - `scripts/ai_memory_lib.py` — Shared AI memory helpers for GitHub workflows.
+- `scripts/alert_inbox_capture.sh` — Sourced by `tg_helpers.sh`: reads the trusted `.github/ai/alert_inbox.json` switches and sends one `alert-inbox` `repository_dispatch` per captured WARNING/ERROR/CRITICAL alert (alert triage Phase 1, default off).
+- `scripts/alert_inbox_store.sh` — Body of `alert-inbox-intake.yml`: validates an `alert_inbox.v1` record and writes it to `ai/alert-inbox` with the Contents API (409 retry, branch bootstrap).
 - `scripts/analyze_soft_errors.py` — Soft-error log analyzer for the release-gate smoke test.
 - `scripts/analyze_workflow_logs.py` — Prepare aggregated workflow telemetry context for the Codex analysis pass.
 - `scripts/apply_analysis_on_main.sh` — Dispatch one pending workflow-analysis document to the orchestrator.
