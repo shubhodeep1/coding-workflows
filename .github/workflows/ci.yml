@@ -2793,6 +2793,13 @@ jobs:
     # tests-hooks-and-orchestrator instead of group 0.
     # Since #9214, the CI wiring guard part 2 step runs in
     # tests-release-and-log-analysis instead of group 0.
+    # 2026-11-13 (#9447): budget-watch reported orchestrate-poll (0) at
+    # 15m55s of 20m in run 43343930604 at d49b34c8562d. That run predates
+    # the PR #9268 merge (2026-11-13T02:30:22Z), so it measured group 0
+    # before the #9214 move; no step was moved. If a run that includes
+    # #9268 flags group 0 again, read that run's step timings before
+    # moving anything. The fast-fail step stays in group 0 because it
+    # reads the /tmp list that the derive step writes.
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
