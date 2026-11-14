@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1522-1542 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reviewer reports that the step \"Regression tests wired by the CI wiring guard (part 1)\" was moved to `tests-release-and-log-analysis`, and then concludes from the diff that the move was done correctly.\n  WHY: The reviewer says the step now exists only in the target job, so no runtime failure is shown. The source gave no severity, so low is a placeholder.\n- .github/workflows/ci.yml:2555-2560 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The last run's change is a comment-only clarification. The reviewer verified it as accurate: `fetch-depth: 0` is at ci.yml:1960, and both the Node pair and wiring guard part 1 now point at `tests-release-and-log-analysis`.\n  WHY: The reviewer said it does not fail at runtime. It was reported as a NIT under TASK COMPLETENESS.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml`, the selection and placement of steps removed from `tests-promote-stall-and-review` (destination jobs `tests-release-and-log-analysis` and `tests-heal-plan-and-validation`)\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, minimax_minimax-m3]\n  EVIDENCE: Comments at ci.yml:1525-1529 and 2532-2536 say the step timings were unreadable and the pick is an estimate. No measured per-job headroom appears in the diff. The steps were split over two jobs (tests/test_ci_poll_test_sharding.py:2476-2495). The hard constraints are met (no `timeout-minutes` raise, no new job names, step names and bodies unchanged). Severity differed between reviewers: MAJOR for gemini and luna, NIT for sonnet-5_5. minimax said it did not re-raise the gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, the destination jobs for the steps removed from `tests-promote-stall-and-review`.\n  Evidence of absence: No measured step timings or per-job headroom appear in the diff. The steps were spread over two jobs. The hard constraints are met. The issue does not require measured timings.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1522-1542, 1686-1691, 1733-1743 | confidence=5\n  PROBLEM: The step \"Regression tests wired by the CI wiring guard (part 1)\" was moved to `tests-release-and-log-analysis`. The reviewer concludes that it was correctly moved out of `tests-promote-stall-and-review`.\n  WHY: The step exists only in the target job.\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\"\n  Expected change site: `.github/workflows/ci.yml`, placement of steps removed from `tests-promote-stall-and-review`.\n  Evidence of absence: Step timings were unreadable (ci.yml:1525\u20131529, 2532\u20132536). The steps were chosen by estimation, with no data showing the target jobs have the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:2555-2560 | severity=low | confidence=1\n  PROBLEM: The last run's change is a comment-only clarification. The reviewer verified it as accurate.\n  WHY: It does not fail at runtime. It was reported as a NIT.\n\n(The reviewer also noted the pass-1 task gap on slowest steps and headroom, and did not re-raise it.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection and placement of steps removed from `tests-promote-stall-and-review`.\n  Evidence of absence: Comments at ci.yml:1525-1529 and 2532-2536 say the timings were unreadable and the picks are estimates. The destination assignments in `tests/test_ci_poll_test_sharding.py:2476-2495` split the steps between two jobs.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "dd3fd20b64a883d7f5f2d8192706b1a74e21cdbf66e37e3d5c9e229039935497",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9367,
+    "run_id": "43498937818",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43498937818",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114023846_7e20f95ccb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9367,
+    "run_id": "43498937818"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-14T02:38:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
