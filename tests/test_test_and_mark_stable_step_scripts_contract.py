@@ -396,6 +396,227 @@ def test_orchestrate_capacity_check_reads_emitted_log_line_only() -> None:
 		assert "Could not read 2 job log(s)" in stdout
 
 
+# Issue #9223: Phase 1 fails fast on clarify's own failure comment when it
+# names the newest scoped Clarify run, and names that run (built from its
+# numeric ID) plus the issue URL on timeout. The fakes are
+# shell functions, not PATH executables: the pre-push gate container mounts
+# the temp dir noexec (see test_test_and_mark_stable_alt_model_cleanup_pr_selector.py).
+_CLARIFY_FAKES = r"""gh() {
+  local ep="${2:-}" jq_expr="" data=""
+  if [ "${3:-}" = "--jq" ]; then jq_expr="${4:-}"; fi
+  printf '%s\n' "${ep}" >> "${FAKE_DIR}/calls"
+  case "${ep}" in
+    *actions/runs*)
+      if [ "${FAKE_RUNS_FAIL:-0}" = "1" ]; then return 1; fi
+      data=$(cat "${FAKE_DIR}/runs.json") ;;
+    */comments*) data=$(cat "${FAKE_DIR}/comments.json") ;;
+    *) data='{"labels":[{"name":"ai:clarifying"}]}' ;;
+  esac
+  if [ -n "${jq_expr}" ]; then printf '%s' "${data}" | jq -r "${jq_expr}"; else printf '%s' "${data}"; fi
+}
+sleep() { :; }
+"""
+CLARIFY_TITLE = "[E2E Smoke Test] canary (run 1)"
+FAILED_PREFIX = "AI clarification workflow failed for https://github.com/o/r/issues/42. Run: https://github.com/o/r/actions/runs/5"
+
+
+def _comment(body: str, association: str = "OWNER", login: str = "pat-user") -> dict:
+	return {"body": body, "author_association": association, "user": {"login": login}}
+
+
+def _clarify_run(run_id: object, url: str, created_at: str, title: str = CLARIFY_TITLE) -> dict:
+	return {"id": run_id, "name": "AI Clarify", "conclusion": None, "display_title": title, "created_at": created_at, "html_url": url}
+
+
+def _run_clarify_wait(tmp: Path, comments: list, runs: list | None = None, runs_fail: bool = False, timeout_minutes: str = "30") -> tuple[int, str, str, list[str]]:
+	import json
+
+	bash = shutil.which("bash")
+	assert bash is not None
+	# capture_run_id reads the created_after bound through a workflow
+	# expression; bash cannot expand it, so substitute it as GitHub would.
+	run = _step(_all_steps(_raw()), CLARIFY_STEP)["run"].replace(
+		"${{ steps.create-issue.outputs.created_after }}", "2026-11-13T00:00:00Z"
+	)
+	(tmp / "comments.json").write_text(json.dumps(comments), encoding="utf-8")
+	(tmp / "runs.json").write_text(json.dumps({"workflow_runs": runs or []}), encoding="utf-8")
+	output = tmp / "github_output"
+	output.write_text("", encoding="utf-8")
+	env = dict(os.environ)
+	env.update(
+		{
+			"FAKE_DIR": str(tmp),
+			"FAKE_RUNS_FAIL": "1" if runs_fail else "0",
+			"PHASE_TIMEOUT": timeout_minutes,
+			"POLL_INTERVAL": "0",
+			"TEST_REPO": "o/r",
+			"ISSUE_NUMBER": "42",
+			"ISSUE_TITLE": CLARIFY_TITLE,
+			"GITHUB_OUTPUT": str(output),
+			"GITHUB_SERVER_URL": "https://github.com",
+		}
+	)
+	result = subprocess.run(
+		[bash, "-c", _CLARIFY_FAKES + run],
+		cwd=str(REPO_ROOT),
+		env=env,
+		capture_output=True,
+		text=True,
+		check=False,
+		timeout=60,
+	)
+	calls_path = tmp / "calls"
+	calls = calls_path.read_text(encoding="utf-8").splitlines() if calls_path.exists() else []
+	return result.returncode, output.read_text(encoding="utf-8"), result.stdout, calls
+
+
+def _skip_without_bash_and_jq() -> None:
+	if shutil.which("bash") is None or shutil.which("jq") is None:
+		raise unittest.SkipTest("bash or jq is not installed")
+
+
+def test_clarify_wait_fails_fast_on_clarify_failed_comment() -> None:
+	_skip_without_bash_and_jq()
+	import tempfile
+
+	runs = [_clarify_run(5, "https://github.com/o/r/actions/runs/5", "2026-11-13T00:01:00Z")]
+	for association in ("OWNER", "MEMBER", "COLLABORATOR"):
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, output, stdout, calls = _run_clarify_wait(Path(tmp), [_comment(FAILED_PREFIX, association)], runs=runs)
+			assert rc == 1, (association, stdout)
+			assert "status=clarify_failed" in output, output
+			assert "status=timeout" not in output
+			# The error line names the newest Clarify run, built from its ID.
+			assert "(Clarify run: https://github.com/o/r/actions/runs/5)" in stdout, stdout
+			# No comment body is echoed.
+			assert "AI clarification workflow failed for" not in stdout, stdout
+			# One poll: the count read and the 100-comment read.
+			comment_calls = [c for c in calls if "/comments" in c]
+			assert comment_calls == [
+				"repos/o/r/issues/42/comments",
+				"repos/o/r/issues/42/comments?per_page=100",
+			], comment_calls
+			# One newest-run lookup, which matched on its first page.
+			assert len([c for c in calls if "actions/runs" in c]) == 1, calls
+
+
+def test_clarify_wait_ignores_untrusted_or_non_prefix_failure_comment() -> None:
+	_skip_without_bash_and_jq()
+	import tempfile
+
+	cases = [
+		[_comment(FAILED_PREFIX, "NONE")],
+		[_comment(FAILED_PREFIX, "CONTRIBUTOR")],
+		[_comment("Note: " + FAILED_PREFIX, "OWNER")],
+		[_comment("AI clarification workflow was cancelled/timed out for https://github.com/o/r/issues/42.", "OWNER")],
+		[{"body": None, "user": {"login": "pat-user"}}],
+	]
+	for comments in cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, output, _, _ = _run_clarify_wait(Path(tmp), comments, timeout_minutes="0")
+			assert rc == 1, comments
+			assert "status=timeout" in output, (comments, output)
+			assert "clarify_failed" not in output, comments
+
+
+def test_clarify_wait_timeout_prints_issue_and_run_url() -> None:
+	_skip_without_bash_and_jq()
+	import tempfile
+
+	runs = [
+		_clarify_run(7, "https://github.com/o/r/actions/runs/7", "2026-11-13T00:01:00Z"),
+		_clarify_run(9, "https://github.com/o/r/actions/runs/9", "2026-11-13T00:02:00Z"),
+		_clarify_run(11, "https://github.com/o/r/actions/runs/11", "2026-11-13T00:03:00Z", title="other issue"),
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout, calls = _run_clarify_wait(Path(tmp), [], runs=runs, timeout_minutes="0")
+		assert rc == 1
+		assert "status=timeout" in output
+		assert "Issue: https://github.com/o/r/issues/42" in stdout
+		assert re.findall(r"https://\S+/actions/runs/\d+", stdout) == ["https://github.com/o/r/actions/runs/9"], stdout
+		assert "(Clarify run: https://github.com/o/r/actions/runs/9)" in stdout, stdout
+		assert len([c for c in calls if "actions/runs" in c]) == 1, calls
+	# The run URL is built only from a numeric run ID; html_url is never printed.
+	bad_runs = [
+		[_clarify_run("not-a-number", "https://github.com/o/r/actions/runs/9", "2026-11-13T00:02:00Z")],
+		[_clarify_run("::warning::injected", "https://github.com/o/r/actions/runs/9", "2026-11-13T00:02:00Z")],
+		[_clarify_run("9\n::warning::injected", "https://github.com/o/r/actions/runs/9", "2026-11-13T00:02:00Z")],
+	]
+	for case in bad_runs:
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, output, stdout, _ = _run_clarify_wait(Path(tmp), [], runs=case, timeout_minutes="0")
+			assert rc == 1
+			assert "status=timeout" in output
+			assert "Issue: https://github.com/o/r/issues/42" in stdout
+			assert "/actions/runs/" not in stdout, stdout
+			assert "::warning::" not in stdout, stdout
+			assert "no non-skipped Clarify run titled" in stdout, stdout
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout, _ = _run_clarify_wait(Path(tmp), [], runs=runs, runs_fail=True, timeout_minutes="0")
+		assert rc == 1
+		assert "status=timeout" in output
+		assert "Issue: https://github.com/o/r/issues/42" in stdout
+		assert "/actions/runs/" not in stdout, stdout
+		assert "no non-skipped Clarify run titled" in stdout, stdout
+
+
+def test_clarify_wait_timeout_with_cancelled_comment_prints_one_run_url() -> None:
+	_skip_without_bash_and_jq()
+	import tempfile
+
+	cancelled = "AI clarification workflow was cancelled/timed out for https://github.com/o/r/issues/42. Run: https://github.com/o/r/actions/runs/7"
+	runs = [
+		_clarify_run(7, "https://github.com/o/r/actions/runs/7", "2026-11-13T00:01:00Z"),
+		_clarify_run(9, "https://github.com/o/r/actions/runs/9", "2026-11-13T00:02:00Z"),
+	]
+	# A newer run exists: only the newest run is named, not the cancelled one.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout, _ = _run_clarify_wait(Path(tmp), [_comment(cancelled)], runs=runs, timeout_minutes="0")
+		assert rc == 1
+		assert "status=timeout" in output
+		assert "Issue: https://github.com/o/r/issues/42" in stdout
+		assert re.findall(r"https://\S+/actions/runs/\d+", stdout) == ["https://github.com/o/r/actions/runs/9"], stdout
+	# No newest run found: the cancelled run is the one URL printed.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout, _ = _run_clarify_wait(Path(tmp), [_comment(cancelled)], runs=[], timeout_minutes="0")
+		assert rc == 1
+		assert "status=timeout" in output
+		assert re.findall(r"https://\S+/actions/runs/\d+", stdout) == ["https://github.com/o/r/actions/runs/7"], stdout
+
+
+def test_clarify_and_alt_model_timeouts_print_issue_url() -> None:
+	steps = _all_steps(_raw())
+	clarify = _step(steps, CLARIFY_STEP)["run"]
+	_ordered(
+		clarify,
+		CAPACITY_STATUS,
+		"status=clarify_failed",
+		'CLARIFY_STALL_RUN_ID=$(capture_run_id "Clarif")',
+		"Clarify phase stalled",
+		'echo "  Issue: ${CLARIFY_ISSUE_URL}"',
+	)
+	# Trusted authors only, and only clarify's own failed/cancelled prefixes.
+	assert 'author_association == "OWNER"' in clarify
+	assert '"AI clarification workflow failed for "' in clarify
+	assert '"AI clarification workflow was cancelled/timed out for "' in clarify
+	assert clarify.count("comments?per_page=100") == 1
+	assert "per_page=5&direction=desc" not in clarify
+	assert "CLARIFY_CREATED_AFTER" not in _step(steps, CLARIFY_STEP)["text"]
+	alt_step = _step(steps, ALT_MODEL_STEP)
+	alt = alt_step["run"]
+	_ordered(
+		alt,
+		'find_latest_scoped_run_field "${TEST_REPO}" "${ALT_CREATED_AFTER}" "Clarif" "${ALT_ISSUE_TITLE}" id',
+		"Alt-model run timed out before reaching review stage",
+		"Issue: ${GITHUB_SERVER_URL:-https://github.com}/${TEST_REPO}/issues/${ISSUE_NUMBER}",
+	)
+	assert "ALT_PRE_CLARIFY_RUN_ID" not in alt_step["text"]
+	assert "ALT_CREATED_AFTER: ${{ steps.create.outputs.created_after }}" in alt_step["text"]
+	# The parallel e2e-smoke-test job's Clarify run must not be picked (#9223).
+	assert "ALT_ISSUE_TITLE: ${{ steps.create.outputs.title }}" in alt_step["text"]
+	assert "${{" not in alt
+
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	skipped = 0
