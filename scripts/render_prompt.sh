@@ -192,10 +192,69 @@ import pathlib
 import re
 import sys
 
-text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+try:
+	text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+except (OSError, UnicodeDecodeError) as exc:
+	print(f"ERROR: collect_prompt_placeholders {type(exc).__name__}: {sys.argv[1]}: {exc}", file=sys.stderr)
+	sys.exit(1)
 for name in sorted(set(re.findall(r"\{\{([A-Za-z0-9_]+)\}\}", text))):
 	print(name)
 PY
+}
+
+# Security (#9399, #9431, #9465): placeholder names come from the prompt body,
+# and callers render composed bodies that embed untrusted PR-diff / comment /
+# issue text. Without a guard, a literal `{{GH_PAT}}` in that text would make
+# the indirect expansion below substitute the runner's secret into a prompt
+# sent to a third-party model. No shipped template uses a placeholder whose
+# name looks like a credential, so refusing these names leaves the literal
+# `{{NAME}}` in the output (render_prompt.py leaves unknown placeholders
+# untouched) and changes no legitimate render.
+placeholder_env_name_is_credential_like()
+{
+	local upper_name="${1^^}"
+	local name_word=""
+	local -a name_words=()
+
+	case "${upper_name}" in
+		*TOKEN*|*SECRET*|*PASSWORD*|*PASSWD*|*PASSPHRASE*|*CREDENTIAL*|*PRIVATE*|*APIKEY*|*COOKIE*|*WEBHOOK*|*CONNECTION_STRING*|*DATABASE_URL*)
+			return 0
+			;;
+		ACTIONS_*|INPUT_*)
+			# Runner internals (ACTIONS_RUNTIME_URL, ACTIONS_ID_TOKEN_REQUEST_URL, ...)
+			# and action inputs, which can carry secrets; never prompt content.
+			return 0
+			;;
+	esac
+
+	IFS='_' read -r -a name_words <<< "${upper_name}"
+	for name_word in "${name_words[@]}"; do
+		case "${name_word}" in
+			KEY|KEYS|PAT|PASS|PWD|AUTH|SESSION|SIGNING|SIGNATURE|CERT|DSN|URI|CF|OTP)
+				return 0
+				;;
+		esac
+	done
+	return 1
+}
+
+# Second layer: refuse a value that is, as a whole, shaped like a well-known
+# credential even when the variable name looks harmless. Only whole-value
+# matches count, so a legitimate body that merely quotes a token-like string
+# (an issue body, a diff) still renders.
+placeholder_env_value_is_credential_like()
+{
+	local candidate_value="$1"
+	if [[ "${candidate_value}" =~ ^[[:space:]]*(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{20,}[[:space:]]*$ ]]; then
+		return 0
+	fi
+	if [[ "${candidate_value}" =~ ^[[:space:]]*sk-[A-Za-z0-9_-]{20,}[[:space:]]*$ ]]; then
+		return 0
+	fi
+	if [[ "${candidate_value}" =~ ^[[:space:]]*-----BEGIN\ [A-Z\ ]*PRIVATE\ KEY----- ]]; then
+		return 0
+	fi
+	return 1
 }
 
 append_render_var()
@@ -275,8 +334,18 @@ fi
 # fail-open requires both flags. Placeholder substitution for the static
 # scaffolding still runs. Default (unset) keeps
 # include assembly for every trusted template render.
+#
+# Security (#9399, #9431, #9465): either untrusted-body flag below marks a body
+# that embeds PR-diff / comment text, so its `{{NAME}}` tokens are
+# attacker-chosen. In that mode the open-ended environment lookup in the
+# placeholder loop is skipped entirely; only the explicit vars appended before
+# the loop are substituted and every other `{{NAME}}` stays literal. The
+# reviewer/editor callers (review_run_reviewers.sh, review_apply_fixes.sh) need
+# only those explicit vars.
+_render_untrusted_body_mode=false
 case "${RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED:-}" in
 	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		_render_untrusted_body_mode=true
 		if [ "${INPUT_ALREADY_ASSEMBLED_FLAG_ADDED}" != "true" ]; then
 			RENDER_ARGS+=(--input-already-assembled)
 			INPUT_ALREADY_ASSEMBLED_FLAG_ADDED=true
@@ -292,6 +361,7 @@ esac
 # Default (unset) keeps the strict syntax gate for every static template render.
 case "${RENDER_PROMPT_SKIP_SYNTAX_VALIDATION:-}" in
 	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		_render_untrusted_body_mode=true
 		RENDER_ARGS+=(--skip-syntax-validation)
 		;;
 esac
@@ -301,12 +371,44 @@ append_render_var "SEMBLE_PREFETCH" "${SEMBLE_PREFETCH_BLOCK}"
 append_render_var "SERENA_TOOL_HINTS" "${SERENA_TOOL_HINTS_BLOCK}"
 append_render_var "MODEL_FAMILY_OVERLAY" "${MODEL_FAMILY_OVERLAY_BLOCK}"
 
+# Capture the placeholder names in a checked command substitution instead of a
+# process substitution: bash ignores a process substitution's exit status even
+# under `set -euo pipefail`, so a collect_prompt_placeholders failure would
+# otherwise fall through into render_prompt.py and print a second ERROR line
+# (#9341). The helper's stderr is not captured, so its single ERROR line
+# reaches the caller; the EXIT trap still removes any assembled temp file.
+if ! _render_placeholder_names="$(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")"; then
+	# The EXIT trap deletes the assembled temp file the ERROR line names, so
+	# point at the original prompt (a NOTE, not a second ERROR line).
+	if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
+		echo "NOTE: ${PLACEHOLDER_SOURCE_FILE} was assembled from ${PROMPT_FILE} and is removed on exit; inspect the source prompt and its includes." >&2
+	fi
+	exit 1
+fi
+
 while IFS= read -r placeholder_name; do
 	[ -n "${placeholder_name}" ] || continue
+	# Explicitly appended vars above win; skip before touching the environment.
+	if [ -n "${RENDER_VARS_SEEN[${placeholder_name}]+x}" ]; then
+		continue
+	fi
+	# Untrusted body: never read the environment for an attacker-chosen name
+	# (#9399/#9431/#9465). No NOTE either, so diff text cannot flood stderr.
+	if [ "${_render_untrusted_body_mode}" = "true" ]; then
+		continue
+	fi
+	if placeholder_env_name_is_credential_like "${placeholder_name}"; then
+		echo "NOTE: render_prompt.sh left {{${placeholder_name}}} unresolved: credential-like names are never read from the environment." >&2
+		continue
+	fi
 	if [ "${!placeholder_name+x}" = "x" ]; then
+		if placeholder_env_value_is_credential_like "${!placeholder_name}"; then
+			echo "NOTE: render_prompt.sh left {{${placeholder_name}}} unresolved: its environment value looks like a credential." >&2
+			continue
+		fi
 		append_render_var "${placeholder_name}" "${!placeholder_name}"
 	fi
-done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
+done <<< "${_render_placeholder_names}"
 
 if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
 	"${RENDER_ARGS[@]}"
