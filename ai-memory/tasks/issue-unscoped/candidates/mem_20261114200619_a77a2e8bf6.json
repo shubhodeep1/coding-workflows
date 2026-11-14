@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:530-537 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The `report_age_credit outcome=applied` log line is emitted even when `RUN_ATTEMPT_ELAPSED_SECONDS` is not greater than `QUEUE_WAITED_SECONDS`, so `REPORT_MAX_AGE` is unchanged and no credit was added.\n  WHY: The log label misleads triage of `identity_stale` rejections about whether the runner wait was credited. All three reviewers rated it NIT, and the only effect is on the log. `max_age=` is correct either way.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal_intake.sh:~531-537 | severity=NIT | confidence=3\n  PROBLEM: The `log \"report_age_credit outcome=applied ...\"` line runs whenever the run read succeeds. That includes the case where elapsed time is not greater than the queue wait and no credit was added.\n  WHY: The log can mislead triage of an `identity_stale` rejection. The `attempt_elapsed_seconds=` and `queue_waited_seconds=` fields show the real numbers, and the report is still rejected correctly.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:531-534 | severity=NIT | confidence=4\n  PROBLEM: When RUN_ATTEMPT_ELAPSED_SECONDS is valid but not greater than QUEUE_WAITED_SECONDS, the REPORT_MAX_AGE adjustment is skipped but `report_age_credit outcome=applied` is still logged.\n  WHY: The log misleads triage about whether the adjustment occurred.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_failure_heal_intake.sh:530-534 | severity=NIT | confidence=4\n  PROBLEM: When `RUN_ATTEMPT_ELAPSED_SECONDS` parses but is not greater than `QUEUE_WAITED_SECONDS`, the `REPORT_MAX_AGE` adjustment at line 531-533 is skipped, yet line 534 still logs `report_age_credit outcome=applied ... max_age=${REPORT_MAX_AGE}`.\n  WHY: `report_age_credit outcome=` is a registered stable log prefix that downstream triage reads. An `applied` line misdirects triage about whether the runner wait was credited. Only the outcome label is wrong.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ef7ea27b663f277a4d3b8ab61aaacffc21b7110e3ec82d4d0d65f528e5ba379a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9477,
+    "run_id": "43584750299",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43584750299",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114200619_a77a2e8bf6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9477,
+    "run_id": "43584750299"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-14T20:06:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
