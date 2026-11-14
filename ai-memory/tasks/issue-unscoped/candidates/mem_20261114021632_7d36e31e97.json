@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Any change in operational behavior or workflow logic must be documented in agents.md via an agents.d/ fragment (CLAUDE.md \u00a730); behavior changes need README.md or agents.md documentation.\n  expected_change_site: agents.d/9418-cleanup-cancel-dispatch-review-run.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/test-and-mark-stable.yml adds a cleanup step that cancels workflow_dispatch review runs, but the PR diff has no agents.d/ fragment or README.md update. Only changelog.d/9418-cleanup-cancel-dispatch-review-run.md and the new test file are present. Severity disagreement: MAJOR (google_gemini-3_1-flash-lite, minimax_minimax-m3) vs NIT (openai_gpt-6-luna).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Any change in operational behavior or workflow logic must be documented in agents.md via an agents.d/ fragment (CLAUDE.md \u00a730).\n  Expected change site: agents.d/9418-cleanup-cancel-dispatch-review-run.md\n  Evidence of absence: The PR modifies .github/workflows/test-and-mark-stable.yml to introduce a new cleanup step for workflow_dispatch review runs, but no corresponding agents.d/ fragment is present in the PR diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Any change in operational behavior or workflow logic must be documented in agents.md via an agents.d/ fragment per CLAUDE.md \u00a730 (the new cleanup step now lists and cancels `workflow_dispatch` review runs before branch deletion, which is an observable operational behavior change for operators running the release gate).\n  Expected change site: agents.d/9418-cleanup-cancel-dispatch-review-run.md\n  Evidence of absence: PR DIFF contains changelog.d/9418-cleanup-cancel-dispatch-review-run.md and the new test file, but no agents.d/ fragment exists; the file is missing from the diff entirely and CI failures for test_agents_fragment_contract.py / test_changelog_fragment_contract.py in the autofix log are consistent with this gap.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: Repository guidance requires behavior changes to be documented in README.md or agents.md with operational steps and failure modes.\n  Expected change site: agents.d/9418-cleanup-cancel-dispatch-review-run.md, extending the existing smoke-cleanup documentation.\n  Evidence of absence: The PR adds cancellation of workflow_dispatch review runs in .github/workflows/test-and-mark-stable.yml, but adds no README.md update or agents.d fragment describing that behavior. The changelog fragment documents it, but does not meet the README.md / agents.md documentation requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d210102478d5e6f1a8a37d3e2b733b383bdcd20533ba42cf3bdd8e909b11438d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9456,
+    "run_id": "43484832867",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43484832867",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114021632_7d36e31e97",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9456,
+    "run_id": "43484832867"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-14T02:16:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
