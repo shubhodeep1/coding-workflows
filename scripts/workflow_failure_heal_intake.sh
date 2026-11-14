@@ -2434,10 +2434,38 @@ case "${ACTION}" in
 			# The heal issue's own clarify / plan / implement run failed the way
 			# the issue was filed for: the pipeline cannot run the fix, and every
 			# retry would only add another occurrence here. Hand it to a human.
+			# The CRITICAL alert fires only on the first escalation (issue
+			# #9248; #9200 alerted four times): the validated report payload
+			# carries this issue's own labels, so when it already shows the
+			# escalated label the alert is replaced by a stable
+			# `escalate_repeat ... alert=suppressed` line. The check cannot tell
+			# which path set the label, and it is suppressed whenever the label
+			# is present. Post-merge verification
+			# (workflow_failure_heal_verify.sh) and the `escalate)` lineage-cap
+			# branch below each sent their own CRITICAL alert. The synced-file
+			# security and synced-check lineage caps (above) send only a
+			# WARNING summary, so a self-failure of an issue they escalated
+			# never gets a CRITICAL; that gap is accepted. A missing or unreadable label list
+			# fails open (alert sent). Two intakes racing on the same issue may
+			# both alert; that is accepted.
+			HEAL_SELF_ESCALATED="$(jq -r --arg l "${ESCALATED_LABEL}" '[.labels[]? | if type == "object" then .name else . end] | index($l) != null' "${PAYLOAD_FILE}" 2>/dev/null || echo false)"
+			# validate-payload iterates whatever `labels` holds, so a reported
+			# object such as {"ai:workflow-heal-escalated": true} would survive
+			# as its keys. Only a label array in the raw report counts as
+			# readable; any other shape fails open (alert sent).
+			HEAL_SELF_LABELS_SHAPE="$(jq -r 'if type == "object" then ((.labels | type) == "array") else false end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo false)"
+			# Record when the shape check overturns a suppression, so the CRITICAL
+			# alert that follows can be told apart from a first escalation.
+			[ "${HEAL_SELF_LABELS_SHAPE}" = "true" ] || [ "${HEAL_SELF_ESCALATED}" != "true" ] || log "warn heal_self_labels_unreadable issue=${EXISTING} repo=${EXISTING_REPO}"
+			[ "${HEAL_SELF_LABELS_SHAPE}" = "true" ] || HEAL_SELF_ESCALATED=false
 			ensure_label_exists "${ESCALATED_LABEL}" "${EXISTING_REPO}" || true
 			gh_retry gh issue edit "${EXISTING}" --repo "${EXISTING_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${EXISTING} repo=${EXISTING_REPO}"
 			log "escalate reason=heal_issue_failed_itself issue=${EXISTING} repo=${EXISTING_REPO} fp=${FP} failure=${FAILURE_REASON}"
-			tg_send_msg "Workflow failure heal: heal issue ${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}} failed its own ${FAILURE_REASON%_failed} run with the failure it was filed for, so the pipeline cannot fix it; a human should look at this."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+			if [ "${HEAL_SELF_ESCALATED}" != "true" ]; then
+				tg_send_msg "Workflow failure heal: heal issue ${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}} failed its own ${FAILURE_REASON%_failed} run with the failure it was filed for, so the pipeline cannot fix it; a human should look at this."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+			else
+				log "escalate_repeat reason=heal_issue_failed_itself issue=${EXISTING} repo=${EXISTING_REPO} fp=${FP} failure=${FAILURE_REASON} alert=suppressed"
+			fi
 			exit 0
 		fi
 		if [ "${SOURCE_KIND}" = "validation_failure" ]; then

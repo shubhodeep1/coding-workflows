@@ -164,6 +164,21 @@ def test_verify_run_binds_a_self_dispatched_review_run_by_its_marker_head() -> N
 			raise AssertionError(f"head mismatch accepted: {case}")
 
 
+def test_verify_run_binds_a_pull_request_run_by_its_own_head() -> None:
+	# Issue #9250: a pull_request run whose PR head moved while it ran has
+	# `pull_requests: []` and its own head. The reporter now sends that head,
+	# and verify_run (unchanged) binds the run only when the heads are equal.
+	run = {"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "pull_request", "head_sha": SHA_A,
+		"display_title": "AI Review", "pull_requests": [], "conclusion": "failure", "path": ".github/workflows/ai-review.yml"}
+	assert heal.verify_run(run, repo=CONSUMER_REPO, kind="autofix_failure", head_sha=SHA_A, pr_number=4174)["run_id"] == 500
+	try:
+		heal.verify_run(run, repo=CONSUMER_REPO, kind="autofix_failure", head_sha=SHA_B, pr_number=4174)
+	except ValueError as exc:
+		assert str(exc) == "run head mismatch"
+	else:
+		raise AssertionError("a pull_request run on another head was bound")
+
+
 def test_verify_run_provenance_lists_runs_a_trusted_marker_binds_to_the_pr_head() -> None:
 	payload = heal.validate_payload(_autofix_payload())
 	assert payload["head_sha"] == SHA_B
@@ -5194,6 +5209,118 @@ def test_autofix_payload_lists_the_trusted_failed_runs_first() -> None:
 	assert [ref["run_id"] for ref in plain["run_refs"]] == ["500"]
 
 
+def test_build_autofix_failure_payload_prefers_run_head_sha() -> None:
+	# Issue #9250: the failed run's own head replaces the PR's current head in
+	# head_sha and in the failure-marker lookup; head_branch stays the PR's.
+	kwargs = dict(
+		repo=CONSUMER_REPO,
+		pr=_pr(),
+		comments=[],
+		workflow_name="AI Review",
+		failure_reason="editor_empty_noop",
+		failure_evidence="::error::PR diff unavailable\n",
+		failure_streak=1,
+		run_id="500",
+		run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		wrapper_sha=SHA_A,
+		reporter_run_url=None,
+	)
+	for run_head in (SHA_A, SHA_A.upper(), f"  {SHA_A}\n"):
+		payload = heal.validate_payload(heal.build_autofix_failure_payload(**kwargs, run_head_sha=run_head))
+		assert payload["head_sha"] == SHA_A, run_head
+		assert payload["head_branch"] == "ai/issue-4173"
+	for run_head in (None, "", "abc", "g" * 40, SHA_A + "a"):
+		payload = heal.validate_payload(heal.build_autofix_failure_payload(**kwargs, run_head_sha=run_head))
+		assert payload["head_sha"] == SHA_B, run_head
+	assert heal.build_autofix_failure_payload(**kwargs)["head_sha"] == SHA_B
+	# Markers are looked up by the run head, not by the PR head.
+	comments = [*_trusted_failure_comments(["101"], head=SHA_A), *_trusted_failure_comments(["102"], head=SHA_B)]
+	by_run_head = heal.build_autofix_failure_payload(**{**kwargs, "comments": comments}, failure_marker_author=CAP_AUTHOR, run_head_sha=SHA_A)
+	assert [ref["run_id"] for ref in by_run_head["run_refs"]] == ["101", "500"]
+	by_pr_head = heal.build_autofix_failure_payload(**{**kwargs, "comments": comments}, failure_marker_author=CAP_AUTHOR)
+	assert [ref["run_id"] for ref in by_pr_head["run_refs"]] == ["102", "500"]
+
+
+def _autofix_report_event_env(tmp: Path, env: dict[str, str], *, event_name: str, event: object | None) -> None:
+	env["GITHUB_EVENT_NAME"] = event_name
+	event_path = tmp / "event.json"
+	if event is not None:
+		event_path.write_text(json.dumps(event), encoding="utf-8")
+	env["GITHUB_EVENT_PATH"] = str(event_path)
+
+
+def test_autofix_report_sends_the_pull_request_event_head() -> None:
+	# Issue #9250: the PR head moved (SHA_B) while the pull_request run went on
+	# its own head (SHA_A); the report carries the run head, read from the event
+	# file on disk with no GitHub read.
+	event = {"pull_request": {"number": 4174, "head": {"sha": SHA_A.upper()}}}
+	for override, expected, source in ((None, SHA_A, "event"), (SHA_C.upper(), SHA_C, "override")):
+		with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "AUTOFIX_STREAK_AUTHOR_LOGIN": "workflow-bot"})
+			_autofix_report_event_env(tmp, env, event_name="pull_request", event=event)
+			if override is not None:
+				env["REPORT_RUN_HEAD_SHA"] = override
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert f"run_head={expected} run_head_source={source} pr_head={SHA_B}" in result.stdout, result.stdout
+			state = _state(state_file)
+			assert len(state["dispatches"]) == 1
+			payload = heal.validate_payload(state["dispatches"][0]["body"]["client_payload"]["report"])
+			assert payload["head_sha"] == expected and payload["head_branch"] == "ai/issue-4173"
+			assert all(call[:1] != ["api"] or "/dispatches" in " ".join(call) for call in state["calls"])
+
+
+def test_autofix_report_keeps_pr_head_without_a_usable_event_head() -> None:
+	good = {"pull_request": {"number": 4174, "head": {"sha": SHA_A}}}
+	cases = [
+		("workflow_dispatch", "workflow_dispatch", good, {}),
+		("pull_request_target", "pull_request_target", good, {}),
+		("non_hex", "pull_request", {"pull_request": {"number": 4174, "head": {"sha": "z" * 40}}}, {}),
+		("short", "pull_request", {"pull_request": {"number": 4174, "head": {"sha": "abc"}}}, {}),
+		("other_pr", "pull_request", {"pull_request": {"number": 4175, "head": {"sha": SHA_A}}}, {}),
+		("not_json", "pull_request", "not an object", {}),
+		("missing_file", "pull_request", None, {}),
+		("invalid_override", "workflow_dispatch", None, {"REPORT_RUN_HEAD_SHA": "not-a-sha"}),
+		# The identical-failure cap keeps the PR (gate) head its counted markers carry.
+		("identical_failure_cap", "pull_request", good, {"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "REPORT_RUN_HEAD_SHA": SHA_C}),
+	]
+	for name, event_name, event, extra in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-autofix-run-head-{name}-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", **extra})
+			_autofix_report_event_env(tmp, env, event_name=event_name, event=event)
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert f"run_head=none run_head_source=none pr_head={SHA_B}" in result.stdout, (name, result.stdout)
+			payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+			assert payload["head_sha"] == SHA_B, name
+	# An event path that is a directory, not a file, is ignored.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-dir-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		env["GITHUB_EVENT_NAME"] = "pull_request"
+		env["GITHUB_EVENT_PATH"] = str(tmp)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "run_head=none run_head_source=none" in result.stdout, result.stdout
+		assert heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["head_sha"] == SHA_B
+	# A staged helper that predates --run-head-sha still reports, with the PR head.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-old-helper-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		_autofix_report_event_env(tmp, env, event_name="pull_request", event=good)
+		staged_helper = work / "scripts" / "workflow_failure_heal.py"
+		old_text = staged_helper.read_text(encoding="utf-8")
+		old_text = re.sub(r'\tp\.add_argument\(\n\t\t"--run-head-sha",\n(?:\t\t.*\n)*?\t\)\n', "", old_text)
+		old_text = old_text.replace("\t\trun_head_sha=args.run_head_sha or None,\n", "")
+		assert "run-head-sha" not in old_text
+		staged_helper.write_text(old_text, encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "dispatched pr=4174 failure=editor_empty_noop" in result.stdout and "run_head=none" in result.stdout, result.stdout + result.stderr
+		assert heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["head_sha"] == SHA_B
+
+
 def test_autofix_report_cap_links_the_failed_runs_and_counts_only_them() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-autofix-cap-runs-") as tmp_name:
 		tmp = Path(tmp_name)
@@ -6746,18 +6873,90 @@ def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_withou
 	assert "issues_created" not in _state_after
 
 
-def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
-	# A heal issue (#6413-style, in this repository) whose plan run fails with
-	# the failure it was filed for: the pipeline cannot run its own fix.
+def _run_heal_self_escalation_intake(labels: list[str] | None, *, raw_labels: object = None) -> tuple[subprocess.CompletedProcess[str], dict, str, list[str]]:
+	"""Run the intake for heal issue #42 failing its own plan run.
+
+	*labels* become the report payload's issue labels (``None`` drops the
+	payload's ``labels`` field entirely). A non-``None`` *raw_labels* is
+	written to the payload's ``labels`` field verbatim instead, so a
+	malformed value can be injected. Returns the intake result, the
+	fake-gh state, the heal fingerprint and every ``level|text`` line the
+	stubbed ``tg_send_msg`` recorded.
+	"""
 	first, _state_first, _ = _run_intake(_phase_payload(repo=SELF_REPO), _plan_intake_state(repo=SELF_REPO), diagnosis=DIAG_WORKFLOW_DEFECT)
 	fp = re.search(r"fingerprint fp=([0-9a-f]{64})", first.stdout).group(1)
 	heal_issue = _sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")
-	body = heal_issue["body"]
-	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=body, labels=["ai:planning", heal.HEAL_LABEL]))
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=heal_issue["body"], labels=labels or []))
+	if raw_labels is not None:
+		payload["labels"] = raw_labels
+	elif labels is None:
+		payload.pop("labels", None)
 	state = _plan_intake_state(repo=SELF_REPO, heal_issues=[heal_issue])
-	result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	tg_dir = Path(tempfile.mkdtemp(prefix="heal-tg-"))
+	try:
+		def setup(tmp: Path, work: Path) -> None:
+			(work / "scripts" / "tg_helpers.sh").write_text(
+				f'tg_send_msg() {{ printf \'%s|%s\\n\' "${{2:-}}" "$1" >> {str(tg_dir / "calls.txt")!r}; }}\n', encoding="utf-8")
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=setup)
+		calls_file = tg_dir / "calls.txt"
+		calls = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+	finally:
+		shutil.rmtree(tg_dir, ignore_errors=True)
+	return result, state_after, fp, calls
+
+
+def _heal_self_escalation_alerts(calls: list[str]) -> list[str]:
+	return [line for line in calls if line.startswith("CRITICAL|") and "heal issue" in line and "failed its own plan run" in line]
+
+
+def test_intake_heal_self_escalation_alerts_once() -> None:
+	# Issue #9248: heal issue #9200 sent a CRITICAL alert on each of its four
+	# self-failures. Once the payload shows the escalated label, a repeat still
+	# re-adds the label, logs `escalate` and posts the occurrence, but replaces
+	# the alert with a stable `escalate_repeat ... alert=suppressed` line.
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(["ai:planning", heal.HEAL_LABEL, heal.ESCALATED_LABEL])
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert f"WORKFLOW_HEAL escalate_repeat reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed alert=suppressed" in result.stdout
+	assert not [line for line in calls if line.startswith("CRITICAL|")], calls
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])
+	# Fail open: with no label list in the payload the alert is sent as before.
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(None)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert "escalate_repeat" not in result.stdout
+	assert len(_heal_self_escalation_alerts(calls)) == 1, calls
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+	# Fail open on a malformed label list too: a bare string (not a list) and
+	# object entries are not a readable label list: validate-payload
+	# (workflow_failure_heal.py) keeps only string entries, so the escalated
+	# label never reaches the intake's jq check and the alert is still sent.
+	# A dict keyed by the label itself survives validate-payload as its keys,
+	# so the intake also requires the raw report's labels to be an array.
+	for malformed in (heal.ESCALATED_LABEL, [{"name": heal.ESCALATED_LABEL}], {"name": heal.ESCALATED_LABEL}, {heal.ESCALATED_LABEL: True}):
+		result, state_after, fp, calls = _run_heal_self_escalation_intake(None, raw_labels=malformed)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+		assert "escalate_repeat" not in result.stdout, malformed
+		assert len(_heal_self_escalation_alerts(calls)) == 1, (malformed, calls)
+		# Only the dict keyed by the label would have suppressed without the
+		# raw-shape check, so only it logs the overturned suppression.
+		assert ("WORKFLOW_HEAL warn heal_self_labels_unreadable issue=42" in result.stdout) == (malformed == {heal.ESCALATED_LABEL: True}), malformed
+		assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+
+
+def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
+	# A heal issue (#6413-style, in this repository) whose plan run fails with
+	# the failure it was filed for: the pipeline cannot run its own fix. The
+	# first escalation sends exactly one CRITICAL alert (issue #9248).
+	result, state_after, fp, calls = _run_heal_self_escalation_intake(["ai:planning", heal.HEAL_LABEL])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert "escalate_repeat" not in result.stdout
+	assert len(_heal_self_escalation_alerts(calls)) == 1, calls
+	assert len([line for line in calls if line.startswith("CRITICAL|")]) == 1, calls
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=_sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")["body"], labels=["ai:planning", heal.HEAL_LABEL]))
 	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
 	assert "issues_created" not in state_after
 	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])

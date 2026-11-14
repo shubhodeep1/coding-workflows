@@ -3461,8 +3461,10 @@ print(json.dumps(parsed))
 
 		_write_exec(
 			bin_dir / "python3",
-			r'''#!/usr/bin/python3
-import json
+			# Use the interpreter running the tests (not a hardcoded /usr/bin/python3);
+			# an env shebang would resolve to this shim itself on PATH and recurse.
+			f"#!{sys.executable}\n"
+			+ r'''import json
 import os
 import subprocess
 import sys
