@@ -391,3 +391,43 @@ def test_resolver_exits_75_when_rate_limited(tmp_path: Path) -> None:
 	result = subprocess.run(["bash", str(RESOLVER)], env=env, capture_output=True, text=True)
 	assert result.returncode == 75, (result.stdout, result.stderr)
 	assert result.stdout == ""
+
+
+def test_resolver_exits_75_when_reissue_pr_read_rate_limited(tmp_path: Path) -> None:
+	"""#9170: a rate-limited PR read on the reissue base-branch path keeps exit 75."""
+	import json
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	fake = bin_dir / "gh"
+	fake.write_text(FAKE_GH, encoding="utf-8")
+	fake.chmod(0o755)
+	plan_dir = tmp_path / "plan"
+	plan_dir.mkdir()
+	issue = {
+		"number": 1,
+		"body": "<!-- check-failure-triage:pr=6786 -->\nRe-issued by the unblock judge from #7.\n\nFix the failing check.\n",
+		"labels": [],
+		"author_association": "OWNER",
+	}
+	plan = [_ok(json.dumps(issue)), _primary(_now() + 7200)]
+	for index, (out, err, rc) in enumerate(plan, start=1):
+		(plan_dir / f"{index}.stdout").write_text(out)
+		(plan_dir / f"{index}.stderr").write_text(err)
+		(plan_dir / f"{index}.rc").write_text(str(rc))
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("TG_", "GH_RETRY", "GH_API_RETRY", "CI_TRIAGE_"))}
+	env.update({
+		"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+		"FAKE_GH_PLAN": str(plan_dir),
+		"TMPDIR": str(tmp_path),
+		"GH_RATE_LIMIT_BREAKER_FILE": str(tmp_path / "breaker"),
+		"REPO": "o/r",
+		"ISSUE": "1",
+		"GH_TOKEN": "x",
+	})
+	result = subprocess.run(["bash", str(RESOLVER)], env=env, capture_output=True, text=True)
+	assert result.returncode == 75, (result.stdout, result.stderr)
+	assert result.stdout == ""
+	assert "INTEGRATION_REF_RESOLVE outcome=rate_limited what=pr-6786" in result.stderr
+	assert "CI_TRIAGE_PR_BRANCH_ROUTING" not in result.stderr
+	calls = _calls(plan_dir)
+	assert len(calls) == 2 and "repos/o/r/pulls/6786" in calls[1]

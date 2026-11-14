@@ -1,0 +1,40 @@
+{
+  "name": "reissue_merged_pr_base_branch_lookup_failed_refuses",
+  "env": {
+    "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true"
+  },
+  "issues": {
+    "101": {
+      "body": "<!-- check-failure-triage:pr=6786 -->\nRe-issued by the unblock judge from #7.\n\nFix the failing check.\n",
+      "labels": [],
+      "author_association": "OWNER",
+      "user": {
+        "login": "owner"
+      }
+    }
+  },
+  "pulls": {
+    "6786": {
+      "number": 6786,
+      "state": "closed",
+      "merged": true,
+      "head": {
+        "ref": "ai/issue-6700",
+        "repo": {
+          "full_name": "owner/repo"
+        }
+      },
+      "base": {
+        "ref": "orchestrator/project-768",
+        "repo": {
+          "full_name": "owner/repo",
+          "default_branch": "main"
+        }
+      }
+    }
+  },
+  "branch_exists": {},
+  "expected_stdout": "",
+  "expected_exit_code": 3,
+  "expected_error_reason": "branch_lookup_failed"
+}

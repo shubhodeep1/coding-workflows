@@ -51,6 +51,12 @@ env:
   # Codex version baked into the isolated agent image
   # (scripts/codex_isolated_exec.sh); matches the host install below.
   CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+  # Opt-in Solidity compilers for the isolated implement sandbox image
+  # (scripts/codex_isolated_exec.sh validates it; empty = off, image unchanged).
+  # Set at workflow level, not only on the prepare steps, because `run`,
+  # `run --engine claude` and the pre-push gate's `image` call rebuild the
+  # image too and must see the same inputs.
+  SANDBOX_SOLC_VERSIONS: ${{ vars.SANDBOX_SOLC_VERSIONS || '' }}
   REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}
