@@ -171,6 +171,11 @@
       "engine": "claude",
       "claude_model": "claude-sonnet-5-5",
       "profile": "read"
+    },
+    "CS_INVESTIGATE": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "read"
     }
   }
 }

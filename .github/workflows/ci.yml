@@ -765,6 +765,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_token.py
 
+      - name: CS investigate workflow tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_cs_investigate.py tests/test_cs_bridge_query.py
+
       - name: CI budget watch tests
         run: |
           set -euo pipefail
