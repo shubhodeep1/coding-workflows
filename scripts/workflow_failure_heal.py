@@ -627,6 +627,22 @@ _SOFT_LOG_PATTERNS = re.compile(
 	r"##\[(?:warning|error)\]|\bCLAUDE_POOL run\b.*\boutcome=(?!success\b)|\bAI_ENGINE_FALLBACK\b|\bexited with code\b",
 	re.IGNORECASE,
 )
+# A Python traceback header matches _SOFT_LOG_PATTERNS, but its frames
+# (`  File "...", line N, in ...`) and its exception line (`ValueError: ...`)
+# do not, so filter_log also keeps the lines after each header (see
+# _traceback_context_indices). Without them heal issues #9190 / #9200 carried
+# two bare headers and were filed as inconclusive.
+_TRACEBACK_HEADER_RE = re.compile(r"Traceback \(most recent call last\)")
+_TRACEBACK_CHAIN_RE = re.compile(
+	r"^(?:The above exception was the direct cause of the following exception"
+	r"|During handling of the above exception, another exception occurred):?\s*$"
+)
+# Lines kept after one header (the innermost ones when a traceback is longer),
+# and how far one traceback is scanned before it is treated as ended (past it,
+# a traceback with no exception line yet is walked on with the same line rules,
+# so its exception line and any continuation lines and chain marker are kept).
+_TRACEBACK_CONTEXT_MAX_LINES = 30
+_TRACEBACK_SCAN_MAX_LINES = 400
 
 
 # ---------------------------------------------------------------------------
@@ -3681,6 +3697,92 @@ def _strip_step_env_values(text: str) -> str:
 	return "\n".join(kept)
 
 
+def _traceback_context_indices(lines: list[str]) -> set[int]:
+	"""Indices of the frame and exception lines that follow each traceback header.
+
+	A traceback runs from its header through indented lines (frames, source
+	lines, carets) and blank lines to its first unindented line, the exception
+	line. After that, indented continuation lines, blank lines and a chain
+	marker ("The above exception was the direct cause ...", "During handling
+	of the above exception ...") still belong to it; the next unindented line
+	or the next header ends it, and a chained traceback's header starts its
+	own block. Each block keeps at most _TRACEBACK_CONTEXT_MAX_LINES lines, the
+	last ones, since the innermost frames and the exception are printed last.
+	When more continuation lines follow the exception line than that cut
+	holds (a pydantic ValidationError lists every error indented), the cut
+	keeps the exception line and the innermost frames before it plus the
+	last lines of the block, so the exception type and message are not lost.
+	A traceback still without its exception line after
+	_TRACEBACK_SCAN_MAX_LINES lines is walked on with the same line rules, so
+	its exception line and the continuation lines and chain marker after it
+	are kept.
+	The Actions timestamp prefix is ignored. The header lines themselves are
+	not returned (_SOFT_LOG_PATTERNS keeps them).
+	"""
+	kept: set[int] = set()
+	total = len(lines)
+	index = 0
+	while index < total:
+		if not _TRACEBACK_HEADER_RE.search(lines[index]):
+			index += 1
+			continue
+		block: list[int] = []
+		exception_seen = False
+		exception_pos: int | None = None
+		cursor = index + 1
+		scan_end = min(total, cursor + _TRACEBACK_SCAN_MAX_LINES)
+		while cursor < scan_end:
+			content = _LOG_TIMESTAMP_RE.sub("", lines[cursor])
+			if _TRACEBACK_HEADER_RE.search(content):
+				break
+			if not content.strip() or content[:1].isspace() or _TRACEBACK_CHAIN_RE.match(content.strip()):
+				block.append(cursor)
+			elif not exception_seen:
+				exception_pos = len(block)
+				block.append(cursor)
+				exception_seen = True
+			else:
+				break
+			cursor += 1
+		# Past the scan window with no exception line yet (mutual recursion
+		# prints hundreds of uncollapsed frames): walk on over the remaining
+		# frames to the exception line so it and the innermost frames are kept.
+		# cursor only moves forward and index = cursor below, so this is linear.
+		# The walk classifies lines as the window scan does, so the
+		# continuation lines and chain marker after that exception line are
+		# kept too (a chained traceback's link is not lost). The walk also runs
+		# when the window ends with the block still open after the exception
+		# line (that line last in the window), so a chain marker or
+		# continuation line just past the window is not dropped.
+		if cursor == scan_end:
+			while cursor < total:
+				content = _LOG_TIMESTAMP_RE.sub("", lines[cursor])
+				if _TRACEBACK_HEADER_RE.search(content):
+					break
+				if not content.strip() or content[:1].isspace() or _TRACEBACK_CHAIN_RE.match(content.strip()):
+					block.append(cursor)
+				elif not exception_seen:
+					exception_pos = len(block)
+					block.append(cursor)
+					exception_seen = True
+				else:
+					break
+				cursor += 1
+		while block and not _LOG_TIMESTAMP_RE.sub("", lines[block[-1]]).strip():
+			block.pop()
+		if exception_pos is not None and len(block) - exception_pos > _TRACEBACK_CONTEXT_MAX_LINES:
+			# The last-N cut would drop the exception line: keep it with the
+			# innermost frames before it (half the cap) and fill the rest with
+			# the block's last lines (continuation lines, chain marker).
+			exception_head = block[max(0, exception_pos + 1 - _TRACEBACK_CONTEXT_MAX_LINES // 2):exception_pos + 1]
+			kept.update(exception_head)
+			kept.update(block[len(block) - (_TRACEBACK_CONTEXT_MAX_LINES - len(exception_head)):])
+		else:
+			kept.update(block[-_TRACEBACK_CONTEXT_MAX_LINES:])
+		index = cursor
+	return kept
+
+
 def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> str:
 	"""Keep the high-signal lines plus the tail of a job log, bounded.
 
@@ -3690,14 +3792,17 @@ def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> s
 	redacted (an unterminated header is dropped), and credential shapes are
 	masked with ``redact_secrets`` on the whole text before the tail and byte
 	cut, so a cut can never leave a token without its recognisable prefix.
+	A Python traceback keeps its frame and exception lines too, up to
+	_TRACEBACK_CONTEXT_MAX_LINES per traceback (_traceback_context_indices).
 	The output feeds the diagnosis prompt and the heal issue evidence.
 	"""
 	lines = redact_secrets(sanitize_text(_strip_step_env_values(_drop_step_script_lines(text)))).split("\n")
 	kept: list[str] = []
 	seen: set[int] = set()
 	tail_start = max(0, len(lines) - max_lines)
+	traceback_indices = _traceback_context_indices(lines)
 	for index, line in enumerate(lines):
-		if index >= tail_start or _SOFT_LOG_PATTERNS.search(line):
+		if index >= tail_start or index in traceback_indices or _SOFT_LOG_PATTERNS.search(line):
 			if index not in seen:
 				seen.add(index)
 				kept.append(line)
