@@ -417,8 +417,18 @@ def test_review_timeout_inventory_step_is_gated_and_non_blocking() -> None:
 	assert "\n        timeout-minutes: 3\n" in text
 	for key in ("PR_NUMBER", "ISSUE_NUMBER", "BAIT_SHA"):
 		assert f"\n          {key}: ${{{{ " in text, key
-	wait_text = _step(steps, WAIT_REVIEW_STEP)["text"]
-	comment = wait_text.split('source "${STABLE_E2E_STEP_SCRIPT}"', 1)[1]
+	# The incident run ids live in the comment block directly above the Phase 4d
+	# step; read that block from the raw text so the check does not depend on
+	# which step `_e2e_steps` attaches trailing comments to.
+	raw = _raw()
+	lead = raw[: raw.index(f'\n      - name: "{TIMEOUT_INV_STEP}"\n')].split("\n")
+	comment_lines: list[str] = []
+	for line in reversed(lead):
+		if not line.startswith("      #"):
+			break
+		comment_lines.append(line)
+	comment = "\n".join(reversed(comment_lines))
+	assert "Phase 4d" in comment and "#9418" in comment
 	for run_id in ("43283656910", "43300092840", "43300108598"):
 		assert run_id in comment, run_id
 
