@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The standalone stall loop in `scripts/orchestrate_poll_process.sh` (from about line 24893) already goes through every candidate that carries a pipeline label, using the prefetched `_candidate_details_json` comments. `orchestrate_lib.py` `STALL_RECOVERY_ACTIONS[\"ai:clarification\"]` (`auto_respond_clarify`, `auto_respond_clarify`, `escalate_human`) already ends in `escalate_human`. So the change belongs inside that loop. When there is no clarify output, meaning no `<!-- ai:clarification-questions -->` comment and no clarify answer comment, the first recovery posts a `/reclarify` comment with a dedup marker in place of `auto_respond_clarify`. Today `auto_respond_clarify` would answer questions that were never asked. If the marker is present and there is still no clarify output, the second miss goes to the existing `escalate_human`. Option C would put two code paths on the same issue. Option B adds a new variable and turns off current behaviour. On the issue's 6-hour default: the existing per-phase setting `STALL_THRESHOLD_CLARIFICATION_MINUTES` (built-in default 60 in `DEFAULT_PHASE_STALL_THRESHOLDS`) already controls this phase, and an operator who wants 6 hours can set it to 360. Keeping one threshold avoids a second clock for the same label.\nQ2: The code shows this is very likely what happened to #146. In `.github/workflows/clarify.yml` (lines 931-946), a held security follow-up gets the `ai:clarification` label and is skipped with no comment. In the poller (lines 24948-24955), a held verdict logs `STALL_SKIP ... reason=security_dependency_held` and moves on, also with no comment. A hold whose detail is `closed_without_ai_merged` or `unverified` never releases on its own. Re-running clarify (option C) would get around the same-file security ordering gate, which breaks the \"security first, fail closed\" rule. Option B keeps the silence that caused the incident. Option A keeps the gate and makes the hold visible. It works as follows:\n- The poller posts one advisory comment per dependency, with the marker `<!-- ai:security-dependency-held:<issue>:<depends_on> -->`.\n- The comment names `.depends_on` from the `security_dependency.py` verdict and the detail (`open`, `closed_without_ai_merged` or `unverified`).\n- For the two details that cannot release on their own, the comment says a maintainer must act.\n- It is posted only when the cached comment history is complete and has no marker yet. If comments are unavailable, nothing is posted, so no duplicates.\n- The comment does not start with `/reclarify` and does not use the clarification-questions marker. This keeps the release-marker check and the Q1 \"no clarify output\" check unchanged.\n\nSETUP REQUIRED: none. Neither decision depends on a placeholder or on an operator provisioning anything.",
+  "fingerprint": "e0086eadd0a9907751b52b22ff72cff50a14b1f1254e331eafe41ad151d1051d",
+  "lineage": {
+    "issue_number": 9486,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43569040769",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43569040769",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9486"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261114120152_7ba96a816f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9486,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43569040769"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9486",
+  "timestamps": {
+    "created_at": "2026-11-14T12:01:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
