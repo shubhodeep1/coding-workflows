@@ -49,6 +49,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 - `.github/workflows/audit_consumer_drift.yml` — GitHub Actions workflow: Audit Consumer Drift.
 - `.github/workflows/auto-release-stable.yml` — GitHub Actions workflow: Auto release stable.
+- `.github/workflows/rollback-stable.yml` — GitHub Actions workflow: Roll back stable (dispatch-only; moves the `stable` and major tags back to an earlier signed release, holds auto-release, notifies consumers; #9342).
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
 - `.github/workflows/check-failure-triage-historical.yml` — GitHub Actions workflow: Internal: Historical check-failure triage (PR #6611 run 37922279826).
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
@@ -128,6 +129,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/audit_consumer_drift.py` — Audit consumer workflow-wrapper drift against checked-in templates.
 - `scripts/auto_decisions.py` — Parse RECOMMENDED clarify answers and keep the standalone auto-decisions (AD) comment and PR-body section (port P3).
 - `scripts/auto_release_stable.sh` — Dispatch the release gate when the stable branch is ahead of its tag.
+- `scripts/rollback_stable.sh` — Roll `@stable` back to an earlier signed release (rollback-stable.yml): validate the target, set the hold, cancel in-flight releases, move the tags, notify consumers (#9342).
+- `scripts/stable_hold.sh` — Read / set / clear the stable rollback hold (`stable-hold.json` on branch `ai/stable-hold`) that pauses auto-release and the promote cycle after a rollback (#9342).
 - `scripts/blocker_check.py` — Python helper for blocker check.
 - `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
 - `scripts/build_state_snapshot.py` — Python helper for build state snapshot.

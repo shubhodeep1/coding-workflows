@@ -1280,6 +1280,20 @@ jobs:
 
           echo "Tagged $VERSION and updated stable + $MAJOR pointers."
 
+      # Stable rollback hold (#9342): this deliberate release has published
+      # its tags, so auto-release and the promote cycle may resume. A failure
+      # only warns: the release already shipped and the next release clears it.
+      - name: Clear stable rollback hold
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! bash scripts/stable_hold.sh clear --version "${RELEASE_VERSION}"; then
+            echo "::warning::STABLE_HOLD clear failed after release ${RELEASE_VERSION}; the next release clears it."
+          fi
+
       # Release manifest (safeguarded consumer updater, phase 1, #6943):
       # build it from the tagged tree, attest it, and upload it as a release
       # asset before consumers are notified. Any failure stops the job before

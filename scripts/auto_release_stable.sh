@@ -11,6 +11,14 @@
 #
 # Decision order (every exit is a logged, stable prefix):
 #   AUTO_RELEASE_SKIPPED reason=disabled          kill switch
+#   AUTO_RELEASE_SKIPPED reason=stable_hold_active to=<v>
+#                                                 rollback-stable.yml rolled the
+#                                                 tag back; only a deliberate
+#                                                 release clears the hold (#9342)
+#   AUTO_RELEASE_SKIPPED reason=stable_hold_unknown
+#                                                 the hold could not be read;
+#                                                 fail closed (a skipped tick
+#                                                 costs at most 6 hours)
 #   AUTO_RELEASE_SKIPPED reason=up_to_date        branch tip == tag commit
 #   AUTO_RELEASE_SKIPPED reason=branch_not_ahead   branch is behind or diverged
 #                                                 from the tag; fail closed
@@ -35,7 +43,8 @@
 # hotfix on `stable` is such a move) or for a human re-run. Attempts are
 # counted from the 30 most recent gate runs the workflow-runs read returns.
 #
-# API calls per run (§15): 2 ref reads (+1 to dereference an annotated tag),
+# API calls per run (§15): 1 contents read (the stable hold,
+# scripts/stable_hold.sh read), 2 ref reads (+1 to dereference an annotated tag),
 # 1 compare, 3 workflow-runs lists (the release gate, promote-main-to-stable,
 # and the legacy mark-stable path), at most 1 dispatch.
 #
@@ -48,6 +57,8 @@
 #   AUTO_RELEASE_STABLE_WORKFLOW_FILE   default test-and-mark-stable.yml
 #   AUTO_RELEASE_STABLE_MAX_ATTEMPTS    default 3 (failed gate runs per tip
 #                                       before the tip is held)
+#   STABLE_HOLD_BRANCH / STABLE_HOLD_FILE  read by scripts/stable_hold.sh
+#                                       (defaults ai/stable-hold, stable-hold.json)
 #   GITHUB_OUTPUT                       receives dispatched=/sha=
 
 set -euo pipefail
@@ -101,6 +112,21 @@ is_truthy()
 if ! is_truthy "${AUTO_RELEASE_STABLE_ENABLED}"; then
 	skip_release disabled
 fi
+
+# Stable rollback hold (#9342): after rollback-stable.yml moved the tag back,
+# releasing the branch would re-ship the regression. `unknown`, a failing or
+# missing helper and any unexpected output all skip (fail closed).
+stable_hold_line="$(bash "${SCRIPT_DIR}/stable_hold.sh" read || true)"
+case "${stable_hold_line}" in
+	inactive) ;;
+	"active "*)
+		stable_hold_to="${stable_hold_line#active }"
+		[[ "${stable_hold_to}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || skip_release stable_hold_unknown
+		echo "::warning::A stable rollback hold is active (stable rolled back to ${stable_hold_to}); a deliberate release clears it."
+		skip_release stable_hold_active "to=${stable_hold_to}"
+		;;
+	*) skip_release stable_hold_unknown ;;
+esac
 
 branch_tip="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${AUTO_RELEASE_STABLE_BRANCH}" | jq -r '.object.sha // empty')"
 if ! [[ "${branch_tip}" =~ ^[0-9a-f]{40}$ ]]; then

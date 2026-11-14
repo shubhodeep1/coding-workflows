@@ -5654,6 +5654,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/review_autofix.yml
 .github/workflows/review_autofix_sweep.yml
 .github/workflows/review_rb_judge_dispatch.yml
+.github/workflows/rollback-stable.yml
 .github/workflows/security-audit.yml
 .github/workflows/sync-claude-live-copies.yml
 .github/workflows/sync_ai_labels.yml

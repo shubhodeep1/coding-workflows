@@ -1,0 +1,76 @@
+---
+name: Roll back stable
+
+# Rolls `@stable` back to an earlier signed release in one dispatch (#9342).
+#
+# Moves the `stable` tag and the major tag (v<MAJOR>) back to an earlier
+# vX.Y.Z release that already carries its signed sync-manifest.json and
+# release-manifest.v1.json assets, then sends coding-workflows-stable-released
+# to every consumer in .github/ai/consumer_repos.json. Consumers re-render from
+# refs/tags/stable, so the older release reaches them without re-signing.
+#
+# Before any tag moves, the run writes a hold (stable-hold.json on branch
+# ai/stable-hold, scripts/stable_hold.sh) and cancels in-flight release and
+# promote runs. While the hold is active, auto-release-stable.yml and the
+# promote-main-to-stable.yml cycle skip (AUTO_RELEASE_SKIPPED /
+# PROMOTE_CYCLE_SKIPPED reason=stable_hold_active). To clear the hold, cut a
+# release deliberately: the release job of test-and-mark-stable.yml or
+# mark-stable.yml clears it after publishing its tags.
+#
+# Re-running with the same target only re-sends the consumer dispatch. Run
+# with dry_run=true first to see the resolved target. Kill switch:
+# STABLE_ROLLBACK_ENABLED=false. Every outcome logs one STABLE_ROLLBACK line
+# and sends a CRITICAL Telegram message. Logic: scripts/rollback_stable.sh.
+
+"on":
+  workflow_dispatch:
+    inputs:
+      target_version:
+        description: "Release to roll back to (vX.Y.Z). Blank: the highest eligible release below the current stable version."
+        required: false
+        type: string
+        default: ""
+      reason:
+        description: "Why stable is rolled back (required, at most 200 characters)."
+        required: true
+        type: string
+      dry_run:
+        description: "Resolve the target and report the plan without changing anything."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: stable-rollback
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          # The tag pushes use GH_PAT, like the release job's tag step.
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Roll back stable
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          # Hold writes use the job token, so they trigger no workflow.
+          STABLE_HOLD_TOKEN: ${{ github.token }}
+          STABLE_ROLLBACK_ENABLED: ${{ vars.STABLE_ROLLBACK_ENABLED || 'true' }}
+          STABLE_ROLLBACK_TARGET_VERSION: ${{ inputs.target_version }}
+          STABLE_ROLLBACK_REASON: ${{ inputs.reason }}
+          STABLE_ROLLBACK_DRY_RUN: ${{ inputs.dry_run }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          bash scripts/rollback_stable.sh
