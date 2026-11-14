@@ -2504,7 +2504,7 @@ through `clarify → plan → implement → review`.
   (`GET repos/<self>/actions/runs/<id>/attempts/<n>`) and, when the time since
   that attempt's `run_started_at` is larger than the queue wait, credits that
   instead (capped at 24 hours; `WORKFLOW_HEAL report_age_credit
-  outcome=applied|unavailable attempt_elapsed_seconds= queue_waited_seconds=
+  outcome=applied|not_needed|unavailable attempt_elapsed_seconds= queue_waited_seconds=
   max_age=`). A failed read keeps the queue-only credit. A re-run attempt
   starts its own clock, so a report that was already stale on arrival stays
   rejected. The queue never drops a report: when it cannot be

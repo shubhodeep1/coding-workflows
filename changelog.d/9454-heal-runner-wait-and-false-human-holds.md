@@ -14,4 +14,4 @@ What this means for operators: fewer CRITICAL and WARNING pages that need no act
 
 ### For contributors
 
-The intake logs `WORKFLOW_HEAL report_age_credit outcome=applied|unavailable` with `attempt_elapsed_seconds=`, `queue_waited_seconds=` and `max_age=`. A failed run read keeps the old queue-only credit. The gate logs `SINGLE_ISSUE_SECURITY_PASS mode=gate ... checkout=<sha> outcome=hold reason=head_unpushed`, and `status` mode reports `unverifiable` as before. A checkout that does not descend from the PR head still holds as `extensions_unverifiable`.
+The intake logs `WORKFLOW_HEAL report_age_credit outcome=applied|not_needed|unavailable` (`not_needed` when the queue wait already covers the elapsed time) with `attempt_elapsed_seconds=`, `queue_waited_seconds=` and `max_age=`. A failed run read keeps the old queue-only credit. The gate logs `SINGLE_ISSUE_SECURITY_PASS mode=gate ... checkout=<sha> outcome=hold reason=head_unpushed`, and `status` mode reports `unverifiable` as before. A checkout that does not descend from the PR head still holds as `extensions_unverifiable`.

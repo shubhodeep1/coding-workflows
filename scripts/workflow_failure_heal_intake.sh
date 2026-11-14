@@ -528,10 +528,14 @@ if [ "${REPORT_ORIGIN}" = "repository_dispatch" ] && { [ "${REPORT_IDENTITY_STAT
 		fi
 	fi
 	if [[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" =~ ^[0-9]+$ ]]; then
+		# not_needed: the queue wait already credited covers this attempt's
+		# elapsed time, so max_age is unchanged (the label must not say applied).
+		run_attempt_credit_outcome="not_needed"
 		if [ "${RUN_ATTEMPT_ELAPSED_SECONDS}" -gt "$((10#${QUEUE_WAITED_SECONDS}))" ]; then
 			REPORT_MAX_AGE=$((REPORT_MAX_AGE + RUN_ATTEMPT_ELAPSED_SECONDS - 10#${QUEUE_WAITED_SECONDS}))
+			run_attempt_credit_outcome="applied"
 		fi
-		log "report_age_credit outcome=applied attempt_elapsed_seconds=${RUN_ATTEMPT_ELAPSED_SECONDS} queue_waited_seconds=$((10#${QUEUE_WAITED_SECONDS})) max_age=${REPORT_MAX_AGE}"
+		log "report_age_credit outcome=${run_attempt_credit_outcome} attempt_elapsed_seconds=${RUN_ATTEMPT_ELAPSED_SECONDS} queue_waited_seconds=$((10#${QUEUE_WAITED_SECONDS})) max_age=${REPORT_MAX_AGE}"
 	else
 		log "report_age_credit outcome=unavailable queue_waited_seconds=$((10#${QUEUE_WAITED_SECONDS})) max_age=${REPORT_MAX_AGE}"
 	fi

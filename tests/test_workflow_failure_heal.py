@@ -5957,6 +5957,23 @@ def test_intake_credits_runner_wait_against_report_identity_age() -> None:
 	assert not any(any("/attempts/" in part for part in call) for call in state_after.get("calls", []))
 
 
+def test_intake_runner_wait_credit_not_needed_when_queue_wait_covers_it() -> None:
+	"""The queue wait already credited is larger than this attempt's elapsed
+	time: max_age is unchanged, so the log must not say outcome=applied."""
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	now = int(time.time())
+	with tempfile.TemporaryDirectory(prefix="heal-identity-queue-covers-") as tmp_name:
+		token_file, jwks_file, _ = _fresh_identity(Path(tmp_name), iat=now - 7200)
+		state = _intake_state()
+		state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 60)}
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={**_identity_env(token_file, jwks_file), "HEAL_INTAKE_QUEUE_WAITED_SECONDS": "600"})
+		assert re.search(r"^WORKFLOW_HEAL report_age_credit outcome=not_needed attempt_elapsed_seconds=\d+ queue_waited_seconds=600 max_age=4200$", result.stdout, re.MULTILINE), result.stdout
+		assert "report_age_credit outcome=applied" not in result.stdout
+		assert "report_auth=rejected reason=identity_stale" in result.stdout
+		assert _api_writes(state_after) == []
+
+
 def test_intake_unauthenticated_report_transition_and_enforcement() -> None:
 	# Default (false): accepted after binding, with a log line.
 	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
