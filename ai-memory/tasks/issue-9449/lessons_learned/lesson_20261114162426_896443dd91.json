@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-14T16:24:26Z",
+  "issue_number": 9449,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/review_untrusted_sandbox.sh:716-882; cited_path=scripts/review_untrusted_sandbox.sh, tests/test_sandbox_python_coverage.py; files_touched=.github/ai/chatgpt_pool.json, changelog.d/phase2-chatgpt-pool-config-file.md, tests/test_review_chatgpt_reviewer_slot.py.",
+  "phase": "review_autofix",
+  "pr_number": 9454,
+  "record_id": "lesson_20261114162426_896443dd91",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/review_untrusted_sandbox.sh, tests/test_sandbox_python_coverage.py",
+    "scripts/review_untrusted_sandbox.sh",
+    ".github/ai/chatgpt_pool.json",
+    "changelog.d/phase2-chatgpt-pool-config-file.md",
+    "tests/test_review_chatgpt_reviewer_slot.py"
+  ]
+}
