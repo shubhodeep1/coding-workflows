@@ -118,6 +118,30 @@ def test_shipped_config_keeps_the_slot_off(tmp_path: Path) -> None:
 	assert result == {"enabled": "false", "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh", "source": "file", "reason": "switch_off"}
 
 
+def test_shipped_pool_config_file_is_committed_and_switched_off() -> None:
+	# The committed file itself (not a tmp_path copy) must exist, match
+	# SHIPPED_CONFIG and resolve to switch_off, so the repo variable can turn
+	# the slot on; a missing file would resolve to config_missing (always off).
+	assert POOL_CONFIG.is_file()
+	shipped = json.loads(POOL_CONFIG.read_text(encoding="utf-8"))
+	assert shipped == json.loads(SHIPPED_CONFIG)
+	assert shipped["reviewer_slot_enabled"] is False
+	results = {}
+	for args in ((), ("--override", "true")):
+		proc = subprocess.run(
+			[sys.executable, str(ENGINE), "chatgpt-slot", "--config", str(POOL_CONFIG), *args],
+			env=_env(), capture_output=True, text=True, check=True,
+		)
+		lines = proc.stdout.strip().splitlines()
+		assert len(lines) == 1
+		results[args] = dict(part.split("=", 1) for part in lines[0].split())
+	default = results[()]
+	assert default["reason"] != "config_missing"
+	assert default == {"enabled": "false", "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh", "source": "file", "reason": "switch_off"}
+	override = results[("--override", "true")]
+	assert (override["enabled"], override["reason"], override["source"]) == ("true", "ok", "var")
+
+
 ON = '{"reviewer_slot_enabled": true, "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}'
 
 

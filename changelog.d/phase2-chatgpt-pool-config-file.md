@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **The ChatGPT account reviewer slot's shipped switch file now exists.** `.github/ai/chatgpt_pool.json` ships with `reviewer_slot_enabled: false`. Before this, `claude_engine.py chatgpt-slot` reported `config_missing` and kept the slot off even when `REVIEWER_CHATGPT_SLOT_ENABLED=true` was set. It now reports `switch_off`, so setting the repository variable to `true` turns the slot on for one repo. Refs #8969.
