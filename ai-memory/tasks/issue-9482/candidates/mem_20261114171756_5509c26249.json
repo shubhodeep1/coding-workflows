@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9482,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9482\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9502\",\"pr_number\":9502,\"branch\":\"ai/issue-9482\",\"run_id\":\"43592213832\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43592213832\",\"changed_files\":[\"changelog.d/9482-standalone-stall-merged-linked-pr.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "b21b7339688f9a6f08dd550fa01e57a78766d86d186bbbcc320c63bad197e1bf",
+  "lineage": {
+    "issue_number": 9482,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "43592213832",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43592213832",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9502"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261114171756_5509c26249",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9482,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "43592213832"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9482: https://github.com/shubhodeep1/coding-workflows/pull/9502",
+  "timestamps": {
+    "created_at": "2026-11-14T17:17:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
