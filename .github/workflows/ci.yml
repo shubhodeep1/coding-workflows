@@ -14,6 +14,20 @@ name: CI
     branches: ["**"]
   push:
     branches: [main, stable, "orchestrator/project-*"]
+  # Nightly runner-image canary (Q12: A, stuck-backlog plan Phase 1): the
+  # runner-image-canary job in nightly-validation-selftest.yml calls this
+  # workflow with runner_image: ubuntu-latest, so a GitHub runner image change
+  # shows up before the ubuntu-26.04 pin moves. Push and pull_request runs
+  # have no inputs and stay on the pin. Steps guarded on github.event_name
+  # (budget-watch, the PR-only checks) do not run under the caller's
+  # schedule / workflow_dispatch event.
+  workflow_call:
+    inputs:
+      runner_image:
+        description: "Runner label for every job; empty means the pinned ubuntu-26.04 (used by the nightly runner-image canary)."
+        type: string
+        required: false
+        default: ""
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -53,7 +67,7 @@ jobs:
     # under its 15-minute timeout; it may still pass budget-watch's 11m15s
     # warning line. The first pick for that step, tests-promote-stall-and-review,
     # was cancelled at its 20-minute timeout on the PR head run 41097621008.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 15
     # The actionlint tarball cache key (#9056) reads these values through the
     # `env` context, so they are set at job level. The `Install actionlint`
@@ -232,6 +246,18 @@ jobs:
               exit 1
             fi
           done
+
+      # Runner-image canary only (empty input on push / pull_request skips it):
+      # runs the image's own system python3, before setup-python replaces it,
+      # because clarify/plan/review/judge call scripts/render_prompt.py on the
+      # system interpreter and that is what broke on the 26.04 image (#9200).
+      - name: Runner-image canary system python smoke
+        if: inputs.runner_image != ''
+        run: |
+          set -euo pipefail
+          command -v python3
+          python3 --version
+          python3 scripts/render_prompt.py --help >/dev/null
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -577,7 +603,7 @@ jobs:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -1044,7 +1070,7 @@ jobs:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -1520,7 +1546,7 @@ jobs:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -1645,6 +1671,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_step_scripts_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_runner_image_pin_contract.py
 
       - name: Review autofix retired Claude-fixer hand-off and validate target_ref contract tests
         run: |
@@ -2117,7 +2144,7 @@ jobs:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -2780,7 +2807,7 @@ jobs:
     # tests-release-and-log-analysis instead of group 0.
     # Since #9391, group 3 also pins the pre-push affected-test gate step
     # (moved from tests-hooks-and-orchestrator).
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
       fail-fast: false
@@ -3524,7 +3551,7 @@ jobs:
     # step proves sys.base_prefix is /usr. The shard step collects once and
     # runs the functions with NR % total == index; raise the shard count by
     # editing the matrix list alone (job-index / job-total feed the step).
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -3684,7 +3711,7 @@ jobs:
     # tests/test_sandbox_python_coverage.py, which fails when a launch script
     # gains an entry point it does not list. The test container gets no
     # network, no credential and no root.
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -3821,7 +3848,7 @@ jobs:
       - orchestrate-poll
       - tests-system-python
       - tests-sandbox-python
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -3861,7 +3888,7 @@ jobs:
       - tests-system-python
       - tests-sandbox-python
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}
     timeout-minutes: 5
     steps:
       - name: Require every CI job to succeed

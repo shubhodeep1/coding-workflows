@@ -26,7 +26,7 @@ jobs:
       vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
       github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN &&
       contains(github.event.comment.body, '[auto-approved-by-plan]')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       approved: ${{ steps.verify.outputs.approved }}
     steps:

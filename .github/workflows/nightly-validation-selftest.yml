@@ -11,7 +11,7 @@ env:
 
 jobs:
   validation-selftest:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     # The self-test runs generated validation tests as the runner user; they
     # can rewrite this checkout's .git (hooks, config, HEAD) and, on hosted
@@ -141,7 +141,7 @@ jobs:
   # fresh runner each night; a failure reaches the workflow failure heal
   # intake like a red main CI run. It runs only trusted checkout code.
   harness-sandbox-check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -187,7 +187,7 @@ jobs:
   commit-selftest-status:
     needs: validation-selftest
     if: always() && github.ref_type == 'branch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     # Every write goes through GH_PAT: the status reaches main through a pull
     # request, because the main ruleset requires `lint` and
@@ -470,3 +470,32 @@ jobs:
               echo "::warning::VALIDATION_SELFTEST_STATUS outcome=supersede_close_failed pr=${old}"
             fi
           done
+
+  # Runner-image canary (stuck-backlog plan Phase 1, Q12: A). Every hosted job
+  # is pinned to ubuntu-26.04 because the 2026-11-10 move of ubuntu-latest to
+  # the 26.04 image (Python 3.14) broke scripts/render_prompt.py and stopped
+  # clarify, plan, review and judge everywhere (#9200). This job runs all of
+  # ci.yml on the floating ubuntu-latest label, so the next image change shows
+  # up as one failed Nightly run (and one heal issue through the existing
+  # workflow-failure-heal-intake route) before the pin is moved.
+  # permissions must equal the union of what the ci.yml jobs request: GitHub
+  # checks nested job permissions before any job starts, even for jobs that
+  # will be skipped (budget-watch runs only on a push to main), and a smaller
+  # grant would reject this whole run, self-test included. No secrets are
+  # forwarded. The concurrency group differs from validation-selftest's so the
+  # two jobs of one run never cancel each other.
+  # RUNNER_IMAGE_CANARY_ENABLED=false turns the canary off (unset means on).
+  # A manual dispatch runs the canary only from main, so another branch's
+  # ci.yml never runs under this job's issues: write grant.
+  runner-image-canary:
+    if: vars.RUNNER_IMAGE_CANARY_ENABLED != 'false' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    uses: ./.github/workflows/ci.yml
+    with:
+      runner_image: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    concurrency:
+      group: ${{ github.workflow }}-runner-image-canary-${{ github.ref }}
+      cancel-in-progress: true

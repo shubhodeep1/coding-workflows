@@ -9,7 +9,7 @@ name: AI Cancel Runs on PR Close
 
 jobs:
   cancel-active-runs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     concurrency:
       # Each PR-close run gets its own group; scheduled sweeps keep the

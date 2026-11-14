@@ -51,7 +51,7 @@ env:
 
 jobs:
   update-wrappers:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     # allow_workflow_edits (vars.ALLOW_WORKFLOW_EDITS) no longer skips this
     # job: managed wrappers always follow the release (the consumer's
@@ -2031,7 +2031,7 @@ jobs:
   verify:
     needs: update-wrappers
     if: ${{ !cancelled() && needs.update-wrappers.outputs.delivery == 'pr' && (needs.update-wrappers.outputs.pr_action == 'created' || needs.update-wrappers.outputs.pr_action == 'refreshed') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       GIT_LFS_SKIP_SMUDGE: "1"

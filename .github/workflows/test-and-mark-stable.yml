@@ -156,7 +156,7 @@ jobs:
   # without per-job edits.
   # ──────────────────────────────────────────────────────────────────
   source:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 3
     outputs:
       branch: ${{ steps.detect.outputs.branch }}
@@ -321,7 +321,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   resolve-version:
     needs: [source]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The full-history checkout (fetch-depth: 0, for the tag list) took 87s
     # on 2026-10-15 02:21 and passed 2 minutes at 10:04, cancelling the
     # release after stable had already moved (run 38717659089).
@@ -570,7 +570,7 @@ jobs:
   e2e-smoke-test:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The conservative serial-budget check in Validate prerequisites must stay
     # aligned with this hard runner limit. Defaults reserve 20 minutes for deep
     # verification, analysers, aggregation, and unconditional cleanup.
@@ -3896,7 +3896,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   validate-scripts:
     needs: [source, resolve-version]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 45, not 30: the orchestrate-poll module is this job's critical path
     # even after sharding, and shards can be slower on a cold runner than
     # on a warm one. At 30 the serial suite was cancelled mid-run (release
@@ -4294,7 +4294,7 @@ jobs:
   workflow-log-analysis-test:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     continue-on-error: true
     outputs:
       # Job-level `continue-on-error` keeps this post-hoc audit
@@ -4430,7 +4430,7 @@ jobs:
   orphan-workflows-test:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Sum of remaining in-step DEADLINEs (validation-refresh 5520s +
     # update_workflows 600s + memory-maintenance 2400s = 8520s = 142m);
     # step limits 95 + 18 + 45 = 158m; the analyser steps below have no
@@ -4637,7 +4637,7 @@ jobs:
   orchestrate-decompose-test:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -4973,7 +4973,7 @@ jobs:
   validate-standalone-test:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The job cap must exceed the dispatch step's 35-minute cap (the
     # watcher's 1800s registration/completion waits plus poll and retry
     # headroom) and leave time for the always() soft-error analyser.
@@ -5051,7 +5051,7 @@ jobs:
   clarify-rejects-unsolvable-test:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -5273,7 +5273,7 @@ jobs:
       ${{ !inputs.skip_e2e
           && !inputs.dry_run
           && vars.E2E_ALT_MODEL_ENABLED != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -5653,7 +5653,7 @@ jobs:
       (needs.validate-standalone-test.result == 'success' || needs.validate-standalone-test.result == 'skipped') &&
       (needs.clarify-rejects-unsolvable-test.result == 'success' || needs.clarify-rejects-unsolvable-test.result == 'skipped') &&
       (needs.e2e-alt-model-test.result == 'success' || needs.e2e-alt-model-test.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 45, not 5: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
     # (default 30 minutes, maximum 40) for a pending `CI / lint` run; the
     # extra 5 minutes cover checkout and the tag preflight so the gate can
@@ -5788,7 +5788,7 @@ jobs:
       needs.source.result == 'success' &&
       needs.resolve-version.result == 'success' &&
       needs.validate.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 50, not 10: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
     # (default 30 minutes) for a pending `CI / lint` run, and the tag-push
     # retries still have to fit after it. A job timeout fails closed.
@@ -6553,7 +6553,7 @@ jobs:
       !inputs.gate_only &&
       needs.release.result == 'success' &&
       needs.release.outputs.release_enabled == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 2
     permissions:
       actions: write
@@ -6579,7 +6579,7 @@ jobs:
   notify:
     needs: [resolve-version, e2e-smoke-test, validate-scripts, workflow-log-analysis-test, orphan-workflows-test, orchestrate-decompose-test, validate-standalone-test, clarify-rejects-unsolvable-test, e2e-alt-model-test, validate, release, sync-to-main]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       # ── Consolidated soft-error report ─────────────────────────

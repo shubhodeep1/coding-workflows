@@ -50,7 +50,7 @@ jobs:
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
       inputs.issue_number != '' &&
       contains(fromJson('["ai:needs-human","ai:check-triage-escalated","ai:destructive-blocked","ai:scope-blocked","ai:harness-broken","ai:resolver-escalated","ai:security-pass-failed"]'), inputs.label)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     concurrency:
       # One in-flight report per repo + issue; a second label event on the same

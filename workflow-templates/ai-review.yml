@@ -81,7 +81,7 @@ jobs:
   # ai:needs-human. All writes use GH_PAT; the job has no id-token.
   non-retryable-backfill:
     if: ${{ github.event_name == 'schedule' && vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED != 'false' && vars.WORKFLOW_HEAL_ENABLED != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -110,7 +110,7 @@ jobs:
     # so the sweep still runs (fail-open, like review_autofix_sweep.yml).
     needs: provider-outage-resume
     if: ${{ !cancelled() && github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true' && needs.provider-outage-resume.outputs.paused != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Least privilege: github.token does every sweep operation (list PRs and
     # comments, post the dedup marker, dispatch the judge) within these grants.
     # GH_PAT only names the account that posts findings markers (issue #7209).
@@ -148,7 +148,7 @@ jobs:
   # marker-backed outage labels, close the tracker and send one alert.
   provider-outage-resume:
     if: ${{ github.event_name == 'schedule' && vars.PROVIDER_OUTAGE_RESUME_ENABLED != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       paused: ${{ steps.provider_outage.outputs.paused }}
     concurrency:

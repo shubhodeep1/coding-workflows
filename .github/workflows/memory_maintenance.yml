@@ -10,7 +10,7 @@ on:
 
 jobs:
   memory_maintenance:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - name: Resolve workflow support ref

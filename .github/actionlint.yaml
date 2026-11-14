@@ -1,0 +1,7 @@
+# actionlint 1.7.12 (the version ci.yml pins) does not know the GitHub-hosted
+# ubuntu-26.04 label yet (rhysd/actionlint#682) and reports it as unknown.
+# Every hosted job is pinned to that label (stuck-backlog plan Phase 1), so it
+# is declared here. Remove this file once the pinned actionlint ships it.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

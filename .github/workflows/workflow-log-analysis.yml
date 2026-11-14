@@ -74,7 +74,7 @@ concurrency:
 jobs:
   collect-logs:
     if: ${{ github.event_name != 'schedule' || github.event.schedule == '0 6 * * *' || ((vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -236,7 +236,7 @@ jobs:
   weekly-retro:
     needs: collect-logs
     if: ${{ github.event_name == 'schedule' && (vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -810,7 +810,7 @@ jobs:
   analyze-commit-notify:
     needs: collect-logs
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Run #25558885206 cancelled at 30m 14s on this job (Codex pass alone
     # ran ~26m 31s — start 13:47:06, ##[error]The operation was canceled
     # 14:13:38). Successful neighbours took only 9–13m (e.g. 25548339583
@@ -1722,7 +1722,7 @@ jobs:
   deep-audit:
     needs: analyze-commit-notify
     if: ${{ github.event_name != 'schedule' && success() && needs.analyze-commit-notify.outputs.analysis_status == 'completed' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Bumped 30 → 45 after run #25088541089 cancelled at 30m 16s — the
     # original 30m budget gave no headroom for LLM latency variance, and
     # `api-redundancy` was skipped (`needs: deep-audit`) when the timeout
@@ -2347,7 +2347,7 @@ jobs:
   api-redundancy:
     needs: [analyze-commit-notify, deep-audit]
     if: ${{ github.event_name != 'schedule' && success() && needs.deep-audit.outputs.audit_status == 'completed' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Bumped 30 → 60 after run 25115192726 cancelled at 30m19s on this job
     # — Codex was still mid-analysis ("considering whether I can combine
     # findings from two separate call sites") when the 30m cap fired and
@@ -2969,7 +2969,7 @@ jobs:
   deliver-report:
     needs: [analyze-commit-notify, deep-audit, api-redundancy]
     if: ${{ always() && github.event_name != 'schedule' && needs.analyze-commit-notify.outputs.committed == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read

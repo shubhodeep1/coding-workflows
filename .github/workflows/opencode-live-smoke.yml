@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   live-smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     env:
       OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}

@@ -41,7 +41,7 @@ jobs:
     if: >-
       github.repository == 'shubhodeep1/coding-workflows' &&
       !contains(fromJson('["false"]'), vars.CHECK_FAILURE_TRIAGE_ENABLED)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: read
@@ -142,7 +142,7 @@ jobs:
   repro:
     needs: guard
     if: needs.guard.outputs.should_run == 'true' && needs.guard.outputs.log_available != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     # Runs the failing tree's own test code: read-only contents (checkout of
     # a private repository needs it), no secrets, credentials never persisted.

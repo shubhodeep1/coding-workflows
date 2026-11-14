@@ -392,3 +392,14 @@ Copy this block when adding a new entry:
   - No open issue carries its port marker: `gh issue list -R shubhodeep1/coding-workflows -l ai:workflow-heal -s open --search 'in:body "Ported from heal:"' --json number --jq length` prints `0`.
   - `tests/test_heal_port_to_default.py` (and its `ci.yml` entry) and the `heal-port` subcommand of `scripts/workflow_failure_heal.py` are removed in the same PR.
 - **Owner:** @shubhodeep1
+
+### `.github/workflows/nightly-validation-selftest.yml` (`runner-image-canary` job)
+
+- **Introduced in:** PR for #9422 (2026-11-13), Refs #9421
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the nightly job that calls `.github/workflows/ci.yml` (its `workflow_call` trigger) with `runner_image: ubuntu-latest`, so a GitHub runner image change fails one Nightly run (and files one heal issue through `.github/workflows/workflow-failure-heal-intake.yml`) before the `ubuntu-26.04` pin moves. Remove it only if hosted jobs stop pinning a runner label. `RUNNER_IMAGE_CANARY_ENABLED=false` turns it off without removal.
+- **Removal preflight checks:**
+  - `grep -rn "ubuntu-26.04" .github/workflows workflow-templates` returns no `runs-on` line, neither the literal `runs-on: ubuntu-26.04` nor the `ci.yml` fallback `runs-on: ${{ inputs.runner_image || 'ubuntu-26.04' }}` (nothing is pinned any more, so there is no pin for the canary to protect).
+  - The `runner-image-canary` job, the `workflow_call` trigger and `runner_image` input of `.github/workflows/ci.yml`, and its "Runner-image canary system python smoke" step are removed in the same PR.
+  - `tests/test_runner_image_pin_contract.py` (and its `ci.yml` entry) and `.github/actionlint.yaml` are removed or updated in the same PR.
+- **Owner:** @shubhodeep1

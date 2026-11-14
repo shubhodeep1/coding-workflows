@@ -138,7 +138,7 @@ jobs:
           contains(github.event.comment.body, '[auto-approved-by-plan]')
         )
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 180
     outputs:
       # Read by the heal-report job: "true" when this failed run should reach
@@ -7276,7 +7276,7 @@ jobs:
       always() && needs.implement.result == 'failure' &&
       needs.implement.outputs.heal_report == 'true' &&
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       id-token: write
