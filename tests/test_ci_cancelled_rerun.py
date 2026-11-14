@@ -4,6 +4,7 @@ import contextlib
 import importlib.util
 import io
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -33,12 +34,18 @@ def run(sha=SHA, number=11, conclusion="cancelled", attempt=1, run_id=123, **ext
 	}
 
 
-def exercise(prs=None, completed=None, active=None, enabled=True, dry_run=False, head_filter="", classify="genuine"):
+def exercise(prs=None, completed=None, active=None, enabled=True, dry_run=False, head_filter="", classify="genuine",
+		zombie_hours=0):
 	prs = [pr()] if prs is None else prs
 	completed = [run()] if completed is None else completed
 	active = [] if active is None else active
 	output = io.StringIO()
-	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: completed if status == "completed" else active) as listing, \
+	# The fixtures carry a fixed 2026-10-03 created_at, so the wedged-queued
+	# filter (issue #9473) is off unless a test turns it on. Load it first so
+	# the lazy load cannot overwrite the patched hours.
+	HELPER._zombie_lib()
+	with mock.patch.dict(HELPER._ZOMBIE_LIB_STATE, {"hours": zombie_hours}), \
+		mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: completed if status == "completed" else active) as listing, \
 		mock.patch.object(HELPER, "current_pr_heads", return_value={item["number"]: item["head_sha"] for item in prs if isinstance(item, dict) and type(item.get("number")) is int}), \
 		mock.patch.object(HELPER, "classify_runner_shutdown", return_value=classify) as classifier, \
 		mock.patch.object(HELPER, "rerun_failed_jobs", return_value=True) as post, contextlib.redirect_stdout(output):
@@ -100,6 +107,26 @@ def test_other_branch_push_on_same_sha_does_not_mask_cancelled_pr_run():
 	lines, _, post = exercise(completed=[run(), push])
 	assert "run=123 action=rerun reason=cancelled_ci" in lines[0]
 	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
+
+
+def _iso_hours_ago(hours):
+	stamp = datetime.now(timezone.utc) - timedelta(hours=hours)
+	return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_wedged_queued_run_does_not_block_but_fresh_queued_and_in_progress_do(capsys):
+	"""Issue #9473: only a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is ignored."""
+	wedged = run(status="queued", run_id=43095142301, created_at=_iso_hours_ago(25))
+	lines, _, post = exercise(active=[wedged], zombie_hours=24)
+	assert "action=rerun reason=cancelled_ci" in lines[0]
+	post.assert_called_once()
+	assert ("ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/ci.yml age_h=25 guard=ci_cancelled_rerun"
+		in capsys.readouterr().err)
+	for blocker in (run(status="queued", run_id=7, created_at=_iso_hours_ago(23)),
+			run(status="in_progress", run_id=8, created_at=_iso_hours_ago(100))):
+		lines, _, post = exercise(active=[wedged, blocker], zombie_hours=24)
+		assert "reason=active_run" in lines[0]
+		post.assert_not_called()
 
 
 @pytest.mark.parametrize("status", ["queued", "in_progress", "pending"])

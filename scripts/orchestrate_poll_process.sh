@@ -15902,8 +15902,20 @@ has_active_validation_run() {
   # is acceptable because the poll cycle retries on the next tick
   # and the actual dispatch/mutation calls still go through
   # gh_retry.  (Copilot review on PR #1044.)
-  active_count="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
-    --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' || echo '0')"
+  # Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+  # wedged (zero jobs, cannot be cancelled) and is not active. gh --jq takes
+  # no jq arguments, so the same single response is filtered locally.
+  local va_zq_cutoff va_zq_def va_runs_body
+  va_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+  [[ "${va_zq_cutoff}" =~ ^[0-9]+$ ]] || va_zq_cutoff=0
+  va_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+  va_runs_body="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" || echo '')"
+  if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+    zombie_queued_log_ignored poll_validate_active "${va_zq_cutoff}" <<< "${va_runs_body}"
+  fi
+  active_count="$(printf '%s' "${va_runs_body}" \
+    | jq -r --argjson zq_cutoff "${va_zq_cutoff}" "${va_zq_def}"'[.workflow_runs[] | select(.status == "in_progress" or .status == "queued") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo '0')"
+  [[ "${active_count}" =~ ^[0-9]+$ ]] || active_count=0
   if [ "${active_count}" -gt 0 ]; then
     return 0
   fi
@@ -15913,8 +15925,13 @@ has_active_validation_run() {
   # one that actually resolves, so we want it to fire fast without
   # retry backoff on the preceding 404.
   if [ "${wf_name}" != "internal-validate.yml" ]; then
-    active_count="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
-      --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' || echo '0')"
+    va_runs_body="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" || echo '')"
+    if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+      zombie_queued_log_ignored poll_validate_active "${va_zq_cutoff}" <<< "${va_runs_body}"
+    fi
+    active_count="$(printf '%s' "${va_runs_body}" \
+      | jq -r --argjson zq_cutoff "${va_zq_cutoff}" "${va_zq_def}"'[.workflow_runs[] | select(.status == "in_progress" or .status == "queued") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo '0')"
+    [[ "${active_count}" =~ ^[0-9]+$ ]] || active_count=0
     if [ "${active_count}" -gt 0 ]; then
       return 0
     fi
@@ -18072,13 +18089,24 @@ _direct_inflight_review_run_on_branch()
 		return 0
 	fi
 	_di_runs_total="$(printf '%s' "${_di_runs_json}" | jq -r 'length' 2>/dev/null || echo "invalid")"
-	_di_runs_live="$(printf '%s' "${_di_runs_json}" | jq -r '[.[]? | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")] | length' 2>/dev/null || echo "invalid")"
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and is not live.
+	local _di_zq_cutoff _di_zq_def
+	_di_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+	[[ "${_di_zq_cutoff}" =~ ^[0-9]+$ ]] || _di_zq_cutoff=0
+	_di_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+	if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+		zombie_queued_log_ignored stall_inflight_direct_check "${_di_zq_cutoff}" <<< "${_di_runs_json}"
+	fi
+	_di_runs_live="$(printf '%s' "${_di_runs_json}" | jq -r --argjson zq_cutoff "${_di_zq_cutoff}" "${_di_zq_def}"'[.[]? | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo "invalid")"
 	_di_match="$(printf '%s' "${_di_runs_json}" | jq -r \
 		--argjson now "${_di_now_epoch}" \
-		--argjson threshold "${_di_stall_secs}" '
+		--argjson zq_cutoff "${_di_zq_cutoff}" \
+		--argjson threshold "${_di_stall_secs}" "${_di_zq_def}"'
 		(if type == "array" then . else [] end)
 		| [ .[]?
 			| select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+			| select(is_wedged_queued($zq_cutoff) | not)
 			| select(
 				((.name // "") == "AI Review" or (.name // "") == "Internal Review" or (.name // "") == "Review Autofix"
 				 or (.name // "") == "Internal: AI Review & Autofix" or (.name // "") == "Codex PR Self-Healing Semantic Agent")
@@ -18100,12 +18128,17 @@ _direct_inflight_review_run_on_branch()
 			printf '%s\n' "listing-incomplete"
 			return 0
 		fi
+		if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+			zombie_queued_log_ignored stall_inflight_direct_check "${_di_zq_cutoff}" <<< "${_di_pr_named_json}"
+		fi
 		_di_match="$(printf '%s' "${_di_pr_named_json}" | jq -r \
 			--argjson now "${_di_now_epoch}" \
-			--argjson threshold "${_di_stall_secs}" '
+			--argjson zq_cutoff "${_di_zq_cutoff}" \
+			--argjson threshold "${_di_stall_secs}" "${_di_zq_def}"'
 			(if type == "array" then . else [] end)
 			| [ .[]?
 				| select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+				| select(is_wedged_queued($zq_cutoff) | not)
 				| ([.startedAt, .createdAt] | map(select(type == "string" and . != ""))[0] // "") as $ts
 				| (if $ts != ""
 				   then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now)
@@ -18274,8 +18307,17 @@ build_active_issue_set() {
   local runs_json
   runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
+  # Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+  # wedged (zero jobs, cannot be cancelled). Drop it before the 50-run
+  # window so wedged runs cannot crowd out live queued runs.
+  local bais_zq_cutoff
+  bais_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+  [[ "${bais_zq_cutoff}" =~ ^[0-9]+$ ]] || bais_zq_cutoff=0
+  if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+    zombie_queued_log_ignored build_active_issue_set "${bais_zq_cutoff}" <<< "${actions_runs_blob}"
+  fi
   local queued_json
-  queued_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "queued")] | .[:50]' 2>/dev/null || echo '[]')"
+  queued_json="$(printf '%s' "${actions_runs_blob}" | jq -c --argjson zq_cutoff "${bais_zq_cutoff}" "$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"'[.workflow_runs[]? | select((.status // "") == "queued") | select(is_wedged_queued($zq_cutoff) | not)] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${queued_json}" ] || queued_json='[]'
 
 
@@ -20227,6 +20269,15 @@ STALL_EOF
           local _rtr_inflight_blob _rtr_inflight_id _rtr_direct_inflight_id _rtr_now_epoch _rtr_stall_secs _rtr_origin_head_sha _rtr_push_succeeded
           _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
           _rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
+          # Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS
+          # is wedged (zero jobs, cannot be cancelled) and is not in flight.
+          local _rtr_zq_cutoff _rtr_zq_def
+          _rtr_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+          _rtr_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+          [[ "${_rtr_zq_cutoff}" =~ ^[0-9]+$ ]] || _rtr_zq_cutoff=0
+          if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+            zombie_queued_log_ignored retrigger_review_inflight "${_rtr_zq_cutoff}" <<< "$(printf '%s' "${_rtr_inflight_blob}" | jq -c --arg br "${head_ref}" --arg pr "${pr_num}" '[.workflow_runs[]? | select(type == "object" and ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")) and ((.head_branch // "") == $br or ($pr != "" and ((.display_title // "") | tostring | contains("[pr:" + $pr + "]")))))]' 2>/dev/null || echo '[]')"
+          fi
           # This block selects only review-family runs (name/path filter
           # below), so the freshness window is the review-run budget, not the
           # generic stall threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
@@ -20250,9 +20301,11 @@ STALL_EOF
               --arg db "${_rtr_review_default_branch}" \
               --arg repo "${GITHUB_REPOSITORY:-}" \
               --argjson now "${_rtr_now_epoch}" \
-              --argjson threshold "${_rtr_stall_secs}" "$(_pr_named_review_trust_jq_def)"'
+              --argjson zq_cutoff "${_rtr_zq_cutoff}" \
+              --argjson threshold "${_rtr_stall_secs}" "${_rtr_zq_def}""$(_pr_named_review_trust_jq_def)"'
               [.workflow_runs[]?
                | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+               | select(is_wedged_queued($zq_cutoff) | not)
                | select(
                    ((.head_branch // "") == $br)
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
@@ -25800,6 +25853,15 @@ STALL_EOF
 			_std_rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
 			_std_rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
 			_std_rtr_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
+			# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS
+			# is wedged (zero jobs, cannot be cancelled) and is not in flight.
+			local _std_rtr_zq_cutoff _std_rtr_zq_def
+			_std_rtr_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+			_std_rtr_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+			[[ "${_std_rtr_zq_cutoff}" =~ ^[0-9]+$ ]] || _std_rtr_zq_cutoff=0
+			if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+				zombie_queued_log_ignored std_retrigger_review_inflight "${_std_rtr_zq_cutoff}" <<< "$(printf '%s' "${_std_rtr_inflight_blob}" | jq -c --arg br "${head_ref}" --arg pr "${pr_num}" '[.workflow_runs[]? | select(type == "object" and ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")) and ((.head_branch // "") == $br or ($pr != "" and ((.display_title // "") | tostring | contains("[pr:" + $pr + "]")))))]' 2>/dev/null || echo '[]')"
+			fi
 			# Provenance (issue #6629): see _pr_named_review_trust_jq_def. An
 			# empty value trusts no PR-named run; the push is then skipped
 			# below as for an incomplete listing.
@@ -25812,9 +25874,11 @@ STALL_EOF
                 --arg db "${_std_rtr_review_default_branch}" \
                 --arg repo "${GITHUB_REPOSITORY:-}" \
                 --argjson now "${_std_rtr_now_epoch}" \
-                --argjson threshold "${_std_rtr_stall_secs}" "$(_pr_named_review_trust_jq_def)"'
+                --argjson zq_cutoff "${_std_rtr_zq_cutoff}" \
+                --argjson threshold "${_std_rtr_stall_secs}" "${_std_rtr_zq_def}""$(_pr_named_review_trust_jq_def)"'
                 [.workflow_runs[]?
                  | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+                 | select(is_wedged_queued($zq_cutoff) | not)
                  | select(
                      ((.head_branch // "") == $br)
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
@@ -26813,16 +26877,29 @@ _has_active_autofix_run()
 	local pr_number="$1"
 	local head_ref="$2"
 	local log_prefix="[conflict-dispatch] PR #${pr_number}"
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and is not active. The same
+	# listing call now returns createdAt so it can be filtered locally.
+	local aar_zq_cutoff aar_zq_def
+	aar_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+	[[ "${aar_zq_cutoff}" =~ ^[0-9]+$ ]] || aar_zq_cutoff=0
+	aar_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
 
 	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
-		local active
-		active="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+		local active aar_runs_json
+		aar_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
 			--workflow "${wf_candidate}" \
 			--branch "${head_ref}" \
 			--limit 5 \
-			--json status \
-			--jq '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")] | length' \
+			--json status,createdAt,databaseId,workflowName \
+			2>/dev/null || echo "[]")"
+		if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+			zombie_queued_log_ignored conflict_dispatch_active_autofix "${aar_zq_cutoff}" <<< "${aar_runs_json}"
+		fi
+		active="$(printf '%s' "${aar_runs_json}" \
+			| jq -r --argjson zq_cutoff "${aar_zq_cutoff}" "${aar_zq_def}"'[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' \
 			2>/dev/null || echo "0")"
+		[[ "${active}" =~ ^[0-9]+$ ]] || active=0
 		if [ "${active}" -gt 0 ]; then
 			echo "  ${log_prefix} Active autofix run found (workflow=${wf_candidate}, count=${active}). Skipping dispatch."
 			return 0
@@ -26846,8 +26923,11 @@ _has_active_autofix_run()
 			echo "  ${log_prefix} Review dispatch run listing incomplete (PR-named lookup); treating a review run as possibly active. Skipping; the next poll cycle retries."
 			return 0
 		fi
+		if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+			zombie_queued_log_ignored conflict_dispatch_active_autofix "${aar_zq_cutoff}" <<< "${pr_named_json}"
+		fi
 		pr_named_active="$(printf '%s' "${pr_named_json}" \
-			| jq -r '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")] | length' \
+			| jq -r --argjson zq_cutoff "${aar_zq_cutoff}" "${aar_zq_def}"'[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' \
 			2>/dev/null || echo "0")"
 		if [ "${pr_named_active:-0}" -gt 0 ] 2>/dev/null; then
 			echo "  ${log_prefix} Active autofix run found (workflow_dispatch run named for PR #${pr_number}, count=${pr_named_active}). Skipping dispatch."

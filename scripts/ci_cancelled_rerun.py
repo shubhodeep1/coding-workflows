@@ -34,6 +34,7 @@ unchanged; CI_ABANDONED_JOB_RERUN_ENABLED=false turns that class off.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -46,6 +47,49 @@ from pathlib import Path
 SOURCE_REPO = "shubhodeep1/coding-workflows"
 SHA_PATTERN = re.compile(r"[a-fA-F0-9]{40}\Z")
 ACTIVE_STATUSES = ("queued", "in_progress", "pending")
+
+
+# Issue #9473: wedged-queued run filter. A queued run older than
+# ZOMBIE_RUN_MAX_QUEUED_HOURS (default 24; 0 or invalid disables) has zero
+# jobs and cannot be cancelled, so it must not count as active. The shared
+# predicate lives in orchestrate_lib.py, loaded from this script's own
+# directory only (never the cwd or a PR checkout). If it cannot be loaded,
+# every queued run stays active (pre-#9473 behaviour).
+_ZOMBIE_LIB_STATE: dict = {"loaded": False, "lib": None, "hours": 0}
+
+
+def _zombie_lib() -> object:
+	if not _ZOMBIE_LIB_STATE["loaded"]:
+		_ZOMBIE_LIB_STATE["loaded"] = True
+		name = "_ci_cancelled_rerun_orchestrate_lib"
+		try:
+			spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("orchestrate_lib.py"))
+			if spec is None or spec.loader is None:
+				return None
+			module = importlib.util.module_from_spec(spec)
+			sys.modules[name] = module
+			spec.loader.exec_module(module)
+			if callable(getattr(module, "is_wedged_queued_run", None)) and callable(getattr(module, "log_zombie_run_ignored", None)):
+				_ZOMBIE_LIB_STATE["lib"] = module
+				_ZOMBIE_LIB_STATE["hours"] = int(module.zombie_run_max_queued_hours())
+		except Exception:
+			sys.modules.pop(name, None)
+			_ZOMBIE_LIB_STATE["lib"] = None
+	return _ZOMBIE_LIB_STATE["lib"]
+
+
+def _is_wedged_queued(run: object, now_epoch: int, guard: str) -> bool:
+	"""True (and logs ZOMBIE_RUN_IGNORED once) when ``run`` is wedged."""
+	lib = _zombie_lib()
+	if lib is None:
+		return False
+	try:
+		if not lib.is_wedged_queued_run(run, int(now_epoch), _ZOMBIE_LIB_STATE["hours"]):
+			return False
+		lib.log_zombie_run_ignored(run, guard, int(now_epoch))
+		return True
+	except Exception:
+		return False
 # Runner-shutdown classification (issue #7109). The runner writes this text as
 # an `##[error]` line, which GitHub records as a failure annotation on the job.
 RUNNER_SHUTDOWN_PREFIX = "The runner has received a shutdown signal"
@@ -495,7 +539,13 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 	try:
 		# No CI listing is shared with the review-family active-run cache.
 		completed = list_runs(repo, "completed")
-		active = [run for status in ACTIVE_STATUSES for run in list_runs(repo, status)]
+		active_now_epoch = int(datetime.now().timestamp())
+		active = [
+			run
+			for status in ACTIVE_STATUSES
+			for run in list_runs(repo, status)
+			if not _is_wedged_queued(run, active_now_epoch, "ci_cancelled_rerun")
+		]
 		current_heads = {} if dry_run else current_pr_heads(repo)
 	except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
 		reason = str(exc) if isinstance(exc, ValueError) else "api_unavailable"

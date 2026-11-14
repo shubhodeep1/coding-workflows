@@ -103,7 +103,7 @@ workflow_run_is_review_family() {
   esac
 
   case "${workflow_name}" in
-    AI\ Review|Internal\ Review|Review\ Autofix)
+    AI\ Review|Internal\ Review|Review\ Autofix|Internal:\ AI\ Review\ \&\ Autofix|Codex\ PR\ Self-Healing\ Semantic\ Agent)
       return 0
       ;;
   esac
@@ -160,8 +160,17 @@ build_active_issue_set() {
   local runs_json
   runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
+  # Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+  # wedged (zero jobs, cannot be cancelled). Drop it before the 50-run
+  # window so wedged runs cannot crowd out live queued runs.
+  local bais_zq_cutoff
+  bais_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+  [[ "${bais_zq_cutoff}" =~ ^[0-9]+$ ]] || bais_zq_cutoff=0
+  if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+    zombie_queued_log_ignored build_active_issue_set "${bais_zq_cutoff}" <<< "${actions_runs_blob}"
+  fi
   local queued_json
-  queued_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "queued")] | .[:50]' 2>/dev/null || echo '[]')"
+  queued_json="$(printf '%s' "${actions_runs_blob}" | jq -c --argjson zq_cutoff "${bais_zq_cutoff}" "$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"'[.workflow_runs[]? | select((.status // "") == "queued") | select(is_wedged_queued($zq_cutoff) | not)] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${queued_json}" ] || queued_json='[]'
 
 
@@ -264,4 +273,73 @@ cancel_zombie_runs_for_issue() {
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" -X POST 2>/dev/null || true
     done
   fi
+}
+
+zombie_queued_cutoff_epoch()
+{
+	local _zq_hours="${ZOMBIE_RUN_MAX_QUEUED_HOURS:-24}" _zq_now=""
+	if ! [[ "${_zq_hours}" =~ ^[0-9]{1,5}$ ]]; then
+		echo "::warning::ZOMBIE_RUN_MAX_QUEUED_HOURS is not a whole number of hours; wedged-queued filter disabled" >&2
+		printf '0'
+		return 0
+	fi
+	_zq_hours=$((10#${_zq_hours}))
+	if [ "${_zq_hours}" -le 0 ]; then
+		printf '0'
+		return 0
+	fi
+	_zq_now="$(date -u +%s 2>/dev/null || true)"
+	if ! [[ "${_zq_now}" =~ ^[0-9]+$ ]] || [ "${_zq_now}" -le $((_zq_hours * 3600)) ]; then
+		printf '0'
+		return 0
+	fi
+	printf '%s' "$((_zq_now - _zq_hours * 3600))"
+}
+
+zombie_queued_jq_def()
+{
+	cat <<'JQ_DEF'
+def zq_created_epoch:
+  ((.created_at // .createdAt) as $zq_ts
+   | if ($zq_ts | type) == "string" and ($zq_ts | length) > 0
+     then (try ($zq_ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null)
+     else null end);
+def zq_run_id: (.id // .databaseId // "-");
+def zq_workflow: (.path // .workflowName // .name // "-");
+def is_wedged_queued($cutoff):
+  type == "object"
+  and ($cutoff | type) == "number" and $cutoff > 0
+  and ((.status // "") | if type == "string" then ascii_downcase else "" end) == "queued"
+  and (zq_created_epoch as $zq_c | $zq_c != null and $zq_c <= $cutoff);
+JQ_DEF
+}
+
+zombie_queued_log_ignored()
+{
+	local _zq_guard="${1:-unknown}" _zq_cutoff="${2:-0}" _zq_now="" _zq_rows="" _zq_id _zq_wf _zq_age
+	_zq_guard="$(printf '%s' "${_zq_guard}" | tr -c 'A-Za-z0-9_.-' '_')"
+	if ! [[ "${_zq_cutoff}" =~ ^[0-9]+$ ]] || [ "${_zq_cutoff}" -le 0 ]; then
+		cat >/dev/null 2>&1 || true
+		return 0
+	fi
+	_zq_now="$(date -u +%s 2>/dev/null || true)"
+	[[ "${_zq_now}" =~ ^[0-9]+$ ]] || _zq_now=0
+	_zq_rows="$(jq -r --argjson zq_cutoff "${_zq_cutoff}" --argjson zq_now "${_zq_now}" "$(zombie_queued_jq_def)"'
+		(if type == "array" then .[] elif type == "object" then ((.workflow_runs // []) | if type == "array" then .[] else empty end) else empty end)
+		| select(is_wedged_queued($zq_cutoff))
+		| [(zq_run_id | tostring | gsub("[^A-Za-z0-9_.-]"; "_")),
+		   (zq_workflow | tostring | gsub("[^A-Za-z0-9_./@-]"; "_")),
+		   (if $zq_now > 0 then (((($zq_now - zq_created_epoch) / 3600) | floor) | tostring) else "-" end)]
+		| @tsv' 2>/dev/null || true)"
+	[ -n "${_zq_rows}" ] || return 0
+	if ! declare -p _ZOMBIE_RUN_IGNORED_SEEN >/dev/null 2>&1; then
+		declare -gA _ZOMBIE_RUN_IGNORED_SEEN=()
+	fi
+	while IFS=$'\t' read -r _zq_id _zq_wf _zq_age; do
+		[ -n "${_zq_id}" ] || continue
+		[ -z "${_ZOMBIE_RUN_IGNORED_SEEN["${_zq_guard}:${_zq_id}"]+x}" ] || continue
+		_ZOMBIE_RUN_IGNORED_SEEN["${_zq_guard}:${_zq_id}"]=1
+		echo "ZOMBIE_RUN_IGNORED run=${_zq_id} workflow=${_zq_wf} age_h=${_zq_age} guard=${_zq_guard}" >&2
+	done <<< "${_zq_rows}"
+	return 0
 }

@@ -250,7 +250,7 @@ def _run(subcommand: str, tmp_path: Path, bin_dir: Path, fixtures: Path, log: Pa
 	# opt in explicitly rather than inherit the live PR's paths or base branch.
 	for inherited_name in ("BASE_BRANCH", "PR_DIFF_FILE", "PR_NUMBER", "TARGET_BRANCH", "IS_SMOKE_TEST",
 			"MERGE_TRAIN_CONFLICT_CHECK_ENABLED", "MERGE_TRAIN_HEAD_MAX_AGE_HOURS", "MERGE_TRAIN_PRIORITY_LABELS",
-			"MERGE_TRAIN_IGNORE_PATHS"):
+			"MERGE_TRAIN_IGNORE_PATHS", "ZOMBIE_RUN_MAX_QUEUED_HOURS"):
 		run_env.pop(inherited_name, None)
 	run_env.update({
 		"PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -3052,11 +3052,49 @@ def test_release_stale_untitled_rule_can_be_turned_off(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	_queued_pr_4077(fixtures)
 	_write_runs(fixtures, [_untitled_dispatch_run(6105, "queued", 200)])
+	# Issue #9473: the wedged-queued rule would also drop a 200-hour queued
+	# run, so it is switched off too to observe the stale rule alone.
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
-		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="0")
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="0", ZOMBIE_RUN_MAX_QUEUED_HOURS="0")
 	assert result.returncode == 0, result.stderr
 	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=unattributed_run" in result.stderr
 	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+
+
+def test_release_drops_wedged_queued_review_run_even_with_stale_rule_off(tmp_path: Path) -> None:
+	"""Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS never holds the train."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [_untitled_dispatch_run(6107, "queued", 200)])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="0")
+	assert result.returncode == 0, result.stderr
+	assert ("ZOMBIE_RUN_IGNORED run=6107 workflow=.github/workflows/internal-review.yml age_h=200 guard=merge_train_release"
+		in result.stderr)
+	assert "outcome=incomplete" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+@pytest.mark.parametrize("hours_ago,status,held", [
+	(25, "queued", False),
+	(23, "queued", True),
+	(100, "in_progress", True),
+])
+def test_release_wedged_rule_only_ages_out_old_queued_runs(tmp_path: Path, hours_ago: int, status: str, held: bool) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	run = {"id": 6200, "status": status, "event": "workflow_dispatch", "head_branch": "main",
+		"display_title": "Internal: AI Review & Autofix [pr:4077]", "path": ".github/workflows/internal-review.yml",
+		"created_at": _iso(hours_ago)}
+	_write_runs(fixtures, [run])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	if held:
+		assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+		assert "ZOMBIE_RUN_IGNORED" not in result.stderr
+	else:
+		assert "ZOMBIE_RUN_IGNORED run=6200 " in result.stderr
+		assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
 
 
 def test_release_stale_untitled_limit_is_configurable_and_validated(tmp_path: Path) -> None:

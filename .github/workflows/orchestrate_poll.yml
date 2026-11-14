@@ -90,6 +90,8 @@ env:
   STATE_SNAPSHOT_BRANCH_ENABLED: ${{ vars.STATE_SNAPSHOT_BRANCH_ENABLED || 'true' }}
   STATE_SNAPSHOT_HISTORY_DEPTH: ${{ vars.STATE_SNAPSHOT_HISTORY_DEPTH || '100' }}
   STATE_SNAPSHOT_BRANCH_NAME: ${{ vars.STATE_SNAPSHOT_BRANCH_NAME || 'state-snapshot' }}
+  # Wedged-queued run filter (issue #9473); 0 disables it.
+  ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
 
 jobs:
   poll:

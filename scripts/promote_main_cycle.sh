@@ -123,6 +123,22 @@ cd "${REPO_ROOT}"
 
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+# Issue #9473: wedged-queued run filter from gh_helpers.sh. When the helpers
+# could not be sourced, these no-op fallbacks keep the pre-#9473 behaviour
+# (every queued run counts as active).
+declare -F zombie_queued_cutoff_epoch >/dev/null 2>&1 || zombie_queued_cutoff_epoch()
+{
+	printf '0'
+}
+declare -F zombie_queued_jq_def >/dev/null 2>&1 || zombie_queued_jq_def()
+{
+	printf '%s\n' 'def is_wedged_queued($cutoff): false;'
+}
+declare -F zombie_queued_log_ignored >/dev/null 2>&1 || zombie_queued_log_ignored()
+{
+	cat >/dev/null 2>&1 || true
+	return 0
+}
 
 PROMOTE_CYCLE_ENABLED="${PROMOTE_CYCLE_ENABLED:-true}"
 PROMOTE_CYCLE_DEFAULT_BRANCH="${PROMOTE_CYCLE_DEFAULT_BRANCH:-main}"
@@ -696,7 +712,13 @@ fi
 # 1. Another cycle job still running (the schedule fired while a previous
 #    tick waits on its smoke gate): skip, do not queue behind it.
 self_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_WORKFLOW_FILE}/runs?per_page=20")"
-other_active="$(printf '%s' "${self_runs_json}" | jq -r --arg me "${GITHUB_RUN_ID}" '[.workflow_runs[]? | select((.id|tostring) != $me) | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is wedged
+# (zero jobs, cannot be cancelled) and does not count as active.
+zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+[[ "${zq_cutoff}" =~ ^[0-9]+$ ]] || zq_cutoff=0
+zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+zombie_queued_log_ignored promote_cycle_self "${zq_cutoff}" <<< "${self_runs_json}"
+other_active="$(printf '%s' "${self_runs_json}" | jq -r --arg me "${GITHUB_RUN_ID}" --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select((.id|tostring) != $me) | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length')"
 [[ "${other_active}" =~ ^[0-9]+$ ]] || other_active=0
 if [ "${other_active}" -gt 0 ]; then
 	skip_cycle another_run_active "active_runs=${other_active}"
@@ -818,8 +840,10 @@ fi
 # never frees within the separate idle-wait budget.
 idle_wait_deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS ))
 while :; do
-	active_gate_runs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" \
-		| jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length' 2>/dev/null || echo "")"
+	gate_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" 2>/dev/null || echo "")"
+	zombie_queued_log_ignored promote_cycle_gate_idle "${zq_cutoff}" <<< "${gate_runs_json}"
+	active_gate_runs="$(printf '%s' "${gate_runs_json}" \
+		| jq -r --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo "")"
 	[[ "${active_gate_runs}" =~ ^[0-9]+$ ]] || skip_cycle guard_unavailable "lookup=workflow-runs:${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}"
 	if [ "${active_gate_runs}" -eq 0 ]; then
 		break

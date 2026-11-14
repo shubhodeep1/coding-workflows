@@ -59,6 +59,8 @@ env:
   # stay aligned with the literal cron above. The job gate uses it to fail
   # closed if a future schedule is added without updating the retro path.
   WORKFLOW_RETRO_CRON: ${{ vars.WORKFLOW_RETRO_CRON || '0 9 * * 1' }}
+  # Wedged-queued run filter (issue #9473); 0 disables it.
+  ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
 
 permissions:
   contents: write

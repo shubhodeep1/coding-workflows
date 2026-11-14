@@ -96,6 +96,49 @@ unblock_ledger = importlib.util.module_from_spec(_LEDGER_SPEC)
 sys.modules.setdefault("unblock_ledger", unblock_ledger)
 _LEDGER_SPEC.loader.exec_module(unblock_ledger)
 
+
+# Issue #9473: wedged-queued run filter. A queued run older than
+# ZOMBIE_RUN_MAX_QUEUED_HOURS (default 24; 0 or invalid disables) has zero
+# jobs and cannot be cancelled, so it must not count as active. The shared
+# predicate lives in orchestrate_lib.py, loaded from this script's own
+# directory only (never the cwd or a PR checkout). If it cannot be loaded,
+# every queued run stays active (pre-#9473 behaviour).
+_ZOMBIE_LIB_STATE: dict = {"loaded": False, "lib": None, "hours": 0}
+
+
+def _zombie_lib() -> object:
+	if not _ZOMBIE_LIB_STATE["loaded"]:
+		_ZOMBIE_LIB_STATE["loaded"] = True
+		name = "_unblock_scan_orchestrate_lib"
+		try:
+			spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("orchestrate_lib.py"))
+			if spec is None or spec.loader is None:
+				return None
+			module = importlib.util.module_from_spec(spec)
+			sys.modules[name] = module
+			spec.loader.exec_module(module)
+			if callable(getattr(module, "is_wedged_queued_run", None)) and callable(getattr(module, "log_zombie_run_ignored", None)):
+				_ZOMBIE_LIB_STATE["lib"] = module
+				_ZOMBIE_LIB_STATE["hours"] = int(module.zombie_run_max_queued_hours())
+		except Exception:
+			sys.modules.pop(name, None)
+			_ZOMBIE_LIB_STATE["lib"] = None
+	return _ZOMBIE_LIB_STATE["lib"]
+
+
+def _is_wedged_queued(run: object, now_epoch: int, guard: str) -> bool:
+	"""True (and logs ZOMBIE_RUN_IGNORED once) when ``run`` is wedged."""
+	lib = _zombie_lib()
+	if lib is None:
+		return False
+	try:
+		if not lib.is_wedged_queued_run(run, int(now_epoch), _ZOMBIE_LIB_STATE["hours"]):
+			return False
+		lib.log_zombie_run_ignored(run, guard, int(now_epoch))
+		return True
+	except Exception:
+		return False
+
 TRACKING_LABEL = "ai:orchestrator-tracking"
 CLOSED_LABEL = "ai:unblock-closed"
 MARKER_PREFIXES = ("<!-- ai:unblock:v1 ", "<!-- ai:unblock-wait:v1 ")
@@ -290,7 +333,8 @@ def _busy_items(runs: object, now: dt.datetime, inflight: dt.timedelta) -> set[i
 		created = _time(run.get("created_at"))
 		if run.get("status") in ("cancelled", "skipped"):
 			continue
-		if run.get("status") in ACTIVE_RUN_STATES or (created and now - created < inflight):
+		status_active = run.get("status") in ACTIVE_RUN_STATES and not _is_wedged_queued(run, int(now.timestamp()), "unblock_scan_busy")
+		if status_active or (created and now - created < inflight):
 			busy.add(int(match.group(1)))
 	return busy
 
@@ -404,6 +448,7 @@ def select(
 		isinstance(run, dict)
 		and RUN_NAME_RE.match(str(run.get("display_title") or run.get("name") or ""))
 		and run.get("status") in ACTIVE_RUN_STATES
+		and not _is_wedged_queued(run, int(now.timestamp()), "unblock_scan_active_judge")
 		for run in (runs if isinstance(runs, list) else [])
 	)
 	effective_limit = 0 if active_judge else min(limit, 1)
