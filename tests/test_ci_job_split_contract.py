@@ -178,6 +178,13 @@ class SystemPythonJobTest(unittest.TestCase):
 			self.assertNotIn("runner_temp", step_tmpdir_value)
 			self.assertNotIn("runner.temp", step_tmpdir_value)
 			self.assertFalse(step_tmpdir_value.startswith("/home/runner/work"), step_tmpdir_value)
+		# The shard step inherits a job-level `TMPDIR`, so hold it to the same rule.
+		job_tmpdir = (_ci_jobs()[self.SYSTEM_PYTHON_JOB_ID].get("env") or {}).get("TMPDIR")
+		if job_tmpdir is not None:
+			job_tmpdir_value = str(job_tmpdir).lower()
+			for marker in ("runner_temp", "runner.temp"):
+				self.assertNotIn(marker, job_tmpdir_value)
+			self.assertFalse(job_tmpdir_value.startswith("/home/runner/work"), job_tmpdir_value)
 		for raw_line in str(step.get("run", "")).splitlines():
 			run_line = raw_line.strip()
 			if not run_line or run_line.startswith("#") or "TMPDIR=" not in run_line:
