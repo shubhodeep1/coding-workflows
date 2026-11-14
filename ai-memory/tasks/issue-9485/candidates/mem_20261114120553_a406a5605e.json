@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\nQ3: REFRAME\nQ4: A\n\nRATIONALE:\nQ1: B works the same way as the sync's existing additive step for `.gitattributes` (`.github/workflows/update_workflows.yml`, step \"Sync changelog fragment assets from upstream\", lines 799-836), which keeps the consumer's own settings. One part of B is narrowed: the sync must not add a `github-actions` entry the consumer doesn't have. Without that entry Dependabot opens no version-bump PRs for these files, and adding one would start version updates the consumer never asked for. The execution plan below makes this binding.\nQ2: The integrity check sets the managed set in `.github/workflows/workflow_integrity.yml` `compare()` (lines 276-306). It is the `WORKFLOW_PROFILE` profile entries, plus the integrity wrapper (`INTEGRITY_WRAPPER`, line 282), plus `ai-update-workflows.yml` (`UPDATER_WRAPPER`, line 173) when that file exists. Excluding exactly that set stops the failing PRs, and the consumer's own workflows still get bumps. Dependabot's `exclude-paths` accepts glob or literal file paths relative to the update directory (https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference, https://github.blog/changelog/2025-08-26-dependabot-can-now-exclude-automatic-pull-requests-for-manifests-in-selected-subdirectories/).\nQ3: Option A cannot be done as written. `workflow-templates/ai-review.yml` (lines 89, 127, 167) pins `actions/checkout` by commit SHA (`fbc6f399... # v5.1.0`). No v6 or v7 checkout SHA appears anywhere in the repo, and the implementer has no network access, so writing a v7.0.1 SHA would mean inventing one. Option B only partly holds up: GitHub's docs say Dependabot with `directory: \"/\"` scans `.github/workflows/` and a root `action.yml` only, not plain `workflow-templates/*.yml` (https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/auto-update-actions). So the decision is to ship B limited to what the docs support, and not to bump any SHA by hand.\nQ4: A is the most conservative choice. GitHub facts show the example PR shubhodeep1/mongo-explorer#68 is already closed and not merged. Option B would give the sync a new power (closing PRs) that the issue doesn't need once new bump PRs stop.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/update_workflows.yml (the additive step \"Sync changelog fragment assets from upstream\", lines 799-836, gated by `inputs.allow_workflow_edits != false`; the profile/manifest loop at lines 955-983)\n    - scripts/build_sync_manifest.py (`derive_allowed_paths`, the `allowed_consumer_paths` payload at line 422)\n    - .github/workflows/workflow_integrity.yml (the inline staged-path policy around lines 428-498)\n  steps:\n    - Add a new additive sync step to `update_workflows.yml`, gated like `changelog_sync`. It runs an upstream helper from the `@stable` support checkout, the same way `assemble_changelog.py ensure-assets` is run, and records changed paths in a changed-paths file.\n    - The helper reads `.github/dependabot.yml`, or `.github/dependabot.yaml` if that is the one present. It is a no-op with a log line in each of these cases: no file, no `package-ecosystem: github-actions` entry, or no entry whose `directory`/`directories` covers `/`. It never creates the file or the entry.\n    - For each matching `github-actions` entry, it sets `exclude-paths` to the consumer's own entries plus the sync-owned entries from Q2. It treats any `.github/workflows/<name>` entry whose `<name>` is a basename in upstream `workflow-templates/*.yml` as sync-owned. Those entries are replaced on each run, so the list follows profile changes. All other keys and entries are kept.\n    - If the file doesn't parse as YAML, the helper leaves it untouched, logs a warning, and fails open (the sync continues).\n    - Make sure the signed sync manifest's `allowed_consumer_paths` (`scripts/build_sync_manifest.py`) and the staged-path policies in `update_workflows.yml` and `workflow_integrity.yml` allow `.github/dependabot.yml` / `.github/dependabot.yaml`, so the staged change passes PR-delivery verification.\n    - Add contract tests covering: no file, no `github-actions` entry, existing consumer `exclude-paths` kept, sync-owned entries replaced after a profile change, invalid YAML left untouched, and the manifest allow-list includes the path.\n  replaces_acceptance_criterion: Option B's \"or add that entry if missing\"\n  equivalence_argument: Without a `github-actions` entry, Dependabot opens no version-bump PRs against the wrappers, so there is nothing to exclude. Not adding the entry keeps the consumer's settings exactly as they are.\n  reversibility: The helper owns only `.github/workflows/<template>` entries. Removing the step stops future edits, and the consumer can delete the sync-owned entries by hand.\nQ3:\n  strategy: reframe\n  inputs:\n    - workflow-templates/ai-review.yml lines 89, 127, 167 (`actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0`)\n    - .github/workflows/*.yml (139 `actions/checkout@` uses across 44 files)\n  steps:\n    - Add `.github/dependabot.yml` to coding-workflows with one update entry: `package-ecosystem: \"github-actions\"`, `directory: \"/\"`, a weekly schedule. Do not list `/workflow-templates`, because the docs don't promise Dependabot scans plain workflow files there.\n    - Leave the pins in `workflow-templates/ai-review.yml` unchanged. Do not write any new action SHA that isn't already in the checkout.\n    - Add a contract test that parses the new upstream `dependabot.yml` and checks it has the `github-actions` entry with `directory: \"/\"`.\n  replaces_acceptance_criterion: \"one-time bump of `actions/checkout` in `workflow-templates/ai-review.yml` to v7.0.1\" (from Q3:A)\n  equivalence_argument: Bumps upstream now come from Dependabot, which writes the real commit SHAs. Once a bumped pin has merged upstream, a later change can copy it into `workflow-templates/` without guessing. Inventing a SHA is not allowed, and a wrong pin would break every consumer's review workflow.\n  reversibility: Deleting `.github/dependabot.yml` undoes the change. The template bump can be done in a later issue once a verified v7.x SHA is in the repo.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):",
+  "fingerprint": "89f492342c7cd5a8bd1c940c0cc0a15545edb2ca6f71a3e62771b49acdde76e2",
+  "lineage": {
+    "issue_number": 9485,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43569103787",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43569103787",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9485"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261114120553_a406a5605e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9485,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43569103787"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9485",
+  "timestamps": {
+    "created_at": "2026-11-14T12:05:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
