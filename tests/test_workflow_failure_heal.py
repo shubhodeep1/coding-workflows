@@ -164,6 +164,21 @@ def test_verify_run_binds_a_self_dispatched_review_run_by_its_marker_head() -> N
 			raise AssertionError(f"head mismatch accepted: {case}")
 
 
+def test_verify_run_binds_a_pull_request_run_by_its_own_head() -> None:
+	# Issue #9250: a pull_request run whose PR head moved while it ran has
+	# `pull_requests: []` and its own head. The reporter now sends that head,
+	# and verify_run (unchanged) binds the run only when the heads are equal.
+	run = {"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "pull_request", "head_sha": SHA_A,
+		"display_title": "AI Review", "pull_requests": [], "conclusion": "failure", "path": ".github/workflows/ai-review.yml"}
+	assert heal.verify_run(run, repo=CONSUMER_REPO, kind="autofix_failure", head_sha=SHA_A, pr_number=4174)["run_id"] == 500
+	try:
+		heal.verify_run(run, repo=CONSUMER_REPO, kind="autofix_failure", head_sha=SHA_B, pr_number=4174)
+	except ValueError as exc:
+		assert str(exc) == "run head mismatch"
+	else:
+		raise AssertionError("a pull_request run on another head was bound")
+
+
 def test_verify_run_provenance_lists_runs_a_trusted_marker_binds_to_the_pr_head() -> None:
 	payload = heal.validate_payload(_autofix_payload())
 	assert payload["head_sha"] == SHA_B
@@ -1122,6 +1137,148 @@ def test_filter_log_keeps_runtime_lines_outside_tail() -> None:
 	report = ["filler"] * 100
 	report[0] = "AI_ENGINE_FALLBACK_REPORT role=IMPLEMENT entries=2"
 	assert "AI_ENGINE_FALLBACK_REPORT" not in heal.filter_log("\n".join(report), max_lines=10)
+
+
+# The chained argparse crash of scripts/render_prompt.py on Python 3.14 (plan
+# run 42929246385, heal issues #9190 / #9200): filter_log used to keep only the
+# two bare `Traceback (most recent call last):` lines, so the heal was filed as
+# inconclusive.
+CHAINED_VALUEERROR_TRACEBACK_LINES = (
+	"2026-11-11T00:15:15.5012084Z Traceback (most recent call last):",
+	'2026-11-11T00:15:15.5013904Z   File "/usr/lib/python3.14/argparse.py", line 1759, in _check_help',
+	"2026-11-11T00:15:15.5019025Z ValueError: unsupported format character '.' (0x2e) at index 237",
+	"2026-11-11T00:15:15.5020164Z The above exception was the direct cause of the following exception:",
+	"2026-11-11T00:15:15.5021014Z Traceback (most recent call last):",
+	'2026-11-11T00:15:15.5033125Z   File "/home/runner/work/coding-workflows/coding-workflows/scripts/render_prompt.py", line 1414, in <module>',
+	"2026-11-11T00:15:15.5043693Z ValueError: badly formed help string",
+	"2026-11-11T00:15:15.5227737Z ##[error]Process completed with exit code 1.",
+)
+
+
+def test_filter_log_keeps_chained_traceback_frames_and_exception_lines_outside_tail() -> None:
+	# The traceback sits before the 400-line tail, so only the signal match
+	# can keep it.
+	filler = [f"2026-11-11T00:16:00.0000000Z step output {i}" for i in range(600)]
+	log = "\n".join(list(CHAINED_VALUEERROR_TRACEBACK_LINES) + filler) + "\n"
+	filtered = heal.filter_log(log)
+	for kept_line in CHAINED_VALUEERROR_TRACEBACK_LINES:
+		assert kept_line in filtered
+	assert "ValueError: unsupported format character '.' (0x2e) at index 237" in filtered
+	assert "ValueError: badly formed help string" in filtered
+	# The block ends at the first line after the exception that is not part of
+	# the traceback, so the filler before the tail is still dropped.
+	assert "step output 0\n" not in filtered and "step output 150\n" not in filtered
+	assert "step output 599" in filtered
+
+
+def test_filter_log_keeps_the_innermost_lines_of_a_long_traceback() -> None:
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(80)]
+	traceback_lines = ["Traceback (most recent call last):", *frames, "RecursionError: too deep"]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "Traceback (most recent call last):" in filtered
+	assert "RecursionError: too deep" in filtered
+	kept_frames = [line for line in filtered if line.startswith('  File "/srv/app/')]
+	assert len(kept_frames) == heal._TRACEBACK_CONTEXT_MAX_LINES - 1
+	assert frames[-1] in kept_frames and frames[0] not in kept_frames
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_exception_line_of_a_traceback_longer_than_the_scan_window() -> None:
+	# Mutual recursion is not collapsed by CPython, so its traceback can run
+	# past _TRACEBACK_SCAN_MAX_LINES before the exception line.
+	frames: list[str] = []
+	for i in range(heal._TRACEBACK_SCAN_MAX_LINES):
+		frames += [f'  File "/srv/app/ping.py", line {i}, in ping{i}', f"    pong{i}()"]
+	traceback_lines = ["Traceback (most recent call last):", *frames, "RecursionError: maximum recursion depth exceeded"]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "RecursionError: maximum recursion depth exceeded" in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	kept_frames = [line for line in filtered if line in set(frames)]
+	assert len(kept_frames) == heal._TRACEBACK_CONTEXT_MAX_LINES - 1
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_chain_marker_after_a_traceback_longer_than_the_scan_window() -> None:
+	# A long mutual-recursion traceback caught and re-raised: the walk past
+	# _TRACEBACK_SCAN_MAX_LINES must keep the chain marker after the first
+	# exception line, as the in-window scan does.
+	frames: list[str] = []
+	for i in range(heal._TRACEBACK_SCAN_MAX_LINES):
+		frames += [f'  File "/srv/app/ping.py", line {i}, in ping{i}', f"    pong{i}()"]
+	marker = "The above exception was the direct cause of the following exception:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		"RecursionError: maximum recursion depth exceeded",
+		"",
+		marker,
+		"",
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: ping failed",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "RecursionError: maximum recursion depth exceeded" in filtered
+	assert marker in filtered
+	assert "RuntimeError: ping failed" in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_chain_marker_after_an_exception_line_at_the_scan_window_edge() -> None:
+	# The exception line is the last line of the scan window, so the chain
+	# marker sits just past it and must still be kept.
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(heal._TRACEBACK_SCAN_MAX_LINES - 1)]
+	marker = "The above exception was the direct cause of the following exception:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		"ValueError: inner failure",
+		marker,
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: outer failure",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "ValueError: inner failure" in filtered
+	assert marker in filtered
+	assert "RuntimeError: outer failure" in filtered
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_exception_line_before_many_continuation_lines() -> None:
+	# A pydantic ValidationError prints every error indented after the
+	# exception line, so more than _TRACEBACK_CONTEXT_MAX_LINES continuation
+	# lines can follow it; the cut must still keep the exception line.
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(40)]
+	details = [f"  field_{i}\n    Field required [type=missing]" for i in range(30)]
+	exception_line = "pydantic_core._pydantic_core.ValidationError: 30 validation errors for Settings"
+	marker = "During handling of the above exception, another exception occurred:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		exception_line,
+		*"\n".join(details).split("\n"),
+		"",
+		marker,
+		"",
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: settings failed",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert exception_line in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	assert marker in filtered
+	assert "RuntimeError: settings failed" in filtered
+	first_block = set(frames) | {exception_line} | set("\n".join(details).split("\n"))
+	assert len([line for line in filtered if line in first_block]) <= heal._TRACEBACK_CONTEXT_MAX_LINES
+	assert "later output 0" not in filtered
 
 
 def test_drop_step_script_lines_drops_unstyled_echoed_script() -> None:
@@ -5192,6 +5349,118 @@ def test_autofix_payload_lists_the_trusted_failed_runs_first() -> None:
 	assert [ref["run_id"] for ref in one["run_refs"]] == ["101", "500"]
 	plain = heal.build_autofix_failure_payload(**kwargs)
 	assert [ref["run_id"] for ref in plain["run_refs"]] == ["500"]
+
+
+def test_build_autofix_failure_payload_prefers_run_head_sha() -> None:
+	# Issue #9250: the failed run's own head replaces the PR's current head in
+	# head_sha and in the failure-marker lookup; head_branch stays the PR's.
+	kwargs = dict(
+		repo=CONSUMER_REPO,
+		pr=_pr(),
+		comments=[],
+		workflow_name="AI Review",
+		failure_reason="editor_empty_noop",
+		failure_evidence="::error::PR diff unavailable\n",
+		failure_streak=1,
+		run_id="500",
+		run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		wrapper_sha=SHA_A,
+		reporter_run_url=None,
+	)
+	for run_head in (SHA_A, SHA_A.upper(), f"  {SHA_A}\n"):
+		payload = heal.validate_payload(heal.build_autofix_failure_payload(**kwargs, run_head_sha=run_head))
+		assert payload["head_sha"] == SHA_A, run_head
+		assert payload["head_branch"] == "ai/issue-4173"
+	for run_head in (None, "", "abc", "g" * 40, SHA_A + "a"):
+		payload = heal.validate_payload(heal.build_autofix_failure_payload(**kwargs, run_head_sha=run_head))
+		assert payload["head_sha"] == SHA_B, run_head
+	assert heal.build_autofix_failure_payload(**kwargs)["head_sha"] == SHA_B
+	# Markers are looked up by the run head, not by the PR head.
+	comments = [*_trusted_failure_comments(["101"], head=SHA_A), *_trusted_failure_comments(["102"], head=SHA_B)]
+	by_run_head = heal.build_autofix_failure_payload(**{**kwargs, "comments": comments}, failure_marker_author=CAP_AUTHOR, run_head_sha=SHA_A)
+	assert [ref["run_id"] for ref in by_run_head["run_refs"]] == ["101", "500"]
+	by_pr_head = heal.build_autofix_failure_payload(**{**kwargs, "comments": comments}, failure_marker_author=CAP_AUTHOR)
+	assert [ref["run_id"] for ref in by_pr_head["run_refs"]] == ["102", "500"]
+
+
+def _autofix_report_event_env(tmp: Path, env: dict[str, str], *, event_name: str, event: object | None) -> None:
+	env["GITHUB_EVENT_NAME"] = event_name
+	event_path = tmp / "event.json"
+	if event is not None:
+		event_path.write_text(json.dumps(event), encoding="utf-8")
+	env["GITHUB_EVENT_PATH"] = str(event_path)
+
+
+def test_autofix_report_sends_the_pull_request_event_head() -> None:
+	# Issue #9250: the PR head moved (SHA_B) while the pull_request run went on
+	# its own head (SHA_A); the report carries the run head, read from the event
+	# file on disk with no GitHub read.
+	event = {"pull_request": {"number": 4174, "head": {"sha": SHA_A.upper()}}}
+	for override, expected, source in ((None, SHA_A, "event"), (SHA_C.upper(), SHA_C, "override")):
+		with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "AUTOFIX_STREAK_AUTHOR_LOGIN": "workflow-bot"})
+			_autofix_report_event_env(tmp, env, event_name="pull_request", event=event)
+			if override is not None:
+				env["REPORT_RUN_HEAD_SHA"] = override
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert f"run_head={expected} run_head_source={source} pr_head={SHA_B}" in result.stdout, result.stdout
+			state = _state(state_file)
+			assert len(state["dispatches"]) == 1
+			payload = heal.validate_payload(state["dispatches"][0]["body"]["client_payload"]["report"])
+			assert payload["head_sha"] == expected and payload["head_branch"] == "ai/issue-4173"
+			assert all(call[:1] != ["api"] or "/dispatches" in " ".join(call) for call in state["calls"])
+
+
+def test_autofix_report_keeps_pr_head_without_a_usable_event_head() -> None:
+	good = {"pull_request": {"number": 4174, "head": {"sha": SHA_A}}}
+	cases = [
+		("workflow_dispatch", "workflow_dispatch", good, {}),
+		("pull_request_target", "pull_request_target", good, {}),
+		("non_hex", "pull_request", {"pull_request": {"number": 4174, "head": {"sha": "z" * 40}}}, {}),
+		("short", "pull_request", {"pull_request": {"number": 4174, "head": {"sha": "abc"}}}, {}),
+		("other_pr", "pull_request", {"pull_request": {"number": 4175, "head": {"sha": SHA_A}}}, {}),
+		("not_json", "pull_request", "not an object", {}),
+		("missing_file", "pull_request", None, {}),
+		("invalid_override", "workflow_dispatch", None, {"REPORT_RUN_HEAD_SHA": "not-a-sha"}),
+		# The identical-failure cap keeps the PR (gate) head its counted markers carry.
+		("identical_failure_cap", "pull_request", good, {"AUTOFIX_FAILURE_REASON": "identical_failure_cap", "REPORT_RUN_HEAD_SHA": SHA_C}),
+	]
+	for name, event_name, event, extra in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-autofix-run-head-{name}-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true", **extra})
+			_autofix_report_event_env(tmp, env, event_name=event_name, event=event)
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert f"run_head=none run_head_source=none pr_head={SHA_B}" in result.stdout, (name, result.stdout)
+			payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+			assert payload["head_sha"] == SHA_B, name
+	# An event path that is a directory, not a file, is ignored.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-dir-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		env["GITHUB_EVENT_NAME"] = "pull_request"
+		env["GITHUB_EVENT_PATH"] = str(tmp)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "run_head=none run_head_source=none" in result.stdout, result.stdout
+		assert heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["head_sha"] == SHA_B
+	# A staged helper that predates --run-head-sha still reports, with the PR head.
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-run-head-old-helper-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+		_autofix_report_event_env(tmp, env, event_name="pull_request", event=good)
+		staged_helper = work / "scripts" / "workflow_failure_heal.py"
+		old_text = staged_helper.read_text(encoding="utf-8")
+		old_text = re.sub(r'\tp\.add_argument\(\n\t\t"--run-head-sha",\n(?:\t\t.*\n)*?\t\)\n', "", old_text)
+		old_text = old_text.replace("\t\trun_head_sha=args.run_head_sha or None,\n", "")
+		assert "run-head-sha" not in old_text
+		staged_helper.write_text(old_text, encoding="utf-8")
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "dispatched pr=4174 failure=editor_empty_noop" in result.stdout and "run_head=none" in result.stdout, result.stdout + result.stderr
+		assert heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["head_sha"] == SHA_B
 
 
 def test_autofix_report_cap_links_the_failed_runs_and_counts_only_them() -> None:
