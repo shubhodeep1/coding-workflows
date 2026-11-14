@@ -226,50 +226,36 @@ def test_stdout_buffer_mktemp_failure_does_not_run_the_command(tmp_path: Path) -
 	assert _leftover_temp_files(tmp_path) == []
 
 
+def _output_larger_than_any_pipe() -> int:
+	"""Bytes that cannot fit in a pipe even after the writer enlarges it."""
+	try:
+		pipe_max = int(Path("/proc/sys/fs/pipe-max-size").read_text(encoding="utf-8").strip())
+	except (OSError, ValueError):
+		pipe_max = 1024 * 1024
+	return max(8 * 1024 * 1024, 4 * pipe_max)
+
+
 def test_closed_reader_does_not_rerun_a_successful_command(tmp_path: Path) -> None:
-	# 1 MiB of output into a reader that exits at once: the reader goes away
-	# long before the output is written (1 MiB is far more than a pipe
-	# buffer, so the replay must hit the closed pipe). The command already
-	# succeeded, so it must not be run again; the undelivered output is
-	# reported as a non-zero status. The reader is `true`, not `head -c 1`:
-	# the Rust coreutils `head` on ubuntu-26.04 runners reads all of its
-	# input before exiting, so the writer never saw a closed pipe and the
-	# test got rc=0 there although gh_retry behaved correctly.
-	big = "x" * (1024 * 1024)
+	# More output than any pipe holds, into a reader that takes one byte and
+	# exits: the reader goes away before the output is written. The command
+	# already succeeded, so it must not be run again; the undelivered output is
+	# reported as a non-zero status. The size matters: Rust coreutils' cat
+	# (ubuntu-26.04) grows its stdout pipe to pipe-max-size (1 MiB by default)
+	# and splices up to 1 MiB in one call, so a 1 MiB output landed in the pipe
+	# whole and the copy returned 0 before the reader left. That is ordinary
+	# pipe behaviour, not a gh_retry defect.
+	big = "x" * _output_larger_than_any_pipe()
 	env = _setup(tmp_path, [(big, "", 0)])
 	result = _run(
 		tmp_path,
 		env,
-		"gh_retry gh api repos/o/r | true\n"
+		"gh_retry gh api repos/o/r | { IFS= read -r -n 1 _ || true; }\n"
 		'echo "rc=${PIPESTATUS[0]}"',
 	)
 	assert _calls(tmp_path) == 1, result.stderr
 	rc_line = result.stdout.strip()
-	assert rc_line.startswith("rc=") and rc_line != "rc=0", (rc_line, result.stderr, _closed_pipe_diagnostics(tmp_path, env))
+	assert rc_line.startswith("rc=") and rc_line != "rc=0", (rc_line, result.stderr)
 	assert _leftover_temp_files(tmp_path) == []
-
-
-def _closed_pipe_diagnostics(tmp_path: Path, env: dict[str, str]) -> str:
-	"""Failure-only facts about how this host's cat/head handle a closed pipe.
-
-	ubuntu-26.04 runners replay through Rust coreutils and the test sees
-	rc=0; these lines say which tool and which signal disposition do it.
-	"""
-	big_file = tmp_path / "diag_big.txt"
-	big_file.write_text("x" * (1024 * 1024), encoding="utf-8")
-	probe = (
-		"type -a cat head 2>&1 | tr '\\n' ';'; echo\n"
-		"cat --version 2>&1 | head -n 1\n"
-		"head --version 2>&1 | head -n 1\n"
-		"echo \"bash=${BASH_VERSION}\"\n"
-		"grep -E '^Sig(Ign|Blk)' /proc/self/status 2>&1 | tr '\\n' ' '; echo\n"
-		f"cat '{big_file}' | head -c 1 > /dev/null; echo \"cat_head=${{PIPESTATUS[*]}}\"\n"
-		f"cat '{big_file}' | ( exec 0<&- ); echo \"cat_closed=${{PIPESTATUS[*]}}\"\n"
-		f"cat '{big_file}' | true; echo \"cat_true=${{PIPESTATUS[*]}}\"\n"
-		f"( cat '{big_file}'; echo \"inner_cat=$?\" >&2 ) | head -c 1 > /dev/null\n"
-	)
-	proc = subprocess.run(["bash", "-c", probe], env=env, capture_output=True, text=True, timeout=60)
-	return (proc.stdout + proc.stderr).strip()
 
 
 CLOSED_READER_BODY = (

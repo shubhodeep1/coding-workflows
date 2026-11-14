@@ -129,6 +129,48 @@ class AggregateJobWiringTest(unittest.TestCase):
 				self.assertEqual(jobs[job_id]["steps"][0].get("name"), "Checkout repository")
 
 
+class SystemPythonJobTest(unittest.TestCase):
+	"""`tests-system-python` must test the runner's own interpreter (#9233)."""
+
+	SYSTEM_PYTHON_JOB_ID = "tests-system-python"
+	SANDBOX_PYTHON_JOB_ID = "tests-sandbox-python"
+
+	def _steps(self) -> dict:
+		return {step.get("name"): step for step in _ci_jobs()[self.SYSTEM_PYTHON_JOB_ID]["steps"]}
+
+	def test_system_python_job_uses_the_runner_interpreter(self) -> None:
+		jobs = _ci_jobs()
+		for step in jobs[self.SYSTEM_PYTHON_JOB_ID]["steps"]:
+			with self.subTest(step=step.get("name")):
+				self.assertFalse(str(step.get("uses", "")).startswith("actions/setup-python"))
+		steps = self._steps()
+		self.assertIn('/usr/bin/python3 -m venv "${RUNNER_TEMP}/system-python-venv"', steps["Setup Python"]["run"])
+		self.assertIn("GITHUB_PATH", steps["Setup Python"]["run"])
+		install = steps["Install Python CI dependencies"]["run"]
+		self.assertIn("sys.base_prefix", install)
+		self.assertIn('!= "/usr"', install)
+		self.assertEqual(jobs[self.SYSTEM_PYTHON_JOB_ID]["runs-on"], "ubuntu-latest")
+
+	def test_system_python_shards_come_from_the_matrix(self) -> None:
+		job = _ci_jobs()[self.SYSTEM_PYTHON_JOB_ID]
+		shards = job["strategy"]["matrix"]["system-python-shard"]
+		self.assertEqual(shards, list(range(len(shards))))
+		self.assertFalse(job["strategy"]["fail-fast"])
+		shard_step = self._steps()["System-Python test shard"]
+		self.assertEqual(shard_step["env"]["CI_SYSTEM_PYTHON_SHARD_INDEX"], "${{ strategy.job-index }}")
+		self.assertEqual(shard_step["env"]["CI_SYSTEM_PYTHON_SHARD_TOTAL"], "${{ strategy.job-total }}")
+		self.assertIn("pytest --collect-only -q -p no:cacheprovider tests", shard_step["run"])
+		self.assertIn("'NR % total == n'", shard_step["run"])
+		self.assertIn('-v n="${shard_index}" -v total="${shard_total}"', shard_step["run"])
+
+	def test_runtime_python_jobs_gate_lint_and_feed_budget_watch(self) -> None:
+		jobs = _ci_jobs()
+		for job_id in (self.SYSTEM_PYTHON_JOB_ID, self.SANDBOX_PYTHON_JOB_ID):
+			with self.subTest(job=job_id):
+				self.assertIn(job_id, jobs[AGGREGATE_JOB_ID]["needs"])
+				self.assertIn(job_id, jobs["budget-watch"]["needs"])
+
+
 class AggregateJobBehaviourTest(unittest.TestCase):
 	def test_all_success_passes(self) -> None:
 		result = _run_aggregate(_needs(**{"static-checks": "success", "orchestrate-poll": "success"}))
