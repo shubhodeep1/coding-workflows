@@ -1097,6 +1097,36 @@ def test_review_gate_no_login_read_unless_supersede_candidate() -> None:
 	assert "user" not in calls, calls
 
 
+def test_review_gate_self_login_cached_across_polls_per_token() -> None:
+	"""Repeated gate calls in one shell (the _pr_wait_for_required_checks
+	polls) read `user` once per token; a failed read is not cached."""
+	import tempfile
+
+	with tempfile.TemporaryDirectory() as tmp:
+		calls_log = str(Path(tmp) / "calls.log")
+		Path(calls_log).write_text("")
+		call = f'_pr_checks_completed {SUP_ARGS} >/dev/null 2>&1; echo "R=$?:${{PR_CHECKS_LAST_REASON}}"'
+		body = "; ".join([
+			f"USER_JSON='{{}}' {call}",
+			call,
+			call,
+			f"GH_TOKEN=other-token {call}",
+		])
+		res = _run(
+			body,
+			runs_json=_page(_sup_green_runs() + [_sup_gate_run()]),
+			statuses_json=json.dumps([_sup_status()]),
+			calls_log=calls_log,
+			user_json=json.dumps({"login": SUP_LOGIN}),
+			env={**REPO_ENV},
+		)
+		calls = Path(calls_log).read_text().splitlines()
+	results = [ln for ln in res.stdout.splitlines() if ln.startswith("R=")]
+	assert results == ["R=1:blocking", "R=0:ok", "R=0:ok", "R=0:ok"], (results, res.stderr)
+	# Failed read (not cached), first valid read (cached), cache hit, token switch re-read.
+	assert calls.count("user") == 3, calls
+
+
 def test_review_gate_supersede_context_matches_head_gate_helper() -> None:
 	"""The pinned supersede context must stay equal to the context
 	scripts/review_head_gate.sh posts; a drift would silently bring back the

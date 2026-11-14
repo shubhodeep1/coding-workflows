@@ -469,12 +469,26 @@ _pr_checks_completed()
 						# Bind the status to its author (review finding, #9212):
 						# only a status the token's own login posted (the identity
 						# review_head_gate_post_status uses) may relax the check.
-						# §14: one `user` read, only on this candidate path; this
-						# function has no cached login (same read as
-						# _pr_base_sync_count). Any read or match failure blocks.
-						local gate_sup_creator="" gate_sup_self_login=""
+						# §14: one `user` read, only on this candidate path (same read
+						# as _pr_base_sync_count). A valid login is cached for the
+						# shell in PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE, keyed on a
+						# fingerprint of GH_TOKEN/GITHUB_TOKEN, so the polls of
+						# _pr_wait_for_required_checks do not repeat it and a token
+						# switch re-reads. A failed or invalid read is never cached
+						# (retried next call). Any read or match failure blocks.
+						local gate_sup_creator="" gate_sup_self_login="" gate_sup_token_fp=""
 						IFS=$'\t' read -r gate_sup_created_at gate_sup_creator <<< "${gate_sup_decision#superseded$'\t'}"
-						gate_sup_self_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)"
+						gate_sup_token_fp="$(printf '%s|%s' "${GH_TOKEN:-}" "${GITHUB_TOKEN:-}" | sha256sum 2>/dev/null | cut -c1-64)"
+						if [ -n "${gate_sup_token_fp}" ] && [ "${PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE_KEY:-}" = "${gate_sup_token_fp}" ]; then
+							gate_sup_self_login="${PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE:-}"
+						fi
+						if [ -z "${gate_sup_self_login}" ]; then
+							gate_sup_self_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)"
+							if [ -n "${gate_sup_token_fp}" ] && [[ "${gate_sup_self_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+								PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE="${gate_sup_self_login}"
+								PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE_KEY="${gate_sup_token_fp}"
+							fi
+						fi
 						if ! [[ "${gate_sup_self_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
 							gate_sup_reason="creator_check_failed"
 						elif [ "${gate_sup_creator}" != "${gate_sup_self_login}" ]; then
