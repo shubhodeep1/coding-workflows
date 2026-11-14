@@ -1196,11 +1196,10 @@ gh_api_retry()
 # succeeds writes nothing to stdout and returns 1. If the successful
 # attempt's output cannot be delivered (the reader closed the pipe),
 # the copy's non-zero status is returned and the command is not re-run.
-# The copy uses the builtin `printf` in a subshell (141 on SIGPIPE, 1 on
-# EPIPE when SIGPIPE is ignored), so that status does not depend on the
-# external `cat`: on ubuntu-26.04 runners Rust coreutils' `cat` returned 0
-# when the reader closed early (issue #9225). `cat` is only the fallback
-# when the output holds a NUL byte, which a bash variable cannot store.
+# The copy uses bash's builtin printf in a subshell (141 on SIGPIPE, 1 on
+# EPIPE when SIGPIPE is ignored), not cat, so a closed reader gives a
+# non-zero status whichever cat is installed: on ubuntu-26.04 runners Rust
+# coreutils' cat exited 0 there (issues #9225, #9227).
 #
 # Usage:
 #   gh_retry gh api repos/owner/repo/issues
@@ -1230,19 +1229,23 @@ gh_retry()
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
 		if "$@" >"${stdout_file}" 2>"${stderr_file}"; then
-			local _gh_retry_replay_rc=0 _gh_retry_replay_buf=""
-			# read -d '' returns 0 only when it found a NUL delimiter; at EOF it
-			# returns non-zero with the whole file in the variable, trailing
-			# newlines included (IFS= keeps whitespace, -r keeps backslashes).
-			if IFS= read -r -d '' _gh_retry_replay_buf < "${stdout_file}"; then
-				# NUL in the output: keep the old cat replay (and its status).
-				cat "${stdout_file}" || _gh_retry_replay_rc=$?
-			else
-				# Subshell: SIGPIPE ends only the subshell, so cleanup still runs
-				# and the caller gets a non-zero status (issue #9225).
-				( printf '%s' "${_gh_retry_replay_buf}" ) || _gh_retry_replay_rc=$?
-			fi
-			_gh_retry_replay_buf=""
+			local _gh_retry_replay_rc=0
+			# Replay with builtin printf, not cat (issues #9225, #9227): the
+			# ubuntu-26.04 runner's cat exited 0 after the reader closed the
+			# pipe. The subshell takes the SIGPIPE (141) or EPIPE (1), so the
+			# caller's shell survives, both temp files are removed and the
+			# command is not re-run. Chunks split at NUL keep the output
+			# byte-exact (NULs, backslashes, trailing newlines).
+			(
+				_gh_retry_replay_chunk=""
+				while IFS= read -r -d '' _gh_retry_replay_chunk; do
+					builtin printf '%s\0' "${_gh_retry_replay_chunk}" || exit "$?"
+				done
+				if [ -n "${_gh_retry_replay_chunk}" ]; then
+					builtin printf '%s' "${_gh_retry_replay_chunk}" || exit "$?"
+				fi
+				exit 0
+			) < "${stdout_file}" || _gh_retry_replay_rc=$?
 			rm -f "${stderr_file}" "${stdout_file}"
 			return "${_gh_retry_replay_rc}"
 		fi

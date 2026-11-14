@@ -22,7 +22,9 @@ contract guarantees:
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import sys
 import tempfile
 from pathlib import Path
@@ -476,10 +478,15 @@ def test_main_exit_codes():
 				"--pr-body-file", str(body_path),
 				"--repo", "owner/repo",
 			]
+			# Capture the expected ::error:: lines so they do not become live
+			# CI annotations that the failure log tail then anchors on.
+			captured = io.StringIO()
 			try:
-				rc = mod.main()
+				with contextlib.redirect_stderr(captured):
+					rc = mod.main()
 			finally:
 				sys.argv = old_argv
+			assert "::error::[lint_pr_body_auto_close]" in captured.getvalue()
 			assert rc == 1, f"expected exit 1 (violation), got {rc}"
 			# A clean body with the violation only in a commit message
 			# (the PR #7190 shape) must also fail the check.
@@ -494,10 +501,15 @@ def test_main_exit_codes():
 				"--commit-messages-file", str(commits_path),
 				"--repo", "owner/repo",
 			]
+			# Capture the expected ::error:: lines so they do not become live
+			# CI annotations that the failure log tail then anchors on.
+			captured = io.StringIO()
 			try:
-				rc = mod.main()
+				with contextlib.redirect_stderr(captured):
+					rc = mod.main()
 			finally:
 				sys.argv = old_argv
+			assert "::error::[lint_pr_body_auto_close]" in captured.getvalue()
 			assert rc == 1, f"expected exit 1 (commit-message violation), got {rc}"
 		finally:
 			mod._fetch_issue_labels_gh = original

@@ -1132,9 +1132,10 @@ class MergeTrainStepContractTest(unittest.TestCase):
 # (#7690) and from tests-hooks-and-orchestrator (budget-watch issue #7798).
 # Without its guard such a step would run in every group.
 GROUP_PINNED_STEPS = {
-	# Moved from group 2 to group 4 in #8772, and from group 4 to group 0 in
-	# #8980, and split across 4 local processes in #9021.
-	"Regression tests wired by the CI wiring guard (part 2)": 0,
+	# "Regression tests wired by the CI wiring guard (part 2)" (group 2, then
+	# group 4 in #8772, group 0 in #8980, split across 4 local processes in
+	# #9021) left the matrix for tests-release-and-log-analysis in #9214; see
+	# MOVED_POLL_GROUP_ZERO_9214_STEPS.
 	# Moved from group 3 to group 1 in #8072, to group 0 in #8091, and to
 	# group 4 in #8118.
 	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": 4,
@@ -3406,9 +3407,9 @@ POLL_GROUP_TWO_8772_SOURCE_GROUP = 2
 POLL_GROUP_TWO_8772_SETUP_STEP = "Install Python CI dependencies"
 POLL_GROUP_TWO_8772_STEP_NAME = "Regression tests wired by the CI wiring guard (part 2)"
 MOVED_POLL_GROUP_TWO_8772_STEPS = {
-	# Moved on from group 4 to group 0 in budget-watch issue #8980; see
-	# MOVED_POLL_GROUP_FOUR_8980_STEPS.
-	POLL_GROUP_TWO_8772_STEP_NAME: 0,
+	# Moved on from group 4 to group 0 in budget-watch issue #8980, then
+	# moved on to tests-release-and-log-analysis in budget-watch issue #9214;
+	# see MOVED_POLL_GROUP_ZERO_9214_STEPS.
 }
 # The body's first and last module, the module count and the sha256 below pin
 # the step's module set, which #9021's in-place sharding kept. #9056 added
@@ -3424,7 +3425,7 @@ POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "7a3ed25f8f1aaca89c28d47d55b31abcfac8fe8
 
 
 class MovedPollGroupTwo8772StepsContractTest(unittest.TestCase):
-	"""The CI wiring guard part 2 step runs once, in orchestrate-poll group 0 (#8772, #8980)."""
+	"""The CI wiring guard part 2 step ran once per CI run in one poll group (#8772, #8980) until #9214."""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
@@ -3615,12 +3616,13 @@ POLL_GROUP_FOUR_8980_STEP_NAME = POLL_GROUP_TWO_8772_STEP_NAME
 # it stays there.
 POLL_GROUP_FOUR_8980_KEPT_STEP_NAME = UNBLOCK_STEP_NAME
 MOVED_POLL_GROUP_FOUR_8980_STEPS = {
-	POLL_GROUP_FOUR_8980_STEP_NAME: 0,
+	# Moved on to tests-release-and-log-analysis in budget-watch issue #9214;
+	# see MOVED_POLL_GROUP_ZERO_9214_STEPS.
 }
 
 
 class MovedPollGroupFour8980StepsContractTest(unittest.TestCase):
-	"""The CI wiring guard part 2 step runs once, in orchestrate-poll group 0 (#8980)."""
+	"""The CI wiring guard part 2 step ran once, in orchestrate-poll group 0 (#8980), until #9214."""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
@@ -3886,15 +3888,29 @@ class MovedHooks9078StepsContractTest(unittest.TestCase):
 
 
 # Issue #9021: orchestrate-poll (0) took 15m15s of its 20 minutes (run
-# 42426489708). The CI wiring guard part 2 step stays in group 0, by name and
-# guard, and splits its test functions across 4 local processes, the way the
-# part 1 step did in #8246. Its module set stays pinned by the #8772 constants.
+# 42426489708). The CI wiring guard part 2 step stayed in group 0, by name and
+# guard, until #9214, and splits its test functions across 4 local processes,
+# the way the part 1 step did in #8246. Its module set stays pinned by the
+# #8772 constants.
+# Issue #9214: orchestrate-poll (0) took 15m51s of its 20 minutes (run
+# 42933243586), so the step moved, name and body unchanged, out of the poll
+# matrix into tests-release-and-log-analysis, where it runs unguarded.
 WIRING_PART2_STEP_NAME = POLL_GROUP_TWO_8772_STEP_NAME
+# The poll group the step ran in before #9214 (kept for reference only).
 WIRING_PART2_GROUP = 0
+WIRING_PART2_JOB_ID = "tests-release-and-log-analysis"
 WIRING_PART2_SHARDS = 4
 WIRING_PART2_AWK_RE = re.compile(
 	r"""awk -v n="\$\{wg2_shard\}" -v total="\$\{wg2_shards\}" '(?P<expr>[^']+)'"""
 )
+
+
+def wiring_part2_job_step() -> dict:
+	steps = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"][WIRING_PART2_JOB_ID]["steps"]
+	for step in steps:
+		if step.get("name") == WIRING_PART2_STEP_NAME:
+			return step
+	raise AssertionError(f"{WIRING_PART2_JOB_ID} step not found: {WIRING_PART2_STEP_NAME}")
 
 
 def run_wiring_part2_judge(step_run: str, files: dict[int, dict[str, str]]) -> subprocess.CompletedProcess:
@@ -3947,15 +3963,18 @@ class WiringGuardPartTwoShardingContractTest(unittest.TestCase):
 	"""The wiring guard part 2 step runs its 53 modules in local shards (#9021).
 
 	`orchestrate-poll (0)` took 15m15s of its 20 minutes (run 42426489708).
-	The step stays in group 0, by name and guard, and splits its test
-	functions across 4 processes, the way #8150 and #8246 did. Its module
+	The step stayed in group 0, by name and guard, until #9214, and splits
+	its test functions across 4 processes, the way #8150 and #8246 did. Its module
 	set is pinned by the #8772/#8980 constants. Every listed module must
 	collect at least one test, every test must run exactly once, and a shard
 	that fails or records no exit code must fail the step.
+
+	Since #9214 the step runs, name and body unchanged, in
+	tests-release-and-log-analysis without a matrix guard.
 	"""
 
 	def setUp(self) -> None:
-		self.step = poll_job_step(WIRING_PART2_STEP_NAME)
+		self.step = wiring_part2_job_step()
 		self.run = self.step["run"]
 
 	def green(self) -> dict[int, dict[str, str]]:
@@ -3966,7 +3985,7 @@ class WiringGuardPartTwoShardingContractTest(unittest.TestCase):
 		self.assertIsNotNone(array)
 		return tuple(array.group("mods").split())
 
-	def test_step_stays_in_group_zero_of_the_poll_job(self) -> None:
+	def test_step_runs_unguarded_in_the_release_job(self) -> None:
 		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
 		owners = [
 			job_id
@@ -3974,9 +3993,9 @@ class WiringGuardPartTwoShardingContractTest(unittest.TestCase):
 			for step in job.get("steps", [])
 			if step.get("name") == WIRING_PART2_STEP_NAME
 		]
-		self.assertEqual(owners, [POLL_JOB_ID])
-		self.assertEqual(self.step.get("if"), f"strategy.job-index == {WIRING_PART2_GROUP}")
-		self.assertEqual(GROUP_PINNED_STEPS.get(WIRING_PART2_STEP_NAME), WIRING_PART2_GROUP)
+		self.assertEqual(owners, [WIRING_PART2_JOB_ID])
+		self.assertNotIn("if", self.step)
+		self.assertNotIn(WIRING_PART2_STEP_NAME, GROUP_PINNED_STEPS)
 		self.assertIn(f"wg2_shards={WIRING_PART2_SHARDS}", self.run)
 
 	def test_module_array_is_the_pinned_set_and_the_only_paths_named(self) -> None:
@@ -4112,6 +4131,98 @@ class WiringGuardPartTwoShardingContractTest(unittest.TestCase):
 		result = run_wiring_part2_judge(self.run, files)
 		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 		self.assertNotIn("shard 3", result.stdout)
+
+
+# Step moved out of orchestrate-poll group 0, which took 15m51s of its 20
+# minutes (run 42933243586, budget-watch issue #9214): step name -> (target job
+# id, boundary module paths its body names). The run's step timings were not
+# readable; this is group 0's only step that can move whole (the fast-fail step
+# reads the derive step's /tmp list, and the slice is the matrix). The target
+# was chosen by test and subprocess counts, an estimate, not a measurement. The
+# step needs no Node or prepared .claude/ live copies, so it runs unguarded in
+# tests-release-and-log-analysis, before that job's Node 22 / vitest pair.
+POLL_GROUP_ZERO_9214_SOURCE_JOB_ID = POLL_JOB_ID
+POLL_GROUP_ZERO_9214_SETUP_STEP = "Install Python CI dependencies"
+POLL_GROUP_ZERO_9214_NODE_STEP = HOOKS_NODE_SETUP_STEP
+POLL_GROUP_ZERO_9214_FAST_FAIL_STEP = "Orchestrate poll implementation-failed regression fast-fail"
+MOVED_POLL_GROUP_ZERO_9214_STEPS = {
+	WIRING_PART2_STEP_NAME: ("tests-release-and-log-analysis", POLL_GROUP_TWO_8772_BOUNDARY_MODULES),
+}
+
+
+class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
+	"""The CI wiring guard part 2 step runs once, in tests-release-and-log-analysis (#9214)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_target_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_POLL_GROUP_ZERO_9214_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_POLL_GROUP_ZERO_9214_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, GROUP_PINNED_STEPS)
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_job_id, modules) in MOVED_POLL_GROUP_ZERO_9214_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_poll_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[POLL_GROUP_ZERO_9214_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_POLL_GROUP_ZERO_9214_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_target_job_setup(self) -> None:
+		for name, (job_id, _modules) in MOVED_POLL_GROUP_ZERO_9214_STEPS.items():
+			names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+			with self.subTest(step=name):
+				self.assertIn(POLL_GROUP_ZERO_9214_SETUP_STEP, names, job_id)
+				self.assertIn(name, names)
+				self.assertLess(names.index(POLL_GROUP_ZERO_9214_SETUP_STEP), names.index(name))
+
+	def test_moved_steps_run_before_the_node_pair(self) -> None:
+		"""The Node 22 setup and vitest steps stay together and after the moved step (#9018)."""
+		for name, (job_id, _modules) in MOVED_POLL_GROUP_ZERO_9214_STEPS.items():
+			names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+			with self.subTest(step=name):
+				self.assertIn(POLL_GROUP_ZERO_9214_NODE_STEP, names, job_id)
+				node_index = names.index(POLL_GROUP_ZERO_9214_NODE_STEP)
+				self.assertLess(names.index(name), node_index)
+				self.assertLess(node_index + 1, len(names))
+				self.assertEqual(names[node_index + 1], HOOKS_VITEST_STEP)
+
+	def test_no_target_is_the_source_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_POLL_GROUP_ZERO_9214_STEPS.items():
+			with self.subTest(step=name):
+				self.assertNotEqual(job_id, POLL_GROUP_ZERO_9214_SOURCE_JOB_ID)
+
+	def test_group_zero_keeps_only_its_slice_and_fast_fail(self) -> None:
+		group_zero_guarded = [
+			step.get("name")
+			for step in self.jobs()[POLL_GROUP_ZERO_9214_SOURCE_JOB_ID]["steps"]
+			if str(step.get("if", "")) == "strategy.job-index == 0"
+		]
+		self.assertEqual(group_zero_guarded, [POLL_GROUP_ZERO_9214_FAST_FAIL_STEP])
+		self.assertEqual({name for name, group in GROUP_PINNED_STEPS.items() if group == 0}, set())
 
 
 # Issue #9045: tests-heal-plan-and-validation took 17m00s of its 20 minutes
@@ -4608,19 +4719,20 @@ def run_single_file_step_judge(step_run: str, files: dict[int, dict[str, str]]) 
 		)
 
 
-def run_single_file_step_body(step_run: str, fake_modules: list[str], tmp: str) -> subprocess.CompletedProcess:
+def run_single_file_step_body(step_run: str, fake_modules: list[str], tmp: str, prelude: str = "") -> subprocess.CompletedProcess:
 	"""Run the whole single-file step body with fake modules.
 
 	The module array points at `fake_modules`, temp files go to `tmp`, and
 	the 30s heartbeat interval becomes 0.2s. Everything else is the shipped
-	shell, run the way GitHub runs a bash step.
+	shell, run the way GitHub runs a bash step. `prelude` is shell placed
+	before the body (for example a fake `date` function).
 	"""
 	array_line = SINGLE_FILE_STEP_ARRAY_RE.search(step_run).group(0)
 	script = step_run.replace(array_line, "sf_modules=(" + " ".join(fake_modules) + ")")
 	script = script.replace("/tmp/single_file_step_", f"{tmp}/single_file_step_")
 	if "sleep 30 " not in script:
 		raise AssertionError("heartbeat interval `sleep 30 ` not found in the single-file step body")
-	script = script.replace("sleep 30 ", "sleep 0.2 ")
+	script = prelude + script.replace("sleep 30 ", "sleep 0.2 ")
 	return subprocess.run(
 		["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
 		capture_output=True,
@@ -4726,6 +4838,40 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 		module = SINGLE_FILE_MODULES[0]
 		self.assertIn(f"CI_SUBTEST_END subtest={module} elapsed_ms=1000 rc=1\n", result.stdout)
 		self.assertIn(f"::error::single-file module tests failed: {module}\n", result.stdout)
+
+	def test_full_body_elapsed_ignores_a_short_date_reading(self) -> None:
+		# ubuntu-26.04's `date +%s%3N` sometimes returned a reading a digit
+		# short, so a heartbeat printed a negative elapsed_ms. The step reads
+		# bash's EPOCHREALTIME first, so a bad `date` cannot do that.
+		# On bash < 5 (no EPOCHREALTIME) the step falls back to `date` by
+		# design, so the fake `date` would be read and there is nothing to test.
+		probe = subprocess.run(
+			["bash", "--noprofile", "--norc", "-c", '[ -n "${EPOCHREALTIME:-}" ]'],
+			capture_output=True,
+			timeout=30,
+		)
+		if probe.returncode != 0:
+			self.skipTest("bash has no EPOCHREALTIME (bash < 5); sf_now_ms uses its `date` fallback")
+		with tempfile.TemporaryDirectory(prefix="test_sf_clock_") as tmp:
+			markers = Path(tmp, "markers")
+			markers.mkdir()
+			fakes = []
+			for n in range(3):
+				fake = Path(tmp, f"fake_module_{n}.py")
+				fake.write_text(SINGLE_FILE_FAKE_MODULE.format(markers=str(markers), n=n, rc=0), encoding="utf-8")
+				fakes.append(str(fake))
+			count_file = Path(tmp, "date_calls")
+			prelude = (
+				f"date() {{ echo x >> '{count_file}'; "
+				f"if [ \"$(wc -l < '{count_file}')\" -eq 1 ]; then echo 1700000000900; else echo 170000000010; fi; }}\n"
+			)
+			result = run_single_file_step_body(self.run, fakes, tmp, prelude=prelude)
+			out = result.stdout
+			self.assertEqual(result.returncode, 0, out + result.stderr)
+			self.assertRegex(out, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=\d+\n")
+			self.assertEqual(len(re.findall(r"CI_SUBTEST_END subtest=\S+ elapsed_ms=\d+ rc=0\n", out)), 3, out)
+			# Only the fake `date` writes count_file, so it must not exist.
+			self.assertFalse(count_file.exists(), out)
 
 	def test_full_body_overlaps_modules_and_fails_closed(self) -> None:
 		for failing in (1, None):
