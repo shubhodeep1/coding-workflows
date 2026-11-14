@@ -104,6 +104,22 @@ cd "${REPO_ROOT}"
 
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+# Issue #9473: wedged-queued run filter from gh_helpers.sh. When the helpers
+# could not be sourced, these no-op fallbacks keep the pre-#9473 behaviour
+# (every queued run counts as active).
+declare -F zombie_queued_cutoff_epoch >/dev/null 2>&1 || zombie_queued_cutoff_epoch()
+{
+	printf '0'
+}
+declare -F zombie_queued_jq_def >/dev/null 2>&1 || zombie_queued_jq_def()
+{
+	printf '%s\n' 'def is_wedged_queued($cutoff): false;'
+}
+declare -F zombie_queued_log_ignored >/dev/null 2>&1 || zombie_queued_log_ignored()
+{
+	cat >/dev/null 2>&1 || true
+	return 0
+}
 
 APPLY_ANALYSIS_SOURCE_DOC_MARKER="apply-analysis-source-doc"
 APPLY_ANALYSIS_ON_MAIN_ENABLED="${APPLY_ANALYSIS_ON_MAIN_ENABLED:-true}"
@@ -315,11 +331,17 @@ in_flight_docs()
 # none, 2 when the runs list could not be read (callers fail closed).
 orchestrate_run_in_flight()
 {
-	local runs_json active
+	local runs_json active zq_cutoff zq_def
 	if ! runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE}/runs?per_page=20")"; then
 		return 2
 	fi
-	active="$(printf '%s' "${runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length' 2>/dev/null || true)"
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and is not in flight.
+	zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+	[[ "${zq_cutoff}" =~ ^[0-9]+$ ]] || zq_cutoff=0
+	zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+	zombie_queued_log_ignored apply_analysis_orchestrate_in_flight "${zq_cutoff}" <<< "${runs_json}"
+	active="$(printf '%s' "${runs_json}" | jq -r --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || true)"
 	[[ "${active}" =~ ^[0-9]+$ ]] || return 2
 	[ "${active}" -gt 0 ] && return 0
 	return 1

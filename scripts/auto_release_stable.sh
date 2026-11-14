@@ -55,6 +55,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+# Issue #9473: wedged-queued run filter from gh_helpers.sh. When the helpers
+# could not be sourced, these no-op fallbacks keep the pre-#9473 behaviour
+# (every queued run counts as active).
+declare -F zombie_queued_cutoff_epoch >/dev/null 2>&1 || zombie_queued_cutoff_epoch()
+{
+	printf '0'
+}
+declare -F zombie_queued_jq_def >/dev/null 2>&1 || zombie_queued_jq_def()
+{
+	printf '%s\n' 'def is_wedged_queued($cutoff): false;'
+}
+declare -F zombie_queued_log_ignored >/dev/null 2>&1 || zombie_queued_log_ignored()
+{
+	cat >/dev/null 2>&1 || true
+	return 0
+}
 
 AUTO_RELEASE_STABLE_ENABLED="${AUTO_RELEASE_STABLE_ENABLED:-true}"
 AUTO_RELEASE_STABLE_BRANCH="${AUTO_RELEASE_STABLE_BRANCH:-stable}"
@@ -160,21 +176,29 @@ if [[ "${tag_commit}" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${AUTO_RELEASE_STABLE_WORKFLOW_FILE}/runs?per_page=30")"
+# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is wedged
+# (zero jobs, cannot be cancelled) and does not count as in flight.
+zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+[[ "${zq_cutoff}" =~ ^[0-9]+$ ]] || zq_cutoff=0
+zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+zombie_queued_log_ignored auto_release_gate "${zq_cutoff}" <<< "${runs_json}"
 # Any branch: the gate's e2e-smoke-test job runs under a per-repository
 # cancel-in-progress group, so dispatching a stable gate while the promote
 # cycle's gate_only run on main is active would cancel that run.
-active_count="$(printf '%s' "${runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+active_count="$(printf '%s' "${runs_json}" | jq -r --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length')"
 # The gate-runs endpoint above cannot report a promotion that has moved
 # `stable` but has not dispatched its gate yet, so this requires a separate
 # workflow-scoped read.
 promote_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/promote-main-to-stable.yml/runs?per_page=30")"
 # Any event: a scheduled cycle tick is about to dispatch (or is waiting on)
 # its own gate run, which the group above would otherwise cancel.
-promote_active_count="$(printf '%s' "${promote_runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+zombie_queued_log_ignored auto_release_promote "${zq_cutoff}" <<< "${promote_runs_json}"
+promote_active_count="$(printf '%s' "${promote_runs_json}" | jq -r --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length')"
 active_count=$((active_count + promote_active_count))
 # The legacy manual release path (mark-stable.yml) also writes refs/tags/stable.
 legacy_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/mark-stable.yml/runs?per_page=30")"
-legacy_active_count="$(printf '%s' "${legacy_runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+zombie_queued_log_ignored auto_release_legacy "${zq_cutoff}" <<< "${legacy_runs_json}"
+legacy_active_count="$(printf '%s' "${legacy_runs_json}" | jq -r --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length')"
 active_count=$((active_count + legacy_active_count))
 if [ "${active_count}" -gt 0 ]; then
 	skip_release release_in_flight "active_runs=${active_count}"

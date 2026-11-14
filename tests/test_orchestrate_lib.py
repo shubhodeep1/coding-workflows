@@ -4232,6 +4232,59 @@ def main() -> int:
 	return 1 if failed > 0 else 0
 
 
+def _zq_iso_hours_ago(now_epoch, hours):
+	from datetime import datetime, timezone
+	return datetime.fromtimestamp(now_epoch - int(hours * 3600), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_zombie_run_max_queued_hours_parsing():
+	import contextlib
+	import io
+	assert orchestrate_lib.zombie_run_max_queued_hours({}) == 24
+	assert orchestrate_lib.zombie_run_max_queued_hours({"ZOMBIE_RUN_MAX_QUEUED_HOURS": ""}) == 24
+	assert orchestrate_lib.zombie_run_max_queued_hours({"ZOMBIE_RUN_MAX_QUEUED_HOURS": "0"}) == 0
+	assert orchestrate_lib.zombie_run_max_queued_hours({"ZOMBIE_RUN_MAX_QUEUED_HOURS": "48"}) == 48
+	for bad in ("abc", "-1", "1.5", "123456"):
+		err = io.StringIO()
+		with contextlib.redirect_stderr(err):
+			assert orchestrate_lib.zombie_run_max_queued_hours({"ZOMBIE_RUN_MAX_QUEUED_HOURS": bad}) == 0
+		assert "ZOMBIE_RUN_MAX_QUEUED_HOURS is not a whole number of hours" in err.getvalue()
+
+
+def test_is_wedged_queued_run_matrix():
+	now = 1794650000
+	wedged = orchestrate_lib.is_wedged_queued_run
+	assert wedged({"status": "queued", "created_at": _zq_iso_hours_ago(now, 25)}, now, 24) is True
+	assert wedged({"status": "queued", "created_at": _zq_iso_hours_ago(now, 23)}, now, 24) is False
+	assert wedged({"status": "QUEUED", "createdAt": _zq_iso_hours_ago(now, 30)}, now, 24) is True
+	for status in ("in_progress", "pending", "waiting", "requested"):
+		assert wedged({"status": status, "created_at": _zq_iso_hours_ago(now, 100)}, now, 24) is False
+	for created in (None, "", "garbage", 12345):
+		run = {"status": "queued"}
+		if created is not None:
+			run["created_at"] = created
+		assert wedged(run, now, 24) is False
+	assert wedged({"status": "queued", "created_at": _zq_iso_hours_ago(now, 500)}, now, 0) is False
+	assert wedged({"status": "queued", "created_at": _zq_iso_hours_ago(now, 500)}, 0, 24) is False
+	assert wedged("not-a-run", now, 24) is False
+
+
+def test_log_zombie_run_ignored_dedupes_per_guard():
+	import io
+	now = 1794650000
+	stream = io.StringIO()
+	run = {"id": 43095142301, "status": "queued", "created_at": _zq_iso_hours_ago(now, 25),
+		"path": ".github/workflows/implement.yml"}
+	orchestrate_lib._ZOMBIE_RUN_IGNORED_SEEN.discard(("lib_test_guard", "43095142301"))
+	orchestrate_lib._ZOMBIE_RUN_IGNORED_SEEN.discard(("lib_test_guard_b", "43095142301"))
+	orchestrate_lib.log_zombie_run_ignored(run, "lib_test_guard", now, stream=stream)
+	orchestrate_lib.log_zombie_run_ignored(run, "lib_test_guard", now, stream=stream)
+	orchestrate_lib.log_zombie_run_ignored(run, "lib_test_guard_b", now, stream=stream)
+	assert stream.getvalue().splitlines() == [
+		"ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/implement.yml age_h=25 guard=lib_test_guard",
+		"ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/implement.yml age_h=25 guard=lib_test_guard_b",
+	]
+
 if __name__ == "__main__":
 	raise SystemExit(main())
 

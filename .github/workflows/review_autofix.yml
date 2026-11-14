@@ -304,6 +304,8 @@ env:
   # verified workflow checkout when the staging helper does not install them.
   REVIEW_HEAL_REPORTER_SUPPORT_SCRIPTS: >-
     workflow_failure_heal.py workflow_failure_heal_autofix_report.sh provider_outage.py ai_engine_fallback_report.sh
+  # Wedged-queued run filter (issue #9473); 0 disables it.
+  ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
 
 jobs:
   gate:

@@ -53,6 +53,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           AUTO_RELEASE_STABLE_ENABLED: ${{ vars.AUTO_RELEASE_STABLE_ENABLED || 'true' }}
           AUTO_RELEASE_STABLE_MAX_ATTEMPTS: ${{ vars.AUTO_RELEASE_STABLE_MAX_ATTEMPTS || '3' }}
+          ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
         run: |
           set -euo pipefail
           bash scripts/auto_release_stable.sh

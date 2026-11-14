@@ -133,6 +133,8 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Wedged-queued run filter (issue #9473); 0 disables it.
+  ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
 
 permissions:
   contents: write
@@ -1347,9 +1349,28 @@ jobs:
                 sleep "$POLL_INTERVAL"
                 continue
               fi
+              # Issue #9473: a queued Plan run older than ZOMBIE_RUN_MAX_QUEUED_HOURS
+              # (gh_helpers.sh, default 24, 0 disables) is wedged (zero jobs,
+              # cannot be cancelled) and is not active. The helpers run in a
+              # subshell so this step's shell is not changed; when they are
+              # unavailable every queued run stays active.
+              if [ -z "${PLAN_ZQ_CUTOFF:-}" ]; then
+                PLAN_ZQ_CUTOFF="$(bash -c '. scripts/gh_helpers.sh >/dev/null 2>&1; zombie_queued_cutoff_epoch' 2>/dev/null || echo 0)"
+                [[ "$PLAN_ZQ_CUTOFF" =~ ^[0-9]+$ ]] || PLAN_ZQ_CUTOFF=0
+                PLAN_ZQ_DEF="$(bash -c '. scripts/gh_helpers.sh >/dev/null 2>&1; zombie_queued_jq_def' 2>/dev/null || true)"
+                [ -n "$PLAN_ZQ_DEF" ] || PLAN_ZQ_DEF='def is_wedged_queued($cutoff): false;'
+              fi
+              if [ -z "${PLAN_ZQ_LOGGED:-}" ] && [ "$PLAN_ZQ_CUTOFF" -gt 0 ]; then
+                PLAN_ZQ_LINES="$(printf '%s' "$PLAN_RUNS_JSON" | jq -c --arg title "${ISSUE_TITLE}" '[.workflow_runs[]? | select(.display_title == $title)]' 2>/dev/null \
+                  | bash -c '. scripts/gh_helpers.sh >/dev/null 2>&1 && zombie_queued_log_ignored stable_gate_plan_runs "$1"' _ "$PLAN_ZQ_CUTOFF" 2>&1 >/dev/null || true)"
+                if [ -n "$PLAN_ZQ_LINES" ]; then
+                  printf '%s\n' "$PLAN_ZQ_LINES" >&2
+                  PLAN_ZQ_LOGGED=1
+                fi
+              fi
               OTHER_ACTIVE_PLAN_RUNS=0
               if _OTHER_ACTIVE_PLAN_RUNS=$(printf '%s' "$PLAN_RUNS_JSON" \
-                | jq -r --arg title "${ISSUE_TITLE}" '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.display_title == $title) | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null); then
+                | jq -r --arg title "${ISSUE_TITLE}" --argjson zq_cutoff "$PLAN_ZQ_CUTOFF" "$PLAN_ZQ_DEF"'[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.display_title == $title) | select(.status == "in_progress" or .status == "queued") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null); then
                 OTHER_ACTIVE_PLAN_RUNS="$_OTHER_ACTIVE_PLAN_RUNS"
               fi
               unset _OTHER_ACTIVE_PLAN_RUNS
@@ -1375,7 +1396,7 @@ jobs:
                     break
                   fi
                   ACTIVE_WALK_PAGE_COUNT=$(printf '%s' "$ACTIVE_WALK_PAGE_JSON" \
-                    | jq -r --arg title "${ISSUE_TITLE}" '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.display_title == $title) | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo "0")
+                    | jq -r --arg title "${ISSUE_TITLE}" --argjson zq_cutoff "$PLAN_ZQ_CUTOFF" "$PLAN_ZQ_DEF"'[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.display_title == $title) | select(.status == "in_progress" or .status == "queued") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo "0")
                   if [[ "$ACTIVE_WALK_PAGE_COUNT" =~ ^[0-9]+$ ]] && [ "$ACTIVE_WALK_PAGE_COUNT" -gt 0 ]; then
                     OTHER_ACTIVE_PLAN_RUNS="$ACTIVE_WALK_PAGE_COUNT"
                     break

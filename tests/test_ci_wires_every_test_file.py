@@ -95,6 +95,14 @@ UNWIRED_ALLOWLIST: dict[str, str] = {
 		"ci.yml is outside the file grant of the issue that added it (#9247); its cases run in CI "
 		"through tests/test_render_prompt_foundation.py, which collects them"
 	),
+	"tests/test_gh_helpers_zombie_queued.py": (
+		"ci.yml is outside the file grant of the issue that added it (#9473); its cases run in CI "
+		"through tests/test_gh_helpers_list_runs_method.py, which collects them"
+	),
+	"tests/test_zombie_queued_guard_contract.py": (
+		"ci.yml is outside the file grant of the issue that added it (#9473); its cases run in CI "
+		"through tests/test_auto_release_stable.py, which collects them"
+	),
 }
 
 

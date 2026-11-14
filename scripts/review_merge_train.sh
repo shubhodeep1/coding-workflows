@@ -134,6 +134,22 @@ elif [ -f "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" ]; then
 	source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" 2>/dev/null || true
 fi
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+# Issue #9473: wedged-queued run filter from gh_helpers.sh. When the helpers
+# could not be sourced, these no-op fallbacks keep the pre-#9473 behaviour
+# (every queued run counts as active).
+declare -F zombie_queued_cutoff_epoch >/dev/null 2>&1 || zombie_queued_cutoff_epoch()
+{
+	printf '0'
+}
+declare -F zombie_queued_jq_def >/dev/null 2>&1 || zombie_queued_jq_def()
+{
+	printf '%s\n' 'def is_wedged_queued($cutoff): false;'
+}
+declare -F zombie_queued_log_ignored >/dev/null 2>&1 || zombie_queued_log_ignored()
+{
+	cat >/dev/null 2>&1 || true
+	return 0
+}
 
 MT_SUBCOMMAND="${1:-}"
 MT_ENABLED="${MERGE_TRAIN_ENABLED:-true}"
@@ -1215,6 +1231,13 @@ _mt_inflight_review_branches()
 	local __mt_runs_query="" __mt_runs_created_bound=""
 	local __mt_runs_status_runs='[]' __mt_runs_all='[]' __mt_runs_keys="" __mt_runs_keyed='[]'
 	local __mt_runs_classified='{}' __mt_runs_stale_ids="" __mt_runs_stale_count=0 __mt_runs_now_epoch=0
+	# Issue #9473: a queued review run older than ZOMBIE_RUN_MAX_QUEUED_HOURS
+	# is wedged (zero jobs, cannot be cancelled); it is dropped instead of
+	# holding a PR or making the listing incomplete.
+	local __mt_runs_zq_cutoff=0 __mt_runs_zq_def="" __mt_runs_zombie_ids='[]' __mt_runs_zombie_runs='[]'
+	__mt_runs_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+	[[ "${__mt_runs_zq_cutoff}" =~ ^[0-9]+$ ]] || __mt_runs_zq_cutoff=0
+	__mt_runs_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
 	local __mt_runs_stale_hours="${MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS:-6}"
 	if ! [[ "${__mt_runs_stale_hours}" =~ ^[0-9]{1,4}$ ]]; then
 		_mt_warn "merge-train release: MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS is not a whole number of hours; using 6." >&2
@@ -1339,7 +1362,8 @@ _mt_inflight_review_branches()
 		# stale unattributed run that is dropped (see the header). A clock that
 		# could not be read ($now 0) turns the stale rule off.
 		if ! __mt_runs_classified="$(printf '%s' "${__mt_runs_all}" | jq -c --arg db "${__mt_runs_default_branch}" --arg repo "${MT_REPO}" \
-			--argjson now "${__mt_runs_now_epoch}" --argjson stale_secs "$((__mt_runs_stale_hours * 3600))" '
+			--argjson now "${__mt_runs_now_epoch}" --argjson stale_secs "$((__mt_runs_stale_hours * 3600))" \
+			--argjson zq_cutoff "${__mt_runs_zq_cutoff}" "${__mt_runs_zq_def}"'
 			def mt_review_path:
 				((.path // "") | if type == "string" then . else "" end | sub("@.*$"; "")) as $p
 				| if $repo != "" and ($p | ascii_downcase | startswith(($repo | ascii_downcase) + "/"))
@@ -1356,7 +1380,7 @@ _mt_inflight_review_branches()
 						end);
 			[.[]?
 			| select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
-			| if (.event // "") == "workflow_dispatch" then
+			| (if (.event // "") == "workflow_dispatch" then
 				((.display_title // "") | if type == "string" then . else "" end) as $t
 				| [$t | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | .pr] as $prs
 				| if ((.head_branch | type) == "string" and .head_branch != "" and .head_branch != $db) then empty
@@ -1366,17 +1390,25 @@ _mt_inflight_review_branches()
 					else empty
 					end
 				else {k: [.head_branch | select(type == "string" and length > 0)]}
-				end] as $m
-			| {keyed: [$m[] | select(has("k")) | .k], stale: ([$m[] | select(has("s")) | .s] | unique)}' 2>/dev/null)" \
+				end) as $mt_c
+			| if ($mt_c | has("k")) and is_wedged_queued($zq_cutoff) then {z: .id} else $mt_c end] as $m
+			| {keyed: [$m[] | select(has("k")) | .k], stale: ([$m[] | select(has("s")) | .s] | unique),
+				zombie: ([$m[] | select(has("z")) | .z] | unique)}' 2>/dev/null)" \
 			|| ! __mt_runs_keyed="$(printf '%s' "${__mt_runs_classified}" | jq -c '.keyed' 2>/dev/null)" \
 			|| ! __mt_runs_stale_ids="$(printf '%s' "${__mt_runs_classified}" | jq -r '.stale | map(tostring) | join(",")' 2>/dev/null)" \
 			|| ! __mt_runs_stale_count="$(printf '%s' "${__mt_runs_classified}" | jq -r '.stale | length' 2>/dev/null)"; then
+			__mt_runs_reason="filter_failed"
+		elif ! __mt_runs_zombie_ids="$(printf '%s' "${__mt_runs_classified}" | jq -c '.zombie // []' 2>/dev/null)"; then
 			__mt_runs_reason="filter_failed"
 		elif ! printf '%s' "${__mt_runs_keyed}" | jq -e 'all(.[]; length > 0)' >/dev/null 2>&1; then
 			__mt_runs_reason="unattributed_run"
 		elif ! __mt_runs_keys="$(printf '%s' "${__mt_runs_keyed}" | jq -r '.[][]' 2>/dev/null)"; then
 			__mt_runs_reason="filter_failed"
 		fi
+	fi
+	if [ "${__mt_runs_zombie_ids}" != "[]" ] && [ -n "${__mt_runs_zombie_ids}" ] && [ "${__mt_runs_reason}" != "filter_failed" ]; then
+		__mt_runs_zombie_runs="$(printf '%s' "${__mt_runs_all}" | jq -c --argjson ids "${__mt_runs_zombie_ids}" '[.[]? | select(type == "object" and (.id as $i | $ids | index($i)))] | unique_by(.id)' 2>/dev/null || echo '[]')"
+		zombie_queued_log_ignored merge_train_release "${__mt_runs_zq_cutoff}" <<< "${__mt_runs_zombie_runs}"
 	fi
 	if [ -n "${__mt_runs_stale_ids}" ] && [ "${__mt_runs_reason}" != "filter_failed" ]; then
 		echo "MERGE_TRAIN_RUNS_LISTING outcome=ignored reason=stale_unattributed_run runs=${__mt_runs_stale_count} ids=${__mt_runs_stale_ids} max_age_hours=${__mt_runs_stale_hours}" >&2
