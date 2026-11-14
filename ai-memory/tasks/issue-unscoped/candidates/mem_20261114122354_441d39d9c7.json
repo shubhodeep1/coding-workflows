@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1094-1108 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The Phase 1 timeout block can print two Clarify run URLs, the newest run in CLARIFY_STALL_NOTE and the run named by CLARIFY_CANCELLED_RUN_ID, so the \"at most one Clarify run URL\" requirement is not met.\n  WHY: Reviewers disagreed on severity (NIT from openai_gpt-6-luna, unstated from google_gemini-3_1-flash-lite), and the highest is used. Per openai_gpt-6-luna, a trusted cancellation comment naming an older run while a newer scoped run exists causes both links to print at timeout. The reviewer text states no severity for google_gemini-3_1-flash-lite, so the stated NIT is the only explicit value and \"high\" here is not source-stated. Treat the severity as uncertain.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"On timeout in Phase 1 and the alt-model step, print the issue URL and at most one Clarify run URL.\"\n  expected_change_site: .github/workflows/test-and-mark-stable.yml, Phase 1 \"Inactivity timeout\" block, lines 1094-1108\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  EVIDENCE: Line 1098 sets CLARIFY_STALL_NOTE with the newest run URL, lines 1102-1103 append a cancelled-run URL when CLARIFY_CANCELLED_RUN_ID is numeric, and line 1105 prints both. The alt-model timeout (lines 5457-5467) is compliant. The changelog fragment documents the two-URL behaviour, and no test covers the cancellation-comment-plus-timeout case. Severity: MAJOR (anthropic_claude-sonnet-5_5), NIT (z-ai_glm-5_3-flash).\n- requirement: \"put the new cases in the existing contract test file, not a new file.\"\n  expected_change_site: tests/test_test_and_mark_stable_step_scripts_contract.py\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: Both reviewers say the PR adds tests/test_test_and_mark_stable_clarify_wait.py. Severity: BLOCKER (google_gemini-3_1-flash-lite), MAJOR (openai_gpt-6-luna). Disputed by anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash, who say the file already exists on base, was only modified, and the new cases are in the contract file.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (also in consensus task gaps): Phase 1 timeout at .github/workflows/test-and-mark-stable.yml:1094-1108 can print two Clarify run URLs (lines 1098, 1102-1103, 1105). Severity MAJOR, confidence 4.\n(No other findings reported. Items checked and not reported: the new-test-file claim, Phase 1 fail-fast and the comments-query constraint, and the alt-model title scoping and numeric-ID guard. Hardening risk score 1.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:Phase 1 timeout block | confidence=3\n  PROBLEM: The timeout diagnostics can print more than one Clarify run URL when CLARIFY_STALL_NOTE already holds a run URL and the cancellation-comment run ID adds another.\n  WHY: This clutters the error output and violates the \"at most one Clarify run URL\" requirement.\n- TASK_GAP: Requirement: \"put the new cases in the existing contract test file, not a new file.\" Expected change site: tests/test_test_and_mark_stable_step_scripts_contract.py. Evidence of absence: The PR creates tests/test_test_and_mark_stable_clarify_wait.py instead of using the existing contract test file. SEVERITY: BLOCKER, ISSUE_CONFIDENCE: 5.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:1096-1104 | severity=NIT | confidence=5\n  PROBLEM: The timeout output can contain two Clarify run URLs, the latest scoped run in CLARIFY_STALL_NOTE and the older run named by CLARIFY_CANCELLED_RUN_ID.\n  WHY: When a trusted cancellation comment names an older run and a newer scoped run exists, the wait runs to timeout and prints both links, violating \"at most one Clarify run URL\".\n- TASK_GAP: Requirement: \"Put the new cases in the existing contract test file, not a new file,\" and edit only the workflow inline, that contract test file, and the changelog fragment. Expected change site: tests/test_test_and_mark_stable_step_scripts_contract.py. Evidence of absence: The PR adds tests/test_test_and_mark_stable_clarify_wait.py with additional clarify-wait cases, though the contract file also has new cases. SEVERITY: MAJOR, ISSUE_CONFIDENCE: 5.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (also in consensus task gaps): Phase 1 timeout block at .github/workflows/test-and-mark-stable.yml:1094-1108 appends the newest run URL at line 1098 and a second run URL at lines 1102-1103, which prints the same URL twice when the cancellation comment names the newest run. SEVERITY: NIT, ISSUE_CONFIDENCE: 4.\n(No other findings reported. It rejected the google_gemini-3_1-flash-lite new-file claim: the file exists on base, so the PR only modifies it.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4a6c279b019fb9178c86ffac4766e17b42e443b299576fbfeb9f36ccd8697f3b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9471,
+    "run_id": "43552672653",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43552672653",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114122354_441d39d9c7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9471,
+    "run_id": "43552672653"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-14T12:23:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
