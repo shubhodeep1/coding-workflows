@@ -522,3 +522,198 @@ Existing guard: `tests/test_workflow_file_size_limit.py:66-98` fails CI when a `
 | Code modularization | 13 workflows with "Resolve workflow support ref", 6 staging workflows, `scripts/stage_workflow_support.sh`, `scripts/tg_helpers.sh`, `.github/workflows/review_autofix.yml`, `.github/workflows/implement.yml`, `scripts/orchestrate_poll_process.sh` | Large |
 | Expression size reduction | `.github/workflows/orchestrate_poll.yml`, `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/implement.yml`, `tests/test_workflow_file_size_limit.py` | Small |
 | Medium/Low fixes | `.github/workflows/integration-pr-readiness.yml`, `.github/workflows/lint-pr-body-auto-close.yml`, `scripts/check_integration_pr_readiness.py`, `.github/workflows/update_workflows.yml`, `.github/workflows/implement.yml`, `.github/workflows/test-and-mark-stable.yml`, `scripts/stable_e2e_step_wait_review.sh`, `scripts/promote_candidate_follow.sh`, `scripts/workflow_failure_heal_pr_reconcile.sh`, `scripts/label_helpers.sh`, `.github/workflows/ci.yml`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/cancel_on_pr_close.yml`, `README.md` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-11-14)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`**: every precondition holds and was proven by reading the code. The two calls hit the same endpoint, or one reads a strict subset of the other's fields. Pagination, filters and auth are the same. Both sit in the same function or step, with no mutation between them. Error handling and retry behaviour do not change. No concurrency boundary is crossed, and any cache contract is kept. The implement stage may act on these without further review.
+- **`NEEDS_VERIFICATION`**: the consolidation looks correct, but at least one precondition cannot be proven from the code alone. A named check must pass before anyone implements it.
+- **`RISKY_SKIP`**: at least one hard trigger applies. The triggers are:
+  - a retry, backoff or stall-recovery path;
+  - an auth, identity or provenance flow;
+  - pagination;
+  - a rate-limit-sensitive path;
+  - code that defends against races;
+  - log keys that other code matches on.
+
+  These findings are listed so they are visible, but they must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001**: `RISKY_SKIP`. The merge-train release reads the same PR's comment list twice for each released PR.
+- **Calls involved:**
+  - `scripts/review_merge_train.sh:1662` calls `_mt_find_marker_comment_id "${num}" "${MT_MARKER}"`, which runs the paginated list at `scripts/review_merge_train.sh:836-837`.
+  - `scripts/review_merge_train.sh:1685` calls `_mt_upsert_comment "${num}" "${MT_RELEASED_MARKER}" …` with no 4th argument. That goes through `:910` and runs the same paginated list at `:836-837` again.
+  - If a released marker from an earlier cycle exists, `:914` then reads that single comment.
+- **Endpoints:** `GET repos/{repo}/issues/{pr}/comments?per_page=100` (paginated, twice) and `GET repos/{repo}/issues/comments/{id}`.
+- **Current call count:** at least 2 paginated listings (at least 1 page each) plus up to 1 single-comment GET per released PR.
+- **Proposed call count:** 1 paginated listing per released PR.
+- **Evidence:**
+  - The two listings differ only in the marker the `--jq` filter keeps:
+    ```bash
+    gh_retry gh api --paginate "repos/${MT_REPO}/issues/${pr}/comments?per_page=100" \
+    	--jq ".[] | select((.user.login // \"\" | ascii_downcase) == \"${MT_AUTOMATION_LOGIN}\" and ((.body // \"\") | startswith(\"${marker}\"))) | \"\\(.id) \\(.created_at)\""
+    ```
+  - The markers do not share a prefix: `<!-- merge-train:queued -->` vs `<!-- merge-train:released -->` (`:146-147`). One listing filtered on `startswith("<!-- merge-train:")` could return both.
+- **Proposed fix:** have `_mt_find_marker_comment` accept several markers and return `marker id created_at` rows. Store the released-marker id from the `:1662` listing and pass it as the 4th argument to `_mt_upsert_comment` at `:1685`.
+- **Safety rationale:** both triggers apply.
+  - The listing is paginated.
+  - Three mutations sit between the two reads: the queue-marker PATCH (`:1668`), the label DELETE that claims the release against concurrent peers (`:1677`), and the review dispatch (`:1682`). This is race-defensive claim code, so the "no intervening mutation" precondition fails.
+- **Downstream signal:** do not auto-implement. A maintainer of `review_merge_train.sh` must first confirm two things:
+  - no concurrent gate or release run can write a `merge-train:released` comment between `:1662` and `:1685`, including the review run that `:1682` dispatches;
+  - the `MERGE_TRAIN_*` log lines and tests keep their current shape.
+
+**MERGE-002**: `RISKY_SKIP`. The promote-candidate follower reads several refs one at a time.
+- **Calls involved:**
+  - `scripts/promote_candidate_follow.sh:148`: branch
+  - `:168`: tag ref
+  - `:181`: main ref
+  - `:210`: annotated tag object
+- **Endpoints:** `GET repos/{repo}/branches/promote-candidate`, `GET repos/{repo}/git/ref/tags/{tag}`, `GET repos/{repo}/git/ref/heads/main` and `GET repos/{repo}/git/tags/{sha}`.
+- **Current call count:** 3–4 per run (cron `17 * * * *` plus pushes).
+- **Proposed call count:** 2. Keep the REST branch read, because its `protected` field is used at `:158-162`. Merge the tag ref, tag message (`... on Tag{message}`) and main oid into one GraphQL `repository{ref(qualifiedName:…)}` query.
+- **Evidence:** all four reads happen before any write. Each one maps to its own fail reason: `branch_read_failed`, `tag_read_failed`, `main_read_failed` and `tag_object_read_failed`. Missing refs are detected with `follow_is_not_found` (`:116-119`), which checks for a REST 404 in `GH_API_RETRY_LAST_STATUS`.
+- **Safety rationale:** two triggers apply.
+  - Every call goes through `gh_api_retry` (a retry/backoff helper).
+  - The fail reasons are observable log keys that `tests/test_promote_candidate_follow.py` and `agents.md` match on. GraphQL returns `null` for a missing ref instead of a 404, so the fail-closed classification would change.
+- **Downstream signal:** do not auto-implement. Saving 1–2 calls per hour does not justify changing contractual `PROMOTE_CANDIDATE_FOLLOW outcome=error reason=…` keys. Reconsider only if the follower's API budget becomes a measured problem.
+
+**MERGE-003**: `NEEDS_VERIFICATION`. The PR-body lint looks up each referenced issue with a separate call.
+- **Calls involved:** `scripts/lint_pr_body_auto_close.py:143-178` (`_fetch_issue_labels_gh`), called from `lint()` at `:260-268` once for each unique `(repo, issue)`.
+- **Endpoint:** `gh issue view N --json labels`, which is a GraphQL issue query run once per issue.
+- **Current call count:** N, the number of unique auto-close references across the PR body and up to 250 commit messages.
+- **Proposed call count:** about ceil(N/50) for each referenced repo.
+- **Evidence:** the per-key cache at `:257-268` already removes repeat lookups of the same issue. What remains is one call per distinct issue. The batching pattern to follow is `_cpr_fetch_pr_state_batches` (`.github/workflows/cancel_on_pr_close.yml:198-263`) or `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`.
+- **Proposed fix:** before the loop, prefetch every key from `candidate_matches` into `issue_label_cache` with one aliased query per repo: `i<N>: issue(number:N){labels(first:100){nodes{name}}}`. Keep `label_lookup` as the fallback for keys the batch did not resolve.
+- **Safety rationale:** this is a required check, and `None` per issue currently means "lookup error" (exit 2). A partial GraphQL error (NOT_FOUND or FORBIDDEN on one alias) must map to `None` for exactly that key and nothing else. That equivalence cannot be proven statically.
+- **Downstream signal:** before implementing, verify three things:
+  1. A batched response with a mix of NOT_FOUND and valid aliases yields `None` only for the missing keys. Add a test next to the existing injectable `label_lookup` tests.
+  2. Cross-repo references (`owner/repo#N`) are grouped per repository.
+  3. Issues with more than 100 labels are handled. The current `--jq '[.labels[].name]'` reads every label, so `labels(first:100)` needs a `totalCount` check.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001**: `NEEDS_VERIFICATION`. Hop 1 of the no-op ancestor walk re-reads an issue the job already cached.
+- **Calls involved:** `.github/workflows/implement.yml:5691`, the first iteration with `current="${ISSUE_NUMBER}"`.
+- **Endpoint:** `GET repos/{repo}/issues/{ISSUE_NUMBER}`.
+- **Current call count:** 1 per no-op run.
+- **Proposed call count:** 0, with a fallback to 1 when the cache is unusable.
+- **Evidence:**
+  - The job already saves the full issue object to `ISSUE_META_FILE`:
+    - `implement.yml:223` sets `ISSUE_META_FILE="${RUNTIME_DIR}/issue_meta.json"`.
+    - `:232-233` fetches and writes it.
+    - `:325` exports it job-wide.
+    - `:1007`/`:1030` revalidate it.
+  - `RUNTIME_DIR` is only removed at `:7251`, which runs after this step.
+  - Hop 1 needs only `.body`, to find `Re-issued from #N`:
+    ```bash
+    parent_body="$(gh_retry gh api "repos/${REPO}/issues/${current}" --jq '.body // ""' 2>/dev/null || echo "")"
+    ```
+- **Proposed fix:** on hop 1 only, read `.body` from `"${ISSUE_META_FILE}"` with `jq -r` when it is a non-empty object whose `.number` equals `ISSUE_NUMBER`. Otherwise fall back to the existing call.
+  - Do **not** use `ISSUE_BODY_FILE`: `:2129` overwrites it with `${ISSUE_BODY}`.
+  - Hops 2 and later are unchanged. Their paginated comment reads belong to API-003.
+- **Safety rationale:** the cache is written in an earlier step, hours before this one runs, so the "same function or step, no intervening mutation" precondition does not hold.
+- **Downstream signal:** before implementing, verify two things:
+  1. Nothing between job start and "Handle no-op implementation" (`:5536`) edits the issue body's `Re-issued from #N` line. Grep the implement, orchestrate and poller paths for issue-body PATCHes on implement-phase issues.
+  2. `ISSUE_META_FILE` may be truncated (`:1002`, `:1021`). In that case the code must fall back to the API read rather than treat an empty body as "no parent".
+
+**REUSE-002**: `RISKY_SKIP`. The intake re-reads, for each candidate, data the recovery scan already fetched.
+- **Calls involved:**
+
+  | Data | First read: recovery scan (`scripts/workflow_failure_heal_recovery_scan.sh`) | Re-read: intake (`scripts/workflow_failure_heal_intake.sh`) |
+  |---|---|---|
+  | Token identity | `/user` at `:142` | `/user` at `:1305` (runs because `SOURCE_KIND=autofix_failure` is not `workflow_run`) |
+  | Source PR | `pulls/{n}` at `:352` | `pulls/{n}` at `:646` |
+  | Source PR comments (paginated) | `:354-356` | `:1308-1311` |
+  | Heal issue comments (paginated) | `:280-283` | `:2269-2272`, for `recovery_issue`, which is expected to be the candidate via `WORKFLOW_HEAL_RECOVERY_SCAN_EXPECTED_ISSUE`, `:393` |
+
+  The intake is the subprocess started at recovery scan `:388-394`.
+- **Endpoints:** `GET user`, `GET repos/{src}/pulls/{n}`, `GET repos/{src}/issues/{n}/comments` (paginated) and `GET repos/{self}/issues/{heal}/comments` (paginated).
+- **Current call count:** at least 4 duplicate reads (plus extra pages) per processed candidate. `MAX_PER_TICK` is 1–2.
+- **Proposed call count:** 0 duplicates, if the scan's files were passed to the intake.
+- **Evidence:** the scan's own design comment (`workflow_failure_heal.py:4522-4524`) says the intake "still binds the PR, verifies run provenance … before recovery may replace the issue". The re-reads are that independent verification.
+- **Safety rationale:** the re-reads are part of the claim-binding and provenance (authentication) flow, which is a trigger. Two of them are also paginated. Feeding scan-produced files into the intake would let a reconstructed, untrusted payload's companion data skip verification.
+- **Downstream signal:** do not auto-implement. Any reuse needs a security review of the intake's trust model (`REPORT_AUTH=reconstructed`, `_report_auth_reject`) and must not run before that review.
+
+**REUSE-003**: `RISKY_SKIP`. A single intake run can read `/user` twice.
+- **Calls involved:** `scripts/workflow_failure_heal_intake.sh:1305` (`PROVENANCE_LOGIN`) and `:2078` (`HEAL_TRUSTED_AUTHOR`).
+- **Endpoint:** `GET user`, both times with the same `GH_TOKEN`. No `GH_TOKEN=` reassignment exists in the script.
+- **Current call count:** 2 per intake run, when all of the following hold:
+  - `source_gen` is numeric;
+  - `PHASE_COMMENT_AUTHOR` is empty;
+  - the kind is not `workflow_run` and not a cross-repo `phase_failure`.
+- **Proposed call count:** 1.
+- **Evidence:** `:2249-2250` already reuses `PROVENANCE_LOGIN`, then `HEAL_TRUSTED_AUTHOR`, before a third read. `:2075-2078` does not reuse `PROVENANCE_LOGIN`. Its §14 comment ("the only other /user read is for self-repo phase reports", `:2076-2077`) is wrong: `:1304` also reads `/user` for `issue`, `pull_request` and `autofix_failure` kinds.
+- **Proposed fix:** `HEAL_TRUSTED_AUTHOR="${PHASE_COMMENT_AUTHOR:-${PROVENANCE_LOGIN:-}}"` before the `/user` fallback at `:2078`. Correct the comment at the same time.
+- **Safety rationale:** this is the token-identity value used as the trusted author for budget and lineage decisions, so it is an auth/identity-flow trigger. That holds even though the two reads are byte-identical.
+- **Downstream signal:** do not auto-implement. A heal-intake owner must confirm that `PROVENANCE_LOGIN` can never hold a value from anything other than this token's `/user`, for example a payload or env override, before the fallback is chained.
+
+**REUSE-004**: `RISKY_SKIP`. The recovery-scan job repeats the identity read and candidate list that the candidates job just did.
+- **Calls involved:**
+  - `.github/workflows/workflow-failure-heal-intake.yml:399-404`: the `recovery-candidates` job runs `workflow_failure_heal_recovery_scan.sh --list-only`.
+  - `:406-416` and `:556-565`: the `recovery-scan` job runs the script again. It repeats `/user` (`recovery_scan.sh:142`) and the 1–4 page GraphQL list (`:162-183`).
+- **Endpoints:** `GET user` and GraphQL `repository.issues(labels:["ai:workflow-heal"], filterBy:{createdBy})` (cursor-paginated).
+- **Current call count:** 2–5 extra calls per hourly tick that has candidates.
+- **Proposed call count:** 0, if the list were handed over between jobs.
+- **Evidence:** `recovery-candidates` passes only `count` (`:385-386`). The scan job then waits in the intake concurrency group, which can be the shared `workflow-failure-heal-intake` group (`:414-416`), for up to 80 minutes (`:412`).
+- **Safety rationale:** the second list is a deliberate fresh read taken after the serialised intake slot is acquired. That is a race defence across a concurrency boundary. The list is also paginated.
+- **Downstream signal:** do not auto-implement. A stale candidate list could replay an issue that a queued intake has since replaced.
+
+**REUSE-005**: `RISKY_SKIP`. `_mt_upsert_comment` re-reads a comment body the paginated listing already returned.
+- **Calls involved:**
+  - `scripts/review_merge_train.sh:914` reads the existing marker comment's body.
+  - It is reached from the gate path: listing at `:994` (via `_mt_find_marker_comment`), then `:1029` with the id as the 4th argument.
+  - It is also reached from the release path; see MERGE-001.
+- **Endpoint:** `GET repos/{repo}/issues/comments/{id}`.
+- **Current call count:** 1 paginated listing plus 1 GET, for each queued-PR gate evaluation that already has a queued marker.
+- **Proposed call count:** 1 paginated listing.
+- **Evidence:** the `:836-837` listing already receives `.body` from the API and drops it in the `--jq` projection. The only change between `:994` and `:914` is the label POST at `:1022`; the bypass PATCH at `:1003` returns before the upsert. Neither changes the comment.
+- **Proposed fix:** have `_mt_find_marker_comment` also write the matching body (`@base64`) to a caller-provided temp file. In `_mt_upsert_comment`, compare against that file and skip the `:914` GET when it is present.
+- **Safety rationale:** the source listing is paginated, and the merge train's marker and label logic exists to defend against concurrent gate and release races (the false-bypass guards at `:976`, `:1663`).
+- **Downstream signal:** do not auto-implement. A merge-train maintainer must confirm that `MERGE_TRAIN_GATE`/`MERGE_TRAIN_RELEASED` logs and existing merge-train tests are unchanged. Treat this together with MERGE-001.
+
+**REUSE-006**: `RISKY_SKIP`. Do not reuse the cancel step's active-run snapshot for the merge-train release.
+- **Calls involved:**
+  - `.github/workflows/cancel_on_pr_close.yml:174-193`: `_cpr_fetch_active_runs`, with `status=queued` and `status=in_progress`, `event=pull_request`, paginated.
+  - The next step, `:431`, runs `review_merge_train.sh release`. That lists `actions/runs?status=<s>` for requested, pending, queued, waiting and in_progress, then all five again (`scripts/review_merge_train.sh:1229-1240`).
+- **Endpoint:** `GET repos/{repo}/actions/runs` (status-filtered).
+- **Current call count:** 2 paginated plus about 10 per scheduled sweep.
+- **Proposed call count:** no safe reduction.
+- **Evidence:**
+  - The filters differ: the cancel step adds `event=pull_request`, and the merge train has no event filter. The cancel step's data is therefore not a superset of what the merge train reads.
+  - The cancel POSTs at `:377-379` change run states between the two reads.
+  - The merge train reads each status twice on purpose, to detect a shifted listing (`MERGE_TRAIN_RUNS_LISTING … reason=listing_shifted`, `:1177`).
+- **Safety rationale:** the listings are paginated, mutations sit between them, and the logic is race-defensive.
+- **Downstream signal:** do not implement. This entry exists so a later pass does not propose it.
+
+### Dead Calls (DEAD-API-###)
+No findings. Two candidates were checked and are not dead:
+- `scripts/workflow_failure_heal_intake.sh:4186`, a branch GET sent to `/dev/null`. It is an existence probe whose exit status is the function's return value.
+- The comment reads at `scripts/orchestrate_poll_process.sh:26277` and `:26387`. They are already shared through the prefetched file that `extract_recommended_answers` accepts (`:26265-26275`).
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — the release scan's `actions/runs` listings are paginated, and the scan is the backstop for missed close events.
+  - Net-new: in this window 42 of 42 poll runs were cancelled before the first step, while cancel-on-close had 3 successes. The scheduled sweep may have been the only release path that actually ran.
+  - Any schedule opt-out therefore needs `POLL_TICK` success data first.
+  - The poller step alone carries the Telegram queue-age alert env (`orchestrate_poll.yml:285-288`), so an opt-out would not lose that alert.
+- API-002: NEEDS_VERIFICATION — GraphQL `pullRequests(headRefName:)` has no owner filter equivalent to REST `head=<owner>:<branch>` (`workflow_failure_heal_pr_reconcile.sh:243`).
+  - The batch must select `headRepository{nameWithOwner}` and drop forks.
+  - The script's API-budget header (`:29-31`) must be updated.
+  - N is normally 1 per closed source PR, so the savings are marginal.
+- API-003: RISKY_SKIP — the per-hop comment read is `--paginate` (`implement.yml:5695-5696`).
+  - The proposed `comments(last:100)` can miss an older no-op marker. That would under-count the #1292 loop-cap guard.
+  - The non-paginated hop-1 issue read is split out as REUSE-001.
+- API-004: RISKY_SKIP — the read being replaced is `--paginate` (`recovery_scan.sh:280`).
+  - Net-new: the report's open shape question is answered. `_comment_author_login` accepts `author.login`, and `heal_scope_recovery_check`/`count_heal_scope_recovery_scan_attempts` never read comment `id` (`workflow_failure_heal.py:4458-4467`, `4495-4512`, `4553-4565`).
+  - Still unverified: `reconstruct` (`recovery_scan.sh:363`) also reads `COMMENTS_FILE`.
+  - Still unverified: whether an earlier candidate's intake run can post recovery markers on a later candidate. If it can, the pre-loop snapshot at `:162-193` would be stale.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | MERGE-003, REUSE-001, API-002 |
+| RISKY_SKIP | 10 | MERGE-001, MERGE-002, REUSE-002, REUSE-003, REUSE-004, REUSE-005, REUSE-006, API-001, API-003, API-004 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
+- The highest-value item for a later pass is REUSE-001, which needs only a cache-freshness check. MERGE-003 is next.
