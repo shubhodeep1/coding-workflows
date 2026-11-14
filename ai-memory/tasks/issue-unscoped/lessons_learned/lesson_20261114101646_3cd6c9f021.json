@@ -1,0 +1,26 @@
+{
+  "discovered_at": "2026-11-14T10:16:46Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=agents.md:1; cited_path=agents.md, CLAUDE.md; files_touched=.github/workflows/implement.yml, README.md, agents.d/ci-reissue-merged-pr-base-branch-routing.md, agents.d/sandbox-solc-versions.md, changelog.d/ci-reissue-merged-pr-base-branch-routing.md, changelog.d/sandbox-solc-versions.md, scripts/codex_isolated_exec.sh, scripts/resolve_integration_ref.sh, tests/fixtures/integration_ref_resolver_ci_triage/*.json, tests/test_codex_isolated_exec.py, tests/test_gh_api_retry.py, tests/test_resolve_integration_ref_ci_triage.py.",
+  "phase": "review_autofix",
+  "pr_number": 9178,
+  "record_id": "lesson_20261114101646_3cd6c9f021",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.md, CLAUDE.md",
+    "agents.md",
+    ".github/workflows/implement.yml",
+    "README.md",
+    "agents.d/ci-reissue-merged-pr-base-branch-routing.md",
+    "agents.d/sandbox-solc-versions.md",
+    "changelog.d/ci-reissue-merged-pr-base-branch-routing.md",
+    "changelog.d/sandbox-solc-versions.md",
+    "scripts/codex_isolated_exec.sh",
+    "scripts/resolve_integration_ref.sh",
+    "tests/fixtures/integration_ref_resolver_ci_triage/*.json",
+    "tests/test_codex_isolated_exec.py",
+    "tests/test_gh_api_retry.py",
+    "tests/test_resolve_integration_ref_ci_triage.py"
+  ]
+}
