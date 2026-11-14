@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should `ai-review/head-gate` treat consumer-updater PRs (`auto/update-workflows-<sha12>`)?\nChoices:\nA) `scripts/review_head_gate.sh` posts `success` for an updater head only when that exact head SHA already has a successful `ai-update-workflows/verify` status and a passing `workflow-integrity` check. Otherwise the gate stays `pending`. (RECOMMENDED)\nB) Exempt updater PRs from `ai-review/head-gate` through the required-check or branch-protection settings in each consumer repo. This is a settings change in the consumer repos, not a code change.\nC) Leave the head gate unchanged and ship only fixes 1, 2 and 4.\nQ2: How should the 24-hour drift alarm (fix 4) be built, given the existing audit?\nChoices:\nA) Extend the existing `audit_consumer_drift.yml` and `audit_consumer_drift.py`. Alert when a consumer's pin has been behind `@stable` for more than 24 hours, counted from the tag time of the first release newer than its pin. Alert even if an update PR is open, and run the audit often enough (for example every 6 hours) that 24 hours is actually enforced. (RECOMMENDED)\nB) Extend the existing audit, but only lower `SYNC_PR_STALE_AFTER_SECONDS` from 3 days to 24 hours, still counted from when the PR opened, and keep the daily 08:00 cron. This would have missed btc_sweeper, which went through 3 closed PRs since v1.46.0.\nC) Add a new, separate drift-alarm workflow next to the existing audit.\nQ3: When the verify job cannot enable auto-merge (fix 2), what should happen to the job and to the `ai-update-workflows/verify` status?\nChoices:\nA) Keep the `ai-update-workflows/verify` success status already posted, so a human can still merge. Then exit the job non-zero with an `::error::` line and send a Telegram alert. (RECOMMENDED)\nB) Fail the job and also set the verify status to failure. The PR then can't be merged until the job is rerun and succeeds.\nC) Keep the job green, but raise the warning to an `::error::` annotation and send a Telegram alert.",
+  "fingerprint": "2680272ea38dee16b10595ac07fad2ec6c2a73e5582898efb06645d29e6ff633",
+  "lineage": {
+    "issue_number": 9483,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43547052797",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43547052797",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261114065926_7974fdfd77",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9483,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43547052797"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9483 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-14T06:59:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
