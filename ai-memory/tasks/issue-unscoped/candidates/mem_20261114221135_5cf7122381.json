@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Edit only `.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_step_scripts_contract.py`, and `changelog.d/9223-release-gate-clarify-stall-diagnostics.md`.\n  expected_change_site: PR changed-file set\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR also modifies `tests/test_test_and_mark_stable_clarify_wait.py` to change its fake-command setup, outside the listed three-file scope. Severity disagreement: MAJOR (google_gemini-3_1-flash-lite) vs NIT (anthropic_claude-sonnet-5_5, openai_gpt-6-luna). The anthropic reviewer notes the edit only replaces PATH-executable fakes with shell functions because the gate container mounts the temp dir noexec, that the linked issue's grant lists `tests/**`, and that this is a wording quibble, not a missing deliverable (its ISSUE_CONFIDENCE was 2).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- requirement: \"Edit only `.github/workflows/test-and-mark-stable.yml` ..., plus `tests/test_test_and_mark_stable_step_scripts_contract.py` and `changelog.d/9223-release-gate-clarify-stall-diagnostics.md`.\"\n  expected_change_site: PR changed-file set\n  Evidence of absence: the PR also changes `tests/test_test_and_mark_stable_clarify_wait.py`; the change only replaces its PATH-executable fakes with shell functions, because the gate container mounts the temp dir noexec. The linked issue's grant lists `tests/**`, so the edit is allowed. The finding is a wording quibble, not a missing deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\nAll other checklist categories: NONE.\nDismissed items: five pre-push failures (`test_agents_fragment_contract`, `test_ai_label_precreation_contract`, `test_changelog_fragment_contract`, `test_review_autofix_provider_outage_contract`, `test_workflow_checkout_integration_ref_audit`) could not be mapped to the diff and were not reported.\nHARDENING_SUGGESTIONS: NONE\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- requirement: Edit only `.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_step_scripts_contract.py`, and `changelog.d/9223-release-gate-clarify-stall-diagnostics.md`.\n  expected_change_site: PR changed-file set\n  Evidence of absence: The PR also modifies `tests/test_test_and_mark_stable_clarify_wait.py` to change its fake-command setup, outside the specified three-file scope.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\nAll other checklist categories: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- requirement: \"Edit only `.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_step_scripts_contract.py`, and `changelog.d/9223-release-gate-clarify-stall-diagnostics.md`.\"\n  expected_change_site: PR changed-file set\n  Evidence of absence: The PR also modifies `tests/test_test_and_mark_stable_clarify_wait.py` to change its fake-command setup. That file is outside the specifically listed edit set.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\nAll other checklist categories: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "a052b72c53498fe40c1b6e3c2b48acfaef94856d012db451c04c88a83ee30d7e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9471,
+    "run_id": "43597717754",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43597717754",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114221135_5cf7122381",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9471,
+    "run_id": "43597717754"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-14T22:11:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
