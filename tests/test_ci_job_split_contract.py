@@ -163,6 +163,37 @@ class SystemPythonJobTest(unittest.TestCase):
 		self.assertIn("'NR % total == n'", shard_step["run"])
 		self.assertIn('-v n="${shard_index}" -v total="${shard_total}"', shard_step["run"])
 
+	def test_system_python_shard_keeps_default_tmpdir(self) -> None:
+		"""Regression guard for run 43053071771 (#9313).
+
+		A `TMPDIR` under `RUNNER_TEMP` made pytest's `tmp_path` long enough to
+		push the heal tests' broker socket past the 108-byte `AF_UNIX` limit.
+		A short `/tmp/...` `TMPDIR` stays allowed.
+		"""
+		step = self._steps()["System-Python test shard"]
+		long_tmpdir_markers = ("runner_temp", "runner.temp", "/home/runner/work")
+		step_tmpdir = (step.get("env") or {}).get("TMPDIR")
+		if step_tmpdir is not None:
+			step_tmpdir_value = str(step_tmpdir).lower()
+			self.assertNotIn("runner_temp", step_tmpdir_value)
+			self.assertNotIn("runner.temp", step_tmpdir_value)
+			self.assertFalse(step_tmpdir_value.startswith("/home/runner/work"), step_tmpdir_value)
+		for raw_line in str(step.get("run", "")).splitlines():
+			run_line = raw_line.strip()
+			if not run_line or run_line.startswith("#") or "TMPDIR=" not in run_line:
+				continue
+			with self.subTest(line=run_line):
+				for marker in long_tmpdir_markers:
+					self.assertNotIn(marker, run_line.lower())
+
+	def test_system_python_shard_count_fits_the_job_budget(self) -> None:
+		shards = _ci_jobs()[self.SYSTEM_PYTHON_JOB_ID]["strategy"]["matrix"]["system-python-shard"]
+		self.assertGreaterEqual(
+			len(shards),
+			24,
+			"run 43053071771: 12 system-python shards hit the 20-minute job budget",
+		)
+
 	def test_runtime_python_jobs_gate_lint_and_feed_budget_watch(self) -> None:
 		jobs = _ci_jobs()
 		for job_id in (self.SYSTEM_PYTHON_JOB_ID, self.SANDBOX_PYTHON_JOB_ID):
