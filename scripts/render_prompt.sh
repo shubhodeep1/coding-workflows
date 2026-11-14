@@ -397,6 +397,13 @@ while IFS= read -r placeholder_name; do
 	if [ "${_render_untrusted_body_mode}" = "true" ]; then
 		continue
 	fi
+	# The collector regex admits names such as `1abc` or `0`; `${!name}` aborts
+	# the script on the first ("invalid variable name") and reads a positional
+	# parameter ($0 = script path) on the second. No environment variable can
+	# have such a name, so leave the placeholder literal for render_prompt.py.
+	if ! [[ "${placeholder_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+		continue
+	fi
 	if placeholder_env_name_is_credential_like "${placeholder_name}"; then
 		echo "NOTE: render_prompt.sh left {{${placeholder_name}}} unresolved: credential-like names are never read from the environment." >&2
 		continue

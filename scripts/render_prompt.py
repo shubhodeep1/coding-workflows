@@ -1419,6 +1419,9 @@ def main(argv: list[str] | None = None) -> int:
 		# not Exception subclasses and keep their previous behaviour. CR/LF in
 		# the message are escaped so a multi-line message stays on one line.
 		unexpected_exc_message = str(exc).replace("\r", "\\r").replace("\n", "\\n")
+		# Cap the message so one unexpected exception cannot emit a multi-KB log line.
+		if len(unexpected_exc_message) > 1000:
+			unexpected_exc_message = unexpected_exc_message[:1000] + "...[truncated]"
 		print(
 			f"ERROR: render_prompt unexpected {type(exc).__name__}: {unexpected_exc_message} (prompt={prompt_path})",
 			file=sys.stderr,

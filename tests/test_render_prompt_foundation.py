@@ -556,6 +556,24 @@ def test_render_prompt_sh_refuses_secret_like_env_placeholders() -> None:
 	assert not _stderr_error_lines(proc.stderr), proc.stderr
 
 
+def test_render_prompt_sh_leaves_non_identifier_placeholders_literal() -> None:
+	# `{{1abc}}` matches the collector regex but is not a bash identifier, so the
+	# indirect env lookup used to abort render_prompt.sh with a bare
+	# "invalid variable name" line; `{{0}}` read the script path from $0.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_non_identifier_") as td:
+		prompt_file = Path(td) / "mode-sample.txt"
+		prompt_file.write_text(
+			f"Header\n{_brace('1abc')}\n{_brace('0')}\n{_brace('RENDER_PROMPT_TEST_PLAIN_VALUE')}\nFooter\n",
+			encoding="utf-8",
+		)
+		proc = _run_render_prompt_sh_with_env(prompt_file, {"RENDER_PROMPT_TEST_PLAIN_VALUE": "plain_ok"})
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout == f"Header\n{_brace('1abc')}\n{_brace('0')}\nplain_ok\nFooter\n"
+	assert "invalid variable name" not in proc.stderr
+	assert str(RENDER_PROMPT_SH) not in proc.stdout
+
+
 def test_render_prompt_sh_renders_header_with_empty_repo_learnings() -> None:
 	header_compaction_rules = (
 		"<compaction-rules>\n"
@@ -1755,6 +1773,7 @@ def main() -> int:
 	test_render_prompt_sh_never_substitutes_credential_env_placeholders()
 	test_render_prompt_sh_does_not_substitute_env_into_untrusted_body()
 	test_render_prompt_sh_refuses_secret_like_env_placeholders()
+	test_render_prompt_sh_leaves_non_identifier_placeholders_literal()
 	print("OK: render prompt foundation assertions hold")
 	# Imported here so pytest does not collect these cases twice; run as a
 	# script, sys.path[0] is tests/.
