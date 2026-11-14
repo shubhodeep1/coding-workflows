@@ -377,10 +377,10 @@ def _workflow() -> str:
 
 def test_capture_sites_use_the_paged_lookup() -> None:
 	wf = _workflow()
-	# Three run-ID capture sites, plus wait-clarify's one-page html_url read
-	# on timeout (issue #9223), which is scoped by the same issue title.
+	# Three e2e-smoke-test capture sites plus the alt-model deadline's
+	# title-scoped Clarify lookup (#9223).
 	assert wf.count('find_latest_scoped_run_field "${TEST_REPO}"') == 4
-	assert wf.count('"Clarif" "${ISSUE_TITLE}" "html_url" 1') == 1
+	assert wf.count('find_latest_scoped_run_field "${TEST_REPO}" "${ALT_CREATED_AFTER}" "Clarif" "${ALT_ISSUE_TITLE}" id') == 1
 	# Clarify and Implement scope by the smoke issue's title, like Plan does.
 	assert wf.count('"${name_re}" "${ISSUE_TITLE:-}" "id"') == 2
 	for step_id in ("wait-clarify", "wait-implement"):
@@ -478,6 +478,33 @@ def test_phase7_run_listings_all_go_through_the_retry_helper() -> None:
 	for per_page in ("50", "1", "10"):
 		assert f"if ! phase7_list_cancel_runs {per_page}; then" in wf
 	assert wf.count('echo "status=lookup_failed" >> "$GITHUB_OUTPUT"') >= 3
+
+
+
+# The clarify-wait cases (issue #9223) live in
+# tests/test_test_and_mark_stable_clarify_wait.py and are collected here,
+# since CI already runs this file and ci.yml was outside that issue's file
+# grant. A name clash would hide a test, so it fails loudly.
+def _collect_clarify_wait_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"test_and_mark_stable_clarify_wait_cases",
+		Path(__file__).resolve().parent / "test_test_and_mark_stable_clarify_wait.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 15, f"only {collected} clarify-wait cases collected"
+
+
+_collect_clarify_wait_cases()
 
 
 def main() -> int:
