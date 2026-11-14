@@ -163,6 +163,11 @@ class SystemPythonJobTest(unittest.TestCase):
 		self.assertIn("'NR % total == n'", shard_step["run"])
 		self.assertIn('-v n="${shard_index}" -v total="${shard_total}"', shard_step["run"])
 
+	def test_system_python_shard_count_covers_budget(self) -> None:
+		# 24 shards let shard 11 take 15m16s of 20 minutes (run 43412753795, #9469).
+		shards = _ci_jobs()[self.SYSTEM_PYTHON_JOB_ID]["strategy"]["matrix"]["system-python-shard"]
+		self.assertGreaterEqual(len(shards), 32)
+
 	def test_runtime_python_jobs_gate_lint_and_feed_budget_watch(self) -> None:
 		jobs = _ci_jobs()
 		for job_id in (self.SYSTEM_PYTHON_JOB_ID, self.SANDBOX_PYTHON_JOB_ID):
