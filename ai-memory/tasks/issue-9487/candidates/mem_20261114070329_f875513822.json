@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should an issue-less PR be re-queued? `retrigger_review` needs an issue number and pushes an empty commit to that issue's implementation PR.\nChoices:\nA) Re-dispatch the review the way the noop sweep does, through `_dispatch_review_for_conflicts \"<pr>\" \"<head_ref>\"`. This sends a workflow dispatch, pushes no empty commit, and treats rc=2 (\"already active or dispatched this cycle\") as `in_flight` (RECOMMENDED)\nB) Move the empty-commit push and its in-flight, merge-train and conflict guards out of `retrigger_review` into a helper that works per PR, and call that helper. The new commit changes the PR head.\nC) Keep `retrigger_review` itself and add a no-issue branch inside it.\nQ2: Where should the candidate data come from, given that the standalone sweep already lists open PRs and fetches each one's comments?\nChoices:\nA) Add the selection, gate and act step to the existing standalone PR loop and reuse `STANDALONE_PRS` and `N_COMMENTS_JSON`. That costs no new calls, but you still need one batched lookup per cycle to find each PR's `closingIssuesReferences` labels (RECOMMENDED)\nB) As the issue says: a new `_fetch_issueless_review_retry_candidates_graphql` batch (50 PRs per alias batch, last 5 comments, fail-open), run once per cycle after the standalone stall pass and separate from the noop sweep.\nQ3: For the `waiting_for_release` gate, which SHA counts as \"current `@stable`\" when the poller runs in a consumer repo?\nChoices:\nA) Reuse `_noop_cap_review_support_sha`. That is `ORCHESTRATOR_ENGINE_SHA` in coding-workflows, and the `review_autofix.yml@<40-hex>` pin in the consumer's local `.github/workflows/ai-review.yml`. It needs no API call. If the SHA cannot be resolved, log `outcome=skipped` and do not retry (fail closed) (RECOMMENDED)\nB) Read the `stable` branch or tag SHA of coding-workflows over the API once per cycle, and retry once it differs from the marker's `support=`, even if the consumer has not synced the new pin yet.\n**Note:** with B, a consumer that has not synced yet can re-run into the same crash. That works against the issue's Goal 2.\nQ4: Which issue-less PRs are eligible?\nChoices:\nA) Only PRs whose head is in the same repository (same fork exclusion as issue #7126). The `review-autofix-failure:v1` marker and the `issueless-review-retry:v1` marker count only when the trusted pipeline login wrote them (`unblock_trusted_login`) (RECOMMENDED)\nB) Every open, non-draft PR, fork PRs included, and markers count whoever wrote them.",
+  "fingerprint": "261c092f58e9d4ddf09c1623e3f151963cd89779ecf40af4941466c4adc34310",
+  "lineage": {
+    "issue_number": 9487,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43547434626",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43547434626",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261114070329_f875513822",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9487,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43547434626"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9487 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-14T07:03:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
