@@ -260,6 +260,10 @@ jobs:
       # Issue #8265: a failure whose fix is only in unmodified upstream-managed
       # files goes upstream as one heal report instead of a consumer issue.
       CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED || 'true' }}
+      # Issue #9130: an attempt-1 outage failure (no AFFECTED_FILES, an HTTP
+      # 5xx / timeout / connection error in the failed log tail) re-runs its
+      # failed jobs once instead of filing an issue. "false" files as before.
+      CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED: ${{ vars.CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED || 'true' }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       # Job-level override of the workflow-level default: a PR carrying the
@@ -682,10 +686,33 @@ jobs:
           cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
           bash scripts/check_failure_triage.sh
 
+      # Issue #9130: an outage failure on attempt 1 of its run re-runs its
+      # failed jobs once (one rerun-failed-jobs POST with GH_PAT; the post
+      # step's Issues token cannot). Any failure here leaves `rerun` unset, so
+      # the post step below files the issue as before.
+      - name: Re-run transient check failure
+        id: transient_rerun
+        if: ${{ steps.diagnose_triage.outputs.ready == 'true' && steps.upstream_route.outputs.routed != 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          CHECK_TRIAGE_STAGE: transient-rerun
+          CHECK_TRIAGE_PR_NUMBER: ${{ inputs.pr_number }}
+          CHECK_TRIAGE_CHECK_RUN_ID: ${{ inputs.check_run_id }}
+          CHECK_TRIAGE_CHECK_NAME: ${{ inputs.check_name }}
+          CHECK_TRIAGE_CHECK_CONCLUSION: ${{ inputs.check_conclusion }}
+          CHECK_TRIAGE_HEAD_SHA: ${{ inputs.head_sha }}
+          CHECK_TRIAGE_DETAILS_URL: ${{ inputs.details_url }}
+        run: |
+          set -euo pipefail
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
+          bash scripts/check_failure_triage.sh
+
       # A fine-grained PAT with Issues: write (and Metadata: read) keeps
       # issues:opened dispatching clarify; github.token would suppress it.
       - name: Post check-failure triage issue
-        if: ${{ steps.diagnose_triage.outputs.ready == 'true' && steps.upstream_route.outputs.routed != 'true' }}
+        if: ${{ steps.diagnose_triage.outputs.ready == 'true' && steps.upstream_route.outputs.routed != 'true' && steps.transient_rerun.outputs.rerun != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

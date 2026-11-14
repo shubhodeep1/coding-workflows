@@ -113,6 +113,10 @@ jobs:
       ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
       ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
       PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+      # Issue #9130: a nested extensionless file the plan lists is granted only
+      # when it is a regular file in this planning checkout; otherwise the plan
+      # holds as replannable. "false" restores the earlier silent drop.
+      PLAN_GRANT_TREE_FILE_CHECK_ENABLED: ${{ vars.PLAN_GRANT_TREE_FILE_CHECK_ENABLED || 'true' }}
       WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -3453,6 +3457,7 @@ jobs:
                     --allow-workflow-edits "${plan_gate_allow_edits}" \
                     --origin-repo "${GITHUB_REPOSITORY:-}" \
                     --pipeline-grant-body-out "${plan_gate_grant_body_file}" \
+                    --planning-root "$(pwd)" \
                     --issue-number "${ISSUE_NUMBER}" 2>/dev/null || true
                 }
                 plan_gate_result="$(run_plan_gate)"

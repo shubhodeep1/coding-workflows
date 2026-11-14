@@ -1090,3 +1090,99 @@ def test_step_error_excerpt_keeps_max_excerpt_lines_before_the_trailing_lines():
 	out = excerpt.split("\n")
 	assert out.index(STEP_ERROR_8799) == mod.MAX_EXCERPT_LINES - 1
 	assert out[-1] == f"t{mod.STEP_ERROR_AFTER_LINES - 1}"
+
+
+# --- same-head re-run (issue #9130) -------------------------------------------
+
+ALL_JOBS_KEY = rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=all&per_page=100"
+SAME_HEAD_CHECKS_KEY = rf"repos/{REPO}/commits/{PR_HEAD_SHA}/check-runs\?check_name=CI&filter=latest&per_page=100"
+
+
+def _attempt_jobs(entries):
+	jobs = [
+		{"id": 5000 + index, "name": name, "status": "completed", "conclusion": conclusion, "run_attempt": attempt}
+		for index, (name, conclusion, attempt) in enumerate(entries)
+	]
+	return {"total_count": len(jobs), "jobs": jobs}
+
+
+ALL_ATTEMPT_JOBS = _attempt_jobs([
+	("orchestrate-poll (3)", "failure", 1), ("static-checks", "success", 1), ("orchestrate-poll (2)", "success", 1),
+	("orchestrate-poll (3)", "success", 2), ("static-checks", "success", 2), ("orchestrate-poll (2)", "success", 2),
+])
+
+
+def _same_head_routes(**overrides):
+	routes = _open_routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _open_pr(head_sha=PR_HEAD_SHA),
+		rf"repos/{REPO}/actions/runs/{RUN_ID}": _run(run_attempt=2, status="completed", conclusion="success"),
+		rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=latest&per_page=100": _jobs(BASE_JOBS, id_base=1),
+		ALL_JOBS_KEY: ALL_ATTEMPT_JOBS,
+	})
+	routes.update(overrides)
+	return routes
+
+
+def test_same_head_rerun_that_passed_resolves(tmp_path, monkeypatch):
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_same_head_routes(), dry_run=False)
+	assert rc == 0 and result["status"] == "resolved" and result["reason"] == "verified", result
+	assert result["path"] == "open_head_rerun" and result["pr_state"] == "open"
+	assert result["evidence_sha"] == PR_HEAD_SHA and result["triage_head_sha"] == PR_HEAD_SHA
+	assert result["matched"] == ["orchestrate-poll (3): success"]
+	body = fake.writes[0][1]["body"]
+	assert "later attempt of the triaged run passed" in body
+	assert body.splitlines()[-1] == f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={PR_HEAD_SHA} -->"
+	assert [w[0][:3] for w in fake.writes][-1] == ["-X", "PATCH", f"repos/{REPO}/issues/{ISSUE}"]
+	reads = [call[-1] for call in fake.calls if call[0] != "-X"]
+	assert sum(1 for path in reads if "filter=all" in path) == 1
+	assert not any("/compare/" in path or "/workflows/" in path for path in reads)
+
+
+def _rerun_run(**overrides):
+	run = _run(run_attempt=2, status="completed", conclusion="success")
+	run.update(overrides)
+	return {rf"repos/{REPO}/actions/runs/{RUN_ID}": run}
+
+
+@pytest.mark.parametrize(("overrides", "rerun_reason"), [
+	(_rerun_run(run_attempt=1, conclusion="failure"), "attempt_not_rerun"),
+	(_rerun_run(status="in_progress", conclusion=None), "rerun_pending"),
+	(_rerun_run(conclusion="failure"), "rerun_not_success"),
+	({rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=latest&per_page=100": _jobs({"static-checks": "success"}, id_base=1)}, "failed_jobs_not_resolved"),
+	({rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=latest&per_page=100": _jobs(
+		{"orchestrate-poll (3)": "success", "static-checks": "success"}, id_base=1) | {
+		"jobs": _jobs({"orchestrate-poll (3)": "success"}, id_base=1)["jobs"] * 2, "total_count": 2}}, "failed_jobs_not_resolved"),
+	({ALL_JOBS_KEY: {"total_count": 99, "jobs": ALL_ATTEMPT_JOBS["jobs"]}}, "jobs_truncated"),
+	({ALL_JOBS_KEY: mod.GhApiError("rc=1")}, "all_jobs_unreadable"),
+	({ALL_JOBS_KEY: _attempt_jobs([("static-checks", "success", 1), ("static-checks", "success", 2)])}, "no_prior_failed_jobs"),
+])
+def test_same_head_rerun_unverified_variants(tmp_path, monkeypatch, overrides, rerun_reason):
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_same_head_routes(**overrides))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "open_head_unchanged", result
+	assert result["rerun_reason"] == rerun_reason
+	assert "path" not in result
+	assert not any(w["method"] == "PATCH" for w in result["writes"])
+
+
+def test_same_head_rerun_on_another_head_or_pr_is_not_evidence(tmp_path, monkeypatch):
+	routes = _same_head_routes(**_rerun_run(head_sha="7" * 40, pull_requests=[]))
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "run_identity_mismatch"
+	routes = _same_head_routes(**_rerun_run(pull_requests=[{"number": PR + 1}], head_sha="7" * 40))
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "unverified" and "path" not in result
+
+
+def test_same_head_check_run_triage_resolves_on_a_newer_check_run(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID))
+	newer = {"total_count": 1, "check_runs": [{"id": FAILED_JOB_ID + 7, "head_sha": PR_HEAD_SHA, "status": "completed", "conclusion": "success"}]}
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=_same_head_routes(**{SAME_HEAD_CHECKS_KEY: newer}))
+	assert rc == 0 and result["status"] == "resolved" and result["path"] == "open_head_rerun"
+	for checks, rerun_reason in (
+		({"total_count": 1, "check_runs": [{"id": FAILED_JOB_ID, "head_sha": PR_HEAD_SHA, "status": "completed", "conclusion": "success"}]}, "rerun_check_not_newer"),
+		({"total_count": 1, "check_runs": [{"id": FAILED_JOB_ID + 7, "head_sha": PR_HEAD_SHA, "status": "completed", "conclusion": "failure"}]}, "rerun_check_failure"),
+		(mod.GhApiError("rc=1"), "rerun_checks_unreadable"),
+	):
+		result, _, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=_same_head_routes(**{SAME_HEAD_CHECKS_KEY: checks}))
+		assert result["status"] == "unverified" and result["reason"] == "open_head_unchanged"
+		assert result["rerun_reason"] == rerun_reason

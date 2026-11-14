@@ -19,7 +19,8 @@ and prints one JSON object:
    "merge_sha": ..., "evidence_sha": ..., "evidence_url": ..., "check_name": ...,
    "evidence_ref": "default" | "integration_pr:<n>",
    "failed_jobs": [...], "traceback_posted": [...], "writes": [...],
-   "path": "merged" | "open_head" (only when resolved),
+   "path": "merged" | "open_head" | "open_head_rerun" (only when resolved),
+   "rerun_reason": ... (only when the same-head re-run check did not resolve),
    "pr_state": "merged" | "open" | "closed" (when the PR was readable)}
 
 (the integration path also adds "integration_pr" and, once that PR merged,
@@ -49,6 +50,19 @@ open and whose head has moved past the trusted header's Head SHA:
   blocks) completed with ``success``, and every failed job name of the
   triaged run is present exactly once and ``success``.
 No compare read is made on this path; the marker's sha is the current head.
+Resolved (``path=open_head_rerun``, issue #9130) covers a linked PR that is
+still open on the trusted header's Head SHA, when a later attempt of the
+triaged run passed on that same head:
+- workflow-run triage: the triaged run (already read and bound to this
+  repository and PR above) has ``run_attempt > 1``, ``status == completed``,
+  ``conclusion == success`` and ``head_sha`` equal to the header's Head SHA;
+  one ``jobs?filter=all`` read names every job that failed in an earlier
+  attempt, and each of those names is present exactly once and ``success``
+  in the latest attempt's jobs (a truncated job list is unverified);
+- check-run triage: every latest run of the exact check name on the head
+  completed with ``success`` and none of them is the triaged check run.
+Every other same-head case stays ``unverified`` with the reason
+``open_head_unchanged``; the specific cause is in ``rerun_reason``.
 
 Integration-branch rule (issue #8685): a PR merged into
 ``orchestrator/project-<N>`` reaches the default branch only inside the
@@ -84,7 +98,9 @@ API calls (only for a trusted ai:check-triage issue): 1 user read, 1 paginated
 comment read, 1 PR read, 1-4 run/job/check reads, 1 compare read, up to 3 job
 log reads on the unverified path, and up to 3 writes. The open-head path
 replaces the default-branch and compare reads with at most 2 reads (1 for
-check-run triage), made only for an open PR whose head moved. The
+check-run triage), made only for an open PR whose head moved. An open PR
+whose head did not move adds at most 1 read (the jobs or check-runs read; the
+run read is the one already made, so at most 2 for the path). The
 integration-branch path adds 1 issue read, 1 PR list read and 1-2 run/check
 reads, plus 1 more compare read once the integration PR merged. ``CHECK_TRIAGE_RESOLVED_GATE_ENABLED``
 (default ``true``) set to ``false`` disables the gate with no API call.
@@ -365,6 +381,8 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 	base_repo = (base.get("repo") or {}).get("full_name") if isinstance(base.get("repo"), dict) else None
 
 	workflow_id = None
+	triaged_run: dict[str, Any] | None = None
+	triaged_latest_jobs: list[dict[str, Any]] | None = None
 	if triage.get("check_run_id") is None:
 		# Workflow-run triage: the check name is the workflow name.
 		run_id = triage.get("run_id")
@@ -422,6 +440,8 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		except GhApiError:
 			return _fail("run_jobs_unreadable")
 		verdict["failed_jobs"] = _failed_jobs(pr_jobs)
+		triaged_run = run
+		triaged_latest_jobs = pr_jobs
 	else:
 		# A check-run id is an Actions job id only for a github-actions check;
 		# fetch_failing_tracebacks reads the check run to pick the log source.
@@ -436,7 +456,10 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 	if pr.get("merged") is not True and pr.get("state") == "open":
 		# Issue #8671: an open PR (for example an orchestrator integration
 		# PR) whose head moved past the failure can resolve on that head.
-		return _verify_open_head(repo, triage, pr, head_repo, base_repo, workflow_id, verdict)
+		return _verify_open_head(
+			repo, triage, pr, head_repo, base_repo, workflow_id, verdict,
+			triaged_run=triaged_run, latest_jobs=triaged_latest_jobs,
+		)
 	merge_sha = pr.get("merge_commit_sha")
 	if pr.get("merged") is not True or not isinstance(merge_sha, str) or not SHA_RE.match(merge_sha):
 		return _fail("pr_not_merged")
@@ -674,9 +697,11 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 
 def _verify_open_head(
 	repo: str, triage: dict[str, Any], pr: dict[str, Any], head_repo: Any, base_repo: Any,
-	workflow_id: int | None, verdict: dict[str, Any],
+	workflow_id: int | None, verdict: dict[str, Any], *,
+	triaged_run: dict[str, Any] | None = None, latest_jobs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-	"""Resolve an open PR whose current head passes what failed on an older head."""
+	"""Resolve an open PR whose current head passes what failed on an older head,
+	or (issue #9130) whose unchanged head passed on a later attempt of the run."""
 
 	def _fail(reason: str) -> dict[str, Any]:
 		verdict["reason"] = reason
@@ -692,7 +717,15 @@ def _verify_open_head(
 	if not isinstance(triage_head, str) or not SHA_RE.match(triage_head):
 		return _fail("triage_head_unavailable")
 	if current == triage_head:
-		return _fail("open_head_unchanged")
+		rerun_reason = _verify_same_head_rerun(repo, triage, current, workflow_id, verdict, triaged_run, latest_jobs)
+		if rerun_reason:
+			verdict["rerun_reason"] = rerun_reason
+			return _fail("open_head_unchanged")
+		verdict.update({
+			"status": "resolved", "reason": "verified", "path": "open_head_rerun",
+			"evidence_sha": current, "triage_head_sha": triage_head,
+		})
+		return verdict
 
 	if workflow_id is None:
 		try:
@@ -745,6 +778,63 @@ def _verify_open_head(
 		"evidence_sha": current, "triage_head_sha": triage_head,
 	})
 	return verdict
+
+
+def _verify_same_head_rerun(
+	repo: str, triage: dict[str, Any], head_sha: str, workflow_id: int | None, verdict: dict[str, Any],
+	triaged_run: dict[str, Any] | None, latest_jobs: list[dict[str, Any]] | None,
+) -> str:
+	"""Empty string when a later attempt passed on head_sha (sets evidence_url
+	and matched), else the cause token (issue #9130). Never raises."""
+	if workflow_id is None:
+		check_run_id = triage.get("check_run_id")
+		if not isinstance(check_run_id, int):
+			return "check_run_id_unavailable"
+		try:
+			checks = _gh_api([
+				f"repos/{repo}/commits/{head_sha}/check-runs?check_name={quote(triage['check_name'], safe='')}&filter=latest&per_page=100",
+			])
+		except GhApiError:
+			return "rerun_checks_unreadable"
+		outcome = classify_check_runs(checks, head_sha)
+		if outcome != "success":
+			return f"rerun_check_{outcome}"
+		if any(not isinstance(item.get("id"), int) or item.get("id") == check_run_id for item in checks["check_runs"]):
+			return "rerun_check_not_newer"
+		verdict["evidence_url"] = f"https://github.com/{repo}/commit/{head_sha}"
+		verdict["matched"] = [f"{triage['check_name']}: success"]
+		return ""
+	if not isinstance(triaged_run, dict) or not isinstance(latest_jobs, list):
+		return "run_unavailable"
+	attempt = triaged_run.get("run_attempt")
+	if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt <= 1:
+		return "attempt_not_rerun"
+	if triaged_run.get("status") != "completed":
+		return "rerun_pending"
+	if triaged_run.get("conclusion") != "success":
+		return "rerun_not_success"
+	if triaged_run.get("head_sha") != head_sha or not isinstance(triaged_run.get("id"), int):
+		return "rerun_head_mismatch"
+	try:
+		all_jobs = _jobs_of(_gh_api([f"repos/{repo}/actions/runs/{triaged_run['id']}/jobs?filter=all&per_page=100"]))
+	except GhApiError as exc:
+		return "jobs_truncated" if str(exc) == "jobs_incomplete" else "all_jobs_unreadable"
+	names = sorted({
+		job["name"] for job in all_jobs
+		if isinstance(job.get("name"), str) and job.get("conclusion") in FAILED_JOB_CONCLUSIONS
+		and isinstance(job.get("run_attempt"), int) and not isinstance(job.get("run_attempt"), bool)
+		and job["run_attempt"] < attempt
+	})
+	if not names:
+		return "no_prior_failed_jobs"
+	if not shard_jobs_resolved(names, latest_jobs):
+		return "failed_jobs_not_resolved"
+	verdict["evidence_url"] = (
+		triaged_run["html_url"] if isinstance(triaged_run.get("html_url"), str)
+		else f"https://github.com/{repo}/actions/runs/{triaged_run['id']}"
+	)
+	verdict["matched"] = [f"{name}: success" for name in names]
+	return ""
 
 
 def _neutralize(text: str) -> str:
@@ -883,6 +973,25 @@ def fetch_failing_tracebacks(repo: str, failed_jobs: list[dict[str, Any]]) -> li
 
 
 def render_evidence_comment(issue_number: int, verdict: dict[str, Any]) -> str:
+	if verdict.get("path") == "open_head_rerun":
+		lines = [
+			"## Check-triage failure already resolved",
+			"",
+			f"The PR this issue was filed for, #{verdict['pr']}, is still open on the same head "
+			f"`{verdict['evidence_sha']}`, and a later attempt of the triaged run passed the failing check on that head. "
+			"The failure did not come from the PR's code.",
+			"",
+			f"- **Evidence commit (PR head):** `{verdict['evidence_sha']}` ({verdict['evidence_url']})",
+		]
+		for item in verdict.get("matched") or []:
+			lines.append(f"- **Passed:** `{_neutralize(item).replace('`', chr(39))}`")
+		lines += [
+			"",
+			"Closing this issue as completed. The PR is left unchanged, and no clarification answer or implementation is needed.",
+			"",
+			f"<!-- ai:check-triage-resolved:v1 issue={issue_number} pr={verdict['pr']} sha={verdict['evidence_sha']} -->",
+		]
+		return "\n".join(lines)
 	if verdict.get("path") == "open_head":
 		lines = [
 			"## Check-triage failure already resolved",

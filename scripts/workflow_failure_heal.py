@@ -8448,6 +8448,122 @@ def parse_check_triage_affected_files(text: Any) -> dict[str, Any]:
 	return result
 
 
+
+# Issue #9130: a check failure whose diagnosis names no AFFECTED_FILES and
+# whose failed-job log tail shows an outage signature re-runs its failed jobs
+# once (attempt 1 only) instead of filing a triage issue. One documented,
+# word-boundary-anchored alternation; only failed[i].log_tail text is scanned.
+CHECK_TRIAGE_TRANSIENT_SIGNATURE_RE = re.compile(
+	# Case-sensitive "HTTP" plus a version or a space, so the "http" of a
+	# "http://" URL next to an unrelated number is not a signature.
+	r"(?-i:\bHTTP(?:/[\d.]+)?\s)[^\n]*\b5\d\d\b"  # HTTP status line or "HTTP error 503"
+	r"|\b50[234] Gateway\b"                # 502/504 Gateway ...
+	r"|\bGateway Time-?out\b"              # Gateway Timeout / Gateway Time-out
+	r"|\btimed out\b"                      # "operation timed out"
+	r"|\bETIMEDOUT\b"
+	r"|\bECONNRESET\b"
+	r"|\bConnection reset\b"
+	r"|curl: \(28\)"                       # curl operation timeout
+	r"|curl: \(22\)[^\n]*\b5\d\d\b"        # curl --fail with a 5xx status
+	r"|\bCould not resolve host\b",
+	re.IGNORECASE,
+)
+_CHECK_TRIAGE_CONTEXT_FIELD_RE = re.compile(r"^(failed|incomplete)\[(\d+)\]\.([a-z_]+)(?:: (.*)| \(\d+ chars\):)$")
+CHECK_TRIAGE_TRANSIENT_FAILED_CONCLUSIONS = ("failure", "timed_out")
+
+
+def check_triage_transient_log_tails(context_text: Any, run_id: int) -> list[str]:
+	"""failed[i].log_tail texts whose failed[i].details_url names actions run run_id."""
+	if not isinstance(context_text, str) or not isinstance(run_id, int) or run_id <= 0:
+		return []
+	entries: dict[int, dict[str, Any]] = {}
+	current: int | None = None
+	in_tail = False
+	run_url_re = re.compile(r"/actions/runs/" + str(run_id) + r"(?:/|$)")
+	for line in context_text.split("\n"):
+		field = _CHECK_TRIAGE_CONTEXT_FIELD_RE.match(line)
+		if field:
+			in_tail = False
+			if field.group(1) != "failed":
+				current = None
+				continue
+			current = int(field.group(2))
+			entry = entries.setdefault(current, {"details_url": "", "tail": []})
+			if field.group(3) == "details_url":
+				entry["details_url"] = (field.group(4) or "").strip()
+			elif field.group(3) == "log_tail":
+				in_tail = True
+			continue
+		if in_tail and current is not None:
+			entries[current]["tail"].append(line)
+	return [
+		"\n".join(entry["tail"]) for _, entry in sorted(entries.items())
+		if run_url_re.search(entry["details_url"]) and entry["tail"]
+	]
+
+
+def classify_check_triage_transient(
+	diagnosis_text: Any, context_text: Any, run_id: int, *, run: Any = None, pr: Any = None,
+	repo: str = "", head_sha: str = "", pr_number: int = 0,
+) -> dict[str, Any]:
+	"""Decide whether a check failure is a transient outage to re-run once (issue #9130).
+
+	``candidate`` means the offline gates passed (no AFFECTED_FILES block and a
+	transient signature in a failed log tail of run_id); with ``run`` (the run
+	read) and ``pr`` (the collected PR payload) the result is ``rerun`` only
+	when the run is this repository's attempt-1 pull_request run on head_sha
+	and the PR is open, same-repository and still on head_sha. Anything else
+	is ``skip`` with a reason token.
+	"""
+	result: dict[str, Any] = {"decision": "skip", "reason": "", "attempt": None}
+
+	def _skip(reason: str) -> dict[str, Any]:
+		result["reason"] = reason
+		return result
+
+	if parse_check_triage_affected_files(diagnosis_text)["status"] != "missing":
+		return _skip("affected_files_present")
+	tails = check_triage_transient_log_tails(context_text, run_id)
+	if not any(CHECK_TRIAGE_TRANSIENT_SIGNATURE_RE.search(tail) for tail in tails):
+		return _skip("no_transient_signature")
+	if run is None:
+		result.update({"decision": "candidate", "reason": "transient_signature"})
+		return result
+	if not isinstance(run, dict) or run.get("id") != run_id:
+		return _skip("run_identity_mismatch")
+	attempt = run.get("run_attempt")
+	result["attempt"] = attempt if isinstance(attempt, int) and not isinstance(attempt, bool) else None
+	run_repo = run.get("repository", {}).get("full_name") if isinstance(run.get("repository"), dict) else None
+	if not isinstance(run_repo, str) or not repo or run_repo.lower() != repo.lower() or run.get("event") != "pull_request":
+		return _skip("run_identity_mismatch")
+	if result["attempt"] != 1:
+		return _skip("attempt_not_first")
+	if run.get("status") != "completed":
+		return _skip("run_not_completed")
+	if run.get("conclusion") not in CHECK_TRIAGE_TRANSIENT_FAILED_CONCLUSIONS:
+		return _skip("run_not_failed")
+	if not isinstance(head_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", head_sha) or run.get("head_sha") != head_sha:
+		return _skip("run_head_mismatch")
+	if not isinstance(pr, dict) or not isinstance(pr.get("head"), dict):
+		return _skip("pr_unreadable")
+	pr_head = pr["head"]
+	if pr_number and pr.get("number") != pr_number:
+		return _skip("pr_unreadable")
+	run_prs = [item.get("number") for item in run.get("pull_requests") or [] if isinstance(item, dict)]
+	head_ref = pr_head.get("ref")
+	if pr.get("number") not in run_prs and not (isinstance(head_ref, str) and head_ref and run.get("head_branch") == head_ref):
+		return _skip("run_pr_mismatch")
+	if pr.get("state") != "open" or pr.get("merged") is True:
+		return _skip("pr_not_open")
+	head_repo = pr_head.get("repo", {}).get("full_name") if isinstance(pr_head.get("repo"), dict) else None
+	if not isinstance(head_repo, str) or head_repo.lower() != repo.lower():
+		return _skip("pr_cross_repository")
+	if pr_head.get("sha") != head_sha:
+		return _skip("head_moved")
+	result.update({"decision": "rerun", "reason": "transient_signature"})
+	return result
+
+
 def _load_sync_manifest_module():
 	"""Load the sibling build_sync_manifest.py by path (callers run ``python3 -I``)."""
 	import importlib.util
@@ -8727,6 +8843,35 @@ def _cmd_check_triage_route(args: argparse.Namespace) -> int:
 	))
 	return 0
 
+
+
+def _cmd_check_triage_transient_rerun(args: argparse.Namespace) -> int:
+	"""Print the issue #9130 transient re-run decision; always exits 0."""
+	try:
+		run_id = int(args.run_id) if re.fullmatch(r"[1-9][0-9]{0,19}", args.run_id or "") else 0
+		if not run_id:
+			_write_json({"decision": "skip", "reason": "run_id_invalid", "attempt": None})
+			return 0
+		try:
+			diagnosis = Path(args.diagnosis_file).read_text(encoding="utf-8", errors="replace")
+		except OSError:
+			diagnosis = None
+		if diagnosis is None:
+			_write_json({"decision": "skip", "reason": "diagnosis_missing", "attempt": None})
+			return 0
+		context = Path(args.context_file).read_text(encoding="utf-8", errors="replace")
+		run = _load_json_file(args.run_json) if args.run_json else None
+		pr = _load_json_file(args.pr_payload_file) if args.pr_payload_file else None
+		pr_number = int(args.pr) if re.fullmatch(r"[1-9][0-9]{0,9}", args.pr or "") else 0
+		if args.run_json and run is None:
+			run = {}
+		_write_json(classify_check_triage_transient(
+			diagnosis, context, run_id, run=run, pr=pr, repo=args.repo, head_sha=(args.head_sha or "").lower(),
+			pr_number=pr_number,
+		))
+	except Exception:  # noqa: BLE001 - fail open to filing the issue
+		_write_json({"decision": "skip", "reason": "classify_failed", "attempt": None})
+	return 0
 
 def _cmd_build_synced_check_payload(args: argparse.Namespace) -> int:
 	decision = _load_json_file(args.decision_json)
@@ -11409,6 +11554,17 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--upstream-repo", default="shubhodeep1/coding-workflows")
 	p.add_argument("--historical", default="false")
 	p.set_defaults(func=_cmd_check_triage_route)
+
+	p = sub.add_parser("check-triage-transient-rerun", help="Decide whether a check failure is a transient outage to re-run once (issue #9130); prints the decision JSON, exits 0")
+	p.add_argument("--diagnosis-file", required=True)
+	p.add_argument("--context-file", required=True)
+	p.add_argument("--run-id", required=True)
+	p.add_argument("--repo", required=True)
+	p.add_argument("--head-sha", default="")
+	p.add_argument("--pr", default="")
+	p.add_argument("--run-json", default="")
+	p.add_argument("--pr-payload-file", default="")
+	p.set_defaults(func=_cmd_check_triage_transient_rerun)
 
 	p = sub.add_parser("build-synced-check-payload", help="Print the synced_check_failure dispatch payload for a route decision")
 	p.add_argument("--decision-json", required=True)

@@ -271,5 +271,32 @@ class PostStageBehaviourTests(unittest.TestCase):
 		self.assertLess(proc.stdout.index("CHECK_TRIAGE created issue="), proc.stdout.index("stage=created"))
 
 
+
+# The transient outage re-run cases (issue #9130) live in
+# tests/test_check_failure_triage_transient_rerun.py and are collected here,
+# since CI already runs this file and ci.yml was outside that issue's file
+# grant. A name clash would hide a test, so it fails loudly.
+def _collect_transient_rerun_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"check_failure_triage_transient_rerun_cases",
+		Path(__file__).resolve().parent / "test_check_failure_triage_transient_rerun.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		case = getattr(cases, case_name)
+		if isinstance(case, type) and issubclass(case, unittest.TestCase) and case is not unittest.TestCase:
+			assert case_name not in globals(), case_name
+			globals()[case_name] = case
+			collected += 1
+	assert collected >= 3, collected
+
+
+_collect_transient_rerun_cases()
+
+
 if __name__ == "__main__":
 	unittest.main()

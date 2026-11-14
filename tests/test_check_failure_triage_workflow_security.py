@@ -1020,7 +1020,7 @@ esac
 		self.assertLess(post["run"].index("triage_post_check_name="), post["run"].index("gh_retry gh issue create"))
 		self.assertIn('--title "CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}"', post["run"])
 		self.assertNotIn('--title "CI failure: ${CHECK_NAME}', post["run"])
-		self.assertEqual(post["if"], "${{ steps.diagnose_triage.outputs.ready == 'true' && steps.upstream_route.outputs.routed != 'true' }}")
+		self.assertEqual(post["if"], "${{ steps.diagnose_triage.outputs.ready == 'true' && steps.upstream_route.outputs.routed != 'true' && steps.transient_rerun.outputs.rerun != 'true' }}")
 		self.assertEqual(post["env"]["GH_TOKEN"], "${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}")
 		self.assertIn('cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"', post["run"])
 		self.assertIn("emit_event.sh emit_event.py", _step(triage_job, name="Stage workflow support files")["run"])

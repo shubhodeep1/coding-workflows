@@ -28390,6 +28390,40 @@ def test_managed_replannable_hold_lost_comment_response_keeps_planning() -> None
 	assert "ai:planning" in labels and "ai:awaiting-approval" not in labels, labels
 
 
+
+# Issue #9130: a plan listing a nested extensionless file holds as
+# plan_path_not_grantable (the poller passes no --planning-root) and shares
+# the #8339 one-re-plan flow.
+_UNGRANTABLE_PLAN_FILES = ("scripts/a.sh", "bin/deploy")
+
+
+def test_managed_plan_path_not_grantable_hold_replans_once() -> None:
+	result = _pipeline_plan_grant_run(issue_comments={10: [_trusted_plan_comment(_UNGRANTABLE_PLAN_FILES)]})
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert result.get("issue_body_patch_calls", []) == [], log
+	labels = result["issues"]["10"]["labels"]
+	assert "ai:planning" in labels and "ai:awaiting-approval" not in labels, labels
+	assert len(_replan_answer_bodies(result, "10")) == 1, log
+	# The planner is told the real cause, not "a directory or glob token".
+	answer = _replan_answer_bodies(result, "10")[0]
+	assert "could not be verified as a regular file" in answer and "directory or glob token" not in answer, answer
+	assert _replan_hold_bodies(result, "10") == [], log
+	assert ("AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=plan_path_not_grantable "
+		"outcome=replan issue=10") in log
+
+
+def test_managed_plan_path_not_grantable_hold_after_replan_gets_hold_notice() -> None:
+	result = _pipeline_plan_grant_run(issue_comments={10: [_trusted_plan_comment(_UNGRANTABLE_PLAN_FILES),
+		_replan_marker_comment(10)]})
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert result.get("issue_body_patch_calls", []) == [], log
+	assert _replan_answer_bodies(result, "10") == [], log
+	assert len(_replan_hold_bodies(result, "10")) == 1, log
+	assert "reason=plan_path_not_grantable outcome=defer issue=10" in log
+	assert "outcome=replan" not in log
+
 def test_managed_non_replannable_hold_is_unchanged() -> None:
 	# An exact ungranted path is not a placeholder token: today's hold.
 	result = _run_poller(

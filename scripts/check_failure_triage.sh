@@ -47,8 +47,18 @@
 #                                            (default "Check Failure Triage")
 #   CHECK_TRIAGE_TRUSTED_SUPPORT_DIR          trusted prompt root (required for diagnosis)
 #   CHECK_TRIAGE_STAGE                        all (default), collect, diagnose, route,
+#                                             transient-rerun (re-run an outage failure's
+#                                             failed jobs once, issue #9130),
 #                                             or supersede (close the stale issue the
 #                                             collect stage recorded, issue #8671)
+#   CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED      default true (unset, empty or true in any
+#                                             case); "false" turns it off; any other value
+#                                             turns it off with a warning. When on, an
+#                                             attempt-1 failure whose diagnosis names no
+#                                             AFFECTED_FILES and whose failed log tail shows
+#                                             an outage signature (HTTP 5xx, timeout,
+#                                             connection error) re-runs its failed jobs once
+#                                             instead of filing an issue (issue #9130)
 #   CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED      "false" keeps a blocked triage issue from an
 #                                             older PR head as a duplicate instead of
 #                                             superseding it (default true; issue #8671)
@@ -682,7 +692,7 @@ if [ -z "${TRUSTED_SUPPORT_DIR}" ] ||
 	exit 1
 fi
 case "${TRIAGE_STAGE}" in
-	all|collect|diagnose|route|supersede|supersede-check) ;;
+	all|collect|diagnose|route|transient-rerun|supersede|supersede-check) ;;
 	*) log "error invalid_stage"; exit 1 ;;
 esac
 
@@ -826,6 +836,134 @@ triage_upstream_send()
 	return 0
 }
 
+# --- Transient outage re-run (issue #9130) ---------------------------------
+# A check that failed for an external reason (a 5xx from a download host, a
+# timeout, a reset connection) on attempt 1 of its run, whose diagnosis names
+# no AFFECTED_FILES, re-runs its failed jobs once instead of filing an issue.
+# A second failure arrives as attempt 2 and files the issue as before. Every
+# gate failure, read error or refused POST files the issue (fail open).
+TRANSIENT_RERUN_SWITCH="${CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED:-true}"
+case "${TRANSIENT_RERUN_SWITCH,,}" in
+	''|true)
+		TRANSIENT_RERUN_ENABLED="true"
+		;;
+	false)
+		TRANSIENT_RERUN_ENABLED="false"
+		;;
+	*)
+		echo "::warning::CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED has an unrecognised value; transient re-runs stay off. Use true or false."
+		TRANSIENT_RERUN_ENABLED="false"
+		;;
+esac
+TRANSIENT_RERUN_RUN_FILE="${RUNTIME_DIR}/transient_run.json"
+# Written by the diagnosis step: "model" or "fallback" (the CI-log fallback
+# body, which never counts as a "no affected files" diagnosis).
+DIAGNOSIS_SOURCE_FILE="${RUNTIME_DIR}/diagnosis_source.txt"
+
+triage_transient_rerun_log()
+{
+	local tr_log_reason=""
+	tr_log_reason="$(printf '%s' "${2:-}" | tr -cd 'a-z_' | head -c 40)"
+	echo "CHECK_TRIAGE_TRANSIENT_RERUN outcome=${1} reason=${tr_log_reason:-unknown} run=${3//[^0-9]/} attempt=${4//[^0-9]/} pr=${PR_NUMBER//[^0-9]/}"
+}
+
+# Prints the classifier's decision JSON; the untrusted diagnosis and log
+# tails are read with no credential in the environment.
+triage_transient_rerun_classify()
+{
+	env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GH_TOKEN -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET \
+		PYTHONDONTWRITEBYTECODE=1 timeout 60 python3 -I -B "${UPSTREAM_HEAL_PY}" check-triage-transient-rerun \
+		--diagnosis-file "${RUNTIME_DIR}/diagnosis.md" --context-file "${PR_CHECK_RUNS_CONTEXT_FILE}" \
+		--run-id "${1}" --repo "${REPO}" --head-sha "${HEAD_SHA,,}" --pr "${PR_NUMBER}" "${@:2}" 2>/dev/null || true
+}
+
+# Returns 0 only when GitHub accepted the rerun-failed-jobs POST (HTTP 201).
+triage_transient_rerun()
+{
+	local tr_run_id="" tr_decision_json="" tr_decision="" tr_reason="" tr_attempt="" tr_response="" tr_status_line="" tr_rc=0
+	if [ "${TRANSIENT_RERUN_ENABLED}" != "true" ]; then
+		triage_transient_rerun_log skip disabled "" ""
+		return 1
+	fi
+	if [ "${HISTORICAL_MODE}" = "true" ] || [ "$(jq -r 'has("historical_run_id")' "${TRIAGE_METADATA_FILE}" 2>/dev/null)" = "true" ]; then
+		triage_transient_rerun_log skip historical "" ""
+		return 1
+	fi
+	case "$(head -c 16 "${DIAGNOSIS_SOURCE_FILE}" 2>/dev/null | tr -cd 'a-z')" in
+		model) ;;
+		fallback)
+			triage_transient_rerun_log skip fallback_diagnosis "" ""
+			return 1
+			;;
+		*)
+			triage_transient_rerun_log skip diagnosis_source_missing "" ""
+			return 1
+			;;
+	esac
+	tr_run_id="$(printf '%s' "${CHECK_DETAILS_URL}" | sed -n 's#^https://[^/]*/[^/]*/[^/]*/actions/runs/\([0-9][0-9]*\).*#\1#p' | head -n 1)"
+	if ! [[ "${tr_run_id}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+		triage_transient_rerun_log skip not_actions_run "" ""
+		return 1
+	fi
+	if ! [[ "${HEAD_SHA,,}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+		triage_transient_rerun_log skip inputs_invalid "${tr_run_id}" ""
+		return 1
+	fi
+	if [ ! -f "${UPSTREAM_HEAL_PY}" ] || [ -L "${UPSTREAM_HEAL_PY}" ]; then
+		triage_transient_rerun_log skip helper_missing "${tr_run_id}" ""
+		return 1
+	fi
+	if [ ! -s "${PR_CHECK_RUNS_CONTEXT_FILE}" ] || [ ! -s "${RUNTIME_DIR}/pr_payload.json" ]; then
+		triage_transient_rerun_log skip context_missing "${tr_run_id}" ""
+		return 1
+	fi
+	# Offline gates first: no API call unless the failure looks transient.
+	tr_decision_json="$(triage_transient_rerun_classify "${tr_run_id}")"
+	tr_decision="$(jq -r '.decision // ""' <<< "${tr_decision_json}" 2>/dev/null || true)"
+	tr_reason="$(jq -r '.reason // ""' <<< "${tr_decision_json}" 2>/dev/null || true)"
+	if [ "${tr_decision}" != "candidate" ]; then
+		triage_transient_rerun_log skip "${tr_reason:-classify_failed}" "${tr_run_id}" ""
+		return 1
+	fi
+	if [ -z "${GH_TOKEN:-}" ]; then
+		triage_transient_rerun_log failed token_missing "${tr_run_id}" ""
+		return 1
+	fi
+	# The one extra read (section 14 audit): the collect stage's base-gate run
+	# read keeps only workflow_id and runs only on some paths, and nothing else
+	# in triage returns run_attempt.
+	rm -f "${TRANSIENT_RERUN_RUN_FILE}"
+	if ! gh_retry gh api "repos/${REPO}/actions/runs/${tr_run_id}" > "${TRANSIENT_RERUN_RUN_FILE}" 2>/dev/null ||
+		! jq -e 'type == "object"' "${TRANSIENT_RERUN_RUN_FILE}" >/dev/null 2>&1; then
+		triage_transient_rerun_log failed run_unreadable "${tr_run_id}" ""
+		return 1
+	fi
+	tr_decision_json="$(triage_transient_rerun_classify "${tr_run_id}" --run-json "${TRANSIENT_RERUN_RUN_FILE}" --pr-payload-file "${RUNTIME_DIR}/pr_payload.json")"
+	tr_decision="$(jq -r '.decision // ""' <<< "${tr_decision_json}" 2>/dev/null || true)"
+	tr_reason="$(jq -r '.reason // ""' <<< "${tr_decision_json}" 2>/dev/null || true)"
+	tr_attempt="$(jq -r '.attempt // "" | tostring' <<< "${tr_decision_json}" 2>/dev/null || true)"
+	if [ "${tr_decision}" != "rerun" ]; then
+		triage_transient_rerun_log skip "${tr_reason:-classify_failed}" "${tr_run_id}" "${tr_attempt}"
+		return 1
+	fi
+	# One POST, no retry, so a run can never be re-run twice by this path.
+	# Only the status line is kept; the response body is never printed.
+	tr_response="$(gh api -i -X POST "repos/${REPO}/actions/runs/${tr_run_id}/rerun-failed-jobs" 2>/dev/null)" || tr_rc=$?
+	tr_status_line="$(printf '%s\n' "${tr_response}" | head -n 1 | tr -d '\r')"
+	tr_response=""
+	if [ "${tr_rc}" -ne 0 ] || ! [[ "${tr_status_line}" =~ ^HTTP/[^[:space:]]+\ 201([[:space:]]|$) ]]; then
+		triage_transient_rerun_log failed rerun_refused "${tr_run_id}" "${tr_attempt}"
+		return 1
+	fi
+	triage_transient_rerun_log rerun transient_signature "${tr_run_id}" "${tr_attempt}"
+	log "skip reason=transient_rerun pr=${PR_NUMBER} run=${tr_run_id} check=${CHECK_NAME_DISPLAY:-check}"
+	tg_send_msg "Check-failure auto-triage re-ran the failed jobs of run ${tr_run_id} for ${REPO} PR #${PR_NUMBER} (check '${CHECK_NAME_DISPLAY:-check}'): the failure looks like an external outage. No issue was filed." "DEBUG" >/dev/null 2>&1 || true
+	if [ -n "${GITHUB_OUTPUT:-}" ]; then
+		echo "rerun=true" >> "${GITHUB_OUTPUT}"
+	fi
+	return 0
+}
+
 if [ "${TRIAGE_STAGE}" = "supersede-check" ]; then
 	# Runs in the workflow's post step before it creates the new issue, with
 	# that step's Issues-scoped token (issue #8671). Exit 0 lets the post step
@@ -894,6 +1032,25 @@ if [ "${TRIAGE_STAGE}" = "route" ]; then
 		exit 0
 	fi
 	triage_upstream_send || true
+	exit 0
+fi
+
+if [ "${TRIAGE_STAGE}" = "transient-rerun" ]; then
+	# Runs between route and post with GH_PAT (issue #9130); it reads only the
+	# hand-off files the collect and diagnose stages wrote. Always exits 0:
+	# without rerun=true the post step files the issue as before.
+	if [ ! -s "${TRIAGE_METADATA_FILE}" ]; then
+		triage_transient_rerun_log skip metadata_missing "" ""
+		exit 0
+	fi
+	PR_NUMBER="$(jq -r '.pr_number // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
+	CHECK_NAME="$(jq -r '.check_name // ""' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
+	if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] || ! CHECK_NAME_DISPLAY="$(sanitize_check_name_display "${CHECK_NAME}")"; then
+		PR_NUMBER=""
+		triage_transient_rerun_log skip metadata_invalid "" ""
+		exit 0
+	fi
+	triage_transient_rerun || true
 	exit 0
 fi
 
@@ -1982,6 +2139,7 @@ PROMPT_FILE="${RUNTIME_DIR}/codex_prompt.txt"
 DIAG_FILE="${RUNTIME_DIR}/diagnosis.md"
 DIAGNOSIS_FALLBACK_REASON="produced no output"
 : > "${DIAG_FILE}"
+rm -f "${DIAGNOSIS_SOURCE_FILE}"
 
 {
 	echo "=== SYSTEM INSTRUCTIONS ==="
@@ -2176,6 +2334,14 @@ print(evidence, end="" if evidence.endswith("\n") else "\n")
 print(fence)
 PY
 	} > "${DIAG_FILE}"
+fi
+
+# Issue #9130: the transient re-run stage reads whether the model wrote the
+# diagnosis; the CI-log fallback body never counts as "no affected files".
+if [ "${UPSTREAM_DIAGNOSIS_FALLBACK}" = "true" ]; then
+	printf 'fallback\n' > "${DIAGNOSIS_SOURCE_FILE}"
+else
+	printf 'model\n' > "${DIAGNOSIS_SOURCE_FILE}"
 fi
 
 # Issue #8265: classify the raw diagnosis before neutralisation edits it. The
@@ -2393,6 +2559,11 @@ fi
 
 # Direct callers (stage "all") route here; the workflow routes in its own step.
 if triage_upstream_send; then
+	exit 0
+fi
+# Direct callers re-run a transient outage here; the workflow does it in its
+# own GH_PAT step (issue #9130).
+if triage_transient_rerun; then
 	exit 0
 fi
 
