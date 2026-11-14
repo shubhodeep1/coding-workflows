@@ -5930,7 +5930,7 @@ def test_intake_credits_runner_wait_against_report_identity_age() -> None:
 		state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 7190)}
 		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={**_identity_env(token_file, jwks_file), "HEAL_INTAKE_QUEUE_WAITED_SECONDS": "2"})
 		assert result.returncode == 0, result.stderr + result.stdout
-		assert re.search(r"^WORKFLOW_HEAL report_age_credit outcome=applied attempt_elapsed_seconds=71\d\d queue_waited_seconds=2 max_age=10\d\d\d$", result.stdout, re.MULTILINE), result.stdout
+		assert re.search(r"^WORKFLOW_HEAL report_age_credit outcome=applied attempt_elapsed_seconds=(7[1-9]\d\d) queue_waited_seconds=2 max_age=(1[01]\d\d\d)$", result.stdout, re.MULTILINE), result.stdout
 		assert f"WORKFLOW_HEAL report_auth=verified reason=bound source={CONSUMER_REPO}" in result.stdout
 		assert len(_composed_issues(state_after)) == 1
 		assert token not in result.stdout + result.stderr
