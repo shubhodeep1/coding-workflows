@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:716,882 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Line 716 mounts claude_anthropic_relay.py at /relay.py. Line 882 mounts chatgpt_codex_relay.py at the same /relay.py. tests/test_sandbox_python_coverage.py:293 (test_scanned_host_file_matches_the_registry) expects /relay.py to map to one host basename, so the scan fails with 'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'.\n  WHY: Every failing check (tests-sandbox-python codex-isolated-codex/review/clarify, tests-hooks-and-orchestrator, tests-system-python shard 11, and the lint aggregate) fails on this one assertion. The failure is inherited from the merge base and out of scope here, because issue #9449 forbids changing any script. It was raised only to tell the merge gate. The source severity was NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_untrusted_sandbox.sh:Line 716 mounts claude_anthropic_relay.py at /relay.py. Line 882 mounts chatgpt_codex_relay.py at the same /relay.py. | severity=NIT | confidence=5\n  PROBLEM: This is the only CI failure left. tests/test_sandbox_python_coverage.py:293 (test_scanned_host_file_matches_the_registry) expects /relay.py to map to one host basename, but the two mounts use different files. The registry lists only claude_anthropic_relay.py, so the scan fails with 'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'.\n  WHY: All five failing checks fail on this one assertion, and the lint aggregate fails because those jobs did. The PR does not touch either file, and the PR body lists this as an inherited failure. The previous editor run (entry[7]) declined it as out of scope because issue #9449 forbids changing any script. It was raised only so the merge gate knows these checks stay red, and this PR should not change anything for it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e53bb31c0a8d23a0e0c8a6b0005e35f2419c6ef07bcc998bf405f2e5516c551a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9454,
+    "run_id": "43502951796",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43502951796",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114162335_c4a735e685",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9454,
+    "run_id": "43502951796"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-14T16:23:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
