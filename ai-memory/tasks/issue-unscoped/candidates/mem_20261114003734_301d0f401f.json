@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:line 7339, def test_security_pass_cap_converts_low_keep_fixing_to_advisory() (CI check-run \"orchestrate-poll (1)\"; the \"lint\" check fails only because it collects that job's result) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The orchestrate-poll (1) shard fails with \"poller did not exit within 180s; process group killed\", and the lint job fails because its CI_NEEDS_JSON shows orchestrate-poll as a failure.\n  WHY: The poller hangs while exiting, but the reviewer could not tie this to the PR: the PR does not change scripts/orchestrate_poll_process.sh or this test file, and sandbox_solc_resolve_versions returns early when SANDBOX_SOLC_VERSIONS is empty. Suggested next step: re-run the shard on head 6ea36343 and on merge-base 507ba62a. The source rated this NIT, mapped here to low.\n- (CI check-run copilot-pull-request-reviewer; no code site in this PR):log_tail \"Prompt too big after adding system message ... errorCode: 'custom_instructions_too_large', statusCode: 422\" | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The third-party Copilot reviewer stops before it analyses any code because its custom instructions (AGENTS.md plus CLAUDE.md) are too large.\n  WHY: This is a size limit in the external reviewer. The PR adds only agents.d fragments and does not edit AGENTS.md or CLAUDE.md, so no file in this PR can fix it. The source rated this NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:line 7339, def test_security_pass_cap_converts_low_keep_fixing_to_advisory() (CI check-run \"orchestrate-poll (1)\"; the \"lint\" check fails only because it collects that job's result) | severity=NIT | confidence=2\n  PROBLEM: The shard fails with \"poller did not exit within 180s; process group killed\". In the lint job, CI_NEEDS_JSON shows orchestrate-poll as failure and the other five jobs as success.\n  WHY: The poller hangs while exiting, and the reviewer could not tie that to this PR:\n  - The PR does not change scripts/orchestrate_poll_process.sh or this test file.\n  - The last run changed only a resolver test.\n  - With SANDBOX_SOLC_VERSIONS empty, sandbox_solc_resolve_versions returns early, and the in-container solc block runs only when /opt/solc/hardhat-nodejs/compilers-v2/linux-amd64 exists.\n  Next step: re-run on head 6ea36343 and on merge-base 507ba62a. Treat it as this PR's defect only if it passes on the base and fails on the head.\n- (CI check-run copilot-pull-request-reviewer; no code site in this PR):log_tail \"Prompt too big after adding system message ... errorCode: 'custom_instructions_too_large', statusCode: 422\" | severity=NIT | confidence=1\n  PROBLEM: The third-party Copilot reviewer aborts before it analyses any code, because its custom instructions (AGENTS.md plus CLAUDE.md) are too large.\n  WHY: This is a size limit in the external reviewer. The PR adds only agents.d fragments and does not edit AGENTS.md or CLAUDE.md, so no file in this PR can fix it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c060bffdc1bf48492757e76af064f49dd76ba8d4b1be50940e372116bcc6c86a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "43162034307",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "43162034307",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261114003734_301d0f401f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "43162034307"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-14T00:37:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
