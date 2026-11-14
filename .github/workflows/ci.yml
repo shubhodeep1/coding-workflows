@@ -2409,28 +2409,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
 
-      # Moved again from tests-promote-stall-and-review, which took 16m02s of
-      # its 20 minutes on main (run 41704793081, budget-watch issue #8771). It
-      # was that job's most subprocess-heavy unsharded step (about 152 tests
-      # and about 57 subprocess call sites; an estimate, not a measurement).
-      # This job lost its two most expensive steps in #8759; the other step of
-      # the #8771 move first went to tests-heal-plan-and-validation, and #8993
-      # moved it on to this job (see "Orchestrate lib unit tests" below), so
-      # both #8771 steps now run here. Name and body unchanged.
-      # Moved from tests-release-and-log-analysis, which took 20m16s of its
-      # 20 minutes on main (run 39030079651, budget-watch issue #7560). It
-      # moved there from tests-heal-plan-and-validation in #7383. Step timings
-      # were not readable when this was planned; it was chosen as that job's
-      # most bash-driven step after the merge-train step (estimated, not
-      # measured). It needs no git history, Node or prepared .claude/ live
-      # copies. Name and body unchanged.
-      - name: Check-failure triage workflow security tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_post_stage.py
-
       # Moved again from tests-heal-plan-and-validation, which took 16m08s of
       # its 20 minutes on main (run 42373283876, budget-watch issue #8993). The
       # run's step timings could not be read; the pick is the heal job's
@@ -3498,6 +3476,45 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_tracking_issue_list_limit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
+
+      # Moved again from tests-release-and-log-analysis, which took 15m19s of
+      # its 20 minutes on main (run 43352637124, budget-watch issue #9450).
+      # The run's step timings could not be read (step statuses only), so the
+      # pick is a planning-sandbox relative weight, not a measurement: about
+      # 162s, that job's slowest unsplit step after "Regression tests wired by
+      # the CI wiring guard (part 2)" (Orchestrate lib about 72s, post-Codex
+      # recovery about 31s, files_touched guard about 7s). Part 2 stays in
+      # that job: moving it back would reverse #9214, and group 0 took 15m51s
+      # with it. Group 0 is the target because it has pinned no step since
+      # #9214 removed its heaviest one (658 test functions, 155 subprocess
+      # call sites), while groups 1-4 each pin steps. The tests create
+      # throwaway `git init` repositories and need no checkout history (this
+      # job checks out at depth 1), Node or prepared .claude/ live copies; the
+      # shared pip install provides PyYAML. The two #8771 steps no longer
+      # share a job. Name and body unchanged; the step runs once per CI run.
+      #
+      # Moved again from tests-promote-stall-and-review, which took 16m02s of
+      # its 20 minutes on main (run 41704793081, budget-watch issue #8771). It
+      # was that job's most subprocess-heavy unsharded step (about 152 tests
+      # and about 57 subprocess call sites; an estimate, not a measurement).
+      # This job lost its two most expensive steps in #8759; the other step of
+      # the #8771 move first went to tests-heal-plan-and-validation, and #8993
+      # moved it on to this job (see "Orchestrate lib unit tests" below), so
+      # both #8771 steps now run here. Name and body unchanged.
+      # Moved from tests-release-and-log-analysis, which took 20m16s of its
+      # 20 minutes on main (run 39030079651, budget-watch issue #7560). It
+      # moved there from tests-heal-plan-and-validation in #7383. Step timings
+      # were not readable when this was planned; it was chosen as that job's
+      # most bash-driven step after the merge-train step (estimated, not
+      # measured). It needs no git history, Node or prepared .claude/ live
+      # copies. Name and body unchanged.
+      - name: Check-failure triage workflow security tests
+        if: strategy.job-index == 0
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_post_stage.py
 
   tests-system-python:
     # The whole pytest-collected tests/ suite on the runner's own
