@@ -2,7 +2,7 @@
 
 ## Summary
 
-Three independent harness changes that stop the failure loop seen on 2026-11-11, when 91 issues and 63 PRs were open at once. Phase 1 pins every hosted job to an explicit runner image and adds a nightly canary that runs the full CI on `ubuntu-latest`, so the next image move shows up as one heal issue instead of red CI everywhere. Phase 2 holds plan auto-approval while the default branch's CI is red and tracked by a heal issue, so new implementation PRs do not pile onto a broken base. Phase 3 makes the poller notice deep Actions queues: it holds its own dispatches until the queue drains and links queued pipeline runs to their issue, so it stops re-triggering work that is only waiting for a runner.
+Three independent harness changes that stop the failure loop seen on 2026-11-11, when 91 issues and 63 PRs were open at once. Phase 1 pins every hosted job to an explicit runner image and adds a nightly canary that runs the full CI on `ubuntu-latest`, so the next image move shows up as one heal issue instead of red CI everywhere. Phase 2 holds plan auto-approval while the default branch's CI is red and tracked by a heal issue, so new implementation PRs do not pile onto a broken base. Phase 3 makes the poller notice deep Actions queues: it holds its own dispatches until the queue drains and links queued pipeline runs to their issue, so it stops re-triggering work that is only waiting for a runner. Phase 3 also stops the persistence budget from escalating items to `ai:needs-human` for time spent queued, or for rounds whose only CI failures were inherited from the base branch (amendment, user decisions Q27: A, Q29: A, Q30: A).
 
 ## Context
 
@@ -12,6 +12,11 @@ On 2026-11-11 the backlog reached 91 open issues and 63 open PRs. The causes, me
 - **Cascade from a red base.** Every PR inherited the red base. Check-failure triage filed 42 `CI failure: CI on PR #N` issues, most concluding "not caused by this PR". Each went clarify → plan → auto-approve → implement and opened an `AI implementation for issue #N` PR (about 25), which inherited the same red base and filed the next triage generation (the cap is 3). PR #9272 stops triage from filing when the base failure is already tracked. Nothing stops the plan → implement half: `plan.yml` posts `/approved [auto-approved-by-plan]` whenever `AUTO_IMPLEMENT_ON_CLEAR_PLAN` is on (`.github/workflows/plan.yml:3203-3548`), whatever the base's state.
 - **Runner saturation.** About 2,500 runs were created that day; 493 were queued at once against about 20 concurrent hosted runners. Required checks could not start, so PRs sat `blocked`.
 - **Stall recovery re-dispatching queued work.** `build_active_issue_set` (`scripts/orchestrate_poll_process.sh:18238`) maps runs to issues only through `head_branch` patterns (`ai/issue-N`). A plan run triggered by an `/answer` comment runs on the default branch, so it never maps to its issue. The function also reads at most 50 queued runs and treats any run older than `STALL_THRESHOLD_MINUTES` (default 120) as a zombie. With hundreds of runs queued, issues #9004, #9008, #9014 and #9056 each got 5-6 `retrigger_plan` comments that day, about every 1-2 hours, each adding another queued run.
+- **Persistence budget escalating items that were only waiting (found 2026-11-13/14).** `scripts/persist_budget.py` `decide` escalates to `ai:needs-human` on two triggers that the jam inflated:
+  - **`max_hours` is wall-clock** (`persist_budget.py:333`): `now - oldest entry > PERSIST_MAX_HOURS` (default 48), with no allowance for time spent queued.
+  - **`max_rounds` counts every round on the current approach** (`:344-347`), deliberately whatever its outcome, because each `review=ok` round is an autofix commit and counting them stops endless autofix churn. But a round driven only by CI failures inherited from the base branch counts the same as churn from the PR's own failures. The journal already records the split: `gate.pr_caused` and `gate.inherited` (`scripts/attempt_journal.py:140-145`).
+
+  On 2026-11-13 this escalated #9369, #9387, #9362 and #9341 (`open_pr:max_rounds`) and #9250, #9212, #9008, #9266 and #9234 (`max_hours`). Their PRs were green or queued, and were stopped only by `main`'s red CI and the queue. They had to be restarted by hand.
 - **Existing mechanisms to extend (§5).** `phase_cap_can_dispatch` (`scripts/orchestrate_poll_process.sh:17824`) already gates every poller dispatch (stall recovery at 19757, 25539, 26738; wave issue creation at 29846, 34501; validation, review-blocked judge). `.github/ai/concurrency_caps.yml` has `global_max_concurrent: -1`. `_plan_auto_approval_gate` (`:19414`) already gates both poller `/approved` paths (`auto_approve`, and `retrigger_implement` from `ai:awaiting-approval`). `_load_actions_runs_cached` (`:17620`) already reads `actions/runs?status=queued&per_page=50`, whose response carries `total_count`, but the `--jq '.workflow_runs'` filter drops it. Run names already carry `[pr:N]` (`internal-review.yml`) and `[tracking:N]` (`internal-validate.yml`). `workflow-failure-heal-intake.yml` already watches `Nightly Validation Self-Test`, so a failing nightly job files a heal issue automatically.
 
 ## Goals
@@ -20,6 +25,7 @@ On 2026-11-11 the backlog reached 91 open issues and 63 open PRs. The causes, me
 - While the default branch's CI is red and tracked, plans that finish are held instead of auto-approved, and approved once the base is green again. The heal fix itself is never held.
 - When 150 or more runs are queued, the poller makes no new dispatches and does not count stall time toward recovery, until fewer than 50 are queued.
 - A queued or running clarify, plan, implement or clarify-respond run is recognised as the issue's active run, whether or not it runs on an `ai/issue-N` branch.
+- The persistence budget does not escalate an item because of the queue or a red base. Time while backpressure was on does not count toward `max_hours`. A round whose gate shows `pr_caused == 0` and `inherited > 0` does not count toward `max_rounds`. Rounds with PR-caused failures, or with unknown gate counts, still count, so autofix churn still escalates.
 
 ## Non-goals
 
@@ -31,8 +37,8 @@ On 2026-11-11 the backlog reached 91 open issues and 63 open PRs. The causes, me
 
 ## Constraints
 
-- **§6 naming immutability.** No identifier is renamed or removed. The workflow `name:` of every touched workflow stays the same. Adding `run-name:` changes only `display_title`; Phase 3 audits every `display_title` reader in `scripts/` (31 matches) before it changes anything. New names, checked for collisions on 2026-11-12 (0 matches each): `RUNNER_IMAGE` input, `RED_BASE_APPROVAL_HOLD_ENABLED`, `RED_BASE_HOLD_WORKFLOWS`, `RED_BASE_APPROVAL_HOLD` log prefix, `ai:red-base-approval-hold:v1` marker, `ACTIONS_QUEUE_BACKPRESSURE_HIGH`, `ACTIONS_QUEUE_BACKPRESSURE_LOW`, `QUEUED_RUN_ZOMBIE_MINUTES`, `QUEUE_BACKPRESSURE` log prefix. Re-check each before use.
-- **§4 env vars.** Every new variable has a default: `RED_BASE_APPROVAL_HOLD_ENABLED=true`, `RED_BASE_HOLD_WORKFLOWS=.github/workflows/ci.yml`, `ACTIONS_QUEUE_BACKPRESSURE_HIGH=150` (`-1` disables), `ACTIONS_QUEUE_BACKPRESSURE_LOW=50`, `QUEUED_RUN_ZOMBIE_MINUTES=1440`.
+- **§6 naming immutability.** No identifier is renamed or removed. The workflow `name:` of every touched workflow stays the same. Adding `run-name:` changes only `display_title`; Phase 3 audits every `display_title` reader in `scripts/` (31 matches) before it changes anything. New names, checked for collisions on 2026-11-12 (0 matches each): `RUNNER_IMAGE` input, `RED_BASE_APPROVAL_HOLD_ENABLED`, `RED_BASE_HOLD_WORKFLOWS`, `RED_BASE_APPROVAL_HOLD` log prefix, `ai:red-base-approval-hold:v1` marker, `ACTIONS_QUEUE_BACKPRESSURE_HIGH`, `ACTIONS_QUEUE_BACKPRESSURE_LOW`, `QUEUED_RUN_ZOMBIE_MINUTES`, `QUEUE_BACKPRESSURE` log prefix. Phase 3 amendment, checked 2026-11-14 (0 matches each): `PERSIST_QUEUE_PAUSE_ENABLED`, `PERSIST_INHERITED_ROUNDS_EXEMPT`, the `persist_budget.py decide --paused-intervals-file` option, and the reason token `queue_backpressure_pause`. Avoid `inherited_only`, which is already used in 3 files. Re-check each before use.
+- **§4 env vars.** Every new variable has a default: `RED_BASE_APPROVAL_HOLD_ENABLED=true`, `RED_BASE_HOLD_WORKFLOWS=.github/workflows/ci.yml`, `ACTIONS_QUEUE_BACKPRESSURE_HIGH=150` (`-1` disables), `ACTIONS_QUEUE_BACKPRESSURE_LOW=50`, `QUEUED_RUN_ZOMBIE_MINUTES=1440`, `PERSIST_QUEUE_PAUSE_ENABLED=true`, `PERSIST_INHERITED_ROUNDS_EXEMPT=true`.
 - **§15 GitHub API hygiene.** Phase 1 adds no calls. Phase 2 adds, only when an auto-approval or a poller approval is about to happen, one open-issues read (`issues?labels=ai:workflow-heal&state=open&per_page=100`) and at most one runs read per configured workflow (`actions/workflows/<file>/runs?branch=<default>&event=push&status=completed&per_page=1`). The poller caches both per tick, so N approvals in a tick cost the same two reads. Phase 3 adds zero calls: it keeps `total_count` from the queued read the poller already makes. Every new read fails open (no hold, legacy behaviour).
 - **§27 workflow file size.** `plan.yml` is 228,098 bytes, `ci.yml` 189,348, `orchestrate_poll.yml` 140,583 and `nightly-validation-selftest.yml` 22,755. The guard is 480,000. New logic goes into `scripts/`; workflows gain only `run-name:`, `runs-on:`, inputs, `env:` lines and short calls. Check with `wc -c` after editing.
 - **§14 consumers.** Phases 1 and 3 change files under `workflow-templates/` and reusable workflows, which reach all 13 repositories in `.github/ai/consumer_repos.json` on the next `@stable` sync. Phase 2's hold uses `RED_BASE_HOLD_WORKFLOWS`, so a consumer whose CI file is not `.github/workflows/ci.yml` gets no hold (legacy behaviour) until it sets the variable.
@@ -69,6 +75,20 @@ In `plan.yml`'s auto-approval step, before posting `/approved [auto-approved-by-
 
 **Run linkage.** Add `run-name: "<existing workflow name> [issue:${{ github.event.issue.number }}]"` to `internal-clarify.yml`, `internal-plan.yml`, `internal-implement.yml`, `internal-orchestrate-clarify-respond.yml` and their `workflow-templates/` counterparts (`ai-plan.yml`, `ai-implement.yml` and the clarify / clarify-respond wrappers). In `build_active_issue_set`, also extract `[issue:N]` from `display_title` of fresh runs. Queued runs use `QUEUED_RUN_ZOMBIE_MINUTES` (default 1440) instead of the general stall cutoff, so a run waiting hours for a runner is still active, while stuck GitHub-side ghost rows (some dated 2026-08-19) are still excluded.
 
+**Persistence budget (amendment: Q27 A, Q29 A, Q30 A).** Two changes to the governor, both behind default-on switches.
+
+- **Queue pause.** The backpressure marker file (above) also keeps a list of `[on_ts, off_ts]` intervals while backpressure was on. An open interval has `off_ts = null`. Intervals older than twice `PERSIST_MAX_HOURS` are pruned, and the list holds at most 200 entries.
+  - The poller writes this list to a scratch file and passes it to `persist_budget.py decide --paused-intervals-file <f>`.
+  - In `decide`, the elapsed time for `max_hours` becomes `now - oldest` minus the overlap of those intervals with `[oldest, now]`.
+  - While backpressure is on, the poller does not call `decide` at all; it logs `PERSIST governor outcome=skipped reason=queue_backpressure_pause issue=<n>`. Nothing escalates while the queue is deep, and the time spent queued is not counted afterwards.
+  - A missing or unreadable file means no pause (legacy behaviour).
+- **Rounds from inherited failures.** In `decide`, a round whose `gate.pr_caused == 0` and `gate.inherited > 0` (both integers) is left out of the count compared with `PERSIST_MAX_ROUNDS`. Every other round still counts as today, including:
+  - rounds with no gate data;
+  - rounds with `pr_caused > 0`;
+  - `review=ok` autofix rounds with no inherited failures.
+
+  The `failed_rounds` and `no_progress` triggers are unchanged. The decision `summary` reports how many rounds were left out.
+
 ## Phases & Merge Strategy
 
 Each phase is its own PR, independently mergeable, complete on its own and production-safe at merge. No phase assumes another has merged.
@@ -80,7 +100,7 @@ Safe at merge: the pin names the image the jobs already use. The canary only add
 Safe at merge: on by default, but a no-op whenever the base is green or no trusted heal issue matches. Every read fails open. Rollback: `RED_BASE_APPROVAL_HOLD_ENABLED=false`.
 
 ### Phase 3: Queue backpressure and `[issue:N]` run linkage
-Safe at merge: backpressure is on by default at 150/50. `ACTIONS_QUEUE_BACKPRESSURE_HIGH=-1` turns it off. Run-name and linkage only add matches. Rollback: the variable, or revert the PR.
+Safe at merge: backpressure is on by default at 150/50. `ACTIONS_QUEUE_BACKPRESSURE_HIGH=-1` turns it off. Run-name and linkage only add matches. The budget changes only remove false escalations: with no intervals file or no gate data, `decide` behaves exactly as today. Rollback: the variables (`PERSIST_QUEUE_PAUSE_ENABLED=false`, `PERSIST_INHERITED_ROUNDS_EXEMPT=false`), or revert the PR.
 
 ## Implementation Steps
 
@@ -111,6 +131,29 @@ Safe at merge: backpressure is on by default at 150/50. `ACTIONS_QUEUE_BACKPRESS
 7. `build_active_issue_set`: add `[issue:N]` extraction from `.display_title`. Apply `QUEUED_RUN_ZOMBIE_MINUTES` to runs with `status == "queued"`, and the existing per-run threshold to the rest.
 8. Tests: extend `tests/test_orchestrate_poll_process.py` (or add `tests/test_queue_backpressure.py`, wired into `ci.yml`) for hysteresis (on at HIGH, held between, off below LOW, missing marker, unknown count), the dispatch hold and its exemptions, `[issue:N]` linkage, and the queued zombie cutoff. Add a contract test that the four wrappers and their templates carry the `[issue:N]` run-name.
 9. `changelog.d/<issue>-queue-backpressure.md` (`added`) and `agents.d/<issue>-queue-backpressure.md`: document the variables, the log prefix, the run-name convention and the exemptions.
+10. **Backpressure marker intervals.** Extend the marker file from step 2 to JSON `{"active": bool, "intervals": [[on_ts, off_ts|null], ...]}`.
+    - When the state changes, open or close an interval.
+    - Prune intervals older than `2 * PERSIST_MAX_HOURS` and cap the list at 200 entries.
+    - Read the old one-line format as `{"active": <value>, "intervals": []}`.
+11. **`scripts/persist_budget.py`.**
+    - Add `--paused-intervals-file` to `decide`. In the `max_hours` check (around line 333), subtract the overlap of the intervals with `[oldest, now]`; an open interval ends at `now`. Do this only when `PERSIST_QUEUE_PAUSE_ENABLED` is true, which is the default.
+    - When `PERSIST_INHERITED_ROUNDS_EXEMPT` is true (the default), compute `counted = [e for e in items if not (_pr_caused(e) == 0 and isinstance(_gate(e).get("inherited"), int) and _gate(e).get("inherited") > 0)]`, and compare `len(counted)` instead of `len(items)` with `limits["max_rounds"]` (around line 347). Keep `items` for `trailing_failed` and `no_progress`.
+    - Add `rounds_exempt_inherited` to the decision JSON and a short clause to `summary`.
+    - Update the module docstring (checks 3 and 4) and the comment above `max_rounds`.
+12. **`scripts/orchestrate_poll_process.sh`, `persist_budget_govern_issue`** (around line 20803; called at around 25162 and 33085).
+    - When `QUEUE_BACKPRESSURE_ACTIVE` is true and `PERSIST_QUEUE_PAUSE_ENABLED` is true, log `PERSIST governor outcome=skipped reason=queue_backpressure_pause issue=<n>` and return 0 before calling `decide`.
+    - Otherwise write the intervals to a scratch file and pass `--paused-intervals-file`.
+    - Pass both new variables through `orchestrate_poll.yml` `env:` with defaults `'true'`.
+13. **Tests in `tests/test_persist_budget.py`** (already wired into `ci.yml` around line 729), covering:
+    - interval overlap: none, partial, full, open interval, and a missing or bad file treated as no pause;
+    - `max_hours` not reached because of a pause;
+    - inherited-only rounds left out of `max_rounds`;
+    - `pr_caused > 0` and unknown-gate rounds still counted;
+    - autofix churn with no inherited failures still escalating;
+    - both kill switches restoring today's behaviour.
+
+    Add a poller test for the `queue_backpressure_pause` skip.
+14. **Fragments.** Extend the Phase 3 `changelog.d/` and `agents.d/` entries with the two variables and the new reason token.
 
 ## Files & Modules
 
@@ -118,7 +161,7 @@ Safe at merge: backpressure is on by default at 150/50. `ACTIONS_QUEUE_BACKPRESS
 | --- | --- |
 | 1 | `.github/workflows/*.yml` (42 files), `workflow-templates/**` (3 files), `.github/workflows/ci.yml`, `.github/workflows/nightly-validation-selftest.yml`, optional `.github/actionlint.yaml`, `tests/test_runner_image_pin.py`, fragments |
 | 2 | `scripts/orchestrate_lib.py`, `scripts/red_base_approval_hold.sh`, `.github/workflows/plan.yml`, `scripts/orchestrate_poll_process.sh`, `.github/workflows/orchestrate_poll.yml`, `tests/test_red_base_approval_hold.py`, `.github/workflows/ci.yml` (wiring), fragments |
-| 3 | `scripts/orchestrate_poll_process.sh`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/internal-clarify.yml`, `internal-plan.yml`, `internal-implement.yml`, `internal-orchestrate-clarify-respond.yml`, matching `workflow-templates/` wrappers, tests, `.github/workflows/ci.yml` (wiring), fragments |
+| 3 | `scripts/orchestrate_poll_process.sh`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/internal-clarify.yml`, `internal-plan.yml`, `internal-implement.yml`, `internal-orchestrate-clarify-respond.yml`, matching `workflow-templates/` wrappers, `scripts/persist_budget.py`, `tests/test_persist_budget.py`, tests, `.github/workflows/ci.yml` (wiring), fragments |
 
 ## Data Model / Index Changes
 
@@ -144,6 +187,8 @@ None. No MongoDB collection, index or contract is touched (§10).
 | Backpressure delays merges. | `attempt_merge` and `escalate_human` are exempt, and event-driven review and CI runs are unaffected. |
 | The `run-name` change breaks a `display_title` reader. | Phase 3 step 5 audit before the change, with the audit listed in the PR body. |
 | The cache marker is lost (eviction). | A missing marker means off; the next tick at or above HIGH turns it on again. |
+| Exempting inherited-only rounds lets a PR loop forever on a base that stays red. | `max_hours` still applies outside backpressure. Phase 2 holds new approvals while the base is red. A round with any PR-caused failure, or no gate data, still counts. |
+| Losing the marker drops the pause intervals, so a long-queued item escalates on `max_hours` once backpressure ends. | Accepted. A person resumes it by removing `ai:needs-human` (the governor restarts its window), as was done by hand on 2026-11-14. |
 
 ## Rollout
 
@@ -161,3 +206,4 @@ None. No MongoDB collection, index or contract is touched (§10).
 - `scripts/orchestrate_poll_process.sh`: `build_active_issue_set` (18238), `phase_cap_can_dispatch` (17824), `_plan_auto_approval_gate` (19414), `_load_actions_runs_cached` (17620), standalone `retrigger_plan` (25626).
 - `.github/workflows/plan.yml:3203-3548` (auto-approval), `.github/ai/concurrency_caps.yml`, `.github/workflows/workflow-failure-heal-intake.yml:50`.
 - User decisions in the interactive session of 2026-11-11/12: Q6 A, Q7 A, Q8 A, Q9 A, Q10 A, Q11 A, Q12 A, Q13 A, Q14 A, Q15 A.
+- Phase 3 amendment, decisions of 2026-11-14: Q27 A (add it to Phase 3), Q29 A (pause the budget clock while queued, and fix round counting), Q30 A (exempt only rounds whose CI failures were all inherited from the base). Budget-stopped items restarted by hand: #9369, #9387, #9362, #9212, #9008.
