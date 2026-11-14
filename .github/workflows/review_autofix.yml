@@ -5504,9 +5504,12 @@ jobs:
                 # The single-issue security gate held the judge's merge;
                 # judge_skip_reason carries its hold_reason. A dispatched or
                 # pending audit, or open follow-ups, re-run the review and
-                # bring the judge back without a human: no alert.
+                # bring the judge back without a human: no alert. So does
+                # head_unpushed: this run's own deferred commit (the conflict
+                # resolver's) is pushed after the judge, and that push starts
+                # the review that audits the new head (PRs #9338, #9283).
                 case "${JUDGE_SKIP_REASON}" in
-                  security_hold_audit_dispatched|security_hold_audit_pending|security_hold_awaiting_followups)
+                  security_hold_audit_dispatched|security_hold_audit_pending|security_hold_awaiting_followups|security_hold_head_unpushed)
                     echo "Judge merge held while the single-issue security pass runs (${JUDGE_SKIP_REASON}); suppressing alert."
                     exit 0 ;;
                 esac

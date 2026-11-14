@@ -1898,6 +1898,12 @@ if args[:1] == ["api"]:
 		if jobs is None:
 			fail("HTTP 404")
 		out(json.dumps({"jobs": jobs}))
+	if "/actions/runs/" in path and path.split("/")[-2] == "attempts" and path.split("/")[-1].isdigit():
+		# The intake's own run attempt (report age credit); unset is a 404.
+		started_at = state.get("run_attempt_started_at", {}).get(path)
+		if method != "GET" or started_at is None:
+			fail("HTTP 404")
+		out(started_at + "\n" if "--jq" in rest else json.dumps({"run_started_at": started_at}))
 	if "/actions/runs/" in path and path.split("/")[-1].isdigit():
 		if method != "GET":
 			fail("HTTP method must be GET for run details")
@@ -6031,6 +6037,51 @@ def test_intake_verifies_report_identity_and_rejects_a_forged_repository() -> No
 	result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REPORT_IDENTITY_STATE": "malformed"})
 	assert "report_auth=rejected reason=identity_malformed" in result.stdout
 	assert _api_writes(state) == []
+
+
+def _iso_utc(epoch: int) -> str:
+	return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def test_intake_credits_runner_wait_against_report_identity_age() -> None:
+	"""Runs 43439048054, 43496779526, 43498856864: the intake job waited 1h54m to
+	3h25m for a runner (heal queue wait: seconds) and rejected valid reports as
+	identity_stale. The time since this run attempt started now counts as wait."""
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	now = int(time.time())
+	with tempfile.TemporaryDirectory(prefix="heal-identity-runner-wait-") as tmp_name:
+		# Minted at dispatch two hours ago; the run attempt started right after.
+		token_file, jwks_file, token = _fresh_identity(Path(tmp_name), iat=now - 7200)
+		state = _intake_state()
+		state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 7190)}
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={**_identity_env(token_file, jwks_file), "HEAL_INTAKE_QUEUE_WAITED_SECONDS": "2"})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert re.search(r"^WORKFLOW_HEAL report_age_credit outcome=applied attempt_elapsed_seconds=(7[1-9]\d\d) queue_waited_seconds=2 max_age=(1[01]\d\d\d)$", result.stdout, re.MULTILINE), result.stdout
+		assert f"WORKFLOW_HEAL report_auth=verified reason=bound source={CONSUMER_REPO}" in result.stdout
+		assert len(_composed_issues(state_after)) == 1
+		assert token not in result.stdout + result.stderr
+	with tempfile.TemporaryDirectory(prefix="heal-identity-replayed-") as tmp_name:
+		# A report already two hours old when it arrived (the attempt started
+		# a minute ago) is still stale: the credit covers waiting, not age.
+		token_file, jwks_file, _ = _fresh_identity(Path(tmp_name), iat=now - 7200)
+		state = _intake_state()
+		state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 60)}
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert "report_age_credit outcome=applied" in result.stdout
+		assert "report_auth=rejected reason=identity_stale" in result.stdout
+		assert _api_writes(state_after) == []
+	with tempfile.TemporaryDirectory(prefix="heal-identity-no-run-read-") as tmp_name:
+		# An unreadable run keeps the queue-only credit (the old behaviour).
+		token_file, jwks_file, _ = _fresh_identity(Path(tmp_name), iat=now - 7200)
+		result, state_after, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert "WORKFLOW_HEAL report_age_credit outcome=unavailable queue_waited_seconds=0 max_age=3600" in result.stdout
+		assert "report_auth=rejected reason=identity_stale" in result.stdout
+		assert _api_writes(state_after) == []
+	# A report without an identity never reads the run.
+	result, state_after, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "report_age_credit" not in result.stdout
+	assert not any(any("/attempts/" in part for part in call) for call in state_after.get("calls", []))
 
 
 def test_intake_unauthenticated_report_transition_and_enforcement() -> None:

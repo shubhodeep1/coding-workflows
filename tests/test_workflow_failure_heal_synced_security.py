@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -441,8 +442,9 @@ def test_intake_two_consumers_in_one_bucket_give_one_issue_and_one_occurrence() 
 	assert f"runs={CONSUMER_A}:{base._ID_RUN_ID}" in body
 	assert "paths=workflow-templates/.claude/hooks/guard.py,tests/**,changelog.d/*.md" in body
 	assert FREE_TEXT not in body
-	# No log, run or diagnosis read for this kind.
-	assert not [call for call in state.get("calls", []) if any("/actions/" in arg or "/logs" in arg for arg in call)]
+	# No log, run or diagnosis read for this kind. The intake's one read of its
+	# own run attempt (report age credit for the runner wait) is not a source read.
+	assert not [call for call in state.get("calls", []) if any(("/actions/" in arg and not re.search(r"/actions/runs/\d+/attempts/\d+$", arg)) or "/logs" in arg for arg in call)]
 
 	heal_issue = {
 		"number": 901, "state": "open", "state_reason": None, "title": created["title"], "body": body, "author": "workflow-bot",
@@ -675,8 +677,9 @@ def test_synced_check_intake_opens_one_issue_then_records_an_occurrence() -> Non
 	assert body.splitlines()[0] == f"<!-- workflow-failure-heal:fp={fp} -->"
 	assert body.count("ai:workflow-heal-scope:v1") == 1
 	assert "paths=workflow-templates/.claude/hooks/guard.py,tests/**,changelog.d/*.md" in body
-	# No log, run or diagnosis read for this kind.
-	assert not [call for call in state.get("calls", []) if any("/actions/" in arg or "/logs" in arg for arg in call)]
+	# No log, run or diagnosis read for this kind. The intake's one read of its
+	# own run attempt (report age credit for the runner wait) is not a source read.
+	assert not [call for call in state.get("calls", []) if any(("/actions/" in arg and not re.search(r"/actions/runs/\d+/attempts/\d+$", arg)) or "/logs" in arg for arg in call)]
 
 	heal_issue = {
 		"number": 902, "state": "open", "state_reason": None, "title": created["title"], "body": body, "author": "workflow-bot",

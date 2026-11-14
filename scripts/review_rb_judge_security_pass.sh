@@ -287,7 +287,7 @@ Open high/critical/unrated security findings (${RB_SECURITY_BLOCKING_ISSUES:-unk
 # security-exhaustion merge without blocking findings may reach it.
 # Returns 0 when a judge merge may proceed, 1 when the security gate holds it.
 # A hold sets RB_SECURITY_HOLD_REASON: the gate's hold_reason (audit_dispatched,
-# audit_pending and awaiting_followups resolve without a human; a failed
+# audit_pending, awaiting_followups and head_unpushed resolve without a human; a failed
 # pending-marker write must keep pending_marker_failed even on a nonzero exit), or
 # security_mode_unverified, gate_failed or unknown.
 rb_security_merge_gate()
@@ -308,6 +308,16 @@ rb_security_merge_gate()
 			&& [ "${audited_head}" = "${RB_JUDGED_HEAD_SHA:-}" ]; then
 			rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=allow reason=security_mode_audited_head"
 			return 0
+		fi
+		# status reports an unpushed checkout commit (the conflict resolver's
+		# deferred [ai-merge-resolve] push) as unverifiable; its gate log line
+		# names head_unpushed. Keep that reason so the judge alert treats it as
+		# self-clearing, as on the non-exhaustion path. The merge still holds.
+		if [ "${state}" = "unverifiable" ] \
+			&& printf '%s\n' "${gate_out}" | grep -Eq '^SINGLE_ISSUE_SECURITY_PASS mode=gate .* outcome=hold reason=head_unpushed$'; then
+			rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=head_unpushed state=${state}"
+			RB_SECURITY_HOLD_REASON="head_unpushed"
+			return 1
 		fi
 		rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=security_mode_unverified state=${state:-unknown}"
 		RB_SECURITY_HOLD_REASON="security_mode_unverified"
