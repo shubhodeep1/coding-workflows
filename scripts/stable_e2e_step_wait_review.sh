@@ -80,8 +80,9 @@ fi
 # at least one job queued/waiting/pending. JOBS_JSON is reassigned on
 # every in_progress poll that has a known run ID (|| echo "" on a failed
 # read), so under that condition it holds this poll's response or is
-# empty; it is read only then. JOBS_STEP_JSON (fetched only for runs that
-# are not in_progress) is never read, and no gh call is made here. An
+# empty; it is read only then. JOBS_STEP_JSON (fetched whenever JOBS_JSON
+# is empty, including in_progress polls whose jobs read failed) is never
+# read, and no gh call is made here. An
 # empty or unreadable jobs JSON returns 1, so the normal inactivity rules
 # apply (fail closed).
 review_waiting_for_runner() {
@@ -847,7 +848,14 @@ while true; do
     fi
     LAST_ACTIVITY=$NOW
     IDLE=0
-  elif [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ]; then
+  elif [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ] \
+      && [[ "$RUN_ID" =~ ^[0-9]+$ ]] \
+      && { [ "$RUN_STATUS" != "in_progress" ] || [ -n "${JOBS_JSON:-}" ]; }; then
+    # Close the stretch only on a poll that answered: an empty runs
+    # lookup (RUN_ID not numeric) or a failed jobs read on an in_progress
+    # run says nothing about the runner, so the stretch is kept (no false
+    # outcome=started). The inactivity rules above still apply to that
+    # poll because LAST_ACTIVITY is not reset here.
     if [ "${REVIEW_RUNNER_WAIT_RUN_ID}" = "${RUN_ID}" ]; then
       echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=started waited_seconds=$((NOW - REVIEW_RUNNER_WAIT_SINCE))"
     fi

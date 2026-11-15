@@ -116,7 +116,7 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
           when a long single step should extend the wait past the
           inactivity window). The wait loop clamps overrides above
           90 minutes so a typo cannot mask a genuine hang until the
-          300-minute smoke-test job timeout kills the run.
+          360-minute smoke-test job timeout kills the run.
         required: false
         type: number
         default: 75

@@ -1050,6 +1050,23 @@ def test_phase4_runner_wait_missing_jobs_json_keeps_inactivity_rules() -> None:
 	assert "E2E_REVIEW_RUNNER_WAIT" not in result.stdout
 
 
+def test_phase4_runner_wait_survives_a_failed_jobs_read() -> None:
+	# A failed jobs read in the middle of a runner wait says nothing about
+	# the runner: the stretch is kept, so there is one waiting line and one
+	# started line, not a false start followed by a second stretch.
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 180, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 300, "run": _rw_run("in_progress"), "jobs": None},
+		{"until": _RW_START + 480, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": _rw_run("completed", "success"), "jobs": _rw_jobs()},
+	])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=30"]
+	assert result.stdout.count("E2E_REVIEW_RUNNER_WAIT run=30 status=in_progress outcome=waiting") == 1
+	assert result.stdout.count("outcome=started") == 1
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=started waited_seconds=4\d\d", result.stdout)
+
+
 def test_phase4_runner_wait_prefix_is_registered() -> None:
 	agents = agents_text()
 	assert "- `E2E_REVIEW_RUNNER_WAIT`" in agents
