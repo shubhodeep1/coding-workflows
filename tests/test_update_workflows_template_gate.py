@@ -440,8 +440,12 @@ def test_dependabot_sync_runs_before_the_wrapper_update_and_gates_the_commit() -
 	run = sync["run"]
 	assert '--changed-paths-file /tmp/dependabot_changed_files.txt' in run
 	assert '|| echo "::warning::DEPENDABOT_EXCLUDE_SYNC' in run
-	skip = run.index('[ "${RELEASE_MANIFEST_VERIFIED:-}" = "true" ] && [ "${DEPENDABOT_HELPER_ATTESTED:-}" != "true" ]')
-	assert skip < run.index('python3 "${DEPENDABOT_HELPER}"')
+	# The update job skips the helper whenever it is unattested, including
+	# verified=skipped, so it never stages an edit verify_reproduce cannot
+	# reproduce (verify-pr-tree would reject it as unlisted_path).
+	skip = run.index('if [ "${DEPENDABOT_HELPER_ATTESTED:-}" != "true" ]; then')
+	assert '[ "${RELEASE_MANIFEST_VERIFIED:-}" = "true" ] &&' not in run
+	assert skip < run.index('python3 -I -B "${DEPENDABOT_HELPER}"')
 	gate = "steps.dependabot_sync.outputs.dependabot_has_changes == 'true'"
 	commit = steps[ids.index("commit_push")]
 	assert gate in commit["if"]

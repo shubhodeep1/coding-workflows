@@ -888,13 +888,17 @@ jobs:
             exit 0
           fi
           # The verify job runs the helper only when the attested release
-          # manifest lists it; mirror that so its reproduction matches.
-          if [ "${RELEASE_MANIFEST_VERIFIED:-}" = "true" ] && [ "${DEPENDABOT_HELPER_ATTESTED:-}" != "true" ]; then
+          # manifest lists it; mirror that so its reproduction matches. This
+          # includes verified=skipped (UPDATER_VERIFY_RELEASE_MANIFEST=false):
+          # there the attestation output is empty, verify_reproduce does not
+          # run the helper, and an edit staged here would be rejected by
+          # verify-pr-tree as unlisted_path.
+          if [ "${DEPENDABOT_HELPER_ATTESTED:-}" != "true" ]; then
             echo "DEPENDABOT_EXCLUDE_SYNC outcome=skipped reason=helper_unattested file=none entries=0 managed=0"
             exit 0
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 "${DEPENDABOT_HELPER}" \
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${DEPENDABOT_HELPER}" \
             --repo-root . \
             --templates-dir "${UPSTREAM_DIR}" \
             --profile "${SELECTED_PROFILE}" \
