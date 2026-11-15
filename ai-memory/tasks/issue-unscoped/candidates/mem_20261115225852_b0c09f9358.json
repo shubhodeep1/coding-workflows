@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:708-711 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The arithmetic substitution `$((10#${vst_end_ms} - 10#${vst_start_ms}))` is performed without checking inside the subtraction whether `vst_end_ms` or `vst_start_ms` is empty or non-numeric.\n  WHY: An unset or non-numeric `vst_start_ms` could make the shell arithmetic fail or give a wrong `vst_elapsed_ms`; the reviewer notes existing guards exist but could be more robust. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, the static-checks job's \"Validation self-test unit tests\" step and the destination job\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The step stays in static-checks at .github/workflows/ci.yml:578 and its body is rewritten into four concurrent lanes in place, and no hunk moves it to another job. Severity disagreement: openai_gpt-6-luna said MAJOR, while the other two said NIT. anthropic_claude-sonnet-5_5 and google_gemini-3_1-flash-lite note the approved plan on #9362 chose the in-place approach on purpose, so the deviation is documented. anthropic_claude-sonnet-5_5 also says the hard limits are met: job id, step name and timeout-minutes (15) are unchanged, and no new required job is added.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:708-711 | severity=NIT | confidence=2\n  PROBLEM: The arithmetic substitution `$((10#${vst_end_ms} - 10#${vst_start_ms}))` is performed without checking whether `vst_end_ms` or `vst_start_ms` is empty or non-numeric within the subtraction context.\n  WHY: If `vst_start_ms` is empty, bash arithmetic might treat it as 0 or fail, giving an incorrect `vst_elapsed_ms`. The script already has guards, but they could be more robust.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" | Expected change site: `.github/workflows/ci.yml`, the `static-checks` job's \"Validation self-test unit tests\" step | Evidence of absence: The approved plan in the issue summary comment (entry [0]) chose to run this step concurrently in place instead of moving it to another job. The PR does not move the step, so the original wording is not met. The reviewer says the deviation is intentional and documented, so it is not a defect for the editor to address. | severity=NIT | confidence=5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" | Expected change site: `.github/workflows/ci.yml`, moving the \"Validation self-test unit tests\" step from `static-checks` to the CI job with the most headroom | Evidence of absence: The workflow keeps the step in `static-checks` at `.github/workflows/ci.yml:578` and replaces its sequential body with four concurrent lanes in place. The PR diff contains no change that moves the step to another job. The issue does not defer this requirement. | severity=MAJOR | confidence=5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7f8c08922e6a7357245a5bd7a82e6559a9c0f945ce623cdb8108f3f91105a9c9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9368,
+    "run_id": "43727747351",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43727747351",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261115225852_b0c09f9358",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9368,
+    "run_id": "43727747351"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-15T22:58:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
