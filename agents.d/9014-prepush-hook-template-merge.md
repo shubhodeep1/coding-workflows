@@ -9,8 +9,8 @@ the same `CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED` kill switch (default
 checkout (`${SUPPORT_SCRIPTS_DIR}/review_untrusted_workspace.py`), and each
 pair must be `.claude/hooks/<name>` -> `workflow-templates/.claude/hooks/<name>`;
 a pair of any other shape logs `skipped reason=pair_rejected`. When the list
-cannot be read, only the built-in `pr_merge_status_guard.py` pair is handled
-and the run logs `Guard-hook template merge: pair_source=fallback
+cannot be read, the static `GUARD_HOOK_TEMPLATE_PAIRS` array (equal to
+`PAIRED_LIVE_COPIES`, #9004) is used and the run logs `Guard-hook template merge: pair_source=fallback
 reason=<support_missing|read_failed|no_valid_pairs>`; otherwise it logs
 `pair_source=paired_live_copies pairs=<n>`. Every
 `Guard-hook template merge: skipped reason=<...>` line now ends with

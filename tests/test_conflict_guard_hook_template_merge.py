@@ -53,6 +53,8 @@ TEMPLATE = "workflow-templates/.claude/hooks/pr_merge_status_guard.py"
 PREPUSH_LIVE = ".claude/hooks/prepush_affected_tests.py"
 PREPUSH_TEMPLATE = "workflow-templates/.claude/hooks/prepush_affected_tests.py"
 SUPPORT_DIR = str(REPO_ROOT / "scripts")
+GH_API_WRITE_LIVE = ".claude/hooks/gh_api_write_guard.py"
+GH_API_WRITE_TEMPLATE = "workflow-templates/.claude/hooks/gh_api_write_guard.py"
 MERGE_RESOLVE_COMMIT_MESSAGE = "[ai-merge-resolve] resolve merge conflicts"
 BASE_LINES = [f"line {i}" for i in range(1, 11)]
 
@@ -409,6 +411,21 @@ def test_prepush_hook_integration_sync_conflict_is_resolved_from_template() -> N
 		_assert_resolved_from_template(repo, live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
 
 
+def test_gh_api_write_guard_hook_only_conflict_is_resolved_and_committed() -> None:
+	"""A third pair (#9004): the pair loop covers more than the prepush hook."""
+	tmpdir, tmp, repo = _with_repo(live_rel=GH_API_WRITE_LIVE, template_rel=GH_API_WRITE_TEMPLATE)
+	with tmpdir:
+		region = _guard_and_union_region(_prepare_text()) + _hook_only_commit_region(_prepare_text())
+		result, github_env, _ = _run(repo, tmp, region=region)
+		out = result.stdout + result.stderr
+		assert result.returncode == 0, out
+		assert "Guard-hook template merge: resolved " + GH_API_WRITE_LIVE in result.stdout, out
+		assert "REGION_FELL_THROUGH" not in result.stdout, out
+		assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
+		assert len(_git(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()) == 3
+		_assert_resolved_from_template(repo, live_rel=GH_API_WRITE_LIVE, template_rel=GH_API_WRITE_TEMPLATE)
+
+
 def test_prepush_hook_only_conflict_is_resolved_and_committed() -> None:
 	tmpdir, tmp, repo = _with_repo(live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
 	with tmpdir:
@@ -448,17 +465,18 @@ def test_prepush_refuses_when_ours_live_differs_from_ours_template() -> None:
 
 
 def test_falls_back_to_guard_pair_without_support_dir() -> None:
+	# Since #9004 the fallback is the static GUARD_HOOK_TEMPLATE_PAIRS list
+	# (equal to PAIRED_LIVE_COPIES), so a non-guard pair is still covered.
 	tmpdir, tmp, repo = _with_repo(live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
 	with tmpdir:
-		stages_before = _git(repo, "ls-files", "-u", "--", PREPUSH_LIVE).stdout
-		result, github_env, allowlist = _run(repo, tmp, region=_guard_region(_prepare_text()), support_dir="")
+		result, _github_env, allowlist = _run(repo, tmp, region=_guard_region(_prepare_text()), support_dir="")
 		out = result.stdout + result.stderr
 		assert result.returncode == 0, out
 		assert "Guard-hook template merge: pair_source=fallback reason=support_missing" in result.stdout, out
-		assert "GHM_RESOLVED=false" in result.stdout, out
-		assert _git(repo, "ls-files", "-u", "--", PREPUSH_LIVE).stdout == stages_before
-		assert PREPUSH_LIVE in allowlist.read_text(encoding="utf-8").splitlines()
-		assert not github_env.exists()
+		assert "Guard-hook template merge: resolved " + PREPUSH_LIVE in result.stdout, out
+		assert "GHM_RESOLVED=true" in result.stdout, out
+		assert PREPUSH_LIVE not in allowlist.read_text(encoding="utf-8").splitlines()
+		_assert_resolved_from_template(repo, live_rel=PREPUSH_LIVE, template_rel=PREPUSH_TEMPLATE)
 	tmpdir, tmp, repo = _with_repo()
 	with tmpdir:
 		result, _github_env, allowlist = _run(repo, tmp, region=_guard_region(_prepare_text()), support_dir="")
@@ -496,6 +514,38 @@ def test_hook_only_commit_uses_shared_helper() -> None:
 	assert '_conflict_prepare_commit_deterministic_merge "Guard-hook template merge"' in region
 	assert "_mu_defer_commit=true" in region
 	assert "orchestrator/project-*) _ghm_defer_commit=true ;;" in _guard_region(text)
+
+
+def test_static_pair_list_equals_paired_live_copies() -> None:
+	"""GUARD_HOOK_TEMPLATE_PAIRS (the fallback list) must equal PAIRED_LIVE_COPIES (#9004)."""
+	import importlib.util
+	import sys
+
+	text = _prepare_text()
+	start = text.index("GUARD_HOOK_TEMPLATE_PAIRS=(")
+	end = text.index("\n)\n", start) + 2
+	assert start > text.index('GUARD_HOOK_LIVE_PATH=".claude/hooks/pr_merge_status_guard.py"')
+	assert end <= text.index("_conflict_prepare_guard_hook_pairs()")
+	snippet = (
+		'GUARD_HOOK_LIVE_PATH=".claude/hooks/pr_merge_status_guard.py"\n'
+		'GUARD_HOOK_TEMPLATE_PATH="workflow-templates/.claude/hooks/pr_merge_status_guard.py"\n'
+		+ text[start:end]
+		+ "\nprintf '%s\\n' \"${GUARD_HOOK_TEMPLATE_PAIRS[@]}\"\n"
+	)
+	result = subprocess.run(["bash", "-c", snippet], capture_output=True, text=True, check=True)
+	shell_pairs = [tuple(line.split(":", 1)) for line in result.stdout.splitlines()]
+	scripts_dir = str(REPO_ROOT / "scripts")
+	sys.path.insert(0, scripts_dir)
+	try:
+		spec = importlib.util.spec_from_file_location(
+			"review_untrusted_workspace_static_pairs", REPO_ROOT / "scripts" / "review_untrusted_workspace.py"
+		)
+		assert spec is not None and spec.loader is not None
+		workspace = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(workspace)
+	finally:
+		sys.path.remove(scripts_dir)
+	assert shell_pairs == list(workspace.PAIRED_LIVE_COPIES.items())
 
 
 def test_pair_source_is_trusted_support_dir_and_paired_live_copies() -> None:
