@@ -15372,7 +15372,11 @@ def test_standalone_ready_to_merge_skips_recovery_when_linked_pr_merged_into_int
 		},
 	)
 	assert "linked PR #825 is MERGED" in result["stdout"]
-	assert "STALL_SKIP issue=823 reason=linked_pr_merged pr=825 phase=ai:ready-to-merge" in result["stdout"]
+	# PR #825 merged into a non-target base, so the reconcile logs its own
+	# skip line; exactly one STALL_SKIP is printed for this skip.
+	assert "STALL_SKIP issue=823 reason=merged_non_target_base pr=825" in result["stdout"]
+	assert "reason=linked_pr_merged" not in result["stdout"]
+	assert result["stdout"].count("STALL_SKIP issue=823 ") == 1
 	standalone_state = _extract_latest_standalone_state(result["issues"]["823"]["comments"])
 	assert standalone_state is not None
 	assert standalone_state["stall_recovery_count"] == 2
@@ -15410,6 +15414,36 @@ def test_stall_judge_diagnostics_report_merged_linked_pr_and_keep_escalation():
 	assert "ai:needs-human" in result["issues"]["823"]["labels"]
 	assert "normalized to 'attempt_merge'" not in result["stdout"]
 	assert "Stall judge action 'escalate_human' kept for issue #823: linked PR #825 is merged" in result["stdout"]
+
+
+def test_stall_judge_escalation_not_kept_for_closed_non_implementation_cross_ref():
+	# The last cross-reference is a closed mention-only PR, not the issue's
+	# implementation PR, so its state says nothing about attempt_merge and
+	# the judge's escalate_human is normalised as before #9482.
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides={
+			"state": "closed",
+			"merged": False,
+			"body": "Refs #823",
+			"headRefName": "feature/unrelated",
+			"headRefFromApi": "feature/unrelated",
+		},
+		stall_recovery_count=2,
+		env_overrides={"ENABLE_STALL_MERGED_PR_GUARD": "false"},
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "cannot tell what happened to PR #825",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	assert any(
+		"Stall Judge" in str(comment.get("body", ""))
+		for comment in result["issues"]["823"]["comments"]
+	), result["stdout"]
+	assert "Stall judge action 'escalate_human' kept" not in result["stdout"]
+	assert "normalized to 'attempt_merge'" in result["stdout"]
+	assert "ai:needs-human" not in result["issues"]["823"]["labels"]
 
 
 def test_standalone_ready_to_merge_open_linked_pr_still_attempts_merge():

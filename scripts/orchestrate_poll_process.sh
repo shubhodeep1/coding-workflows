@@ -22132,8 +22132,13 @@ invoke_stall_judge() {
   # no-op when the linked PR is already closed or merged, so the issue would
   # loop forever. Keep the judge's escalation in that case. An empty
   # pr_state (fetch failure) is inconclusive and keeps the normalisation.
+  # target_pr is only the last cross-reference, so require it to be the
+  # issue's implementation PR (payload already in hand, no API call): a
+  # closed mention-only PR says nothing about the PR attempt_merge targets
+  # (#3816 / #3828 mis-target).
   if [ "${judge_action}" = "escalate_human" ] && [ "${effective_action}" = "attempt_merge" ] && \
-     [[ "${target_pr}" =~ ^[0-9]+$ ]] && { [ "${pr_state}" = "closed" ] || [ "${pr_state}" = "merged" ]; }; then
+     [[ "${target_pr}" =~ ^[0-9]+$ ]] && { [ "${pr_state}" = "closed" ] || [ "${pr_state}" = "merged" ]; } && \
+     _pr_json_is_issue_implementation_pr "${issue_num}" "${linked_pr_json}"; then
     effective_action="escalate_human"
     echo "::notice::Stall judge action 'escalate_human' kept for issue #${issue_num}: linked PR #${target_pr} is ${pr_state}, so 'attempt_merge' cannot act."
   fi
@@ -23573,6 +23578,9 @@ _reconcile_merged_pr_issue() {
 _STALL_STANDALONE_DEFAULT_BRANCH=""
 # Set once the lookup ran, so a failed read is not repeated per candidate.
 _STALL_STANDALONE_DEFAULT_BRANCH_TRIED=false
+# Issue #9482: set to true when the reconcile printed its own STALL_SKIP line,
+# so the caller does not log a second STALL_SKIP for the same skip.
+_STALL_STANDALONE_NT_SKIP_LOGGED=false
 _reconcile_standalone_merged_pr_issue() {
   local issue_num="$1"
   local phase="$2"
@@ -23582,6 +23590,7 @@ _reconcile_standalone_merged_pr_issue() {
   local issue_json_file="$6"
   local labels_json="${7:-[]}"
   local _stall_nt_base _stall_nt_body _stall_nt_declared _stall_nt_managed _stall_nt_pr_json
+  _STALL_STANDALONE_NT_SKIP_LOGGED=false
 
   _stall_nt_base="$(printf '%s' "${linked_json}" | jq -r '(.base_ref // .base.ref // "") | strings' 2>/dev/null | tr -d '\r\n' || echo "")"
   if [ -z "${_stall_nt_base}" ]; then
@@ -23622,6 +23631,7 @@ _reconcile_standalone_merged_pr_issue() {
     return 0
   fi
 
+  _STALL_STANDALONE_NT_SKIP_LOGGED=true
   echo "STALL_SKIP issue=${issue_num} reason=merged_non_target_base pr=${pr_num} base=$(_close_sweep_log_ref "${_stall_nt_base}" "unknown") declared=$(_close_sweep_log_ref "${_stall_nt_declared}" "none") phase=${phase} action=${action}"
   if printf '%s' "${labels_json}" | jq -e 'index("ai:check-triage") != null' >/dev/null 2>&1; then
     _stall_check_triage_resolution_gate "${issue_num}" "${pr_num}"
@@ -25311,8 +25321,11 @@ PY
     fi
     if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
       echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}'."
-      echo "STALL_SKIP issue=${issue_num} reason=linked_pr_merged pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
       _reconcile_standalone_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}" "${_std_linked_json}" "${_security_dependency_issue_file}" "${labels_json}"
+      # One STALL_SKIP per skip: the non-target-base reconcile logs its own.
+      if [ "${_STALL_STANDALONE_NT_SKIP_LOGGED}" != "true" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=linked_pr_merged pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
+      fi
       if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
         write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
       fi
