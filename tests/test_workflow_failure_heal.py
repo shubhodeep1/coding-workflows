@@ -1139,6 +1139,148 @@ def test_filter_log_keeps_runtime_lines_outside_tail() -> None:
 	assert "AI_ENGINE_FALLBACK_REPORT" not in heal.filter_log("\n".join(report), max_lines=10)
 
 
+# The chained argparse crash of scripts/render_prompt.py on Python 3.14 (plan
+# run 42929246385, heal issues #9190 / #9200): filter_log used to keep only the
+# two bare `Traceback (most recent call last):` lines, so the heal was filed as
+# inconclusive.
+CHAINED_VALUEERROR_TRACEBACK_LINES = (
+	"2026-11-11T00:15:15.5012084Z Traceback (most recent call last):",
+	'2026-11-11T00:15:15.5013904Z   File "/usr/lib/python3.14/argparse.py", line 1759, in _check_help',
+	"2026-11-11T00:15:15.5019025Z ValueError: unsupported format character '.' (0x2e) at index 237",
+	"2026-11-11T00:15:15.5020164Z The above exception was the direct cause of the following exception:",
+	"2026-11-11T00:15:15.5021014Z Traceback (most recent call last):",
+	'2026-11-11T00:15:15.5033125Z   File "/home/runner/work/coding-workflows/coding-workflows/scripts/render_prompt.py", line 1414, in <module>',
+	"2026-11-11T00:15:15.5043693Z ValueError: badly formed help string",
+	"2026-11-11T00:15:15.5227737Z ##[error]Process completed with exit code 1.",
+)
+
+
+def test_filter_log_keeps_chained_traceback_frames_and_exception_lines_outside_tail() -> None:
+	# The traceback sits before the 400-line tail, so only the signal match
+	# can keep it.
+	filler = [f"2026-11-11T00:16:00.0000000Z step output {i}" for i in range(600)]
+	log = "\n".join(list(CHAINED_VALUEERROR_TRACEBACK_LINES) + filler) + "\n"
+	filtered = heal.filter_log(log)
+	for kept_line in CHAINED_VALUEERROR_TRACEBACK_LINES:
+		assert kept_line in filtered
+	assert "ValueError: unsupported format character '.' (0x2e) at index 237" in filtered
+	assert "ValueError: badly formed help string" in filtered
+	# The block ends at the first line after the exception that is not part of
+	# the traceback, so the filler before the tail is still dropped.
+	assert "step output 0\n" not in filtered and "step output 150\n" not in filtered
+	assert "step output 599" in filtered
+
+
+def test_filter_log_keeps_the_innermost_lines_of_a_long_traceback() -> None:
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(80)]
+	traceback_lines = ["Traceback (most recent call last):", *frames, "RecursionError: too deep"]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "Traceback (most recent call last):" in filtered
+	assert "RecursionError: too deep" in filtered
+	kept_frames = [line for line in filtered if line.startswith('  File "/srv/app/')]
+	assert len(kept_frames) == heal._TRACEBACK_CONTEXT_MAX_LINES - 1
+	assert frames[-1] in kept_frames and frames[0] not in kept_frames
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_exception_line_of_a_traceback_longer_than_the_scan_window() -> None:
+	# Mutual recursion is not collapsed by CPython, so its traceback can run
+	# past _TRACEBACK_SCAN_MAX_LINES before the exception line.
+	frames: list[str] = []
+	for i in range(heal._TRACEBACK_SCAN_MAX_LINES):
+		frames += [f'  File "/srv/app/ping.py", line {i}, in ping{i}', f"    pong{i}()"]
+	traceback_lines = ["Traceback (most recent call last):", *frames, "RecursionError: maximum recursion depth exceeded"]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "RecursionError: maximum recursion depth exceeded" in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	kept_frames = [line for line in filtered if line in set(frames)]
+	assert len(kept_frames) == heal._TRACEBACK_CONTEXT_MAX_LINES - 1
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_chain_marker_after_a_traceback_longer_than_the_scan_window() -> None:
+	# A long mutual-recursion traceback caught and re-raised: the walk past
+	# _TRACEBACK_SCAN_MAX_LINES must keep the chain marker after the first
+	# exception line, as the in-window scan does.
+	frames: list[str] = []
+	for i in range(heal._TRACEBACK_SCAN_MAX_LINES):
+		frames += [f'  File "/srv/app/ping.py", line {i}, in ping{i}', f"    pong{i}()"]
+	marker = "The above exception was the direct cause of the following exception:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		"RecursionError: maximum recursion depth exceeded",
+		"",
+		marker,
+		"",
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: ping failed",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "RecursionError: maximum recursion depth exceeded" in filtered
+	assert marker in filtered
+	assert "RuntimeError: ping failed" in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_chain_marker_after_an_exception_line_at_the_scan_window_edge() -> None:
+	# The exception line is the last line of the scan window, so the chain
+	# marker sits just past it and must still be kept.
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(heal._TRACEBACK_SCAN_MAX_LINES - 1)]
+	marker = "The above exception was the direct cause of the following exception:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		"ValueError: inner failure",
+		marker,
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: outer failure",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert "ValueError: inner failure" in filtered
+	assert marker in filtered
+	assert "RuntimeError: outer failure" in filtered
+	assert "later output 0" not in filtered
+
+
+def test_filter_log_keeps_the_exception_line_before_many_continuation_lines() -> None:
+	# A pydantic ValidationError prints every error indented after the
+	# exception line, so more than _TRACEBACK_CONTEXT_MAX_LINES continuation
+	# lines can follow it; the cut must still keep the exception line.
+	frames = [f'  File "/srv/app/mod{i}.py", line {i}, in f{i}' for i in range(40)]
+	details = [f"  field_{i}\n    Field required [type=missing]" for i in range(30)]
+	exception_line = "pydantic_core._pydantic_core.ValidationError: 30 validation errors for Settings"
+	marker = "During handling of the above exception, another exception occurred:"
+	traceback_lines = [
+		"Traceback (most recent call last):",
+		*frames,
+		exception_line,
+		*"\n".join(details).split("\n"),
+		"",
+		marker,
+		"",
+		"Traceback (most recent call last):",
+		'  File "/srv/app/main.py", line 9, in <module>',
+		"RuntimeError: settings failed",
+	]
+	filler = [f"later output {i}" for i in range(100)]
+	filtered = heal.filter_log("\n".join(traceback_lines + filler), max_lines=10).split("\n")
+	assert exception_line in filtered
+	assert frames[-1] in filtered and frames[0] not in filtered
+	assert marker in filtered
+	assert "RuntimeError: settings failed" in filtered
+	first_block = set(frames) | {exception_line} | set("\n".join(details).split("\n"))
+	assert len([line for line in filtered if line in first_block]) <= heal._TRACEBACK_CONTEXT_MAX_LINES
+	assert "later output 0" not in filtered
+
+
 def test_drop_step_script_lines_drops_unstyled_echoed_script() -> None:
 	dropped = heal._drop_step_script_lines(BTC_SWEEPER_UNSTYLED_STEP_LOG)
 	assert "set -euo pipefail\n" not in dropped.split("##[group]Run set -euo pipefail", 1)[1]
@@ -2240,6 +2382,9 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 					"pull_requests": [{"number": payload.get("issue_number")}],
 				} for ref in payload.get("run_refs", [])
 			}
+		# extra_run_details adds runs (e.g. the intake's own run) on top of
+		# the default fixtures without replacing them.
+		state["run_details"].update(state.pop("extra_run_details", {}))
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		payload_file = tmp / "payload_raw.json"
 		payload_file.write_text(json.dumps(payload), encoding="utf-8")
@@ -6030,6 +6175,45 @@ def test_intake_verifies_report_identity_and_rejects_a_forged_repository() -> No
 
 	result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REPORT_IDENTITY_STATE": "malformed"})
 	assert "report_auth=rejected reason=identity_malformed" in result.stdout
+	assert _api_writes(state) == []
+
+
+def test_intake_credits_runner_queue_wait_against_a_stale_identity() -> None:
+	# 2026-11-14: six reports sat ~3h50m waiting for a runner and were all
+	# rejected identity_stale; the age limit applies at arrival (run_started_at).
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+
+	def _iso(epoch: int) -> str:
+		return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+	def _stale_run(run_started_at: str | None) -> tuple[subprocess.CompletedProcess[str], dict]:
+		with tempfile.TemporaryDirectory(prefix="heal-identity-wait-") as tmp_name:
+			# Token minted two hours ago (iat = now - 7200 - 60).
+			token_file, jwks_file, token = _fresh_identity(Path(tmp_name), iat=int(time.time()) - 7260, nbf=int(time.time()) - 7260)
+			extra = {} if run_started_at is None else {own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": run_started_at}}
+			result, state, _ = _run_intake(payload, _intake_state(extra_run_details=extra), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+			assert token not in result.stdout + result.stderr
+			return result, state
+
+	# The run started when the dispatch arrived, right after the token was minted.
+	result, state = _stale_run(_iso(int(time.time()) - 7230))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL report_identity_age_credit arrival_waited_seconds=" in result.stdout
+	assert "report_auth=verified reason=bound" in result.stdout
+	assert len(_composed_issues(state)) == 1
+	# A recent start (e.g. a re-run of an old report) earns no credit.
+	result, state = _stale_run(_iso(int(time.time()) - 30))
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
+	assert _api_writes(state) == []
+	# The own-run read failing keeps the rejection (fails closed).
+	result, state = _stale_run(None)
+	assert "report_identity_age_credit arrival_waited_seconds=0" in result.stdout
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
+	assert _api_writes(state) == []
+	# A malformed timestamp earns no credit either.
+	result, state = _stale_run("yesterday")
+	assert "report_auth=rejected reason=identity_stale" in result.stdout
 	assert _api_writes(state) == []
 
 

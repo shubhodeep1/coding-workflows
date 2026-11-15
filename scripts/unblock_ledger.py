@@ -61,6 +61,10 @@ Rules enforced here:
     It is offered at most MAX_HOLDS_PER_ITEM times per item, never for a
     condition this item already saw met, and not at all when the caller
     passes `decide --wait-disabled` (UNBLOCK_JUDGE_WAIT_ENABLED=false).
+    A `placeholder_retired` wait is accepted only for a name in the decision's
+    `variable_step_placeholders`: the item's newest trusted operator_step
+    verdict comment records `Operator step kind: `variable_or_secret`.` for it
+    (issue #9484). Any other operator step is escalated to a person instead.
 
 Subcommands (one JSON line on stdout; exit 0 ok, 1 bad arguments or a refused
 verdict, 2 unreadable input):
@@ -320,6 +324,18 @@ SANDBOX_CHECKED_VERDICTS = ("retry_budget", "descope", "reissue", "accept_with_f
 # scripts/unblock_actions.py routes to a heal report instead of a fix-up).
 TARGET_REPOS = ("consumer", "harness")
 TARGET_REPO_VERDICTS = SANDBOX_CHECKED_VERDICTS
+
+
+# Issue #9484: an `_UNSET_OPERATOR_STEP` operator step is held for
+# (`placeholder_retired`) only when its operator instructions tell a person to
+# set a repository variable or secret with exactly that name, the one thing
+# the judge can check. Any other step is escalated to a person once instead.
+OPERATOR_STEP_KIND_VARIABLE = "variable_or_secret"
+OPERATOR_STEP_KIND_OTHER = "other"
+OPERATOR_STEP_KIND_WORD_RE = re.compile(r"\b(variables?|secrets?)\b", re.IGNORECASE)
+# Lines of the trusted operator_step verdict comment (scripts/unblock_judge.sh).
+STAYS_OFF_LINE_RE = re.compile(r"^Stays off behind `(?P<n>[A-Z][A-Z0-9_]{2,63})` until the operator step is done\.$")
+VARIABLE_STEP_KIND_LINE = f"Operator step kind: `{OPERATOR_STEP_KIND_VARIABLE}`."
 
 
 class UsageError(Exception):
@@ -756,6 +772,57 @@ def latest_automation_rejection(comments: object, trusted_login: str, item: int)
 	return {"status": "ok", "run": match.group("run"), "paths": cleaned}
 
 
+def operator_step_kind(placeholder: str, operator_instructions: str) -> str:
+	"""How an operator step ends: `variable_or_secret`, `other`, or '' for an _ENABLED off switch.
+
+	`variable_or_secret` only when the instructions name the exact placeholder
+	as a whole token and say variable or secret (case-insensitive): only such a
+	step ends by itself through the judge's variable/secret check (#9484).
+	"""
+	if not isinstance(placeholder, str) or not placeholder.endswith(OPERATOR_PLACEHOLDER_SUFFIX):
+		return ""
+	text = operator_instructions if isinstance(operator_instructions, str) else ""
+	names_it = re.search(r"(?<![A-Za-z0-9_])" + re.escape(placeholder) + r"(?![A-Za-z0-9_])", text)
+	if names_it and OPERATOR_STEP_KIND_WORD_RE.search(text):
+		return OPERATOR_STEP_KIND_VARIABLE
+	return OPERATOR_STEP_KIND_OTHER
+
+
+def variable_step_placeholders_from_comments(comments: object, trusted_login: str, item: int) -> list[str]:
+	"""The placeholder of the item's newest trusted operator_step verdict, when it is a variable step.
+
+	Looks at the newest comment by the trusted login whose last non-empty line
+	is an `ai:unblock:v1` marker for this item; returns `[NAME]` only when that
+	verdict is `operator_step` and its comment has both the "Stays off behind
+	`NAME`" line and the `variable_or_secret` kind line. Otherwise `[]`: a
+	verdict comment from before #9484 (no kind line) is never a variable step.
+	"""
+	if not isinstance(comments, list):
+		raise InputError("comments must be a JSON array")
+	newest = None
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		if (user.get("login") or comment.get("author_login") or "") != trusted_login:
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		if not lines:
+			continue
+		match = MARKER_RE.match(lines[-1])
+		if not match or int(match.group("item")) != item:
+			continue
+		created = str(comment.get("created_at") or "")
+		if newest is None or created >= newest[0]:
+			newest = (created, match.group("verdict"), lines)
+	if newest is None or newest[1] != "operator_step":
+		return []
+	names = [m.group("n") for m in (STAYS_OFF_LINE_RE.match(line) for line in newest[2]) if m]
+	if not names or not names[0].endswith(OPERATOR_PLACEHOLDER_SUFFIX) or VARIABLE_STEP_KIND_LINE not in newest[2]:
+		return []
+	return [names[0]]
+
+
 def invalid_verdict_streak(comments: object, trusted_login: str, item: int, stop: str, fp: str) -> int:
 	"""Refused judge answers in a row for this item, stop and fingerprint.
 
@@ -810,6 +877,7 @@ def decide(
 	holds: list[dict] | None = None,
 	wait_enabled: bool = True,
 	invalid_verdicts_in_row: int = 0,
+	variable_step_placeholders: list[str] | None = None,
 ) -> dict:
 	"""What the judge may still do for this item."""
 	if kind not in ITEM_KINDS:
@@ -904,6 +972,10 @@ def decide(
 		"holds_met": holds_met,
 		"invalid_verdict_streak": invalid_verdicts_in_row,
 		"invalid_verdict_park_after": INVALID_VERDICT_PARK_AFTER,
+		# Placeholders a `wait` on placeholder_retired may name (#9484).
+		"variable_step_placeholders": sorted(
+			{name for name in (variable_step_placeholders or []) if isinstance(name, str)}
+		),
 	}
 
 
@@ -1116,6 +1188,14 @@ def validate(
 		normalised["paths"] = cleaned
 	if name == "wait":
 		hold_kind, ref = hold_ref(verdict.get("wait_for"), decision.get("item") if type(decision.get("item")) is int else None)
+		# #9484: hold on an operator step only when a trusted operator_step
+		# verdict told a person to set that repository variable or secret; a
+		# decision without the key fails closed.
+		if hold_kind == "placeholder_retired" and ref not in (decision.get("variable_step_placeholders") or []):
+			raise UsageError(
+				f"wait placeholder_retired needs an operator step that sets a repository variable or secret named {ref}; "
+				"pick another verdict"
+			)
 		if f"{hold_kind}:{ref}" in (decision.get("holds_met") or []):
 			raise UsageError(f"wait condition {hold_kind}:{ref} was already met on this item; pick another verdict")
 		if type(decision.get("item")) is int:
@@ -1138,6 +1218,7 @@ def validate(
 			verdict.get("operator_instructions"), "operator_instructions", flag.endswith(OPERATOR_PLACEHOLDER_SUFFIX)
 		)
 		normalised["instructions"] = _clean_text(verdict.get("instructions"), "instructions", True)
+		normalised["operator_step_kind"] = operator_step_kind(flag, normalised["operator_instructions"])
 	if name in TARGET_REPO_VERDICTS:
 		target_repo = verdict.get("target_repo")
 		if target_repo is None or target_repo == "":
@@ -1281,6 +1362,7 @@ def run(argv: list[str] | None = None) -> dict:
 			wait_enabled=not args.wait_disabled,
 			invalid_verdicts_in_row=invalid_verdict_streak(item_comments, args.trusted_login, item, stop, fp)
 			+ max(0, args.pending_invalid_verdicts),
+			variable_step_placeholders=variable_step_placeholders_from_comments(item_comments, args.trusted_login, item),
 		)
 	if args.command == "validate":
 		return validate(
