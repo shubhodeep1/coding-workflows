@@ -835,6 +835,13 @@ single_pass_followup_merge_guard()
 		# shellcheck source=/dev/null
 		source "$(dirname -- "${BASH_SOURCE[0]}")/gh_helpers.sh" 2>/dev/null || true
 	fi
+	# Kill switch: an explicit `false` turns the guard off like the gate. Unset
+	# keeps it on, because the auto-merge step env does not pass the variable
+	# and a silently disabled guard would let a follow-up move a clean head.
+	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED-}" = "false" ]; then
+		single_pass_followup_guard_emit allow disabled
+		return 0
+	fi
 	if ! [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] || [ ! -s "${guard_payload}" ] \
 		|| ! jq -e 'type == "object"' "${guard_payload}" >/dev/null 2>&1; then
 		single_pass_followup_guard_emit unverifiable missing_input
@@ -920,12 +927,13 @@ single_pass_followup_merge_guard()
 	guard_dedupe_file="${PR_ISSUE_COMMENTS_FILE:-}"
 	if [ -z "${guard_dedupe_file}" ] || [ ! -s "${guard_dedupe_file}" ] || ! jq -e 'type == "array"' "${guard_dedupe_file}" >/dev/null 2>&1; then
 		guard_dedupe_file="$(mktemp 2>/dev/null)" || guard_dedupe_file=""
-		if [ -n "${guard_dedupe_file}" ]; then
-			{ if type gh_retry >/dev/null 2>&1; then
+		if [ -n "${guard_dedupe_file}" ] && ! { { if type gh_retry >/dev/null 2>&1; then
 				gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"
 			else
 				gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"
-			fi; } 2>/dev/null | jq -s 'add // []' > "${guard_dedupe_file}" 2>/dev/null || true
+			fi; } 2>/dev/null | jq -s 'add // []' > "${guard_dedupe_file}" 2>/dev/null; }; then
+			rm -f "${guard_dedupe_file}"
+			guard_dedupe_file=""
 		fi
 	fi
 	if [ -n "${guard_dedupe_file}" ]; then
@@ -938,6 +946,12 @@ single_pass_followup_merge_guard()
 	fi
 	if [[ "${guard_existing}" =~ ^[1-9][0-9]*$ ]]; then
 		single_pass_followup_guard_emit refuse parent_head_clean "${guard_parent_number}" "${guard_parent_head}" "comment=existing"
+		return 0
+	fi
+	if [ "${guard_existing}" != "0" ]; then
+		# This PR's comments could not be read: still refuse, but post nothing
+		# so a flaky read on a later round cannot duplicate the hold comment.
+		single_pass_followup_guard_emit refuse parent_head_clean "${guard_parent_number}" "${guard_parent_head}" "comment=unverifiable"
 		return 0
 	fi
 	guard_body="## Merge held: the target branch passed its security audit

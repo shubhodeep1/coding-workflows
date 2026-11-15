@@ -81,6 +81,8 @@ if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
 		sys.exit(0)
 	print(json.dumps({"id": 17, "body": next((arg[5:] for arg in args if arg.startswith("body=")), "")}))
 	sys.exit(0)
+if "pr_comments" in fail and "repos/o/r/issues/77/comments?per_page=100" in args:
+	sys.exit(1)
 if args[0] == "api" and "--paginate" in args:
 	if "comments_once" in fail and sum('"--paginate"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
 		sys.exit(1)
@@ -1438,3 +1440,27 @@ def test_auto_merge_helper_runs_followup_guard_before_merge() -> None:
 	assert guard < text.index("gh_retry gh pr merge")
 	assert 'if [ "${_followup_guard_result}" != "allow" ]; then' in text[guard:status]
 	assert "exit 0" in text[guard:status]
+	# The guard runs again after the required-checks wait, before any --auto merge.
+	wait = text.index("_pr_wait_for_required_checks", status)
+	recheck = text.index('if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! run_security_followup_guard; then', wait)
+	assert recheck < text.index("gh_retry gh pr merge")
+
+
+def test_followup_merge_guard_honours_explicit_kill_switch(tmp_path: Path) -> None:
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env={"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "false"})
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
+	assert "reason=disabled" in result.stdout and calls == []
+	# Unset keeps the guard on: the auto-merge step does not pass the variable.
+	result, _, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env={"SINGLE_ISSUE_SECURITY_PASS_ENABLED": None})
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=refuse" in result.stdout.splitlines()
+
+
+def test_followup_merge_guard_refuses_without_comment_when_own_comments_unreadable(tmp_path: Path) -> None:
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env={"PR_ISSUE_COMMENTS_FILE": str(tmp_path / "missing.json"), "FAKE_GH_FAIL": "pr_comments"})
+	assert result.returncode == 0
+	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=refuse" in result.stdout.splitlines()
+	assert "reason=parent_head_clean comment=unverifiable" in result.stdout
+	assert _hold_posts(calls) == []
+	# A readable listing without the marker still posts the hold comment once.
+	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env={"PR_ISSUE_COMMENTS_FILE": str(tmp_path / "missing.json")})
+	assert "comment=posted" in result.stdout and len(_hold_posts(calls)) == 1
