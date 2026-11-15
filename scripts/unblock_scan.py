@@ -333,8 +333,11 @@ def _busy_items(runs: object, now: dt.datetime, inflight: dt.timedelta) -> set[i
 		created = _time(run.get("created_at"))
 		if run.get("status") in ("cancelled", "skipped"):
 			continue
-		status_active = run.get("status") in ACTIVE_RUN_STATES and not _is_wedged_queued(run, int(now.timestamp()), "unblock_scan_busy")
-		if status_active or (created and now - created < inflight):
+		# Issue #9473: a wedged queued run is never busy, not even through the
+		# recency window below (UNBLOCK_JUDGE_INFLIGHT_MINUTES may exceed 24h).
+		run_is_wedged = _is_wedged_queued(run, int(now.timestamp()), "unblock_scan_busy")
+		status_active = run.get("status") in ACTIVE_RUN_STATES and not run_is_wedged
+		if not run_is_wedged and (status_active or (created and now - created < inflight)):
 			busy.add(int(match.group(1)))
 	return busy
 

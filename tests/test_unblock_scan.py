@@ -948,6 +948,15 @@ def test_fresh_queued_and_in_progress_judge_runs_still_hold_the_scan() -> None:
 	assert "judge_running" in result["skipped"]
 
 
+def test_wedged_queued_run_stays_ignored_under_a_long_inflight_window() -> None:
+	"""Issue #9473: an inflight window above 24h must not re-add a wedged queued run."""
+	window = dt.timedelta(minutes=2880)
+	wedged = {"id": 11, "display_title": "Unblock judge #6", "status": "queued", "created_at": _iso(25)}
+	assert scan._busy_items([wedged], NOW, window) == set()
+	finished = {"id": 12, "display_title": "Unblock judge #7", "status": "completed", "conclusion": "success",
+		"created_at": _iso(25)}
+	assert scan._busy_items([finished], NOW, window) == {7}
+
 def test_zombie_filter_can_be_disabled(monkeypatch) -> None:
 	# Load first so the lazy load cannot overwrite the patched hours, and so
 	# teardown restores the real loaded value for later tests.
