@@ -1372,6 +1372,9 @@ if method == "POST" and endpoint.endswith("/comments"):
 	if os.environ.get("FAKE_GH_FAIL_HOLD") and " hold=" in f.get("body", ""):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
+	if os.environ.get("FAKE_GH_FAIL_ESCALATION") and " escalated=operator_step " in f.get("body", ""):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	if os.environ.get("FAKE_GH_FAIL_WAIT_MARKER") and "<!-- ai:unblock-wait:v1 item=7 fixup=" in f.get("body", ""):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
@@ -2583,6 +2586,9 @@ def test_operator_step_success_writes_tracker_entry(tmp_path: Path) -> None:
 	assert len(entries) == 1 and entries[0]["body"].startswith("<!-- ai:operator-step:entry key=")
 	verdict_comment = next(c["body"] for c in state["comments"] if c["body"].startswith("## Unblock judge"))
 	assert "Stays off behind `NIGHTLY_TOKEN_UNSET_OPERATOR_STEP` until the operator step is done." in verdict_comment
+	# #9484: "set the secret" does not name the placeholder, so it is not a variable step.
+	assert "\nOperator step kind: `other`.\n" in verdict_comment
+	assert "\nOperator instructions: set the secret\n" in verdict_comment
 
 
 def test_operator_step_with_enabled_flag_writes_no_tracker_entry(tmp_path: Path) -> None:
@@ -2602,6 +2608,8 @@ def test_unblock_prompt_never_defaults_a_fix_off_to_page_a_person() -> None:
 		text = (ROOT / prompt).read_text(encoding="utf-8")
 		assert "the new code ships on by default and the flag is only an off switch (`false`), so no person is paged" in text
 		assert "Never default a fix to off and page a person only to switch it on." in text
+		assert ("only for a placeholder listed in the decision's `variable_step_placeholders` (an operator step whose recorded "
+			"instructions say to set that repository variable or secret); for any other operator step, never wait") in text
 		assert "(default off)" not in text
 
 
@@ -3962,7 +3970,7 @@ def test_wait_is_offered_until_disabled_or_spent_and_never_counts_a_round() -> N
 	({"kind": "placeholder_retired", "placeholder": "DOC_SYNC_UNSET_OPERATOR_STEP"}, "DOC_SYNC_UNSET_OPERATOR_STEP"),
 ])
 def test_wait_validates_and_normalises_each_condition(wait_for: dict, ref: str) -> None:
-	decision = ledger.decide(7, "blocked", FP, [], None, NOW)
+	decision = ledger.decide(7, "blocked", FP, [], None, NOW, variable_step_placeholders=["DOC_SYNC_UNSET_OPERATOR_STEP"])
 	verdict = ledger.validate({"verdict": "wait", "reason": "r", "wait_for": wait_for}, decision, "o/r")
 	assert (verdict["hold_kind"], verdict["hold_ref"]) == (wait_for["kind"], ref)
 	assert ledger.HOLD_MARKER_RE.match(ledger.hold_marker(7, wait_for["kind"], ref))
@@ -4140,6 +4148,11 @@ def test_a_manual_resume_ends_an_open_hold(tmp_path: Path) -> None:
 	assert "hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=holding" in result.stdout, result.stdout
 
 
+DOC_SYNC_VARIABLE_STEP = ("Stays off behind `DOC_SYNC_UNSET_OPERATOR_STEP` until the operator step is done.\n\n"
+	"Operator step kind: `variable_or_secret`.\n\n"
+	"Operator instructions: set the repository variable DOC_SYNC_UNSET_OPERATOR_STEP to true")
+
+
 def _operator_step_comments(placeholder_line: str) -> list[dict]:
 	verdict = _comment("## Unblock judge: `operator_step` (round 1)\n\nReason: r\n\nInstructions: i\n\n" + placeholder_line + "\n\n"
 		+ ledger.marker(7, "blocked", FP, "operator_step", 1), BOT, "2026-10-04T10:00:00Z")
@@ -4150,7 +4163,7 @@ def _operator_step_comments(placeholder_line: str) -> list[dict]:
 
 def test_merged_operator_step_fixup_holds_until_the_person_acts(tmp_path: Path) -> None:
 	merged = {"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}}
-	comments = _operator_step_comments("Stays off behind `DOC_SYNC_UNSET_OPERATOR_STEP` until the operator step is done.")
+	comments = _operator_step_comments(DOC_SYNC_VARIABLE_STEP)
 	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=merged)
 	assert "fixup=50 op=hold hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=held" in result.stdout, result.stdout
 	assert [c["body"].rstrip().splitlines()[-1] for c in state["comments"]] == [
@@ -4278,12 +4291,149 @@ def test_a_later_descope_fixup_does_not_hold_on_an_older_operator_step(tmp_path:
 
 def test_an_operator_step_hold_is_not_posted_twice(tmp_path: Path) -> None:
 	merged = {"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}}
-	comments = _operator_step_comments("Stays off behind `DOC_SYNC_UNSET_OPERATOR_STEP` until the operator step is done.")
+	comments = _operator_step_comments(DOC_SYNC_VARIABLE_STEP)
 	comments.append(_hold_comment("placeholder_retired", "DOC_SYNC_UNSET_OPERATOR_STEP", created_at="2026-10-04T10:00:05Z"))
 	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=merged)
 	assert "fixup=50 op=hold hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=held" in result.stdout, result.stdout
 	assert state["comments"] == []
 	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
+
+
+# --- Operator steps that are not a variable or secret are escalated (#9484) ---
+
+MERGED_FIXUP = {"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}}
+PIN_STEP = "PR_AGENT_ACTION_SHA_UNSET_OPERATOR_STEP"
+PIN_STEP_LINES = (f"Stays off behind `{PIN_STEP}` until the operator step is done.\n\n"
+	"Operator step kind: `other`.\n\n"
+	f"Operator instructions: pin the action SHA for {PIN_STEP} in the workflow")
+PIN_ESCALATION_MARKER = f"<!-- ai:unblock-wait:v1 item=7 escalated=operator_step ref={PIN_STEP} -->"
+
+
+def _escalation_comment(*, created_at: str = "2026-10-04T10:00:05Z", comment_id: int = 456) -> dict:
+	comment = _comment("Fix-up #50 merged. Its operator step is not a variable.\n\nDo the step, then post this item's resume command.\n\n"
+		+ PIN_ESCALATION_MARKER, BOT, created_at)
+	comment["id"] = comment_id
+	return comment
+
+
+@pytest.mark.parametrize("placeholder,instructions,expected", [
+	("NIGHTLY_TOKEN_UNSET_OPERATOR_STEP", "set the repository secret NIGHTLY_TOKEN_UNSET_OPERATOR_STEP", "variable_or_secret"),
+	("DOC_SYNC_UNSET_OPERATOR_STEP", "set the Actions variable DOC_SYNC_UNSET_OPERATOR_STEP", "variable_or_secret"),
+	("PR_AGENT_ACTION_SHA_UNSET_OPERATOR_STEP", "pin the action SHA for PR_AGENT_ACTION_SHA_UNSET_OPERATOR_STEP", "other"),
+	("SAFE_FETCH_COMMAND_GRANT_UNSET_OPERATOR_STEP", "grant the workflow paths SAFE_FETCH_COMMAND_GRANT_UNSET_OPERATOR_STEP", "other"),
+	("NIGHTLY_TOKEN_UNSET_OPERATOR_STEP", "set the secret", "other"),
+	("DOC_SYNC_UNSET_OPERATOR_STEP", "set secret XDOC_SYNC_UNSET_OPERATOR_STEP", "other"),
+	("NIGHTLY_ENABLED", "set the secret NIGHTLY_ENABLED", ""),
+])
+def test_operator_step_kind_classification(placeholder: str, instructions: str, expected: str) -> None:
+	assert ledger.operator_step_kind(placeholder, instructions) == expected
+	verdict = {"verdict": "operator_step", "reason": "r", "instructions": "gate it", "placeholder": placeholder,
+		"operator_instructions": instructions}
+	assert ledger.validate(verdict, _decision("needs-human"), "o/r")["operator_step_kind"] == expected
+
+
+def test_wait_refuses_placeholder_retired_for_a_non_variable_step(tmp_path: Path) -> None:
+	wait = {"verdict": "wait", "reason": "r", "wait_for": {"kind": "placeholder_retired", "placeholder": PIN_STEP}}
+	pin_verdict = _comment("## Unblock judge: `operator_step` (round 1)\n\n" + PIN_STEP_LINES + "\n\n"
+		+ ledger.marker(7, "blocked", FP, "operator_step", 1))
+	listed = ledger.variable_step_placeholders_from_comments([pin_verdict], BOT, 7)
+	assert listed == []
+	with pytest.raises(ledger.UsageError, match="variable or secret"):
+		ledger.validate(wait, ledger.decide(7, "blocked", FP, [], None, NOW, variable_step_placeholders=listed), "o/r")
+	# A decision without the key fails closed.
+	decision = ledger.decide(7, "blocked", FP, [], None, NOW)
+	decision.pop("variable_step_placeholders")
+	with pytest.raises(ledger.UsageError):
+		ledger.validate(wait, decision, "o/r")
+	# A variable-kind verdict comment counts only from the trusted login.
+	variable_lines = PIN_STEP_LINES.replace("Operator step kind: `other`.", "Operator step kind: `variable_or_secret`.")
+	body = "## Unblock judge: `operator_step` (round 1)\n\n" + variable_lines + "\n\n" + ledger.marker(7, "blocked", FP, "operator_step", 1)
+	assert ledger.variable_step_placeholders_from_comments([_comment(body, "someone")], BOT, 7) == []
+	# Only the newest verdict counts, and only for this item.
+	later = _comment("## Unblock judge: `descope` (round 2)\n\n" + ledger.marker(7, "blocked", FP, "descope", 2), BOT, "2026-10-04T11:00:00Z")
+	assert ledger.variable_step_placeholders_from_comments([_comment(body), later], BOT, 7) == []
+	assert ledger.variable_step_placeholders_from_comments([_comment(body)], BOT, 8) == []
+	trusted = ledger.variable_step_placeholders_from_comments([_comment(body)], BOT, 7)
+	assert trusted == [PIN_STEP]
+	verdict = ledger.validate(wait, ledger.decide(7, "blocked", FP, [], None, NOW, variable_step_placeholders=trusted), "o/r")
+	assert (verdict["hold_kind"], verdict["hold_ref"]) == ("placeholder_retired", PIN_STEP)
+	# The decide CLI reads the list from the item comments.
+	comments_file = tmp_path / "comments.json"
+	comments_file.write_text(json.dumps([_comment(body)]), encoding="utf-8")
+	rc, decided = _cli("decide", "--item", "7", "--stop", "blocked", "--fingerprint", FP, "--comments-file", str(comments_file),
+		"--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z")
+	assert rc == 0 and decided["variable_step_placeholders"] == [PIN_STEP]
+
+
+def test_merged_non_variable_operator_step_fixup_escalates_once(tmp_path: Path) -> None:
+	comments = _operator_step_comments(PIN_STEP_LINES)
+	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=MERGED_FIXUP)
+	assert (f"fixup=50 op=escalate escalated=operator_step ref={PIN_STEP} outcome=escalated reason=not_a_variable_step"
+		in result.stdout), result.stdout
+	assert "hold=placeholder_retired" not in result.stdout
+	assert len(state["comments"]) == 1
+	body = state["comments"][0]["body"]
+	assert body.rstrip().splitlines()[-1] == PIN_ESCALATION_MARKER
+	assert "hold=placeholder_retired" not in body
+	assert f"> pin the action SHA for {PIN_STEP} in the workflow" in body
+	assert "will not resume this item by itself" in body and "post this item's resume command" in body
+	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
+	assert state["labels_added"] == [] and not [f for f in state["created"] if f.get("labels[]") == "ai:operator-step"]
+	# Next run: the escalation parks the item and is refreshed; nothing is posted.
+	done_wait = _comment("Fix-up #50 merged.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->", BOT, "2026-10-04T10:00:01Z")
+	done_wait["id"] = 123
+	parked = [comments[0], done_wait, _escalation_comment()]
+	result, state = _judge(tmp_path, ISSUE, comments=parked, issues=MERGED_FIXUP,
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "i"})
+	assert f"op=escalate ref={PIN_STEP} outcome=skip reason=operator_escalated" in result.stdout, result.stdout
+	assert "outcome=acted" not in result.stdout
+	assert state["comments"] == []
+	refreshed = state["patched"][-1][1]["body"]
+	assert "Still waiting for an operator; last checked " in refreshed and refreshed.endswith(PIN_ESCALATION_MARKER)
+	assert refreshed.count("ai:unblock-wait:v1") == 1
+	# Wait still open (its update failed) with the escalation already posted: no second post.
+	result, state = _judge(tmp_path, ISSUE, comments=comments + [_escalation_comment()], issues=MERGED_FIXUP)
+	assert "outcome=escalated reason=not_a_variable_step" in result.stdout, result.stdout
+	assert state["comments"] == []
+	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
+	# A failed escalation record keeps the fix-up wait open.
+	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=MERGED_FIXUP, FAKE_GH_FAIL_ESCALATION="1")
+	assert "op=escalate escalated=operator_step" in result.stdout and "reason=escalation_record_failed" in result.stdout, result.stdout
+	assert state["comments"] == [] and state["patched"] == []
+	# Waits off: today's immediate resume.
+	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=MERGED_FIXUP, UNBLOCK_JUDGE_WAIT_ENABLED="false")
+	assert "fixup=50 outcome=followup" in result.stdout and "op=escalate" not in result.stdout, result.stdout
+
+
+def test_legacy_operator_step_verdict_without_kind_escalates(tmp_path: Path) -> None:
+	comments = _operator_step_comments("Stays off behind `DOC_SYNC_UNSET_OPERATOR_STEP` until the operator step is done.")
+	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=MERGED_FIXUP)
+	assert ("fixup=50 op=escalate escalated=operator_step ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=escalated reason=no_step_kind"
+		in result.stdout), result.stdout
+	assert "hold=placeholder_retired" not in result.stdout
+	assert len(state["comments"]) == 1
+	body = state["comments"][0]["body"]
+	assert "`ai:operator-step` entry `unblock-7`" in body
+	assert body.rstrip().endswith("<!-- ai:unblock-wait:v1 item=7 escalated=operator_step ref=DOC_SYNC_UNSET_OPERATOR_STEP -->")
+
+
+def test_operator_escalation_ends_on_a_resume_command(tmp_path: Path) -> None:
+	retry = {"verdict": "retry_budget", "reason": "r", "instructions": "i"}
+	resume = _comment("/reclarify\nPinned by hand.", "owner", "2026-10-04T11:30:00Z")
+	resume["author_association"] = "OWNER"
+	result, state = _judge(tmp_path, ISSUE, comments=[_escalation_comment(), resume], verdict=retry)
+	assert "reason=operator_escalated" not in result.stdout and "outcome=acted" in result.stdout, result.stdout
+	# An untrusted, or older, slash command does not end it.
+	outsider = _comment("/reclarify", "someone", "2026-10-04T11:30:00Z")
+	outsider["author_association"] = "NONE"
+	older = _comment("/answer Q1: A", BOT, "2026-10-04T09:30:00Z")
+	result, state = _judge(tmp_path, ISSUE, comments=[older, _escalation_comment(), outsider], verdict=retry)
+	assert f"op=escalate ref={PIN_STEP} outcome=skip reason=operator_escalated" in result.stdout, result.stdout
+	# A forged escalation marker parks nothing.
+	forged = _escalation_comment()
+	forged["user"]["login"] = "someone"
+	result, state = _judge(tmp_path, ISSUE, comments=[forged], verdict=retry)
+	assert "reason=operator_escalated" not in result.stdout and "outcome=acted" in result.stdout, result.stdout
 
 
 def test_disabled_triage_gate_is_not_run(tmp_path: Path) -> None:
