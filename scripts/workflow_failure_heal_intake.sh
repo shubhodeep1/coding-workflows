@@ -601,7 +601,12 @@ case "${REPORT_ORIGIN}" in
 					# this script or the queue step reads this run, and the read
 					# is made only on this path. Fails closed: when the read fails
 					# the rejection stands.
-					if [ "${IDENTITY_REJECT_REASON}" = "identity_stale" ]; then
+					# Skipped when the report_age_credit block above already
+					# measured this attempt's elapsed time: REPORT_MAX_AGE then
+					# carries that wait, and adding the arrival wait again would
+					# credit the same runner wait twice and accept a report that
+					# was already stale on arrival.
+					if [ "${IDENTITY_REJECT_REASON}" = "identity_stale" ] && ! [[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" =~ ^[0-9]+$ ]]; then
 						INTAKE_SELF_RUN_FILE="${RUNTIME_DIR}/intake_self_run.json"
 						INTAKE_ARRIVAL_WAITED_SECONDS=0
 						if [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]] \
@@ -611,6 +616,7 @@ case "${REPORT_ORIGIN}" in
 							if [[ "${INTAKE_RUN_STARTED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] && [[ "${INTAKE_RUN_STARTED_EPOCH}" =~ ^[0-9]+$ ]]; then
 								INTAKE_ARRIVAL_WAITED_SECONDS=$(( $(date -u +%s) - INTAKE_RUN_STARTED_EPOCH ))
 								[ "${INTAKE_ARRIVAL_WAITED_SECONDS}" -ge 0 ] || INTAKE_ARRIVAL_WAITED_SECONDS=0
+								[ "${INTAKE_ARRIVAL_WAITED_SECONDS}" -le 86400 ] || INTAKE_ARRIVAL_WAITED_SECONDS=86400
 							fi
 						fi
 						log "report_identity_age_credit arrival_waited_seconds=${INTAKE_ARRIVAL_WAITED_SECONDS} queue_waited_seconds=${QUEUE_WAITED_SECONDS} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"

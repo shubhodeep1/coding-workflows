@@ -6246,6 +6246,25 @@ def test_intake_runner_wait_credit_not_needed_when_queue_wait_covers_it() -> Non
 		assert _api_writes(state_after) == []
 
 
+def test_intake_does_not_credit_the_runner_wait_twice() -> None:
+	"""The attempt credit and the identity_stale retry measure the same runner
+	wait. A token 3700 s old on arrival after a 600 s wait (limit 3600) must be
+	rejected: the retry may not add the wait again (base + 2 * wait)."""
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+	now = int(time.time())
+	with tempfile.TemporaryDirectory(prefix="heal-identity-no-double-credit-") as tmp_name:
+		token_file, jwks_file, _ = _fresh_identity(Path(tmp_name), iat=now - 4300, nbf=now - 4300)
+		state = _intake_state(extra_run_details={own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": _iso_utc(now - 600)}})
+		state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 600)}
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert "WORKFLOW_HEAL report_age_credit outcome=applied" in result.stdout, result.stdout
+		assert "report_identity_age_credit" not in result.stdout
+		assert "report_auth=rejected reason=identity_stale" in result.stdout
+		assert _api_writes(state_after) == []
+
+
 def test_intake_credits_runner_queue_wait_against_a_stale_identity() -> None:
 	# 2026-11-14: six reports sat ~3h50m waiting for a runner and were all
 	# rejected identity_stale; the age limit applies at arrival (run_started_at).

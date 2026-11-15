@@ -45,8 +45,9 @@
 #           are younger than the limit; followups_missing,
 #           followups_unverifiable, followups_stalled, markers_unverifiable,
 #           extensions_unverifiable, label_write_failed, pending_marker_failed,
-#           head_unpushed (the checkout holds a commit on top of the PR head
-#           that this run has not pushed yet; the push re-runs the review),
+#           head_unpushed (an extension marker needs the checkout at the PR
+#           head, but it holds a commit on top of it that this run has not
+#           pushed yet; the push re-runs the review),
 #           cycles_exhausted,
 #           exhausted_without_completed_audit or dispatch_failed otherwise.
 #           review_rb_judge.sh passes it on so a judge merge held here alerts
@@ -398,22 +399,25 @@ single_pass_gate()
 		return 0
 	fi
 	cycles_used="$(printf '%s\n' "${markers}" | awk -F'\t' 'NF >= 5 && $5 + 0 > m { m = $5 + 0 } END { print m + 0 }')"
-	# The checkout can be ahead of the PR head when this run made a commit it
-	# has not pushed yet: the conflict resolver's [ai-merge-resolve] commit is
-	# pushed by the job's final push step, after the review-blocked judge. That
-	# head is unaudited, so the merge holds, but the push starts a new review
-	# whose gate audits it: no human is needed (PRs #9338 and #9283 paged
-	# extensions_unverifiable for this). A checkout that is not a descendant of
-	# the PR head still takes the extensions_unverifiable hold below.
-	gate_checkout_head="$(git rev-parse HEAD 2>/dev/null || true)"
-	if [[ "${gate_checkout_head}" =~ ^[0-9a-f]{40}$ ]] && [ "${gate_checkout_head}" != "${head_sha}" ] \
-		&& git merge-base --is-ancestor "${head_sha}" "${gate_checkout_head}" 2>/dev/null; then
-		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} checkout=${gate_checkout_head} outcome=hold reason=head_unpushed"
-		single_pass_state unverifiable
-		single_pass_output true head_unpushed
-		return 0
-	fi
 	if ! extensions="$(single_pass_extensions "${comments}" "${head_sha}" . "${head_ref}")"; then
+		# The checkout can be ahead of the PR head when this run made a commit
+		# it has not pushed yet: the conflict resolver's [ai-merge-resolve]
+		# commit is pushed by the job's final push step, after the review-blocked
+		# judge. An extension marker can only be checked with the checkout at the
+		# PR head, so the merge holds, but the push starts a new review whose
+		# gate audits the new head: no human is needed (PRs #9338 and #9283
+		# paged extensions_unverifiable for this). Checked only here, after an
+		# extension marker failed: with no marker an unpushed local commit must
+		# not hold the gate (#9011 / #9134). A checkout that is not a descendant
+		# of the PR head still takes the extensions_unverifiable hold.
+		gate_checkout_head="$(git rev-parse HEAD 2>/dev/null || true)"
+		if [[ "${gate_checkout_head}" =~ ^[0-9a-f]{40}$ ]] && [ "${gate_checkout_head}" != "${head_sha}" ] \
+			&& git merge-base --is-ancestor "${head_sha}" "${gate_checkout_head}" 2>/dev/null; then
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} checkout=${gate_checkout_head} outcome=hold reason=head_unpushed"
+			single_pass_state unverifiable
+			single_pass_output true head_unpushed
+			return 0
+		fi
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=extensions_unverifiable"
 		single_pass_state unverifiable
 		single_pass_output true extensions_unverifiable
