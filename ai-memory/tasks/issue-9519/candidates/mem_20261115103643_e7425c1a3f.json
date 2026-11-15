@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Should the new `passing_change_erased` guard revert the repair (and keep the editor's change) when the gate run before the repair had zero PR-caused failures but a done-check acceptance test was unmet (`rpg_persist_extra > 0`)? From the code, that is the only case where the guard can fire, and it is the case in run 43517436284.\nChoices:\n- A: Yes. Revert whenever `pr_caused == 0` before the repair, as the issue says, even if only acceptance tests were unmet. The pre-repair result stays final, so the `PERSIST repair_loop` line and the summary will report `acceptance=unmet`, and reviewers see that the done-check failed. The diagnostic line also logs the pre-repair acceptance state and the extra-unmet count. (RECOMMENDED)\n- B: Yes, but only when the unmet acceptance tests are ones the editor's change does not touch (no overlap between the editor-changed files and the unmet test paths). Otherwise keep today's behaviour and let the repair's erasure stand.\n- C: No. Revert only when `pr_caused == 0` and `rpg_persist_extra == 0`. Given the loop's entry condition this guard would effectively never fire, so the change would amount to adding the diagnostic line. Run 43517436284 would still have lost the editor's change.",
+  "fingerprint": "600309f328c465fbadcf34bb900ab743a98254f0a38ea8301d1033a213de8820",
+  "lineage": {
+    "issue_number": 9519,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43680562330",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43680562330",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261115103643_e7425c1a3f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9519,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43680562330"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9519 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-15T10:36:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
