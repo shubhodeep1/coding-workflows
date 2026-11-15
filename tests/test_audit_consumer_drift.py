@@ -1719,6 +1719,21 @@ def test_report_warns_for_an_unknown_pin_and_stays_quiet_within_threshold() -> N
 		assert "Behind stable" not in summary_md
 
 
+def test_report_heading_follows_the_threshold_and_splits_unknown_pins(monkeypatch) -> None:
+	monkeypatch.setenv("CONSUMER_PIN_MAX_AGE_SECONDS", "7200")
+	measured = {"stale": True, "reason": "behind_stable", "pinned_release": "v1.46.0", "first_newer_release": "v1.47.0", "behind_seconds": 3 * 3600}
+	with tempfile.TemporaryDirectory(prefix="drift-report-pin-threshold-") as td:
+		_level, _telegram, summary_md = _run_report_step(Path(td), _pin_summary(measured, [_sync_skip(False)]))
+	assert "### Behind stable for 2 hours or more" in summary_md
+	assert "24 hours" not in summary_md
+	with tempfile.TemporaryDirectory(prefix="drift-report-pin-unknown-split-") as td:
+		level, telegram, summary_md = _run_report_step(Path(td), _pin_summary({"stale": True, "reason": "tag_time_unknown"}, [_sync_skip(False)]))
+	assert level == "WARNING"
+	assert "### Behind stable, pin or release tag time unknown" in summary_md
+	assert "### Behind stable for" not in summary_md
+	assert "pin age unknown: owner/drifted" in telegram
+
+
 def test_workflow_passes_release_tags_and_pin_age_threshold() -> None:
 	workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
 	assert "CONSUMER_PIN_MAX_AGE_SECONDS: ${{ vars.CONSUMER_PIN_MAX_AGE_SECONDS || '86400' }}" in workflow_text

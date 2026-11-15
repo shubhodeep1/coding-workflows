@@ -1331,7 +1331,8 @@ already fetched to this repository's `vX.Y.Z` release tags and counts from the
 tag time of the first release newer than the oldest pin. Once that is
 `CONSUMER_PIN_MAX_AGE_SECONDS` (default 86400, 24 hours) or older, or when the
 pin or tag time cannot be resolved, the alert is a `WARNING` with a "Behind
-stable for 24 hours or more" section, even while an update pull request is
+stable for 24 hours or more" section (named after the configured threshold;
+unresolved pins get their own "pin or release tag time unknown" section), even while an update pull request is
 open (each new update pull request no longer resets the clock). Each check logs
 `DRIFT_PIN_AGE repository=<r> outcome=stale|ok reason=<token>`. Transient GitHub API
 failures (intermittent 5xx "Unicorn" pages, rate limits, and network hiccups)

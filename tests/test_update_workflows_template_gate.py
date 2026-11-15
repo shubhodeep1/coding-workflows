@@ -561,7 +561,10 @@ def test_merge_blocked_step_fails_the_job_after_mark_verify_failure() -> None:
 	run = step["run"]
 	assert "${{" not in run
 	assert "::error::UPDATER_PR_VERIFY outcome=merge_blocked reason=auto_merge_failed pr=${PR_NUMBER} head=${PUSHED_SHA}" in run
-	assert "read:org" in run
+	# #9483 fix 1 removed the read:org dependency; do not send operators there.
+	assert "read:org" not in run
+	assert "curl -sS --fail -X POST" in run
+	assert step["env"]["ALERT_MSG_LEVEL"].endswith("|| vars.ALERT_MSG_LEVEL || 'WARNING' }}")
 	assert run.rstrip().endswith("exit 1")
 	# The verify status is never touched: a human can still merge the PR.
 	assert "statuses" not in run
@@ -612,6 +615,13 @@ def test_merge_blocked_step_alerts_and_exits_nonzero(tmp_path: Path) -> None:
 	assert sent.count("api.telegram.org/bot") == 1
 	assert "chat_id=123" in sent
 	assert "updater PR #77 in octo/consumer" in sent
+
+
+def test_merge_blocked_step_alerts_when_no_level_is_set(tmp_path: Path) -> None:
+	# An unset or empty level means WARNING for this ERROR-class alert.
+	result, calls = _run_merge_blocked(tmp_path, "", "bot-secret")
+	assert result.returncode == 1
+	assert "\n".join(calls).count("api.telegram.org/bot") == 1
 
 
 def test_merge_blocked_step_still_fails_without_telegram(tmp_path: Path) -> None:

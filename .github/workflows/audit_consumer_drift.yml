@@ -111,6 +111,8 @@ jobs:
         env:
           SUMMARY_JSON: ${{ steps.audit.outputs.summary_json }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Same threshold the audit used; only names the report heading.
+          CONSUMER_PIN_MAX_AGE_SECONDS: ${{ vars.CONSUMER_PIN_MAX_AGE_SECONDS || '86400' }}
         run: |
           set -euo pipefail
           REPORT_DIR="${RUNNER_TEMP}/audit-consumer-drift-report-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -121,6 +123,7 @@ jobs:
 
           python3 - "${SUMMARY_JSON}" "${SUMMARY_MD}" "${TELEGRAM_BODY}" "${TELEGRAM_LEVEL_FILE}" "${RUN_URL}" <<'PY'
           import json
+          import os
           import sys
           from pathlib import Path
 
@@ -238,6 +241,19 @@ jobs:
                   return f"pinned {pinned}, {newer} released {behind // 3600} hours ago"
               return f"pinned {pinned}, first newer {newer} ({pin_age.get('reason', 'unknown')})"
 
+          def pin_threshold_label() -> str:
+              # Mirrors parse_pin_max_age_seconds: bad values mean 86400.
+              raw = os.environ.get("CONSUMER_PIN_MAX_AGE_SECONDS", "86400").strip()
+              seconds = int(raw) if raw.isdigit() and int(raw) > 0 else 86400
+              if seconds % 3600 == 0:
+                  return f"{seconds // 3600} hours"
+              return f"{seconds} seconds"
+
+          # Only behind_stable was measured against the threshold; pin_unknown
+          # and tag_time_unknown fail closed and are listed on their own.
+          pin_measured_results = [item for item in pin_stale_results if item["pin_age"].get("reason") == "behind_stable"]
+          pin_unknown_results = [item for item in pin_stale_results if item["pin_age"].get("reason") != "behind_stable"]
+
           def repair_pull_request_note(repair: dict) -> str:
               if repair.get("reason") != "sync_pull_request_open":
                   return ""
@@ -277,9 +293,13 @@ jobs:
                       if diff_preview:
                           lines.extend(["", "```diff", diff_preview, "```"])
 
-          if pin_stale_results:
-              lines.extend(["", "### Behind stable for 24 hours or more"])
-              for result in pin_stale_results:
+          if pin_measured_results:
+              lines.extend(["", f"### Behind stable for {pin_threshold_label()} or more"])
+              for result in pin_measured_results:
+                  lines.append(f"- `{result.get('repository', 'unknown')}` — {pin_age_note(result)}")
+          if pin_unknown_results:
+              lines.extend(["", "### Behind stable, pin or release tag time unknown"])
+              for result in pin_unknown_results:
                   lines.append(f"- `{result.get('repository', 'unknown')}` — {pin_age_note(result)}")
 
           if repairs:
@@ -345,8 +365,10 @@ jobs:
                   ]
               )
               blocks = []
-              for result in pin_stale_results:
+              for result in pin_measured_results:
                   blocks.append(f"- behind stable: {result.get('repository', 'unknown')} — {pin_age_note(result)}")
+              for result in pin_unknown_results:
+                  blocks.append(f"- pin age unknown: {result.get('repository', 'unknown')} — {pin_age_note(result)}")
               # Drift an open, fresh update pull request covers is left out:
               # its repair line below says it is handled.
               for result in alert_drift_results:

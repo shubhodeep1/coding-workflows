@@ -311,7 +311,7 @@ with open(os.environ["FAKE_GH_LOG"], "a") as out:
     out.write(json.dumps(args) + "\\n")
 joined = " ".join(args)
 if "/statuses/" in joined:
-    sys.exit(0)
+    sys.exit(1 if os.environ.get("FAKE_FAIL") == "post" else 0)
 if args[:2] == ["api", "repos/o/r/pulls/42"]:
     if os.environ.get("FAKE_FAIL") == "read": sys.exit(1)
     print(os.environ["FAKE_PR_JSON"]); sys.exit(0)
@@ -386,6 +386,22 @@ def test_updater_pr_with_green_verify_and_integrity_gets_success(tmp_path: Path)
 	assert "context=ai-review/head-gate" in posts[0]
 	assert f"REVIEW_HEAD_GATE mode=updater_exempt pr=42 head={HEAD} outcome=posted reason=verified" in result.stdout
 	assert [call[1] for call in calls if call[:2] != ["api", "-X"]] == ["repos/o/r/pulls/42", f"repos/o/r/commits/{HEAD}/status?per_page=100"]
+
+
+def test_updater_exemption_reports_a_failed_post(tmp_path: Path) -> None:
+	result, calls = _run_exempt(tmp_path, FAKE_FAIL="post")
+	assert result.returncode == 1
+	assert len(_statuses(calls)) == 1
+	assert "outcome=skipped reason=post_failed" in result.stdout
+	assert "outcome=posted reason=verified" not in result.stdout
+
+
+def test_judge_updater_hold_rechecks_the_exemption() -> None:
+	text = (ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	branch = text.index('echo "judge_action=updater_verify_hold" >> "$GITHUB_OUTPUT"')
+	section = text[branch:text.index("exit 0", branch)]
+	assert 'review_head_gate_updater_exempt "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA:-}" "${POST_REVIEW_HEAD_REF}" || true' in section
+	assert "gh pr merge" not in section
 
 
 def test_review_tail_passes_its_pr_read_and_skips_the_pr_call(tmp_path: Path) -> None:

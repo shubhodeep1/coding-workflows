@@ -164,7 +164,15 @@ review_head_gate_updater_exempt()
 		ue_log skipped "${ue_reason:-invalid_response}"
 		return 1
 	fi
-	review_head_gate_post_status "${ue_repo}" "${ue_sha}" success "updater PR verified against the attested release manifest"
+	# review_head_gate_post_status always returns 0 (its other callers rely
+	# on that), so read its own outcome line to tell a failed POST apart.
+	local ue_post_out=""
+	ue_post_out="$(review_head_gate_post_status "${ue_repo}" "${ue_sha}" success "updater PR verified against the attested release manifest")"
+	[ -n "${ue_post_out}" ] && printf '%s\n' "${ue_post_out}"
+	if [[ "${ue_post_out}" != *"state=success outcome=posted"* ]]; then
+		ue_log skipped post_failed
+		return 1
+	fi
 	ue_log posted verified
 	return 0
 }

@@ -2216,6 +2216,12 @@ if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
     -f body="## Review-Blocked Judge — action held for the updater verify job
 
 The judge chose **${RB_ACTION}**, but this is a consumer-updater pull request. Only the update_workflows.yml verify job may change or merge it, so no action was taken." >/dev/null 2>&1 || true
+  # #9483: the judge runs late in the review, usually after the verify and
+  # integrity statuses have posted, so re-check the head-gate exemption here
+  # (the gate-time check may have run before them). Fails closed; never merges.
+  if type review_head_gate_updater_exempt >/dev/null 2>&1; then
+    review_head_gate_updater_exempt "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA:-}" "${POST_REVIEW_HEAD_REF}" || true
+  fi
   exit 0
 fi
 # BEGIN rb judge incomplete-context merge deferral (BUG-002)

@@ -2507,13 +2507,18 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           SYNC_REPO: ${{ github.repository }}
           SYNC_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Same precedence as the workflow-level ALERT_MSG_LEVEL, but this
+          # ERROR-class alert defaults to WARNING instead of SILENT (which
+          # exists to mute the routine wrapper-update notice), so it fires
+          # when nothing is configured. An explicit SILENT still opts out.
+          ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -uo pipefail
           echo "::error::UPDATER_PR_VERIFY outcome=merge_blocked reason=auto_merge_failed pr=${PR_NUMBER} head=${PUSHED_SHA}"
-          echo "::error::The verify status on #${PR_NUMBER} stays success, so a human can merge it. Possible causes: 'Allow auto-merge' is off in the repository settings, or GH_PAT is missing scopes (for example read:org or repo)."
+          echo "::error::The verify status on #${PR_NUMBER} stays success, so a human can merge it. Possible causes: 'Allow auto-merge' is off in the repository settings, or GH_PAT lacks the repo scope or write access to this repository."
           # PR_NUMBER and PUSHED_SHA were validated by verify_inputs; the
           # message carries only those, the repository and the run URL.
-          sync_alert_level="${ALERT_MSG_LEVEL:-SILENT}"
+          sync_alert_level="${ALERT_MSG_LEVEL:-WARNING}"
           case "${sync_alert_level^^}" in
             DEBUG|WARNING|ERROR)
               if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
@@ -2522,7 +2527,8 @@ jobs:
                 MSG="ERROR: updater PR #${PR_NUMBER} in ${SYNC_REPO} passed verification but auto-merge could not be enabled.
           A human must merge it. Head: ${PUSHED_SHA}
           Run: ${SYNC_RUN_URL}"
-                curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+                # --fail: an HTTP 4xx/5xx reply reaches the warning below.
+                curl -sS --fail -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
                   -d "chat_id=${TG_ADMIN_CHAT_ID}" \
                   -d "disable_web_page_preview=true" \
                   --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"

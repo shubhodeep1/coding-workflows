@@ -7,6 +7,6 @@ Two consumers (btc_sweeper#264, atlas-bridge.gd#134) stayed on pre-v1.47.2 wrapp
 | --- | --- |
 | Pin-age alarm threshold | 24 hours (`CONSUMER_PIN_MAX_AGE_SECONDS`, default 86400) |
 | Drift audit schedule | every 6 hours (was daily) |
-| Extra API calls per updater-PR review | at most 2 (PR read, combined status); 0 for other PRs |
+| Extra API calls per updater-PR head-gate check | at most 3 (PR read, combined status, status post), up to 3 checks per review (gate, clean tail or review-blocked judge); 0 for other PRs |
 
-What this means for consumer repos: after the next `@stable` sync, an update PR whose auto-merge cannot be enabled fails the `verify` job (the verify status stays `success`, so you can merge it by hand). Updater PRs with green `ai-update-workflows/verify` and `coding-workflows/workflow-integrity` statuses get `ai-review/head-gate` = `success`; set `REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED=false` to turn that off.
+What this means for consumer repos: after the next `@stable` sync, an update PR whose auto-merge cannot be enabled fails the `verify` job (the verify status stays `success`, so you can merge it by hand) and sends a Telegram alert unless `ALERT_MSG_LEVEL` is explicitly `SILENT`. Updater PRs with green `ai-update-workflows/verify` and `coding-workflows/workflow-integrity` statuses get `ai-review/head-gate` = `success`; set `REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED=false` to turn that off.
