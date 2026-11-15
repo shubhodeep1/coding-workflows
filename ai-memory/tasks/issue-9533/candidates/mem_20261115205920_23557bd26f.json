@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: Option A is the safest choice. The issue says to reuse the existing marker parser and not add a second one. The fully verified copy of that parse already exists as `review_head_gate_freshness_sync` in `scripts/review_head_gate.sh` (lines 124-204). It applies the pipeline-identity filter, binds the marker to the head through `merge=`, and checks parents [`from`, `base`], a `web-flow` committer with a verified signature, and that the base parent is contained in the base (`compare ... ahead|identical`). That code was hardened after the security finding `freshness-sync-signed-merge-review-bypass`. Option B drops those checks, which would let an unverified merge carry a clean audit. That is a security regression, and the security pass is the last place to accept one. Option C drops the PR-changed-files diff, which Specification item 1 explicitly requires. Option A keeps every condition the issue lists and adds the hardened checks. Anything that cannot be verified falls back to auditing the head as today.\nQ2: Option A extends the existing identical-failure cap rather than building a competing mechanism. The cap lives in `scripts/review_autofix_step_evaluate_gate.sh` lines 815-971: `FINGERPRINT_CAP_MAX` from `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` (default 3), counted by `workflow_failure_heal.py autofix-identical-failure-count`, which already returns `reason=` and `fp=`. Its existing block path applies `ai:review-blocked`, posts one cap comment, then hands off to the rb-judge. Using a threshold of 2 for `reason=reviewers_failed` only matches Specification item 2: a second failure on the same head with the same `fp=` blocks, and a single failure still retries. Option A also stops the second failure comment from saying \"will retry\" and stops the poller from queueing another review, which closes the loop the issue describes. Option B still posts \"will retry\" on the second failure, which the specification forbids. Option C changes behaviour for every other failure reason, which is scope expansion.\n\nEXECUTION PLAN (required for any non-letter decision):\nNot applicable. Both decisions are lettered. Binding notes for the planner:\nQ1:\n  - Do not re-implement the marker regex. Call `review_head_gate_freshness_sync` (or a thin wrapper around it in the same file) from `single_pass_gate` in `scripts/review_single_issue_security_pass.sh`. Pass the repo, PR, head, base ref, the pipeline's own login, and the marker comments it already has. Exit 0 means the marker, parents, signature and base-containment checks all passed. The `from=` value can be read from the logged `from=` field, or by exposing it from the shared helper without duplicating the regex.\n  - Then require a `status=clean` security-pass marker for `from=`, read through `single_pass_markers`.\n  - Then require that `git diff <base parent>..<merge>`, restricted to the PR's changed files, adds nothing the base side did not already contain.\n  - On success, log `single_pass_log ... outcome=clean reason=base_sync_carry from=<sha>`. Any failed or unverifiable step audits the head as today.\n  - Tests go in `tests/test_single_issue_security_pass.py`, covering the three cases in Specification item 4. They must stub the GitHub `commits/<head>` and `compare` reads used by the shared helper.\nQ2:\n  - Add a reason-scoped threshold of 2, applied only when the counted `reason` is `reviewers_failed`. Name it after checking for collisions, for example `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED`, with default `2` in the helper itself (\u00a78). The global default stays `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL:-3`, and existing variable names are unchanged.\n  - Route the block through the existing `FINGERPRINT_CAP=true` / `SKIP_REASON=fingerprint_cap` path and its sibling fingerprint-cap-block job.\n  - In the codex-agent failure-comment path, when this failure's marker would be the second same-head, same-`fp` `reviewers_failed` marker, report the block instead of \"will retry\".\n  - In `scripts/orchestrate_poll_process.sh`, do not queue a review for a head whose newest markers meet the same rule. Read the comments the poller has already fetched or cached, and add no new per-iteration API call (\u00a714).\n  - Fill `AUTOFIX_FAILURE_FIRST_ERROR` from the reviewer step's first `ERROR` line or bash diagnostic line (Specification item 3).\n  - Tests go in the existing evaluate-gate or poller test files: a second same-head, same-`fp` `reviewers_failed` failure blocks; a different `fp` or a different head retries.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "7a90792fbd97567a4d30a74029faf4bc7d895baaf16daaa3ba7403c6a46d05dc",
+  "lineage": {
+    "issue_number": 9533,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43733574491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43733574491",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9533"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261115205920_23557bd26f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9533,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43733574491"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9533",
+  "timestamps": {
+    "created_at": "2026-11-15T20:59:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
