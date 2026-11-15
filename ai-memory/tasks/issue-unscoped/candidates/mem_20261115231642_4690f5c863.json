@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: the `orchestrate-poll` job in `.github/workflows/ci.yml`\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: no step moves in the PR diff or the last-run diff. The reviewer called this a deliberate deferral, not a gap (severity NIT). The PR description's \"Deferred scope\" section records it, along with auto-decisions AD-1 = B and AD-2 = C. Run 43343930604 ran on d49b34c8562d, before PR #9268 merged. The only step left in group 0 is the fast-fail step, which cannot move unchanged because it needs the derive step's `/tmp` list.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (severity=NIT, confidence=1)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: the `orchestrate-poll` job in `.github/workflows/ci.yml`\n  Evidence of absence: no step moves in the PR diff or the last-run diff. This is a deliberate deferral, not a gap. The PR description's \"Deferred scope\" section records it, along with auto-decisions AD-1 = B and AD-2 = C. Run 43343930604 ran on d49b34c8562d, before PR #9268 merged, so its 15m55s was measured before the #9214 move. The only step left in group 0 is the fast-fail step, which cannot move unchanged because it needs the derive step's `/tmp` list.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2bfcdbbdf20f487b474f9d65cfed83d5e3940d2d4dc372644b74f9fb19b6942d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9453,
+    "run_id": "43730505031",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43730505031",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261115231642_4690f5c863",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9453,
+    "run_id": "43730505031"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-15T23:16:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
