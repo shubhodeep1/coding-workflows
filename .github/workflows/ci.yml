@@ -253,6 +253,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_job_split_contract.py
 
+      - name: CI shallow checkout contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_shallow_checkout_contract.py
+
       - name: CI test wiring guard
         run: |
           set -euo pipefail
@@ -583,7 +588,98 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          # Shallow: the next step fetches the base commit and the history
+          # window that the parity/drift `base...HEAD` diff and the Prepare
+          # step's sync need, and fails the job if it cannot.
+          fetch-depth: 1
+
+      - name: Fetch base commits for the shallow checkout (hooks and orchestrator)
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # The checkout above is depth 1 (cut-ci-runner-time Phase 1). Two readers
+          # need more than the checked-out commit: tests/claude_template_drift.py
+          # diffs `base...HEAD`, which needs the merge-base, and the Prepare step's
+          # sync runs a per-path `git log` and `merge-base --is-ancestor`. So this
+          # step fetches a 200-commit window of HEAD and main plus the base (or push
+          # before) commit, and unshallows those two refs only when the merge-base
+          # is deeper. A missing commit fails the job; it never skips the parity or
+          # drift tests.
+          retry_delay="${SHALLOW_FETCH_RETRY_DELAY_SECONDS:-5}"
+          case "${retry_delay}" in
+            ''|*[!0-9]*) retry_delay=5 ;;
+          esac
+          shallow_fetch() {
+            local attempt
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --quiet "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                sleep "$(( attempt * retry_delay ))"
+              fi
+            done
+            return 1
+          }
+          event="${GITHUB_EVENT_NAME:-}"
+          case "${GITHUB_REF:-}" in
+            refs/heads/orchestrator/project-*) project_push=true ;;
+            *) project_push=false ;;
+          esac
+          if [ "${event}" != "pull_request" ] && [ "${project_push}" != "true" ]; then
+            # Pushes to main and stable read no base: the Prepare steps are off and
+            # CLAUDE_PARITY_PR_BASE_SHA is empty.
+            echo "Shallow checkout: ${event:-unknown} on ${GITHUB_REF:-unknown} reads no base commit; nothing to fetch."
+            exit 0
+          fi
+          main_refspec="+refs/heads/main:refs/remotes/origin/main"
+          if ! shallow_fetch --depth=200 origin "${GITHUB_SHA}" "${main_refspec}"; then
+            echo "::error::Shallow checkout: could not fetch history for ${GITHUB_SHA} and main from origin."
+            exit 1
+          fi
+          base="${PR_BASE_SHA:-${PUSH_BEFORE_SHA:-}}"
+          shown_base="${base:-empty}"
+          base_usable=false
+          if [[ "${base}" =~ ^[0-9a-f]{40}$ ]]; then
+            if [ -n "${base//0/}" ]; then
+              if git cat-file -e "${base}^{commit}" 2>/dev/null || shallow_fetch --depth=1 origin "${base}"; then
+                base_usable=true
+              fi
+            fi
+          elif [ -n "${base}" ]; then
+            shown_base="invalid"
+          fi
+          if [ "${base_usable}" != "true" ]; then
+            if [ "${event}" = "pull_request" ]; then
+              echo "::error::Shallow checkout: the pull request base ${shown_base} is not a commit origin can serve; parity and drift tests cannot run."
+              exit 1
+            fi
+            echo "::warning::Shallow checkout: push before=${shown_base} is not a reachable commit; the Prepare step falls back to the merge-base with main."
+            base=""
+          fi
+          history_ready() {
+            if [ -z "${base}" ]; then
+              git merge-base HEAD origin/main >/dev/null 2>&1
+            elif [ "${event}" = "pull_request" ]; then
+              git merge-base "${base}" HEAD >/dev/null 2>&1
+            fi
+          }
+          if ! history_ready; then
+            if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+              echo "Shallow checkout: the merge-base is deeper than the 200-commit window; unshallowing ${GITHUB_SHA} and main."
+              if ! shallow_fetch --unshallow origin "${GITHUB_SHA}" "${main_refspec}"; then
+                echo "::error::Shallow checkout: could not unshallow ${GITHUB_SHA} and main from origin."
+                exit 1
+              fi
+            fi
+            if ! history_ready; then
+              echo "::error::Shallow checkout: no common history between ${base:-HEAD} and HEAD/main after unshallow; parity and drift tests cannot run."
+              exit 1
+            fi
+          fi
+          echo "Shallow checkout: history ready for ${GITHUB_SHA} (base=${base:-none})."
 
       - name: Prepare template-only PR live copies for parity tests
         if: >-
@@ -2128,9 +2224,98 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          # Full history: tests/claude_template_drift.py diffs against the PR
-          # base SHA, which a depth-1 checkout does not contain.
-          fetch-depth: 0
+          # Shallow: tests/claude_template_drift.py diffs against the PR base
+          # SHA, so the next step fetches that commit and the history window
+          # its `base...HEAD` diff needs, and fails the job if it cannot.
+          fetch-depth: 1
+
+      - name: Fetch base commits for the shallow checkout (release and log analysis)
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # The checkout above is depth 1 (cut-ci-runner-time Phase 1). Two readers
+          # need more than the checked-out commit: tests/claude_template_drift.py
+          # diffs `base...HEAD`, which needs the merge-base, and the Prepare step's
+          # sync runs a per-path `git log` and `merge-base --is-ancestor`. So this
+          # step fetches a 200-commit window of HEAD and main plus the base (or push
+          # before) commit, and unshallows those two refs only when the merge-base
+          # is deeper. A missing commit fails the job; it never skips the parity or
+          # drift tests.
+          retry_delay="${SHALLOW_FETCH_RETRY_DELAY_SECONDS:-5}"
+          case "${retry_delay}" in
+            ''|*[!0-9]*) retry_delay=5 ;;
+          esac
+          shallow_fetch() {
+            local attempt
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --quiet "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                sleep "$(( attempt * retry_delay ))"
+              fi
+            done
+            return 1
+          }
+          event="${GITHUB_EVENT_NAME:-}"
+          case "${GITHUB_REF:-}" in
+            refs/heads/orchestrator/project-*) project_push=true ;;
+            *) project_push=false ;;
+          esac
+          if [ "${event}" != "pull_request" ] && [ "${project_push}" != "true" ]; then
+            # Pushes to main and stable read no base: the Prepare steps are off and
+            # CLAUDE_PARITY_PR_BASE_SHA is empty.
+            echo "Shallow checkout: ${event:-unknown} on ${GITHUB_REF:-unknown} reads no base commit; nothing to fetch."
+            exit 0
+          fi
+          main_refspec="+refs/heads/main:refs/remotes/origin/main"
+          if ! shallow_fetch --depth=200 origin "${GITHUB_SHA}" "${main_refspec}"; then
+            echo "::error::Shallow checkout: could not fetch history for ${GITHUB_SHA} and main from origin."
+            exit 1
+          fi
+          base="${PR_BASE_SHA:-${PUSH_BEFORE_SHA:-}}"
+          shown_base="${base:-empty}"
+          base_usable=false
+          if [[ "${base}" =~ ^[0-9a-f]{40}$ ]]; then
+            if [ -n "${base//0/}" ]; then
+              if git cat-file -e "${base}^{commit}" 2>/dev/null || shallow_fetch --depth=1 origin "${base}"; then
+                base_usable=true
+              fi
+            fi
+          elif [ -n "${base}" ]; then
+            shown_base="invalid"
+          fi
+          if [ "${base_usable}" != "true" ]; then
+            if [ "${event}" = "pull_request" ]; then
+              echo "::error::Shallow checkout: the pull request base ${shown_base} is not a commit origin can serve; parity and drift tests cannot run."
+              exit 1
+            fi
+            echo "::warning::Shallow checkout: push before=${shown_base} is not a reachable commit; the Prepare step falls back to the merge-base with main."
+            base=""
+          fi
+          history_ready() {
+            if [ -z "${base}" ]; then
+              git merge-base HEAD origin/main >/dev/null 2>&1
+            elif [ "${event}" = "pull_request" ]; then
+              git merge-base "${base}" HEAD >/dev/null 2>&1
+            fi
+          }
+          if ! history_ready; then
+            if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+              echo "Shallow checkout: the merge-base is deeper than the 200-commit window; unshallowing ${GITHUB_SHA} and main."
+              if ! shallow_fetch --unshallow origin "${GITHUB_SHA}" "${main_refspec}"; then
+                echo "::error::Shallow checkout: could not unshallow ${GITHUB_SHA} and main from origin."
+                exit 1
+              fi
+            fi
+            if ! history_ready; then
+              echo "::error::Shallow checkout: no common history between ${base:-HEAD} and HEAD/main after unshallow; parity and drift tests cannot run."
+              exit 1
+            fi
+          fi
+          echo "Shallow checkout: history ready for ${GITHUB_SHA} (base=${base:-none})."
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -3562,7 +3747,98 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          # Shallow: the next step fetches the base commit and the history
+          # window that the parity/drift `base...HEAD` diff and the Prepare
+          # step's sync need, and fails the job if it cannot.
+          fetch-depth: 1
+
+      - name: Fetch base commits for the shallow checkout (system Python)
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # The checkout above is depth 1 (cut-ci-runner-time Phase 1). Two readers
+          # need more than the checked-out commit: tests/claude_template_drift.py
+          # diffs `base...HEAD`, which needs the merge-base, and the Prepare step's
+          # sync runs a per-path `git log` and `merge-base --is-ancestor`. So this
+          # step fetches a 200-commit window of HEAD and main plus the base (or push
+          # before) commit, and unshallows those two refs only when the merge-base
+          # is deeper. A missing commit fails the job; it never skips the parity or
+          # drift tests.
+          retry_delay="${SHALLOW_FETCH_RETRY_DELAY_SECONDS:-5}"
+          case "${retry_delay}" in
+            ''|*[!0-9]*) retry_delay=5 ;;
+          esac
+          shallow_fetch() {
+            local attempt
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --quiet "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                sleep "$(( attempt * retry_delay ))"
+              fi
+            done
+            return 1
+          }
+          event="${GITHUB_EVENT_NAME:-}"
+          case "${GITHUB_REF:-}" in
+            refs/heads/orchestrator/project-*) project_push=true ;;
+            *) project_push=false ;;
+          esac
+          if [ "${event}" != "pull_request" ] && [ "${project_push}" != "true" ]; then
+            # Pushes to main and stable read no base: the Prepare steps are off and
+            # CLAUDE_PARITY_PR_BASE_SHA is empty.
+            echo "Shallow checkout: ${event:-unknown} on ${GITHUB_REF:-unknown} reads no base commit; nothing to fetch."
+            exit 0
+          fi
+          main_refspec="+refs/heads/main:refs/remotes/origin/main"
+          if ! shallow_fetch --depth=200 origin "${GITHUB_SHA}" "${main_refspec}"; then
+            echo "::error::Shallow checkout: could not fetch history for ${GITHUB_SHA} and main from origin."
+            exit 1
+          fi
+          base="${PR_BASE_SHA:-${PUSH_BEFORE_SHA:-}}"
+          shown_base="${base:-empty}"
+          base_usable=false
+          if [[ "${base}" =~ ^[0-9a-f]{40}$ ]]; then
+            if [ -n "${base//0/}" ]; then
+              if git cat-file -e "${base}^{commit}" 2>/dev/null || shallow_fetch --depth=1 origin "${base}"; then
+                base_usable=true
+              fi
+            fi
+          elif [ -n "${base}" ]; then
+            shown_base="invalid"
+          fi
+          if [ "${base_usable}" != "true" ]; then
+            if [ "${event}" = "pull_request" ]; then
+              echo "::error::Shallow checkout: the pull request base ${shown_base} is not a commit origin can serve; parity and drift tests cannot run."
+              exit 1
+            fi
+            echo "::warning::Shallow checkout: push before=${shown_base} is not a reachable commit; the Prepare step falls back to the merge-base with main."
+            base=""
+          fi
+          history_ready() {
+            if [ -z "${base}" ]; then
+              git merge-base HEAD origin/main >/dev/null 2>&1
+            elif [ "${event}" = "pull_request" ]; then
+              git merge-base "${base}" HEAD >/dev/null 2>&1
+            fi
+          }
+          if ! history_ready; then
+            if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+              echo "Shallow checkout: the merge-base is deeper than the 200-commit window; unshallowing ${GITHUB_SHA} and main."
+              if ! shallow_fetch --unshallow origin "${GITHUB_SHA}" "${main_refspec}"; then
+                echo "::error::Shallow checkout: could not unshallow ${GITHUB_SHA} and main from origin."
+                exit 1
+              fi
+            fi
+            if ! history_ready; then
+              echo "::error::Shallow checkout: no common history between ${base:-HEAD} and HEAD/main after unshallow; parity and drift tests cannot run."
+              exit 1
+            fi
+          fi
+          echo "Shallow checkout: history ready for ${GITHUB_SHA} (base=${base:-none})."
 
       - name: Prepare template-only PR live copies for system-Python tests
         if: >-
