@@ -22140,7 +22140,7 @@ invoke_stall_judge() {
      [[ "${target_pr}" =~ ^[0-9]+$ ]] && { [ "${pr_state}" = "closed" ] || [ "${pr_state}" = "merged" ]; } && \
      _pr_json_is_issue_implementation_pr "${issue_num}" "${linked_pr_json}"; then
     effective_action="escalate_human"
-    echo "::notice::Stall judge action 'escalate_human' kept for issue #${issue_num}: linked PR #${target_pr} is ${pr_state}, so 'attempt_merge' cannot act."
+    echo "::notice::Stall judge action 'escalate_human' kept for issue #${issue_num}: linked PR #${target_pr} is ${pr_state}, so 'attempt_merge' cannot act (head=${head_ref:-unknown})."
   fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then

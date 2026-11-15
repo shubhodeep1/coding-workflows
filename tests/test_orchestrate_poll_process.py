@@ -15388,6 +15388,34 @@ def test_standalone_ready_to_merge_skips_recovery_when_linked_pr_merged_into_int
 	assert result.get("merge_calls", []) == []
 
 
+def test_standalone_ready_to_merge_logs_linked_pr_merged_when_merged_into_default_branch():
+	# Target-base sibling of the integration-branch case: the reconcile does
+	# not log merged_non_target_base, so the poller prints its own single
+	# STALL_SKIP ... reason=linked_pr_merged line.
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides={**_MERGED_PR_9482, "baseRefName": "main"},
+		stall_recovery_count=2,
+		mock_stall_judge_json={
+			"action": "attempt_merge",
+			"justification": "must not be reached",
+			"target_pr": 825,
+			"head_ref": "ai/issue-823",
+		},
+	)
+	assert "linked PR #825 is MERGED" in result["stdout"]
+	assert "STALL_SKIP issue=823 reason=linked_pr_merged pr=825 phase=ai:ready-to-merge" in result["stdout"]
+	assert "reason=merged_non_target_base" not in result["stdout"]
+	assert result["stdout"].count("STALL_SKIP issue=823 ") == 1
+	standalone_state = _extract_latest_standalone_state(result["issues"]["823"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 2
+	assert not any(
+		"Stall Judge" in str(comment.get("body", ""))
+		for comment in result["issues"]["823"]["comments"]
+	)
+	assert result.get("merge_calls", []) == []
+
+
 def test_stall_judge_diagnostics_report_merged_linked_pr_and_keep_escalation():
 	result = _run_standalone_ready_to_merge_tick_9482(
 		pr_overrides=_MERGED_PR_9482,
