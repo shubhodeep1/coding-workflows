@@ -3404,8 +3404,9 @@ jobs:
       # git repositories and needs no Node or prepared .claude/ live copies.
       # Moved back from orchestrate-poll group 1, which took 15m42s of its 20
       # minutes (run 39526504422, budget-watch issue #7766); sharded since
-      # #7579, so its estimated cost here is about 1.5 to 2 minutes. This job
-      # has no matrix, so the step no longer carries a group guard.
+      # #7579, so its estimated cost in tests-hooks-and-orchestrator was about
+      # 1.5 to 2 minutes. That job has no matrix, so the step carried no group
+      # guard there; orchestrate-poll is a matrix job, so here it needs one.
       #
       # Budget-watch issue #9496: tests-hooks-and-orchestrator took 16m09s of
       # its 20 minutes on main (run 43544291165), so the step moved, name and
