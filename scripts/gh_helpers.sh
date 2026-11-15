@@ -2922,7 +2922,7 @@ _embed_input_file()
 			# skip offset 0 because truncating before the first hunk would
 			# emit nothing (head mode handles that case correctly).
 			local _boundary
-			_boundary="$(grep -bE '^diff --git ' "${_path}" 2>/dev/null \
+			_boundary="$(grep -bE -- '^diff --git ' "${_path}" 2>/dev/null \
 				| awk -F: -v cap="${_effective_cap}" \
 					'($1+0) > 0 && ($1+0) <= cap { last=$1+0 } END { print last+0 }')"
 			if [ -n "${_boundary}" ] && [ "${_boundary}" -gt 0 ]; then
