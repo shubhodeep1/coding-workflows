@@ -975,6 +975,7 @@ jobs:
             exit 1
           }
 
+          CLARIFY_ISSUE_URL="${GITHUB_SERVER_URL:-https://github.com}/${TEST_REPO}/issues/${ISSUE_NUMBER}"
           # Prints the run ID of the last trusted comment (owner, member,
           # collaborator or github-actions[bot]) starting with $1 whose Run: URL
           # is in this repo; empty otherwise (#9223).
@@ -1093,16 +1094,18 @@ jobs:
             # Inactivity timeout
             if [ "$IDLE" -ge "$INACTIVITY_LIMIT" ]; then
               CLARIFY_STALL_RUN_ID=$(capture_run_id "Clarif")
+              # At most one run URL: the cancelled run only when no newest run is found.
               if [[ "$CLARIFY_STALL_RUN_ID" =~ ^[0-9]+$ ]]; then
                 CLARIFY_STALL_NOTE=" (Clarify run: https://github.com/${TEST_REPO}/actions/runs/${CLARIFY_STALL_RUN_ID})"
               else
                 CLARIFY_STALL_NOTE=" (no non-skipped Clarify run titled '${ISSUE_TITLE}' found)"
-              fi
-              if [[ "$CLARIFY_CANCELLED_RUN_ID" =~ ^[0-9]+$ ]]; then
-                CLARIFY_STALL_NOTE+=" (cancelled Clarify run: https://github.com/${TEST_REPO}/actions/runs/${CLARIFY_CANCELLED_RUN_ID})"
+                if [[ "$CLARIFY_CANCELLED_RUN_ID" =~ ^[0-9]+$ ]]; then
+                  CLARIFY_STALL_NOTE+=" (cancelled Clarify run: https://github.com/${TEST_REPO}/actions/runs/${CLARIFY_CANCELLED_RUN_ID})"
+                fi
               fi
               echo "::error::Clarify phase stalled — no activity for ${PHASE_TIMEOUT} minutes${CLARIFY_STALL_NOTE}"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
+              echo "  Issue: ${CLARIFY_ISSUE_URL}"
               exit 1
             fi
 
@@ -5462,6 +5465,7 @@ jobs:
             fi
           fi
           echo "::error::Alt-model run timed out before reaching review stage${ALT_CLARIFY_RUN_NOTE}"
+          echo "  Issue: ${GITHUB_SERVER_URL:-https://github.com}/${TEST_REPO}/issues/${ISSUE_NUMBER}"
           exit 1
 
       - name: Capture alt-model phase run ids

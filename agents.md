@@ -5620,6 +5620,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/clarify.yml
 .github/workflows/claude-engine-smoke.yml
 .github/workflows/comprehensive-test-and-release.yml
+.github/workflows/cs_investigate.yml
 .github/workflows/drift-audit.yml
 .github/workflows/forward-merge-stable-to-main.yml
 .github/workflows/implement.yml
