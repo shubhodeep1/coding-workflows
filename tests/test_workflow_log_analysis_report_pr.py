@@ -306,6 +306,30 @@ def test_report_pr_queued_direct_merge_drops_purge_deletions_first() -> None:
 		assert out["purged_docs"] == ""
 
 
+def test_report_pr_purge_drop_restores_a_doc_git_would_pair_as_a_rename() -> None:
+	# A purged doc with the same text as the new report is a rename (R) to
+	# git's default diff, so --diff-filter=D alone would miss it and the PR
+	# would still delete it. The purge-drop must classify with --no-renames.
+	old_report = "analysis/workflow-optimization-2020-01-01.md"
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		(box.work / old_report).write_text("# report\n\n- finding\n", encoding="utf-8")
+		with (box.work / "analysis" / "recommendation-processing-report.md").open("a", encoding="utf-8") as handle:
+			handle.write("- workflow-optimization-2020-01-01.md: applied\n")
+		_git(box.work, "add", "-A", env=box.git_env)
+		_git(box.work, "commit", "-q", "-m", "old report", env=box.git_env)
+		_git(box.work, "push", "-q", "origin", "HEAD:main", env=box.git_env)
+		box.write_report()
+		proc = box.run(FAKE_GH_MERGE_QUEUED="1")
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert box.origin_has(f"refs/heads/{PR_BRANCH}", REPORT)
+		assert box.origin_has(f"refs/heads/{PR_BRANCH}", old_report)
+		assert "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending count=1" in proc.stdout
+		assert "INFO: purged" not in proc.stdout
+		assert "INFO: selected 1 workflow-optimization report(s)" in proc.stdout
+		assert box.outputs()["purged_docs"] == ""
+
+
 def test_report_pr_auto_merge_when_direct_merge_refused() -> None:
 	with tempfile.TemporaryDirectory() as raw:
 		box = _Sandbox(Path(raw))
@@ -598,6 +622,7 @@ def main() -> int:
 	test_report_pr_queued_direct_merge_is_not_reported_merged()
 	test_report_pr_auto_merge_drops_purge_deletions()
 	test_report_pr_queued_direct_merge_drops_purge_deletions_first()
+	test_report_pr_purge_drop_restores_a_doc_git_would_pair_as_a_rename()
 	test_report_pr_auto_merge_when_direct_merge_refused()
 	test_report_pr_auto_merge_wait_sees_the_report_land()
 	test_report_pr_auto_merge_not_landed_warns_about_skipped_audits()

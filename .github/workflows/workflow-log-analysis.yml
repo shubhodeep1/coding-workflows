@@ -1904,7 +1904,13 @@ jobs:
             echo "::warning::Unable to compute report purge cutoff date for retention window (${retention_raw} days); skipping age-based purge to avoid accidental deletions."
           fi
           if [ "${purged_count}" -gt 0 ]; then
-            echo "INFO: purged ${purged_count} workflow-optimization report(s) older than ${cutoff_date}."
+            # PR mode takes these deletions back out of the report PR before
+            # any merge call (see below), so it only selects them.
+            if [ "${report_delivery_mode}" = "pr" ]; then
+              echo "INFO: selected ${purged_count} workflow-optimization report(s) older than ${cutoff_date} for the age-based purge; PR mode keeps them (see WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending)."
+            else
+              echo "INFO: purged ${purged_count} workflow-optimization report(s) older than ${cutoff_date}."
+            fi
           fi
 
           git add "${REPORT_FILE}"
@@ -2137,10 +2143,17 @@ jobs:
             # call; apply-analysis deletes the docs it processes, and push
             # mode (WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=false) still purges.
             report_purge_drop_ok=1
-            report_purged_paths="$(git diff --name-only --diff-filter=D HEAD~1 HEAD -- 'analysis/workflow-optimization-*.md' 2>/dev/null)" || report_purge_drop_ok=0
+            # --no-renames: otherwise git can pair a purged doc with the new
+            # report as a rename (R), --diff-filter=D drops it, and the doc's
+            # deletion would stay in the PR.
+            report_purged_paths="$(git diff --no-renames --name-only --diff-filter=D HEAD~1 HEAD -- 'analysis/workflow-optimization-*.md' 2>/dev/null)" || report_purge_drop_ok=0
             if [ "${report_purge_drop_ok}" -eq 1 ] && [ -n "${report_purged_paths}" ]; then
+              # After the amend, the PR commit must delete no analysis doc;
+              # a diff error or any listed path fails closed (no merge).
               if printf '%s\n' "${report_purged_paths}" | xargs -d '\n' git checkout HEAD~1 -- \
                  && git commit --amend -q -m "chore: add workflow log analysis report" \
+                 && report_purge_left="$(git diff --no-renames --name-only --diff-filter=D HEAD~1 HEAD -- 'analysis/workflow-optimization-*.md')" \
+                 && [ -z "${report_purge_left}" ] \
                  && git push --force-with-lease="refs/heads/${REPORT_PR_BRANCH}:${report_last_pushed_sha}" origin "HEAD:refs/heads/${REPORT_PR_BRANCH}"; then
                 report_last_pushed_sha="$(git rev-parse HEAD)"
                 report_head_sha="${report_last_pushed_sha}"
