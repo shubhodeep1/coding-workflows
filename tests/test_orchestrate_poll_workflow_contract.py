@@ -608,6 +608,22 @@ def test_release_blocker_reporter_env_is_wired_into_both_poller_steps() -> None:
 	assert '"internal-orchestrate-poll.yml"' in heal
 
 
+def test_final_merge_auto_resume_switch_is_wired_into_both_poller_steps() -> None:
+	"""Issue #8984: the auto-resume switch defaults on in every full-poller step."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	line = "FINAL_MERGE_AUTO_RESUME_ENABLED: ${{ vars.FINAL_MERGE_AUTO_RESUME_ENABLED || 'true' }}"
+	assert wf.count(line) == 2
+	for step_name in ("Process each tracking issue", STANDALONE_SWEEP_STEP):
+		assert line in _step_block(wf, step_name), step_name
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'if is_truthy "${FINAL_MERGE_AUTO_RESUME_ENABLED:-true}"; then' in poller
+	assert '.final_merge_failure_kind = "final_merge_exhausted"' in poller
+	agents_text = _agents_text_with_fragments()
+	assert "- `FINAL_MERGE_AUTO_RESUME`" in agents_text
+	assert "LOG_PREFIX.name=FINAL_MERGE_AUTO_RESUME" in agents_text
+	yaml.safe_load(wf)
+
+
 def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "worktree_registry.sh" in wf
@@ -813,6 +829,7 @@ def main() -> int:
 	test_harness_heal_auto_revalidate_env_is_wired_into_both_poller_steps()
 	test_harness_heal_auto_revalidate_log_prefix_is_registered()
 	test_release_blocker_reporter_env_is_wired_into_both_poller_steps()
+	test_final_merge_auto_resume_switch_is_wired_into_both_poller_steps()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	test_find_tracking_step_maps_standalone_recovery_switch()
 	test_standalone_stall_probe_log_prefix_is_registered()
