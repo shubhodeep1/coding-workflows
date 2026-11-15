@@ -24,24 +24,14 @@ conflicted ``git merge --no-commit`` scratch repositories.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
-
-try:
-	import pytest
-except ImportError:  # script mode without pytest: record the mark main() reads
-	import types
-
-	def _xfail_without_pytest(**kwargs):
-		def wrap(func):
-			func.pytestmark = [*getattr(func, "pytestmark", []), types.SimpleNamespace(name="xfail", kwargs=kwargs)]
-			return func
-		return wrap
-
-	pytest = types.SimpleNamespace(mark=types.SimpleNamespace(xfail=_xfail_without_pytest))
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PREPARE = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
@@ -555,7 +545,8 @@ def test_block_runs_before_manifest_block_and_empty_allowlist_check() -> None:
 	assert text.index("# First, a guard-hook-only conflict") < text.index(
 		'if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ]; then'
 	)
-	assert 'CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED:-true' in _guard_region(text)
+	guard = _guard_region(text)
+	assert 'CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED:-true' in guard
 
 
 def test_hook_only_commit_uses_shared_helper() -> None:
@@ -646,25 +637,13 @@ def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	failed = 0
 	for func in test_funcs:
-		expect_fail = any(getattr(mark, "name", "") == "xfail" for mark in getattr(func, "pytestmark", []))
 		try:
 			func()
-		except AssertionError as e:
-			if expect_fail:
-				print(f"  XFAIL  {func.__name__}")
-				continue
-			print(f"  FAIL  {func.__name__}: {e}")
-			failed += 1
-			continue
 		except Exception as e:  # noqa: BLE001
 			print(f"  FAIL  {func.__name__}: {e}")
 			failed += 1
 			continue
-		if expect_fail:
-			print(f"  XPASS(strict)  {func.__name__}")
-			failed += 1
-		else:
-			print(f"  PASS  {func.__name__}")
+		print(f"  PASS  {func.__name__}")
 	print(f"\n{len(test_funcs) - failed} passed, {failed} failed, {len(test_funcs)} total")
 	return 1 if failed else 0
 
