@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9529,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9529\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9544\",\"pr_number\":9544,\"branch\":\"ai/issue-9529\",\"run_id\":\"43736614867\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43736614867\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/cut-ci-runner-time-phase1-shallow-checkouts.md\",\"tests/test_ci_shallow_checkout_contract.py\",\"tests/test_claude_template_live_parity.py\"]}",
+  "fingerprint": "60ca5f196e17bc651afd10deb21d5f6e669a1298b1e2f71fd59aa6fc1889be02",
+  "lineage": {
+    "issue_number": 9529,
+    "parent_ids": [],
+    "pr_number": 9544,
+    "run_id": "43736614867",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43736614867",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9544"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261115214709_0da0e1e037",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9529,
+    "level": "run",
+    "pr_number": 9544,
+    "run_id": "43736614867"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9529: https://github.com/shubhodeep1/coding-workflows/pull/9544",
+  "timestamps": {
+    "created_at": "2026-11-15T21:47:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
