@@ -840,7 +840,9 @@ while true; do
   # Runner wait (#9480): time the watched review run spends waiting for
   # a runner is never inactivity. The wall clock stays bounded by the
   # #8004 deadline ceiling checked at the top of the loop.
+  REVIEW_RUNNER_WAIT_POLL_CONFIRMED=0
   if review_waiting_for_runner; then
+    REVIEW_RUNNER_WAIT_POLL_CONFIRMED=1
     if [ "${REVIEW_RUNNER_WAIT_RUN_ID}" != "${RUN_ID}" ]; then
       REVIEW_RUNNER_WAIT_SINCE="$NOW"
       REVIEW_RUNNER_WAIT_RUN_ID="$RUN_ID"
@@ -850,10 +852,11 @@ while true; do
     IDLE=0
   elif [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ] \
       && [[ "$RUN_ID" =~ ^[0-9]+$ ]] \
-      && { [ "$RUN_STATUS" != "in_progress" ] || [ -n "${JOBS_JSON:-}" ]; }; then
+      && { [ "$RUN_STATUS" != "in_progress" ] \
+        || { [ -n "${JOBS_JSON:-}" ] && printf '%s' "${JOBS_JSON}" | jq -e '.jobs | type == "array"' >/dev/null 2>&1; }; }; then
     # Close the stretch only on a poll that answered: an empty runs
-    # lookup (RUN_ID not numeric) or a failed jobs read on an in_progress
-    # run says nothing about the runner, so the stretch is kept (no false
+    # lookup (RUN_ID not numeric) or a failed or unreadable jobs read on
+    # an in_progress run says nothing about the runner, so the stretch is kept (no false
     # outcome=started). The inactivity rules above still apply to that
     # poll because LAST_ACTIVITY is not reset here.
     if [ "${REVIEW_RUNNER_WAIT_RUN_ID}" = "${RUN_ID}" ]; then
@@ -920,8 +923,11 @@ while true; do
 
   REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
   RUNNER_WAIT_SUFFIX=""
-  if [ -n "${REVIEW_RUNNER_WAIT_SINCE}" ]; then
+  if [ -n "${REVIEW_RUNNER_WAIT_SINCE}" ] && [ "${REVIEW_RUNNER_WAIT_POLL_CONFIRMED}" = "1" ]; then
     RUNNER_WAIT_SUFFIX=" (waiting for runner $(( (NOW - REVIEW_RUNNER_WAIT_SINCE) / 60 ))m)"
+  elif [ -n "${REVIEW_RUNNER_WAIT_SINCE}" ]; then
+    # Stretch kept open across a poll that did not answer (#9480).
+    RUNNER_WAIT_SUFFIX=" (runner wait unconfirmed this poll, $(( (NOW - REVIEW_RUNNER_WAIT_SINCE) / 60 ))m)"
   fi
   echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — step: ${CURRENT_STEP:-?}, head: ${PR_HEAD_SHA:0:7}, reviews: ${REVIEW_COMMENT_COUNT}, log: ${LOG_SIZE}b${RUNNER_WAIT_SUFFIX}"
   sleep "$POLL_INTERVAL"
