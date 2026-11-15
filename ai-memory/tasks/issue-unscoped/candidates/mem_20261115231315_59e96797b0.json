@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:2925 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The diff-mode boundary scan `grep -bE '^diff --git ' \"${_path}\"` in `_embed_input_file` has no `--` end-of-options separator, so a path starting with `-` is read as a grep option.\n  WHY: The scan fails silently, `_boundary` stays empty, and truncation falls back to `_head_bytes=\"${_effective_cap}\"` instead of a `diff --git` boundary. All reviewers rated it NIT, and no reviewer gave a higher severity. Confidence ranged from 3 to 4, and the highest is used. z-ai_glm-5_3-flash also notes that a path equal to `-` makes grep read stdin and hang.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/gh_helpers.sh:2925 | severity=NIT | confidence=3\n  PROBLEM: `grep -bE '^diff --git ' \"${_path}\"` in the `_embed_input_file` diff-mode boundary scan is the one path-consuming call left without `--`. `cat` (line 2909), `head -c` (line 2936) and `od` already have it.\n  WHY: With a dash-prefixed path, grep fails and its stderr is discarded. `_boundary` stays empty and truncation falls back to a raw byte offset. The UTF-8-safe cut still applies. Callers pass fixed workflow file names, so this is hard to reach. The fix is `grep -bE -- '^diff --git ' \"${_path}\"`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:2925 | severity=NIT | confidence=4\n  PROBLEM: The grep command `grep -bE '^diff --git ' \"${_path}\"` lacks the `--` separator.\n  WHY: A path starting with `-` is interpreted as a grep option, which silently disables diff-boundary detection and falls back to full-file truncation.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/gh_helpers.sh:2925 | severity=NIT | confidence=4\n  PROBLEM: The diff-boundary scan passes `_path` to `grep` without an option terminator. When `_path` begins with `-`, grep interprets it as an option.\n  WHY: The scan fails and `_boundary` stays empty, so diff mode truncates at `_effective_cap`. That can emit a partial diff hunk instead of the whole-diff boundary.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/gh_helpers.sh:2925 | severity=NIT | confidence=4\n  PROBLEM: This is the one remaining path-consuming call in `_embed_input_file` without the `--` separator. `cat` (line 2909) and `head -c` (line 2936) have it, and so does the `od` call in `_embed_utf8_safe_cut`.\n  WHY: For a dash-prefixed path, GNU grep parses the filename as options, so the scan errors out and `_boundary` stays empty. The code falls back to `_head_bytes=\"${_effective_cap}\"` (line 2917) and emits a half-hunk. For a path exactly equal to `-`, grep reads stdin and the substitution hangs.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c0c08030bde769bd042e4eae8262b21cf872b7da56466f395c628851ccf0b9bf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9402,
+    "run_id": "43727741922",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43727741922",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261115231315_59e96797b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9402,
+    "run_id": "43727741922"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-15T23:13:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
