@@ -3097,6 +3097,32 @@ if ! [[ "${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS}" =~ ^[0-9]+$ ]]; then
   STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS="3"
 fi
 
+# Issue-less review retry pass (issue #9487): re-dispatches, at most this
+# many times per cycle, the review of an open same-repository PR with no
+# linked pipeline issue whose newest pipeline comment is the "will retry"
+# no-output comment, once per (head, failing review-support SHA) and only
+# after a newer review-support SHA is pinned. 0 logs decisions only.
+ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE="${ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE:-5}"
+if ! [[ "${ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE must be a non-negative integer; defaulting to 5"
+  ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE="5"
+fi
+# Only PRs updated within this many days are candidates (0 disables the age
+# filter).
+ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS="${ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS:-7}"
+if ! [[ "${ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS must be a non-negative integer; defaulting to 7"
+  ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS="7"
+fi
+# Constants, not env vars. The pipeline label set is a copy of the
+# function-local pipeline_labels literal in run_standalone_stall_recovery
+# (a test pins the two as equal). The exclude set covers ai:review-blocked,
+# the human gates and orchestrate_lib.STALL_RECOVERY_LATCH_LABELS.
+ISSUELESS_REVIEW_RETRY_MARKER_TAG="issueless-review-retry:v1"
+ISSUELESS_REVIEW_RETRY_REASONS_JSON='["reviewers_failed","provider_unavailable","sandbox_prepare_failed"]'
+ISSUELESS_REVIEW_RETRY_PIPELINE_LABELS_JSON='["ai:clarification","ai:planning","ai:awaiting-approval","ai:implementing","ai:done","ai:ready-to-merge","ai:review-blocked"]'
+ISSUELESS_REVIEW_RETRY_EXCLUDE_LABELS_JSON='["ai:review-blocked","ai:needs-human","ai:claude-capacity-wait","force-review","e2e-smoke-test","ai:destructive-blocked","ai:scope-blocked","ai:workflow-heal-escalated"]'
+
 # Phase-specific stall recovery cap for ai:done.
 #
 # Each ai:done "recovery" dispatches a fresh review-autofix run that itself
@@ -19260,6 +19286,137 @@ _staged_support_comments_for_guard()
   ' 2>/dev/null
 }
 
+# Issue #9486: decide whether a standalone `ai:clarification` issue ever got
+# clarification output. shubhodeep1/digital_pa#146 sat labelled for 34 days
+# with no clarify comment while stall recovery kept answering questions that
+# were never asked. Args: <issue_num> <comments_json>; the comments MUST be the
+# complete history (callers never infer absence from a partial window).
+# Only trusted comments count: a login ending in `[bot]`, or an
+# author_association of OWNER, MEMBER or COLLABORATOR (the same list as
+# stall_recovery_clarify_answer). Output is a trusted comment carrying the
+# clarification-questions marker or starting `Clarification required`, or a
+# trusted comment with a line starting `/answer`. The rerun marker is a trusted
+# comment starting "/reclarify\n<!-- ai:clarify-no-output-rerun:<issue> -->".
+# Prints exactly one of: `has_output`, `no_output_unmarked`,
+# `no_output_marked <epoch>` (newest marker; an unparseable timestamp is 0, so
+# it counts as old and escalation is never blocked forever). Any jq failure
+# prints `has_output`, which keeps the legacy recovery path (fail open).
+# No GitHub API call.
+_standalone_clarify_no_output_state()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local clarify_no_output_out=""
+
+  if ! clarify_no_output_out="$(printf '%s' "${comments_json}" | jq -r \
+    --arg marker "/reclarify
+<!-- ai:clarify-no-output-rerun:${issue_num} -->" '
+    def trusted:
+      ((.user.login // "") | tostring | test("\\[bot\\]$"))
+      or ((.author_association // "") | tostring | IN("OWNER", "MEMBER", "COLLABORATOR"));
+    if type != "array" then error("comments are not an array") else . end
+    | [ .[] | select(type == "object") | select(trusted) | .body = ((.body // "") | tostring) ] as $trusted
+    | if any($trusted[]; (.body | test("<!-- ai:clarification-questions -->|^Clarification required"))
+        or (.body | test("(^|\\n)/answer\\b"))) then "has_output"
+      else
+        [ $trusted[] | select(.body | startswith($marker))
+          | ((.created_at // "") | tostring
+            | (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor) catch 0)) ] as $marker_epochs
+        | if ($marker_epochs | length) == 0 then "no_output_unmarked"
+          else "no_output_marked " + ($marker_epochs | max | tostring)
+          end
+      end
+  ' 2>/dev/null)"; then
+    printf 'has_output'
+    return 0
+  fi
+  if [[ "${clarify_no_output_out}" =~ ^(has_output|no_output_unmarked|no_output_marked\ [0-9]+)$ ]]; then
+    printf '%s' "${clarify_no_output_out}"
+  else
+    printf 'has_output'
+  fi
+  return 0
+}
+
+# Issue #9486 (AD-2): a security follow-up held by the same-file ordering gate
+# (security_dependency.py verdict `held`) stays held, but the poller posts one
+# advisory per (issue, dependency) pair so the hold is visible instead of
+# silent. Args: <issue_num> <verdict_json> <detail> <comments_json>
+# <cache_available>. detail is one of open | closed_without_ai_merged |
+# unverified (anything else is treated as unverified). depends_on must match
+# ^[1-9][0-9]{0,9}$ before it reaches a marker or the body. Posts only when the
+# comment history already in hand is complete (cache `true` with fewer than
+# 100 comments, or `complete`); there is no extra read (§14: held issues are
+# visited every tick). Dedup marker
+# `<!-- ai:security-dependency-held:<issue>:<depends_on> -->` counts only from
+# trusted authors (same list as _standalone_clarify_no_output_state). The body
+# never has a line starting `/reclarify` or `/answer` and never carries the
+# clarification-questions marker. API calls: zero, or one POST. Always
+# returns 0 so a failure never stops the standalone loop.
+_post_security_dependency_held_advisory()
+{
+  local issue_num="$1"
+  local held_verdict_json="$2"
+  local held_detail="$3"
+  local comments_json="$4"
+  local cache_available="$5"
+  local held_depends_on=""
+  local held_comment_count=""
+  local held_marker=""
+  local held_body=""
+
+  case "${held_detail}" in
+    open|closed_without_ai_merged|unverified) ;;
+    *) held_detail="unverified" ;;
+  esac
+  held_depends_on="$(printf '%s' "${held_verdict_json}" | jq -r '.depends_on // empty | tostring' 2>/dev/null || true)"
+  if ! [[ "${held_depends_on}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=none detail=${held_detail} action=advisory_no_dependency"
+    return 0
+  fi
+  if [ "${cache_available}" = "true" ]; then
+    held_comment_count="$(printf '%s' "${comments_json}" | jq -er 'if type == "array" then length else error("not an array") end' 2>/dev/null || echo 100)"
+    [[ "${held_comment_count}" =~ ^[0-9]+$ ]] || held_comment_count=100
+  elif [ "${cache_available}" = "complete" ]; then
+    held_comment_count=0
+  else
+    held_comment_count=100
+  fi
+  if [ "${held_comment_count}" -ge 100 ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_comments_incomplete"
+    return 0
+  fi
+  held_marker="<!-- ai:security-dependency-held:${issue_num}:${held_depends_on} -->"
+  if printf '%s' "${comments_json}" | jq -e --arg marker "${held_marker}" '
+    any(.[]?; type == "object"
+      and (((.user.login // "") | tostring | test("\\[bot\\]$"))
+        or ((.author_association // "") | tostring | IN("OWNER", "MEMBER", "COLLABORATOR")))
+      and ((.body // "") | tostring | contains($marker)))' >/dev/null 2>&1; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_present"
+    return 0
+  fi
+  case "${held_detail}" in
+    open)
+      held_body="Security-dependency hold: this issue waits for #${held_depends_on} (the earlier fix to the same file) to be closed with \`ai:merged\`. Clarification then starts automatically. No action is needed."
+      ;;
+    closed_without_ai_merged)
+      held_body="Security-dependency hold: #${held_depends_on} (the earlier fix to the same file) was closed without \`ai:merged\`, so this hold will not release on its own. A maintainer must act: land the prerequisite fix, or edit this issue's \`- Depends on: #${held_depends_on}\` line."
+      ;;
+    *)
+      held_body="Security-dependency hold: the dependency on #${held_depends_on} (the earlier fix to the same file) could not be verified, so this hold will not release on its own. A maintainer must act: land the prerequisite fix, or edit this issue's \`- Depends on: #${held_depends_on}\` line."
+      ;;
+  esac
+  held_body="${held_body}
+
+${held_marker}"
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${held_body}" >/dev/null 2>&1; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_posted"
+  else
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_failed"
+  fi
+  return 0
+}
+
 # Issue #6769: comments for the plan auto-approval gate. Reuses the batched
 # GraphQL cache entry when it conclusively holds the whole history, otherwise
 # the paginated REST read in _staged_support_comments_for_guard. Prints `[]`
@@ -25196,6 +25353,7 @@ run_standalone_stall_recovery() {
   local _standalone_staged_support_latch_rc
   local _standalone_staged_support_cache_available
   local _standalone_staged_support_comments_unavailable
+  local _std_clarify_no_output_rerun="false"
   local _security_dependency_issue_file="${RUNTIME_DIR}/standalone_security_dependency_issue.json"
   local _security_dependency_verdict
   local _security_dependency_status
@@ -25267,6 +25425,9 @@ run_standalone_stall_recovery() {
         *) _security_dependency_status="unverified" ;;
       esac
       echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held detail=${_security_dependency_status} action=none"
+      # Issue #9486 (AD-2): the hold stays, but make it visible once.
+      _post_security_dependency_held_advisory "${issue_num}" "${_security_dependency_verdict}" \
+        "${_security_dependency_status}" "${comments_json}" "${_standalone_staged_support_cache_available}" || true
       continue
     fi
     if [ "${_security_dependency_status}" = "ready" ]; then
@@ -25530,6 +25691,56 @@ PY
       action="run_stall_judge"
     else
       action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+    fi
+
+    # Issue #9486: an ai:clarification issue with no clarification output
+    # gets one marked /reclarify (retrigger_pipeline arm below) instead of an
+    # answer to questions that were never asked; a second miss, at least one
+    # stall threshold after the trusted marker, escalates to a human directly
+    # (D2: even with ENABLE_STALL_HUMAN_TERMINALIZATION=false). The override
+    # sits before the active-workflow, merged-PR, fresh-push and phase-cap
+    # guards so they still gate the overridden action, and never replaces
+    # `skip`, so the recovery caps still apply. Absence of output is only
+    # inferred from a complete comment history.
+    _std_clarify_no_output_rerun="false"
+    if [ "${phase}" = "ai:clarification" ] && [ "${action}" != "skip" ]; then
+      local _std_clarify_comments=""
+      local _std_clarify_comments_ok="false"
+      local _std_clarify_state=""
+      local _std_clarify_marker_epoch=""
+      if [ "${_standalone_staged_support_cache_available}" = "complete" ]; then
+        _std_clarify_comments="${comments_json}"
+        _std_clarify_comments_ok="true"
+      elif [ "${_standalone_staged_support_cache_available}" = "true" ] \
+        && _std_clarify_comments="$(_staged_support_comments_for_guard "${issue_num}" "${comments_json}" "true")"; then
+        _std_clarify_comments_ok="true"
+      fi
+      if [ "${_std_clarify_comments_ok}" != "true" ]; then
+        echo "::warning::[standalone-stall] clarify-output check skipped for issue #${issue_num}: comment history incomplete" >&2
+      else
+        _std_clarify_state="$(_standalone_clarify_no_output_state "${issue_num}" "${_std_clarify_comments}")"
+        case "${_std_clarify_state}" in
+          no_output_unmarked)
+            echo "STALL_RECOVERY issue=${issue_num} reason=clarify_no_output phase=${phase} action=retrigger_pipeline override_from=${action}"
+            action="retrigger_pipeline"
+            _std_clarify_no_output_rerun="true"
+            ;;
+          no_output_marked\ *)
+            _std_clarify_marker_epoch="${_std_clarify_state#no_output_marked }"
+            [[ "${_std_clarify_marker_epoch}" =~ ^[0-9]+$ ]] || _std_clarify_marker_epoch=0
+            if [ "$(( $(date +%s) - _std_clarify_marker_epoch ))" -lt "$(( threshold_minutes * 60 ))" ]; then
+              echo "STALL_SKIP issue=${issue_num} reason=clarify_no_output_rerun_pending phase=${phase} action=none"
+              if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+                write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+              fi
+              continue
+            fi
+            echo "STALL_RECOVERY issue=${issue_num} reason=clarify_no_output_second_miss phase=${phase} action=escalate_human override_from=${action}"
+            action="escalate_human"
+            ;;
+          *) ;;
+        esac
+      fi
     fi
     echo "  [standalone-stall] Issue #${issue_num} stuck in '${phase}' for ${elapsed_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
 
@@ -25912,6 +26123,14 @@ PY
         ;;
       retrigger_pipeline)
         local _std_retrigger_pipeline_rc=0
+        if [ "${_std_clarify_no_output_rerun}" = "true" ]; then
+          # Issue #9486: the marker must stay on the second line exactly so
+          # _standalone_clarify_no_output_state's startswith check matches.
+          gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="/reclarify
+<!-- ai:clarify-no-output-rerun:${issue_num} -->
+
+_Standalone stall recovery: this issue has been in \`ai:clarification\` for ${elapsed_minutes}m with no clarification output. Re-running clarification once; if it still produces nothing, the issue is escalated to a human._" >/dev/null 2>&1 || _std_retrigger_pipeline_rc=$?
+        else
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /reclarify
 
@@ -25919,6 +26138,7 @@ _Standalone stall recovery: this issue did not enter the AI pipeline.
 Re-triggering clarification._
 STALL_EOF
 )" >/dev/null 2>&1 || _std_retrigger_pipeline_rc=$?
+        fi
         if [ "${_std_retrigger_pipeline_rc}" -eq 0 ]; then
           phase_cap_note_dispatch "ai:clarification"
         fi
@@ -35137,6 +35357,9 @@ DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.defau
 # per batch; errors, missing aliases, unknown state or changed head fail open
 # to the legacy live REST read. DIRTY candidates always get a fresh REST
 # payload before update-branch/dispatch (including expected-head guard).
+# The same aliases also return updatedAt, labels and closingIssuesReferences
+# (with their labels) for _STANDALONE_ISSUELESS_RETRY_STATE below, so the
+# issue-less review retry pass (issue #9487) adds no read call.
 declare -A _STANDALONE_CLEAN_PRS=()
 declare -A _STANDALONE_NOOP_CLEAR_PRS=()
 # Conflict-attempt markers per PR, read from the same batch (no extra call):
@@ -35147,6 +35370,18 @@ declare -A _STANDALONE_NOOP_CLEAR_PRS=()
 # exist, so only a marker found in the window counts.
 declare -A _STANDALONE_CONFLICT_ATTEMPTS_STATE=()
 declare -A _STANDALONE_CONFLICT_STATE_LOADED=()
+# Issue-less review retry input (issue #9487), filled from the same batch:
+# one compact JSON value per PR whose alias node is OPEN at the snapshot
+# head ({oid, ref, updated_at, draft, cross, owner, labels, closing_total,
+# closing_seen, linked_pipeline, comments: [{a, fail, retry}]}, comments
+# oldest first). Only own-line markers are parsed; author trust is applied
+# later by run_issueless_review_retry_pass. A failed list or batch leaves
+# its PRs out and sets _STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED (fail open).
+declare -A _STANDALONE_ISSUELESS_RETRY_STATE=()
+_STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED="false"
+if [ "${_conflict_sweep_list_failed:-false}" = "true" ]; then
+	_STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED="true"
+fi
 if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 	_standalone_owner="${GITHUB_REPOSITORY%%/*}"
 	_standalone_name="${GITHUB_REPOSITORY#*/}"
@@ -35162,7 +35397,7 @@ if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 			fi
 			_standalone_num="$(printf '%s' "${STANDALONE_PRS}" | jq -r ".[${_standalone_i}].number // empty")"
 			[[ "${_standalone_num}" =~ ^[1-9][0-9]*$ ]] || continue
-			_standalone_aliases+="p${_standalone_num}: pullRequest(number: ${_standalone_num}) { number state headRefName headRefOid isDraft mergeStateStatus comments(last: 100) { pageInfo { hasPreviousPage } nodes { body databaseId author { login } } } } "
+			_standalone_aliases+="p${_standalone_num}: pullRequest(number: ${_standalone_num}) { number state headRefName headRefOid isDraft mergeStateStatus updatedAt labels(first: 30) { nodes { name } } closingIssuesReferences(first: 10) { totalCount nodes { number labels(first: 30) { nodes { name } } } } comments(last: 100) { pageInfo { hasPreviousPage } nodes { body databaseId author { login } } } } "
 		done
 		[ -n "${_standalone_aliases}" ] || continue
 		_standalone_query="query { repository(owner: \"${_standalone_owner}\", name: \"${_standalone_name}\") { ${_standalone_aliases} } }"
@@ -35197,9 +35432,47 @@ if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 						| ((.body // "") | capture("head=(?<h>[0-9a-f]{40}) attempts=(?<a>[0-9]+) alerted=(?<al>[01])") // {h: "", a: "0", al: "0"}) as $m
 						| "\(.databaseId // "")|\(.author.login // "")|\($m.h)|\($m.a)|\($m.al)"' 2>/dev/null || true)"
 				fi
+				_standalone_issueless_row="$(printf '%s' "${STANDALONE_PRS}" | jq -c --argjson num "${_standalone_num}" '[.[] | select(.number == $num)][0] // {}' 2>/dev/null || echo '{}')"
+				[ -n "${_standalone_issueless_row}" ] || _standalone_issueless_row='{}'
+				_standalone_issueless_entry="$(printf '%s' "${_standalone_response}" | jq -c --arg key "p${_standalone_num}" --arg ref "${_standalone_head}" --arg oid "${_standalone_list_oid}" --argjson num "${_standalone_num}" \
+					--argjson row "${_standalone_issueless_row}" --argjson pipeline "${ISSUELESS_REVIEW_RETRY_PIPELINE_LABELS_JSON}" \
+					--arg fail_tag "review-autofix-failure:v1" --arg retry_tag "${ISSUELESS_REVIEW_RETRY_MARKER_TAG}" '
+					def own_marker($tag):
+						[capture("(^|\n)<!-- " + $tag + " (?<f>[^>\n]*?) -->[ \r]*(\n|$)"; "g") | .f] | last
+						| if . == null then null else
+							reduce ([splits(" +")] | .[] | select(test("^[a-z_]+=")) | capture("^(?<k>[a-z_]+)=(?<v>.*)$")) as $kv ({}; . + {($kv.k): $kv.v})
+						end;
+					.data.repository[$key] as $n
+					| if ($n | type) == "object" and $n.number == $num and $n.headRefName == $ref and $n.headRefOid == $oid and ($oid | test("^[0-9a-f]{40}$")) and $n.state == "OPEN" then
+						(($n.closingIssuesReferences.nodes // []) | if type == "array" then . else [] end) as $closing
+						| {
+							oid: $oid,
+							ref: $ref,
+							updated_at: (($n.updatedAt // "") | if type == "string" then . else "" end),
+							draft: ($n.isDraft != false),
+							cross: ($row.isCrossRepository | if type == "boolean" then tostring else "unknown" end),
+							owner: (($row.headRepositoryOwner.login // "") | if type == "string" then . else "" end),
+							labels: [($n.labels.nodes // [])[]? | .name? | strings],
+							closing_total: ($n.closingIssuesReferences.totalCount | if type == "number" then . else 2147483647 end),
+							closing_seen: ($closing | length),
+							linked_pipeline: any($closing[]; any((.labels.nodes // [])[]?; (.name? // "") as $l | $pipeline | index($l) != null)),
+							comments: [($n.comments.nodes // [])[]? | (.body // "" | if type == "string" then . else "" end) as $b | {
+								a: ((.author.login // "") | if type == "string" then . else "" end),
+								fail: ($b | own_marker($fail_tag) | if . == null then null else {head: (.head // ""), reason: (.reason // ""), support: (.support // "")} end),
+								retry: ($b | own_marker($retry_tag) | if . == null then null else {head: (.head // ""), support: (.support // "")} end)
+							}]
+						}
+					else empty end' 2>/dev/null || true)"
+				if [ -n "${_standalone_issueless_entry}" ]; then
+					_STANDALONE_ISSUELESS_RETRY_STATE["${_standalone_num}"]="${_standalone_issueless_entry}"
+				fi
 			done < <(printf '%s' "${_standalone_response}" | jq -r '.data.repository | keys[] | select(test("^p[1-9][0-9]*$")) | ltrimstr("p")' 2>/dev/null)
+		else
+			_STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED="true"
 		fi
 	done
+else
+	_STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED="true"
 fi
 
 for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
@@ -36148,4 +36421,148 @@ done
 write_state_snapshot_actions_runs_export || true
 echo "Noop-suspicious recovery complete. Dispatched: ${NOOP_RECOVERY_DISPATCHED}, force-merged: ${NOOP_FORCE_MERGED}, blocked: ${NOOP_RECOVERY_BLOCKED}."
 echo "Noop-suspicious recovery skipped (fingerprint cap already applied on head): ${NOOP_RECOVERY_CAP_SKIPPED}."
+
+# ---------------------------------------------------------------
+# Issue-less review retry pass (issue #9487)
+# ---------------------------------------------------------------
+# A review run that fails before the editor (reviewers_failed,
+# provider_unavailable, sandbox_prepare_failed) posts "AI review/autofix
+# produced no output - will retry" with a review-autofix-failure:v1 marker.
+# The standalone stall pass only follows labelled issues, so a PR with no
+# linked pipeline issue was never retried (tele-funtoken-msg-scoring PR #5219
+# sat three days). This pass reads _STANDALONE_ISSUELESS_RETRY_STATE (filled
+# by the conflict sweep's existing GraphQL batch, no extra read) and
+# re-dispatches such a PR through _dispatch_review_for_conflicts (default
+# branch only, #4701; cycle tracker and in-flight guard) at most once per
+# (head, failing review-support SHA), and only after the locally pinned
+# review-support SHA (_noop_cap_review_support_sha) differs from the failing
+# one. Same-repository heads only; both marker families count only when the
+# pipeline's own login (unblock_trusted_login) wrote them, on their own line.
+# Writes per eligible PR (capped by ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE):
+# the dispatch helper's in-flight read and dispatch, plus one marker comment.
+# Log prefix: ISSUELESS_REVIEW_RETRY.
+
+# _issueless_review_retry_decide <entry_json> <trusted_login> <pinned_support_sha> <support_state> <now_epoch> <max_age_days>
+# Pure: prints one line "<decision>|<reason>|<head>|<failing_support>" where
+# decision is none, skipped, waiting_for_release, already_retried or
+# eligible. Malformed input prints "none|||" (fail closed).
+_issueless_review_retry_decide() {
+	local entry="${1:-}" login="${2:-}" pinned="${3:-}" state="${4:-}" now="${5:-0}" max_age="${6:-0}" result
+	[[ "${now}" =~ ^[0-9]+$ ]] || now=0
+	[[ "${max_age}" =~ ^[0-9]+$ ]] || max_age=0
+	result="$(printf '%s' "${entry}" | jq -r --arg login "${login}" --arg pinned "${pinned}" --arg state "${state}" \
+		--argjson now "${now}" --argjson max_age "${max_age}" --arg repo_owner "${GITHUB_REPOSITORY%%/*}" \
+		--argjson reasons "${ISSUELESS_REVIEW_RETRY_REASONS_JSON}" --argjson exclude "${ISSUELESS_REVIEW_RETRY_EXCLUDE_LABELS_JSON}" '
+		def sha: (type == "string") and test("^[0-9a-f]{40}$");
+		. as $e
+		| if ($e | type) != "object" or $login == "" then "none|||" else
+		[($e.comments // [])[]? | select((.a // "") == $login)] as $trusted
+		| [$trusted[] | select(.retry == null)] as $plain
+		| [$trusted[] | .retry | select(. != null)] as $retries
+		| ($plain | last) as $newest
+		| if $newest == null or ($newest.fail | type) != "object" then "none|||"
+		else $newest.fail as $f
+		| if ($e.oid | sha | not) or $f.head != $e.oid or (($f.reason | type) != "string") or ($reasons | index($f.reason)) == null then "none|||"
+		else (if ($f.support | sha) then $f.support else "" end) as $fs
+		| "|\($f.head)|\($fs)" as $tail
+		| if ($e.cross != "false") or (($e.owner // "") == "") or (($e.owner | ascii_downcase) != ($repo_owner | ascii_downcase)) then "skipped|fork_or_unknown_head\($tail)"
+		elif $e.draft != false then "skipped|draft\($tail)"
+		elif $e.linked_pipeline != false or (($e.closing_total // 2147483647) > ($e.closing_seen // 0)) then "skipped|linked_pipeline_issue\($tail)"
+		elif any(($e.labels // [])[]; . as $l | $exclude | index($l) != null) then "skipped|excluded_label\($tail)"
+		elif $max_age > 0 and ((($e.updated_at // "") | try fromdateiso8601 catch null) as $u | $u == null or $u < ($now - $max_age * 86400)) then "skipped|too_old\($tail)"
+		elif $state != "ok" or ($pinned | sha | not) then "skipped|support_unresolved\($tail)"
+		elif $fs == "" then "skipped|marker_support_missing\($tail)"
+		elif $fs == $pinned then "waiting_for_release|\($tail)"
+		elif any($retries[]; .head == $f.head and .support == $fs) then "already_retried|\($tail)"
+		else "eligible|\($tail)" end
+		end end end' 2>/dev/null || true)"
+	[ -n "${result}" ] || result="none|||"
+	printf '%s\n' "${result}"
+}
+
+# run_issueless_review_retry_pass: one pass per cycle; always returns 0.
+run_issueless_review_retry_pass() {
+	local repo="${GITHUB_REPOSITORY:-}" login pinned="" state now pr entry decision reason head failing head_ref
+	local dispatch_rc body attempts=0 retriggered=0 log_head log_support log_pinned log_line
+	echo ""
+	echo "========================================"
+	echo "Issue-less review retry pass"
+	echo "========================================"
+	if [ "${_STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED:-false}" = "true" ]; then
+		echo "ISSUELESS_REVIEW_RETRY outcome=skipped reason=prefetch_unavailable repo=${repo}"
+	fi
+	if [ "${#_STANDALONE_ISSUELESS_RETRY_STATE[@]}" -eq 0 ]; then
+		echo "Issue-less review retry pass complete. Retriggered: 0."
+		return 0
+	fi
+	unblock_trusted_login >/dev/null || true
+	login="${UNBLOCK_TRUSTED_LOGIN:-}"
+	if [ -z "${login}" ]; then
+		echo "ISSUELESS_REVIEW_RETRY outcome=skipped reason=trusted_login_unresolved repo=${repo}"
+		echo "Issue-less review retry pass complete. Retriggered: 0."
+		return 0
+	fi
+	_noop_cap_review_support_sha || true
+	state="${NOOP_CAP_REVIEW_SUPPORT_STATE:-unresolved}"
+	if [ "${state}" = "ok" ]; then
+		pinned="${NOOP_CAP_REVIEW_SUPPORT_SHA:-}"
+	fi
+	now="$(date -u +%s)"
+	while IFS= read -r pr; do
+		[[ "${pr}" =~ ^[1-9][0-9]*$ ]] || continue
+		entry="${_STANDALONE_ISSUELESS_RETRY_STATE["${pr}"]:-}"
+		decision="" reason="" head="" failing=""
+		IFS='|' read -r decision reason head failing < <(_issueless_review_retry_decide "${entry}" "${login}" "${pinned}" "${state}" "${now}" "${ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS}") || true
+		if [ "${decision:-none}" = "none" ]; then
+			continue
+		fi
+		log_head="${head:-}"; [[ "${log_head}" =~ ^[0-9a-f]{40}$ ]] || log_head="unknown"
+		log_support="${failing:-}"; [[ "${log_support}" =~ ^[0-9a-f]{40}$ ]] || log_support="none"
+		log_pinned="${pinned:-}"; [[ "${log_pinned}" =~ ^[0-9a-f]{40}$ ]] || log_pinned="none"
+		log_line="pr=${pr} repo=${repo} head=${log_head} support=${log_support} pinned=${log_pinned}"
+		case "${decision}" in
+			skipped)
+				echo "ISSUELESS_REVIEW_RETRY outcome=skipped ${log_line} reason=${reason:-unknown}"
+				continue
+				;;
+			waiting_for_release|already_retried)
+				echo "ISSUELESS_REVIEW_RETRY outcome=${decision} ${log_line}"
+				continue
+				;;
+			eligible) ;;
+			*) continue ;;
+		esac
+		if [ "${attempts}" -ge "${ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE}" ]; then
+			echo "ISSUELESS_REVIEW_RETRY outcome=skipped ${log_line} reason=cycle_cap"
+			continue
+		fi
+		attempts=$((attempts + 1))
+		head_ref="$(printf '%s' "${entry}" | jq -r '.ref // ""' 2>/dev/null || true)"
+		dispatch_rc=0
+		_dispatch_review_for_conflicts "${pr}" "${head_ref}" || dispatch_rc=$?
+		case "${dispatch_rc}" in
+			0)
+				retriggered=$((retriggered + 1))
+				body="Issue-less review retry: re-dispatched the review of \`${log_head}\`; review support \`${log_support}\` → \`${log_pinned}\`.
+
+<!-- ${ISSUELESS_REVIEW_RETRY_MARKER_TAG} head=${log_head} support=${log_support} -->"
+				if gh_retry gh api "repos/${repo}/issues/${pr}/comments" -f body="${body}" >/dev/null 2>&1; then
+					echo "ISSUELESS_REVIEW_RETRY outcome=retriggered ${log_line}"
+				else
+					echo "ISSUELESS_REVIEW_RETRY outcome=retriggered ${log_line} marker=write_failed"
+				fi
+				;;
+			2)
+				echo "ISSUELESS_REVIEW_RETRY outcome=in_flight ${log_line}"
+				;;
+			*)
+				echo "ISSUELESS_REVIEW_RETRY outcome=skipped ${log_line} reason=dispatch_failed"
+				;;
+		esac
+	done < <(printf '%s\n' "${!_STANDALONE_ISSUELESS_RETRY_STATE[@]}" | sort -n)
+	echo "Issue-less review retry pass complete. Retriggered: ${retriggered}."
+	return 0
+}
+
+run_issueless_review_retry_pass || echo "ISSUELESS_REVIEW_RETRY outcome=skipped reason=error rc=$?"
 _standalone_sweep_alert_level_restore
