@@ -1048,8 +1048,8 @@ jobs:
       # early: the sandbox has no pyyaml), pr_checks_lib 7.4s, the implement
       # leftover-branch test 7.1s, and the release CI gate Python test 6.1s
       # plus its inline stub checks. This job was picked because it is the
-      # only 20-minute non-matrix test job whose last recorded total (15m33s,
-      # run 42513195209, #9078) was followed only by steps moving out; nothing
+      # only 20-minute non-matrix test job whose last recorded total (15m32s,
+      # run 43220859648, #9391) was followed only by steps moving out; nothing
       # has moved in since. Per CHANGELOG.md, the pr_checks_lib step reached
       # the heal job from tests-promote-stall-and-review (#7677) and the two
       # release steps from tests-release-and-log-analysis (#8208); it records
