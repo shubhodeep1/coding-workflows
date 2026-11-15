@@ -9,10 +9,11 @@ unmerged ``db/contracts/*.yml`` path of a real ``git merge --no-commit``
 of the default branch into an ``orchestrator/project-*`` branch. When
 every conflict hunk only adds entries to a ``read_entrypoints:`` or
 ``write_entrypoints:`` list (each side keeps every merge-base entry in its
-original relative order; new entries may sit at the end or between base
-entries), the helper writes the union of both sides; otherwise (a removed,
-replaced or reordered base entry, or any other edit) it declares the path
-ineligible and the poller falls back to the existing LLM conflict resolver.
+original relative order; new entries may sit anywhere in the list: before,
+between or after base entries), the helper writes the union of both
+sides; otherwise (a removed, replaced or reordered base entry, or any other
+edit) it declares the path ineligible and the poller falls back to the
+existing LLM conflict resolver.
 
 Usage::
 

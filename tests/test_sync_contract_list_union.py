@@ -291,3 +291,18 @@ def test_interior_insertion_on_both_sides_merges_union(tmp_path: Path) -> None:
 	merged = yaml.safe_load(out.read_text(encoding="utf-8"))
 	assert merged["read_entrypoints"] == ["a.py:a", "x.py:x", "y.py:y", "b.py:b", "c.py:c"]
 	assert merged["write_entrypoints"] == ["w.py:w"]
+
+
+def test_prepend_on_both_sides_merges_union(tmp_path: Path) -> None:
+	# Base [a, b]; ours prepends x and theirs prepends y before the first base
+	# entry. The hunk sits directly under ``read_entrypoints:`` and both sides
+	# keep the base entries in order, so it merges as [x, y, a, b].
+	yaml = pytest.importorskip("yaml")
+	base = "collection: x\nread_entrypoints:\n  - a.py:a\n  - b.py:b\nwrite_entrypoints:\n  - w.py:w\n"
+	ours = base.replace("read_entrypoints:\n", "read_entrypoints:\n  - x.py:x\n")
+	theirs = base.replace("read_entrypoints:\n", "read_entrypoints:\n  - y.py:y\n")
+	proc, out = _run(tmp_path, base, ours, theirs, path="db/contracts/x.yml")
+	assert proc.returncode == 0, proc.stderr
+	merged = yaml.safe_load(out.read_text(encoding="utf-8"))
+	assert merged["read_entrypoints"] == ["x.py:x", "y.py:y", "a.py:a", "b.py:b"]
+	assert merged["write_entrypoints"] == ["w.py:w"]
