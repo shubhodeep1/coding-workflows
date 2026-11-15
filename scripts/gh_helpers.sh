@@ -2906,7 +2906,7 @@ _embed_input_file()
 		# command substitution `$(...)` strips trailing newlines and the
 		# enclosing heredoc places its own \n after the substitution, so
 		# the closing fence always lands on its own line.
-		cat "${_path}"
+		cat -- "${_path}"
 		_emit_bytes="${_size}"
 	else
 		# File would overflow the effective cap.  In `diff` mode, walk
@@ -2933,7 +2933,7 @@ _embed_input_file()
 		# (#9261).  The marker and budget accounting below use the trimmed
 		# count.  A `diff`-mode boundary is a line start, so it is unchanged.
 		_head_bytes="$(_embed_utf8_safe_cut "${_path}" "${_head_bytes}")"
-		head -c "${_head_bytes}" "${_path}"
+		head -c "${_head_bytes}" -- "${_path}"
 		printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s) ...]\n' \
 			"${_size}" "${_head_bytes}" "${_mode}" "${_cap}" "${_budget_remaining}"
 		_emit_bytes="${_head_bytes}"
