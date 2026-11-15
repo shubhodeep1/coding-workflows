@@ -394,7 +394,7 @@ def annotation(message, level="failure"):
 	return {"message": message, "annotation_level": level}
 
 
-def classify(jobs, annotations, enabled=True, checkout_enabled=True):
+def classify(jobs, annotations, enabled=True, checkout_enabled=True, abandoned_enabled=True):
 	"""Run the real classifier against stubbed jobs/annotations reads."""
 	def fake_annotations(repo, check_run_id):
 		value = annotations[check_run_id - 1000]
@@ -405,7 +405,7 @@ def classify(jobs, annotations, enabled=True, checkout_enabled=True):
 	with mock.patch.object(HELPER, "list_run_jobs", jobs_mock), \
 		mock.patch.object(HELPER, "failure_annotations", side_effect=fake_annotations) as reads:
 		return HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 123, action_resolution_enabled=enabled,
-			checkout_fetch_enabled=checkout_enabled), reads
+			checkout_fetch_enabled=checkout_enabled, abandoned_job_enabled=abandoned_enabled), reads
 
 
 def test_shutdown_failure_with_lint_aggregate_is_classified_shutdown():
@@ -491,7 +491,8 @@ def test_shutdown_text_next_to_a_real_failure_is_genuine():
 
 def test_lint_alone_without_shutdown_job_is_unverified_or_genuine():
 	jobs = [job("static-checks", 1, "cancelled"), job("lint", 3)]
-	verdict, _ = classify(jobs, {3: [annotation("CI jobs that did not succeed: static-checks")]})
+	verdict, _ = classify(jobs, {3: [annotation("CI jobs that did not succeed: static-checks")]},
+		abandoned_enabled=False)
 	assert verdict == "unverified"
 
 
@@ -616,7 +617,8 @@ def test_action_resolution_verdict_reruns_once_with_new_reason():
 	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="action_resolution")
 	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=rerun reason=action_resolution"]
 	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
-	assert exercise.classifier.call_args.kwargs == {"action_resolution_enabled": True, "checkout_fetch_enabled": True}
+	assert exercise.classifier.call_args.kwargs == {"action_resolution_enabled": True, "checkout_fetch_enabled": True,
+		"abandoned_job_enabled": True}
 
 
 def test_action_resolution_flag_off_falls_back_to_genuine():
@@ -629,7 +631,8 @@ def test_action_resolution_flag_off_falls_back_to_genuine():
 		mock.patch.object(HELPER, "classify_runner_shutdown", return_value="genuine") as classifier, \
 		mock.patch.object(HELPER, "rerun_failed_jobs") as post, contextlib.redirect_stdout(output):
 		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "", action_resolution_enabled=False)
-	assert classifier.call_args.kwargs == {"action_resolution_enabled": False, "checkout_fetch_enabled": True}
+	assert classifier.call_args.kwargs == {"action_resolution_enabled": False, "checkout_fetch_enabled": True,
+		"abandoned_job_enabled": True}
 	assert "action=skip reason=other_conclusion" in output.getvalue()
 	post.assert_not_called()
 
@@ -652,6 +655,7 @@ def test_main_reads_action_resolution_flag(tmp_path, monkeypatch):
 	snapshot.write_text(json.dumps([pr()]), encoding="utf-8")
 	monkeypatch.setenv("CI_CANCELLED_PR_SNAPSHOT", str(snapshot))
 	monkeypatch.delenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", raising=False)
+	monkeypatch.delenv("CI_ABANDONED_JOB_RERUN_ENABLED", raising=False)
 	for value, expected in ((None, True), ("false", False), ("bogus", False)):
 		if value is None:
 			monkeypatch.delenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", raising=False)
@@ -659,7 +663,8 @@ def test_main_reads_action_resolution_flag(tmp_path, monkeypatch):
 			monkeypatch.setenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", value)
 		with mock.patch.object(HELPER, "process") as processed, contextlib.redirect_stderr(io.StringIO()):
 			HELPER.main()
-		assert processed.call_args.kwargs == {"action_resolution_enabled": expected, "checkout_fetch_enabled": True}
+		assert processed.call_args.kwargs == {"action_resolution_enabled": expected, "checkout_fetch_enabled": True,
+			"abandoned_job_enabled": True}
 
 
 @pytest.mark.parametrize("steps", [
@@ -866,6 +871,7 @@ def test_main_reads_checkout_fetch_flag(tmp_path, monkeypatch):
 	snapshot.write_text(json.dumps([pr()]), encoding="utf-8")
 	monkeypatch.setenv("CI_CANCELLED_PR_SNAPSHOT", str(snapshot))
 	monkeypatch.delenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", raising=False)
+	monkeypatch.delenv("CI_ABANDONED_JOB_RERUN_ENABLED", raising=False)
 	for value, expected in ((None, True), ("false", False), ("bogus", False)):
 		if value is None:
 			monkeypatch.delenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", raising=False)
@@ -873,9 +879,175 @@ def test_main_reads_checkout_fetch_flag(tmp_path, monkeypatch):
 			monkeypatch.setenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", value)
 		with mock.patch.object(HELPER, "process") as processed, contextlib.redirect_stderr(io.StringIO()):
 			HELPER.main()
-		assert processed.call_args.kwargs == {"action_resolution_enabled": True, "checkout_fetch_enabled": expected}
+		assert processed.call_args.kwargs == {"action_resolution_enabled": True, "checkout_fetch_enabled": expected,
+			"abandoned_job_enabled": True}
 
 
 def test_workflow_forwards_checkout_fetch_flag():
 	text = (ROOT / ".github/workflows/review_autofix_sweep.yml").read_text(encoding="utf-8")
 	assert "CI_CHECKOUT_FETCH_RERUN_ENABLED: ${{ vars.CI_CHECKOUT_FETCH_RERUN_ENABLED || 'true' }}" in text
+
+
+# --- Abandoned-job recovery (issue #9146) ----------------------------------
+
+ABANDONED_LINT = [
+	annotation("CI jobs that did not succeed: static-checks, tests-hooks-and-orchestrator, "
+		"tests-release-and-log-analysis, orchestrate-poll"),
+	annotation("Process completed with exit code 1."),
+]
+CANCELED = "The operation was canceled."
+TIMEOUT = "The job running on runner GitHub Actions 12 has exceeded the maximum execution time of 30 minutes."
+
+
+def abandoned_jobs():
+	# Mirrors run 42673813893: four abandoned (reported cancelled), two green.
+	return [
+		job("static-checks", 1, "cancelled"),
+		job("tests-hooks-and-orchestrator", 2, "cancelled"),
+		job("tests-heal-plan-and-validation", 3, "success"),
+		job("tests-promote-stall-and-review", 4, "success"),
+		job("tests-release-and-log-analysis", 5, "cancelled"),
+		job("orchestrate-poll (0)", 6, "cancelled"),
+		job("lint", 9),
+	]
+
+
+@pytest.mark.parametrize("named_annotations", [
+	[],
+	[annotation(SHUTDOWN), annotation(CANCELED)],
+	[annotation(CANCELED)],
+])
+def test_lint_only_with_abandoned_named_jobs_is_abandoned(named_annotations):
+	annotations = {index: list(named_annotations) for index in (1, 2, 5, 6)}
+	annotations[9] = ABANDONED_LINT
+	verdict, reads = classify(abandoned_jobs(), annotations)
+	assert verdict == "abandoned"
+	assert reads.call_count == 1 + 4
+	assert {call.args[1] for call in reads.call_args_list} == {1009, 1001, 1002, 1005, 1006}
+
+
+@pytest.mark.parametrize("bad", [
+	[annotation(TIMEOUT), annotation(CANCELED)],
+	[annotation("Error: something broke")],
+	[annotation(SHUTDOWN), annotation("Process completed with exit code 1.")],
+])
+def test_abandoned_named_job_with_timeout_or_other_annotation_is_genuine(bad):
+	annotations = {index: [annotation(CANCELED)] for index in (1, 2, 5, 6)}
+	annotations[5] = bad
+	annotations[9] = ABANDONED_LINT
+	verdict, _ = classify(abandoned_jobs(), annotations)
+	assert verdict == "genuine"
+
+
+def test_abandoned_job_flag_off_keeps_unverified():
+	verdict, reads = classify(abandoned_jobs(), {9: ABANDONED_LINT}, abandoned_enabled=False)
+	assert verdict == "unverified"
+	assert [call.args[1] for call in reads.call_args_list] == [1009]
+
+
+def test_abandoned_over_read_cap_is_unverified():
+	count = HELPER.MAX_FAILED_JOBS_CLASSIFIED
+	jobs = [job(f"job-{index}", index, "cancelled") for index in range(1, count + 1)] + [job("lint", 99)]
+	names = ", ".join(f"job-{index}" for index in range(1, count + 1))
+	verdict, reads = classify(jobs, {99: [annotation(f"CI jobs that did not succeed: {names}")]})
+	assert verdict == "unverified"
+	assert [call.args[1] for call in reads.call_args_list] == [1099]
+
+
+def test_abandoned_within_read_cap_is_classified():
+	count = HELPER.MAX_FAILED_JOBS_CLASSIFIED - 1
+	jobs = [job(f"job-{index}", index, "cancelled") for index in range(1, count + 1)] + [job("lint", 99)]
+	names = ", ".join(f"job-{index}" for index in range(1, count + 1))
+	annotations = {index: [] for index in range(1, count + 1)}
+	annotations[99] = [annotation(f"CI jobs that did not succeed: {names}")]
+	verdict, reads = classify(jobs, annotations)
+	assert verdict == "abandoned"
+	assert reads.call_count == HELPER.MAX_FAILED_JOBS_CLASSIFIED
+
+
+def test_abandoned_unreadable_annotations_is_unverified():
+	annotations = {index: [annotation(CANCELED)] for index in (1, 2, 5, 6)}
+	annotations[2] = ValueError("annotations_unreadable")
+	annotations[9] = ABANDONED_LINT
+	verdict, _ = classify(abandoned_jobs(), annotations)
+	assert verdict == "unverified"
+
+
+def test_abandoned_named_jobs_are_deduplicated():
+	jobs = [job("orchestrate-poll (0)", 1, "cancelled"), job("lint", 9)]
+	verdict, reads = classify(jobs, {
+		1: [],
+		9: [annotation("CI jobs that did not succeed: orchestrate-poll, orchestrate-poll (0)")],
+	})
+	assert verdict == "abandoned"
+	assert [call.args[1] for call in reads.call_args_list] == [1009, 1001]
+
+
+def test_abandoned_does_not_change_mixed_shutdown_runs():
+	jobs = [job("static-checks", 1), job("orchestrate-poll (0)", 2, "cancelled"), job("lint", 3)]
+	verdict, reads = classify(jobs, {
+		1: [annotation(SHUTDOWN)],
+		3: [annotation("CI jobs that did not succeed: static-checks, orchestrate-poll")],
+	})
+	assert verdict == "shutdown"
+	assert reads.call_count == 2
+
+
+def test_abandoned_verdict_reruns_once_with_new_reason():
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="abandoned")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=rerun reason=abandoned"]
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
+
+
+def test_abandoned_already_retried_is_not_rerun():
+	lines, _, post = exercise(completed=[run(conclusion="failure", attempt=2)], classify="abandoned")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=skip reason=already_retried"]
+	exercise.classifier.assert_not_called()
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("raw,expected,warned", [
+	(None, True, False), ("", True, False), ("true", True, False), ("TRUE", True, False),
+	("false", False, False), ("bogus", False, True),
+])
+def test_abandoned_job_flag_parser(raw, expected, warned):
+	err = io.StringIO()
+	with contextlib.redirect_stderr(err):
+		assert HELPER.abandoned_job_rerun_enabled(raw) is expected
+	assert ("::warning::CI_ABANDONED_JOB_RERUN_ENABLED" in err.getvalue()) is warned
+	if warned:
+		assert raw not in err.getvalue()
+
+
+def test_main_reads_abandoned_job_flag(tmp_path, monkeypatch):
+	snapshot = tmp_path / "snapshot.json"
+	snapshot.write_text(json.dumps([pr()]), encoding="utf-8")
+	monkeypatch.setenv("CI_CANCELLED_PR_SNAPSHOT", str(snapshot))
+	monkeypatch.delenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", raising=False)
+	monkeypatch.delenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", raising=False)
+	for value, expected in ((None, True), ("false", False), ("bogus", False)):
+		if value is None:
+			monkeypatch.delenv("CI_ABANDONED_JOB_RERUN_ENABLED", raising=False)
+		else:
+			monkeypatch.setenv("CI_ABANDONED_JOB_RERUN_ENABLED", value)
+		with mock.patch.object(HELPER, "process") as processed, contextlib.redirect_stderr(io.StringIO()):
+			HELPER.main()
+		assert processed.call_args.kwargs == {"action_resolution_enabled": True, "checkout_fetch_enabled": True,
+			"abandoned_job_enabled": expected}
+
+
+def test_process_forwards_abandoned_job_flag():
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: [run(conclusion="failure")] if status == "completed" else []), \
+		mock.patch.object(HELPER, "current_pr_heads", return_value={11: SHA}), \
+		mock.patch.object(HELPER, "classify_runner_shutdown", return_value="unverified") as classifier, \
+		mock.patch.object(HELPER, "rerun_failed_jobs") as post, contextlib.redirect_stdout(output):
+		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "", abandoned_job_enabled=False)
+	assert classifier.call_args.kwargs["abandoned_job_enabled"] is False
+	assert "action=skip reason=runner_shutdown_unverified" in output.getvalue()
+	post.assert_not_called()
+
+
+def test_workflow_forwards_abandoned_job_flag():
+	text = (ROOT / ".github/workflows/review_autofix_sweep.yml").read_text(encoding="utf-8")
+	assert "CI_ABANDONED_JOB_RERUN_ENABLED: ${{ vars.CI_ABANDONED_JOB_RERUN_ENABLED || 'true' }}" in text

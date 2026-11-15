@@ -22,10 +22,11 @@
 #   prepush_test_gate_run.sh --worktree DIR --module FILE --image IMAGE \
 #     --base SHA --out-dir DIR [--timeout-minutes N] [--deps-root DIR]... \
 #     [--venv DIR] [--shards N] [--large-file-tests N] [--node-modules DIR] \
-#     [--nested-node-modules-root DIR] [--tests-file FILE] \
+#     [--nested-node-modules-root DIR] [--tests-only FILE] [--tests-file F] \
 #     [--expect-baseline-fail-file F]
 #
-# --tests-file runs an explicit list of test files (one `path[::name]` per
+# --tests-only (issue #8461, the heal reproduction runner) runs an explicit
+# list of test files (one `path[::name]` per
 # line) instead of the module's affected-test selection; failures are still
 # re-run on the merge-base. The file must be a regular file (no symlink) of
 # at most 256 KiB. It is copied into the private run root and mounted
@@ -34,13 +35,14 @@
 # tests_file_unreadable / tests_file_too_large / tests_file_copy_failed result; it never falls back
 # to the selection.
 #
-# --expect-baseline-fail-file (issue #8427, P3) passes a plan's red-on-base
-# done-check targets (one `path[::name]` per line) to the module's `run`,
-# which also re-runs them on the baseline tree. It must be a regular,
-# non-symlink file of at most 65,536 bytes; it is copied into a private inputs
-# directory mounted read-only at /inputs. A rejected file is logged
-# (tests_file_rejected) and the run goes ahead without it. Both target
-# options add an `acceptance` map to the result.
+# --tests-file and --expect-baseline-fail-file (issue #8427, P3) pass a plan's
+# done-check targets (one `path[::name]` per line) to the module's `run`:
+# --tests-file adds them to the affected-test selection, and
+# --expect-baseline-fail-file also re-runs them on the baseline tree. Each
+# must be a regular, non-symlink file of at most 65,536 bytes; it is copied
+# into a private inputs directory mounted read-only at /inputs. A rejected
+# file is logged (tests_file_rejected) and the run goes ahead without it.
+# All three options add an `acceptance` map to the result.
 # Without these options the docker argv is unchanged.
 #
 # --nested-node-modules-root mounts each DIR/<project>/node_modules (the
@@ -77,9 +79,13 @@ node_modules=""
 nested_nm_root=""
 shards=""
 large_file_tests=""
+# tests_file / tests_file_given / tests_file_real: the --tests-only list.
 tests_file=""
 tests_file_given=0
+done_check_tests_file=""
+done_check_tests_file_given=0
 baseline_fail_file=""
+baseline_fail_file_given=0
 
 gate_log()
 {
@@ -110,8 +116,9 @@ while [ "$#" -gt 0 ]; do
 		--nested-node-modules-root) nested_nm_root="${2:-}"; shift 2 ;;
 		--shards) shards="${2:-}"; shift 2 ;;
 		--large-file-tests) large_file_tests="${2:-}"; shift 2 ;;
-		--tests-file) [ "$#" -ge 2 ] || { synthetic_result usage_error; exit 0; }; tests_file="${2:-}"; tests_file_given=1; shift 2 ;;
-		--expect-baseline-fail-file) baseline_fail_file="${2:-}"; shift 2 ;;
+		--tests-only) [ "$#" -ge 2 ] || { synthetic_result usage_error; exit 0; }; tests_file="${2:-}"; tests_file_given=1; shift 2 ;;
+		--tests-file) [ "$#" -ge 2 ] || { synthetic_result usage_error; exit 0; }; done_check_tests_file="${2:-}"; done_check_tests_file_given=1; shift 2 ;;
+		--expect-baseline-fail-file) [ "$#" -ge 2 ] || { synthetic_result usage_error; exit 0; }; baseline_fail_file="${2:-}"; baseline_fail_file_given=1; shift 2 ;;
 		*) gate_log "outcome=error reason=unknown_argument"; synthetic_result usage_error; exit 0 ;;
 	esac
 done
@@ -305,10 +312,10 @@ fi
 [ -z "${shards}" ] || run_extra+=(--shards "${shards}")
 if [ -n "${tests_file_real}" ]; then
 	mounts+=(--mount "type=bind,src=${root}/tests.txt,dst=/gate/tests.txt,readonly")
-	run_extra+=(--tests-file /gate/tests.txt)
+	run_extra+=(--tests-only /gate/tests.txt)
 fi
-# Red-on-base done-check targets (issue #8427, P3): host copy, mounted
-# read-only. The --tests-file list is validated and mounted above.
+# Done-check target files (issue #8427, P3): host copies, mounted read-only.
+# The --tests-only list is validated and mounted above.
 inputs_used=false
 gate_input()
 {
@@ -321,7 +328,9 @@ gate_input()
 		gate_log "outcome=warning reason=tests_file_rejected"
 	fi
 }
-[ -z "${baseline_fail_file}" ] || gate_input "${baseline_fail_file}" baseline_fail.txt --expect-baseline-fail-file
+# An explicitly empty value is logged as rejected, not treated as absent.
+[ "${done_check_tests_file_given}" != 1 ] || gate_input "${done_check_tests_file}" tests.txt --tests-file
+[ "${baseline_fail_file_given}" != 1 ] || gate_input "${baseline_fail_file}" baseline_fail.txt --expect-baseline-fail-file
 [ "${inputs_used}" != true ] || mounts+=(--mount "type=bind,src=${root}/inputs,dst=/inputs,readonly")
 
 wall=$(( timeout_minutes * 60 + 120 ))

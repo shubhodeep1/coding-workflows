@@ -175,6 +175,8 @@ def test_no_docs_holds() -> None:
 
 
 def test_dispatches_oldest_unprocessed_doc_bound_by_label_and_marker_inputs() -> None:
+	# The name predates newest-first selection; the test now covers skipping the
+	# newest doc (dispatched before) for the next-newest one.
 	docs = [
 		"analysis/workflow-optimization-2026-09-03.md",
 		"analysis/workflow-optimization-2026-08-30.md",
@@ -182,7 +184,7 @@ def test_dispatches_oldest_unprocessed_doc_bound_by_label_and_marker_inputs() ->
 	]
 	state = {
 		"open_tracking": [_tracking(3)],
-		"search_hits": {"analysis/workflow-optimization-2026-08-30.md": 1},
+		"search_hits": {"analysis/workflow-optimization-2026-09-03.md": 1},
 	}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(
@@ -198,8 +200,8 @@ def test_dispatches_oldest_unprocessed_doc_bound_by_label_and_marker_inputs() ->
 			},
 		)
 	assert proc.returncode == 0, proc.stderr + proc.stdout
-	# 08-30 was dispatched before (marker found) -> skipped with a warning; 09-01 is next.
-	assert "workflow-optimization-2026-08-30.md was dispatched to the orchestrator before" in proc.stderr
+	# 09-03 (newest) was dispatched before (marker found) -> skipped with a warning; 09-01 is next.
+	assert "workflow-optimization-2026-09-03.md was dispatched to the orchestrator before" in proc.stderr
 	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-09-01.md role=verifying" in proc.stdout
 	assert len(final["dispatches"]) == 1
 	dispatch = final["dispatches"][0]
@@ -210,6 +212,7 @@ def test_dispatches_oldest_unprocessed_doc_bound_by_label_and_marker_inputs() ->
 	assert "process ONLY the single source doc" in fields["project_description"]
 	assert "Source doc: analysis/workflow-optimization-2026-09-01.md" in fields["project_description"]
 	assert "workflow-optimization-2026-09-03.md" not in fields["project_description"]
+	assert "workflow-optimization-2026-08-30.md" not in fields["project_description"]
 	assert fields["tracking_labels"] == "ai:comprehensive-test-pending"
 	marker = fields["tracking_comment"]
 	assert "apply-analysis-source-doc: analysis/workflow-optimization-2026-09-01.md" in marker
@@ -223,19 +226,49 @@ def test_dispatches_oldest_unprocessed_doc_bound_by_label_and_marker_inputs() ->
 	assert "role=verifying" in final["github_output"]
 
 
+def test_dispatches_newest_unprocessed_doc_first_including_same_day_suffixes() -> None:
+	docs = [
+		"analysis/workflow-optimization-2026-10-08.md",
+		"analysis/workflow-optimization-2026-10-21-10.md",
+		"analysis/workflow-optimization-2026-10-21.md",
+		"analysis/workflow-optimization-2026-10-21-5.md",
+		"analysis/workflow-optimization-2026-10-09-2.md",
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		listed, listed_final = _run(Path(tmp), {"open_tracking": []}, docs=docs, env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=docs)
+	assert listed.returncode == 0, listed.stderr
+	assert not listed_final.get("dispatches")
+	# Version sort treats 10 as greater than 5 (string sort would not), so in
+	# reverse order -10 comes before -5, and every same-day suffixed doc comes
+	# before that day's first (unsuffixed) doc.
+	assert (
+		"APPLY_ANALYSIS_CANDIDATES count=5 docs="
+		"analysis/workflow-optimization-2026-10-21-10.md,"
+		"analysis/workflow-optimization-2026-10-21-5.md,"
+		"analysis/workflow-optimization-2026-10-21.md,"
+		"analysis/workflow-optimization-2026-10-09-2.md,"
+		"analysis/workflow-optimization-2026-10-08.md"
+	) in listed.stdout
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-10-21-10.md role=proving" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
 def test_untrusted_marker_comment_does_not_mark_a_doc_as_dispatched() -> None:
 	docs = ["analysis/workflow-optimization-2026-08-30.md", "analysis/workflow-optimization-2026-09-01.md"]
 	state = {
 		"open_tracking": [],
-		"search_hits": {"analysis/workflow-optimization-2026-08-30.md": 1},
+		"search_hits": {"analysis/workflow-optimization-2026-09-01.md": 1},
 		# The only comment carrying the marker comes from an outside account.
-		"issue_comments": [{"body": "apply-analysis-source-doc: analysis/workflow-optimization-2026-08-30.md", "user": {"login": "stranger"}, "author_association": "NONE"}],
+		"issue_comments": [{"body": "apply-analysis-source-doc: analysis/workflow-optimization-2026-09-01.md", "user": {"login": "stranger"}, "author_association": "NONE"}],
 	}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), state, docs=docs)
 	assert proc.returncode == 0, proc.stderr + proc.stdout
 	assert "only in a comment from an untrusted author" in proc.stderr
-	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-08-30.md" in proc.stdout
+	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-09-01.md" in proc.stdout
 	assert len(final["dispatches"]) == 1
 
 
@@ -490,15 +523,15 @@ def test_release_job_is_serialised_and_refuses_a_stale_tip() -> None:
 
 def test_doc_removed_on_the_branch_tip_is_skipped_for_the_next_one() -> None:
 	docs = ["analysis/workflow-optimization-2026-09-09.md", "analysis/workflow-optimization-2026-09-12.md"]
-	state = {"open_tracking": [], "gone_docs": ["analysis/workflow-optimization-2026-09-09.md"]}
+	state = {"open_tracking": [], "gone_docs": ["analysis/workflow-optimization-2026-09-12.md"]}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), state, docs=docs)
 	assert proc.returncode == 0, proc.stderr + proc.stdout
-	assert "APPLY_ANALYSIS_DOC_GONE doc=analysis/workflow-optimization-2026-09-09.md ref=main" in proc.stdout
-	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-09-12.md role=proving" in proc.stdout
+	assert "APPLY_ANALYSIS_DOC_GONE doc=analysis/workflow-optimization-2026-09-12.md ref=main" in proc.stdout
+	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/workflow-optimization-2026-09-09.md role=proving" in proc.stdout
 	assert final["contents_reads"] == [
-		"repos/owner/repo/contents/analysis/workflow-optimization-2026-09-09.md?ref=main",
 		"repos/owner/repo/contents/analysis/workflow-optimization-2026-09-12.md?ref=main",
+		"repos/owner/repo/contents/analysis/workflow-optimization-2026-09-09.md?ref=main",
 	]
 	assert len(final["dispatches"]) == 1
 

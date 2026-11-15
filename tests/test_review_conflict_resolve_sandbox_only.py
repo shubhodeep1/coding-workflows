@@ -1050,8 +1050,8 @@ def test_source_repo_without_its_conflict_set_still_fails_closed(tmp_path):
 # onto the live copy. The paired-live report test below locks that pairing,
 # and the guard tests lock the sandbox boundary: the live hook is never
 # admitted to the sandbox and never taken from base on an integration branch.
-# The clean-template host-only merge gap is tracked by the strict xfail in
-# tests/test_conflict_guard_hook_template_merge.py.
+# Since #9014 the host-only template merge also covers this pair; the
+# ordinary tests in tests/test_conflict_guard_hook_template_merge.py lock it.
 
 PREPUSH_HOOK = ".claude/hooks/prepush_affected_tests.py"
 PREPUSH_HOOK_TEMPLATE = "workflow-templates/" + PREPUSH_HOOK
@@ -1512,7 +1512,7 @@ def test_resolver_loop_passes_done_check_tests_file(tmp_path: Path) -> None:
 	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=[_fail_n(1), _PASS],
 		extra_env=_loop_env(), seed_acceptance=True, copy_acceptance_helper=True)
 	runs = _docker_run_lines(work)
-	assert len(runs) == 2 and all("--tests-file /gate/tests.txt" in line for line in runs)
+	assert len(runs) == 2 and all("--tests-file /inputs/tests.txt" in line for line in runs)
 	result = json.loads((tmp_path / "runtime" / "acceptance_result.json").read_text(encoding="utf-8"))
 	assert result["schema"] == "acceptance_result.v1"
 	assert "PERSIST repair_loop outcome=pass turns=1 stop=clean acceptance=not_run" in proc.stderr
@@ -1554,7 +1554,7 @@ def test_resolver_loop_fetches_the_done_check_once_when_none_is_staged(tmp_path:
 	assert len(calls) <= 2 and sum("comments" in call for call in calls) == 1
 	fetched = json.loads((tmp_path / "runtime" / "prepush_gate_resolver" / "acceptance.json").read_text(encoding="utf-8"))
 	assert fetched["state"] == "valid"
-	assert all("--tests-file /gate/tests.txt" in line for line in _docker_run_lines(work))
+	assert all("--tests-file /inputs/tests.txt" in line for line in _docker_run_lines(work))
 
 
 def test_resolver_loop_contract_stays_in_the_gate_function() -> None:

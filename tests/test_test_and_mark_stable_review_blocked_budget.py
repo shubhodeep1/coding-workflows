@@ -15,7 +15,7 @@ from runpy import run_path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
+from review_autofix_step_scripts import expanded_review_autofix_text, expanded_test_and_mark_stable_text  # noqa: E402
 from agents_doc import agents_text  # noqa: E402
 
 
@@ -712,7 +712,8 @@ def test_phase4_failure_and_early_failed_steps_are_not_accepted_without_bait() -
 def test_phase4_checkout_marker_and_every_early_exit_are_covered() -> None:
 	workflow = _read_workflow()
 	phase4 = _slice_between(workflow, '      - name: "Phase 4: Wait for review & autofix to complete"', '      # Per-phase soft-error analysis: review_autofix.')
-	assert 'Captured INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}' in (REPO_ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")
+	# The marker lives in the moved "Checkout PR head branch" step body.
+	assert 'Captured INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}' in expanded_review_autofix_text()
 	assert "Captured INITIAL_HEAD_SHA=[0-9a-fA-F]{40}" in phase4
 	assert "BAIT_UNCOVERED_RUN_IDS" in phase4
 	assert phase4.count('if ! require_bait_review_coverage; then') == 4

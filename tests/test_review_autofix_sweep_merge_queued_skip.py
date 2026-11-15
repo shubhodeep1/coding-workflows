@@ -240,5 +240,26 @@ class SweepMergeQueuedSkipTest(unittest.TestCase):
 		self.assertIn("MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}", text)
 
 
+# The smoke-PR backstop cases (issue #8953) live in
+# tests/test_review_autofix_sweep_smoke_pr_backstop.py and are collected here,
+# since CI already runs this file and ci.yml was outside that issue's file
+# grant. A name clash would hide a test, so it fails loudly.
+def _collect_smoke_pr_backstop_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"review_autofix_sweep_smoke_pr_backstop_cases",
+		Path(__file__).resolve().parent / "test_review_autofix_sweep_smoke_pr_backstop.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	case_name = "SweepSmokePrBackstopTest"
+	assert case_name not in globals(), case_name
+	globals()[case_name] = getattr(cases, case_name)
+
+
+_collect_smoke_pr_backstop_cases()
+
+
 if __name__ == "__main__":
 	unittest.main()
