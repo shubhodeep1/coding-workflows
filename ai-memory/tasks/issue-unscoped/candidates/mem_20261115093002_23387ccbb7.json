@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:716,882 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: Two different host files are mounted at the same sandbox entry point `/relay.py`: `claude_anthropic_relay.py` at line 716 and `chatgpt_codex_relay.py` at line 882. The coverage registry lists only `claude_anthropic_relay.py`, so `test_scanned_host_file_matches_the_registry` fails at `tests/test_sandbox_python_coverage.py:293` with `'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'`.\n  WHY: This one assertion causes all six red CI checks on head da9b888. Both reviewers say it is inherited from the base branch and not caused by this PR's three changed files, and that the fix belongs on the base branch: a registry entry that accepts both relay files, or a separate mount path. Both reviewers gave severity NIT, which is mapped to low here; they agree on severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_untrusted_sandbox.sh:716,882 | severity=NIT | confidence=5\n  PROBLEM: Line 716 is `--mount \"type=bind,src=$(realpath \"${support}/claude_anthropic_relay.py\"),dst=/relay.py,readonly\"` and line 882 is `--mount \"type=bind,src=$(realpath \"${support}/chatgpt_codex_relay.py\"),dst=/relay.py,readonly\"`. Both mount at `/relay.py`, but the registry lists only `claude_anthropic_relay.py`, so `test_scanned_host_file_matches_the_registry` fails at `tests/test_sandbox_python_coverage.py:293`.\n  WHY: This causes all six red checks on head da9b888. The PR does not cause it, because none of the three changed files is read by the coverage scan. The fix belongs on the base branch. The reviewer says this PR needs no change for it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_untrusted_sandbox.sh:716,882 | severity=NIT | confidence=5\n  PROBLEM: The CI sandbox Python coverage check rejects the ChatGPT relay mount because its registry expects `claude_anthropic_relay.py` for the `/relay.py` entry point.\n  WHY: `test_scanned_host_file_matches_the_registry` fails with `chatgpt_codex_relay.py` versus `claude_anthropic_relay.py`, which causes six CI checks to fail. The failure is inherited and not introduced by this PR's changed files.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "85fba92a20a1623c319a72cc288f9f9fe0cef8bfa53fee58c3346b074d68ab70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9454,
+    "run_id": "43633245836",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43633245836",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261115093002_23387ccbb7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9454,
+    "run_id": "43633245836"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-15T09:30:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
