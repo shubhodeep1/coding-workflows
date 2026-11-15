@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2788-2789 | severity=nit | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The added comment says the fast-fail step stays in group 0 because it reads the derive step's /tmp list, but the derive step has no matrix-group guard and runs in every group, so that dependency does not pin the step to group 0.\n  WHY: The comment could mislead operators rebalancing group 0 later, although CI behaviour is unchanged because the diff is comment-only. Confidence is 3 from openai_gpt-6-luna and 4 from z-ai_glm-5_3-flash. Both rated it NIT. anthropic_claude-sonnet-5_5 checked the same comment and judged it accurate for the current layout, so the reviewers disagree on whether it is a problem.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Move the slowest steps of `orchestrate-poll (0)` into the CI job with the most headroom, unchanged, keeping job and step names (issue #9447).\n  expected_change_site: .github/workflows/ci.yml, orchestrate-poll job\n  confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  EVIDENCE: The diff moves no step and adds only a comment and changelog.d/9447-orchestrate-poll-budget-predates-9214.md. Both reviewers treat this as a recorded deferral (PR \"Deferred scope\", AD-1 = B, AD-2 = C), not a gap. anthropic_claude-sonnet-5_5 reported it as SEVERITY NIT with ISSUE_CONFIDENCE 1. z-ai_glm-5_3-flash concluded \"Not a gap.\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (reported under TASK COMPLETENESS / INTENT GAPS; the reviewer judged it a deferral, not a gap):\n  Requirement: Move the slowest steps of `orchestrate-poll (0)` into the CI job with the most headroom, unchanged, keeping job and step names.\n  Expected change site: `.github/workflows/ci.yml`, `orchestrate-poll` job.\n  Evidence of absence: No step moved. This is deferred on purpose (PR \"Deferred scope\", AD-1 = B, AD-2 = C), so it is not counted as a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- All other checklist sections: NONE. HARDENING_RISK_SCORE: 0. The reviewer verified the added comment is accurate for the current layout and chose not to report the wording nit that two reviewers raised.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2788-2789 | severity=nit | confidence=3\n  PROBLEM: The derive step has no matrix-group guard and writes the list in every group, so the `/tmp` dependency does not require the fast-fail step to stay in group 0. The PR's deferred-scope note also describes moving the step with a copy of the derive step.\n  WHY: It does not break current CI execution, but it gives future operators an inaccurate dependency when rebalancing group 0.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:2788-2789 | severity=nit | confidence=4\n  PROBLEM: The new comment says the fast-fail step stays in group 0 because it reads the derive step's /tmp list. The derive step (lines 2811-2841) has no `if:` guard, so every group writes the file. The real pin is `if: strategy.job-index == 0` (line 2845).\n  WHY: It does not fail at runtime because the diff is comment-only. The risk is operator confusion when the recorded re-trigger condition fires, since the \"because\" wording could rule out a move the deferred-scope plan permits.\n- TASK_GAP (skipped, deferral cited; the reviewer judged it \"Not a gap\"):\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, orchestrate-poll job.\n  Evidence of absence: The diff moves no step. It adds only the dated comment (lines 2783-2789) and changelog.d/9447-orchestrate-poll-budget-predates-9214.md. The deferral is recorded in the PR's Deferred scope section, AD-1 = B, AD-2 = C, the comment and the fragment, because run 43343930604 at d49b34c8562d predates PR #9268.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1282db9f2f18784e30aa5c5bd9d5292093b3dfed198c00def9ebde21bc1bfd83",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9453,
+    "run_id": "43625008169",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43625008169",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261115040048_ff6dbecbbb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9453,
+    "run_id": "43625008169"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-15T04:00:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
