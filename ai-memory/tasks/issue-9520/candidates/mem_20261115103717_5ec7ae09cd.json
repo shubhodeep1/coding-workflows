@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which stall-recovery paths should get the self-run check, the one-time live refetch and the \"active set unverifiable\" escalation hold? (The diagnostic line only prints from the tracking-issue stall block. Issues not managed by the orchestrator, possibly including binance-blessings #557/#559, are escalated by `run_standalone_stall_recovery`, which reads the same blob for each tick.)\nChoices:\n- A: Both paths. Run the check and refetch once per tick at the first stall consumer, so the refreshed blob is shared through the per-tick memo and the call budget stays at one extra live fetch. Apply the escalation hold in both `recover_stalled_issue` (tracking) and `run_standalone_stall_recovery` (RECOMMENDED)\n- B: Only the tracking-issue stall block (after `build_active_issue_set` at around L33614), exactly as the Approach section says. The standalone path is unchanged; any follow-up there gets its own issue\n- C: Only `run_standalone_stall_recovery`, on the view that it is the path that escalated #557/#559",
+  "fingerprint": "8c32a690c99f70cad3a97995ab800a3af3087c6b477fad345a43f9ae1f2a202a",
+  "lineage": {
+    "issue_number": 9520,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43680585450",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43680585450",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261115103717_5ec7ae09cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9520,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43680585450"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9520 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-15T10:37:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
