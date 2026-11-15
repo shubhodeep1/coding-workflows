@@ -1167,6 +1167,11 @@ def gate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
 	# Unverified: keep the normal fix path and attach the failing job's traceback.
 	if verdict.get("reason") in ("run_identity_mismatch",):
 		return result, 0
+	# Issue #9481: the orchestrator close sweep gates issues in any phase on a
+	# rotating window; it passes --no-traceback so it neither re-downloads job
+	# logs every rotation nor posts tracebacks outside the clarify/plan path.
+	if getattr(args, "no_traceback", False):
+		return result, 0
 	already = traceback_jobs_posted(comments, pipeline_login, issue_number)
 	pending = [job for job in verdict.get("failed_jobs") or [] if job.get("id") not in already]
 	for traceback in fetch_failing_tracebacks(args.repo, pending):
@@ -1198,6 +1203,7 @@ def main(argv: list[str] | None = None) -> int:
 	p_gate.add_argument("--issue-number", type=int, required=True)
 	p_gate.add_argument("--default-branch", required=True)
 	p_gate.add_argument("--dry-run", action="store_true")
+	p_gate.add_argument("--no-traceback", action="store_true", help="skip the unverified-path failing-job traceback (issue #9481)")
 	args = parser.parse_args(argv)
 	if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", args.default_branch) or ".." in args.default_branch:
 		print(json.dumps({"status": "unverified", "reason": "invalid_arguments"}))

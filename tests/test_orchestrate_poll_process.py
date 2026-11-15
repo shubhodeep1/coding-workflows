@@ -19707,6 +19707,8 @@ def test_close_merged_sweep_runs_check_triage_gate_for_issue_without_fix_pr():
 		assert "issue close" not in calls  # the gate itself closed the issue
 		args = json.loads((Path(tmp) / "gate_args.json").read_text(encoding="utf-8"))
 		assert args[:1] == ["gate"] and "--default-branch" in args and args[args.index("--default-branch") + 1] == "main"
+		# The rotating sweep pass never downloads job logs or posts tracebacks.
+		assert "--no-traceback" in args
 	with tempfile.TemporaryDirectory() as tmp:
 		rc, out, _ = _close_sweep_gate_harness(
 			Path(tmp), verdict={"status": "unverified", "reason": "default_run_not_success", "pr": 795, "pr_state": "merged"}, timeline=[],
@@ -19753,19 +19755,37 @@ def test_close_merged_sweep_closes_triage_issue_when_source_pr_closed_unmerged()
 	merged_elsewhere = {"event": "cross-referenced", "source": {"issue": {
 		"number": 300, "state": "closed", "merged": True, "pull_request": {"url": "https://api.github.com/repos/owner/repo/pulls/300"},
 	}}}
+	source = {85: {"number": 85, "state": "closed", "merged": False, "head": {"ref": "claude/feature", "repo": {"full_name": "owner/repo"}}}}
 	with tempfile.TemporaryDirectory() as tmp:
-		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[merged_elsewhere])
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[merged_elsewhere], prs=source)
 		assert rc == 0, out
 		assert "CLOSE_MERGED_SWEEP issue=10 triage_rule=closed reason=source_pr_closed_unmerged pr=85" in out
 		assert "issue edit 10 --repo owner/repo --add-label ai:closed" in calls
-		close_call = next(line for line in calls.splitlines() if line.startswith("issue close 10"))
-		assert "--reason not planned" in close_call
-		assert "<!-- ai:check-triage-source-closed:v1 issue=10 pr=85 -->" in calls
+		lines = calls.splitlines()
+		close_index = next(i for i, line in enumerate(lines) if line.startswith("issue close 10"))
+		assert "--reason not planned" in lines[close_index]
+		# The marker comment is posted only after the close succeeded.
+		comment_index = next(i for i, line in enumerate(lines) if line.startswith("issue comment 10"))
+		assert close_index < comment_index
+		assert "<!-- ai:check-triage-source-closed:v1 issue=10 pr=85 -->" in "\n".join(lines[comment_index:])
+
+	# A closed orchestrator integration PR may have shipped through a re-issue.
+	with tempfile.TemporaryDirectory() as tmp:
+		integration = {85: {**source[85], "head": {"ref": "orchestrator/project-739", "repo": {"full_name": "owner/repo"}}}}
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[], prs=integration)
+		assert rc == 1, out
+		assert "triage_rule=skip reason=source_pr_integration_head pr=85 head=orchestrator/project-739" in out
+		assert "issue close" not in calls
+	# An unreadable source PR fails closed.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[])
+		assert rc == 1 and "triage_rule=skip reason=source_pr_state_unreadable pr=85" in out
+		assert "issue close" not in calls
 
 	# An open, same-repository fix PR bound to the issue holds it open.
 	with tempfile.TemporaryDirectory() as tmp:
 		rc, out, calls = _close_sweep_gate_harness(
-			Path(tmp), verdict=closed, timeline=[_open_cross_ref(221)], prs={221: _open_fix_pr()},
+			Path(tmp), verdict=closed, timeline=[_open_cross_ref(221)], prs={221: _open_fix_pr(), **source},
 		)
 		assert rc == 1, out
 		assert "CLOSE_MERGED_SWEEP issue=10 triage_rule=skip reason=source_pr_closed_unmerged_fix_pr_open fix_pr=221" in out
@@ -19774,18 +19794,19 @@ def test_close_merged_sweep_closes_triage_issue_when_source_pr_closed_unmerged()
 	with tempfile.TemporaryDirectory() as tmp:
 		rc, out, _ = _close_sweep_gate_harness(
 			Path(tmp), verdict=closed, timeline=[_open_cross_ref(221), _open_cross_ref(222)],
-			prs={221: _open_fix_pr(head_repo="attacker/repo"), 222: _open_fix_pr(number=222, head="claude/other")},
+			prs={221: _open_fix_pr(head_repo="attacker/repo"), 222: _open_fix_pr(number=222, head="claude/other"), **source},
 		)
 		assert rc == 0 and "reason=source_pr_closed_unmerged pr=85" in out
 	# An unreadable cross-referenced PR fails closed.
 	with tempfile.TemporaryDirectory() as tmp:
-		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[_open_cross_ref(223, state=None)])
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[_open_cross_ref(223, state=None)], prs=source)
 		assert rc == 1 and "triage_rule=skip reason=source_pr_state_unreadable pr=85" in out
 		assert "issue close" not in calls
 	# A failed close keeps the issue open with a logged reason.
 	with tempfile.TemporaryDirectory() as tmp:
-		rc, out, _ = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[], close_fails=True)
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[], close_fails=True, prs=source)
 		assert rc == 1 and "triage_rule=skip reason=close_failed pr=85" in out
+		assert "issue comment" not in calls and "ai:check-triage-source-closed" not in calls
 	# An open source PR keeps today's path.
 	with tempfile.TemporaryDirectory() as tmp:
 		rc, out, calls = _close_sweep_gate_harness(
@@ -19805,6 +19826,11 @@ def test_close_merged_sweep_check_triage_gate_wiring_contract():
 	assert body.index("pr_fetch_failed — skipping this cycle.") < gate
 	assert gate < body.index('if [ "${origin}" = "ready_label" ] || [ "${origin}" = "check_triage" ]; then')
 	assert gate < body.index("leaving open and alerting")
+	# Partial deliveries (#7657) are deliberately not gated and say so.
+	partial = body.index('echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_gate=skip reason=partial_delivery"')
+	assert partial < gate
+	# The triage-branch resolver runs only for ai:check-triage issues.
+	assert '[ "${_sweep_cand_bound}" = "true" ] && [ "${_sweep_is_triage}" = "true" ] && [ "${_sweep_triage_parsed}" != "true" ]' in body
 	# The stall path keeps its log contract through the shared core.
 	assert '_check_triage_gate_invoke "${issue_num}" "${_STALL_STANDALONE_DEFAULT_BRANCH}" "STALL_CHECK_TRIAGE_GATE"' in script
 
@@ -19854,11 +19880,11 @@ def test_stall_judge_keeps_escalation_when_linked_pr_merged_into_non_target_base
 		helper = Path(tmp) / "helper.sh"
 		helper.write_text(script[target_start:target_end] + "\n" + script[keep_start:keep_end] + "\n", encoding="utf-8")
 
-		def run(pr: dict, managed: str = "false", default: str = "main") -> str:
+		def run(pr: dict, managed: str = "false", default: str = "main", declared: str = "") -> str:
 			proc = subprocess.run(
 				["bash", "-c", 'set -euo pipefail; gh_retry() { return 1; }; source "$1"; '
-					'if _stall_judge_linked_pr_keeps_escalation 507 "$2" "$3"; then echo "keep:${_STALL_KEEP_ESCALATION_REASON}:${_STALL_KEEP_ESCALATION_BASE}"; else echo no; fi',
-					"_", str(helper), json.dumps(pr), managed],
+					'if _stall_judge_linked_pr_keeps_escalation 507 "$2" "$3" "$4"; then echo "keep:${_STALL_KEEP_ESCALATION_REASON}:${_STALL_KEEP_ESCALATION_BASE}"; else echo no; fi',
+					"_", str(helper), json.dumps(pr), managed, declared],
 				check=True, capture_output=True, text=True, env={**os.environ, "CWS_DEFAULT_BRANCH": default},
 			)
 			return proc.stdout.strip()
@@ -19873,6 +19899,13 @@ def test_stall_judge_keeps_escalation_when_linked_pr_merged_into_non_target_base
 		assert run({}) == "no"
 		# Unknown default branch keeps the old behaviour.
 		assert run(merged, default="") == "no"
+		# The issue's declared integration branch counts as a target, and a
+		# declared branch disables the managed any-project fallback.
+		project6 = {**merged, "base": {"ref": "orchestrator/project-6"}}
+		assert run(project6, declared="orchestrator/project-6") == "no"
+		assert run({**merged, "base": {"ref": "orchestrator/project-5"}}, managed="true", declared="orchestrator/project-6") == (
+			"keep:merged_non_target_base:orchestrator/project-5"
+		)
 
 	start = script.index("invoke_stall_judge() {")
 	body = script[start:script.index("\n}\n", start)]
@@ -19880,6 +19913,8 @@ def test_stall_judge_keeps_escalation_when_linked_pr_merged_into_non_target_base
 	keep = body.index('_stall_judge_linked_pr_keeps_escalation "${issue_num}" "${linked_pr_json}"')
 	assert normalize < keep < body.index("**Decision (effective):** ${effective_action}")
 	assert '[ "${judge_action}" = "escalate_human" ] && [ "${effective_action}" = "attempt_merge" ]' in body
+	assert '"${_keep_escalation_managed}" "${_keep_escalation_declared}"; then' in body
+	assert "extract-integration-branch" in body[normalize:keep]
 	assert "STALL_RECOVERY issue=${issue_num} reason=judge_escalate_kept linked_pr=${_STALL_KEEP_ESCALATION_REASON}" in body
 
 def test_reconciliation_uses_implementation_pr_masked_by_later_mention():

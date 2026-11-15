@@ -1182,3 +1182,22 @@ def test_untrusted_project_branch_never_reaches_the_fallback(tmp_path, monkeypat
 	result, _, fake = _gate(tmp_path, monkeypatch, routes=routes)
 	assert result["status"] == "unverified" and result["reason"] == "integration_base_untrusted"
 	assert not any("branch=main" in call[-1] for call in fake.calls)
+
+
+def test_no_traceback_flag_skips_job_log_reads_and_traceback_comment(tmp_path, monkeypatch):
+	"""Issue #9481: the orchestrator close sweep's rotating gate pass passes
+	--no-traceback, so an unverified verdict reads no job log and posts nothing."""
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID, details="https://ci.example.com/check/1"))
+	check_run = {"id": FAILED_JOB_ID, "app": {"slug": "github-actions"}, "output": {}}
+	fake = FakeGh(_check_run_triage_routes(check_run))
+	monkeypatch.setattr(mod, "_gh_api", fake)
+	monkeypatch.delenv("CHECK_TRIAGE_RESOLVED_GATE_ENABLED", raising=False)
+	issue_path = tmp_path / "issue.json"
+	issue_path.write_text(json.dumps(issue), encoding="utf-8")
+	args = argparse.Namespace(
+		issue_json=str(issue_path), repo=REPO, issue_number=ISSUE, default_branch="main", dry_run=True, no_traceback=True,
+	)
+	result, rc = mod.gate(args)
+	assert rc == 0 and result["status"] == "unverified" and result["traceback_posted"] == []
+	assert not result["writes"]
+	assert not any(call[-1].endswith("/logs") for call in fake.calls)
