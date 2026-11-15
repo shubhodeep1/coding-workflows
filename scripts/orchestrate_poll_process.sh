@@ -19896,6 +19896,137 @@ _staged_support_comments_for_guard()
   ' 2>/dev/null
 }
 
+# Issue #9486: decide whether a standalone `ai:clarification` issue ever got
+# clarification output. shubhodeep1/digital_pa#146 sat labelled for 34 days
+# with no clarify comment while stall recovery kept answering questions that
+# were never asked. Args: <issue_num> <comments_json>; the comments MUST be the
+# complete history (callers never infer absence from a partial window).
+# Only trusted comments count: a login ending in `[bot]`, or an
+# author_association of OWNER, MEMBER or COLLABORATOR (the same list as
+# stall_recovery_clarify_answer). Output is a trusted comment carrying the
+# clarification-questions marker or starting `Clarification required`, or a
+# trusted comment with a line starting `/answer`. The rerun marker is a trusted
+# comment starting "/reclarify\n<!-- ai:clarify-no-output-rerun:<issue> -->".
+# Prints exactly one of: `has_output`, `no_output_unmarked`,
+# `no_output_marked <epoch>` (newest marker; an unparseable timestamp is 0, so
+# it counts as old and escalation is never blocked forever). Any jq failure
+# prints `has_output`, which keeps the legacy recovery path (fail open).
+# No GitHub API call.
+_standalone_clarify_no_output_state()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local clarify_no_output_out=""
+
+  if ! clarify_no_output_out="$(printf '%s' "${comments_json}" | jq -r \
+    --arg marker "/reclarify
+<!-- ai:clarify-no-output-rerun:${issue_num} -->" '
+    def trusted:
+      ((.user.login // "") | tostring | test("\\[bot\\]$"))
+      or ((.author_association // "") | tostring | IN("OWNER", "MEMBER", "COLLABORATOR"));
+    if type != "array" then error("comments are not an array") else . end
+    | [ .[] | select(type == "object") | select(trusted) | .body = ((.body // "") | tostring) ] as $trusted
+    | if any($trusted[]; (.body | test("<!-- ai:clarification-questions -->|^Clarification required"))
+        or (.body | test("(^|\\n)/answer\\b"))) then "has_output"
+      else
+        [ $trusted[] | select(.body | startswith($marker))
+          | ((.created_at // "") | tostring
+            | (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor) catch 0)) ] as $marker_epochs
+        | if ($marker_epochs | length) == 0 then "no_output_unmarked"
+          else "no_output_marked " + ($marker_epochs | max | tostring)
+          end
+      end
+  ' 2>/dev/null)"; then
+    printf 'has_output'
+    return 0
+  fi
+  if [[ "${clarify_no_output_out}" =~ ^(has_output|no_output_unmarked|no_output_marked\ [0-9]+)$ ]]; then
+    printf '%s' "${clarify_no_output_out}"
+  else
+    printf 'has_output'
+  fi
+  return 0
+}
+
+# Issue #9486 (AD-2): a security follow-up held by the same-file ordering gate
+# (security_dependency.py verdict `held`) stays held, but the poller posts one
+# advisory per (issue, dependency) pair so the hold is visible instead of
+# silent. Args: <issue_num> <verdict_json> <detail> <comments_json>
+# <cache_available>. detail is one of open | closed_without_ai_merged |
+# unverified (anything else is treated as unverified). depends_on must match
+# ^[1-9][0-9]{0,9}$ before it reaches a marker or the body. Posts only when the
+# comment history already in hand is complete (cache `true` with fewer than
+# 100 comments, or `complete`); there is no extra read (§14: held issues are
+# visited every tick). Dedup marker
+# `<!-- ai:security-dependency-held:<issue>:<depends_on> -->` counts only from
+# trusted authors (same list as _standalone_clarify_no_output_state). The body
+# never has a line starting `/reclarify` or `/answer` and never carries the
+# clarification-questions marker. API calls: zero, or one POST. Always
+# returns 0 so a failure never stops the standalone loop.
+_post_security_dependency_held_advisory()
+{
+  local issue_num="$1"
+  local held_verdict_json="$2"
+  local held_detail="$3"
+  local comments_json="$4"
+  local cache_available="$5"
+  local held_depends_on=""
+  local held_comment_count=""
+  local held_marker=""
+  local held_body=""
+
+  case "${held_detail}" in
+    open|closed_without_ai_merged|unverified) ;;
+    *) held_detail="unverified" ;;
+  esac
+  held_depends_on="$(printf '%s' "${held_verdict_json}" | jq -r '.depends_on // empty | tostring' 2>/dev/null || true)"
+  if ! [[ "${held_depends_on}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=none detail=${held_detail} action=advisory_no_dependency"
+    return 0
+  fi
+  if [ "${cache_available}" = "true" ]; then
+    held_comment_count="$(printf '%s' "${comments_json}" | jq -er 'if type == "array" then length else error("not an array") end' 2>/dev/null || echo 100)"
+    [[ "${held_comment_count}" =~ ^[0-9]+$ ]] || held_comment_count=100
+  elif [ "${cache_available}" = "complete" ]; then
+    held_comment_count=0
+  else
+    held_comment_count=100
+  fi
+  if [ "${held_comment_count}" -ge 100 ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_comments_incomplete"
+    return 0
+  fi
+  held_marker="<!-- ai:security-dependency-held:${issue_num}:${held_depends_on} -->"
+  if printf '%s' "${comments_json}" | jq -e --arg marker "${held_marker}" '
+    any(.[]?; type == "object"
+      and (((.user.login // "") | tostring | test("\\[bot\\]$"))
+        or ((.author_association // "") | tostring | IN("OWNER", "MEMBER", "COLLABORATOR")))
+      and ((.body // "") | tostring | contains($marker)))' >/dev/null 2>&1; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_present"
+    return 0
+  fi
+  case "${held_detail}" in
+    open)
+      held_body="Security-dependency hold: this issue waits for #${held_depends_on} (the earlier fix to the same file) to be closed with \`ai:merged\`. Clarification then starts automatically. No action is needed."
+      ;;
+    closed_without_ai_merged)
+      held_body="Security-dependency hold: #${held_depends_on} (the earlier fix to the same file) was closed without \`ai:merged\`, so this hold will not release on its own. A maintainer must act: land the prerequisite fix, or edit this issue's \`- Depends on: #${held_depends_on}\` line."
+      ;;
+    *)
+      held_body="Security-dependency hold: the dependency on #${held_depends_on} (the earlier fix to the same file) could not be verified, so this hold will not release on its own. A maintainer must act: land the prerequisite fix, or edit this issue's \`- Depends on: #${held_depends_on}\` line."
+      ;;
+  esac
+  held_body="${held_body}
+
+${held_marker}"
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${held_body}" >/dev/null 2>&1; then
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_posted"
+  else
+    echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held_advisory depends_on=${held_depends_on} detail=${held_detail} action=advisory_failed"
+  fi
+  return 0
+}
+
 # Issue #6769: comments for the plan auto-approval gate. Reuses the batched
 # GraphQL cache entry when it conclusively holds the whole history, otherwise
 # the paginated REST read in _staged_support_comments_for_guard. Prints `[]`
@@ -26217,6 +26348,7 @@ run_standalone_stall_recovery() {
   local _standalone_staged_support_latch_rc
   local _standalone_staged_support_cache_available
   local _standalone_staged_support_comments_unavailable
+  local _std_clarify_no_output_rerun="false"
   local _security_dependency_issue_file="${RUNTIME_DIR}/standalone_security_dependency_issue.json"
   local _security_dependency_verdict
   local _security_dependency_status
@@ -26316,6 +26448,9 @@ run_standalone_stall_recovery() {
         fi
       fi
       echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held detail=${_security_dependency_status} action=none"
+      # Issue #9486 (AD-2): the hold stays, but make it visible once.
+      _post_security_dependency_held_advisory "${issue_num}" "${_security_dependency_verdict}" \
+        "${_security_dependency_status}" "${comments_json}" "${_standalone_staged_support_cache_available}" || true
       continue
     fi
     if [ "${_security_dependency_status}" = "ready" ]; then
@@ -26682,6 +26817,56 @@ PY
       action="run_stall_judge"
     else
       action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+    fi
+
+    # Issue #9486: an ai:clarification issue with no clarification output
+    # gets one marked /reclarify (retrigger_pipeline arm below) instead of an
+    # answer to questions that were never asked; a second miss, at least one
+    # stall threshold after the trusted marker, escalates to a human directly
+    # (D2: even with ENABLE_STALL_HUMAN_TERMINALIZATION=false). The override
+    # sits before the active-workflow, merged-PR, fresh-push and phase-cap
+    # guards so they still gate the overridden action, and never replaces
+    # `skip`, so the recovery caps still apply. Absence of output is only
+    # inferred from a complete comment history.
+    _std_clarify_no_output_rerun="false"
+    if [ "${phase}" = "ai:clarification" ] && [ "${action}" != "skip" ]; then
+      local _std_clarify_comments=""
+      local _std_clarify_comments_ok="false"
+      local _std_clarify_state=""
+      local _std_clarify_marker_epoch=""
+      if [ "${_standalone_staged_support_cache_available}" = "complete" ]; then
+        _std_clarify_comments="${comments_json}"
+        _std_clarify_comments_ok="true"
+      elif [ "${_standalone_staged_support_cache_available}" = "true" ] \
+        && _std_clarify_comments="$(_staged_support_comments_for_guard "${issue_num}" "${comments_json}" "true")"; then
+        _std_clarify_comments_ok="true"
+      fi
+      if [ "${_std_clarify_comments_ok}" != "true" ]; then
+        echo "::warning::[standalone-stall] clarify-output check skipped for issue #${issue_num}: comment history incomplete" >&2
+      else
+        _std_clarify_state="$(_standalone_clarify_no_output_state "${issue_num}" "${_std_clarify_comments}")"
+        case "${_std_clarify_state}" in
+          no_output_unmarked)
+            echo "STALL_RECOVERY issue=${issue_num} reason=clarify_no_output phase=${phase} action=retrigger_pipeline override_from=${action}"
+            action="retrigger_pipeline"
+            _std_clarify_no_output_rerun="true"
+            ;;
+          no_output_marked\ *)
+            _std_clarify_marker_epoch="${_std_clarify_state#no_output_marked }"
+            [[ "${_std_clarify_marker_epoch}" =~ ^[0-9]+$ ]] || _std_clarify_marker_epoch=0
+            if [ "$(( $(date +%s) - _std_clarify_marker_epoch ))" -lt "$(( threshold_minutes * 60 ))" ]; then
+              echo "STALL_SKIP issue=${issue_num} reason=clarify_no_output_rerun_pending phase=${phase} action=none"
+              if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+                write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+              fi
+              continue
+            fi
+            echo "STALL_RECOVERY issue=${issue_num} reason=clarify_no_output_second_miss phase=${phase} action=escalate_human override_from=${action}"
+            action="escalate_human"
+            ;;
+          *) ;;
+        esac
+      fi
     fi
     echo "  [standalone-stall] Issue #${issue_num} stuck in '${phase}' for ${elapsed_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
 
@@ -27064,6 +27249,14 @@ PY
         ;;
       retrigger_pipeline)
         local _std_retrigger_pipeline_rc=0
+        if [ "${_std_clarify_no_output_rerun}" = "true" ]; then
+          # Issue #9486: the marker must stay on the second line exactly so
+          # _standalone_clarify_no_output_state's startswith check matches.
+          gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="/reclarify
+<!-- ai:clarify-no-output-rerun:${issue_num} -->
+
+_Standalone stall recovery: this issue has been in \`ai:clarification\` for ${elapsed_minutes}m with no clarification output. Re-running clarification once; if it still produces nothing, the issue is escalated to a human._" >/dev/null 2>&1 || _std_retrigger_pipeline_rc=$?
+        else
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /reclarify
 
@@ -27071,6 +27264,7 @@ _Standalone stall recovery: this issue did not enter the AI pipeline.
 Re-triggering clarification._
 STALL_EOF
 )" >/dev/null 2>&1 || _std_retrigger_pipeline_rc=$?
+        fi
         if [ "${_std_retrigger_pipeline_rc}" -eq 0 ]; then
           phase_cap_note_dispatch "ai:clarification"
         fi

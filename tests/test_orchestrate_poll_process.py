@@ -6315,6 +6315,7 @@ def test_standalone_security_followup_releases_only_after_prerequisite_merges() 
 		assert f"STALL_SKIP issue=700 reason={expected}" in result["stdout"] + result["stderr"]
 		if closed and not labels and resume == "false":
 			assert "detail=closed_without_ai_merged" in result["stdout"] + result["stderr"]
+			_strip_security_hold_advisories(result)
 			assert result["issues"]["700"]["comments"] == []
 		releases = [c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]
 		assert len(releases) == release_count
@@ -6415,6 +6416,16 @@ def _security_hold_state_comments(result: dict) -> list[dict]:
 	return [c for c in result["issues"]["700"]["comments"] if c["body"].startswith("<!-- AI_STANDALONE_STALL_STATE_V1\n")]
 
 
+_SECURITY_HOLD_ADVISORY_MARKER = "<!-- ai:security-dependency-held:700:701 -->"
+
+
+def _strip_security_hold_advisories(result: dict) -> None:
+	"""Drop the #9486 held advisory so P8c assertions count only their own writes."""
+	result["issues"]["700"]["comments"] = [
+		c for c in result["issues"]["700"]["comments"] if _SECURITY_HOLD_ADVISORY_MARKER not in c["body"]
+	]
+
+
 def test_security_hold_records_held_since_once_per_episode() -> None:
 	import time
 
@@ -6423,6 +6434,7 @@ def test_security_hold_records_held_since_once_per_episode() -> None:
 	log = _security_hold_log(first)
 	assert "STALL_SKIP issue=700 reason=security_dependency_hold_recorded action=none" in log
 	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=open action=none" in log
+	_strip_security_hold_advisories(first)
 	assert len(first["issues"]["700"]["comments"]) == 1
 	recorded = _extract_latest_standalone_state(first["issues"]["700"]["comments"])
 	assert recorded["security_dependency_depends_on"] == 701
@@ -6434,6 +6446,7 @@ def test_security_hold_records_held_since_once_per_episode() -> None:
 	log = _security_hold_log(recent)
 	assert "security_dependency_hold_recorded" not in log
 	assert "security_dependency_escalated" not in log
+	_strip_security_hold_advisories(recent)
 	assert len(recent["issues"]["700"]["comments"]) == 1
 	assert "ai:needs-human" not in recent["issues"]["700"]["labels"]
 
@@ -6559,11 +6572,13 @@ def test_security_hold_escalate_days_config_and_unverified_reads() -> None:
 	unverified = _run_security_hold_tick(fail_get=[701])
 	log = _security_hold_log(unverified)
 	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=unverified action=none" in log
+	_strip_security_hold_advisories(unverified)
 	assert unverified["issues"]["700"]["comments"] == []
 
 	# Switch off: the open hold writes nothing.
 	off = _run_security_hold_tick(comments=[_security_hold_state_comment(now - 8 * 86400)], env={"DEPENDENCY_WAIT_RESUME_ENABLED": "false"})
 	assert "security_dependency_escalated" not in _security_hold_log(off)
+	_strip_security_hold_advisories(off)
 	assert len(off["issues"]["700"]["comments"]) == 1
 
 
@@ -6649,6 +6664,190 @@ def test_security_hold_merged_release_waits_for_the_pipeline_login() -> None:
 	# Without the latch label the merged release does not need the login.
 	unlabelled = _run_security_hold_tick(closed=True, predecessor_labels=["ai:merged"], store_extra={"fail_user_lookup": True}, tracking_issues_override=[])
 	assert "STALL_SKIP issue=700 reason=security_dependency_released action=reclarify" in _security_hold_log(unlabelled)
+
+
+_CLARIFY_NO_OUTPUT_RERUN_PREFIX = "/reclarify\n<!-- ai:clarify-no-output-rerun:700 -->"
+
+
+def _standalone_clarification_state_comment(recovery_count: int = 0) -> str:
+	return (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:clarification",
+			"status_since_ts": 1,
+			"stall_recovery_count": recovery_count,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+
+
+def _run_standalone_clarification_tick(comments: list[str | dict], **extra) -> dict:
+	"""One standalone poller tick for issue #700 sitting in ai:clarification (issue #9486)."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	return _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:clarification"]},
+		issue_comments={700: list(comments)}, mock_gh_issue_list_label_filter=True,
+		**extra,
+	)
+
+
+def test_standalone_clarification_without_output_reruns_clarify_once() -> None:
+	"""shubhodeep1/digital_pa#146: labelled ai:clarification with no clarify output.
+
+	The first miss posts one marked /reclarify instead of answering questions
+	that were never asked.
+	"""
+	result = _run_standalone_clarification_tick([_standalone_clarification_state_comment()])
+	log = result["stdout"] + result["stderr"]
+	comments = result["issues"]["700"]["comments"]
+	reruns = [c for c in comments if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)]
+	assert len(reruns) == 1
+	assert "no clarification output" in reruns[0]["body"]
+	assert not any(c["body"].startswith("/answer [auto-answered-by-poller]") for c in comments)
+	assert "STALL_RECOVERY issue=700 reason=clarify_no_output phase=ai:clarification action=retrigger_pipeline" in log
+	assert "ai:needs-human" not in result["issues"]["700"]["labels"]
+
+	# A forged marker from an untrusted commenter does not count as the first
+	# miss: the real rerun is still posted, and no escalation happens.
+	forged = {
+		"body": _CLARIFY_NO_OUTPUT_RERUN_PREFIX + "\n",
+		"author_association": "NONE", "user": {"login": "stranger"},
+		"created_at": "2026-01-01T00:00:01Z",
+	}
+	forged_result = _run_standalone_clarification_tick([_standalone_clarification_state_comment(), forged])
+	forged_reruns = [
+		c for c in forged_result["issues"]["700"]["comments"]
+		if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)
+	]
+	assert len(forged_reruns) == 2
+	assert "reason=clarify_no_output phase=" in forged_result["stdout"] + forged_result["stderr"]
+	assert "ai:needs-human" not in forged_result["issues"]["700"]["labels"]
+
+	# An untrusted /answer is not clarify output either.
+	spam = {"body": "/answer whatever", "author_association": "NONE", "user": {"login": "stranger"}}
+	spam_result = _run_standalone_clarification_tick([_standalone_clarification_state_comment(), spam])
+	assert len([
+		c for c in spam_result["issues"]["700"]["comments"]
+		if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)
+	]) == 1
+
+
+def test_standalone_clarification_without_output_escalates_on_second_miss() -> None:
+	old_marker = {
+		"body": _CLARIFY_NO_OUTPUT_RERUN_PREFIX + "\n\n_rerun_",
+		"author_association": "NONE", "user": {"login": "github-actions[bot]"},
+		"created_at": "2026-01-01T00:00:01Z",
+	}
+	result = _run_standalone_clarification_tick([_standalone_clarification_state_comment(1), old_marker])
+	log = result["stdout"] + result["stderr"]
+	assert "STALL_RECOVERY issue=700 reason=clarify_no_output_second_miss phase=ai:clarification action=escalate_human" in log
+	assert "ai:needs-human" in result["issues"]["700"]["labels"]
+	assert "Action: escalate_human" in log
+	comments = result["issues"]["700"]["comments"]
+	assert len([c for c in comments if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)]) == 1
+	assert not any(c["body"].startswith("/answer [auto-answered-by-poller]") for c in comments)
+
+	# A marker younger than the stall threshold holds escalation: the rerun
+	# clarify gets one full threshold to produce output.
+	fresh_marker = {
+		**old_marker,
+		"author_association": "OWNER", "user": {"login": "workflow-owner"},
+		"created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+	}
+	pending = _run_standalone_clarification_tick([_standalone_clarification_state_comment(1), fresh_marker])
+	pending_log = pending["stdout"] + pending["stderr"]
+	assert "STALL_SKIP issue=700 reason=clarify_no_output_rerun_pending phase=ai:clarification action=none" in pending_log
+	assert "reason=clarify_no_output_second_miss" not in pending_log
+	assert "ai:needs-human" not in pending["issues"]["700"]["labels"]
+	pending_comments = pending["issues"]["700"]["comments"]
+	assert len([c for c in pending_comments if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)]) == 1
+	assert not any(c["body"].startswith("/answer [auto-answered-by-poller]") for c in pending_comments)
+
+
+def test_standalone_clarification_with_questions_keeps_auto_respond() -> None:
+	questions = {
+		"body": "<!-- ai:clarification-questions -->\nClarification required\n\nQ1: Pick one?\nA) yes (RECOMMENDED)\nB) no",
+		"author_association": "NONE", "user": {"login": "github-actions[bot]"},
+	}
+	result = _run_standalone_clarification_tick([_standalone_clarification_state_comment(), questions])
+	log = result["stdout"] + result["stderr"]
+	comments = result["issues"]["700"]["comments"]
+	assert any(c["body"].startswith("/answer [auto-answered-by-poller]") for c in comments)
+	assert not any(c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX) for c in comments)
+	assert "reason=clarify_no_output" not in log
+
+	# Without the complete comment history, absence is never inferred: the
+	# legacy action runs and a warning is logged.
+	unavailable = _run_standalone_clarification_tick(
+		[_standalone_clarification_state_comment()], gql_comments_unavailable_for=[700],
+	)
+	unavailable_log = unavailable["stdout"] + unavailable["stderr"]
+	assert "reason=clarify_no_output phase=" not in unavailable_log
+	assert not any(
+		c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)
+		for c in unavailable["issues"]["700"]["comments"]
+	)
+
+
+def test_standalone_security_dependency_hold_posts_one_advisory() -> None:
+	dependent_body = "<!-- ai:security-finding:SEC-TEST -->\n- Depends on: #701\n"
+	marker = "<!-- ai:security-dependency-held:700:701 -->"
+
+	def _tick(*, closed: bool, comments: list, **extra) -> dict:
+		state = _base_state(status="in_progress")
+		state["waves"][0]["issues"][0]["status"] = "merged"
+		return _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security"], 701: []},
+			issue_bodies={700: dependent_body}, issue_closed={701: closed},
+			issue_comments={700: list(comments)}, mock_gh_issue_list_label_filter=True,
+			**extra,
+		)
+
+	def _advisories(result: dict) -> list[str]:
+		return [c["body"] for c in result["issues"]["700"]["comments"] if marker in c["body"]]
+
+	def _assert_inert(result: dict) -> None:
+		for comment in result["issues"]["700"]["comments"]:
+			lines = comment["body"].split("\n")
+			assert not any(line.startswith(("/reclarify", "/answer")) for line in lines)
+			assert "<!-- ai:clarification-questions -->" not in comment["body"]
+
+	held_open = _tick(closed=False, comments=[])
+	log = held_open["stdout"] + held_open["stderr"]
+	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=open action=none" in log
+	assert "STALL_SKIP issue=700 reason=security_dependency_held_advisory depends_on=701 detail=open action=advisory_posted" in log
+	advisories = _advisories(held_open)
+	assert len(advisories) == 1
+	assert "#701" in advisories[0] and "No action is needed" in advisories[0]
+	assert advisories[0].rstrip().endswith(marker)
+	_assert_inert(held_open)
+
+	held_closed = _tick(closed=True, comments=[], env_overrides={"DEPENDENCY_WAIT_RESUME_ENABLED": "false"})
+	closed_advisories = _advisories(held_closed)
+	assert len(closed_advisories) == 1
+	assert "A maintainer must act" in closed_advisories[0]
+	assert "detail=closed_without_ai_merged action=advisory_posted" in held_closed["stdout"] + held_closed["stderr"]
+	_assert_inert(held_closed)
+
+	existing = {"body": "advisory\n\n" + marker, "author_association": "NONE", "user": {"login": "github-actions[bot]"}}
+	present = _tick(closed=False, comments=[existing])
+	assert len(_advisories(present)) == 1
+	assert "action=advisory_present" in present["stdout"] + present["stderr"]
+
+	# A forged marker from an untrusted commenter does not suppress the advisory.
+	forged = {"body": marker, "author_association": "NONE", "user": {"login": "stranger"}}
+	forged_result = _tick(closed=False, comments=[forged])
+	assert len(_advisories(forged_result)) == 2
+	assert "action=advisory_posted" in forged_result["stdout"] + forged_result["stderr"]
+
+	incomplete = _tick(closed=False, comments=[], gql_comments_unavailable_for=[700])
+	assert _advisories(incomplete) == []
+	assert "depends_on=701 detail=open action=advisory_comments_incomplete" in incomplete["stdout"] + incomplete["stderr"]
+	_assert_inert(incomplete)
 
 
 def _run_pr_dependency_tick(*, merged: bool, files: dict[str, str], comments: list[dict] | None = None, extra: dict | None = None) -> dict:
