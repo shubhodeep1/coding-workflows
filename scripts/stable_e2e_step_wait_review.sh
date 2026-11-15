@@ -350,10 +350,18 @@ while true; do
         REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=1
       fi
     else
-      if [ -n "$REVIEW_RUNNER_WAIT_SINCE" ] && review_waiting_for_runner; then
+      # Keyed on the open stretch, not on re-reading the last poll: a
+      # stretch stays open across a poll that did not answer (empty runs
+      # lookup, failed or unreadable jobs read), and the queue diagnosis
+      # must survive that poll (#9480).
+      if [ -n "$REVIEW_RUNNER_WAIT_SINCE" ] && [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ]; then
         rw_waited=$((NOW - REVIEW_RUNNER_WAIT_SINCE))
-        echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=ceiling waited_seconds=${rw_waited}"
-        echo "::error::Review run ${RUN_ID} was still waiting for a runner after $((rw_waited / 60)) minutes (ceiling reached); the hosted-runner queue, not the review, blocked the release"
+        echo "E2E_REVIEW_RUNNER_WAIT run=${REVIEW_RUNNER_WAIT_RUN_ID} outcome=ceiling waited_seconds=${rw_waited}"
+        if review_waiting_for_runner; then
+          echo "::error::Review run ${REVIEW_RUNNER_WAIT_RUN_ID} was still waiting for a runner after $((rw_waited / 60)) minutes (ceiling reached); the hosted-runner queue, not the review, blocked the release"
+        else
+          echo "::error::Review run ${REVIEW_RUNNER_WAIT_RUN_ID} had been waiting for a runner for $((rw_waited / 60)) minutes when the ceiling was reached (the last poll did not answer, so the wait is unconfirmed); the hosted-runner queue, not the review, most likely blocked the release"
+        fi
       fi
       echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget$(e2e_watched_run_urls)"
       echo "status=timeout" >> "$GITHUB_OUTPUT"

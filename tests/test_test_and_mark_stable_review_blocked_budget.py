@@ -1030,6 +1030,24 @@ def test_phase4_runner_wait_past_ceiling_names_the_queue() -> None:
 	assert "E2E_REVIEW_DEADLINE_EXTENDED run=30 status=pending" in result.stdout
 
 
+def test_phase4_runner_wait_ceiling_after_unanswered_poll_still_names_the_queue() -> None:
+	# Polls land at start+5+60k; the one at start+1685 is the last before the
+	# ceiling (start+1800) and its jobs read fails, so the stretch stays open
+	# but review_waiting_for_runner returns 1 at the ceiling check.
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 1680, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": None},
+	])
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert output.splitlines() == ["status=timeout"]
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=ceiling waited_seconds=\d+", result.stdout)
+	assert re.search(r"::error::Review run 30 had been waiting for a runner for 2\d minutes when the ceiling was reached "
+		r"\(the last poll did not answer, so the wait is unconfirmed\); the hosted-runner queue", result.stdout)
+	assert "was still waiting for a runner" not in result.stdout
+	assert "Review phase exceeded its 10-minute total wall-clock budget" in result.stdout
+	assert "Review phase stalled" not in result.stdout
+
+
 def test_phase4_active_step_without_state_change_still_stalls() -> None:
 	result, output = _run_phase4_runner_wait([
 		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_active_job(_RW_START))},
