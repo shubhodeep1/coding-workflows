@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9487,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9487\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9513\",\"pr_number\":9513,\"branch\":\"ai/issue-9487\",\"run_id\":\"43634790395\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43634790395\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"README.md\",\"agents.d/9487-issueless-review-retry.md\",\"changelog.d/9487-issueless-review-retry.md\",\"scripts/orchestrate_poll_process.sh\",\"scripts/review_autofix_step_post_editor_summary.sh\",\"tests/test_alert_levels_human_only.py\",\"tests/test_ci_wires_every_test_file.py\",\"tests/test_orchestrate_issueless_review_retry.py\"]}",
+  "fingerprint": "34edd34ca0f0199924856122aa46e41a45a407e0be1dab9615f70f4348ac9eca",
+  "lineage": {
+    "issue_number": 9487,
+    "parent_ids": [],
+    "pr_number": 9513,
+    "run_id": "43634790395",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43634790395",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9513"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261115031615_45567199de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9487,
+    "level": "run",
+    "pr_number": 9513,
+    "run_id": "43634790395"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9487: https://github.com/shubhodeep1/coding-workflows/pull/9513",
+  "timestamps": {
+    "created_at": "2026-11-15T03:16:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
