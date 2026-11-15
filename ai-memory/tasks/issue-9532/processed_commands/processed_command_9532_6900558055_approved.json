@@ -5,13 +5,26 @@
   "entry_id": "processed_command_9532_6900558055_approved",
   "issue_number": 9532,
   "metadata": {
+    "branch": "ai/issue-9532",
+    "changed_files": [
+      ".github/workflows/test-and-mark-stable.yml",
+      "changelog.d/9532-release-gate-cancel-timed-out-dispatch.md",
+      "tests/test_ci_wires_every_test_file.py",
+      "tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py",
+      "tests/test_test_and_mark_stable_dispatch_watch_timeout_cancel.py"
+    ],
+    "issue_number": 9532,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9532",
+    "pr_number": 9547,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9547",
+    "run_attempt": "1",
+    "run_id": "43756469423",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43756469423"
   },
   "run_attempt": 1,
   "run_id": "43756469423",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-15T22:55:39Z",
+  "status": "completed",
+  "timestamp": "2026-11-15T23:08:11Z",
   "workflow": "implement"
 }
