@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: For the base-sync carry in `single_pass_gate`, which existing marker logic should be reused, given that the full parse-and-verify lives in `scripts/review_head_gate.sh`, not `pr_checks_lib.sh`?\nChoices:\nA. Reuse `review_head_gate_freshness_sync`'s checks. These are: the newest trusted marker whose `merge=` equals the head; parents [`from`, `base`]; a GitHub `web-flow` commit with a verified signature; and the base parent already contained in the base. Then add the issue's other conditions: `from=` has a `status=clean` security-pass marker (through `single_pass_markers`), plus the diff of the PR's changed files. Anything unverifiable audits the head as today. (RECOMMENDED)\nB. Take the marker regex from `pr_checks_lib.sh` `_pr_base_sync_count` and do only the four checks in the issue (first parent equals `from=`, plus the diff of the PR's changed files). Skip the signature and base-containment checks that `review_head_gate.sh` does.\nC. Same as A, but drop the separate diff of the PR's changed files. The base-parent containment check is treated as the \"pure merge of `main`\" proof.\nQ2: How should the \"two same-head, same-fp `reviewers_failed` failures block\" rule fit with the existing fingerprint cap, which needs 3 identical markers by default?\nChoices:\nA. Extend the existing cap. Use a threshold of 2 for `reason=reviewers_failed` only; every other reason keeps `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` (default 3). Block through the existing fingerprint-cap-block path (`ai:review-blocked`, one cap comment, then the rb-judge). Also have the second failure's own comment report the block instead of \"will retry\", and stop the poller from queueing a review for that head. (RECOMMENDED)\nB. Extend the existing cap with a threshold of 2 for `reviewers_failed`, but enforce it only at the next run's gate. The second failure comment still says \"will retry\", but the third run stops before any reviewer model runs. The poller is unchanged.\nC. Lower the global default of `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` from 3 to 2, so every failure reason blocks after two identical same-head failures.\n   **Note:** C widens the change beyond `reviewers_failed` and changes behaviour for every other failure reason.",
+  "fingerprint": "4d41e48b3d1f92f8938db336677ba92c2c18ab8033293f4111d7cf7658a9ddfc",
+  "lineage": {
+    "issue_number": 9533,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43720121676",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43720121676",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261115160640_6678d3076f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9533,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43720121676"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #9533 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-15T16:06:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
