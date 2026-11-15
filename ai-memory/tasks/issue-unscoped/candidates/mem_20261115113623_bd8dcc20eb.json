@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:2909-2936 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: In `_embed_input_file`, `cat \"${_path}\"` (around line 2909) and `head -c \"${_head_bytes}\" \"${_path}\"` (around line 2932/2936) pass the path without `--`, so a path starting with `-` is parsed as an option, unlike the `od` call hardened in `_embed_utf8_safe_cut`.\n  WHY: A dash-leading path yields an empty embed or an empty body followed by a truncation marker. Severity disagreement: gemini rated MAJOR, while sonnet, minimax and glm rated it NIT, hardening only or risk 1. Current callers pass workflow-internal absolute paths, so it is not triggered today.\n- scripts/gh_helpers.sh:2799 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `_cut_seq_len` logic in `_embed_utf8_safe_cut` for multi-byte UTF-8 sequence length is potentially brittle or off-by-one, especially for 4-byte sequences.\n  WHY: A wrong step-back could leave invalid UTF-8 in the prompt. Anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash traced the logic and found it correct, so they contradict this claim.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/gh_helpers.sh:~2909,~2936 (`_embed_input_file`, `cat \"${_path}\"` and `head -c \"${_head_bytes}\" \"${_path}\"`) | severity=NIT | confidence=1\n  PROBLEM: `cat` and `head` take `${_path}` without `--`, unlike the `od` call in `_embed_utf8_safe_cut`.\n  WHY: Callers pass absolute workflow-generated paths, so this is a pre-existing hardening nit only. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:2932 | severity=MAJOR | confidence=4\n  PROBLEM: `head -c \"${_head_bytes}\" \"${_path}\"` does not use the `--` separator for the file path.\n  WHY: A path starting with a dash is read as an option, so the command fails or gives unexpected results.\n- scripts/gh_helpers.sh:2799 | severity=MAJOR | confidence=3\n  PROBLEM: The `_cut_seq_len` logic in `_embed_utf8_safe_cut` is potentially brittle or off-by-one, especially for 4-byte sequences.\n  WHY: Incorrect step-back could leave invalid UTF-8 in the prompt, which the strict downstream parser would reject.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/gh_helpers.sh:2909,2936 (HARDENING_SUGGESTIONS) | HARDENING_RISK_SCORE=1\n  PROBLEM: The sibling `cat` (line 2909) and `head -c` (line 2936) calls lack the `--` separator that the autofix added to the `od` call.\n  WHY: Current callers pass workflow-internal paths, so this is defense-in-depth only.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/gh_helpers.sh:2909,2936 | severity=NIT | confidence=4\n  PROBLEM: `cat` and `head` in `_embed_input_file` receive the path without `--`, unlike the `od` call hardened in the last run.\n  WHY: A dash-leading path gives an empty embed, or an empty body followed by the truncation marker, which misrepresents the file content.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5bbb34e492263f33366cc8672e413681164eb1c276936a1c5f0788a6d7631b5d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9402,
+    "run_id": "43663867398",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43663867398",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261115113623_bd8dcc20eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9402,
+    "run_id": "43663867398"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-15T11:36:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
