@@ -403,3 +403,14 @@ Copy this block when adding a new entry:
   - The `runner-image-canary` job, the `workflow_call` trigger and `runner_image` input of `.github/workflows/ci.yml`, and its "Runner-image canary system python smoke" step are removed in the same PR.
   - `tests/test_runner_image_pin_contract.py` (and its `ci.yml` entry) and `.github/actionlint.yaml` are removed or updated in the same PR.
 - **Owner:** @shubhodeep1
+
+### `scripts/cs_bridge_query.sh`
+
+- **Introduced in:** PR for #9440 (2026-11-13), Refs shubhodeep1/tele-funtoken-msg-scoring#5238
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the only path from the CS ticket investigation (`.github/workflows/cs_investigate.yml`, run by `scripts/cs_investigate.sh`) to the agent DB bridge: it fetches the `agent-db-bridge` OIDC token on the runner and sends one request to the fixed bridge host.
+- **Removal preflight checks:**
+  - `rg -n "cs_bridge_query" .github scripts` returns only the lines being removed in the same PR (the `cs_investigate.sh` caller and its `source` line).
+  - `gh run list -R shubhodeep1/tele-funtoken-msg-scoring --workflow ai-cs-investigate.yml --created ">=$(date -u -d '30 days ago' +%F)" --json databaseId --jq length` prints `0` (no `cs_investigate.yml` run in the last 30 days), for every caller repo.
+  - `tests/test_cs_bridge_query.py` (and its `ci.yml` entry) is removed in the same PR.
+- **Owner:** @shubhodeep1
