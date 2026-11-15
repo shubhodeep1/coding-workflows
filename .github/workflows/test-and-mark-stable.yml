@@ -4511,6 +4511,8 @@ jobs:
           # + 1800s queue allowance = 5520s. Run 39694107256 gave up after
           # 2400s on a run that was still in_progress; run 40831286935 gave
           # up 5s before a run that had queued 20m22s finished success.
+          DW_TIMEOUT_LOG="$(mktemp)"
+          DW_TIMEOUT_RC=0
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -4523,7 +4525,35 @@ jobs:
             --dispatch-backoff-base-secs 2 \
             --field "branch_name=${BRANCH_NAME}" \
             --field alert_msg_level=SILENT \
-            --field discovery_dry_run=true
+            --field discovery_dry_run=true \
+            | tee "${DW_TIMEOUT_LOG}" || DW_TIMEOUT_RC=$?
+          # Dispatch-watch timeout: cancel the timed-out child run (#9532).
+          # Run 43590943288: three children stayed queued for hours with no runner,
+          # and the orphaned orchestrate child later created a tracking issue the
+          # cleanup could not see. Do not lengthen the watch timeouts as a fix.
+          # The step still fails with the watcher's exit code.
+          if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
+            DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
+            if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs // []) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+                DW_TIMEOUT_JOBS="unknown unknown"
+              fi
+              echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
+              DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
+              if [ "${DW_TIMEOUT_CANCEL}" = "false" ]; then
+                echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
+              elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
+                echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              else
+                echo "::warning::Could not cancel timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              fi
+            fi
+            rm -f "${DW_TIMEOUT_LOG}"
+            exit "${DW_TIMEOUT_RC}"
+          fi
+          rm -f "${DW_TIMEOUT_LOG}"
+          # End dispatch-watch timeout handling.
 
       - name: "Soft-error analyser (validation-refresh)"
         if: always() && steps.dispatch_validation_refresh.outputs.run_id != ''
@@ -4694,6 +4724,8 @@ jobs:
           # and may drop the smoke marker, so the label is what lets the
           # scheduled poller (tracking_issue_is_smoke_fixture) keep this
           # fixture project's Telegram alerts silent.
+          DW_TIMEOUT_LOG="$(mktemp)"
+          DW_TIMEOUT_RC=0
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -4704,7 +4736,35 @@ jobs:
             --completion-poll-interval-secs 20 \
             --status-log-prefix "orchestrate-bootstrap" \
             --field "project_description=${PROJECT_DESC}" \
-            --field "tracking_labels=e2e-smoke-test"
+            --field "tracking_labels=e2e-smoke-test" \
+            | tee "${DW_TIMEOUT_LOG}" || DW_TIMEOUT_RC=$?
+          # Dispatch-watch timeout: cancel the timed-out child run (#9532).
+          # Run 43590943288: three children stayed queued for hours with no runner,
+          # and the orphaned orchestrate child later created a tracking issue the
+          # cleanup could not see. Do not lengthen the watch timeouts as a fix.
+          # The step still fails with the watcher's exit code.
+          if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
+            DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
+            if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs // []) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+                DW_TIMEOUT_JOBS="unknown unknown"
+              fi
+              echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
+              DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
+              if [ "${DW_TIMEOUT_CANCEL}" = "false" ]; then
+                echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
+              elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
+                echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              else
+                echo "::warning::Could not cancel timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              fi
+            fi
+            rm -f "${DW_TIMEOUT_LOG}"
+            exit "${DW_TIMEOUT_RC}"
+          fi
+          rm -f "${DW_TIMEOUT_LOG}"
+          # End dispatch-watch timeout handling.
 
           # Locate the tracking issue (created by the orchestrator).
           # The orchestrator titles it `[Orchestrator] <project_title>`
@@ -4969,6 +5029,8 @@ jobs:
           # single pass/fail Telegram message, so the dispatched validate
           # run must not send its own per-phase alerts (same contract as
           # the workflow-log-analysis and orphan-workflows dispatches).
+          DW_TIMEOUT_LOG="$(mktemp)"
+          DW_TIMEOUT_RC=0
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -4981,7 +5043,35 @@ jobs:
             --field tracking_issue=0 \
             --field compose_file=docker-compose.yml \
             --field validation_timeout=10 \
-            --field alert_msg_level=SILENT
+            --field alert_msg_level=SILENT \
+            | tee "${DW_TIMEOUT_LOG}" || DW_TIMEOUT_RC=$?
+          # Dispatch-watch timeout: cancel the timed-out child run (#9532).
+          # Run 43590943288: three children stayed queued for hours with no runner,
+          # and the orphaned orchestrate child later created a tracking issue the
+          # cleanup could not see. Do not lengthen the watch timeouts as a fix.
+          # The step still fails with the watcher's exit code.
+          if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
+            DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
+            if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs // []) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+                DW_TIMEOUT_JOBS="unknown unknown"
+              fi
+              echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
+              DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
+              if [ "${DW_TIMEOUT_CANCEL}" = "false" ]; then
+                echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
+              elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
+                echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              else
+                echo "::warning::Could not cancel timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              fi
+            fi
+            rm -f "${DW_TIMEOUT_LOG}"
+            exit "${DW_TIMEOUT_RC}"
+          fi
+          rm -f "${DW_TIMEOUT_LOG}"
+          # End dispatch-watch timeout handling.
 
       - name: "Soft-error analyser (validate-standalone)"
         if: always() && steps.dispatch.outputs.run_id != ''

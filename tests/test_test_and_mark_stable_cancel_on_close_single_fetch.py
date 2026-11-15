@@ -335,6 +335,31 @@ def _collect_cleanup_dispatch_review_cancel_cases() -> None:
 _collect_cleanup_dispatch_review_cancel_cases()
 
 
+# The dispatch-watch timeout cancel cases (#9532) live in
+# tests/test_test_and_mark_stable_dispatch_watch_timeout_cancel.py and are
+# collected here for the same reason as the #9418 cases above.
+def _collect_dispatch_watch_timeout_cancel_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"dispatch_watch_timeout_cancel_cases",
+		Path(__file__).resolve().parent / "test_test_and_mark_stable_dispatch_watch_timeout_cancel.py",
+	)
+	assert spec is not None and spec.loader is not None
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	assert collected, "no dispatch-watch timeout cancel cases collected"
+
+
+_collect_dispatch_watch_timeout_cancel_cases()
+
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	for test in tests:

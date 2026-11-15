@@ -63,6 +63,10 @@ UNWIRED_ALLOWLIST: dict[str, str] = {
 		"ci.yml is outside the file grant of the issue that added it (#9418); its cases run in CI "
 		"through tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py, which collects them"
 	),
+	"tests/test_test_and_mark_stable_dispatch_watch_timeout_cancel.py": (
+		"ci.yml is outside the file grant of the issue that added it (#9532); its cases run in CI "
+		"through tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py, which collects them"
+	),
 }
 
 
