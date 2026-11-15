@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: Both stall paths escalate from the same per-tick blob. The tracking block reads it at `scripts/orchestrate_poll_process.sh` L33610\u2013L33614, and `run_standalone_stall_recovery` rebuilds `ACTIVE_WORKFLOW_ISSUES=\"$(build_active_issue_set)\"` from it at L25195. On idle ticks (`STANDALONE_RECOVERY_SWEEP_ONLY`, L27933\u2013L27936) the standalone path is the only stall consumer, so option B would leave a known escalation route on the same stale blob. #557 and #559 may well have been escalated through that route, so B would not reliably fix the reported incident. Option C would miss the tracking block, which is where the incident's `Active issue set is empty (cache: total=0\u2026)` line was printed. Option A keeps the \u00a715 budget of one extra conditional live fetch per tick: `_load_actions_runs_cached` (L17984\u2013L17989) returns the memoised `_ACTIONS_RUNS_BLOB_CACHE` once `_ACTIONS_RUNS_BLOB_READY=true`, so whichever path refreshes the blob first shares it with the other.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/orchestrate_poll_process.sh: `_load_actions_runs_cached` (L17984), `build_active_issue_set` (L18602), the tracking stall block (L33610\u2013L33647), `run_standalone_stall_recovery` (L25105, active-set build at L25195), `recover_stalled_issue` (L26805), and both standalone call sites (L27935 idle-tick sweep and L34976 after the project loop)\n    - tests/test_orchestrate_stall_active_runs_cache.py (new, or extend the existing test file for `_load_actions_runs_cached` / `build_active_issue_set` if one exists)\n  steps:\n    - Add one helper for the self-run check and single refetch, with a new name checked for uniqueness. It must run in the parent shell, not inside `$(...)`, so the memo globals and the new source global survive. This matches the existing pattern at L33610, which calls `_load_actions_runs_cached >/dev/null` outside a subshell to prime the memo.\n    - Guard the helper with a new per-tick \"self-check done\" global. It runs at most one live refetch per tick: no `If-None-Match`, TTL cache bypassed, only when `GITHUB_RUN_ID` is missing from the blob and the blob source is not `live`.\n    - Call the helper before `build_active_issue_set` in both the tracking stall block and `run_standalone_stall_recovery`. Whichever runs first in a tick does the refetch, and the second reuses the memoised result. This covers full-poller ticks (tracking block, then standalone at L34976) and idle ticks (standalone only at L27935).\n    - If the refetch fails, set a per-tick \"active set unverifiable\" flag. The escalate-to-human branch must check this flag in both `recover_stalled_issue` and the standalone escalation branch of `run_standalone_stall_recovery`, and each hold logs its own skip reason. All other stall actions run unchanged.\n    - Tests: TTL-hit blob without the self run, and 304 blob without the self run, each refetch exactly once per tick even when both paths run; a live blob with the self run does no refetch; a failed refetch holds escalation in both the tracking and standalone paths; the diagnostic line shows the right source in each case.\n  replaces_acceptance_criterion: n/a (the Approach's \"in the stall block\" placement is widened to every stall consumer of the blob)\n  equivalence_argument: The issue's goal is that no escalation runs on an unverified empty active set. Both paths escalate from the same blob, and the shared memo keeps the call budget at one extra fetch per tick, so applying the check to both meets the goal within the \u00a715 constraint.\n  reversibility: To return to option B, remove the helper call and the escalation-hold check from `run_standalone_stall_recovery`. The tracking-path behaviour and the diagnostic line are unaffected.",
+  "fingerprint": "05118625e97875893a9db2eb448c7116621ee6fa7f1db31be576584e0d75f683",
+  "lineage": {
+    "issue_number": 9520,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43704945203",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43704945203",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9520"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261115140648_6f892287f9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9520,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43704945203"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9520",
+  "timestamps": {
+    "created_at": "2026-11-15T14:06:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
