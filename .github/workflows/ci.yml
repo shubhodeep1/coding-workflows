@@ -1050,11 +1050,14 @@ jobs:
       # plus its inline stub checks. This job was picked because it is the
       # only 20-minute non-matrix test job whose last recorded total (15m33s,
       # run 42513195209, #9078) was followed only by steps moving out; nothing
-      # has moved in since. Two of these steps ran here before #7366. None of
-      # the four needs Node or the prepared .claude/ live copies; the
-      # leftover-branch test uses temp git repos, and this job's full-history
-      # checkout is a superset of the source job's depth-1 checkout. Names and
-      # bodies unchanged; each step runs once per CI run.
+      # has moved in since. Per CHANGELOG.md, the pr_checks_lib step reached
+      # the heal job from tests-promote-stall-and-review (#7677) and the two
+      # release steps from tests-release-and-log-analysis (#8208); it records
+      # none of the four in this job before. None of the four needs Node or
+      # the prepared .claude/ live copies; the leftover-branch test uses temp
+      # git repos, and this job's full-history checkout is a superset of the
+      # source job's depth-1 checkout. Names and bodies unchanged; each step
+      # runs once per CI run.
       - name: Implement leftover issue-branch replacement tests
         run: |
           set -euo pipefail
