@@ -1,0 +1,25 @@
+{
+  "discovered_at": "2026-11-15T23:06:36Z",
+  "issue_number": 9485,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 009 as out-of-scope; anchor=workflow-templates/ai-review.yml:89, 127, 167; cited_path=workflow-templates/ai-review.yml; files_touched=.github/dependabot.yml, .github/workflows/ci.yml, .github/workflows/update_workflows.yml, agents.d/9485-dependabot-managed-wrapper-exclusions.md, changelog.d/9485-dependabot-managed-wrapper-exclusions.md, scripts/build_sync_manifest.py, scripts/sync_dependabot_exclusions.py, tests/test_build_sync_manifest.py, tests/test_changelog_fragment_contract.py, tests/test_sync_dependabot_exclusions.py, tests/test_update_workflows_pr_delivery.py, tests/test_update_workflows_template_gate.py.",
+  "phase": "review_autofix",
+  "pr_number": 9510,
+  "record_id": "lesson_20261115230636_c69f8d7224",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "workflow-templates/ai-review.yml",
+    ".github/dependabot.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/update_workflows.yml",
+    "agents.d/9485-dependabot-managed-wrapper-exclusions.md",
+    "changelog.d/9485-dependabot-managed-wrapper-exclusions.md",
+    "scripts/build_sync_manifest.py",
+    "scripts/sync_dependabot_exclusions.py",
+    "tests/test_build_sync_manifest.py",
+    "tests/test_changelog_fragment_contract.py",
+    "tests/test_sync_dependabot_exclusions.py",
+    "tests/test_update_workflows_pr_delivery.py",
+    "tests/test_update_workflows_template_gate.py"
+  ]
+}
