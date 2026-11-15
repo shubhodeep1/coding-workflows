@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_checkout_integration_ref_audit.py:28-88 | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: test_checkout_workflows_are_all_classified (lines 82-88) fails because .github/workflows/internal-cancel-on-pr-close.yml (line 46, `uses: actions/checkout@v5`) is absent from ALLOWLIST_EXCEPTIONS (lines 28-67), which lists only cancel_on_pr_close.yml (line 30).\n  WHY: Every CI run on this head fails the `not missing` assertion at line 87 until an allowlist entry is added; the reviewer labelled this MAJOR, which is mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Linked issue #9362: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, relocating the \"Validation self-test unit tests\" step out of `static-checks` (step at .github/workflows/ci.yml:578-579)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: No hunk moves the step out of `static-checks`, and its sequential body is replaced by a four-lane concurrent runner (lines 583-607) inside `static-checks`. Severity disagreement: three reviewers rated it NIT (documented, approved-plan deviation, #8472, run 41097621008) and openai_gpt-6-luna rated it MAJOR; the highest is MAJOR. The issue's hard limits (job and step names, timeout-minutes, no new required jobs) are met.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: Linked issue #9362: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, relocating the \"Validation self-test unit tests\" step out of `static-checks`.\nEvidence of absence: No hunk moves a step out of `static-checks`. The step stays there and its sequential body is replaced by a four-lane concurrent runner. The approved plan chose this deliberately (#8472, run 41097621008). Job and step names are kept, `timeout-minutes` is not raised, no new required job is added. Documented deviation, not a defect.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" (Issue #9362)\nExpected change site: .github/workflows/ci.yml, \"Validation self-test unit tests\" step.\nEvidence of absence: The step was not moved to another job. The 23 module commands run concurrently in four background lanes within the `static-checks` job. Documented and approved deviation.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (issue #9362)\nExpected change site: `.github/workflows/ci.yml`, relocating the \"Validation self-test unit tests\" step (or another slow `static-checks` step) into a different job with more headroom.\nEvidence of absence: No diff hunk moves the step out of `static-checks`. The step stays at `.github/workflows/ci.yml:578\u2013579` and its sequential 23-line body was replaced with a four-lane concurrent runner. The ci.yml comment block (lines 552\u2013577) records this as the approved-plan deviation (#8472, run 41097621008). The hard limits are met, so it is a documented plan choice.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\u201d\nExpected change site: `.github/workflows/ci.yml`, relocating the slowest `static-checks` step to the CI job with the most headroom.\nEvidence of absence: The \u201cValidation self-test unit tests\u201d step remains in `static-checks` at `.github/workflows/ci.yml:578-579`. Its sequential commands were replaced with a four-lane runner at lines 583-607; no diff hunk relocates the step unchanged. The issue does not defer this requirement.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_workflow_checkout_integration_ref_audit.py:28-88 | severity=MAJOR | confidence=4\n  PROBLEM: test_checkout_workflows_are_all_classified (lines 82-88) fails because .github/workflows/internal-cancel-on-pr-close.yml (line 46, `uses: actions/checkout@v5`) is absent from ALLOWLIST_EXCEPTIONS (lines 28-67), which lists only cancel_on_pr_close.yml (line 30).\n  WHY: Every CI run on this head fails the `not missing` assertion at line 87 until an allowlist entry is added. The workflow file arrived via base syncs from main, but the fix is in-scope under `tests/**`. The other four gate-attributed failures reference files this PR does not touch.\n\nTASK COMPLETENESS / INTENT GAPS: NONE (the issue's move requirement was replaced by the approved plan; hard constraints hold; accepted won't-fix).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "dd6857c18ec56ebc68ab07ae653f04d2fbf5f49b76cc45932b07bbc0fe16626f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9368,
+    "run_id": "43633405608",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43633405608",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261115114058_fb61b296b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9368,
+    "run_id": "43633405608"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-15T11:40:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
