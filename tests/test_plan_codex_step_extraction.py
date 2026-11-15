@@ -46,10 +46,13 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # 17_142 -> 17_308 bytes); with #8335 the prompt is 270 lines, 17_996 bytes.
 # Consumer tele-funtoken-msg-scoring #5101 reworded rule 10 so the Scope-mode
 # lines stay out of the Files section (270 lines, 17_996 -> 18_031 bytes).
+# Issues #9519 / #9520 added the `files_touched` sentence to item 1's last
+# line: both plans were held with plan_files_outside_files_touched (270 lines,
+# 18_031 -> 18_402 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"a9ce63aafa64bb6cc8ab48e98a3b5b941c417c789228f16836a8bcee70e76ece"
+	"afc1bac7b82053453351e583201b2af4a96bc68e31e9e06010cf759df3d593c5"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 18_031
+PRE_EXTRACTION_PROMPT_BYTES = 18_402
 PRE_EXTRACTION_PROMPT_LINES = 270
 
 
@@ -187,6 +190,31 @@ def test_plan_prompts_keep_prose_and_placeholders_out_of_files_section() -> None
 	compliant = "## Files likely to change\n- `scripts/x.sh`\n\n## Next\nIt pins `scripts/<helper>`.\n"
 	assert guard.extract_plan_automation_paths(held) == ["scripts/x.sh", "scripts/"]
 	assert guard.extract_plan_automation_paths(compliant) == ["scripts/x.sh"]
+
+
+def test_plan_prompts_keep_the_files_section_inside_files_touched() -> None:
+	# Issues #9519 and #9520 (plan runs 43733726102, 43733730435): one plan
+	# named an unnumbered `agents.d/` fragment the issue's files_touched list
+	# missed, the other a test file it changed "only if" needed. The approval
+	# gate held both with plan_files_outside_files_touched.
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import files_touched_scope_guard as guard  # noqa: E402
+
+	rule = ("When the issue body has a `files_touched:` list, the gate also holds a plan that names a file off "
+		"that list, so name one only when the plan cannot work without it, and never list a file you only might "
+		"change. A new fragment the list does not name goes in `changelog.d/<this issue number>-<slug>.md` or "
+		"`agents.d/<this issue number>-<slug>.md`, which are always in scope.")
+	for prompt in (PLAN_RUNNER, REPO_ROOT / "prompts" / "mode-plan.txt",
+			REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		assert prompt.read_text(encoding="utf-8").count(rule) == 1, prompt
+	body = "files_touched:\n  - scripts/x.sh\n  - changelog.d/x-fix.md\n"
+	held = ("## Files likely to change\n- `scripts/x.sh`\n- `changelog.d/x-fix.md` (new)\n"
+		"- `agents.d/x-fix.md` (new)\n- `tests/test_maybe.py` (only if needed)\n\n## Next\n")
+	compliant = ("## Files likely to change\n- `scripts/x.sh`\n- `changelog.d/x-fix.md` (new)\n"
+		"- `agents.d/9519-x-fix.md` (new)\n\n## Next\n")
+	assert guard.plan_files_outside_files_touched(held, body, issue_number="9519") == [
+		"agents.d/x-fix.md", "tests/test_maybe.py"]
+	assert guard.plan_files_outside_files_touched(compliant, body, issue_number="9519") == []
 
 
 def _write_executable(path: Path, content: str) -> None:
