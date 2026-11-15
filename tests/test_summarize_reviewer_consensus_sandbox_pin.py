@@ -81,7 +81,26 @@ def test_review_utility_roles_never_start_host_opencode() -> None:
 	allowlist = next(line for line in sandbox.splitlines() if line.startswith('case "${claude_role}" in REVIEW_EDITOR|'))
 	for role in ("SUMMARISER", "BEHAVIOURAL_SMOKE", "JUDGE_INTERIM"):
 		assert f"|{role}" in allowlist, role
-	assert "WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM|PANEL_REVIEWER)" in sandbox
+	# Role-set check on the read-only `case` arm: adding a read-only role
+	# must not break this test, but dropping a required one must.
+	read_only_arms = [
+		stripped
+		for stripped in (sandbox_line.strip() for sandbox_line in sandbox.splitlines())
+		if stripped.startswith("WAVE_JUDGE|") and stripped.endswith(")")
+	]
+	assert len(read_only_arms) == 1, read_only_arms
+	read_only_roles = set(read_only_arms[0][:-1].split("|"))
+	for required_role in (
+		"WAVE_JUDGE",
+		"STALL_JUDGE",
+		"INTEGRATION_JUDGE",
+		"SECURITY_JUDGE",
+		"SUMMARISER",
+		"BEHAVIOURAL_SMOKE",
+		"JUDGE_INTERIM",
+		"PANEL_REVIEWER",
+	):
+		assert required_role in read_only_roles, required_role
 	assert '"SUMMARISER", "BEHAVIOURAL_SMOKE", "JUDGE_INTERIM"}' in sandbox
 	assert 'if [ "${claude_role}" = JUDGE_INTERIM ] && [ "${engine}" != codex ]; then' in sandbox
 
