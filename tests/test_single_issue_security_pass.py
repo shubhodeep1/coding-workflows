@@ -670,6 +670,18 @@ def test_head_unpushed_is_a_self_clearing_judge_hold() -> None:
 	assert "security_hold_awaiting_followups|security_hold_head_unpushed)" in REVIEW.read_text(encoding="utf-8")
 
 
+def test_unpushed_local_commit_without_extensions_does_not_hold(tmp_path: Path) -> None:
+	# PRs #9011 / #9134: the review job's deferred [ai-merge-resolve] commit
+	# moved the checkout past the PR head before the judge's merge gate ran.
+	# With no extension marker there is nothing to verify against the checkout.
+	comments = [_comment("ok\n" + _marker("clean", HEAD, 1))]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_HEAD": OLD})
+	assert output == "hold=false\n" and "outcome=clean" in result.stdout
+	assert "extensions_unverifiable" not in result.stdout
+	result, calls, output = _run(tmp_path, "status", comments=comments, env={"FAKE_GIT_HEAD": OLD})
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=unverifiable" not in result.stdout
+
+
 def test_missing_extension_in_shallow_checkout_holds_if_history_unavailable(tmp_path: Path) -> None:
 	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_FETCH_FAIL": "true"})

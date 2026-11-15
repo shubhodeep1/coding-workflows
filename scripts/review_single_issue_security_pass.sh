@@ -198,8 +198,8 @@ single_pass_extensions()
 {
 	local comments_file="$1" audited_head="$2" checkout="$3" branch_ref="$4" count=0 extension_line extension_sha extension_lines extension_ancestor_rc
 	local -A single_pass_extension_seen=()
-	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN:-}" ] || [ ! -s "${comments_file}" ] \
-		|| [ "$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" != "${audited_head}" ]; then
+	local single_pass_extension_head_checked=false
+	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN:-}" ] || [ ! -s "${comments_file}" ]; then
 		return 1
 	fi
 	if ! extension_lines="$(jq -r --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" '
@@ -217,6 +217,16 @@ single_pass_extensions()
 				continue
 			fi
 			single_pass_extension_seen["${extension_sha}"]=1
+			# The checkout must sit at the audited head before a marker can be
+			# checked against it. With no marker there is nothing to verify and
+			# no cycle to grant, so an unpushed local commit (e.g. the review
+			# job's deferred [ai-merge-resolve] merge) must not hold the gate.
+			if [ "${single_pass_extension_head_checked}" != "true" ]; then
+				if [ "$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" != "${audited_head}" ]; then
+					return 1
+				fi
+				single_pass_extension_head_checked=true
+			fi
 			if ! git -C "${checkout}" cat-file -e "${extension_sha}^{commit}" 2>/dev/null; then
 				if [ "$(git -C "${checkout}" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
 					# An absent object in a shallow clone may be a real fix outside
@@ -655,7 +665,11 @@ single_pass_report()
 	fi; } 2>/dev/null | jq -s 'add // []' > "${comments_file}" 2>/dev/null \
 		&& jq -e 'type == "array"' "${comments_file}" >/dev/null 2>&1; then
 		cycle="$(single_pass_markers "${comments_file}" | awk -F'\t' -v h="${head_sha}" '$3 == "pending" && $4 == h { c = $5 } END { print c + 0 }')"
-		if ! extensions="$(single_pass_extensions "${comments_file}" "${head_sha}" "${GITHUB_WORKSPACE:-.}/audit-data" "${SECURITY_PASS_AUDIT_BRANCH}")"; then
+		# The audit result is only for head_sha if the audit checkout sits there,
+		# whether or not any extension marker exists (single_pass_extensions now
+		# checks the checkout only when a marker needs it).
+		if [ "$(git -C "${GITHUB_WORKSPACE:-.}/audit-data" rev-parse HEAD 2>/dev/null || true)" != "${head_sha}" ] \
+			|| ! extensions="$(single_pass_extensions "${comments_file}" "${head_sha}" "${GITHUB_WORKSPACE:-.}/audit-data" "${SECURITY_PASS_AUDIT_BRANCH}")"; then
 			rm -f "${comments_file}"
 			single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=extensions_unverifiable"
 			return 0
