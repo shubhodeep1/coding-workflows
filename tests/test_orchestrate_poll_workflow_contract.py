@@ -503,6 +503,22 @@ def test_validation_harness_hold_env_is_wired_into_both_poller_steps() -> None:
 	yaml.safe_load(wf)
 
 
+def test_final_merge_auto_resume_switch_is_wired_into_both_poller_steps() -> None:
+	"""Issue #8984: the auto-resume switch defaults on in every full-poller step."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	line = "FINAL_MERGE_AUTO_RESUME_ENABLED: ${{ vars.FINAL_MERGE_AUTO_RESUME_ENABLED || 'true' }}"
+	assert wf.count(line) == 2
+	for step_name in ("Process each tracking issue", STANDALONE_SWEEP_STEP):
+		assert line in _step_block(wf, step_name), step_name
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'if is_truthy "${FINAL_MERGE_AUTO_RESUME_ENABLED:-true}"; then' in poller
+	assert '.final_merge_failure_kind = "final_merge_exhausted"' in poller
+	agents_text = _agents_text_with_fragments()
+	assert "- `FINAL_MERGE_AUTO_RESUME`" in agents_text
+	assert "LOG_PREFIX.name=FINAL_MERGE_AUTO_RESUME" in agents_text
+	yaml.safe_load(wf)
+
+
 def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "worktree_registry.sh" in wf
@@ -702,6 +718,7 @@ def main() -> int:
 	test_standalone_recovery_sweep_runs_without_tracking_issues()
 	test_engine_and_claude_steps_run_on_idle_ticks_when_needed()
 	test_validation_harness_hold_env_is_wired_into_both_poller_steps()
+	test_final_merge_auto_resume_switch_is_wired_into_both_poller_steps()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	test_find_tracking_step_maps_standalone_recovery_switch()
 	test_standalone_stall_probe_log_prefix_is_registered()
