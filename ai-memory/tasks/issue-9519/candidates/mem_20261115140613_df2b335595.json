@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The code backs up the question's premise. `review_prepush_test_gate_main` (lines 1012-1015) runs the single repair only when `initial=fail` and `pr_caused > 0`. Under the persist switch, `review_prepush_test_gate_persist_loop` (lines 791-811) calls `review_prepush_test_gate_repair` only while `eff = pr_caused + rpg_persist_extra > 0`. So the only way a repair can run with `pr_caused == 0` is when `rpg_persist_extra > 0`. That is the path behind `initial=pass failures=0 ... repair=ran_x1` in run 43517436284. Option C would make the guard dead code, and the editor's change would still be lost, which defeats the issue's first goal.\n- Why not B: the unmet done-check test is often the same file the editor touched. In this run it was likely `tests/test_workflow_checkout_integration_ref_audit.py`, so B would let the erasure stand in exactly the failing case.\n- Why A is safe: A keeps the pre-repair result as final. The `PERSIST repair_loop ... acceptance=unmet` line and the gate summary therefore still tell reviewers the done-check was unmet. The issue's stated risk check holds: the gate has no PR-caused failure against the change.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Q1 picks option A, a letter.\n\nThe planner should apply option A with these binding details, all taken from `scripts/review_autofix_step_prepush_test_gate.sh`:\n- **Where the guard goes.** Put it in `review_prepush_test_gate_repair`, next to the existing lint-only guard (lines 692-702), and keep that guard and `reason=lint_only_change_erased` as they are.\n- **When it fires.** All of these must hold:\n  - `review_prepush_test_gate_changed` is empty after the repair;\n  - the editor had changes before the repair;\n  - the PR-caused failure count from the pre-repair gate result is `0`.\n- **What it does.** Call `review_prepush_test_gate_revert all || true`. Log `outcome=repair_reverted reason=passing_change_erased`. Set `rpg_repair` to a value starting with `reverted`, so the persist loop's `case` at line 814 records `stop=reverted`.\n- **Fail-safe.** If the before or after changed-file state, or the pre-repair failure count, cannot be read, fall back to today's behaviour (`rpg_repair=\"ran\"`).\n- **Diagnostic line.** Emit one structured, bounded line for every repair turn. It carries the count and paths of the editor-changed files before the repair and of the changed files after it. It also carries the pre-repair `pr_caused`, `rpg_persist_state` and `rpg_persist_extra`. Use a stable prefix and register it in an `agents.d/` fragment under \"Stable log prefixes (contractual)\", per \u00a725.\n- **Tests.** Put them in the existing test file that covers `lint_only_change_erased`. Cover these cases, and the diagnostic line in each:\n  1. Initial pass with unmet acceptance, and the repair erases the change: the repair is reverted, the editor change is kept, `passing_change_erased` is logged, and `acceptance=unmet` is reported.\n  2. Initial pass, and the repair edits but keeps changes: behaviour is unchanged.\n  3. A PR-caused failure, and the repair erases the change: behaviour is unchanged (not reverted unless lint-only).\n- **Reversibility.** If a human disagrees later, reverting the single commit restores today's behaviour.\n\nESCALATION (required for any ESCALATE decision):\nNone.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\nNone.",
+  "fingerprint": "ac8df06fccbf5956be5a54a9e110bc7b8415809fe3076557a628cf801c094e4f",
+  "lineage": {
+    "issue_number": 9519,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43704890197",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43704890197",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9519"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261115140613_df2b335595",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9519,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43704890197"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9519",
+  "timestamps": {
+    "created_at": "2026-11-15T14:06:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
