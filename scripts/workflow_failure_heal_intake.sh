@@ -186,7 +186,9 @@
 #   WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS  max age of the identity's iat (default 3600), plus
 #                                         HEAL_INTAKE_QUEUE_WAITED_SECONDS (set by the queue step)
 #                                         or, when larger, the time since this run attempt
-#                                         started (runner wait included; one run read)
+#                                         started (runner wait included; one run read): for an
+#                                         engine_fallback report up front, for an identity only
+#                                         after it first failed as identity_stale
 #   WORKFLOW_HEAL_REPORT_ORIGIN           repository_dispatch | workflow_run | workflow_dispatch |
 #                                         recovery_scan (default GITHUB_EVENT_NAME, else
 #                                         repository_dispatch). recovery_scan is set only by
@@ -502,19 +504,23 @@ _report_auth_reject()
 
 # Runner wait. The intake job can wait for a GitHub-hosted runner long after
 # the dispatch arrived: on 2026-11-13 runs 43439048054, 43496779526 and
-# 43498856864 started 1h54m to 3h25m after they were queued and rejected valid
-# reports as identity_stale, although the heal queue step had waited seconds.
-# The age limit applies at arrival, so the credit is the time since this run
-# attempt started (GitHub's run_started_at, which covers the runner wait and the
-# heal queue wait) when that exceeds the queue wait already added above. A
-# re-run attempt starts its own clock, so a replayed report gains nothing.
+# 43498856864 started 1h54m to 3h25m after they were queued. The age limit
+# applies at arrival, so the credit is the time since this run attempt started
+# (GitHub's run_started_at, which covers the runner wait and the heal queue
+# wait) when that exceeds the queue wait already added above. A re-run attempt
+# starts its own clock, so a replayed report gains nothing.
+# Only an engine_fallback report reads it here, for the reporting-run age
+# check (verify-engine-reporter-run --max-age). A report that carries an
+# identity is credited by the identity_stale retry below (PR #9516), which
+# reads the run only when the first verification failed as stale; reading it
+# here as well cost a second GET of the same run (§15) and credited the same
+# wait twice.
 # CLAUDE.md §15 audit: no earlier call in this script or the workflow's earlier
-# steps reads this run, so this is one GET, made only for a repository_dispatch
-# report that the age limit applies to (a carried identity, or an
-# engine_fallback reporting run). A failed read or an unparseable time keeps the
+# steps reads this run, so this is one GET per engine_fallback
+# repository_dispatch report. A failed read or an unparseable time keeps the
 # queue-only credit; the result is clamped to GitHub's 24-hour queue limit.
 RUN_ATTEMPT_ELAPSED_SECONDS=""
-if [ "${REPORT_ORIGIN}" = "repository_dispatch" ] && { [ "${REPORT_IDENTITY_STATE}" = "present" ] || [ "${SOURCE_KIND}" = "engine_fallback" ]; } \
+if [ "${REPORT_ORIGIN}" = "repository_dispatch" ] && [ "${SOURCE_KIND}" = "engine_fallback" ] \
 	&& [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]]; then
 	run_attempt_number="${GITHUB_RUN_ATTEMPT:-1}"
 	[[ "${run_attempt_number}" =~ ^[1-9][0-9]{0,5}$ ]] || run_attempt_number=1
@@ -602,7 +608,8 @@ case "${REPORT_ORIGIN}" in
 					# is made only on this path. Fails closed: when the read fails
 					# the rejection stands.
 					# Skipped when the report_age_credit block above already
-					# measured this attempt's elapsed time: REPORT_MAX_AGE then
+					# measured this attempt's elapsed time (an engine_fallback
+					# report that also carries an identity): REPORT_MAX_AGE then
 					# carries that wait, and adding the arrival wait again would
 					# credit the same runner wait twice and accept a report that
 					# was already stale on arrival.
