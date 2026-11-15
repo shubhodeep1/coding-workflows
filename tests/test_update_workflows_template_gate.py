@@ -21,8 +21,10 @@ provisional names from the issue.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -579,11 +581,11 @@ def test_merge_blocked_step_fails_the_job_after_mark_verify_failure() -> None:
 
 FAKE_CURL = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "${FAKE_CURL_LOG}"
-exit 0
+exit "${FAKE_CURL_RC:-0}"
 """
 
 
-def _run_merge_blocked(tmp_path: Path, level: str, secret: str) -> tuple[subprocess.CompletedProcess, list[str]]:
+def _run_merge_blocked(tmp_path: Path, level: str, secret: str, curl_rc: int = 0) -> tuple[subprocess.CompletedProcess, list[str]]:
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	curl = bin_dir / "curl"
@@ -601,6 +603,7 @@ def _run_merge_blocked(tmp_path: Path, level: str, secret: str) -> tuple[subproc
 		"SYNC_REPO": REPO,
 		"SYNC_RUN_URL": "https://github.com/octo/consumer/actions/runs/1",
 		"FAKE_CURL_LOG": str(log),
+		"FAKE_CURL_RC": str(curl_rc),
 	}
 	result = subprocess.run(["bash", "-c", _verify_step("verify_merge_blocked")["run"]], env=env, capture_output=True, text=True)
 	calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
@@ -636,3 +639,172 @@ def test_merge_blocked_step_honours_silent_alert_level(tmp_path: Path) -> None:
 	assert result.returncode == 1
 	assert "suppresses the merge-blocked alert" in result.stdout
 	assert calls == []
+
+
+def test_merge_blocked_step_warns_when_telegram_rejects_the_alert(tmp_path: Path) -> None:
+	# curl --fail exits 22 on an HTTP 4xx/5xx reply; the warning must show
+	# and the step must still fail the job.
+	result, calls = _run_merge_blocked(tmp_path, "WARNING", "bot-secret", curl_rc=22)
+	assert result.returncode == 1
+	assert "::warning::Telegram send failed" in result.stdout
+	assert "\n".join(calls).count("api.telegram.org/bot") == 1
+
+
+# ── Head gate re-check after verify (#9483 fix 3) ────────────────────────
+
+
+UPDATER_BRANCH = "auto/update-workflows-0123456789ab"
+HEAD_GATE_IF = "${{ !cancelled() && steps.verify_publish.outcome == 'success' }}"
+FAKE_GATE_GH = '''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+token = os.environ.get("GH_TOKEN", "")
+with open(os.environ["FAKE_GH_LOG"], "a") as out:
+    out.write(json.dumps({"args": args, "token": token}) + "\\n")
+if args[:3] == ["api", "-X", "POST"]:
+    sys.exit(1 if token in os.environ.get("FAKE_REFUSED_TOKENS", "none").split(",") else 0)
+if len(args) >= 2 and args[0] == "api" and "/commits/" in args[1] and "/status" in args[1]:
+    seq = json.loads(os.environ["FAKE_STATUS_SEQ"])
+    counter = os.environ["FAKE_GH_LOG"] + ".n"
+    n = int(open(counter).read()) if os.path.exists(counter) else 0
+    open(counter, "w").write(str(n + 1))
+    item = seq[min(n, len(seq) - 1)]
+    if item is None:
+        sys.exit(1)
+    print(json.dumps(item))
+    sys.exit(0)
+if len(args) >= 2 and args[0] == "api" and args[1] == "repos/octo/consumer/pulls/77":
+    print(os.environ["FAKE_PR_JSON"])
+    sys.exit(0)
+sys.exit(1)
+'''
+
+
+def _gate_statuses(verify: str | None = "success", integrity: str | None = "success") -> dict:
+	statuses = []
+	if verify is not None:
+		statuses.append({"context": STATUS_CONTEXT, "state": verify})
+	if integrity is not None:
+		statuses.append({"context": "coding-workflows/workflow-integrity", "state": integrity})
+	return {"state": "pending", "total_count": len(statuses), "statuses": statuses}
+
+
+def _gate_pr(**head: object) -> dict:
+	return {
+		"state": "open",
+		"head": {"ref": UPDATER_BRANCH, "sha": PUSHED_SHA, "repo": {"full_name": REPO}, **head},
+		"base": {"ref": "main", "repo": {"full_name": REPO}},
+	}
+
+
+def _run_head_gate(tmp_path: Path, seq: list | None = None, pr: dict | None = None,
+	**env_overrides: str) -> tuple[subprocess.CompletedProcess, list[dict]]:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required by the head-gate step")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(parents=True)
+	gh = bin_dir / "gh"
+	gh.write_text(FAKE_GATE_GH, encoding="utf-8")
+	gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+	log = tmp_path / "gh.log"
+	env = {
+		**{k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "GH_", "FAKE_", "REVIEW_HEAD_GATE_", "UPDATER_HEAD_GATE_"))},
+		"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+		"GITHUB_REPOSITORY": REPO,
+		"GITHUB_RUN_ID": "1",
+		"PR_NUMBER": "77",
+		"PUSHED_SHA": PUSHED_SHA,
+		"VERIFY_STATUS_CONTEXT": STATUS_CONTEXT,
+		"STATUS_TOKEN": "job-token",
+		"MERGE_TOKEN": "pat-token",
+		"UPDATER_HEAD_GATE_POLL_ATTEMPTS": "3",
+		"UPDATER_HEAD_GATE_POLL_SECONDS": "0",
+		"FAKE_GH_LOG": str(log),
+		"FAKE_STATUS_SEQ": json.dumps([_gate_statuses()] if seq is None else seq),
+		"FAKE_PR_JSON": json.dumps(_gate_pr() if pr is None else pr),
+		**env_overrides,
+	}
+	result = subprocess.run(["bash", "-c", _verify_step("verify_head_gate")["run"]], env=env, capture_output=True, text=True)
+	calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+	return result, calls
+
+
+def _gate_posts(calls: list[dict]) -> list[dict]:
+	return [call for call in calls if call["args"][:3] == ["api", "-X", "POST"]]
+
+
+def test_head_gate_step_follows_publish_and_never_merges() -> None:
+	steps = _verify_job()["steps"]
+	ids = [step.get("id") for step in steps]
+	names = [step.get("name") for step in steps]
+	step = _verify_step("verify_head_gate")
+	assert step["if"] == HEAD_GATE_IF
+	assert ids.index("verify_publish") < ids.index("verify_head_gate") < names.index("Mark verify failure")
+	assert step["env"]["REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED"] == "${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}"
+	assert step["env"]["MERGE_TOKEN"] == "${{ secrets.GH_PAT }}"
+	run = step["run"]
+	assert "${{" not in run
+	assert "gh pr merge" not in run
+	assert "context=ai-review/head-gate" in run
+	assert run.rstrip().endswith("exit 0")
+
+
+def test_head_gate_posts_success_when_verify_and_integrity_are_green(tmp_path: Path) -> None:
+	result, calls = _run_head_gate(tmp_path)
+	assert result.returncode == 0, result.stderr
+	posts = _gate_posts(calls)
+	assert len(posts) == 1
+	assert posts[0]["args"][3] == f"repos/{REPO}/statuses/{PUSHED_SHA}"
+	assert "state=success" in posts[0]["args"] and "context=ai-review/head-gate" in posts[0]["args"]
+	assert posts[0]["token"] == "pat-token"
+	assert f"REVIEW_HEAD_GATE mode=updater_exempt source=verify_job pr=77 head={PUSHED_SHA} outcome=posted reason=verified" in result.stdout
+
+
+def test_head_gate_waits_for_a_late_integrity_status(tmp_path: Path) -> None:
+	seq = [_gate_statuses(integrity=None), _gate_statuses(integrity="pending"), _gate_statuses()]
+	result, calls = _run_head_gate(tmp_path, seq)
+	assert result.returncode == 0, result.stderr
+	assert sum("/status" in call["args"][1] for call in calls if call["args"][1] != "-X") == 3
+	assert len(_gate_posts(calls)) == 1
+
+
+@pytest.mark.parametrize("seq,pr,reason,reads", [
+	([_gate_statuses(integrity="failure")], None, "integrity_not_success", 1),
+	([_gate_statuses(verify="failure")], None, "verify_not_success", 1),
+	([_gate_statuses(integrity=None)], None, "integrity_missing", 3),
+	([None], None, "status_read_failed", 3),
+	([{"statuses": "nope"}], None, "invalid_response", 1),
+	(None, _gate_pr(sha="b" * 40), "head_moved", 1),
+	(None, _gate_pr(repo={"full_name": "evil/consumer"}), "fork_head", 1),
+	(None, _gate_pr(ref="ai/issue-1"), "not_updater_branch", 1),
+	(None, {**_gate_pr(), "state": "closed"}, "pr_not_open", 1),
+])
+def test_head_gate_fails_closed(tmp_path: Path, seq: list | None, pr: dict | None, reason: str, reads: int) -> None:
+	result, calls = _run_head_gate(tmp_path, seq, pr)
+	assert result.returncode == 0, result.stderr
+	assert not _gate_posts(calls)
+	assert f"outcome=skipped reason={reason}" in result.stdout
+	assert sum(call["args"][1].endswith("/status?per_page=100") for call in calls) == reads
+
+
+@pytest.mark.parametrize("env,reason", [
+	({"REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED": "false"}, "disabled"),
+	({"REVIEW_HEAD_GATE_STATUS_ENABLED": "false"}, "status_disabled"),
+	({"PR_NUMBER": "abc"}, "invalid_input"),
+])
+def test_head_gate_switches_make_no_api_call(tmp_path: Path, env: dict, reason: str) -> None:
+	result, calls = _run_head_gate(tmp_path, **env)
+	assert result.returncode == 0, result.stderr
+	assert calls == []
+	assert f"outcome=skipped reason={reason}" in result.stdout
+
+
+def test_head_gate_falls_back_to_the_job_token_and_never_fails_the_job(tmp_path: Path) -> None:
+	result, calls = _run_head_gate(tmp_path, FAKE_REFUSED_TOKENS="pat-token")
+	assert result.returncode == 0, result.stderr
+	assert [post["token"] for post in _gate_posts(calls)] == ["pat-token", "job-token"]
+	assert "outcome=posted reason=verified" in result.stdout
+	result, calls = _run_head_gate(tmp_path / "both", FAKE_REFUSED_TOKENS="pat-token,job-token")
+	assert result.returncode == 0, result.stderr
+	assert len(_gate_posts(calls)) == 2
+	assert "outcome=skipped reason=post_failed" in result.stdout

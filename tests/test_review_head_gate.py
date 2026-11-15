@@ -482,3 +482,7 @@ def test_review_autofix_passes_head_ref_and_switch_to_the_gate() -> None:
 	tail = text[:text.index('bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"')]
 	tail = tail[tail.rindex("        env:\n"):]
 	assert "REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}" in tail
+	# The review-blocked judge re-checks the exemption, so it needs the switch too.
+	judge = text[text.index("        id: rb_judge\n"):]
+	judge = judge[:judge.index("        run: |")]
+	assert "REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}" in judge

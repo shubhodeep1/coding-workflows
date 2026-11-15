@@ -2465,6 +2465,122 @@ jobs:
           echo "auto_merge=${AUTO_MERGE}" >> "${VERIFY_OUT}"
           echo "UPDATER_PR_VERIFY outcome=passed reason=ok pr=${PR_NUMBER} head=${PUSHED_SHA} auto_merge=${AUTO_MERGE}"
 
+      # #9483 fix 3: review checks the updater head-gate exemption only while
+      # it runs. When review finished before this job posted the verify
+      # status, nothing re-checked it and ai-review/head-gate stayed pending
+      # (btc_sweeper#264). Re-check here, right after the verify success,
+      # with the same fail-closed rules as review_head_gate_updater_exempt in
+      # scripts/review_head_gate.sh: verify and workflow-integrity both
+      # success on this SHA, the PR open, same-repository, on an updater
+      # branch and still at this SHA. It waits a little for integrity; any
+      # other outcome leaves the gate pending. Never fails the job.
+      # API budget: up to UPDATER_HEAD_GATE_POLL_ATTEMPTS combined-status
+      # reads, one PR read and one status post (two when GH_PAT is refused).
+      - name: Post review head gate for the verified updater PR
+        id: verify_head_gate
+        if: ${{ !cancelled() && steps.verify_publish.outcome == 'success' }}
+        env:
+          STATUS_TOKEN: ${{ github.token }}
+          MERGE_TOKEN: ${{ secrets.GH_PAT }}
+          REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}
+          REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
+          UPDATER_HEAD_GATE_POLL_ATTEMPTS: '6'
+          UPDATER_HEAD_GATE_POLL_SECONDS: '20'
+        run: |
+          set -uo pipefail
+          gate_log() {
+            echo "REVIEW_HEAD_GATE mode=updater_exempt source=verify_job pr=${PR_NUMBER:-?} head=${PUSHED_SHA:-?} outcome=$1 reason=$2"
+          }
+          if [ "${REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED:-true}" = "false" ]; then
+            gate_log skipped disabled
+            exit 0
+          fi
+          if [ "${REVIEW_HEAD_GATE_STATUS_ENABLED:-true}" = "false" ]; then
+            gate_log skipped status_disabled
+            exit 0
+          fi
+          # PR_NUMBER, PUSHED_SHA and GITHUB_REPOSITORY were validated by
+          # verify_inputs; checked again so this step stands on its own.
+          if ! [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${PUSHED_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
+            || ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            gate_log skipped invalid_input
+            exit 0
+          fi
+          # Review posts the gate with GH_PAT; read and post as the same account.
+          export GH_TOKEN="${MERGE_TOKEN:-${STATUS_TOKEN:-}}"
+          poll_attempts="${UPDATER_HEAD_GATE_POLL_ATTEMPTS:-6}"
+          [[ "${poll_attempts}" =~ ^[1-9][0-9]?$ ]] || poll_attempts=6
+          poll_seconds="${UPDATER_HEAD_GATE_POLL_SECONDS:-20}"
+          [[ "${poll_seconds}" =~ ^[0-9]{1,3}$ ]] || poll_seconds=20
+          verdict=""
+          attempt=0
+          while :; do
+            attempt=$((attempt + 1))
+            if status_json="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${PUSHED_SHA}/status?per_page=100" 2>/dev/null)"; then
+              # "wait" only for a missing or pending status; anything else stops.
+              verdict="$(jq -r --arg v "${VERIFY_STATUS_CONTEXT}" --arg i "coding-workflows/workflow-integrity" '
+                def state_of($c): [ .statuses[] | select(type == "object" and .context == $c) | .state ] | first;
+                if type != "object" or ((.statuses // null) | type) != "array" then "stop invalid_response"
+                else
+                  state_of($v) as $vs | state_of($i) as $is
+                  | ((.total_count // 0) > (.statuses | length)) as $incomplete
+                  | if $vs == null then (if $incomplete then "stop status_page_incomplete" else "wait verify_missing" end)
+                  elif $vs == "pending" then "wait verify_not_success"
+                  elif $vs != "success" then "stop verify_not_success"
+                  elif $is == null then (if $incomplete then "stop status_page_incomplete" else "wait integrity_missing" end)
+                  elif $is == "pending" then "wait integrity_not_success"
+                  elif $is != "success" then "stop integrity_not_success"
+                  else "ok verified" end
+                end' <<< "${status_json}" 2>/dev/null)" || verdict=""
+              [ -n "${verdict}" ] || verdict="stop invalid_response"
+            else
+              verdict="wait status_read_failed"
+            fi
+            case "${verdict}" in
+              wait\ *)
+                [ "${attempt}" -lt "${poll_attempts}" ] || break
+                sleep "${poll_seconds}"
+                ;;
+              *) break ;;
+            esac
+          done
+          if [ "${verdict%% *}" != "ok" ]; then
+            gate_log skipped "${verdict#* }"
+            exit 0
+          fi
+          # Read the PR after the wait, so the head check is current.
+          if ! pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null)"; then
+            gate_log skipped pr_read_failed
+            exit 0
+          fi
+          pr_reason="$(jq -r --arg repo "${GITHUB_REPOSITORY}" --arg sha "${PUSHED_SHA}" --arg re '^auto/update-workflows-[0-9a-f]{12}$' '
+            if type != "object" then "invalid_response"
+            elif .state != "open" then "pr_not_open"
+            elif ((.head.ref // "") | type) != "string" or ((.head.ref // "") | test($re) | not) then "not_updater_branch"
+            elif (.head.repo.full_name // "") != $repo or (.base.repo.full_name // "") != $repo then "fork_head"
+            elif (.head.sha // "") != $sha then "head_moved"
+            else "ok" end' <<< "${pr_json}" 2>/dev/null)" || pr_reason=""
+          if [ "${pr_reason}" != "ok" ]; then
+            gate_log skipped "${pr_reason:-invalid_response}"
+            exit 0
+          fi
+          RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}"
+          post_head_gate() {
+            GH_TOKEN="$1" gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${PUSHED_SHA}" \
+              -f state=success \
+              -f "context=ai-review/head-gate" \
+              -f "description=updater PR verified against the attested release manifest" \
+              -f "target_url=${RUN_URL}" >/dev/null 2>&1
+          }
+          if { [ -n "${MERGE_TOKEN:-}" ] && post_head_gate "${MERGE_TOKEN}"; } \
+            || { [ -n "${STATUS_TOKEN:-}" ] && post_head_gate "${STATUS_TOKEN}"; }; then
+            gate_log posted verified
+          else
+            echo "::warning::Could not post ai-review/head-gate on #${PR_NUMBER}; it stays pending until review re-checks it."
+            gate_log skipped post_failed
+          fi
+          exit 0
+
       - name: Mark verify failure
         if: ${{ always() && steps.verify_inputs.outputs.sha_ok == 'true' && steps.verify_publish.outcome != 'success' }}
         env:

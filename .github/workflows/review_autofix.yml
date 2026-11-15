@@ -4546,6 +4546,9 @@ jobs:
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
+          # #9483: the judge's updater_verify_hold branch re-checks the
+          # head-gate exemption; without this the helper default (true) wins.
+          REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}
           # Single-issue security pass settings, the same as the
           # "Single-issue security pass" step: security-exhaustion mode and
           # the security gate on judge merges.

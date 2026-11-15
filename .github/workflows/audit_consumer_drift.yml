@@ -243,8 +243,13 @@ jobs:
 
           def pin_threshold_label() -> str:
               # Mirrors parse_pin_max_age_seconds: bad values mean 86400.
-              raw = os.environ.get("CONSUMER_PIN_MAX_AGE_SECONDS", "86400").strip()
-              seconds = int(raw) if raw.isdigit() and int(raw) > 0 else 86400
+              # Same int() parse, so "+3600" names 1 hour here as it does there.
+              try:
+                  seconds = int(os.environ.get("CONSUMER_PIN_MAX_AGE_SECONDS", "86400").strip())
+              except ValueError:
+                  seconds = 0
+              if seconds <= 0:
+                  seconds = 86400
               if seconds % 3600 == 0:
                   return f"{seconds // 3600} hours"
               return f"{seconds} seconds"

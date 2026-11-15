@@ -1734,6 +1734,18 @@ def test_report_heading_follows_the_threshold_and_splits_unknown_pins(monkeypatc
 	assert "pin age unknown: owner/drifted" in telegram
 
 
+def test_report_heading_parses_the_threshold_like_the_audit(monkeypatch) -> None:
+	# parse_pin_max_age_seconds uses int(), which accepts "+3600"; the
+	# heading must name the same 1-hour threshold, not fall back to 24 hours.
+	monkeypatch.setenv("CONSUMER_PIN_MAX_AGE_SECONDS", "+3600")
+	assert drift_audit.parse_pin_max_age_seconds("+3600") == 3600
+	measured = {"stale": True, "reason": "behind_stable", "pinned_release": "v1.46.0", "first_newer_release": "v1.47.0", "behind_seconds": 2 * 3600}
+	with tempfile.TemporaryDirectory(prefix="drift-report-pin-plus-") as td:
+		_level, _telegram, summary_md = _run_report_step(Path(td), _pin_summary(measured, [_sync_skip(False)]))
+	assert "### Behind stable for 1 hours or more" in summary_md
+	assert "24 hours" not in summary_md
+
+
 def test_workflow_passes_release_tags_and_pin_age_threshold() -> None:
 	workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
 	assert "CONSUMER_PIN_MAX_AGE_SECONDS: ${{ vars.CONSUMER_PIN_MAX_AGE_SECONDS || '86400' }}" in workflow_text
