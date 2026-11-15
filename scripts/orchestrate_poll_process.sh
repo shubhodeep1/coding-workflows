@@ -17953,8 +17953,17 @@ prime_phase_concurrency_snapshot() {
   if [ -n "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ]; then
     caps_cmd+=(--implementing-threshold-minutes "${STALL_THRESHOLD_IMPLEMENTING_MINUTES}")
   fi
-  if ! snapshot_json="$("${caps_cmd[@]}" 2>/dev/null <<<"${actions_runs_blob}")"; then
+  # Issue #9473: keep the builder's other stderr out of the log, but forward
+  # its ZOMBIE_RUN_IGNORED lines (guard=concurrency_snapshot) and the
+  # invalid ZOMBIE_RUN_MAX_QUEUED_HOURS warning so they stay searchable.
+  local caps_err_file=""
+  caps_err_file="$(mktemp "${TMPDIR:-/tmp}/phase_caps_snapshot_err.XXXXXX" 2>/dev/null || true)"
+  if ! snapshot_json="$("${caps_cmd[@]}" 2>"${caps_err_file:-/dev/null}" <<<"${actions_runs_blob}")"; then
     snapshot_json='{"enabled":false,"status":"invalid","error":"snapshot_build_failed","global_max_concurrent":null,"max_concurrent_by_state":{},"running_by_state":{},"global_running":0}'
+  fi
+  if [ -n "${caps_err_file}" ]; then
+    grep -E '^(ZOMBIE_RUN_IGNORED |::warning::ZOMBIE_RUN_MAX_QUEUED_HOURS )' "${caps_err_file}" >&2 2>/dev/null || true
+    rm -f "${caps_err_file}" 2>/dev/null || true
   fi
   [ -n "${snapshot_json}" ] || snapshot_json='{"enabled":false,"status":"invalid","error":"empty_snapshot","global_max_concurrent":null,"max_concurrent_by_state":{},"running_by_state":{},"global_running":0}'
   if [ "${actions_runs_fetch_rc}" -ne 0 ] && jq -e '.enabled == true' <<<"${snapshot_json}" >/dev/null 2>&1; then

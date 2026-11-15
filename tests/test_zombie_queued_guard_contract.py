@@ -139,3 +139,49 @@ def test_guard_jq_programs_compile_with_the_shared_definitions() -> None:
 			capture_output=True, text=True,
 		)
 		assert result.returncode == 0, (rel, program, result.stderr)
+
+
+def _poll_validate_active_rc(tmp_path: Path, primary_runs: list[dict], env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+	"""Run the poller's has_active_validation_run against a mocked listing."""
+	import json
+	import os
+
+	poller = _text("scripts/orchestrate_poll_process.sh")
+	start = poller.index("has_active_validation_run() {\n")
+	body = poller[start:poller.index("\n}\n", start) + 3]
+	(tmp_path / "primary.json").write_text(json.dumps({"workflow_runs": primary_runs}), encoding="utf-8")
+	(tmp_path / "fallback.json").write_text(json.dumps({"workflow_runs": []}), encoding="utf-8")
+	script = (
+		f'set -euo pipefail\nsource "{GH_HELPERS}"\n'
+		'_safe_gh_jq() { case "$1" in *internal-validate.yml*) cat "$FALLBACK";; *) cat "$PRIMARY";; esac; }\n'
+		f"{body}\n"
+		'rc=0; has_active_validation_run || rc=$?; echo "rc=${rc}"\n'
+	)
+	env = {k: v for k, v in os.environ.items() if k not in ("ZOMBIE_RUN_MAX_QUEUED_HOURS", "BASH_ENV", "ENV")}
+	env.update({"PRIMARY": str(tmp_path / "primary.json"), "FALLBACK": str(tmp_path / "fallback.json"),
+		"GITHUB_REPOSITORY": "octo/example", "VALIDATE_WORKFLOW_NAME": "ai-validate.yml"})
+	env.update(env_extra or {})
+	return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required")
+def test_poll_validate_active_counter_ignores_only_the_wedged_queued_run(tmp_path: Path) -> None:
+	"""Issue #9473: call-site test for the poller's validation active-run counter."""
+	from datetime import datetime, timedelta, timezone
+
+	def iso(hours: int) -> str:
+		return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+	wedged = {"id": 43095142301, "status": "queued", "created_at": iso(25), "path": ".github/workflows/ai-validate.yml"}
+	fresh = {"id": 7, "status": "queued", "created_at": iso(1), "path": ".github/workflows/ai-validate.yml"}
+	running = {"id": 8, "status": "in_progress", "created_at": iso(100), "path": ".github/workflows/ai-validate.yml"}
+	result = _poll_validate_active_rc(tmp_path, [wedged])
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert ("ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/ai-validate.yml age_h=25 guard=poll_validate_active"
+		in result.stderr)
+	for blocker in (fresh, running):
+		result = _poll_validate_active_rc(tmp_path, [wedged, blocker])
+		assert "rc=0" in result.stdout, (blocker, result.stdout + result.stderr)
+	result = _poll_validate_active_rc(tmp_path, [wedged], {"ZOMBIE_RUN_MAX_QUEUED_HOURS": "0"})
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert "ZOMBIE_RUN_IGNORED" not in result.stderr
