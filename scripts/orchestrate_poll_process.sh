@@ -5507,11 +5507,19 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # accepted merge closed runs scripts/check_triage_resolution.py gate
 # (_close_sweep_check_triage_gate). resolved / already_resolved closes it; a
 # source PR closed without merging closes it as "not planned" unless an open
-# bound fix PR is cross-referenced. At most CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK
-# (default 10, 0 disables) issues are gated per tick, in a window over the
-# ascending ai:check-triage issue numbers starting at
-# (GITHUB_RUN_NUMBER * cap) % total, so every issue is reached within
-# ceil(total/cap) ticks. CHECK_TRIAGE_RESOLVED_GATE_ENABLED=false turns it off.
+# bound fix PR is cross-referenced or a pipeline run for the issue is active.
+# At most CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK (default 10, 0 disables) issues
+# are gated per tick, in a window over the ascending ai:check-triage issue
+# numbers starting at (GITHUB_RUN_NUMBER * cap) % total, so every issue is
+# reached within ceil(total/cap) consecutive run numbers that reach this sweep
+# (a cancelled or skipped run consumes a run number too, and `total` can change
+# between ticks). CHECK_TRIAGE_RESOLVED_GATE_ENABLED=false turns it off.
+# On ticks with no tracking issue the full poller does not run, so the
+# STANDALONE_RECOVERY_SWEEP_ONLY branch calls `close_merged_issues_sweep
+# triage_only`: only the ai:check-triage list call is made (no ai:merged /
+# ai:ready-to-merge lists) and only issues in this tick's gate window are
+# processed (timeline read, merged-candidate rules, then the gate pass). With
+# no argument the sweep is unchanged.
 #
 # Third origin class (issue #8955):
 #   - check_triage: open ai:check-triage issue carrying neither ai:merged nor
@@ -5539,6 +5547,8 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # so no job-log reads), and a source-closed verdict adds one _fetch_pr_json of
 # the source PR plus at most one per open cross-referenced PR.
 close_merged_issues_sweep() {
+  # Issue #9481: "triage_only" is the idle-tick mode (see the header comment).
+  local _sweep_mode="${1:-full}"
   if [ "${ENABLE_CLOSE_MERGED_ISSUES}" != "true" ]; then
     echo "Close merged issues sweep disabled by ENABLE_CLOSE_MERGED_ISSUES=${ENABLE_CLOSE_MERGED_ISSUES}."
     return 0
@@ -5549,7 +5559,8 @@ close_merged_issues_sweep() {
   echo "Close merged issues sweep"
   echo "========================================"
 
-  local merged_json ready_json
+  local merged_json='[]' ready_json='[]'
+  if [ "${_sweep_mode}" != "triage_only" ]; then
   merged_json="$(gh_retry gh issue list \
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
@@ -5562,6 +5573,7 @@ close_merged_issues_sweep() {
     --label "ai:ready-to-merge" \
     --json number,labels,body,author \
     --limit 200 2>/dev/null || echo "[]")"
+  fi
   # Issue #8955: open ai:check-triage issues (e.g. ai:done) whose fix PR
   # merged into the failing PR's head branch.
   local triage_json
@@ -5678,6 +5690,11 @@ close_merged_issues_sweep() {
     has_tracking_label="$(echo "${issues_json}" | jq -r --argjson i "${idx}" '[.[$i].labels[]?.name] | index("ai:orchestrator-tracking") // empty' 2>/dev/null || echo "")"
     if [ -n "${has_tracking_label}" ]; then
       echo "  Issue #${issue_num}: ai:orchestrator-tracking — skipping (handled by completion path)."
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+    # Issue #9481: the idle-tick mode reads timelines only inside the window.
+    if [ "${_sweep_mode}" = "triage_only" ] && [[ "${_sweep_gate_window}" != *" ${issue_num} "* ]]; then
       skipped_count=$((skipped_count + 1))
       continue
     fi
@@ -24260,7 +24277,10 @@ _check_triage_gate_invoke() {
 # An open bound fix PR holds the issue (triage_rule=skip
 # reason=source_pr_closed_unmerged_fix_pr_open fix_pr=<m>); an unreadable
 # source PR, cross-reference state or PR holds it too
-# (reason=source_pr_state_unreadable); a source PR whose head is an
+# (reason=source_pr_state_unreadable); a source PR the fresh read shows open
+# or merged holds it (reason=source_pr_state_changed); an active pipeline run
+# for the issue (issue_has_active_workflow, this tick's ACTIVE_WORKFLOW_ISSUES)
+# holds it (reason=source_pr_closed_unmerged_run_active); a source PR whose head is an
 # `orchestrator/project-*` integration branch holds it
 # (reason=source_pr_integration_head), because a closed integration PR's
 # content can reach the default branch through a re-issued PR (#739 / #753);
@@ -24312,6 +24332,12 @@ _close_sweep_check_triage_gate() {
     echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_state_unreadable pr=${_CT_GATE_PR}"
     return 1
   fi
+  # The gate's verdict came from an earlier read: a source PR reopened or
+  # merged since then must not be closed against (fail closed).
+  if ! printf '%s' "${_ctg_source_json}" | jq -e '(.state // "") == "closed" and .merged != true' >/dev/null 2>&1; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_state_changed pr=${_CT_GATE_PR}"
+    return 1
+  fi
   if [[ "${_ctg_source_head}" == orchestrator/project-* ]]; then
     echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_integration_head pr=${_CT_GATE_PR} head=$(_close_sweep_log_ref "${_ctg_source_head}" "none")"
     return 1
@@ -24352,6 +24378,18 @@ _close_sweep_check_triage_gate() {
   fi
   if [ "${_ctg_unreadable}" = "true" ]; then
     echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_state_unreadable pr=${_CT_GATE_PR}"
+    return 1
+  fi
+  # AD-1 option B: a pipeline run for this issue that has not opened its fix
+  # PR yet is in-flight work too. ACTIVE_WORKFLOW_ISSUES is this tick's set
+  # (run_standalone_stall_recovery builds it before the sweep); when nothing
+  # built it this tick, build it here from the per-tick actions-runs cache.
+  if [ -z "${ACTIVE_WORKFLOW_ISSUES+x}" ] && declare -F build_active_issue_set >/dev/null 2>&1; then
+    ACTIVE_WORKFLOW_ISSUES="$(build_active_issue_set 2>/dev/null || true)"
+  fi
+  if [ -n "${ACTIVE_WORKFLOW_ISSUES+x}" ] && declare -F issue_has_active_workflow >/dev/null 2>&1 \
+      && issue_has_active_workflow "${issue_num}"; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_closed_unmerged_run_active pr=${_CT_GATE_PR}"
     return 1
   fi
   ensure_label_exists "ai:closed" >/dev/null 2>&1 || true
@@ -28327,6 +28365,9 @@ fi
 if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then
   prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
   run_standalone_stall_recovery
+  # Issue #9481: gate stuck ai:check-triage issues (any phase) on idle ticks
+  # too; this step forwards the full poller's env, so the kill switches apply.
+  close_merged_issues_sweep triage_only || echo "CLOSE_MERGED_SWEEP outcome=skip reason=error mode=triage_only rc=$?"
   exit 0
 fi
 

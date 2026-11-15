@@ -19635,6 +19635,8 @@ def _close_sweep_gate_harness(tmp_path: Path, *, verdict: dict, timeline: list, 
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	gate_start = script.index('_CT_GATE_SKIP=""\n_CT_GATE_RC=0\n')
 	gate_end = script.index("\n# ---------------------------------------------------------------\n# Unblock judge", gate_start)
+	active_start = script.index("issue_has_active_workflow() {")
+	active_end = script.index("\n}\n", active_start) + 2
 	ref_start = script.index("_close_sweep_log_ref() {")
 	ref_end = script.index("\n# A branch name alone does not identify", ref_start)
 	(tmp_path / "scripts").mkdir()
@@ -19659,6 +19661,7 @@ def _close_sweep_gate_harness(tmp_path: Path, *, verdict: dict, timeline: list, 
 		'if [ "$1 $2" = "issue close" ] && [ "${STUB_CLOSE_FAIL:-}" = "1" ]; then return 1; fi; return 0; }\n'
 		'_fetch_pr_json() { cat "${STUB_PR_DIR}/$1.json" 2>/dev/null || echo "{}"; }\n'
 		"ensure_label_exists() { :; }\n"
+		+ script[active_start:active_end] + "\n"
 		+ script[ref_start:ref_end] + "\n" + script[gate_start:gate_end] + "\n"
 		'rc=0; _close_sweep_check_triage_gate 10 "${STUB_TIMELINE}" main || rc=$?\n'
 		'echo "RC=${rc}"\n',
@@ -19676,6 +19679,7 @@ def _close_sweep_gate_harness(tmp_path: Path, *, verdict: dict, timeline: list, 
 		"STUB_CLOSE_FAIL": "1" if close_fails else "",
 	}
 	run_env.pop("CHECK_TRIAGE_RESOLVED_GATE_ENABLED", None)
+	run_env.pop("ACTIVE_WORKFLOW_ISSUES", None)
 	run_env.update(env or {})
 	proc = subprocess.run(["bash", str(driver)], cwd=tmp_path, env=run_env, capture_output=True, text=True, check=True)
 	rc = int(proc.stdout.strip().splitlines()[-1].split("=", 1)[1])
@@ -19807,6 +19811,28 @@ def test_close_merged_sweep_closes_triage_issue_when_source_pr_closed_unmerged()
 		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[], close_fails=True, prs=source)
 		assert rc == 1 and "triage_rule=skip reason=close_failed pr=85" in out
 		assert "issue comment" not in calls and "ai:check-triage-source-closed" not in calls
+	# Issue #9481: the fresh source-PR read wins over the gate's earlier
+	# verdict; a PR reopened or merged since then is not closed against.
+	for changed in ({"state": "open"}, {"merged": True}):
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, out, calls = _close_sweep_gate_harness(
+				Path(tmp), verdict=closed, timeline=[], prs={85: {**source[85], **changed}},
+			)
+			assert rc == 1 and "triage_rule=skip reason=source_pr_state_changed pr=85" in out, out
+			assert "issue close" not in calls and "issue edit" not in calls
+	# An active pipeline run for the issue that has not opened its PR yet
+	# holds it open (AD-1 option B); an active run for another issue does not.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(
+			Path(tmp), verdict=closed, timeline=[], prs=source, env={"ACTIVE_WORKFLOW_ISSUES": "7\n10"},
+		)
+		assert rc == 1 and "triage_rule=skip reason=source_pr_closed_unmerged_run_active pr=85" in out, out
+		assert "issue close" not in calls and "issue edit" not in calls
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, _ = _close_sweep_gate_harness(
+			Path(tmp), verdict=closed, timeline=[], prs=source, env={"ACTIVE_WORKFLOW_ISSUES": "7\n100"},
+		)
+		assert rc == 0 and "reason=source_pr_closed_unmerged pr=85" in out, out
 	# An open source PR keeps today's path.
 	with tempfile.TemporaryDirectory() as tmp:
 		rc, out, calls = _close_sweep_gate_harness(
@@ -19833,6 +19859,17 @@ def test_close_merged_sweep_check_triage_gate_wiring_contract():
 	assert '[ "${_sweep_cand_bound}" = "true" ] && [ "${_sweep_is_triage}" = "true" ] && [ "${_sweep_triage_parsed}" != "true" ]' in body
 	# The stall path keeps its log contract through the shared core.
 	assert '_check_triage_gate_invoke "${issue_num}" "${_STALL_STANDALONE_DEFAULT_BRANCH}" "STALL_CHECK_TRIAGE_GATE"' in script
+	# Idle ticks (no tracking issue) run the triage-only sweep after standalone
+	# recovery; that mode makes only the ai:check-triage list call and reads
+	# timelines only inside the gate window.
+	idle = script.index('if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then')
+	idle_block = script[idle:script.index("  exit 0\nfi\n", idle)]
+	assert idle_block.index("run_standalone_stall_recovery") < idle_block.index("close_merged_issues_sweep triage_only || echo ")
+	assert '_sweep_mode="${1:-full}"' in body
+	assert body.index('if [ "${_sweep_mode}" != "triage_only" ]; then') < body.index('--label "ai:merged"')
+	assert body.index('--label "ai:ready-to-merge"') < body.index('--label "ai:check-triage"')
+	assert body.index('if [ "${_sweep_mode}" = "triage_only" ] && [[ "${_sweep_gate_window}" != *" ${issue_num} "* ]]; then') \
+		< body.index("_issue_timeline_with_cross_refs_json")
 
 
 def _run_target_merge_marker_base(tmp_path: Path) -> None:
