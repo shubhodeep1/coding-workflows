@@ -32,6 +32,10 @@ LINT_SCRIPT = REPO_ROOT / "scripts" / "lint_pr_body_auto_close.py"
 STEP_MARKER = "      - name: Commit and push report\n"
 REPORT = "analysis/workflow-optimization-2026-11-09.md"
 PR_BRANCH = "auto/workflow-log-analysis-report-111-1"
+DELIVER_SCRIPT = REPO_ROOT / "scripts" / "workflow_log_analysis_deliver_report.sh"
+DEEP_AUDIT_PUSH_STEP = "Commit and push deep audit section"
+API_REDUNDANCY_PUSH_STEP = "Commit and push API redundancy section"
+SECTION_SYNC_STEP = "Sync latest report from target branch"
 
 FAKE_GH = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "${FAKE_GH_LOG}"
@@ -76,6 +80,20 @@ def _step_body() -> str:
 	lines = []
 	for line in body.splitlines():
 		lines.append(line[10:] if line.startswith("          ") else line.strip())
+	return "\n".join(lines) + "\n"
+
+
+def _named_step_body(name: str, occurrence: int = 0) -> str:
+	# The dedented `run:` body of the occurrence-th step called `name`.
+	block = _workflow_text().split(f"      - name: {name}\n")[1 + occurrence].split("\n      - name: ", 1)[0]
+	lines: list[str] = []
+	for line in block.split("        run: |\n", 1)[1].splitlines():
+		if line.startswith("          "):
+			lines.append(line[10:])
+		elif line.strip() == "":
+			lines.append("")
+		else:
+			break
 	return "\n".join(lines) + "\n"
 
 
@@ -183,6 +201,86 @@ class _Sandbox:
 		env.update(extra)
 		return subprocess.run(
 			["bash", "-c", _step_body()], cwd=self.work, env=env, capture_output=True, text=True, check=False
+		)
+
+	def run_named_step(self, name: str, occurrence: int = 0, **extra: str) -> subprocess.CompletedProcess[str]:
+		# A section job step (issue #9503): the report already reached main.
+		env = dict(self.git_env)
+		env.update(
+			{
+				"PATH": f"{self.bin}{os.pathsep}{env.get('PATH', '')}",
+				"GITHUB_OUTPUT": str(self.output),
+				"GITHUB_REF_TYPE": "branch",
+				"GITHUB_REF_NAME": "main",
+				"GITHUB_RUN_ID": "111",
+				"GITHUB_RUN_ATTEMPT": "1",
+				"FAKE_GH_LOG": str(self.gh_log),
+				"REPORT_FILE": REPORT,
+				"REPORT_BRANCH": "",
+				"PYTHONDONTWRITEBYTECODE": "1",
+			}
+		)
+		env.pop("WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR", None)
+		env.update(extra)
+		self.output.write_text("", encoding="utf-8")
+		return subprocess.run(
+			["bash", "-c", _named_step_body(name, occurrence)],
+			cwd=self.work,
+			env=env,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+	def land_report_on_main(self, *extra_files: str) -> str:
+		# Another clone lands the report on main (a push or a squash merge,
+		# after which the run branch is gone), then any unrelated files.
+		other = self.tmp / "lander"
+		_git(self.tmp, "clone", "-q", self.origin.as_uri(), str(other), env=self.git_env)
+		(other / REPORT).write_text("# report\n\n- finding\n", encoding="utf-8")
+		_git(other, "add", "-A", env=self.git_env)
+		_git(other, "commit", "-q", "-m", "report", env=self.git_env)
+		for rel in extra_files:
+			(other / rel).write_text("unrelated\n", encoding="utf-8")
+			_git(other, "add", "-A", env=self.git_env)
+			_git(other, "commit", "-q", "-m", f"unrelated {rel}", env=self.git_env)
+		_git(other, "push", "-q", "origin", "HEAD:refs/heads/main", env=self.git_env)
+		return self.origin_ref("refs/heads/main")
+
+	def append_section(self, heading: str) -> None:
+		with (self.work / REPORT).open("a", encoding="utf-8") as handle:
+			handle.write(f"\n## {heading}\n")
+
+	def deliver_sections(self, branch: str, base: str) -> subprocess.CompletedProcess[str]:
+		checkout = self.tmp / "deliver_checkout"
+		_git(self.tmp, "clone", "-q", "--depth", "1", "--branch", "main", self.origin.as_uri(), str(checkout), env=self.git_env)
+		env = dict(self.git_env)
+		env.update(
+			{
+				"PATH": f"{self.bin}{os.pathsep}{env.get('PATH', '')}",
+				"GITHUB_OUTPUT": str(self.output),
+				"GITHUB_REF_TYPE": "branch",
+				"GITHUB_REF_NAME": "main",
+				"GITHUB_REPOSITORY": "o/r",
+				"GITHUB_RUN_ID": "111",
+				"GITHUB_SERVER_URL": "https://github.com",
+				"RUNNER_TEMP": str(self.runner_temp),
+				"FAKE_GH_LOG": str(self.gh_log),
+				"GH_RETRY_MAX_ATTEMPTS": "1",
+				"GH_TOKEN": "x",
+				"REPORT_PUSH_TOKEN": "x",
+				"REPORT_BRANCH": "",
+				"REPORT_FILE": REPORT,
+				"AUDIT_STATUS": "completed",
+				"WLA_DELIVER_SECTIONS_ONLY": "true",
+				"WLA_DELIVER_SECTIONS_BRANCH": branch,
+				"WLA_DELIVER_SECTIONS_BASE_SHA": base,
+				"PYTHONDONTWRITEBYTECODE": "1",
+			}
+		)
+		self.output.write_text("", encoding="utf-8")
+		return subprocess.run(
+			["bash", str(DELIVER_SCRIPT)], cwd=checkout, env=env, capture_output=True, text=True, check=False, timeout=120
 		)
 
 	def outputs(self) -> dict[str, str]:
@@ -593,6 +691,112 @@ def test_report_pr_static_contract() -> None:
 	assert '= "pr_auto_merge" ] || [ "${WLA_REPORT_DELIVERY:-}" = "pr_open" ]; then\n              ALERT_LEVEL' not in telegram
 
 
+# --- section delivery (issue #9503, project #9116 P1b) -------------------
+
+def test_section_push_mode_report_pushed_creates_run_branch_for_delivery() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		# Push mode delivered the report straight to main; the deep-audit job
+		# synced that tip and appended its section.
+		main_tip = box.land_report_on_main()
+		_git(box.work, "pull", "-q", "--rebase", "origin", "main", env=box.git_env)
+		box.append_section("Deep audit")
+		proc = box.run_named_step(DEEP_AUDIT_PUSH_STEP)
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert box.origin_ref("refs/heads/main") == main_tip
+		assert box.origin_ref(f"refs/heads/{PR_BRANCH}^") == main_tip
+		section = subprocess.run(
+			["git", "show", f"{PR_BRANCH}:{REPORT}"], cwd=box.origin, env=box.git_env, capture_output=True, text=True, check=True
+		).stdout
+		assert "## Deep audit" in section
+		out = box.outputs()
+		assert out["section_branch"] == PR_BRANCH
+		assert out["section_base_sha"] == main_tip
+		assert (
+			f"WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=section_pushed branch={PR_BRANCH} base={main_tip} job=deep-audit"
+			in proc.stdout
+		)
+		assert "reason=no_report_branch" not in proc.stdout
+		assert box.gh_calls() == []
+		# deliver-report opens one sections-only PR for that branch.
+		delivered = box.deliver_sections(PR_BRANCH, main_tip)
+		assert delivered.returncode == 0, delivered.stderr + delivered.stdout
+		assert f"WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=pr_opened branch={PR_BRANCH} pr=42 file={REPORT}" in delivered.stdout
+		calls = box.gh_calls()
+		assert [call for call in calls if call.startswith("pr create")] == calls and len(calls) == 1, calls
+		assert "sections" in calls[0]
+		assert not box.origin_has(f"refs/heads/{PR_BRANCH}", REPORT.replace(".md", "-2.md"))
+
+
+def test_section_pr_merged_recreates_deleted_run_branch() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		# The report PR was squash-merged, its branch deleted, and main then
+		# gained an unrelated commit before the section jobs ran.
+		main_tip = box.land_report_on_main("unrelated.txt")
+		assert box.origin_ref(f"refs/heads/{PR_BRANCH}") == ""
+		sync = box.run_named_step(SECTION_SYNC_STEP, 0)
+		assert sync.returncode == 0, sync.stderr + sync.stdout
+		assert _git(box.work, "rev-parse", "HEAD", env=box.git_env) == main_tip
+		box.append_section("Deep audit")
+		proc = box.run_named_step(DEEP_AUDIT_PUSH_STEP)
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		deep_tip = box.origin_ref(f"refs/heads/{PR_BRANCH}")
+		assert deep_tip and box.origin_ref(f"refs/heads/{PR_BRANCH}^") == main_tip
+		assert box.outputs() == {"section_branch": PR_BRANCH, "section_base_sha": main_tip}
+		# api-redundancy continues on deep-audit's branch: a fast-forward.
+		sync = box.run_named_step(SECTION_SYNC_STEP, 1, SECTION_BRANCH=PR_BRANCH)
+		assert sync.returncode == 0, sync.stderr + sync.stdout
+		assert _git(box.work, "rev-parse", "HEAD", env=box.git_env) == deep_tip
+		box.append_section("API redundancy")
+		proc = box.run_named_step(API_REDUNDANCY_PUSH_STEP, SECTION_BRANCH=PR_BRANCH, SECTION_BASE_SHA=main_tip)
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert box.origin_ref(f"refs/heads/{PR_BRANCH}^") == deep_tip
+		assert box.outputs() == {"section_branch": PR_BRANCH, "section_base_sha": main_tip}
+		assert f"outcome=section_pushed branch={PR_BRANCH} base={main_tip} job=api-redundancy" in proc.stdout
+		assert box.origin_ref("refs/heads/main") == main_tip
+		delivered = box.deliver_sections(PR_BRANCH, main_tip)
+		assert delivered.returncode == 0, delivered.stderr + delivered.stdout
+		assert "outcome=pr_opened" in delivered.stdout
+
+
+def test_section_no_changes_pushes_nothing() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		box.land_report_on_main()
+		_git(box.work, "pull", "-q", "--rebase", "origin", "main", env=box.git_env)
+		proc = box.run_named_step(DEEP_AUDIT_PUSH_STEP)
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert "No deep audit section changes to commit." in proc.stdout
+		assert "section_branch" not in box.outputs()
+		assert box.origin_ref(f"refs/heads/{PR_BRANCH}") == ""
+		assert box.gh_calls() == []
+		assert "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY" not in proc.stdout
+
+
+def test_section_steps_static_contract() -> None:
+	wf = _workflow_text()
+	for name, step_id in ((DEEP_AUDIT_PUSH_STEP, "deep_audit_section_push"), (API_REDUNDANCY_PUSH_STEP, "api_redundancy_section_push")):
+		block = wf.split(f"      - name: {name}\n", 1)[1].split("\n      - name: ", 1)[0]
+		assert block.startswith(f"        id: {step_id}\n"), name
+		assert (
+			"WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR || 'true' }}"
+			in block
+		), name
+		body = _named_step_body(name)
+		assert "${{" not in body
+		assert '"${WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR:-true}"' in body
+		assert "HEAD:${TARGET_BRANCH}" not in body and "HEAD:${GITHUB_REF_NAME}" not in body
+		assert "--force" not in body and "--admin" not in body
+		assert 'git push origin "HEAD:refs/heads/${REPORT_BRANCH}"' in body
+		assert 'REPORT_BRANCH="auto/workflow-log-analysis-report-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in body
+		assert "Never push to the default" in body
+	for job_id, step_id in (("deep-audit", "deep_audit_section_push"), ("api-redundancy", "api_redundancy_section_push")):
+		job = wf.split(f"\n  {job_id}:\n", 1)[1].split("\n    steps:\n", 1)[0]
+		assert f"section_branch: ${{{{ steps.{step_id}.outputs.section_branch }}}}" in job
+		assert f"section_base_sha: ${{{{ steps.{step_id}.outputs.section_base_sha }}}}" in job
+
+
 def main() -> int:
 	test_report_pr_default_mode_opens_and_merges_pr()
 	test_report_pr_queued_direct_merge_is_not_reported_merged()
@@ -613,6 +817,10 @@ def main() -> int:
 	test_report_pr_no_changes_makes_no_gh_calls()
 	test_report_pr_rejects_malformed_report_path()
 	test_report_pr_static_contract()
+	test_section_push_mode_report_pushed_creates_run_branch_for_delivery()
+	test_section_pr_merged_recreates_deleted_run_branch()
+	test_section_no_changes_pushes_nothing()
+	test_section_steps_static_contract()
 	return 0
 
 

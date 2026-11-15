@@ -2350,6 +2350,10 @@ jobs:
     timeout-minutes: 75
     outputs:
       audit_status: ${{ steps.audit.outputs.audit_status }}
+      # Issue #9503 (project #9116 P1b): the run branch the section step
+      # re-created from the target tip, and that tip, for deliver-report.
+      section_branch: ${{ steps.deep_audit_section_push.outputs.section_branch }}
+      section_base_sha: ${{ steps.deep_audit_section_push.outputs.section_base_sha }}
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
       AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
@@ -2842,6 +2846,7 @@ jobs:
           echo "audit_status=completed" >> "$GITHUB_OUTPUT"
 
       - name: Commit and push deep audit section
+        id: deep_audit_section_push
         if: steps.audit.outputs.audit_status == 'completed'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
@@ -2852,6 +2857,8 @@ jobs:
           GIT_CONFIG_VALUE_0: '!f() { printf "username=x-access-token\npassword=%s\n" "${GH_TOKEN}"; }; f'
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
           REPORT_BRANCH: ${{ needs.analyze-commit-notify.outputs.report_branch }}
+          # Issue #9503 kill switch: false/0/no/off restores the P1 skip.
+          WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR || 'true' }}
         run: |
           set -euo pipefail
 
@@ -2863,6 +2870,12 @@ jobs:
             echo "::error::report_branch output does not match auto/workflow-log-analysis-report-<run_id>-<run_attempt>."
             exit 1
           fi
+          sections_via_pr="true"
+          case "$(printf '%s' "${WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR:-true}" | tr '[:upper:]' '[:lower:]')" in
+            false|0|no|off) sections_via_pr="false" ;;
+            true|1|yes|on|"") ;;
+            *) echo "::warning::WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR has an unrecognized value; delivering the section through the run branch (set false to skip it)." ;;
+          esac
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -2873,18 +2886,34 @@ jobs:
             exit 0
           fi
 
+          # The synced target tip that holds the report (issue #9503): the
+          # re-created run branch forks here and deliver-report diffs from it.
+          section_base_sha="$(git rev-parse HEAD)"
           git commit -m "chore: append deep audit section to workflow log analysis report"
 
           # Issue #8963: the default branch requires status checks with no
           # bypass, so the section goes to this run's report branch and the
           # deliver-report job's PR carries it. Never push to the default
           # branch: without a report branch there is nothing to deliver.
+          section_recreated=0
           if [ -z "${REPORT_BRANCH:-}" ]; then
-            # Project #9116 P1: commit_report delivers the report itself, so
-            # no run branch reaches this job and the section is not delivered.
-            echo "::warning::The deep audit section was committed locally but not delivered: this run has no report branch (the report was delivered by commit_report)."
-            echo "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=skipped reason=no_report_branch job=deep-audit"
-            exit 0
+            if [ "${sections_via_pr}" != "true" ]; then
+              # Project #9116 P1: commit_report delivers the report itself, so
+              # no run branch reaches this job and the section is not delivered.
+              echo "::warning::The deep audit section was committed locally but not delivered: this run has no report branch (the report was delivered by commit_report)."
+              echo "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=skipped reason=no_report_branch job=deep-audit"
+              exit 0
+            fi
+            # Issue #9503 (project #9116 P1b): the report is already on the
+            # target branch (pushed or pr_merged, which may have deleted the
+            # run branch), so re-create the run-unique branch from the synced
+            # tip. A plain push: a leftover branch is refused as non-fast-forward.
+            if ! [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] || ! [[ "${GITHUB_RUN_ATTEMPT:-}" =~ ^[0-9]+$ ]]; then
+              echo "::error::Could not build the run branch name from GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT."
+              exit 1
+            fi
+            REPORT_BRANCH="auto/workflow-log-analysis-report-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            section_recreated=1
           fi
 
           # Only this run writes the report branch, and deep-audit and
@@ -2922,6 +2951,13 @@ jobs:
               push_backoff_secs=60
             fi
           done
+          if [ "${section_recreated}" = "1" ]; then
+            {
+              echo "section_branch=${REPORT_BRANCH}"
+              echo "section_base_sha=${section_base_sha}"
+            } >> "$GITHUB_OUTPUT"
+            echo "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=section_pushed branch=${REPORT_BRANCH} base=${section_base_sha} job=deep-audit"
+          fi
 
       - name: Send Telegram notification
         if: always()
@@ -2977,6 +3013,10 @@ jobs:
     timeout-minutes: 90
     outputs:
       api_redundancy_status: ${{ steps.api_redundancy.outputs.api_redundancy_status }}
+      # Issue #9503 (project #9116 P1b): the run branch carrying the sections
+      # and the target tip it forks from, for deliver-report.
+      section_branch: ${{ steps.api_redundancy_section_push.outputs.section_branch }}
+      section_base_sha: ${{ steps.api_redundancy_section_push.outputs.section_base_sha }}
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
       AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
@@ -3122,11 +3162,24 @@ jobs:
           GIT_CONFIG_KEY_0: credential.helper
           GIT_CONFIG_VALUE_0: '!f() { printf "username=x-access-token\npassword=%s\n" "${GH_TOKEN}"; }; f'
           REPORT_BRANCH: ${{ needs.analyze-commit-notify.outputs.report_branch }}
+          # Issue #9503: the run branch deep-audit re-created for its section.
+          SECTION_BRANCH: ${{ needs.deep-audit.outputs.section_branch }}
         run: |
           set -euo pipefail
           if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
             echo "::error::API redundancy pass requires a branch ref for report sync/push (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
             exit 1
+          fi
+          # Issue #9503 (project #9116 P1b): when deep-audit re-created the run
+          # branch for its section, continue on it so this push fast-forwards.
+          if [ -z "${REPORT_BRANCH:-}" ] && [ -n "${SECTION_BRANCH:-}" ]; then
+            if ! [[ "${SECTION_BRANCH}" =~ ^auto/workflow-log-analysis-report-[0-9]+-[0-9]+$ ]]; then
+              echo "::error::deep-audit section_branch output does not match auto/workflow-log-analysis-report-<run_id>-<run_attempt>."
+              exit 1
+            fi
+            git fetch origin "+refs/heads/${SECTION_BRANCH}:refs/remotes/origin/${SECTION_BRANCH}"
+            git checkout -B "${SECTION_BRANCH}" "origin/${SECTION_BRANCH}"
+            exit 0
           fi
           # Issue #8963: the report lives on this run's report branch until
           # its PR merges; append to that copy. Without a report branch,
@@ -3460,6 +3513,7 @@ jobs:
           echo "api_redundancy_status=completed" >> "$GITHUB_OUTPUT"
 
       - name: Commit and push API redundancy section
+        id: api_redundancy_section_push
         if: steps.api_redundancy.outputs.api_redundancy_status == 'completed'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
@@ -3470,6 +3524,11 @@ jobs:
           GIT_CONFIG_VALUE_0: '!f() { printf "username=x-access-token\npassword=%s\n" "${GH_TOKEN}"; }; f'
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
           REPORT_BRANCH: ${{ needs.analyze-commit-notify.outputs.report_branch }}
+          # Issue #9503: deep-audit's re-created run branch and its base.
+          SECTION_BRANCH: ${{ needs.deep-audit.outputs.section_branch }}
+          SECTION_BASE_SHA: ${{ needs.deep-audit.outputs.section_base_sha }}
+          # Issue #9503 kill switch: false/0/no/off restores the P1 skip.
+          WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR || 'true' }}
         run: |
           set -euo pipefail
 
@@ -3481,6 +3540,30 @@ jobs:
             echo "::error::report_branch output does not match auto/workflow-log-analysis-report-<run_id>-<run_attempt>."
             exit 1
           fi
+          sections_via_pr="true"
+          case "$(printf '%s' "${WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR:-true}" | tr '[:upper:]' '[:lower:]')" in
+            false|0|no|off) sections_via_pr="false" ;;
+            true|1|yes|on|"") ;;
+            *) echo "::warning::WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR has an unrecognized value; delivering the section through the run branch (set false to skip it)." ;;
+          esac
+          # Issue #9503 (project #9116 P1b): continue on deep-audit's run
+          # branch. Its outputs reach deliver-report even when this job adds
+          # nothing, so they are written before the no-changes exit.
+          section_from_deep_audit=0
+          section_base_sha=""
+          if [ -z "${REPORT_BRANCH:-}" ] && [ "${sections_via_pr}" = "true" ] && [ -n "${SECTION_BRANCH:-}" ]; then
+            if ! [[ "${SECTION_BRANCH}" =~ ^auto/workflow-log-analysis-report-[0-9]+-[0-9]+$ ]] \
+              || ! [[ "${SECTION_BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::deep-audit section_branch/section_base_sha outputs are malformed."
+              exit 1
+            fi
+            section_from_deep_audit=1
+            section_base_sha="${SECTION_BASE_SHA}"
+            {
+              echo "section_branch=${SECTION_BRANCH}"
+              echo "section_base_sha=${SECTION_BASE_SHA}"
+            } >> "$GITHUB_OUTPUT"
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -3491,18 +3574,37 @@ jobs:
             exit 0
           fi
 
+          if [ -z "${section_base_sha}" ]; then
+            # The synced target tip that holds the report (issue #9503).
+            section_base_sha="$(git rev-parse HEAD)"
+          fi
           git commit -m "chore: append API redundancy section to workflow log analysis report"
 
           # Issue #8963: the default branch requires status checks with no
           # bypass, so the section goes to this run's report branch and the
           # deliver-report job's PR carries it. Never push to the default
           # branch: without a report branch there is nothing to deliver.
+          section_recreated=0
           if [ -z "${REPORT_BRANCH:-}" ]; then
-            # Project #9116 P1: commit_report delivers the report itself, so
-            # no run branch reaches this job and the section is not delivered.
-            echo "::warning::The API redundancy section was committed locally but not delivered: this run has no report branch (the report was delivered by commit_report)."
-            echo "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=skipped reason=no_report_branch job=api-redundancy"
-            exit 0
+            if [ "${sections_via_pr}" != "true" ]; then
+              # Project #9116 P1: commit_report delivers the report itself, so
+              # no run branch reaches this job and the section is not delivered.
+              echo "::warning::The API redundancy section was committed locally but not delivered: this run has no report branch (the report was delivered by commit_report)."
+              echo "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=skipped reason=no_report_branch job=api-redundancy"
+              exit 0
+            fi
+            if [ "${section_from_deep_audit}" = "1" ]; then
+              REPORT_BRANCH="${SECTION_BRANCH}"
+            else
+              # Issue #9503: deep-audit pushed no section, so re-create the
+              # run-unique branch from this job's synced target tip.
+              if ! [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] || ! [[ "${GITHUB_RUN_ATTEMPT:-}" =~ ^[0-9]+$ ]]; then
+                echo "::error::Could not build the run branch name from GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT."
+                exit 1
+              fi
+              REPORT_BRANCH="auto/workflow-log-analysis-report-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            fi
+            section_recreated=1
           fi
 
           # Only this run writes the report branch, and deep-audit and
@@ -3540,6 +3642,15 @@ jobs:
               push_backoff_secs=60
             fi
           done
+          if [ "${section_recreated}" = "1" ]; then
+            if [ "${section_from_deep_audit}" != "1" ]; then
+              {
+                echo "section_branch=${REPORT_BRANCH}"
+                echo "section_base_sha=${section_base_sha}"
+              } >> "$GITHUB_OUTPUT"
+            fi
+            echo "WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=section_pushed branch=${REPORT_BRANCH} base=${section_base_sha} job=api-redundancy"
+          fi
 
       - name: Send Telegram notification
         if: always()
@@ -3581,9 +3692,12 @@ jobs:
   # step, uses a one-shot credential helper, and does its git work in a
   # temporary worktree (scripts/workflow_log_analysis_deliver_report.sh).
   # always(): a failed or skipped section job still delivers what completed.
+  # Issue #9503 (project #9116 P1b): when commit_report delivered the report
+  # itself (pushed or pr_merged), the section jobs re-create the run branch
+  # from the target tip and this job opens a sections-only PR for it.
   deliver-report:
     needs: [analyze-commit-notify, deep-audit, api-redundancy]
-    if: ${{ always() && github.event_name != 'schedule' && needs.analyze-commit-notify.outputs.committed == 'true' }}
+    if: ${{ always() && github.event_name != 'schedule' && (needs.analyze-commit-notify.outputs.committed == 'true' || needs.deep-audit.outputs.section_branch != '' || needs.api-redundancy.outputs.section_branch != '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -3623,4 +3737,8 @@ jobs:
           API_REDUNDANCY_RESULT: ${{ needs.api-redundancy.result }}
           # A dispatch from a non-default ref fails closed (run_context_invalid).
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
+          # Issue #9503: sections-only delivery of a re-created run branch.
+          WLA_DELIVER_SECTIONS_ONLY: ${{ needs.analyze-commit-notify.outputs.committed != 'true' && (needs.api-redundancy.outputs.section_branch || needs.deep-audit.outputs.section_branch) && 'true' || 'false' }}
+          WLA_DELIVER_SECTIONS_BRANCH: ${{ needs.api-redundancy.outputs.section_branch || needs.deep-audit.outputs.section_branch || '' }}
+          WLA_DELIVER_SECTIONS_BASE_SHA: ${{ needs.api-redundancy.outputs.section_base_sha || needs.deep-audit.outputs.section_base_sha || '' }}
         run: bash scripts/workflow_log_analysis_deliver_report.sh
