@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The original issue (Task #9447) requires moving the slowest steps of the CI job `orchestrate-poll (0)` to the job with the most headroom.\n  expected_change_site: .github/workflows/ci.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff contains no changes to move any CI steps, jobs, or matrix configurations. The requirement is explicitly deferred in the PR description under \"Deferred scope (not delivered by this PR)\", justified by AD-1 and AD-2. The reviewer rated it SEVERITY: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: The original issue (Task #9447) requires moving the slowest steps of the CI job `orchestrate-poll (0)` to the job with the most headroom.\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The PR diff contains no changes to move any CI steps, jobs, or matrix configurations. This requirement is explicitly deferred in the PR description under \"Deferred scope (not delivered by this PR)\" with the explanation that a run including the #9214 move must be analyzed first, and this deferral is justified by the clarification questions AD-1 and AD-2.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "363a6852f6cf1c8a52a601bb7206dffd06728fccd74b0b33496b85756eec5d51",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9453,
+    "run_id": "43677257771",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43677257771",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261115150350_3ebfa90d44",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9453,
+    "run_id": "43677257771"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-15T15:03:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
