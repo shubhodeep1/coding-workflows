@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: `scripts/unblock_ledger.py` `latest_rejection` (lines 584-610) reads the marker from the last non-empty line (`lines[-1]`, matched by `REJECTION_RE` and the `rejection_item` prefix). It checks only the first line against `GUARD_REJECTION_HEADERS` (line 600). If the routed layout keeps the header and marker as the last two lines, the existing code parses the marker, keeps the trusted-author check, and returns `malformed` for a broken or truncated marker line through the `rejection_item` path. The ledger stays as it is, which is what the issue's \"make no other ledger change\" asks for. Option B would change three parsers (lines 600, 686, 746), including the automation-path handoff and automation-rejection logic, which this issue says are out of scope. Option C moves `Planning blocked: human input required.` off the first line. That breaks the first-line contract that `scripts/unblock_judge.sh:599`, `tests/test_plan_clarify_blocked_output.py:850` and `tests/test_orchestrate_lib.py:3277` rely on, and it goes against the goal of keeping every existing line of the comment unchanged.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/unblock_ledger.py (`latest_rejection` lines 574-627, `GUARD_REJECTION_HEADERS` lines 275-280, `REJECTION_RE` lines 237-241)\n    - .github/workflows/plan.yml (\"Handle blocked planning output\", around line 2357)\n    - tests/test_unblock_judge.py, tests/test_plan_clarify_blocked_output.py\n  steps:\n    - Keep the routed comment layout as planned. Every existing line stays unchanged and in order, starting with `Planning blocked: human input required.`. The header `\ud83d\udea8 **files_touched scope guard rejected this planning run.**` goes second-to-last, and the `ai:guard-rejection:v1` marker is the last non-empty line.\n    - In \"Handle blocked planning output\", add the header, the marker and `--add-label 'ai:scope-blocked'` only when `steps.route_scope_block.outputs.scope_routed == 'true'` and the marker output is non-empty. Add all three or none of them, so a header can never appear without its marker.\n    - Append the new header string to `GUARD_REJECTION_HEADERS` in `scripts/unblock_ledger.py`. Make no other ledger change; the entry is documentary and has no effect on planning comments.\n    - Change the ledger test that was planned as \"new header without marker is treated as malformed\". It should say: a trusted `ai:scope-blocked` comment that starts with `Planning blocked: human input required.` and ends with the planning header but has no marker never offers `override_guard`, and `latest_rejection` returns `{\"status\": \"none\", \"reason\": \"missing\"}`.\n    - Add a ledger test for a routed comment whose last line starts with `<!-- ai:guard-rejection:v1 item=<n>` but does not fully match `REJECTION_RE`. It returns `reason=malformed` and does not offer `override_guard`.\n    - Keep the contract tests in `tests/test_plan_clarify_blocked_output.py`. The first line stays `Planning blocked: human input required.` in both the routed and unrouted cases. When routed, the marker is the last non-empty line and the header is the line before it.\n  replaces_acceptance_criterion: \"the new header without a marker is treated as malformed and does not offer override_guard\"\n  equivalence_argument: The safety property is that no `override_guard` offer is made without a valid trusted marker, and it still holds. A header with no marker returns `missing`, and a marker line that is present but broken still returns `malformed` through the `rejection_item` branch. Because plan.yml emits the header only together with a non-empty marker, a header-only planning comment cannot be produced. So the case the first-line check guards against for implement comments (a handler that wrote its header but failed to encode the marker) does not arise on this path.\n  reversibility: If a person later wants planning headers covered by the malformed check, option B can be added as a separate change to the ledger parsers (lines 600, 686, 746). The comment layout and marker format stay the same, so markers already posted remain valid.",
+  "fingerprint": "81986598753e40e642cbf5183c0481e4b0fc036e93cbfa06ed9149ab29103503",
+  "lineage": {
+    "issue_number": 9534,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43737259761",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43737259761",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9534"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261115210832_898bcf763e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9534,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43737259761"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9534",
+  "timestamps": {
+    "created_at": "2026-11-15T21:08:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
