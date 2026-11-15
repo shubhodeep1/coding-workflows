@@ -19543,6 +19543,345 @@ def test_close_merged_sweep_check_triage_contract():
 	assert '_pr_json_base_is_target_merge "${issue_num}" "${_stall_nt_pr_json}" "${_STALL_STANDALONE_DEFAULT_BRANCH}" "${_stall_nt_declared}" "${_stall_nt_managed}"; then' in script
 
 
+# ---------------------------------------------------------------------------
+# Issue #9481: stuck ai:check-triage issues. A fix PR merged into the marker
+# PR's orchestrator project base, triage-rule diagnostics, the check-triage
+# gate pass in close_merged_issues_sweep, the source-PR-closed close, and the
+# stall judge keeping escalate_human for a closed linked PR.
+# ---------------------------------------------------------------------------
+
+
+def _triage_project_marker_pr(merged: bool = True, base: str = "orchestrator/project-192") -> dict:
+	pr = _triage_marker_pr()
+	pr.update({"state": "closed" if merged else "open", "merged": merged, "baseRefName": base})
+	if merged:
+		pr["merged_at"] = "2026-11-10T00:00:00Z"
+	return pr
+
+
+def _run_triage_project_sweep(*, tracking_labels: list[str], marker_pr: dict) -> dict:
+	return _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=tracking_labels,
+		issue_labels={10: ["ai:check-triage", "ai:ready-to-merge"]},
+		issue_bodies={10: _triage_issue_body()},
+		issue_authors={10: {"login": _TRIAGE_PIPELINE_LOGIN, "association": "NONE"}},
+		issue_linked_prs={10: 971},
+		prs=[_triage_fix_pr(base="orchestrator/project-192"), marker_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+
+
+def test_close_merged_sweep_accepts_check_triage_fix_merged_into_marker_pr_project_base():
+	"""fun-token-multi-chain #846 shape: marker PR #852's source merged into
+	orchestrator/project-768, and the fix PR targets that project branch."""
+	result = _run_triage_project_sweep(tracking_labels=["ai:orchestrator-tracking"], marker_pr=_triage_project_marker_pr())
+	assert 10 in result.get("closed_issues", []), result["stdout"]
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=ready_label candidate_pr=971 accepted reason=check_triage_marker_pr_base"
+	) in result["stdout"]
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 triage_rule=ok marker_pr=970 head=ai/issue-9 marker_merged=true "
+		"marker_base=orchestrator/project-192"
+	) in result["stdout"]
+
+	# The project issue lacks ai:orchestrator-tracking: a lookalike branch.
+	untracked = _run_triage_project_sweep(tracking_labels=[], marker_pr=_triage_project_marker_pr())
+	assert 10 not in untracked.get("closed_issues", []), untracked["stdout"]
+	assert "triage_rule=skip reason=project_untracked marker_pr=970 marker_base=orchestrator/project-192" in untracked["stdout"]
+	assert "candidate_pr=971 rejected=non_target_base base=orchestrator/project-192" in untracked["stdout"]
+
+	# The marker PR has not merged: its base is not where the fix belongs.
+	unmerged = _run_triage_project_sweep(
+		tracking_labels=["ai:orchestrator-tracking"], marker_pr=_triage_project_marker_pr(merged=False),
+	)
+	assert 10 not in unmerged.get("closed_issues", []), unmerged["stdout"]
+	assert "marker_merged=false marker_base=none" in unmerged["stdout"]
+	assert "candidate_pr=971 rejected=non_target_base" in unmerged["stdout"]
+
+
+def test_close_merged_sweep_logs_check_triage_rule_skip_reasons():
+	"""fun-token-multi-chain #808 shape: the rule rejected silently; every
+	early return now names its reason."""
+	author = _run_triage_sweep(["ai:check-triage", "ai:done"], author="someone-else")
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 triage_rule=skip reason=author_mismatch author=someone-else login=github-actions[bot]"
+	) in author["stdout"]
+	duplicate = _run_triage_sweep(
+		["ai:check-triage", "ai:done"], body=_triage_issue_body(extra="<!-- check-failure-triage:pr=970 -->\n"),
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 triage_rule=skip reason=marker" in duplicate["stdout"]
+	fork_fix = _triage_fix_pr()
+	fork_fix["headRepoFullName"] = "attacker/repo"
+	fork = _run_triage_sweep(["ai:check-triage", "ai:done"], fix_pr=fork_fix)
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 candidate_pr=971 triage_rule=skip reason=candidate_unbound head=ai/issue-10 head_repo=attacker/repo"
+	) in fork["stdout"]
+	foreign = _run_triage_sweep(["ai:check-triage", "ai:done"], marker_pr=_triage_marker_pr(head_repo="attacker/repo"))
+	assert "CLOSE_MERGED_SWEEP issue=10 triage_rule=skip reason=marker_pr_cross_repo marker_pr=970" in foreign["stdout"]
+	# A case-only difference in the repository name still binds (Gap 2).
+	cased_fix = _triage_fix_pr()
+	cased_fix["headRepoFullName"] = "Owner/Repo"
+	cased = _run_triage_sweep(["ai:check-triage", "ai:done"], fix_pr=cased_fix)
+	assert 10 in cased.get("closed_issues", []), cased["stdout"]
+	assert "accepted reason=check_triage_pr_branch" in cased["stdout"]
+
+
+def _close_sweep_gate_harness(tmp_path: Path, *, verdict: dict, timeline: list, prs: dict[int, dict] | None = None,
+		env: dict[str, str] | None = None, close_fails: bool = False) -> tuple[int, str, str]:
+	"""Run _close_sweep_check_triage_gate with a stub gate script and stub gh."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	gate_start = script.index('_CT_GATE_SKIP=""\n_CT_GATE_RC=0\n')
+	gate_end = script.index("\n# ---------------------------------------------------------------\n# Unblock judge", gate_start)
+	ref_start = script.index("_close_sweep_log_ref() {")
+	ref_end = script.index("\n# A branch name alone does not identify", ref_start)
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts" / "workflow_failure_heal.py").write_text("", encoding="utf-8")
+	(tmp_path / "scripts" / "check_triage_resolution.py").write_text(
+		"import json, os, sys\n"
+		"open(os.environ['STUB_GATE_ARGS'], 'w').write(json.dumps(sys.argv[1:]))\n"
+		"print(os.environ['STUB_VERDICT'])\n",
+		encoding="utf-8",
+	)
+	pr_dir = tmp_path / "prs"
+	pr_dir.mkdir()
+	for number, payload in (prs or {}).items():
+		(pr_dir / f"{number}.json").write_text(json.dumps(payload), encoding="utf-8")
+	calls = tmp_path / "gh_calls.txt"
+	driver = tmp_path / "driver.sh"
+	driver.write_text(
+		"set -euo pipefail\n"
+		'gh_retry() { "$@"; }\n'
+		'gh() { printf "%s\\n" "$*" >> "${STUB_CALLS}"; '
+		'if [ "$1" = api ]; then echo \'{"number": 10}\'; return 0; fi; '
+		'if [ "$1 $2" = "issue close" ] && [ "${STUB_CLOSE_FAIL:-}" = "1" ]; then return 1; fi; return 0; }\n'
+		'_fetch_pr_json() { cat "${STUB_PR_DIR}/$1.json" 2>/dev/null || echo "{}"; }\n'
+		"ensure_label_exists() { :; }\n"
+		+ script[ref_start:ref_end] + "\n" + script[gate_start:gate_end] + "\n"
+		'rc=0; _close_sweep_check_triage_gate 10 "${STUB_TIMELINE}" main || rc=$?\n'
+		'echo "RC=${rc}"\n',
+		encoding="utf-8",
+	)
+	run_env = {
+		**os.environ,
+		"GITHUB_REPOSITORY": "owner/repo",
+		"RUNTIME_DIR": str(tmp_path),
+		"STUB_VERDICT": json.dumps(verdict),
+		"STUB_GATE_ARGS": str(tmp_path / "gate_args.json"),
+		"STUB_TIMELINE": json.dumps(timeline),
+		"STUB_PR_DIR": str(pr_dir),
+		"STUB_CALLS": str(calls),
+		"STUB_CLOSE_FAIL": "1" if close_fails else "",
+	}
+	run_env.pop("CHECK_TRIAGE_RESOLVED_GATE_ENABLED", None)
+	run_env.update(env or {})
+	proc = subprocess.run(["bash", str(driver)], cwd=tmp_path, env=run_env, capture_output=True, text=True, check=True)
+	rc = int(proc.stdout.strip().splitlines()[-1].split("=", 1)[1])
+	return rc, proc.stdout, calls.read_text(encoding="utf-8") if calls.exists() else ""
+
+
+def _open_cross_ref(number: int, state: str | None = "open") -> dict:
+	issue = {"number": number, "pull_request": {"url": f"https://api.github.com/repos/owner/repo/pulls/{number}"}, "merged": False}
+	if state is not None:
+		issue["state"] = state
+	return {"event": "cross-referenced", "source": {"issue": issue}}
+
+
+def _open_fix_pr(number: int = 221, head: str = "ai/issue-10", head_repo: str = "owner/repo") -> dict:
+	return {"number": number, "state": "open", "merged": False, "head": {"ref": head, "repo": {"full_name": head_repo}}}
+
+
+def test_close_merged_sweep_runs_check_triage_gate_for_issue_without_fix_pr():
+	"""fun-token-multi-chain #828 / #820 shape: no fix PR at all (never
+	started, or ai:blocked + ai:needs-human). The sweep now runs the gate."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(
+			Path(tmp), verdict={"status": "resolved", "reason": "verified", "pr": 795, "pr_state": "merged"}, timeline=[],
+		)
+		assert rc == 0, out
+		assert "CLOSE_MERGED_SWEEP issue=10 triage_gate=resolved reason=verified rc=0 pr_state=merged" in out
+		assert "issue close" not in calls  # the gate itself closed the issue
+		args = json.loads((Path(tmp) / "gate_args.json").read_text(encoding="utf-8"))
+		assert args[:1] == ["gate"] and "--default-branch" in args and args[args.index("--default-branch") + 1] == "main"
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, _ = _close_sweep_gate_harness(
+			Path(tmp), verdict={"status": "unverified", "reason": "default_run_not_success", "pr": 795, "pr_state": "merged"}, timeline=[],
+		)
+		assert rc == 1 and "triage_gate=unverified reason=default_run_not_success rc=0" in out
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(
+			Path(tmp), verdict={"status": "resolved"}, timeline=[], env={"CHECK_TRIAGE_RESOLVED_GATE_ENABLED": "false"},
+		)
+		assert rc == 1 and "CLOSE_MERGED_SWEEP issue=10 triage_gate=skip reason=disabled" in out
+		assert calls == ""
+
+	# End to end: the sweep gates a blocked triage issue with no fix PR, in a
+	# rotation window bounded by CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK.
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:check-triage", "ai:blocked", "ai:needs-human"], 11: ["ai:check-triage"]},
+		issue_bodies={10: _triage_issue_body(), 11: _triage_issue_body()},
+		mock_gh_issue_list_label_filter=True,
+		env_overrides={"CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK": "1", "GITHUB_RUN_NUMBER": "3"},
+	)
+	assert "CLOSE_MERGED_SWEEP triage_gate_window size=1 total=2 offset=1" in result["stdout"], result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=11 triage_gate=" in result["stdout"]
+	assert "CLOSE_MERGED_SWEEP issue=10 triage_gate=" not in result["stdout"]
+	disabled = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:check-triage", "ai:blocked"]},
+		issue_bodies={10: _triage_issue_body()},
+		mock_gh_issue_list_label_filter=True,
+		env_overrides={"CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK": "0"},
+	)
+	assert "triage_gate" not in disabled["stdout"]
+
+
+def test_close_merged_sweep_closes_triage_issue_when_source_pr_closed_unmerged():
+	"""btc_sweeper #207 shape: source PR #85 closed without merging."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	closed = {"status": "unverified", "reason": "pr_not_merged", "pr": 85, "pr_state": "closed"}
+	merged_elsewhere = {"event": "cross-referenced", "source": {"issue": {
+		"number": 300, "state": "closed", "merged": True, "pull_request": {"url": "https://api.github.com/repos/owner/repo/pulls/300"},
+	}}}
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[merged_elsewhere])
+		assert rc == 0, out
+		assert "CLOSE_MERGED_SWEEP issue=10 triage_rule=closed reason=source_pr_closed_unmerged pr=85" in out
+		assert "issue edit 10 --repo owner/repo --add-label ai:closed" in calls
+		close_call = next(line for line in calls.splitlines() if line.startswith("issue close 10"))
+		assert "--reason not planned" in close_call
+		assert "<!-- ai:check-triage-source-closed:v1 issue=10 pr=85 -->" in calls
+
+	# An open, same-repository fix PR bound to the issue holds it open.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(
+			Path(tmp), verdict=closed, timeline=[_open_cross_ref(221)], prs={221: _open_fix_pr()},
+		)
+		assert rc == 1, out
+		assert "CLOSE_MERGED_SWEEP issue=10 triage_rule=skip reason=source_pr_closed_unmerged_fix_pr_open fix_pr=221" in out
+		assert "issue close" not in calls
+	# A fork-headed PR named ai/issue-10, or an unrelated open PR, does not hold it.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, _ = _close_sweep_gate_harness(
+			Path(tmp), verdict=closed, timeline=[_open_cross_ref(221), _open_cross_ref(222)],
+			prs={221: _open_fix_pr(head_repo="attacker/repo"), 222: _open_fix_pr(number=222, head="claude/other")},
+		)
+		assert rc == 0 and "reason=source_pr_closed_unmerged pr=85" in out
+	# An unreadable cross-referenced PR fails closed.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[_open_cross_ref(223, state=None)])
+		assert rc == 1 and "triage_rule=skip reason=source_pr_state_unreadable pr=85" in out
+		assert "issue close" not in calls
+	# A failed close keeps the issue open with a logged reason.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, _ = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[], close_fails=True)
+		assert rc == 1 and "triage_rule=skip reason=close_failed pr=85" in out
+	# An open source PR keeps today's path.
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(
+			Path(tmp), verdict={**closed, "pr_state": "open"}, timeline=[],
+		)
+		assert rc == 1 and "triage_rule=" not in out and "issue close" not in calls
+
+
+def test_close_merged_sweep_check_triage_gate_wiring_contract():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("close_merged_issues_sweep() {")
+	body = script[start:script.index("\nreconcile_managed_issue_labels() {", start)]
+	# No new list call: the gate pass reuses the three existing lists.
+	assert body.count("gh_retry gh issue list") == 3
+	assert '_sweep_gate_cap="${CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK:-10}"' in body
+	gate = body.index('_close_sweep_check_triage_gate "${issue_num}" "${timeline_json}" "${_sweep_default_branch}"')
+	assert body.index("pr_fetch_failed — skipping this cycle.") < gate
+	assert gate < body.index('if [ "${origin}" = "ready_label" ] || [ "${origin}" = "check_triage" ]; then')
+	assert gate < body.index("leaving open and alerting")
+	# The stall path keeps its log contract through the shared core.
+	assert '_check_triage_gate_invoke "${issue_num}" "${_STALL_STANDALONE_DEFAULT_BRANCH}" "STALL_CHECK_TRIAGE_GATE"' in script
+
+
+def _run_target_merge_marker_base(tmp_path: Path) -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("_TARGET_MERGE_REASON=\"\"\n_pr_json_base_is_target_merge() {")
+	end = script.index("\n# _close_sweep_check_triage_branch", start)
+	helper = tmp_path / "helper.sh"
+	helper.write_text(script[start:end] + "\n", encoding="utf-8")
+
+	def run(*extra: str) -> str:
+		proc = subprocess.run(
+			["bash", "-c", 'source "$1"; shift; if _pr_json_base_is_target_merge 10 "$@"; then echo "yes:${_TARGET_MERGE_REASON}"; else echo no; fi',
+				"_", str(helper), json.dumps({"base": {"ref": "orchestrator/project-768"}}), "main", "", "false", *extra],
+			check=True, capture_output=True, text=True,
+		)
+		return proc.stdout.strip()
+
+	assert run() == "no"
+	assert run("ai/issue-9") == "no"
+	assert run("ai/issue-9", "orchestrator/project-768") == "yes:check_triage_marker_pr_base"
+	assert run("", "orchestrator/project-768") == "yes:check_triage_marker_pr_base"
+	assert run("", "orchestrator/project-769") == "no"
+	assert run("orchestrator/project-768", "orchestrator/project-768") == "yes:check_triage_pr_branch"
+
+
+def test_pr_json_base_is_target_merge_accepts_marker_pr_base():
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	with tempfile.TemporaryDirectory() as tmp:
+		_run_target_merge_marker_base(Path(tmp))
+
+
+def test_stall_judge_keeps_escalation_when_linked_pr_merged_into_non_target_base():
+	"""binance-blessings #507: the judge chose escalate_human, but the linked
+	PR #510 had merged into claude/busy-babbage-grn9nj and the effective action
+	became attempt_merge."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	target_start = script.index("_TARGET_MERGE_REASON=\"\"\n_pr_json_base_is_target_merge() {")
+	target_end = script.index("\n# _close_sweep_check_triage_branch", target_start)
+	keep_start = script.index('_STALL_STANDALONE_DEFAULT_BRANCH=""\n# Set once the lookup ran')
+	keep_end = script.index("\n_reconcile_standalone_merged_pr_issue() {", keep_start)
+	with tempfile.TemporaryDirectory() as tmp:
+		helper = Path(tmp) / "helper.sh"
+		helper.write_text(script[target_start:target_end] + "\n" + script[keep_start:keep_end] + "\n", encoding="utf-8")
+
+		def run(pr: dict, managed: str = "false", default: str = "main") -> str:
+			proc = subprocess.run(
+				["bash", "-c", 'set -euo pipefail; gh_retry() { return 1; }; source "$1"; '
+					'if _stall_judge_linked_pr_keeps_escalation 507 "$2" "$3"; then echo "keep:${_STALL_KEEP_ESCALATION_REASON}:${_STALL_KEEP_ESCALATION_BASE}"; else echo no; fi',
+					"_", str(helper), json.dumps(pr), managed],
+				check=True, capture_output=True, text=True, env={**os.environ, "CWS_DEFAULT_BRANCH": default},
+			)
+			return proc.stdout.strip()
+
+		merged = {"number": 510, "state": "closed", "merged": True, "base": {"ref": "claude/busy-babbage-grn9nj"}}
+		assert run(merged) == "keep:merged_non_target_base:claude/busy-babbage-grn9nj"
+		assert run({**merged, "base": {"ref": "main"}}) == "no"
+		assert run({**merged, "base": {"ref": "orchestrator/project-5"}}, managed="true") == "no"
+		assert run({**merged, "base": {"ref": "orchestrator/project-5"}}) == "keep:merged_non_target_base:orchestrator/project-5"
+		assert run({"number": 85, "state": "closed", "merged": False, "base": {"ref": "main"}}) == "keep:closed_unmerged:main"
+		assert run({"number": 510, "state": "open", "merged": False, "base": {"ref": "x"}}) == "no"
+		assert run({}) == "no"
+		# Unknown default branch keeps the old behaviour.
+		assert run(merged, default="") == "no"
+
+	start = script.index("invoke_stall_judge() {")
+	body = script[start:script.index("\n}\n", start)]
+	normalize = body.index('effective_action="$(normalize_stall_recovery_action')
+	keep = body.index('_stall_judge_linked_pr_keeps_escalation "${issue_num}" "${linked_pr_json}"')
+	assert normalize < keep < body.index("**Decision (effective):** ${effective_action}")
+	assert '[ "${judge_action}" = "escalate_human" ] && [ "${effective_action}" = "attempt_merge" ]' in body
+	assert "STALL_RECOVERY issue=${issue_num} reason=judge_escalate_kept linked_pr=${_STALL_KEEP_ESCALATION_REASON}" in body
+
 def test_reconciliation_uses_implementation_pr_masked_by_later_mention():
 	genuine_pr = {
 		"number": 951,

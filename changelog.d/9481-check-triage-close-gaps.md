@@ -1,0 +1,8 @@
+<!-- changelog: fixed -->
+- **`ai:check-triage` issues no longer stay open after their failure is fixed.** In `shubhodeep1/fun-token-multi-chain`, nine triage issues stayed open for 4 to 12 days after their source PR merged and the check went green on `main`, and five of them looped through stall recovery. Four changes in the orchestrator poller and the check-triage gate:
+  - The close sweep now accepts a fix PR merged into the marker PR's `orchestrator/project-<N>` base, once the marker PR merged there and issue `<N>` carries `ai:orchestrator-tracking` (`reason=check_triage_marker_pr_base`).
+  - Each rejected triage rule now logs why (`triage_rule=skip reason=...`), and the head repository compares case-insensitively.
+  - The sweep runs `check_triage_resolution.py gate` on open triage issues in any phase, up to `CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK` (default 10) per tick. It closes resolved issues, and closes as "not planned" an issue whose source PR closed without merging, unless an open fix PR exists.
+  - When a project reached the default branch without an integration PR, the gate falls back to checking that the default branch is green and holds the PR's content (`CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED`, default `true`).
+
+  The stall judge's `escalate_human` also stays in effect when the linked PR closed without merging or merged into a branch that does not count, instead of becoming `attempt_merge`. Consumer repos pick this up on the next `@stable` sync, with no configuration change.

@@ -5495,6 +5495,23 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # of the failing PR its `check-failure-triage:pr=<N>` marker names; that
 # merge is accepted with reason=check_triage_pr_branch
 # (_close_sweep_check_triage_branch, pipeline-authored issues only).
+# Issue #9481: when that marker PR has itself MERGED into an
+# `orchestrator/project-<N>` branch whose issue <N> carries
+# ai:orchestrator-tracking, a bound fix PR merged into that project branch is
+# accepted with reason=check_triage_marker_pr_base. A rejected candidate of an
+# ai:check-triage issue logs `triage_rule=skip reason=...` (including
+# candidate_unbound) so the rule's trust inputs show up in the log.
+#
+# Check-triage gate pass (issue #9481): an open ai:check-triage issue (any
+# phase, including ai:blocked / ai:needs-human / never started) that no
+# accepted merge closed runs scripts/check_triage_resolution.py gate
+# (_close_sweep_check_triage_gate). resolved / already_resolved closes it; a
+# source PR closed without merging closes it as "not planned" unless an open
+# bound fix PR is cross-referenced. At most CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK
+# (default 10, 0 disables) issues are gated per tick, in a window over the
+# ascending ai:check-triage issue numbers starting at
+# (GITHUB_RUN_NUMBER * cap) % total, so every issue is reached within
+# ceil(total/cap) ticks. CHECK_TRIAGE_RESOLVED_GATE_ENABLED=false turns it off.
 #
 # Third origin class (issue #8955):
 #   - check_triage: open ai:check-triage issue carrying neither ai:merged nor
@@ -5515,7 +5532,11 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # at most one more `pulls/<N>` read for the marker PR (plus the per-tick
 # memoized `user` read). Every open ai:check-triage issue in the third list
 # costs its timeline read each tick, up to 200 issues, even while no fix PR
-# has merged yet.
+# has merged yet. Issue #9481: a merged marker PR whose base is a project
+# branch adds at most one issues/<N> read per project per tick (memoized);
+# each gated ai:check-triage issue (at most the per-tick cap) adds one
+# issues/<n> read plus the gate's documented budget, and a source-closed hold
+# adds at most one _fetch_pr_json per open cross-referenced PR.
 close_merged_issues_sweep() {
   if [ "${ENABLE_CLOSE_MERGED_ISSUES}" != "true" ]; then
     echo "Close merged issues sweep disabled by ENABLE_CLOSE_MERGED_ISSUES=${ENABLE_CLOSE_MERGED_ISSUES}."
@@ -5614,9 +5635,37 @@ close_merged_issues_sweep() {
   local _sweep_triage_branch _sweep_triage_parsed _sweep_target_ok
   local _sweep_triage_rc _sweep_cand_head_repo _sweep_cand_head_ref _sweep_cand_bound
   local _sweep_triage_fetch_failed
+  local _sweep_triage_marker_base _sweep_is_triage
+  local _sweep_gate_cap _sweep_gate_run _sweep_gate_all _sweep_gate_total _sweep_gate_offset _sweep_gate_size
+  local _sweep_gate_window=" " _sweep_gate_i
+  local -a _sweep_gate_list=()
   local closed_count=0
   local skipped_count=0
   local alert_count=0
+
+  # Issue #9481: the check-triage gate pass window (no API call).
+  _sweep_gate_cap="${CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK:-10}"
+  [[ "${_sweep_gate_cap}" =~ ^[0-9]{1,4}$ ]] || _sweep_gate_cap=10
+  _sweep_gate_cap=$((10#${_sweep_gate_cap}))
+  if [ "${_sweep_gate_cap}" -gt 0 ]; then
+    _sweep_gate_run="${GITHUB_RUN_NUMBER:-0}"
+    [[ "${_sweep_gate_run}" =~ ^[0-9]{1,12}$ ]] || _sweep_gate_run=0
+    _sweep_gate_run=$((10#${_sweep_gate_run}))
+    _sweep_gate_all="$(echo "${issues_json}" | jq -r '
+      [.[] | select([.labels[]? | if type == "object" then (.name // "") else . end] | index("ai:check-triage") != null) | .number]
+      | unique | .[]' 2>/dev/null || echo "")"
+    read -r -a _sweep_gate_list <<< "$(printf '%s' "${_sweep_gate_all}" | tr '\n' ' ')"
+    _sweep_gate_total="${#_sweep_gate_list[@]}"
+    if [ "${_sweep_gate_total}" -gt 0 ]; then
+      _sweep_gate_offset=$(( (_sweep_gate_run * _sweep_gate_cap) % _sweep_gate_total ))
+      _sweep_gate_size="${_sweep_gate_cap}"
+      [ "${_sweep_gate_size}" -le "${_sweep_gate_total}" ] || _sweep_gate_size="${_sweep_gate_total}"
+      for ((_sweep_gate_i=0; _sweep_gate_i<_sweep_gate_size; _sweep_gate_i++)); do
+        _sweep_gate_window+="${_sweep_gate_list[$(( (_sweep_gate_offset + _sweep_gate_i) % _sweep_gate_total ))]} "
+      done
+      echo "CLOSE_MERGED_SWEEP triage_gate_window size=${_sweep_gate_size} total=${_sweep_gate_total} offset=${_sweep_gate_offset}"
+    fi
+  fi
 
   for ((idx=0; idx<count; idx++)); do
     issue_num="$(echo "${issues_json}" | jq -r ".[${idx}].number" 2>/dev/null || echo "")"
@@ -5678,8 +5727,13 @@ close_merged_issues_sweep() {
     _sweep_declared_branch=""
     _sweep_declared_parsed=false
     _sweep_triage_branch=""
+    _sweep_triage_marker_base=""
     _sweep_triage_parsed=false
     _sweep_triage_fetch_failed=false
+    _sweep_is_triage=false
+    if echo "${issues_json}" | jq -e --argjson i "${idx}" '([.[$i].labels[]? | if type == "object" then (.name // "") else . end] | index("ai:check-triage")) != null' >/dev/null 2>&1; then
+      _sweep_is_triage=true
+    fi
 
     merged_pr_num=""
     sweep_pr_fetch_failed=false
@@ -5709,9 +5763,12 @@ close_merged_issues_sweep() {
           _sweep_cand_head_repo="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.head.repo.full_name // ""' 2>/dev/null || echo "")"
           _sweep_cand_head_ref="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
           _sweep_cand_bound=false
-          if [ -n "${GITHUB_REPOSITORY:-}" ] && [ "${_sweep_cand_head_repo}" = "${GITHUB_REPOSITORY}" ] \
+          # Issue #9481: compare the head repository case-insensitively.
+          if _pr_json_head_is_same_repo "${_sweep_candidate_pr_json}" \
               && [[ "${_sweep_cand_head_ref}" =~ ^ai/issue-${issue_num}([-/].*)?$ ]]; then
             _sweep_cand_bound=true
+          elif [ "${_sweep_is_triage}" = "true" ]; then
+            echo "CLOSE_MERGED_SWEEP issue=${issue_num} candidate_pr=${_sweep_candidate_pr} triage_rule=skip reason=candidate_unbound head=$(_close_sweep_log_ref "${_sweep_cand_head_ref}" "none") head_repo=$(_close_sweep_log_ref "${_sweep_cand_head_repo}" "none")"
           fi
           if [ "${_sweep_cand_bound}" = "true" ] && [ "${_sweep_triage_parsed}" != "true" ]; then
             _sweep_triage_rc=0
@@ -5720,6 +5777,7 @@ close_merged_issues_sweep() {
               "${_sweep_issue_body}" \
               "$(echo "${issues_json}" | jq -r --argjson i "${idx}" '.[$i].author // ""' 2>/dev/null || echo "")" || _sweep_triage_rc=$?
             _sweep_triage_branch="${_CLOSE_SWEEP_TRIAGE_BRANCH}"
+            _sweep_triage_marker_base="${_CLOSE_SWEEP_TRIAGE_MARKER_BASE}"
             _sweep_triage_parsed=true
             if [ "${_sweep_triage_rc}" = "2" ]; then
               # Transient marker-PR read failure: defer like a failed candidate
@@ -5736,8 +5794,8 @@ close_merged_issues_sweep() {
             echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=check_triage_pr_fetch_failed"
             continue
           fi
-          if [ "${_sweep_cand_bound}" = "true" ] && [ -n "${_sweep_triage_branch}" ] \
-              && _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}" "${_sweep_triage_branch}"; then
+          if [ "${_sweep_cand_bound}" = "true" ] && { [ -n "${_sweep_triage_branch}" ] || [ -n "${_sweep_triage_marker_base}" ]; } \
+              && _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}" "${_sweep_triage_branch}" "${_sweep_triage_marker_base}"; then
             _sweep_target_ok=true
           fi
         fi
@@ -5782,6 +5840,14 @@ close_merged_issues_sweep() {
       if [ "${sweep_pr_fetch_failed}" = "true" ]; then
         echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} pr_fetch_failed — skipping this cycle."
         skipped_count=$((skipped_count + 1))
+        continue
+      fi
+      # Issue #9481: gate an ai:check-triage issue in this tick's window
+      # (resolved on the default branch, or source PR closed unmerged).
+      if [ "${_sweep_is_triage}" = "true" ] && [[ "${_sweep_gate_window}" == *" ${issue_num} "* ]] \
+          && _close_sweep_check_triage_gate "${issue_num}" "${timeline_json}" "${_sweep_default_branch}"; then
+        closed_count=$((closed_count + 1))
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} status=closed via=check_triage_gate"
         continue
       fi
       if [ "${origin}" = "ready_label" ] || [ "${origin}" = "check_triage" ]; then
@@ -22425,6 +22491,18 @@ invoke_stall_judge() {
   else
     effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"
   fi
+  # Issue #9481 (binance-blessings #507): keep the judge's escalate_human when
+  # the linked PR fetched above is closed without merging, or merged into a
+  # branch that does not count (_stall_judge_linked_pr_keeps_escalation).
+  local _keep_escalation_managed=false
+  if [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
+    _keep_escalation_managed=true
+  fi
+  if [ "${judge_action}" = "escalate_human" ] && [ "${effective_action}" = "attempt_merge" ] \
+      && _stall_judge_linked_pr_keeps_escalation "${issue_num}" "${linked_pr_json}" "${_keep_escalation_managed}"; then
+    effective_action="escalate_human"
+    echo "STALL_RECOVERY issue=${issue_num} reason=judge_escalate_kept linked_pr=${_STALL_KEEP_ESCALATION_REASON} pr=${target_pr:-none} base=$(_close_sweep_log_ref "${_STALL_KEEP_ESCALATION_BASE}" "unknown") phase=${phase}"
+  fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
     STALL_JUDGE_TARGET_PR="${target_pr}"
@@ -23309,6 +23387,12 @@ _pr_json_is_partial_delivery() {
 #                                                    -> check_triage_pr_branch
 #     Callers that pass five arguments (standalone stall recovery) keep the
 #     old rule. This function makes no API calls.
+#   - issue #9481: the optional seventh argument is the base of a MERGED
+#     marker PR when that base is an `orchestrator/project-<N>` branch whose
+#     issue <N> carries ai:orchestrator-tracking (resolved and trust-checked
+#     by _close_sweep_check_triage_branch), and .base.ref equals it
+#                                                    -> check_triage_marker_pr_base
+#     Callers that pass five or six arguments keep the rules above.
 # Anything else, including an empty or unparseable base, returns 1 (fail
 # closed: the caller's next step closes the issue).  Refs compare exactly.
 _TARGET_MERGE_REASON=""
@@ -23319,6 +23403,7 @@ _pr_json_base_is_target_merge() {
   local declared_branch="$4"
   local is_managed="$5"
   local check_triage_branch="${6:-}"
+  local check_triage_marker_base="${7:-}"
   _TARGET_MERGE_REASON=""
   [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
   if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
@@ -23346,6 +23431,10 @@ _pr_json_base_is_target_merge() {
     _TARGET_MERGE_REASON="check_triage_pr_branch"
     return 0
   fi
+  if [ -n "${check_triage_marker_base}" ] && [ "${_target_base_ref}" = "${check_triage_marker_base}" ]; then
+    _TARGET_MERGE_REASON="check_triage_marker_pr_base"
+    return 0
+  fi
   return 1
 }
 
@@ -23366,35 +23455,112 @@ _pr_json_base_is_target_merge() {
 # so the caller defers the issue like a failed candidate fetch; 1 otherwise.
 # The caller resolves it only for a candidate PR with a same-repository
 # ai/issue-<n> head, the binding issue_pr_status.yml requires.
+#
+# Issue #9481: every early return prints
+#   CLOSE_MERGED_SWEEP issue=<n> triage_rule=skip reason=<label|support_missing|
+#     login_empty|author_mismatch|marker|marker_pr_cross_repo|marker_head_empty>
+# and success prints `triage_rule=ok marker_pr=<N> head=<ref>
+# marker_merged=<true|false> marker_base=<ref|none>`. When the marker PR has
+# MERGED into a same-repository `orchestrator/project-<N>` base and issue <N>
+# carries ai:orchestrator-tracking, that base goes to
+# _CLOSE_SWEEP_TRIAGE_MARKER_BASE (the seventh argument of
+# _pr_json_base_is_target_merge, reason=check_triage_marker_pr_base); an
+# unreadable or unlabelled project logs triage_rule=skip
+# reason=tracking_unreadable|project_untracked and leaves it empty.
 _CLOSE_SWEEP_TRIAGE_BRANCH=""
+_CLOSE_SWEEP_TRIAGE_MARKER_BASE=""
+# Per-tick memo of project issue number -> tracking|untracked (issue #9481).
+declare -gA _CLOSE_SWEEP_TRACKING_LABEL_MEMO=()
 _close_sweep_check_triage_branch() {
   local issue_num="$1"
   local labels_json="$2"
   local body="$3"
   local author="$4"
-  local _triage_login _triage_pr _triage_pr_json _triage_head_repo _triage_head_ref
+  local _triage_login _triage_pr _triage_pr_json _triage_head_ref
+  local _triage_merged _triage_base_ref _triage_base_repo _triage_project _triage_tracking
   _CLOSE_SWEEP_TRIAGE_BRANCH=""
+  _CLOSE_SWEEP_TRIAGE_MARKER_BASE=""
   [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
-  printf '%s' "${labels_json:-[]}" | jq -e '[.[]? | if type == "object" then (.name // "") else . end] | index("ai:check-triage") != null' >/dev/null 2>&1 || return 1
-  [ -f scripts/orchestrate_lib.py ] || return 1
+  if ! printf '%s' "${labels_json:-[]}" | jq -e '[.[]? | if type == "object" then (.name // "") else . end] | index("ai:check-triage") != null' >/dev/null 2>&1; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=label"
+    return 1
+  fi
+  if [ ! -f scripts/orchestrate_lib.py ]; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=support_missing"
+    return 1
+  fi
   # Main shell (no subshell) keeps the per-tick memo; a failed `user` read may
   # raise the shared once-per-tick identity alert and then fails closed below.
   unblock_trusted_login >/dev/null
   _triage_login="${UNBLOCK_TRUSTED_LOGIN}"
-  [ -n "${_triage_login}" ] || return 1
+  if [ -z "${_triage_login}" ]; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=login_empty author=$(_close_sweep_log_ref "${author}" "none")"
+    return 1
+  fi
+  # Same comparison as orchestrate_lib.check_triage_target_branch (stripped,
+  # case-insensitive), done here so a mismatch is logged with both values.
+  local _triage_author_cmp _triage_login_cmp
+  _triage_author_cmp="$(printf '%s' "${author}" | tr -d '[:space:]')"
+  _triage_login_cmp="$(printf '%s' "${_triage_login}" | tr -d '[:space:]')"
+  if [ -z "${_triage_author_cmp}" ] || [ "${_triage_author_cmp,,}" != "${_triage_login_cmp,,}" ]; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=author_mismatch author=$(_close_sweep_log_ref "${author}" "none") login=$(_close_sweep_log_ref "${_triage_login}" "none")"
+    return 1
+  fi
   _triage_pr="$(printf '%s' "${body}" | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py check-triage-target-pr \
     --labels-json "${labels_json:-[]}" --author "${author}" --pipeline-login "${_triage_login}" 2>/dev/null | head -n 1 || echo "")"
-  [[ "${_triage_pr}" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+  if ! [[ "${_triage_pr}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=marker"
+    return 1
+  fi
   _triage_pr_json="$(_fetch_pr_json "${_triage_pr}")"
   if [ -z "${_triage_pr_json}" ] || [ "${_triage_pr_json}" = "{}" ]; then
     echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_marker_pr=${_triage_pr} rejected=check_triage_pr_fetch_failed"
     return 2
   fi
-  _triage_head_repo="$(printf '%s' "${_triage_pr_json}" | jq -r '.head.repo.full_name // ""' 2>/dev/null || echo "")"
+  if ! _pr_json_head_is_same_repo "${_triage_pr_json}"; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=marker_pr_cross_repo marker_pr=${_triage_pr}"
+    return 1
+  fi
   _triage_head_ref="$(printf '%s' "${_triage_pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
-  [ -n "${_triage_head_repo}" ] && [ "${_triage_head_repo}" = "${GITHUB_REPOSITORY}" ] || return 1
-  [ -n "${_triage_head_ref}" ] || return 1
+  if [ -z "${_triage_head_ref}" ]; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=marker_head_empty marker_pr=${_triage_pr}"
+    return 1
+  fi
   _CLOSE_SWEEP_TRIAGE_BRANCH="${_triage_head_ref}"
+
+  # Issue #9481: a fix for a marker PR that already merged into an
+  # orchestrator project branch targets that project branch.
+  _triage_merged="$(printf '%s' "${_triage_pr_json}" | jq -r 'if .merged == true then "true" else "false" end' 2>/dev/null || echo "false")"
+  _triage_base_ref="$(printf '%s' "${_triage_pr_json}" | jq -r '.base.ref // "" | strings' 2>/dev/null | tr -d '\r\n' || echo "")"
+  _triage_base_repo="$(printf '%s' "${_triage_pr_json}" | jq -r '.base.repo.full_name // "" | strings' 2>/dev/null || echo "")"
+  if [ "${_triage_merged}" = "true" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ "${_triage_base_repo,,}" = "${GITHUB_REPOSITORY,,}" ] \
+      && [[ "${_triage_base_ref}" =~ ^orchestrator/project-([1-9][0-9]{0,9})$ ]]; then
+    _triage_project="${BASH_REMATCH[1]}"
+    if [ -n "${_CLOSE_SWEEP_TRACKING_LABEL_MEMO[${_triage_project}]+x}" ]; then
+      _triage_tracking="${_CLOSE_SWEEP_TRACKING_LABEL_MEMO[${_triage_project}]}"
+    else
+      # §14 audit: the sweep's three `gh issue list` calls list only open
+      # issues with the ai:merged / ai:ready-to-merge / ai:check-triage labels,
+      # and ACTIVE_WORKFLOW_ISSUES / _candidate_details_json do not cover
+      # completed or closed projects, so one issues/<N> read per project per
+      # tick (memoized) is the smallest sufficient call. Made only for a
+      # merged marker PR whose base is a project branch.
+      _triage_tracking="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${_triage_project}" \
+        --jq 'if (.pull_request // null) != null then "untracked" elif ([.labels[]? | if type == "object" then (.name // "") else . end] | index("ai:orchestrator-tracking")) != null then "tracking" else "untracked" end' \
+        2>/dev/null | head -n 1 | tr -cd 'a-z' || echo "")"
+      if [ "${_triage_tracking}" = "tracking" ] || [ "${_triage_tracking}" = "untracked" ]; then
+        _CLOSE_SWEEP_TRACKING_LABEL_MEMO[${_triage_project}]="${_triage_tracking}"
+      fi
+    fi
+    if [ "${_triage_tracking}" = "tracking" ]; then
+      _CLOSE_SWEEP_TRIAGE_MARKER_BASE="${_triage_base_ref}"
+    elif [ "${_triage_tracking}" = "untracked" ]; then
+      echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=project_untracked marker_pr=${_triage_pr} marker_base=$(_close_sweep_log_ref "${_triage_base_ref}" "none")"
+    else
+      echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=tracking_unreadable marker_pr=${_triage_pr} marker_base=$(_close_sweep_log_ref "${_triage_base_ref}" "none")"
+    fi
+  fi
+  echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=ok marker_pr=${_triage_pr} head=$(_close_sweep_log_ref "${_triage_head_ref}" "none") marker_merged=${_triage_merged} marker_base=$(_close_sweep_log_ref "${_CLOSE_SWEEP_TRIAGE_MARKER_BASE}" "none")"
   return 0
 }
 
@@ -23861,6 +24027,62 @@ _reconcile_merged_pr_issue() {
 _STALL_STANDALONE_DEFAULT_BRANCH=""
 # Set once the lookup ran, so a failed read is not repeated per candidate.
 _STALL_STANDALONE_DEFAULT_BRANCH_TRIED=false
+# _stall_standalone_default_branch_resolve — fill _STALL_STANDALONE_DEFAULT_BRANCH
+# once per poller process (CWS_DEFAULT_BRANCH, else one memoized repos/<repo>
+# read). Shared by _reconcile_standalone_merged_pr_issue and the stall judge's
+# escalation guard (issue #9481). Leaves it empty when unresolvable.
+_stall_standalone_default_branch_resolve() {
+  if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ] && [ "${_STALL_STANDALONE_DEFAULT_BRANCH_TRIED}" != "true" ]; then
+    _STALL_STANDALONE_DEFAULT_BRANCH_TRIED=true
+    _STALL_STANDALONE_DEFAULT_BRANCH="${CWS_DEFAULT_BRANCH:-}"
+    if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ]; then
+      _STALL_STANDALONE_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+    fi
+    _STALL_STANDALONE_DEFAULT_BRANCH="$(printf '%s' "${_STALL_STANDALONE_DEFAULT_BRANCH}" | tr -d '\r\n')"
+    [ "${_STALL_STANDALONE_DEFAULT_BRANCH}" = "null" ] && _STALL_STANDALONE_DEFAULT_BRANCH=""
+  fi
+  return 0
+}
+
+# _stall_judge_linked_pr_keeps_escalation <issue> <linked_pr_json> <is_managed>
+# — issue #9481 (binance-blessings #507): the stall judge chose escalate_human
+# but resolve_effective_stall_recovery_action turned it into attempt_merge,
+# although the linked PR was already closed. Returns 0 and sets
+# _STALL_KEEP_ESCALATION_REASON (closed_unmerged | merged_non_target_base) and
+# _STALL_KEEP_ESCALATION_BASE when the already-fetched linked PR (pulls/<n>
+# JSON) is closed without merging, or merged into a base
+# _pr_json_base_is_target_merge rejects. Returns 1 otherwise, including an
+# unreadable PR, an unknown base or an unknown default branch (old behaviour).
+# API calls: none beyond the memoized default-branch read.
+_STALL_KEEP_ESCALATION_REASON=""
+_STALL_KEEP_ESCALATION_BASE=""
+_stall_judge_linked_pr_keeps_escalation() {
+  local issue_num="$1"
+  local pr_json="$2"
+  local is_managed="${3:-false}"
+  local _keep_state _keep_merged
+  _STALL_KEEP_ESCALATION_REASON=""
+  _STALL_KEEP_ESCALATION_BASE=""
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "${pr_json}" | jq -e '(.number // "" | tostring | test("^[1-9][0-9]*$"))' >/dev/null 2>&1 || return 1
+  _keep_state="$(printf '%s' "${pr_json}" | jq -r '(.state // "") | strings | ascii_downcase' 2>/dev/null || echo "")"
+  [ "${_keep_state}" = "closed" ] || [ "${_keep_state}" = "merged" ] || return 1
+  _keep_merged="$(printf '%s' "${pr_json}" | jq -r 'if .merged == true then "true" else "false" end' 2>/dev/null || echo "")"
+  _STALL_KEEP_ESCALATION_BASE="$(printf '%s' "${pr_json}" | jq -r '(.base.ref // "") | strings' 2>/dev/null | tr -d '\r\n' || echo "")"
+  if [ "${_keep_merged}" = "false" ]; then
+    _STALL_KEEP_ESCALATION_REASON="closed_unmerged"
+    return 0
+  fi
+  [ "${_keep_merged}" = "true" ] || return 1
+  [ -n "${_STALL_KEEP_ESCALATION_BASE}" ] || return 1
+  _stall_standalone_default_branch_resolve
+  [ -n "${_STALL_STANDALONE_DEFAULT_BRANCH}" ] || return 1
+  if _pr_json_base_is_target_merge "${issue_num}" "${pr_json}" "${_STALL_STANDALONE_DEFAULT_BRANCH}" "" "${is_managed}"; then
+    return 1
+  fi
+  _STALL_KEEP_ESCALATION_REASON="merged_non_target_base"
+  return 0
+}
 _reconcile_standalone_merged_pr_issue() {
   local issue_num="$1"
   local phase="$2"
@@ -23878,15 +24100,7 @@ _reconcile_standalone_merged_pr_issue() {
     return 0
   fi
 
-  if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ] && [ "${_STALL_STANDALONE_DEFAULT_BRANCH_TRIED}" != "true" ]; then
-    _STALL_STANDALONE_DEFAULT_BRANCH_TRIED=true
-    _STALL_STANDALONE_DEFAULT_BRANCH="${CWS_DEFAULT_BRANCH:-}"
-    if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ]; then
-      _STALL_STANDALONE_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
-    fi
-    _STALL_STANDALONE_DEFAULT_BRANCH="$(printf '%s' "${_STALL_STANDALONE_DEFAULT_BRANCH}" | tr -d '\r\n')"
-    [ "${_STALL_STANDALONE_DEFAULT_BRANCH}" = "null" ] && _STALL_STANDALONE_DEFAULT_BRANCH=""
-  fi
+  _stall_standalone_default_branch_resolve
   if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ]; then
     echo "  [standalone-stall] Issue #${issue_num}: default branch unavailable — tagging ai:merged."
     _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${pr_num}"
@@ -23925,38 +24139,181 @@ _reconcile_standalone_merged_pr_issue() {
 _stall_check_triage_resolution_gate() {
   local issue_num="$1"
   local pr_num="$2"
-  local _stall_ct_file _stall_ct_verdict _stall_ct_status _stall_ct_reason _stall_ct_rc=0
 
-  if [ "$(printf '%s' "${CHECK_TRIAGE_RESOLVED_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
-    echo "STALL_CHECK_TRIAGE_GATE issue=${issue_num} fix_pr=${pr_num} outcome=skip reason=disabled"
+  _check_triage_gate_invoke "${issue_num}" "${_STALL_STANDALONE_DEFAULT_BRANCH}" "STALL_CHECK_TRIAGE_GATE"
+  if [ -n "${_CT_GATE_SKIP}" ]; then
+    echo "STALL_CHECK_TRIAGE_GATE issue=${issue_num} fix_pr=${pr_num} outcome=skip reason=${_CT_GATE_SKIP}"
     return 0
   fi
-  if [ ! -f scripts/check_triage_resolution.py ] || [ ! -f scripts/workflow_failure_heal.py ]; then
-    echo "STALL_CHECK_TRIAGE_GATE issue=${issue_num} fix_pr=${pr_num} outcome=skip reason=support_missing"
-    return 0
-  fi
-  _stall_ct_file="${RUNTIME_DIR:-/tmp}/stall_check_triage_issue_${issue_num}.json"
-  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" > "${_stall_ct_file}" 2>/dev/null \
-      || ! jq -e 'type == "object"' "${_stall_ct_file}" >/dev/null 2>&1; then
-    echo "STALL_CHECK_TRIAGE_GATE issue=${issue_num} fix_pr=${pr_num} outcome=skip reason=issue_unavailable"
-    return 0
-  fi
-  _stall_ct_verdict="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/check_triage_resolution.py gate \
-    --issue-json "${_stall_ct_file}" --repo "${GITHUB_REPOSITORY}" --issue-number "${issue_num}" \
-    --default-branch "${_STALL_STANDALONE_DEFAULT_BRANCH}" 2>"${_stall_ct_file}.err")" || _stall_ct_rc=$?
-  if [ "${_stall_ct_rc}" -ne 0 ] && [ -s "${_stall_ct_file}.err" ]; then
-    # Last few stderr lines, printable ASCII only, prefixed so they cannot act as workflow commands.
-    tail -n 5 "${_stall_ct_file}.err" 2>/dev/null | tr -cd '\11\12\40-\176' | cut -c1-300 | sed 's/^/STALL_CHECK_TRIAGE_GATE stderr| /; s/::/: :/g' || true
-  fi
-  _stall_ct_status="$(printf '%s' "${_stall_ct_verdict}" | jq -r '.status // ""' 2>/dev/null | tr -cd 'a-z_' | cut -c1-40 || echo "")"
-  _stall_ct_reason="$(printf '%s' "${_stall_ct_verdict}" | jq -r '.reason // ""' 2>/dev/null | tr -cd 'A-Za-z0-9_.-' | cut -c1-64 || echo "")"
-  echo "STALL_CHECK_TRIAGE_GATE issue=${issue_num} fix_pr=${pr_num} outcome=${_stall_ct_status:-error} reason=${_stall_ct_reason:-none} rc=${_stall_ct_rc}"
-  if [ "${_stall_ct_rc}" -eq 0 ] && { [ "${_stall_ct_status}" = "resolved" ] || [ "${_stall_ct_status}" = "already_resolved" ]; }; then
+  echo "STALL_CHECK_TRIAGE_GATE issue=${issue_num} fix_pr=${pr_num} outcome=${_CT_GATE_STATUS:-error} reason=${_CT_GATE_REASON:-none} rc=${_CT_GATE_RC}"
+  if [ "${_CT_GATE_RC}" -eq 0 ] && { [ "${_CT_GATE_STATUS}" = "resolved" ] || [ "${_CT_GATE_STATUS}" = "already_resolved" ]; }; then
     if declare -F add_healing_note >/dev/null 2>&1; then
       add_healing_note "Issue #${issue_num}: ai:check-triage fix PR #${pr_num} merged into the triaged PR's branch; the check-triage resolution gate verified the fix on the default branch and closed the issue"
     fi
   fi
   return 0
+}
+
+# _check_triage_gate_invoke <issue> <default_branch> <log_prefix> — shared core
+# of the issue #7095 check-triage resolution gate (issue #9481). Reads the
+# issue once (issues/<n>, the gate's trust check needs `user.type`) and runs
+# `scripts/check_triage_resolution.py gate`. Sets _CT_GATE_SKIP
+# (disabled | support_missing | issue_unavailable, empty when the gate ran),
+# _CT_GATE_RC, and filtered _CT_GATE_STATUS, _CT_GATE_REASON,
+# _CT_GATE_PR_STATE (open|closed|merged) and _CT_GATE_PR. Prints only the
+# gate's sanitized stderr tail (prefixed with <log_prefix>) on a non-zero exit.
+# Never fails the caller.
+_CT_GATE_SKIP=""
+_CT_GATE_RC=0
+_CT_GATE_STATUS=""
+_CT_GATE_REASON=""
+_CT_GATE_PR_STATE=""
+_CT_GATE_PR=""
+_check_triage_gate_invoke() {
+  local issue_num="$1"
+  local default_branch="$2"
+  local log_prefix="${3:-CHECK_TRIAGE_GATE}"
+  local _ct_file _ct_verdict
+  _CT_GATE_SKIP=""
+  _CT_GATE_RC=0
+  _CT_GATE_STATUS=""
+  _CT_GATE_REASON=""
+  _CT_GATE_PR_STATE=""
+  _CT_GATE_PR=""
+  if [ "$(printf '%s' "${CHECK_TRIAGE_RESOLVED_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+    _CT_GATE_SKIP="disabled"
+    return 0
+  fi
+  if [ ! -f scripts/check_triage_resolution.py ] || [ ! -f scripts/workflow_failure_heal.py ]; then
+    _CT_GATE_SKIP="support_missing"
+    return 0
+  fi
+  _ct_file="${RUNTIME_DIR:-/tmp}/stall_check_triage_issue_${issue_num}.json"
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" > "${_ct_file}" 2>/dev/null \
+      || ! jq -e 'type == "object"' "${_ct_file}" >/dev/null 2>&1; then
+    _CT_GATE_SKIP="issue_unavailable"
+    return 0
+  fi
+  _ct_verdict="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/check_triage_resolution.py gate \
+    --issue-json "${_ct_file}" --repo "${GITHUB_REPOSITORY}" --issue-number "${issue_num}" \
+    --default-branch "${default_branch}" 2>"${_ct_file}.err")" || _CT_GATE_RC=$?
+  if [ "${_CT_GATE_RC}" -ne 0 ] && [ -s "${_ct_file}.err" ]; then
+    # Last few stderr lines, printable ASCII only, prefixed so they cannot act as workflow commands.
+    tail -n 5 "${_ct_file}.err" 2>/dev/null | tr -cd '\11\12\40-\176' | cut -c1-300 | sed "s/^/${log_prefix} stderr| /; s/::/: :/g" || true
+  fi
+  _CT_GATE_STATUS="$(printf '%s' "${_ct_verdict}" | jq -r '.status // ""' 2>/dev/null | tr -cd 'a-z_' | cut -c1-40 || echo "")"
+  _CT_GATE_REASON="$(printf '%s' "${_ct_verdict}" | jq -r '.reason // ""' 2>/dev/null | tr -cd 'A-Za-z0-9_.-' | cut -c1-64 || echo "")"
+  _CT_GATE_PR_STATE="$(printf '%s' "${_ct_verdict}" | jq -r '.pr_state // "" | strings' 2>/dev/null | head -n 1 || echo "")"
+  case "${_CT_GATE_PR_STATE}" in open|closed|merged) ;; *) _CT_GATE_PR_STATE="" ;; esac
+  _CT_GATE_PR="$(printf '%s' "${_ct_verdict}" | jq -r '.pr // "" | tostring' 2>/dev/null | head -n 1 || echo "")"
+  [[ "${_CT_GATE_PR}" =~ ^[1-9][0-9]{0,9}$ ]] || _CT_GATE_PR=""
+  return 0
+}
+
+# _close_sweep_check_triage_gate <issue> <timeline_json> <default_branch> —
+# issue #9481: run the check-triage resolution gate from
+# close_merged_issues_sweep for an open ai:check-triage issue no accepted
+# merge closed, whatever its phase (ai:blocked, ai:needs-human, never
+# started). Logs `CLOSE_MERGED_SWEEP issue=<n> triage_gate=<status|skip>
+# reason=<reason> rc=<rc> pr_state=<state>`. Returns 0 when the issue is now
+# closed:
+#   - resolved / already_resolved: the gate commented, labelled and closed it;
+#   - the triaged (source) PR closed without merging (gate reason
+#     pr_not_merged with pr_state=closed, read fresh this tick) and no open,
+#     same-repository ai/issue-<n> fix PR is cross-referenced on the sweep's
+#     timeline: add ai:closed and close as "not planned" with a comment ending
+#     `<!-- ai:check-triage-source-closed:v1 issue=<n> pr=<m> -->`
+#     (triage_rule=closed reason=source_pr_closed_unmerged).
+# An open bound fix PR holds the issue (triage_rule=skip
+# reason=source_pr_closed_unmerged_fix_pr_open fix_pr=<m>); an unreadable
+# cross-reference state or PR holds it too (reason=source_pr_state_unreadable);
+# a failed close logs reason=close_failed. Anything else returns 1 and the
+# caller keeps its existing path.
+# API calls: the gate core's issues/<n> read plus the gate's documented
+# budget; in the source-closed case at most one _fetch_pr_json per open
+# cross-referenced PR and, to close, one label edit and one close.
+_close_sweep_check_triage_gate() {
+  local issue_num="$1"
+  local timeline_json="$2"
+  local default_branch="$3"
+  local _ctg_open_prs _ctg_pr _ctg_pr_json _ctg_head_ref _ctg_hold="" _ctg_unreadable=false _ctg_err_file _ctg_body
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  _check_triage_gate_invoke "${issue_num}" "${default_branch}" "CLOSE_MERGED_SWEEP"
+  if [ -n "${_CT_GATE_SKIP}" ]; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_gate=skip reason=${_CT_GATE_SKIP}"
+    return 1
+  fi
+  echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_gate=${_CT_GATE_STATUS:-error} reason=${_CT_GATE_REASON:-none} rc=${_CT_GATE_RC} pr_state=${_CT_GATE_PR_STATE:-unknown}"
+  if [ "${_CT_GATE_RC}" -eq 0 ] && { [ "${_CT_GATE_STATUS}" = "resolved" ] || [ "${_CT_GATE_STATUS}" = "already_resolved" ]; }; then
+    if declare -F add_healing_note >/dev/null 2>&1; then
+      add_healing_note "Issue #${issue_num}: the check-triage resolution gate verified the failure fixed and closed the issue (close_merged_issues_sweep)"
+    fi
+    return 0
+  fi
+  if [ "${_CT_GATE_RC}" -ne 0 ] || [ "${_CT_GATE_STATUS}" != "unverified" ] || [ "${_CT_GATE_REASON}" != "pr_not_merged" ] \
+      || [ "${_CT_GATE_PR_STATE}" != "closed" ]; then
+    return 1
+  fi
+  if [ -z "${_CT_GATE_PR}" ]; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_state_unreadable"
+    return 1
+  fi
+  # Same-repository PR cross-references whose state is not "closed"; a missing
+  # state is read as unreadable below (fail closed: the issue stays open).
+  if ! _ctg_open_prs="$(printf '%s' "${timeline_json}" | jq -r '
+      [.[]
+        | select(.event == "cross-referenced")
+        | select(.source.issue.pull_request.url? | type == "string")
+        | select((.source.issue.state? // "" | if type == "string" then ascii_downcase else "" end) != "closed")
+        | .source.issue.number
+      ] | unique | .[]' 2>/dev/null)"; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_state_unreadable pr=${_CT_GATE_PR}"
+    return 1
+  fi
+  for _ctg_pr in ${_ctg_open_prs}; do
+    if ! [[ "${_ctg_pr}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+      _ctg_unreadable=true
+      continue
+    fi
+    _ctg_pr_json="$(_fetch_pr_json "${_ctg_pr}")"
+    if [ -z "${_ctg_pr_json}" ] || [ "${_ctg_pr_json}" = "{}" ]; then
+      _ctg_unreadable=true
+      continue
+    fi
+    printf '%s' "${_ctg_pr_json}" | jq -e '(.state // "") == "open"' >/dev/null 2>&1 || continue
+    _pr_json_head_is_same_repo "${_ctg_pr_json}" || continue
+    _ctg_head_ref="$(printf '%s' "${_ctg_pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+    if [[ "${_ctg_head_ref}" =~ ^ai/issue-${issue_num}([-/].*)?$ ]]; then
+      _ctg_hold="${_ctg_pr}"
+      break
+    fi
+  done
+  if [ -n "${_ctg_hold}" ]; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_closed_unmerged_fix_pr_open fix_pr=${_ctg_hold} pr=${_CT_GATE_PR}"
+    return 1
+  fi
+  if [ "${_ctg_unreadable}" = "true" ]; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_state_unreadable pr=${_CT_GATE_PR}"
+    return 1
+  fi
+  ensure_label_exists "ai:closed" >/dev/null 2>&1 || true
+  gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:closed" >/dev/null 2>&1 \
+    || echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=label_failed reason=source_pr_closed_unmerged — closing anyway."
+  _ctg_body="## Check-triage source PR closed without merging
+
+The PR this issue was filed for, #${_CT_GATE_PR}, was closed without merging, so its failing code never reached the default branch. No open fix PR for this issue was found. Closing this issue as not planned. Reopen it if the PR is reopened.
+
+<!-- ai:check-triage-source-closed:v1 issue=${issue_num} pr=${_CT_GATE_PR} -->"
+  _ctg_err_file="$(mktemp)"
+  if gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" --reason "not planned" \
+      --comment "${_ctg_body}" >/dev/null 2>"${_ctg_err_file}"; then
+    rm -f "${_ctg_err_file}"
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=closed reason=source_pr_closed_unmerged pr=${_CT_GATE_PR}"
+    return 0
+  fi
+  rm -f "${_ctg_err_file}"
+  echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=close_failed pr=${_CT_GATE_PR}"
+  return 1
 }
 
 # ---------------------------------------------------------------
