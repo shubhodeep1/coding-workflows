@@ -403,3 +403,14 @@ Copy this block when adding a new entry:
   - The broker's `GET /v1/chatgpt/status` (`.github/actions/chatgpt-pool-token` with `mode: status`) shows no account read in the last 7 days.
   - `grep -rn "chatgpt_codex_relay\|run_chatgpt_reviewer\|chatgpt-slot" .github/workflows scripts` returns no callers other than the files removed in the same PR, and `tests/test_review_chatgpt_reviewer_slot.py` (and its `ci.yml` entry) go with them.
 - **Owner:** @shubhodeep1
+
+### `scripts/cs_bridge_query.sh`
+
+- **Introduced in:** PR for #9440 (2026-11-13), Refs shubhodeep1/tele-funtoken-msg-scoring#5238
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the only path from the CS ticket investigation (`.github/workflows/cs_investigate.yml`, run by `scripts/cs_investigate.sh`) to the agent DB bridge: it fetches the `agent-db-bridge` OIDC token on the runner and sends one request to the fixed bridge host.
+- **Removal preflight checks:**
+  - `rg -n "cs_bridge_query" .github scripts` returns only the lines being removed in the same PR (the `cs_investigate.sh` caller and its `source` line).
+  - `gh run list -R shubhodeep1/tele-funtoken-msg-scoring --workflow ai-cs-investigate.yml --created ">=$(date -u -d '30 days ago' +%F)" --json databaseId --jq length` prints `0` (no `cs_investigate.yml` run in the last 30 days), for every caller repo.
+  - `tests/test_cs_bridge_query.py` (and its `ci.yml` entry) is removed in the same PR.
+- **Owner:** @shubhodeep1
