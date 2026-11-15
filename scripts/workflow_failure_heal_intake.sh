@@ -546,7 +546,45 @@ case "${REPORT_ORIGIN}" in
 				VERIFY_FILE="${RUNTIME_DIR}/report_identity_verify.json"
 				if ! python3 "${HEAL_PY}" verify-report-identity --token-file "${REPORT_IDENTITY_FILE}" --jwks-json "${JWKS_FILE}" \
 					--payload-json "${PAYLOAD_FILE}" --self-repo "${SELF_REPO}" --max-age "${REPORT_MAX_AGE}" > "${VERIFY_FILE}" 2>/dev/null; then
-					_report_auth_reject "$(jq -r '.reason // "verification_failed"' "${VERIFY_FILE}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 60 || echo verification_failed)"
+					IDENTITY_REJECT_REASON="$(jq -r '.reason // "verification_failed"' "${VERIFY_FILE}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 60 || echo verification_failed)"
+					# The age limit applies at arrival, and the heal-queue credit
+					# above covers only the queue. A job can also wait hours for a
+					# runner before its first step (about 3h50m for six reports
+					# on 2026-11-14, all rejected identity_stale). On a stale
+					# rejection, credit the wait since this attempt started
+					# (run_started_at, set by GitHub when the dispatch arrived;
+					# a re-run resets it, so an old report is not revived) and
+					# verify once more. CLAUDE.md §15 audit: no earlier call in
+					# this script or the queue step reads this run, and the read
+					# is made only on this path. Fails closed: when the read fails
+					# the rejection stands.
+					if [ "${IDENTITY_REJECT_REASON}" = "identity_stale" ]; then
+						INTAKE_SELF_RUN_FILE="${RUNTIME_DIR}/intake_self_run.json"
+						INTAKE_ARRIVAL_WAITED_SECONDS=0
+						if [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]] \
+							&& gh_api_json_to_file "${INTAKE_SELF_RUN_FILE}" gh api --method GET "repos/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID}" 2>/dev/null; then
+							INTAKE_RUN_STARTED_AT="$(jq -r '.run_started_at // ""' "${INTAKE_SELF_RUN_FILE}" 2>/dev/null || true)"
+							INTAKE_RUN_STARTED_EPOCH="$(date -u -d "${INTAKE_RUN_STARTED_AT}" +%s 2>/dev/null || true)"
+							if [[ "${INTAKE_RUN_STARTED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] && [[ "${INTAKE_RUN_STARTED_EPOCH}" =~ ^[0-9]+$ ]]; then
+								INTAKE_ARRIVAL_WAITED_SECONDS=$(( $(date -u +%s) - INTAKE_RUN_STARTED_EPOCH ))
+								[ "${INTAKE_ARRIVAL_WAITED_SECONDS}" -ge 0 ] || INTAKE_ARRIVAL_WAITED_SECONDS=0
+							fi
+						fi
+						log "report_identity_age_credit arrival_waited_seconds=${INTAKE_ARRIVAL_WAITED_SECONDS} queue_waited_seconds=${QUEUE_WAITED_SECONDS} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
+						# The queue wait is part of the arrival wait, so the larger one is credited.
+						if [ "${INTAKE_ARRIVAL_WAITED_SECONDS}" -gt "$((10#${QUEUE_WAITED_SECONDS}))" ]; then
+							REPORT_MAX_AGE=$(( REPORT_MAX_AGE - 10#${QUEUE_WAITED_SECONDS} + INTAKE_ARRIVAL_WAITED_SECONDS ))
+							if python3 "${HEAL_PY}" verify-report-identity --token-file "${REPORT_IDENTITY_FILE}" --jwks-json "${JWKS_FILE}" \
+								--payload-json "${PAYLOAD_FILE}" --self-repo "${SELF_REPO}" --max-age "${REPORT_MAX_AGE}" > "${VERIFY_FILE}" 2>/dev/null; then
+								IDENTITY_REJECT_REASON=""
+							else
+								IDENTITY_REJECT_REASON="$(jq -r '.reason // "verification_failed"' "${VERIFY_FILE}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 60 || echo verification_failed)"
+							fi
+						fi
+					fi
+					if [ -n "${IDENTITY_REJECT_REASON}" ]; then
+						_report_auth_reject "${IDENTITY_REJECT_REASON}"
+					fi
 				fi
 				REPORT_AUTH="verified"
 				;;
