@@ -2499,7 +2499,13 @@ through `clarify → plan → implement → review`.
   `HEAL_INTAKE_QUEUE_LEASE_SECONDS` (default 10800). The recovery-scan job
   waits in the same queue. Time spent waiting is added to
   `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` for that run, so a queued report is
-  not rejected as stale. The queue never drops a report: when it cannot be
+  not rejected as stale. Time the job spent waiting for a runner is credited
+  too: on an `identity_stale` rejection the intake reads its own run's
+  `run_started_at` (one REST call, only on that path), credits the wait since
+  then instead of the queue wait, logs `WORKFLOW_HEAL report_identity_age_credit
+  arrival_waited_seconds=<n> queue_waited_seconds=<n>`, and verifies once
+  more. A re-run resets `run_started_at`, so an old report is not revived, and
+  a failed read keeps the rejection. The queue never drops a report: when it cannot be
   used, or after `HEAL_INTAKE_QUEUE_MAX_WAIT_SECONDS` (default 4800), the run
   goes ahead without waiting (`WORKFLOW_HEAL_QUEUE outcome=unlocked
   reason=<r>`, one WARNING). The intake job timeout is 130 minutes and the
