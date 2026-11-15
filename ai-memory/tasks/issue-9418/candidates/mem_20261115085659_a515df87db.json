@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Fixes 1 and 2 are merged, and the only remaining item is re-running the release gate. What should this issue deliver now?\nChoices:\nA) No code change. The plan records three points: the observed timeouts (runs 43283656910 and 43385957741) were most likely transient, from runner starvation or a job stuck in the queue. The next release-gate run is the check. If Phase 4 times out again, the new \"Phase 4d: Review-timeout run inventory\" step prints the evidence needed to tell the two possible causes apart. The issue then closes as delivered. (RECOMMENDED)\nB) Implement optional fix 3. The Phase 3c \"Bug B fallback\" dispatch at `test-and-mark-stable.yml` (around :2115) would run only when no `pull_request` review run with `head_sha=BAIT_SHA` appears within a short wait. Contract tests would be included.\n   **Note:** this conflicts with the earlier auto-decision AD-2 (Q2:A), which kept the dispatch unchanged because the `synchronize` event sometimes does not fire (run 25204168842). Choosing B reverses that decision.\nC) Keep the issue open with no plan until a new release-gate run either passes or produces Phase 4d inventory output. Then decide on a code change based on that evidence. This leaves the issue stalled until something outside the pipeline re-runs the gate.",
+  "fingerprint": "4fa95c106fa05e3c0c4fdd8cfddad28eb5717a7db76eb342c6a7b6c0734c5cc6",
+  "lineage": {
+    "issue_number": 9418,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43672192472",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43672192472",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261115085659_a515df87db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9418,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43672192472"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9418 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-15T08:56:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
