@@ -2785,8 +2785,11 @@ jobs:
     # the PR #9268 merge (2026-11-13T02:30:22Z), so it measured group 0
     # before the #9214 move; no step was moved. If a run that includes
     # #9268 flags group 0 again, read that run's step timings before
-    # moving anything. The fast-fail step stays in group 0 because it
-    # reads the /tmp list that the derive step writes.
+    # moving anything. The fast-fail step runs only in group 0 because of
+    # its `if: strategy.job-index == 0` guard (run once, outside the group
+    # split). The unguarded derive step writes the /tmp list it reads in
+    # every group, so moving it to another job needs a copy of the derive
+    # step there too.
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
