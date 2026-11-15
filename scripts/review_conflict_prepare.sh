@@ -395,7 +395,7 @@ _conflict_prepare_guard_hook_template_merge()
   while [[ "${ghm_ancestor}" == */* ]]; do
     ghm_ancestor="${ghm_ancestor%/*}"
     if [ -n "${ghm_ancestor}" ] && [ -L "${ghm_ancestor}" ]; then
-      echo "Guard-hook template merge: skipped reason=unsafe_path"
+      echo "Guard-hook template merge: skipped reason=unsafe_path path=${ghm_live}"
       return 1
     fi
   done
