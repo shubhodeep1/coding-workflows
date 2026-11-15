@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1045-1053 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The provenance comment (and the same figure in changelog.d/9420-ci-heal-job-steps-to-hooks-job.md) cites \"last recorded total (15m33s, run 42513195209, #9078)\" as the last total for tests-hooks-and-orchestrator. tests/test_ci_poll_test_sharding.py:3983-3991 records a later total, 15m32s (run 43220859648, #9391).\n  WHY: This is a comment and changelog wording problem only, with no runtime effect. All four reviewers rated it NIT. The headroom justification rests on a stale baseline.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, the moved-step selection and destination job (tests-hooks-and-orchestrator)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: ci.yml:1044-1052 says the run's step list had no durations, so the pick is an estimate, not a measurement. No hunk shows the four moved steps were the slowest or that the destination job had the most headroom. The limitation is recorded in the ci.yml comment, the changelog fragment and the test-registry comment. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT with confidence 2 and called it a documented limitation. The other three rated it MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml (also changelog.d/9420-ci-heal-job-steps-to-hooks-job.md):~1050-1053 | severity=NIT | confidence=3\n  PROBLEM: tests/test_ci_poll_test_sharding.py line 3983 records a later total for tests-hooks-and-orchestrator, 15m32s (run 43220859648, #9391). Neither the comment nor the changelog fragment mentions it.\n  WHY: Only comment and changelog wording is stale. The \"followed only by steps moving out\" claim still holds, because #9391 also moved a step out.\n- TASK_GAP: requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, the choice of moved steps and destination job.\n  Evidence of absence: The run's per-step durations were never available, and the PR says so. The steps were chosen from planning-sandbox timings, so the pick is an estimate. The reviewer rated it a documented limitation, not a defect. SEVERITY: NIT, ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1045 | severity=NIT | confidence=3\n  PROBLEM: Stale timing reference (15m33s vs 15m32s for run 43220859648, #9391).\n  WHY: Not a runtime failure, only inaccurate documentation.\n- TASK_GAP: requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, step selection and job targeting logic.\n  Evidence of absence: Lines 1045-1052 of ci.yml admit \"The evidence round returned that run's step list without durations, so the pick is an estimate, not a measurement\". SEVERITY: MAJOR, ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:1050-1052 (and changelog.d/9420-ci-heal-job-steps-to-hooks-job.md) | severity=NIT | confidence=4\n  PROBLEM: The comment's \"last recorded total (15m33s, run 42513195209, #9078)\" is no longer the last total. tests/test_ci_poll_test_sharding.py:3983-3991 records a later 15m32s from run 43220859648, #9391. The latest autofix touched lines 1053-1058 but did not update the baseline.\n  WHY: Comment-only, with no runtime effect. The headroom argument is weaker than the comment claims.\n- TASK_GAP: requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, the moved-step selection and the destination-job pick.\n  Evidence of absence: ci.yml:1044-1046 states the pick is an estimate, not a measurement. No hunk shows the four steps were the slowest in run 43314513853 or that the destination job had the most headroom. The limitation is recorded in three places, but the budget issue could resurface. SEVERITY: MAJOR, ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, the moved-step selection and destination job.\n  Evidence of absence: The workflow says the source run's step list had no durations and the selection is an estimate. The diff does not establish that these were the slowest steps or that tests-hooks-and-orchestrator had the most headroom. SEVERITY: MAJOR, ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:1051-1053 (also changelog.d/9420-ci-heal-job-steps-to-hooks-job.md line 2) | severity=NIT | confidence=4\n  PROBLEM: The comment says \"last recorded total (15m33s, run 42513195209, #9078) was followed only by steps moving out\". tests/test_ci_poll_test_sharding.py lines 3983-3986 record a later 15m32s (run 43220859648, #9391). The changelog fragment repeats the stale figure.\n  WHY: Comment and changelog only, with no runtime failure. The last-run rewrite kept the disproven claim, so the headroom justification rests on the older #9078 baseline.\n- Hardening: ci.yml comment lines 1050-1053 should cite 15m32s (run 43220859648, #9391) as the latest total and mention #9391's move-out. About 2 lines changed.\n- Hardening: changelog.d/9420-ci-heal-job-steps-to-hooks-job.md line 2 should update the figure or drop it. About 1 line changed. HARDENING_RISK_SCORE: 1\n- Note: the reviewer reported no task gaps. It said the \"slowest steps / most headroom\" selection is a previously accepted documented estimate and did not re-raise it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "87ceab8e1af792522ce51717c6d89aa6d2d402b18f8ab71d2a29c5ddba60cd4c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9430,
+    "run_id": "43727733118",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43727733118",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261115224530_2138776bb4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9430,
+    "run_id": "43727733118"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-15T22:45:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
