@@ -5,9 +5,12 @@ name: Audit Consumer Drift
 # coding-workflows:restore-managed-workflows:v1), opened or refreshed with
 # GH_PAT. Repository variable CONSUMER_DRIFT_REPAIR_ENABLED=false keeps the
 # audit and alert but opens no pull requests (default: unset, repair on).
+# Every 6 hours since #9483: a drifted consumer whose first release newer than
+# its pin was tagged CONSUMER_PIN_MAX_AGE_SECONDS (default 86400) ago or more
+# raises the WARNING alert, even while an update pull request is open.
 on:
   schedule:
-    - cron: '0 8 * * *'
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 env:
@@ -42,6 +45,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: '1'
           CONSUMER_DRIFT_REPAIR_ENABLED: ${{ vars.CONSUMER_DRIFT_REPAIR_ENABLED || 'true' }}
+          CONSUMER_PIN_MAX_AGE_SECONDS: ${{ vars.CONSUMER_PIN_MAX_AGE_SECONDS || '86400' }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
@@ -71,6 +75,18 @@ jobs:
           mkdir -p "${STABLE_TREE}"
           git archive FETCH_HEAD workflow-templates scripts/workflow_wrapper_refs.py | tar -x -C "${STABLE_TREE}"
 
+          # Release tag times for the pin-age alarm (#9483). Fetched after the
+          # archive above, which reads FETCH_HEAD. Release tags are annotated,
+          # so creatordate is the tagger date. A failed fetch leaves an empty
+          # file: every behind consumer then fails closed (pin_unknown).
+          RELEASE_TAGS_TSV="${RUNTIME_DIR}/release_tags.tsv"
+          if git fetch --no-tags --depth=1 --filter=tree:0 origin '+refs/tags/v*:refs/tags/v*'; then
+            git for-each-ref --format='%(refname:strip=2)%09%(objectname)%09%(*objectname)%09%(creatordate:unix)' 'refs/tags/v*' > "${RELEASE_TAGS_TSV}"
+          else
+            echo "::warning::Could not fetch release tags; consumers behind stable are flagged as pin_unknown."
+            : > "${RELEASE_TAGS_TSV}"
+          fi
+
           REPAIR_ARGS=()
           if [ "${CONSUMER_DRIFT_REPAIR_ENABLED,,}" != "false" ]; then
             REPAIR_ARGS=(--repair)
@@ -85,6 +101,8 @@ jobs:
             --stable-sha "${STABLE_SHA,,}" \
             --output "${SUMMARY_JSON}" \
             --max-diff-lines 25 \
+            --release-tags-file "${RELEASE_TAGS_TSV}" \
+            --pin-max-age-seconds "${CONSUMER_PIN_MAX_AGE_SECONDS}" \
             "${REPAIR_ARGS[@]}"
 
       - name: Build report artifacts
@@ -202,7 +220,23 @@ jobs:
               if not covered_by_sync_pull_request(repair)
               and not (repair.get("outcome") == "skipped" and repair.get("reason") == "no_exact_drift")
           ]
-          level = "WARNING" if alert_drift_results or error_results or actionable_repairs else "DEBUG"
+          # Pin-age alarm (#9483): a consumer behind stable for the threshold
+          # or longer, or whose pin or tag time is unknown, raises the alert
+          # even when an open update pull request covers its drift.
+          pin_stale_results = [
+              item for item in drift_results
+              if isinstance(item.get("pin_age"), dict) and item["pin_age"].get("stale") is True
+          ]
+          level = "WARNING" if alert_drift_results or error_results or actionable_repairs or pin_stale_results else "DEBUG"
+
+          def pin_age_note(result: dict) -> str:
+              pin_age = result.get("pin_age") or {}
+              pinned = pin_age.get("pinned_release") or "unknown pin"
+              newer = pin_age.get("first_newer_release") or "unknown release"
+              behind = pin_age.get("behind_seconds")
+              if isinstance(behind, int) and pin_age.get("reason") == "behind_stable":
+                  return f"pinned {pinned}, {newer} released {behind // 3600} hours ago"
+              return f"pinned {pinned}, first newer {newer} ({pin_age.get('reason', 'unknown')})"
 
           def repair_pull_request_note(repair: dict) -> str:
               if repair.get("reason") != "sync_pull_request_open":
@@ -242,6 +276,11 @@ jobs:
                       )
                       if diff_preview:
                           lines.extend(["", "```diff", diff_preview, "```"])
+
+          if pin_stale_results:
+              lines.extend(["", "### Behind stable for 24 hours or more"])
+              for result in pin_stale_results:
+                  lines.append(f"- `{result.get('repository', 'unknown')}` — {pin_age_note(result)}")
 
           if repairs:
               lines.extend(["", "### Restore pull requests"])
@@ -306,6 +345,8 @@ jobs:
                   ]
               )
               blocks = []
+              for result in pin_stale_results:
+                  blocks.append(f"- behind stable: {result.get('repository', 'unknown')} — {pin_age_note(result)}")
               # Drift an open, fresh update pull request covers is left out:
               # its repair line below says it is handled.
               for result in alert_drift_results:

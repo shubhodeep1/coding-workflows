@@ -745,6 +745,9 @@ jobs:
           PR_EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GATE_HEAD_SHA: ${{ steps.evaluate.outputs.head_sha }}
           GATE_AUTO_MERGE_ENABLED: ${{ steps.evaluate.outputs.auto_merge_enabled }}
+          # #9483: updater PRs get head-gate success once verify + integrity pass.
+          GATE_HEAD_REF: ${{ steps.evaluate.outputs.head_ref }}
+          REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}
           # #8333: a skip whose security pass is still required gets its
           # success status from the skip job, only after hold=false.
           DETERMINISTIC_SKIP: ${{ steps.evaluate.outputs.det_skip_security_pass != 'true' && steps.evaluate.outputs.deterministic_skip || 'false' }}
@@ -4430,6 +4433,7 @@ jobs:
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
           AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
+          REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}
         run: |
           bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
 

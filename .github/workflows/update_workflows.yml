@@ -1590,7 +1590,13 @@ jobs:
           fi
 
           if [ -n "${PR_NUMBER}" ]; then
-            gh pr edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body-file "${BODY}" >/dev/null || pr_fail pr_edit_failed
+            # REST PATCH, not `gh pr edit`: gh pr edit reads fields over
+            # GraphQL that need the `read:org` scope, which GH_PAT lacks, so
+            # every refresh failed with pr_edit_failed (#9483,
+            # atlas-bridge.gd run 43363402426). The reason code is unchanged.
+            [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] || pr_fail pr_edit_failed
+            jq -n --rawfile body "${BODY}" '{body: $body}' \
+              | gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input - >/dev/null || pr_fail pr_edit_failed
             PR_ACTION="refreshed"
           else
             PR_URL="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base "${BASE}" --head "${BRANCH}" --title "${PR_TITLE}" --body-file "${BODY}" | tail -n1)" || pr_fail pr_create_failed
@@ -2487,6 +2493,44 @@ jobs:
             fi
           fi
           echo "UPDATER_PR_VERIFY outcome=rejected reason=verify_failed stage=final pr=${PR_NUMBER} head=${PUSHED_SHA} auto_merge=none"
+
+      # A verified PR whose auto-merge could not be enabled used to log a
+      # warning and stay green, so updater PRs sat open for days (#9483,
+      # btc_sweeper#264). Fail the job loudly instead. The verify status stays
+      # `success` ("Mark verify failure" only runs when publish failed), so a
+      # human can still merge the PR.
+      - name: Fail when auto-merge could not be enabled
+        id: verify_merge_blocked
+        if: ${{ !cancelled() && steps.verify_publish.outcome == 'success' && steps.verify_publish.outputs.auto_merge == 'failed' }}
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          SYNC_REPO: ${{ github.repository }}
+          SYNC_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          echo "::error::UPDATER_PR_VERIFY outcome=merge_blocked reason=auto_merge_failed pr=${PR_NUMBER} head=${PUSHED_SHA}"
+          echo "::error::The verify status on #${PR_NUMBER} stays success, so a human can merge it. Possible causes: 'Allow auto-merge' is off in the repository settings, or GH_PAT is missing scopes (for example read:org or repo)."
+          # PR_NUMBER and PUSHED_SHA were validated by verify_inputs; the
+          # message carries only those, the repository and the run URL.
+          sync_alert_level="${ALERT_MSG_LEVEL:-SILENT}"
+          case "${sync_alert_level^^}" in
+            DEBUG|WARNING|ERROR)
+              if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+                echo "::warning::Telegram not configured — skipping merge-blocked alert."
+              else
+                MSG="ERROR: updater PR #${PR_NUMBER} in ${SYNC_REPO} passed verification but auto-merge could not be enabled.
+          A human must merge it. Head: ${PUSHED_SHA}
+          Run: ${SYNC_RUN_URL}"
+                curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+                  -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+                  -d "disable_web_page_preview=true" \
+                  --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
+              fi
+              ;;
+            *) echo "Alert level ${sync_alert_level} suppresses the merge-blocked alert." ;;
+          esac
+          exit 1
 
       - name: Verify summary
         if: always()

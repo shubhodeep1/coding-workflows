@@ -238,6 +238,13 @@ fi
 # the PR tree against the attested release manifest. Review never does.
 if [[ "${_orch_pr_head_ref}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} action=skip reason=updater_pr_verify_job_owns_merge"
+	# This exit precedes the head-gate success post below, so the gate used
+	# to stay pending on updater PRs (#9483). Post success only when the
+	# verify and integrity statuses are green on this exact head; reuses the
+	# PR read above (no extra PR call). Review still never enables auto-merge.
+	if type review_head_gate_updater_exempt >/dev/null 2>&1; then
+		review_head_gate_updater_exempt "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "${INITIAL_HEAD_SHA:-}" "${_orch_pr_head_ref}" "${_ORCH_PR_META_JSON}" || true
+	fi
 	exit 0
 fi
 

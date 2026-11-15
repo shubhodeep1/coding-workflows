@@ -456,6 +456,7 @@ def test_multi_repo_drift_aggregates_into_summary() -> None:
 			"drift": 2,
 			"error": 0,
 			"drift_items": 2,
+			"pin_stale": 0,
 		}
 		assert not any(
 			"repos/octo/two/contents/.github/workflows/ai-clarify.yml" in command[-1]
@@ -535,6 +536,7 @@ def test_repo_fetch_failure_is_recorded_after_exhausting_retries() -> None:
 			"drift": 0,
 			"error": 1,
 			"drift_items": 0,
+			"pin_stale": 0,
 		}
 		broken_listing_calls = [
 			command
@@ -747,6 +749,7 @@ def test_command_failure_is_recorded_without_aborting_other_repos() -> None:
 			"drift": 0,
 			"error": 1,
 			"drift_items": 0,
+			"pin_stale": 0,
 		}
 		executor.assert_consumed()
 
@@ -1499,12 +1502,232 @@ def test_repair_credentials_stay_out_of_command_lines() -> None:
 
 def test_workflow_runs_daily_and_restores_from_the_stable_tree() -> None:
 	workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
-	assert "- cron: '0 8 * * *'" in workflow_text
+	# Every 6 hours since #9483 so the 24-hour pin-age alarm is enforced.
+	assert "- cron: '0 */6 * * *'" in workflow_text
+	assert "- cron: '0 8 * * *'" not in workflow_text
 	assert "git archive FETCH_HEAD workflow-templates scripts/workflow_wrapper_refs.py" in workflow_text
 	assert '--templates-dir "${STABLE_TREE}/workflow-templates"' in workflow_text
 	assert '--renderer "${STABLE_TREE}/scripts/workflow_wrapper_refs.py"' in workflow_text
 	assert "CONSUMER_DRIFT_REPAIR_ENABLED: ${{ vars.CONSUMER_DRIFT_REPAIR_ENABLED || 'true' }}" in workflow_text
 	assert "### Restore pull requests" in workflow_text
+
+
+# ── Pin-age alarm (#9483) ────────────────────────────────────────────────
+
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+PIN_NOW = _dt(2026, 11, 14, 12, 0, tzinfo=_tz.utc)
+SHA_V1460 = "1" * 40
+SHA_V1470 = "2" * 40
+SHA_V1471 = "3" * 40
+SHA_V1472 = "4" * 40
+
+
+def _tag(name: str, sha: str, hours_ago: float | None) -> "drift_audit.ReleaseTag":
+	match = drift_audit.RELEASE_VERSION_TAG_RE.match(name)
+	assert match
+	created = None if hours_ago is None else int((PIN_NOW - _td(hours=hours_ago)).timestamp())
+	return drift_audit.ReleaseTag(name=name, version=tuple(int(g) for g in match.groups()), sha=sha, created_at=created)
+
+
+def _release_tags(newer_hours: float = 25) -> list:
+	return [
+		_tag("v1.46.0", SHA_V1460, 24 * 10),
+		_tag("v1.47.0", SHA_V1470, newer_hours),
+		_tag("v1.47.1", SHA_V1471, 5),
+		_tag("v1.47.2", SHA_V1472, 1),
+	]
+
+
+def _pin_age(refs: set[str], tags: list | None = None, stable: str = SHA_V1472):
+	return drift_audit.evaluate_pin_age(refs, stable, _release_tags() if tags is None else tags, PIN_NOW, drift_audit.PIN_BEHIND_ALERT_AFTER_SECONDS)
+
+
+def test_pin_age_23_hours_behind_is_not_stale() -> None:
+	tags = [_tag("v1.47.1", SHA_V1471, 30), _tag("v1.47.2", SHA_V1472, 23)]
+	result = _pin_age({SHA_V1471}, tags)
+	assert result.stale is False
+	assert result.reason == "within_threshold"
+	assert result.first_newer_release == "v1.47.2"
+	assert result.behind_seconds == 23 * 3600
+
+
+def test_pin_age_25_hours_behind_is_stale() -> None:
+	tags = [_tag("v1.47.1", SHA_V1471, 30), _tag("v1.47.2", SHA_V1472, 25)]
+	result = _pin_age({SHA_V1471}, tags)
+	assert result.stale is True
+	assert result.reason == "behind_stable"
+	assert result.pinned_release == "v1.47.1"
+	assert result.first_newer_release == "v1.47.2"
+
+
+def test_pin_age_counts_from_the_first_newer_release_not_the_latest() -> None:
+	# btc_sweeper: pinned v1.46.0 while v1.47.0, v1.47.1 and v1.47.2 shipped
+	# (three update PRs, two closed). The newest tag is 1 hour old, but the
+	# consumer has been behind since v1.47.0 was tagged 25 hours ago.
+	result = _pin_age({SHA_V1460})
+	assert result.stale is True
+	assert result.pinned_release == "v1.46.0"
+	assert result.first_newer_release == "v1.47.0"
+	assert result.behind_seconds == 25 * 3600
+
+
+def test_pin_age_uses_the_oldest_of_mixed_pins() -> None:
+	result = _pin_age({SHA_V1460, SHA_V1471})
+	assert result.pinned_release == "v1.46.0"
+	assert result.first_newer_release == "v1.47.0"
+
+
+def test_pin_age_fails_closed_on_unknown_pins_and_tag_times() -> None:
+	assert _pin_age({"9" * 40}).reason == "pin_unknown"
+	assert _pin_age({"9" * 40}).stale is True
+	assert _pin_age(set()).reason == "pin_unknown"
+	assert _pin_age(set()).stale is True
+	assert _pin_age({SHA_V1460}, []).reason == "pin_unknown"
+	tags = [_tag("v1.46.0", SHA_V1460, 100), _tag("v1.47.0", SHA_V1470, None)]
+	result = _pin_age({SHA_V1460}, tags)
+	assert (result.stale, result.reason) == (True, "tag_time_unknown")
+
+
+def test_pin_age_stable_refs_are_current() -> None:
+	assert _pin_age({"stable"}).stale is False
+	assert _pin_age({SHA_V1472, "stable"}).reason == "current"
+	# Pin equals the newest tag but stable lags or leads: nothing newer yet.
+	result = _pin_age({SHA_V1472}, stable="5" * 40)
+	assert (result.stale, result.reason) == (False, "no_newer_release")
+
+
+def test_release_tags_file_keeps_only_versions_and_peeled_commits() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-pin-tags-") as td:
+		path = Path(td) / "tags.tsv"
+		path.write_text(
+			"\n".join(
+				[
+					f"v1\t{'a' * 40}\t{SHA_V1472}\t1790000000",
+					f"v1.47.2\t{'b' * 40}\t{SHA_V1472}\t1790000100",
+					f"v1.47.0\t{SHA_V1470}\t\t1780000000",
+					f"v1.47.1\tnot-a-sha\t\t1785000000",
+					"garbage-row",
+					f"v1.46.0\t{SHA_V1460}\t\t",
+				]
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+		tags = drift_audit.load_release_tags(path)
+	assert [tag.name for tag in tags] == ["v1.46.0", "v1.47.0", "v1.47.2"]
+	assert tags[-1].sha == SHA_V1472
+	assert tags[0].created_at is None
+	assert drift_audit.load_release_tags(Path("/nonexistent/tags.tsv")) == []
+
+
+def test_extract_pinned_refs_reads_only_coding_workflows_reusable_refs() -> None:
+	text = (
+		"jobs:\n  a:\n    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@" + SHA_V1460.upper() + "\n"
+		"  b:\n    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@stable\n"
+		"  c:\n    uses: other/repo/.github/workflows/x.yml@" + "f" * 40 + "\n"
+		"  d:\n    uses: shubhodeep1/coding-workflows/.github/workflows/x.yml@main\n"
+	)
+	assert drift_audit.extract_pinned_refs([text, None]) == {SHA_V1460, "stable"}
+
+
+def _pin_drift_auditor(templates_dir: Path, consumer_text: str, release_tags: list | None) -> tuple:
+	_write_templates(templates_dir, {"ai-clarify.yml": "jobs:\n  a:\n    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@stable\n"})
+	executor = FakeExecutor(
+		[
+			PlannedCall(
+				("gh", "api", "-H", "Accept: application/vnd.github+json", "repos/octo/demo/contents/.github/workflows"),
+				stdout=json.dumps([{"name": "ai-clarify.yml", "type": "file"}]),
+			),
+			PlannedCall(
+				("gh", "api", "-H", "Accept: application/vnd.github.raw+json", "repos/octo/demo/contents/.github/workflows/ai-clarify.yml"),
+				stdout=consumer_text,
+			),
+		]
+	)
+	auditor = drift_audit.ConsumerDriftAuditor(
+		expected_templates=drift_audit.load_expected_templates(templates_dir, SHA_V1472),
+		max_diff_lines=5,
+		executor=executor,
+		release_tags=release_tags,
+		stable_sha=SHA_V1472,
+		now=PIN_NOW,
+	)
+	return auditor, executor
+
+
+def test_drifted_consumer_gets_a_pin_age_from_the_fetched_wrappers() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-pin-audit-") as td:
+		consumer = "jobs:\n  a:\n    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@" + SHA_V1460 + "\n"
+		auditor, executor = _pin_drift_auditor(Path(td) / "workflow-templates", consumer, _release_tags())
+		output = io.StringIO()
+		with contextlib.redirect_stdout(output):
+			result = auditor.audit_repository("octo/demo")
+		executor.assert_consumed()
+	assert result.outcome == "drift"
+	assert result.pin_age is not None and result.pin_age.stale is True
+	assert "DRIFT_PIN_AGE repository=octo/demo outcome=stale reason=behind_stable pinned=v1.46.0 first_newer=v1.47.0 behind_seconds=90000" in output.getvalue()
+	summary = drift_audit.summarize_results([result], ["ai-clarify.yml"])
+	assert summary["totals"]["pin_stale"] == 1
+	assert summary["results"][0]["pin_age"]["first_newer_release"] == "v1.47.0"
+
+
+def test_pin_age_is_off_without_a_release_tags_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-pin-off-") as td:
+		consumer = "jobs:\n  a:\n    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@" + SHA_V1460 + "\n"
+		auditor, executor = _pin_drift_auditor(Path(td) / "workflow-templates", consumer, None)
+		with contextlib.redirect_stdout(io.StringIO()):
+			result = auditor.audit_repository("octo/demo")
+		executor.assert_consumed()
+	assert result.outcome == "drift"
+	assert result.pin_age is None
+	assert drift_audit.summarize_results([result], [])["totals"]["pin_stale"] == 0
+
+
+def test_pin_max_age_falls_back_to_the_default_for_bad_values() -> None:
+	with contextlib.redirect_stderr(io.StringIO()):
+		assert drift_audit.parse_pin_max_age_seconds("0") == 86400
+		assert drift_audit.parse_pin_max_age_seconds("abc") == 86400
+	assert drift_audit.parse_pin_max_age_seconds("3600") == 3600
+	assert drift_audit.SYNC_PR_STALE_AFTER_SECONDS == 3 * 24 * 60 * 60
+
+
+def _pin_summary(pin_age: dict | None, repairs: list[dict]) -> dict:
+	summary = _report_summary(repairs)
+	summary["results"][0]["pin_age"] = pin_age
+	return summary
+
+
+def test_report_warns_when_behind_stable_even_with_a_fresh_sync_pull_request() -> None:
+	pin_age = {"stale": True, "reason": "behind_stable", "pinned_release": "v1.46.0", "first_newer_release": "v1.47.0", "behind_seconds": 25 * 3600}
+	with tempfile.TemporaryDirectory(prefix="drift-report-pin-") as td:
+		level, telegram, summary_md = _run_report_step(Path(td), _pin_summary(pin_age, [_sync_skip(False)]))
+	assert level == "WARNING"
+	assert "### Behind stable for 24 hours or more" in summary_md
+	assert "owner/drifted" in telegram and "pinned v1.46.0, v1.47.0 released 25 hours ago" in telegram
+
+
+def test_report_warns_for_an_unknown_pin_and_stays_quiet_within_threshold() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-report-pin-unknown-") as td:
+		level, telegram, _md = _run_report_step(Path(td), _pin_summary({"stale": True, "reason": "pin_unknown"}, [_sync_skip(False)]))
+		assert level == "WARNING"
+		assert "pin_unknown" in telegram
+	with tempfile.TemporaryDirectory(prefix="drift-report-pin-fresh-") as td:
+		fresh = {"stale": False, "reason": "within_threshold", "behind_seconds": 23 * 3600}
+		level, telegram, summary_md = _run_report_step(Path(td), _pin_summary(fresh, [_sync_skip(False)]))
+		assert level == "DEBUG"
+		assert "Behind stable" not in summary_md
+
+
+def test_workflow_passes_release_tags_and_pin_age_threshold() -> None:
+	workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert "CONSUMER_PIN_MAX_AGE_SECONDS: ${{ vars.CONSUMER_PIN_MAX_AGE_SECONDS || '86400' }}" in workflow_text
+	assert "git fetch --no-tags --depth=1 --filter=tree:0 origin '+refs/tags/v*:refs/tags/v*'" in workflow_text
+	assert "git for-each-ref --format='%(refname:strip=2)%09%(objectname)%09%(*objectname)%09%(creatordate:unix)' 'refs/tags/v*'" in workflow_text
+	assert '--release-tags-file "${RELEASE_TAGS_TSV}"' in workflow_text
+	assert '--pin-max-age-seconds "${CONSUMER_PIN_MAX_AGE_SECONDS}"' in workflow_text
+	# The tag fetch overwrites FETCH_HEAD, so it must follow the archive.
+	assert workflow_text.index("git archive FETCH_HEAD") < workflow_text.index("--filter=tree:0")
 
 
 def shutil_rmtree(path: Path) -> None:

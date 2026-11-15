@@ -42,6 +42,21 @@ STANDARD_MANAGED_HEADER = (
 	"# automatically when upstream templates change. To opt out of auto-updates,",
 	"# set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.",
 )
+# Pin-age alarm (#9483, AD-2: A). A consumer whose wrappers stay pinned to a
+# release older than stable is flagged once the first release newer than its
+# pin has been tagged for this long, whether or not an update pull request is
+# open. The open-PR staleness rule (SYNC_PR_STALE_AFTER_SECONDS) restarts with
+# every new update pull request, so it missed consumers whose update pull
+# requests kept being closed (btc_sweeper stayed on v1.46.0 through three).
+PIN_BEHIND_ALERT_AFTER_SECONDS = 24 * 60 * 60
+# Only exact vX.Y.Z release tags; floating major tags such as v1 are ignored.
+RELEASE_VERSION_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+PINNED_WORKFLOW_REF_RE = re.compile(
+	r"^\s*(?:-\s+)?uses:\s+['\"]?shubhodeep1/coding-workflows/\.github/workflows/[A-Za-z0-9_.-]+\.yml"
+	r"@(?P<ref>[0-9a-fA-F]{40}|stable)\b",
+	re.MULTILINE,
+)
+SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 SELF_UPDATER_MANAGED_HEADER = (
 	"# IMPORTANT: This file is managed by coding-workflows and will be overwritten",
 	"# by the update process. Do not add custom logic here.",
@@ -132,6 +147,19 @@ class DriftItem:
 
 
 @dataclass
+class PinAgeResult:
+	"""How long a drifted consumer has been behind stable (#9483)."""
+
+	stale: bool
+	reason: str
+	pinned_refs: list[str] = field(default_factory=list)
+	pinned_release: str | None = None
+	first_newer_release: str | None = None
+	first_newer_release_at: str | None = None
+	behind_seconds: int | None = None
+
+
+@dataclass
 class RepoAuditResult:
 	repository: str
 	outcome: str
@@ -140,6 +168,131 @@ class RepoAuditResult:
 	error_detail: str | None = None
 	# Templates actually compared (profile skips excluded); None on error.
 	templates_compared: int | None = None
+	# Pin-age check; None when it did not run (no release tags file, or the
+	# repository did not drift).
+	pin_age: PinAgeResult | None = None
+
+
+@dataclass(frozen=True)
+class ReleaseTag:
+	name: str
+	version: tuple[int, int, int]
+	sha: str
+	created_at: int | None
+
+
+def load_release_tags(tags_file: Path) -> list[ReleaseTag]:
+	"""Read ``tag<TAB>objectname<TAB>peeled<TAB>creatordate_unix`` rows.
+
+	The file is ``git for-each-ref`` output for refs/tags/v*. Only ``vX.Y.Z``
+	tags are kept; the peeled commit is used for annotated tags. Malformed
+	rows are dropped and counted. An unreadable file yields no tags, so every
+	pinned consumer resolves to ``pin_unknown`` (fail closed).
+	"""
+	try:
+		text = tags_file.read_text(encoding="utf-8")
+	except (OSError, UnicodeDecodeError) as exc:
+		print(f"DRIFT_PIN_AGE tags_loaded=0 tags_dropped=0 error=unreadable detail={_sanitize_log_value(str(exc))[:200]}")
+		return []
+	tags: list[ReleaseTag] = []
+	dropped = 0
+	for raw_line in text.splitlines():
+		if not raw_line.strip():
+			continue
+		parts = raw_line.split("\t")
+		if len(parts) != 4:
+			dropped += 1
+			continue
+		name, objectname, peeled, created = (part.strip() for part in parts)
+		match = RELEASE_VERSION_TAG_RE.match(name)
+		if not match:
+			# Floating tags (v1) and other names are not releases; not malformed.
+			continue
+		objectname = objectname.lower()
+		peeled = peeled.lower()
+		if not SHA40_RE.match(objectname) or (peeled and not SHA40_RE.match(peeled)):
+			dropped += 1
+			continue
+		created_at = int(created) if created.isdigit() and int(created) > 0 else None
+		tags.append(
+			ReleaseTag(
+				name=name,
+				version=(int(match.group(1)), int(match.group(2)), int(match.group(3))),
+				sha=peeled or objectname,
+				created_at=created_at,
+			)
+		)
+	tags.sort(key=lambda tag: tag.version)
+	print(f"DRIFT_PIN_AGE tags_loaded={len(tags)} tags_dropped={dropped}")
+	return tags
+
+
+def extract_pinned_refs(texts: Any) -> set[str]:
+	"""Return every coding-workflows reusable-workflow ref (40-hex or ``stable``)."""
+	refs: set[str] = set()
+	for text in texts:
+		if not isinstance(text, str):
+			continue
+		for match in PINNED_WORKFLOW_REF_RE.finditer(text):
+			ref = match.group("ref")
+			refs.add("stable" if ref == "stable" else ref.lower())
+	return refs
+
+
+def evaluate_pin_age(
+	pinned_refs: set[str],
+	stable_sha: str | None,
+	tags: list[ReleaseTag],
+	now: datetime,
+	max_age_seconds: int,
+) -> PinAgeResult:
+	"""Decide whether a consumer has been behind stable for too long.
+
+	The effective pin is the oldest release among the pinned refs. The age is
+	counted from the tag time of the first release newer than that pin. Any
+	pin or tag time that cannot be resolved counts as stale (fail closed).
+	"""
+	refs = sorted(pinned_refs)
+	if not refs:
+		return PinAgeResult(stale=True, reason="pin_unknown")
+	stable = (stable_sha or "").lower()
+	behind_refs = [ref for ref in refs if ref != "stable" and ref != stable]
+	if not behind_refs:
+		return PinAgeResult(stale=False, reason="current", pinned_refs=refs)
+	by_sha: dict[str, ReleaseTag] = {}
+	for tag in tags:
+		# Several tags on one commit: the newest version names that commit.
+		known = by_sha.get(tag.sha)
+		if known is None or tag.version > known.version:
+			by_sha[tag.sha] = tag
+	pinned_tags = [by_sha.get(ref) for ref in behind_refs]
+	if any(tag is None for tag in pinned_tags):
+		return PinAgeResult(stale=True, reason="pin_unknown", pinned_refs=refs)
+	pinned = min((tag for tag in pinned_tags if tag is not None), key=lambda tag: tag.version)
+	newer = [tag for tag in tags if tag.version > pinned.version]
+	if not newer:
+		return PinAgeResult(stale=False, reason="no_newer_release", pinned_refs=refs, pinned_release=pinned.name)
+	first_newer = min(newer, key=lambda tag: tag.version)
+	if first_newer.created_at is None:
+		return PinAgeResult(
+			stale=True,
+			reason="tag_time_unknown",
+			pinned_refs=refs,
+			pinned_release=pinned.name,
+			first_newer_release=first_newer.name,
+		)
+	tagged_at = datetime.fromtimestamp(first_newer.created_at, tz=timezone.utc)
+	behind = int((now - tagged_at).total_seconds())
+	stale = behind >= max_age_seconds
+	return PinAgeResult(
+		stale=stale,
+		reason="behind_stable" if stale else "within_threshold",
+		pinned_refs=refs,
+		pinned_release=pinned.name,
+		first_newer_release=first_newer.name,
+		first_newer_release_at=tagged_at.isoformat(),
+		behind_seconds=behind,
+	)
 
 
 class RepoFetchError(Exception):
@@ -332,6 +485,7 @@ def summarize_results(results: list[RepoAuditResult], template_files: list[str])
 		"drift": 0,
 		"error": 0,
 		"drift_items": 0,
+		"pin_stale": 0,
 	}
 	for result in results:
 		if result.outcome in totals:
@@ -339,6 +493,8 @@ def summarize_results(results: list[RepoAuditResult], template_files: list[str])
 		else:
 			totals["error"] += 1
 		totals["drift_items"] += len(result.drift_items)
+		if result.pin_age is not None and result.pin_age.stale:
+			totals["pin_stale"] += 1
 
 	return {
 		"generated_at": datetime.now(timezone.utc).isoformat(),
@@ -374,6 +530,9 @@ def render_stdout_summary(summary: dict[str, Any]) -> str:
 		outcome = result.get("outcome", "unknown")
 		if outcome == "drift":
 			lines.append(f"- {repository}: drift ({len(result.get('drift_items', []))} file(s))")
+			pin_age = result.get("pin_age") or {}
+			if pin_age.get("stale") is True:
+				lines.append(f"  behind stable: {pin_age.get('reason', 'unknown')} (pinned {pin_age.get('pinned_release') or 'unknown'})")
 		elif outcome == "error":
 			lines.append(f"- {repository}: error ({result.get('error', 'unknown')})")
 	return "\n".join(lines)
@@ -466,8 +625,18 @@ class ConsumerDriftAuditor:
 		gh_api_retry_base_seconds: float = DEFAULT_GH_API_RETRY_BASE_SECONDS,
 		sleeper: Any = time.sleep,
 		profile_manifests: dict[str, set[str]] | None = None,
+		release_tags: list[ReleaseTag] | None = None,
+		stable_sha: str | None = None,
+		pin_max_age_seconds: int = PIN_BEHIND_ALERT_AFTER_SECONDS,
+		now: datetime | None = None,
 	) -> None:
 		self.expected_templates = expected_templates
+		# None turns the pin-age check off (pin_age stays None).
+		self.release_tags = release_tags
+		self.stable_sha = stable_sha
+		self.pin_max_age_seconds = pin_max_age_seconds
+		# Fixed clock for tests; the live run reads the time at each check.
+		self.now = now
 		self.max_diff_lines = max_diff_lines
 		self.executor = executor or CommandExecutor()
 		try:
@@ -685,12 +854,38 @@ class ConsumerDriftAuditor:
 			f"DRIFT_SCAN_OK repository={repository} outcome={outcome} drift_items={len(drift_items)} "
 			f"compared={compared_count}"
 		)
+		# A byte-identical match is on stable; only drift needs the pin age.
+		pin_age = self.evaluate_repository_pin_age(repository) if outcome == "drift" else None
 		return RepoAuditResult(
 			repository=repository,
 			outcome=outcome,
 			drift_items=drift_items,
 			templates_compared=compared_count,
+			pin_age=pin_age,
 		)
+
+	def evaluate_repository_pin_age(self, repository: str) -> PinAgeResult | None:
+		"""Pin age from the wrapper texts already fetched (no extra API call)."""
+		if self.release_tags is None:
+			return None
+		texts = [
+			text for (repo, _name), text in self.workflow_file_cache.items()
+			if repo == repository and text is not None
+		]
+		result = evaluate_pin_age(
+			extract_pinned_refs(texts),
+			self.stable_sha,
+			self.release_tags,
+			self.now or datetime.now(timezone.utc),
+			self.pin_max_age_seconds,
+		)
+		print(
+			f"DRIFT_PIN_AGE repository={repository} outcome={'stale' if result.stale else 'ok'} "
+			f"reason={result.reason} pinned={result.pinned_release or 'unknown'} "
+			f"first_newer={result.first_newer_release or 'none'} "
+			f"behind_seconds={result.behind_seconds if result.behind_seconds is not None else 'unknown'}"
+		)
+		return result
 
 	def audit_repositories(self, repositories: list[str]) -> list[RepoAuditResult]:
 		return [self.audit_repository(repository) for repository in repositories]
@@ -1136,11 +1331,37 @@ def parse_args() -> argparse.Namespace:
 		help="workflow_wrapper_refs.py of the release the templates come from (default: the local copy)",
 	)
 	parser.add_argument(
+		"--release-tags-file",
+		type=Path,
+		default=None,
+		help="git for-each-ref TSV of refs/tags/v* (tag, object, peeled, creatordate unix); enables the pin-age check",
+	)
+	parser.add_argument(
+		"--pin-max-age-seconds",
+		default=str(PIN_BEHIND_ALERT_AFTER_SECONDS),
+		help="Flag a consumer once the first release newer than its pin is this old (default: 86400)",
+	)
+	parser.add_argument(
 		"--git-base-url",
 		default="https://github.com",
 		help="Git host base URL for restore pull request clones and pushes",
 	)
 	return parser.parse_args()
+
+
+def parse_pin_max_age_seconds(value: Any) -> int:
+	"""Return a positive age; anything else falls back to the default with a warning."""
+	try:
+		parsed = int(str(value).strip())
+	except (TypeError, ValueError):
+		parsed = 0
+	if parsed <= 0:
+		print(
+			f"WARNING: --pin-max-age-seconds {value!r} is not a positive integer; using {PIN_BEHIND_ALERT_AFTER_SECONDS}",
+			file=sys.stderr,
+		)
+		return PIN_BEHIND_ALERT_AFTER_SECONDS
+	return parsed
 
 
 def main() -> int:
@@ -1162,6 +1383,9 @@ def main() -> int:
 		expected_templates=expected_templates,
 		max_diff_lines=args.max_diff_lines,
 		profile_manifests=load_profile_manifests(args.templates_dir),
+		release_tags=load_release_tags(args.release_tags_file) if args.release_tags_file is not None else None,
+		stable_sha=args.stable_sha.lower(),
+		pin_max_age_seconds=parse_pin_max_age_seconds(args.pin_max_age_seconds),
 	)
 	results = auditor.audit_repositories(repositories)
 	summary = summarize_results(results, sorted(expected_templates))

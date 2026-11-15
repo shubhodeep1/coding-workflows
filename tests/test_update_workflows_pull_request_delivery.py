@@ -52,7 +52,11 @@ def test_pull_request_path_contract():
 	assert 'SYNC_BRANCH="ai-sync/stable"' in block
 	assert block.count('gh api "repos/${REPO}")') == 1
 	assert block.count("pulls?head=${OWNER}:${SYNC_BRANCH}&base=${DEFAULT_BRANCH}&state=open") == 1
-	assert block.count("-X PATCH") == 1
+	# One PATCH closes the ai-sync PR; the auto/update-workflows-* refresh
+	# has its own REST body PATCH since #9483 (gh pr edit needs read:org).
+	assert block.count('-X PATCH "repos/${REPO}/pulls/') == 1
+	assert block.count('-X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input -') == 1
+	assert block.count("-X PATCH") == 2
 	assert block.count('-X POST "repos/${REPO}/pulls"') == 1
 	assert 'git push --force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_REMOTE_SHA}" origin "HEAD:refs/heads/${SYNC_BRANCH}"' in block
 	assert "git push --force origin" not in block

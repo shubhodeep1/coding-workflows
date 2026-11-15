@@ -46,6 +46,9 @@ EXPECTED_PREDICATE = (
 	"steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || "
 	"steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'"
 )
+# Refresh goes through REST (#9483): `gh pr edit` needs the read:org scope.
+PATCH_RUN_TEXT = 'gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input -'
+PATCH_CALL = f"api -X PATCH repos/{REPO}/pulls/"
 AUTO_CLOSE_RE = re.compile(r"(?i)(?<![\w-])(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+(?:[\w.-]+/[\w.-]+)?#\d+")
 
 
@@ -152,7 +155,7 @@ def test_lint_runs_before_any_push_or_pr_write() -> None:
 	lint = run.index('"${LINT_SCRIPT}" --pr-body-file')
 	assert lint < run.index('--force-with-lease="refs/heads/${BRANCH}:"')
 	assert lint < run.index("gh pr create")
-	assert lint < run.index("gh pr edit")
+	assert lint < run.index(PATCH_RUN_TEXT)
 	assert "--fail-open-on-lookup-error" not in run
 	assert "pr_fail pr_body_lint_failed" in run
 
@@ -261,12 +264,13 @@ case "$1 $2" in
     cp "${body_file}" "${FAKE_BODY_COPY}"
     echo "https://github.com/octo/consumer/pull/77"
     exit 0 ;;
-  "pr edit")
-    cp "${body_file}" "${FAKE_BODY_COPY}"
-    exit 0 ;;
   "pr close"|"pr merge") exit 0 ;;
   "issue view") echo '[]'; exit 0 ;;
 esac
+if [ "$1 $2 $3" = "api -X PATCH" ]; then
+  jq -r '.body' > "${FAKE_BODY_COPY}"
+  exit "${FAKE_PATCH_RC:-0}"
+fi
 if [ "$1" = "api" ]; then
   case "$2" in
     user) echo "${FAKE_PAT_LOGIN}"; exit 0 ;;
@@ -422,7 +426,7 @@ def test_fresh_run_opens_one_pr_without_touching_main(fx: Fixture) -> None:
 	assert pushed
 	calls = fx.gh_calls()
 	assert sum(call.startswith("pr create") for call in calls) == 1
-	assert not any(call.startswith("pr edit") for call in calls)
+	assert not any(call.startswith(PATCH_CALL) for call in calls)
 	lookup = [call for call in calls if call.startswith("pr list") and "--head" in call]
 	assert len(lookup) == 1 and f"--head {BRANCH}" in lookup[0] and "--base main" in lookup[0]
 	body = fx.body_copy.read_text(encoding="utf-8")
@@ -469,9 +473,10 @@ def test_rerun_with_open_pr_refreshes_it(fx: Fixture) -> None:
 	result = fx.run()
 	assert result.returncode == 0, result.stderr
 	calls = fx.gh_calls()
-	assert any(call.startswith(f"pr edit 5 --repo {REPO}") for call in calls)
+	assert any(call == f"{PATCH_CALL}5 --input -" for call in calls)
 	assert not any(call.startswith("pr create") for call in calls)
 	assert fx.outputs()["pr_action"] == "refreshed"
+	assert "ai-update-workflows/verify" in fx.body_copy.read_text(encoding="utf-8")
 	assert _remote_sha(fx.origin, "refs/heads/main") == fx.base_sha
 
 
@@ -487,7 +492,7 @@ def test_refresh_withdraws_earlier_auto_merge_before_push(fx: Fixture) -> None:
 	withdraw = [i for i, call in enumerate(calls) if call.startswith("api graphql") and "disablePullRequestAutoMerge" in call]
 	assert len(withdraw) == 1
 	assert "id=PR_node5" in calls[withdraw[0]]
-	edit = next(i for i, call in enumerate(calls) if call.startswith("pr edit 5"))
+	edit = next(i for i, call in enumerate(calls) if call.startswith(f"{PATCH_CALL}5 "))
 	assert withdraw[0] < edit
 	assert fx.outputs()["auto_merge"] == "pending_verify"
 
@@ -507,7 +512,7 @@ def test_failed_auto_merge_withdrawal_fails_closed(fx: Fixture) -> None:
 	result = fx.run()
 	assert result.returncode != 0
 	assert "auto_merge_withdraw_failed" in result.stdout + result.stderr
-	assert not any(call.startswith("pr edit") for call in fx.gh_calls())
+	assert not any(call.startswith(PATCH_CALL) for call in fx.gh_calls())
 	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}") == ""
 
 
@@ -516,7 +521,7 @@ def test_fork_pr_with_same_branch_name_is_ignored(fx: Fixture) -> None:
 	fx.pr_list.write_text(json.dumps([{"number": 9, "url": "u", "state": "OPEN", "isCrossRepository": True, "headRefName": BRANCH, "mergedAt": None}]), encoding="utf-8")
 	result = fx.run()
 	assert result.returncode == 0, result.stderr
-	assert not any(call.startswith("pr edit 9") for call in fx.gh_calls())
+	assert not any(call.startswith(f"{PATCH_CALL}9 ") for call in fx.gh_calls())
 	assert fx.outputs()["pr_action"] == "created"
 
 
@@ -529,7 +534,7 @@ def test_foreign_commit_on_branch_fails_closed(fx: Fixture) -> None:
 	assert "reason=foreign_commits_on_branch" in result.stdout
 	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}") == foreign
 	assert _remote_sha(fx.origin, "refs/heads/main") == fx.base_sha
-	assert not any(call.startswith(("pr create", "pr edit", "pr merge")) for call in fx.gh_calls())
+	assert not any(call.startswith(("pr create", PATCH_CALL, "pr merge")) for call in fx.gh_calls())
 
 
 @needs_jq
@@ -577,7 +582,7 @@ def test_forged_updater_metadata_without_pat_push_fails_closed(fx: Fixture, acti
 	assert result.returncode != 0
 	assert "reason=foreign_commits_on_branch" in result.stdout
 	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}") == forged
-	assert not any(call.startswith(("pr create", "pr edit", "pr merge")) for call in fx.gh_calls())
+	assert not any(call.startswith(("pr create", PATCH_CALL, "pr merge")) for call in fx.gh_calls())
 
 
 @needs_jq
@@ -630,7 +635,7 @@ def test_merged_release_pr_with_branch_left_skips_without_pushing(fx: Fixture) -
 	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}") == fx.base_sha
 	assert _remote_sha(fx.origin, "refs/heads/main") == fx.base_sha
 	assert fx.outputs()["pr_action"] == "skipped"
-	assert not any(call.startswith(("pr create", "pr edit", "pr merge")) for call in fx.gh_calls())
+	assert not any(call.startswith(("pr create", PATCH_CALL, "pr merge")) for call in fx.gh_calls())
 	assert not any("/compare/" in call or "/activity" in call for call in fx.gh_calls())
 
 
@@ -678,3 +683,22 @@ def test_auto_close_keyword_in_commit_message_blocks_delivery(fx: Fixture, monke
 	assert "reason=pr_body_lint_failed" in result.stdout
 	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}") == ""
 	assert not any(call.startswith(("pr create", "pr list")) for call in fx.gh_calls())
+
+
+def test_refresh_uses_rest_patch_not_gh_pr_edit() -> None:
+	# `gh pr edit` needs the read:org scope GH_PAT lacks (#9483); the REST
+	# PATCH keeps the pr_edit_failed reason code (§10).
+	run = _run_text()
+	assert not [line for line in run.splitlines() if "gh pr edit" in line and not line.lstrip().startswith("#")]
+	assert PATCH_RUN_TEXT in run
+	assert "jq -n --rawfile body \"${BODY}\" '{body: $body}'" in run
+	assert '[[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] || pr_fail pr_edit_failed' in run
+
+
+@needs_jq
+def test_failed_rest_patch_reports_pr_edit_failed(fx: Fixture, monkeypatch) -> None:
+	fx.pr_list.write_text(json.dumps([{"number": 5, "url": "https://github.com/octo/consumer/pull/5", "state": "OPEN", "isCrossRepository": False, "headRefName": BRANCH, "mergedAt": None}]), encoding="utf-8")
+	(fx.bin / "gh").write_text(FAKE_GH.replace('exit "${FAKE_PATCH_RC:-0}"', "exit 1"), encoding="utf-8")
+	result = fx.run()
+	assert result.returncode != 0
+	assert "UPDATER_PR_DELIVERY outcome=failed reason=pr_edit_failed" in result.stdout + result.stderr

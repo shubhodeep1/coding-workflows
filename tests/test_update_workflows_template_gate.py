@@ -542,3 +542,87 @@ def test_merge_failure_is_reported_not_retried(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert sum(call.startswith("pr merge") for call in calls) == 1
 	assert outputs["auto_merge"] == "failed"
+
+
+# ── Merge-blocked alarm (#9483) ──────────────────────────────────────────
+
+
+MERGE_BLOCKED_IF = "${{ !cancelled() && steps.verify_publish.outcome == 'success' && steps.verify_publish.outputs.auto_merge == 'failed' }}"
+
+
+def test_merge_blocked_step_fails_the_job_after_mark_verify_failure() -> None:
+	steps = _verify_job()["steps"]
+	names = [step.get("name") for step in steps]
+	step = _verify_step("verify_merge_blocked")
+	assert step["name"] == "Fail when auto-merge could not be enabled"
+	assert step["if"] == MERGE_BLOCKED_IF
+	assert names.index("Mark verify failure") < names.index(step["name"]) < names.index("Verify summary")
+	assert "continue-on-error" not in step
+	run = step["run"]
+	assert "${{" not in run
+	assert "::error::UPDATER_PR_VERIFY outcome=merge_blocked reason=auto_merge_failed pr=${PR_NUMBER} head=${PUSHED_SHA}" in run
+	assert "read:org" in run
+	assert run.rstrip().endswith("exit 1")
+	# The verify status is never touched: a human can still merge the PR.
+	assert "statuses" not in run
+	assert "gh " not in run
+	assert "Telegram not configured — skipping merge-blocked alert." in run
+	assert step["env"]["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}"
+	# "Mark verify failure" keeps its condition, so it never runs when the
+	# publish step (and its success status) succeeded.
+	failure = [s for s in steps if s.get("name") == "Mark verify failure"][0]
+	assert failure["if"] == "${{ always() && steps.verify_inputs.outputs.sha_ok == 'true' && steps.verify_publish.outcome != 'success' }}"
+
+
+FAKE_CURL = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${FAKE_CURL_LOG}"
+exit 0
+"""
+
+
+def _run_merge_blocked(tmp_path: Path, level: str, secret: str) -> tuple[subprocess.CompletedProcess, list[str]]:
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	curl = bin_dir / "curl"
+	curl.write_text(FAKE_CURL, encoding="utf-8")
+	curl.chmod(curl.stat().st_mode | stat.S_IXUSR)
+	log = tmp_path / "curl.log"
+	env = {
+		**{k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "GH_", "FAKE_", "TG_"))},
+		"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+		"PR_NUMBER": "77",
+		"PUSHED_SHA": PUSHED_SHA,
+		"ALERT_MSG_LEVEL": level,
+		"TG_BOT_SECRET": secret,
+		"TG_ADMIN_CHAT_ID": "123" if secret else "",
+		"SYNC_REPO": REPO,
+		"SYNC_RUN_URL": "https://github.com/octo/consumer/actions/runs/1",
+		"FAKE_CURL_LOG": str(log),
+	}
+	result = subprocess.run(["bash", "-c", _verify_step("verify_merge_blocked")["run"]], env=env, capture_output=True, text=True)
+	calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+	return result, calls
+
+
+def test_merge_blocked_step_alerts_and_exits_nonzero(tmp_path: Path) -> None:
+	result, calls = _run_merge_blocked(tmp_path, "WARNING", "bot-secret")
+	assert result.returncode == 1
+	assert f"::error::UPDATER_PR_VERIFY outcome=merge_blocked reason=auto_merge_failed pr=77 head={PUSHED_SHA}" in result.stdout
+	sent = "\n".join(calls)
+	assert sent.count("api.telegram.org/bot") == 1
+	assert "chat_id=123" in sent
+	assert "updater PR #77 in octo/consumer" in sent
+
+
+def test_merge_blocked_step_still_fails_without_telegram(tmp_path: Path) -> None:
+	result, calls = _run_merge_blocked(tmp_path, "WARNING", "")
+	assert result.returncode == 1
+	assert "Telegram not configured" in result.stdout
+	assert calls == []
+
+
+def test_merge_blocked_step_honours_silent_alert_level(tmp_path: Path) -> None:
+	result, calls = _run_merge_blocked(tmp_path, "SILENT", "bot-secret")
+	assert result.returncode == 1
+	assert "suppresses the merge-blocked alert" in result.stdout
+	assert calls == []
