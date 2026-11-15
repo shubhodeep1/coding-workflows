@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/sync_contract_list_union.py:10-16 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The module docstring says \"new entries may sit at the end or between base entries\", but the ordered-subsequence check in `_validate` (~lines 273-279) also accepts new entries placed before the first base entry (base [a, b]; ours [x, a, b]; theirs [y, a, b] merges to [x, y, a, b]), so the docstring describes a narrower policy than the code applies.\n  WHY: Nothing fails at runtime because the merge is lossless and deterministic, but anyone who reads the docstring as the eligibility rule will predict wrongly which conflicts are resolved automatically and which go to the LLM resolver; every reviewer rated it NIT (mapped to low here), so the severities agree.\n- agents.d/stuck-states-p12-contract-list-union.md:8 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The agents fragment says \"entries may be added at the end or between base entries\", which leaves out the new entries placed before the first base entry that `_validate` also accepts.\n  WHY: This is the same mismatch between the stable contract text and the code that the last run set out to fix, so readers will predict auto-resolution wrongly for prepend conflicts; there is no runtime failure, and every reviewer rated it NIT (mapped to low here), so the severities agree.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/sync_contract_list_union.py (and agents.d/stuck-states-p12-contract-list-union.md, line 8) | severity=NIT | confidence=4\n  Line or code reference: The module docstring at lines 10-15, edited in the last run, says \"new entries may sit at the end or between base entries\". The fragment says \"entries may be added at the end or between base entries\". The code that actually decides this is the ordered-subsequence check in `_validate`: `remaining = iter(_canonical(item) for item in side_list)` / `all(any(entry == candidate for candidate in remaining) for entry in base_seq)` at about lines 273-279, together with `_resolve`/`_nearest_top_level_line` at lines 123-133.\n  PROBLEM: The code also accepts new entries placed before the first base entry (base [a, b], ours [x, a, b], theirs [y, a, b] merges to [x, y, a, b]), so the new wording still describes a narrower policy than the code applies.\n  WHY: Nothing fails at runtime because the merge is lossless and deterministic, but the stable contract text and the agents.d fragment give the wrong answer for this class of conflict; the reviewer's suggested fix is to say \"anywhere in the list (before, between or after base entries)\" in both places.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/sync_contract_list_union.py:12-14 | severity=NIT | confidence=4\n  PROBLEM: The docstring under-describes the eligibility policy for entrypoint list union merging.\n  WHY: It says new entries may be added \"at the end or between base entries\" and leaves out the prepend case that the ordered-subsequence check allows, which could mislead a future reader.\n- agents.d/stuck-states-p12-contract-list-union.md:8 | severity=NIT | confidence=4\n  PROBLEM: The agents fragment under-describes the eligibility policy in the same way as the script docstring.\n  WHY: It says new entries may sit \"at the end or between base entries\" and leaves out entries placed before the first base entry.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/sync_contract_list_union.py; agents.d/stuck-states-p12-contract-list-union.md | severity=NIT | confidence=4\n  Line or code reference: module docstring at scripts/sync_contract_list_union.py:11-16 (\"new entries may sit at the end or between base entries\"); agents.d fragment at line 8 (same wording)\n  PROBLEM: The wording still under-describes what `_validate`'s ordered-subsequence check (scripts/sync_contract_list_union.py:275-279) accepts, including entries placed before the first base entry (base [a, b]; ours [x, a, b]; theirs [y, a, b] gives [x, y, a, b]).\n  WHY: There is no runtime failure because the merge is lossless and deterministic, but readers will predict auto-resolution versus LLM dispatch wrongly; the new test pins \"between\" insertion but does not pin prepend.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/sync_contract_list_union.py | severity=NIT | confidence=4 (2 related items: the same finding reported twice verbatim)\n  Line or code reference: lines 12-13 (module docstring, last-run wording \"new entries may sit at the end or between base entries\") vs the ordered-subsequence check in `_validate` (base_seq subsequence loop, ~lines 273-279); same wording in agents.d/stuck-states-p12-contract-list-union.md line 8\n  PROBLEM: `_validate` accepts base entries as an ordered subsequence anywhere, including new entries placed before the first base entry (base [a, b]; ours [x, a, b]; theirs [y, a, b] merges to [x, y, a, b] with exit 0), but the docstring and fragment say new entries may sit only \"at the end or between base entries\".\n  WHY: There is no runtime failure because the merge is lossless and deterministic, but this is leftover drift between doc and code of the exact kind the last run set out to fix, so readers will predict wrongly which conflicts the helper resolves.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "57ad0817a5be86558bb12ea4426bb977e3ac2cc29a4ed979482bbcc13f8237d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9427,
+    "run_id": "43614512995",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43614512995",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261115033004_8c0ea610cc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9427,
+    "run_id": "43614512995"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-15T03:30:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
