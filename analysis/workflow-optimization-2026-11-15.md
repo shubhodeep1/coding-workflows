@@ -462,3 +462,118 @@ Merge and conflict overhead cannot be seen in this data.
 | Code modularization | 9 workflows with resolver copies plus 5 with bootstrap copies, new `scripts/workflow_log_analysis_helpers.sh`, `scripts/gh_helpers.sh`, `.github/workflows/orchestrate_poll.yml`, new parity tests under `tests/` | Large |
 | Expression size reduction | `.github/workflows/workflow-log-analysis.yml`, `tests/test_workflow_file_size_limit.py` | Small |
 | Medium/Low fixes | `scripts/gh_helpers.sh`, `scripts/label_helpers.sh`, `scripts/promote_candidate_follow.sh`, `.github/workflows/lint-pr-body-auto-close.yml`, `integration-pr-readiness.yml`, `security-audit.yml`, the 12 git-auth steps (SEC-001), `prompts/mode-workflow-audit.txt`, `prompts/_templates/mode-workflow-audit.txt`, `scripts/orchestrate_poll_process.sh` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-11-15)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`**: every precondition was proven by reading the code. That means the same endpoint and filters, the same function or step, no mutation in between, identical error and retry behaviour, no concurrency or job boundary crossed, and any cache contract kept. The implement stage may act on these directly.
+- **`NEEDS_VERIFICATION`**: the change looks sound, but at least one precondition can't be proven from the code alone. A named check has to pass first.
+- **`RISKY_SKIP`**: the call sits in a retry, auth or identity, pagination, rate-limit, `orchestrate_poll_process.sh` or race-defence path, or changing it would alter log keys other code reads. It is listed for visibility only and must not be implemented automatically.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001** — `NEEDS_VERIFICATION` — **Extends API-001.** It does not restate API-001's fix. It adds a precedent already in this repo, a scope correction and the gates the implement stage needs.
+  - **Files and lines:**
+    - `.github/workflows/orchestrate_poll.yml:147-188` (read at 166) and `:572-614` (read at 592), both in job `poll`.
+    - `.github/workflows/orchestrate.yml:202` (read at 221) and `:376` (read at 395), both in job `orchestrate` (79).
+    - `.github/workflows/implement.yml:469-470` (read at 489, `if: … existing_pr == 'true'`), `:772-773` (read at 794, `if: steps.refctx.outputs.pr_not_open == 'true'`) and `:1353-1354` (read at 1373, `if: env.SKIP_IMPLEMENT != 'true'`), all in job `implement` (109).
+  - **Current call count:** 2 per job in `poll` and `orchestrate`; 1–3 per job in `implement`. This only applies on the `@refs/heads/promote-candidate` path.
+  - **Proposed call count:** 1 per job.
+  - **Endpoint:** `GET repos/shubhodeep1/coding-workflows/branches/promote-candidate`.
+  - **Evidence:**
+    - `validate.yml` already does this consolidation in one job, using step outputs rather than `GITHUB_ENV`. The first step emits `promote_candidate_checked=true` (`validate.yml:228`) and `promote_candidate_sha=…` (`:238`). The second step reuses them:
+      ```bash
+      # Reuse the SHA "Resolve integration ref" accepted (a step output,
+      # which later steps cannot overwrite). Read the branch only when that
+      # step never read it (no tracking issue); a rejection there keeps main.
+      promote_candidate_sha="${VALIDATE_PROMOTE_CANDIDATE_SHA:-}"
+      if [[ ! "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]] && [ "${VALIDATE_PROMOTE_CANDIDATE_CHECKED:-}" != "true" ]; then
+      ```
+      (`validate.yml:494-498`)
+    - So `validate.yml:231`/`:501` is already compliant and should not be counted against API-001.
+    - The reads at `clarify.yml:408`/`:2525`, `plan.yml:527`/`:3870`, `validate.yml:1947` and `implement.yml:7310` are in separate `heal-report` jobs (`clarify.yml:2468`, `plan.yml:3826`, `validate.yml:1884`, `implement.yml:7262`). Merging those would cross a job boundary, so they are out of scope here.
+    - The two `orchestrate_poll.yml` steps handle errors differently. Step 572 has `continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}` (`:573`); step 147 has none.
+    - Each step emits its own `SUPPORT_REF source=promote_candidate…` line (`:170/172`, `:596/598`). The current report's Reliability item 1 and BUG-002 both plan to extend that prefix.
+  - **Proposed fix:**
+    - Don't use API-001's `GITHUB_ENV` variable `PROMOTE_CANDIDATE_RESOLVED_SHA`. Follow the `validate.yml` pattern instead.
+    - Give the first resolve step in each job an `id:`. Have it write `promote_candidate_checked=true` and `promote_candidate_sha=<40-hex>` to `$GITHUB_OUTPUT`.
+    - Pass both values into the later step(s) through `env:`.
+    - In the later step, read the branch only when `checked != true`.
+    - Keep emitting the `SUPPORT_REF` line in every step, so log consumers still see one line per step.
+    - Step outputs can't be overwritten by later steps, whereas `GITHUB_ENV` can be rewritten by any step that runs code staged from the first SHA. That matters because this value picks which code gets executed.
+  - **Safety rationale:** the calls cross separate steps that handle errors differently (`continue-on-error` at `orchestrate_poll.yml:573`), and `tests/test_workflow_support_ref_follows_pin.py` asserts the step shape, so the "same error-handling semantics" precondition isn't proven.
+  - **Downstream signal (verification required):**
+    1. Read `tests/test_workflow_support_ref_follows_pin.py`. Confirm it allows a step output plus a conditional read; `validate.yml` passing it is evidence it does.
+    2. In `implement.yml`, confirm whether `existing_pr == 'true'` (469) leads to `SKIP_IMPLEMENT=true` before 1353. If it does, those two steps never both run, and the saving there is only 772 vs 1353.
+    3. Confirm no step between the two resolve steps rewrites the `promote-candidate` protection state. It doesn't today: no workflow step writes that branch, and only `scripts/promote_candidate_follow.sh:237-238` does.
+
+- **MERGE-002** — `RISKY_SKIP` — two `rate_limit` probes back to back in the reclarify sweep.
+  - **Files and lines:**
+    - `scripts/orchestrate_poll_process.sh:191` (`replay_failed_reclarify_commands`).
+    - `scripts/orchestrate_poll_process.sh:304` (`detect_unrouted_blocked_comments`).
+    - These are called one after the other at `:357-358` under `RECLARIFY_REQUEUE_SWEEP_ONLY=true`, which is set by `orchestrate_poll.yml:972-977`.
+    - A third probe runs at job start: `orchestrate_poll.yml:138`.
+  - **Current call count:** 2 per sweep tick (3 counting the job-start budget probe).
+  - **Proposed call count:** 1 (2 with the job-start probe).
+  - **Endpoint:** `GET /rate_limit`.
+  - **Evidence:**
+    ```bash
+    budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || return 0
+    ```
+    (`:191`)
+    ```bash
+    budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || budget=""
+    ```
+    (`:304`)
+    - Both compare against the same threshold of 500.
+    - Per GitHub's docs, `GET /rate_limit` doesn't count against the REST rate limit ([REST API endpoints for rate limits](https://docs.github.com/en/rest/rate-limit/rate-limit)). Merging therefore saves **zero quota** and only one round-trip of latency.
+  - **Proposed fix:** none. If it were ever done: read once in the sweep entry block at `:356-359` and pass the value to both functions.
+  - **Safety rationale:** this is a rate-limit probe inside `orchestrate_poll_process.sh`. The two outcomes are logged differently (191 returns silently; 304 emits `RECLARIFY_UNROUTED outcome=skip reason=budget_low remaining=…`), and the second probe also sees calls the replay loop made in between, so merging changes both the log and the gating.
+  - **Downstream signal:** do not implement automatically. It saves no quota, and a reused value would let `detect_unrouted_blocked_comments` act on a budget that the replay loop's DELETE/POST calls (`:228`, `:241`, `:245`) have already spent. It needs a manual review of whether a stale budget is acceptable.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001** — `RISKY_SKIP` — the pipeline identity is read in the sweep step and read again in the full poller.
+  - **Files and lines:**
+    - Sweep step (`orchestrate_poll.yml:972`): `scripts/orchestrate_poll_process.sh:198`.
+    - Full poller: the cache lines `:21047-21049`, `:21171-21173`, `:21407-21409`, `:21784-21786` and `:21853-21855`, all guarded by `PERSIST_JOURNAL_LOGIN_CACHE`, which is seeded from the environment at `:21024`.
+  - **Current call count:** up to 2 per tick (1 in the sweep when issues are queued, 1 in the full poller when a journal or judge path needs it).
+  - **Proposed call count:** 1.
+  - **Endpoint:** `GET /user`.
+  - **Evidence:**
+    ```bash
+    trusted_login="$(gh_retry gh api user --jq .login 2>/dev/null)" || trusted_login=""
+    ```
+    (`:198`, a local variable that is never exported)
+    ```bash
+    PERSIST_JOURNAL_LOGIN_CACHE="${PERSIST_JOURNAL_LOGIN_CACHE:-}"
+    ```
+    (`:21024`, which already accepts a value from the environment)
+    - The sweep process exits at `:359`, so the login it read never reaches the full poller.
+    - The two places validate the login differently: `:199` uses `^[A-Za-z0-9][A-Za-z0-9-]*$`, while `:21049` uses `…(\[bot\])?$`.
+  - **Proposed fix (for manual review only):** have the sweep hand its validated login to the later poller step as a step output, not through `GITHUB_ENV`, and fall back to the existing `gh api user` read when it is missing.
+  - **Safety rationale:** this is an identity lookup that decides which comment author is trusted to authorize replays and journal entries (`:185-186`, "The marker is data, not authorization"). It sits in `orchestrate_poll_process.sh`, it would cross a step boundary, and the two validation regexes differ.
+  - **Downstream signal:** do not implement automatically. A security reviewer would need to approve carrying a trust-defining identity across steps, and settle which regex is authoritative. The saving is at most 1 REST call per tick.
+
+### Dead Calls (DEAD-API-###)
+
+No new findings. The one dead or unreachable API path in scope (`read_standalone_state_json` at `scripts/orchestrate_poll_process.sh:18993-19000`, and the 2-argument fallback in `get_standalone_state_comment_id` at `:18984-18991` / `:19021`) is already covered by API-004 and DEAD-001; see the cross-references below.
+
+I confirmed that no caller passes 2 arguments: all 19 `write_standalone_state_json` call sites (`:25461`–`:26512`) pass 3. I also checked that `orchestrate_poll.yml:329`'s `provider_outage_trackers.json` is consumed (`orchestrate_poll.yml:1219`), so that call is not dead.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — the finding holds, but use the step-output pattern from `validate.yml:228/238/494-498` rather than `GITHUB_ENV`, drop `validate.yml` from the count, and see MERGE-001 for the `continue-on-error` and step-shape gates.
+- API-002: RISKY_SKIP — the per-issue GET at `orchestrate_poll_process.sh:202` re-checks the label right before a POST (`:241`) that triggers a pipeline run, in an authorization path (`:185-186`) inside `orchestrate_poll_process.sh`. A list snapshot would weaken that live check, and the comments read at `:205` is paginated.
+- API-003: RISKY_SKIP — the per-row GET at `:8822` is in a loop in `orchestrate_poll_process.sh` that ends in a non-idempotent POST (`:8852`) guarded only by a marker. `_fetch_issue_labels_batch_graphql` (`:4778-4791`) returns no `state` and drops issues with an incomplete label page, so it can't replace the GET as it stands.
+- API-004: RISKY_SKIP — no runtime change is proposed, and the paginated call is unreachable (all 19 callers pass 3 arguments, verified). The contract test it suggests touches no API call and can go through normal review, but the call itself is in `orchestrate_poll_process.sh` and must not be edited automatically.
+- DEAD-001 (Section 5, API-related): RISKY_SKIP — the function has no callers (verified), but §10 naming immutability means it is kept; the only safe action is the contract test noted under API-004.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | MERGE-001 |
+| RISKY_SKIP | 2 | MERGE-002, REUSE-001 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass. MERGE-001 is the highest-value candidate once its three checks pass.
