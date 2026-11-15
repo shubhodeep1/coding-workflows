@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nI've planned this change and changed no files. The planning ref is commit `4d4ae9aec4bf2a28ab220500d6dc655f36f96e3f` on `orchestrator/project-9490`, and its `Integration branch mismatch` line reads `false`. On that ref, `tests/e2e_smoke_canary.txt` currently holds `status: ok` on line 1 and `decompose-run: 41445772297` on line 2, followed by a trailing newline.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check ci\nACCEPTANCE: post-merge none: this only changes a data file in a smoke canary, and no workflow depends on the run ID it contains\n\n## Functions or modules to implement\nNone. The only change is a data file.\n\n## Data structures affected\nLine 2 of `tests/e2e_smoke_canary.txt` becomes `decompose-run: 43445515854`. Line 1 stays `status: ok`, the file keeps exactly two lines, and it ends with a single trailing newline (LF).\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace only line 2\n- Chosen: rewrite only the run-ID line and keep line 1 and the trailing newline exactly as they are.\n- Alternatives considered: regenerating the whole file, or also editing `tests/e2e_smoke_canary_b.txt`.\n- Why: the issue limits the change to one line in this one file. A sibling issue owns the `_b` file.\n\n## Security considerations\nNo trust boundary, endpoint, secret or money handling is involved.\n\n## Potential risks or edge cases\n- A missing trailing newline or a CRLF line ending would break the \"exactly two lines\" requirement. After the edit, check the bytes with `cat -A`.\n- Several tests mention files whose names start with `e2e_smoke_canary`. A search of `tests/test_e2e_editor_smoke_canary.py` found no check on the `decompose-run` value, so changing the run ID should not break it. The other tests that mention the file were not searched, so their pass status is not confirmed; CI will show it.\n\n## Testing considerations\n- Check that `cat -A` prints exactly `status: ok$` and then `decompose-run: 43445515854$`.\n- Check that `wc -l` reports 2.\n- Check that `git diff --stat` shows only this file.\n- CI must be green.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a single-line change to a single file and explicitly excludes every other file, so the scope stays exactly as written and needs no helpers or new code.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "99353fc729a88fcd3037f2bf5be2a8d153b2fc9a1712bc9483d31b8d22bdf3ae",
+  "lineage": {
+    "issue_number": 9526,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43708542624",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43708542624",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9526"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261115144448_de6b61c79e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9526,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43708542624"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9526",
+  "timestamps": {
+    "created_at": "2026-11-15T14:44:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
