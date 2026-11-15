@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-15T03:49:39Z",
+  "issue_number": 9480,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=tests/test_agents_fragment_contract.py:1-1; cited_path=tests/test_agents_fragment_contract.py, tests/test_ai_label_precreation_contract.py, tests/test_changelog_fragment_contract.py, tests/test_review_autofix_provider_outage_contract.py, tests/test_workflow_checkout_integration_ref_audit.py; files_touched=.github/workflows/test-and-mark-stable.yml, agents.d/9480-e2e-review-runner-wait.md, changelog.d/9480-e2e-review-runner-wait.md, scripts/stable_e2e_step_wait_review.sh, tests/test_test_and_mark_stable_review_blocked_budget.py.",
+  "phase": "review_autofix",
+  "pr_number": 9501,
+  "record_id": "lesson_20261115034939_a183fb2488",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_agents_fragment_contract.py, tests/test_ai_label_precreation_contract.py, tests/test_changelog_fragment_contract.py, tests/test_review_autofix_provider_outage_contract.py, tests/test_workflow_checkout_integration_ref_audit.py",
+    "tests/test_agents_fragment_contract.py",
+    ".github/workflows/test-and-mark-stable.yml",
+    "agents.d/9480-e2e-review-runner-wait.md",
+    "changelog.d/9480-e2e-review-runner-wait.md",
+    "scripts/stable_e2e_step_wait_review.sh",
+    "tests/test_test_and_mark_stable_review_blocked_budget.py"
+  ]
+}
