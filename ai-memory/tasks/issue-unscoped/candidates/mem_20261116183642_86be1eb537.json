@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/INVENTORY.md:(Workflows and Scripts sections) | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: docs/INVENTORY.md does not document `.github/workflows/ci_pr_quick.yml`, `scripts/ci_docs_only_paths.sh`, `scripts/review_final_ci_failed.sh` and `scripts/review_final_ci_sweep.sh`, so `tests/inventory_parity.py` exits 1.\n  WHY: The failure fails the `tests-release-and-log-analysis` job and then the `lint` gate. Both reviewers say it is inherited from the base branch `orchestrator/project-9550`, not caused by this PR's canary edit. Severity differs: z-ai_glm-5_3-flash gave MAJOR and minimax_minimax-m3 gave no severity. The highest is used and mapped to medium.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/INVENTORY.md:(`## Workflows` and `## Scripts` bullet lists; gate logic tests/inventory_parity.py:276-281 and tests/inventory_parity.py:245-248) | confidence=5\n  PROBLEM: Four tracked files exist but are not documented in docs/INVENTORY.md: `.github/workflows/ci_pr_quick.yml`, `scripts/ci_docs_only_paths.sh`, `scripts/review_final_ci_failed.sh` and `scripts/review_final_ci_sweep.sh`. The parity gate exits 1 with four `missing` lines and four README/agents `does not document it` lines.\n  WHY: The failure is inherited from the integration base (base ref orchestrator/project-9550) and not caused by this PR's canary edit. The `tests-release-and-log-analysis` job fails at `python3 tests/inventory_parity.py`, and the `lint` job then fails, which blocks the merge path. The fix, four bullets in docs/INVENTORY.md, is outside the issue's declared scope of `tests/e2e_smoke_canary.txt` only.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- docs/INVENTORY.md:(tests/inventory_parity.py CI step; README.md:148-150, agents.md:1294, agents.md:2089-2110 reference the missing entries) | severity=MAJOR | confidence=5\n  PROBLEM: `tests/inventory_parity.py` exits 1 on the PR head because docs/INVENTORY.md does not document four tracked-surface paths (`.github/workflows/ci_pr_quick.yml`, `scripts/ci_docs_only_paths.sh`, `scripts/review_final_ci_failed.sh`, `scripts/review_final_ci_sweep.sh`). README.md and agents.md reference them, and the failure cascades into the `lint` gate.\n  WHY: The CI log tail (run 43896191319, job 133400281044) shows 11 `FAIL: docs/INVENTORY.md ...` lines and then exit code 1. The failure is inherited from the base `orchestrator/project-9550` and not caused by the canary edit. Editors should not fix it within the canary PR scope unless the CI-failure repair path directs it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e098da44fb5a068863566090bb7ea9dfba0734b919e7eaaecfccc13fb58d4891",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9571,
+    "run_id": "43896837489",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43896837489",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116183642_86be1eb537",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9571,
+    "run_id": "43896837489"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T18:36:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
