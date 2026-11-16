@@ -2405,7 +2405,6 @@ MOVED_PROMOTE_8771_STEPS = {
 		"tests-release-and-log-analysis",
 		(
 			"tests/test_check_failure_triage_workflow_security.py",
-			"tests/test_check_failure_triage_historical.py",
 		),
 	),
 }
