@@ -83,6 +83,8 @@ if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
 	sys.exit(0)
 if "pr_comments" in fail and "repos/o/r/issues/77/comments?per_page=100" in args:
 	sys.exit(1)
+if "parent_comments" in fail and "repos/o/r/issues/42/comments?per_page=100" in args:
+	sys.exit(1)
 if args[0] == "api" and "--paginate" in args:
 	if "comments_once" in fail and sum('"--paginate"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
 		sys.exit(1)
@@ -1367,7 +1369,7 @@ def test_followup_merge_guard_refuses_into_clean_audited_head(tmp_path: Path) ->
 	assert result.returncode == 0
 	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=refuse" in result.stdout.splitlines()
 	assert "mode=followup_guard pr=77 parent=42 head=" + HEAD + " outcome=refuse reason=parent_head_clean comment=posted" in result.stdout
-	assert ["api", "repos/o/r/pulls?state=open&head=o:ai%2Fissue-7&per_page=100"] in calls
+	assert ["api", "--paginate", "repos/o/r/pulls?state=open&head=o:ai%2Fissue-7&per_page=100"] in calls
 	posts = _hold_posts(calls)
 	assert len(posts) == 1 and posts[0][-1].endswith(HOLD_MARKER) and HEAD in posts[0][-1]
 
@@ -1421,7 +1423,7 @@ def test_followup_merge_guard_allows_without_a_standalone_parent(tmp_path: Path)
 @pytest.mark.parametrize("env, reason", [
 	({"FAKE_GH_FAIL": "head_prs"}, "parent_lookup_failed"),
 	({"FAKE_GH_FAIL": "identity"}, "author_unverifiable"),
-	({"FAKE_GH_FAIL": "comments_once"}, "markers_unverifiable"),
+	({"FAKE_GH_FAIL": "parent_comments"}, "markers_unverifiable"),
 ])
 def test_followup_merge_guard_parent_lookup_failure_is_unverifiable(tmp_path: Path, env: dict, reason: str) -> None:
 	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env=env)

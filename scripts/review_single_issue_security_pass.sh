@@ -96,8 +96,8 @@
 # A clean report adds one paginated open ai:security issue listing, one
 # paginated pulls?base=<head ref> listing when a follow-up matches, and one
 # comment plus one close per retired issue or PR. followup-guard: none for a PR
-# into the default or an integration branch; otherwise one head-filtered pulls
-# listing, one /user read, one paginated parent comments read, at most one
+# into the default or an integration branch; otherwise one paginated
+# head-filtered pulls listing, one /user read, one paginated parent comments read, at most one
 # paginated read of this PR's comments (skipped when PR_ISSUE_COMMENTS_FILE is
 # usable) and at most one comment. Those counts are per invocation: the
 # "Enable auto-merge on PR" step (review_enable_auto_merge.sh) invokes it up to
@@ -873,14 +873,15 @@ single_pass_followup_merge_guard()
 		return 0
 	fi
 	# Neither the follow-up PR payload nor any other call in this path names the
-	# PR whose head is this base branch; one head-filtered listing finds it.
+	# PR whose head is this base branch; one head-filtered listing finds it
+	# (paginated like the comment reads, so a parent past page one is not missed).
 	guard_owner="${REPOSITORY%%/*}"
 	guard_ref_uri="$(jq -rn --arg r "${guard_base}" '$r | @uri' 2>/dev/null)" || guard_ref_uri=""
 	if [ -z "${guard_ref_uri}" ] || ! guard_parents="$({ if type gh_retry >/dev/null 2>&1; then
-			gh_retry gh api "repos/${REPOSITORY}/pulls?state=open&head=${guard_owner}:${guard_ref_uri}&per_page=100"
+			gh_retry gh api --paginate "repos/${REPOSITORY}/pulls?state=open&head=${guard_owner}:${guard_ref_uri}&per_page=100"
 		else
-			gh api "repos/${REPOSITORY}/pulls?state=open&head=${guard_owner}:${guard_ref_uri}&per_page=100"
-		fi; } 2>/dev/null)" \
+			gh api --paginate "repos/${REPOSITORY}/pulls?state=open&head=${guard_owner}:${guard_ref_uri}&per_page=100"
+		fi; } 2>/dev/null | jq -s 'if length > 0 then add else error("empty") end' 2>/dev/null)" \
 		|| ! guard_parent="$(jq -c --arg ref "${guard_base}" --arg repo "${REPOSITORY}" --arg base "${guard_default}" '
 			if type == "array" then . else error("shape") end
 			| [.[] | select(type == "object" and .head.repo.full_name == $repo and .head.ref == $ref and .base.ref == $base)]
