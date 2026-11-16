@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-16T20:53:54Z",
+  "issue_number": 9559,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/ci.yml:2377-2384; cited_path=.github/workflows/ci.yml; files_touched=agents.d/9559-ci-budget-watch-unstarted-jobs.md, changelog.d/9559-ci-budget-watch-unstarted-jobs.md, scripts/ci_budget_watch.py, tests/test_ci_budget_watch.py.",
+  "phase": "review_autofix",
+  "pr_number": 9576,
+  "record_id": "lesson_20261116205354_dfc2f0f98f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    "agents.d/9559-ci-budget-watch-unstarted-jobs.md",
+    "changelog.d/9559-ci-budget-watch-unstarted-jobs.md",
+    "scripts/ci_budget_watch.py",
+    "tests/test_ci_budget_watch.py"
+  ]
+}
