@@ -213,7 +213,7 @@ if [ "${wla_sections_only}" = "true" ]; then
 		if git merge-base --is-ancestor "${wla_sections_base}" "refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null; then
 			break
 		fi
-		git fetch --no-tags "${wla_sections_deepen_flag}" origin "${fetch_specs[0]}" >/dev/null 2>&1 || true
+		git fetch --no-tags "${wla_sections_deepen_flag}" origin "${fetch_specs[0]}" >>"${fetch_log}" 2>&1 || true
 	done
 elif ! git fetch --no-tags --depth=1 origin "${fetch_specs[@]}" >"${fetch_log}" 2>&1; then
 	wla_deliver_redact "${fetch_log}"
@@ -242,6 +242,9 @@ if [ "${wla_sections_only}" = "true" ]; then
 	fi
 	if ! git merge-base --is-ancestor "${wla_sections_base}" "refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null \
 		|| ! git merge-base --is-ancestor "${wla_sections_base}" "${run_ref}" 2>/dev/null; then
+		# The fetch log (credentials masked) tells a failed deepen fetch apart
+		# from a base that is genuinely not an ancestor.
+		wla_deliver_redact "${fetch_log}"
 		wla_deliver_fail section_base_invalid "branch=${REPORT_BRANCH}"
 	fi
 fi
