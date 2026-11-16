@@ -1600,8 +1600,9 @@ jobs:
       # tests-hooks-and-orchestrator (#7798) and moves as a pair: the Node setup
       # runs first and the vitest step keeps its working directory. None of the
       # four steps needs git history, so this job's default depth-1 checkout is
-      # enough (the source job fetches full history only for
-      # tests/claude_template_drift.py). Names and bodies unchanged.
+      # enough (the source job fetches base history only for
+      # tests/claude_template_drift.py and the Prepare step). Names and bodies
+      # unchanged.
       # The Node pair moved on to tests-release-and-log-analysis in #9018.
       - name: Workflow log analysis contract tests
         run: |
@@ -2590,8 +2591,9 @@ jobs:
       # slowest unsplit step in the planning sandbox (about 56s, a relative
       # weight only). This job has the fewest test functions of the 20-minute
       # non-matrix jobs (about 1,374) and lost 557 test functions in #8777.
-      # Release checks out full history; the step needs no Node or prepared
-      # .claude/ live copies. Name and body unchanged.
+      # Release checks out at depth 1 plus the base-history fetch step; the
+      # step needs no Node or prepared .claude/ live copies. Name and body
+      # unchanged.
       # Moved again from tests-promote-stall-and-review, which took 16m02s of
       # its 20 minutes on main (run 41704793081, budget-watch issue #8771).
       # The run's step timings could not be read, so the pick is an estimate
@@ -2698,8 +2700,9 @@ jobs:
       # budget-watch total was 15m36s (#8777), after which it lost 557 test
       # functions. If this job is flagged next, read that run's step timings
       # before moving anything again. The step needs only checkout, Python 3.12
-      # and the shared pip install; this job's full-history checkout is a
-      # superset of the depth-1 checkout it had, and it needs no Node or
+      # and the shared pip install; this job's depth-1 checkout plus its
+      # base-history fetch is a superset of the depth-1 checkout it had, and
+      # it needs no Node or
       # prepared .claude/ live copies. It runs once per CI run, unguarded, since
       # this job has no matrix; the group 0 guard is the only line dropped.
       # Name and body unchanged.
@@ -2884,7 +2887,8 @@ jobs:
       # only), not a measurement. Per-job durations could not be read either,
       # so "most headroom" is a proxy, not a measured comparison: this job has
       # the fewest subprocess call sites of the 20-minute non-matrix test jobs
-      # (about 284) and checks out full history. None of the three steps needs
+      # (about 284) and checks out at depth 1 plus the base-history fetch
+      # step. None of the three steps needs
       # Node or the prepared .claude/ live copies. Names and bodies unchanged.
       - name: Implement post-Codex recovery unit tests
         run: |
