@@ -514,7 +514,10 @@ _ci_reissue_branch_state() {
 	elif [ "${rc}" -eq 75 ]; then
 		rm -f "${out_file}" "${err_file}"
 		_resolver_rate_limited "branch"
-	elif [ "${GH_API_RETRY_LAST_STATUS:-}" = "404" ] || grep -Eq 'status=404|HTTP 404' "${err_file}"; then
+	# The text fallback matches only gh's own `(HTTP 404)` status suffix (as
+	# retarget_merged_base.sh does) or the retry log's `status=404 ` field, so
+	# an error body that merely quotes "HTTP 404" is not read as a deleted branch.
+	elif [ "${GH_API_RETRY_LAST_STATUS:-}" = "404" ] || grep -Eq 'status=404 |\(HTTP 404\)' "${err_file}"; then
 		rc=1
 	else
 		rc=2
