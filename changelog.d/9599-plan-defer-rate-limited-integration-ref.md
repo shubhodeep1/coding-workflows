@@ -1,0 +1,6 @@
+<!-- changelog: fixed -->
+**Plan no longer fails when the integration-ref lookup is rate-limited on a CI-triage issue.**
+
+When the integration-ref resolver hits a GitHub rate limit (exit 75) while CI-triage routing is on, plan still refuses to fall back to the default branch, but it now defers the run instead of failing it. The step writes no ref, sets `SKIP_PLAN=true`, skips every setup step (so the default branch is never checked out) and logs `INTEGRATION_REF_RESOLVE outcome=deferred reason=rate_limited`. It makes no GitHub call. The issue keeps `ai:planning`, and stall recovery re-posts `/answer` after the limit resets. Before this, each rate-limited run failed the job and filed a `plan_failed` heal report for a cause that clears by itself. Exit 2, exit 3 and the routing-off fallback are unchanged. Refs #9599.
+
+For contributors: `test_plan_rate_limited_refusal_defers_without_failing` and `test_plan_setup_steps_skip_on_rate_limited_defer` in `tests/test_workflow_checkout_integration_ref_audit.py` cover the new path.
