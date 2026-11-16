@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-16T18:37:50Z",
+  "issue_number": 9551,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=docs/INVENTORY.md:1; cited_path=docs/INVENTORY.md; files_touched=tests/e2e_smoke_canary.txt.",
+  "phase": "review_autofix",
+  "pr_number": 9571,
+  "record_id": "lesson_20261116183750_b3b1670822",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "docs/INVENTORY.md",
+    "tests/e2e_smoke_canary.txt"
+  ]
+}
