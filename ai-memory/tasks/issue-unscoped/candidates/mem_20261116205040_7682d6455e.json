@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:2094-2115 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: When a wait times out while the fix-up is still open, the branch sets `wait_ended_at=\"${now}\"` but writes the `<!-- ai:unblock-wait-ended:v1 at=... -->` line only when the fix-up is already closed (lines 2100-2111). On the next run, the done-wait read-back (lines 1864-1877) finds no recorded end and falls back to the wait comment's later `updated_at`, which is the patch time.\n  WHY: `now` is captured at line 1734, before the comments are fetched at line 1757. A \"Planning blocked\" comment posted after that fetch but before the wait-comment patch (line 2113) is not seen by this run. On the next run the strict `$block.at > $after` guard (line 619, called at line 2253) rejects that block, so the item goes to the model verdict instead of the #9518 close, which brings back the #9215 escalation. All three reviewers rated this MAJOR, with confidence 3, 4 and 3. Suggested fix: write the marker in this branch every time, using the final `wait_ended_at` (`at=${now}`). Disagreement: anthropic_claude-sonnet-5_5 explicitly rejected this finding. It says that keeping such a block with the judge is the intended behavior and that the PR's block_during_timed_out_wait test case asserts exactly that. minimax_minimax-m3 also notes this trade-off.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh:lines 2098-2112 (write), 1866-1877 (read-back), 619 (guard), 2253 (call site), 1734 and 1757 (now vs. comment fetch) | severity=MAJOR | confidence=3\n  PROBLEM: The timed-out-wait branch sets `wait_ended_at=\"${now}\"` but writes the `<!-- ai:unblock-wait-ended:v1 at=... -->` line only when the fix-up is already closed. If the fix-up is still open, the next run takes the wait end from the wait comment's later `updated_at` (line 1866).\n  WHY: A block posted between the comment fetch (line 1757) and the wait-comment patch (line 2113) is not seen by this run. The next run then rejects it under the `$block.at > $after` guard (line 619) and sends the item to the model verdict, which is the #9215 symptom. Whether a block closes depends on timing. Suggested fix: record `at=${now}` and leave the guard as it is. The reviewer notes the trade-off that keeping such a block with the judge could also be read as intended behavior.\n- HARDENING scripts/unblock_judge.sh:line 2253, `\"${wait:+${wait_ended_at:-${wait_updated:-}}}\"` | HARDENING_RISK_SCORE=2\n  PROBLEM: If both `wait_ended_at` and `wait_updated` are empty, `block_after` is empty, which turns off the age guard at line 619 (`$after == \"\"`).\n  WHY: A block of any age would then close the issue. Suggested fix: fall back to `wait_at` (`\"${wait:+${wait_ended_at:-${wait_updated:-${wait_at:-}}}}\"`) or skip the close. Estimated 1 line changed.\n- HARDENING scripts/unblock_judge.sh:lines 611-620 and 629 (`marker_since=\"${block_at}\"`) | HARDENING_RISK_SCORE=1\n  PROBLEM: If `block_at` is empty, `marker_since` is empty and the `fixup=none` marker dedup at lines 631-632 loses its age check.\n  WHY: A stale marker from an earlier block would suppress the new close comment. Suggested fix: return 1 when `block_at` is not a timestamp. Estimated 2 lines changed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh:2098-2115; compare with 1864-1876 and 2253. | severity=MAJOR | confidence=4\n  PROBLEM: The timeout path records `wait_ended_at=\"${now}\"` but writes an end-time marker only when the fix-up is already closed. On a later run, a done wait without that marker uses the wait comment's `updated_at` as its end time.\n  WHY: `now` is captured before the comments are fetched (1734-1757). A planning-block comment posted after that snapshot but before the patch is not seen by this run. On the next run the strict comparison at 2253 rejects the close, and the issue goes to the judge verdict instead.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/unblock_judge.sh:lines 2094-2115 (timed-out / closed-without-merging branch), lines 1864-1877 (done-wait read-back), line 2253 (no-wait close call site) | severity=MAJOR | confidence=3\n  PROBLEM: The end-time persistence is incomplete for the pure-timeout branch. `wait_ended_at=\"${now}\"` (line 2098) is set, but the `<!-- ai:unblock-wait-ended:v1 at=... -->` marker is written only when the fix-up is closed (lines 2100-2111), so on the next run the boundary moves to the later patch time.\n  WHY: A block posted between `now` (line 1734) and the done-patch (line 2113) is not seen by this run. The next run rejects it under the `$block.at > $after` guard and sends the item to the model verdict (the #9215 escalation pattern). No test covers this window. Suggested fix: always write the marker with the final `wait_ended_at`, about 3 lines.\n- HARDENING scripts/unblock_judge.sh:line 2253 (`\"${wait:+${wait_ended_at:-${wait_updated:-}}}\"`) | HARDENING_RISK_SCORE=1\n  PROBLEM: If both `wait_ended_at` and `wait_updated` are empty, `block_after` is empty and the age guard (`$after == \"\"` at line 619) is turned off.\n  WHY: The reviewer verified that this case cannot be reached today, but the code fails open instead of closed. Suggested fix: fall back to `wait_at` (`\"${wait:+${wait_ended_at:-${wait_updated:-${wait_at:-}}}}\"`). Estimated 1 line changed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ebbc7104d880a982368afa7723d1bd89aed5d2e2279ac54942072432487ee339",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9538,
+    "run_id": "43922580889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43922580889",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116205040_7682d6455e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9538,
+    "run_id": "43922580889"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T20:50:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
