@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update `tests/e2e_smoke_canary.txt` (issue canary-a-retry, Refs #9523)\n\nPlanning ref: `orchestrator/project-9523` at `4ab8f89db502e1353b2bd4766f9ab289299f4a02`. The integration branch matches (`Integration branch mismatch: false`).\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check e2e_smoke_canary\nACCEPTANCE: post-merge none: the change only updates a smoke canary data file, and the orchestrator's final-merge verification checks the file's content\n\n## Functions or modules to implement\nNo code changes. The file currently contains `status: ok\\ndecompose-run: 41445772297\\n`, which I confirmed on the planning ref. Replace it with exactly these two lines and one trailing newline:\n```\nstatus: ok\ndecompose-run: 43590943288\n```\n\n## Data structures affected\nOnly `tests/e2e_smoke_canary.txt`, a two-line plain-text canary file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Rewrite the whole file instead of patching one line\n- Chosen: write the complete two-line file so its exact content and single trailing newline are guaranteed.\n- Alternatives considered: change only line 2 in place.\n- Why: both give the same result, but a full write rules out stray whitespace or a missing final newline.\n\n## Security considerations\nNo trust boundary, endpoint or secret is involved. The file is static test data.\n\n## Potential risks or edge cases\n- Open PR #9571 (for issue #9551) touches the same file. It is probably the canary-b retry or an earlier attempt from this project, which could cause a merge conflict on the integration branch. This plan still delivers the content this issue requires, and conflict resolution is handled downstream.\n- Leave `tests/e2e_smoke_canary_b.txt` and `tests/e2e_smoke_canary_spec.txt` unchanged.\n- No CRLF line endings, no BOM and no blank line at the end.\n\n## Testing considerations\nRun `cat -A tests/e2e_smoke_canary.txt`. It should print exactly `status: ok$` and `decompose-run: 43590943288$`. Then run `git diff --stat`; it should list only this file.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a one-file data edit and forbids touching any other file. No helper or pattern applies beyond rewriting the existing canary file. The complete change is the minimal change.\n\nPLAN_SELF_CHECK: WARNING: open PR #9571 also touches tests/e2e_smoke_canary.txt and may conflict\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "17309fc99e063821c9f165c7c926ee9d3b08c8f4bb85abdd2b0f5e3eeca6c10c",
+  "lineage": {
+    "issue_number": 9568,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43870241107",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43870241107",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9568"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261116135115_6c04272063",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9568,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43870241107"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9568",
+  "timestamps": {
+    "created_at": "2026-11-16T13:51:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
