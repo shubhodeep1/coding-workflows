@@ -227,6 +227,7 @@ def _run_runner(
 	engine: str = "",
 	claude_scenario: str = "",
 	planning_ref_mismatch: str | None = None,
+	issue_number: str | None = None,
 ) -> tuple[
 	subprocess.CompletedProcess[str], Path, tempfile.TemporaryDirectory[str]
 ]:
@@ -396,6 +397,9 @@ esac
 	environment.pop("PLAN_ISOLATED_BASE_BRANCH", None)
 	environment.pop("PLAN_ISOLATED_BASE_ENABLED", None)
 	environment.pop("CODEX_ISOLATED_GIT_BASE_REF", None)
+	environment.pop("ISSUE_NUMBER", None)
+	if issue_number is not None:
+		environment["ISSUE_NUMBER"] = issue_number
 	if planning_ref_mismatch is not None:
 		environment["PLANNING_REF_MISMATCH"] = planning_ref_mismatch
 	if engine:
@@ -422,7 +426,7 @@ def _read_lines(path: Path) -> list[str]:
 
 
 def test_primary_success_preserves_prompt_order_and_outputs() -> None:
-	result, root, _temporary_directory = _run_runner("success")
+	result, root, _temporary_directory = _run_runner("success", issue_number="9519")
 	runtime_dir = root / "runtime"
 
 	assert result.returncode == 0, result.stderr
@@ -450,10 +454,21 @@ def test_primary_success_preserves_prompt_order_and_outputs() -> None:
 		"=== AI MEMORY CONTEXT ===",
 		"MEMORY CONTEXT",
 		"=== PLANNING CONTEXT ===",
+		# Issues #9519 / #9520: the planner needs the number to name its own
+		# `changelog.d/<N>-<slug>.md` / `agents.d/<N>-<slug>.md` fragments.
+		"Issue number: 9519",
 		"DYNAMIC PLANNING CONTEXT",
 	]
 	positions = [prompt_text.index(section) for section in ordered_sections]
 	assert positions == sorted(positions)
+
+
+def test_prompt_omits_issue_number_line_when_unset_or_malformed() -> None:
+	for issue_number in (None, "", "0", "12a", "1\nInjected"):
+		result, root, _temporary_directory = _run_runner("success", issue_number=issue_number)
+		assert result.returncode == 0, result.stderr
+		prompt_text = (root / "runtime" / "codex_prompt.txt").read_text(encoding="utf-8")
+		assert "Issue number:" not in prompt_text, issue_number
 
 
 def test_retries_backoff_comments_and_final_fallback_are_preserved() -> None:

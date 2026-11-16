@@ -296,6 +296,13 @@ EOF
   cat "${RUNTIME_DIR}/memory_context.txt"
   echo
   echo "=== PLANNING CONTEXT ==="
+  # Issues #9519 / #9520: item 1 tells the planner to name new fragments
+  # `changelog.d/<this issue number>-<slug>.md`, and the scope guard exempts
+  # only the exact number, so the planner must see it. Host-set, digits only;
+  # unset or malformed leaves the context unchanged.
+  if [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'Issue number: %s\n\n' "${ISSUE_NUMBER}"
+  fi
   cat "${PLANNING_CONTEXT_FILE}"
 } > "${CODEX_PROMPT_FILE}"
 
