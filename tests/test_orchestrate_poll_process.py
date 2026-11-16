@@ -16128,6 +16128,9 @@ def test_standalone_retrigger_review_retargets_verified_implementation_pr():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[416],
 	)
 	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
 	assert standalone_state is not None
@@ -16139,6 +16142,77 @@ def test_standalone_retrigger_review_retargets_verified_implementation_pr():
 		"/approved" in str(comment.get("body", ""))
 		for comment in result["issues"]["501"]["comments"]
 	)
+
+
+def _standalone_dispatch_first_run(**extra) -> dict:
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	return _run_poller(
+		state=_base_state(status="complete"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 503: ["ai:done"]},
+		issue_comments={503: [standalone_state_comment]},
+		issue_linked_prs={503: 418},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 418,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-503",
+				"headRefFromApi": "ai/issue-503",
+				"headSha": "sha418",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+		**extra,
+	)
+
+
+def test_standalone_retrigger_review_dispatches_review_first():
+	# cut-ci-runner-time Phase 3: the standalone arm dispatches the review
+	# workflow instead of pushing an empty commit.
+	result = _standalone_dispatch_first_run()
+	assert any(d.get("pr_number") == 418 for d in result.get("review_dispatches", [])), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	standalone_state = _extract_latest_standalone_state(result["issues"]["503"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert "Issue #503 PR #418 dispatched the review workflow instead of pushing an empty commit." in result["stdout"]
+
+
+def test_standalone_retrigger_review_falls_back_to_empty_commit_when_dispatch_fails():
+	result = _standalone_dispatch_first_run(review_dispatch_fail_for_prs=[418])
+	assert ["origin", "HEAD:ai/issue-503"] in result.get("git_push_calls", []), result["stdout"]
+	standalone_state = _extract_latest_standalone_state(result["issues"]["503"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert "Issue #503 PR #418 dispatch helper returned rc=1; falling back to empty-commit push." in result["stdout"]
+	assert "action=retrigger_review_empty_commit_fallback" in result["stdout"]
+
+
+def test_standalone_retrigger_review_dispatch_skip_spends_no_budget():
+	# A queued review run on the branch: no dispatch, no push, no budget.
+	result = _standalone_dispatch_first_run(active_autofix_runs=[
+		{"workflow": "review_autofix.yml", "branch": "ai/issue-503", "status": "queued", "conclusion": ""},
+	])
+	assert [d for d in result.get("review_dispatches", []) if d.get("pr_number") == 418] == []
+	assert result.get("git_push_calls", []) == []
+	assert "Issue #503 PR #418 dispatch helper skipped (already active or already dispatched this cycle)" in result["stdout"]
+	standalone_state = _extract_latest_standalone_state(result["issues"]["503"]["comments"])
+	assert standalone_state is None or standalone_state["stall_recovery_count"] == 0
 
 
 def test_standalone_retrigger_review_mixed_fetch_failure_counts_conclusive_rejection():
@@ -16860,6 +16934,9 @@ def test_standalone_retrigger_review_does_not_increment_when_empty_commit_checko
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[417],
 		mock_git_checkout_fail=True,
 	)
 	standalone_state = _extract_latest_standalone_state(result["issues"]["502"]["comments"])
@@ -22889,6 +22966,9 @@ def test_candidate_and_linked_status_helpers_share_repo_filter():
 
 
 def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure():
+	# cut-ci-runner-time Phase 3: with no prior failed review run the review
+	# workflow is dispatched first; the empty commit stays as the fallback
+	# when that dispatch fails, and is logged as the fallback action.
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
 	issue["status"] = "in_progress"
@@ -22915,18 +22995,90 @@ def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure(
 			},
 		],
 		mock_git_push_success=True,
+		review_dispatch_fail_for_prs=[78],
 	)
 	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "78"]
-	assert dispatches_for_pr == [], (
-		f"expected no review_autofix redispatch when no prior failed autofix run exists; "
-		f"got: {dispatches_for_pr}"
-	)
+	assert dispatches_for_pr == [], dispatches_for_pr
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1
 	assert result.get("git_push_calls", []), (
-		"expected the no-prior-failure case to exercise the empty-commit push path"
+		"expected a failed dispatch to fall back to the empty-commit push"
 	)
+	assert "Issue #10 PR #78 dispatch helper returned rc=1; falling back to empty-commit push." in result["stdout"]
+	assert "action=retrigger_review_empty_commit_fallback" in result["stdout"]
 
+
+def test_retrigger_review_dispatches_review_first_when_last_review_succeeded():
+	# cut-ci-runner-time Phase 3 (plan D3): a stalled PR whose last review run
+	# succeeded is re-triggered by a review dispatch, not an empty commit.
+	state, prs = _retrigger_review_pr_state(97, "claude/retrigger-review-dispatch-first")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 97}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-dispatch-first",
+				"status": "completed", "conclusion": "success", "createdAt": "2026-11-15T01:00:00Z"},
+		],
+		mock_git_push_success=True,
+	)
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if d.get("pr_number") == 97]
+	assert len(dispatches_for_pr) == 1, result.get("review_dispatches")
+	assert result.get("git_push_calls", []) == [], "dispatch-first must not push an empty commit"
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+	assert "Issue #10 PR #97 dispatched the review workflow instead of pushing an empty commit." in result["stdout"]
+	assert "action=retrigger_review_empty_commit_fallback" not in result["stdout"]
+
+
+def test_retrigger_review_dispatch_first_with_no_review_history():
+	# No review run at all on the branch: still dispatch first, no empty commit.
+	state, prs = _retrigger_review_pr_state(98, "claude/retrigger-review-dispatch-first-none")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 98}, prs=prs,
+		mock_git_push_success=True,
+	)
+	assert any(d.get("pr_number") == 98 for d in result.get("review_dispatches", [])), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 1
+
+
+def test_retrigger_review_dispatch_first_skip_does_not_push_or_increment():
+	# A queued review run on the branch: neither the dispatch (rc 2 / in-flight
+	# guard) nor the empty commit fires, and no recovery budget is spent.
+	state, prs = _retrigger_review_pr_state(99, "claude/retrigger-review-dispatch-first-active")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 99}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "review_autofix.yml", "branch": "claude/retrigger-review-dispatch-first-active",
+				"status": "queued", "conclusion": ""},
+		],
+		mock_git_push_success=True,
+	)
+	assert [d for d in result.get("review_dispatches", []) if d.get("pr_number") == 99] == []
+	assert result.get("git_push_calls", []) == []
+	assert "Issue #10 PR #99 dispatch helper skipped (already active or already dispatched this cycle)" in result["stdout"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_retrigger_review_failed_redispatch_falls_back_once_without_second_dispatch():
+	# Last run failed and its redispatch failed: the empty-commit fallback
+	# runs and the dispatch-first step is not tried a second time.
+	state, prs = _retrigger_review_pr_state(100, "claude/retrigger-review-failed-then-fallback")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 100}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "review_autofix.yml", "branch": "claude/retrigger-review-failed-then-fallback",
+				"status": "completed", "conclusion": "failure"},
+		],
+		mock_git_push_success=True,
+		review_dispatch_fail_for_prs=[100],
+	)
+	assert result.get("git_push_calls", []), result["stdout"]
+	assert result["stdout"].count("Issue #10 PR #100 dispatch helper returned rc=1; falling back to empty-commit push.") == 1, result["stdout"]
+	assert "action=retrigger_review_empty_commit_fallback" in result["stdout"]
 
 def test_retrigger_review_retries_inconclusive_pr_lookup_without_reimplementing():
 	state = _base_state(status="in_progress")
@@ -23213,6 +23365,9 @@ def test_retrigger_review_ignores_pr_named_dispatch_run_of_another_pr():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[91],
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1, issue_entry
@@ -23263,6 +23418,9 @@ def test_retrigger_review_pushes_past_spoofed_pr_named_run():
 			prs=prs,
 			actions_runs_workflow_runs=[_retrigger_review_spoof_run(93, **overrides)],
 			mock_git_push_success=True,
+			# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+			# dispatch reaches the guarded empty-commit fallback this test covers.
+			review_dispatch_fail_for_prs=[93],
 		)
 		issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 		assert issue_entry["stall_recovery_count"] == 1, (overrides, issue_entry)
@@ -23493,6 +23651,9 @@ def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_bran
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[93],
 	)
 	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "93"]
 	assert dispatches_for_pr == [], dispatches_for_pr
@@ -23594,6 +23755,9 @@ def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[81],
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1, (
@@ -23649,6 +23813,9 @@ def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[82],
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1, (
@@ -23756,6 +23923,9 @@ def test_retrigger_review_skips_empty_commit_when_pr_head_advanced_after_snapsho
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[83],
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 0, (
@@ -23796,6 +23966,9 @@ def test_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[85],
 		mock_git_checkout_fail=True,
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
@@ -27579,7 +27752,7 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
 		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
 		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh '
-		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh"'
+		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh ci_docs_only_paths.sh"'
 	) in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
 	assert 'src=".codex-workflow-src/scripts/${f}"' in stage_helper_body
