@@ -4298,8 +4298,11 @@ jobs:
           # the job's 20-minute timeout in run 43771105041 and was cancelled with
           # no message). Budget: 300 + 180 + 480 = 960 s, plus 3 x 10 s kill-after,
           # plus about 2 minutes for checkout, setup-python, pip install and the
-          # coverage guard: about 18 minutes, under timeout-minutes: 20. Each limit
-          # is overridable (1-9999 s; anything else falls back to the default).
+          # coverage guard: about 18 minutes, under timeout-minutes: 20. The step
+          # env: deliberately maps no repository variable for these limits, so in
+          # CI they change only by editing the defaults below (keeping the sum
+          # under the job budget); the env names exist for local runs of this
+          # body (1-9999 s; anything else falls back to the default).
           set -euo pipefail
 
           image_limit="${CI_SANDBOX_PYTHON_IMAGE_TIMEOUT_SECS:-300}"
@@ -4364,7 +4367,7 @@ jobs:
             image_id=""
           fi
           if ! [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "::error::Could not resolve the ${family} sandbox image (got '${image_id}')."
+            echo "::error::Could not resolve the ${family} sandbox image (got '${image_id}', rc=${image_rc})."
             exit 1
           fi
           echo "sandbox family=${family} image=${image_id}"
