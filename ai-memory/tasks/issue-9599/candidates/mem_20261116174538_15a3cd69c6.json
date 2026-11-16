@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should plan handle resolver exit 75 when CI-triage routing is on, so that a GitHub rate limit stops showing up as a `plan_failed` workflow failure?\nChoices:\nA) Defer instead of failing, like the existing #7516 `label_missing` hold at `.github/workflows/plan.yml:305-316,355-447`. Set `SKIP_PLAN=true` and `resolver_status=failed`, write no ref, and log a `::warning::INTEGRATION_REF_RESOLVE outcome=deferred reason=rate_limited` line. Exit 0 without falling back to the default branch. Keep `ai:planning` so standalone stall recovery re-posts `/answer` after the limit resets. Write no comment and no label, so a rate-limited step makes no extra API calls. (RECOMMENDED)\nB) Hold the issue the way `label_missing` does: post a marker comment and apply `ai:blocked`. A human then has to `/reclarify`. Planning never falls back to the default branch.\nC) Keep `exit 1` and change only how the failure is reported, for example a step output or log marker that the heal intake can read as transient. Note: the heal intake classifier sits outside this issue's allowed paths, so this option may need re-scoping.\nQ2: Which resolver exit codes should get the Q1 treatment?\nChoices:\nA) Only exit 75 (rate-limited). Exit 2 (`api_unavailable`, permanent or exhausted transient errors) and exit 3 (routing refused) keep failing the job as they do now. (RECOMMENDED)\nB) Both exit 75 and exit 2.\n**Note:** B with Q1:A could hide permanent API errors, for example a revoked token or a 404, behind a quiet deferral.\nQ3: The heal scope also lists `.github/workflows/internal-plan.yml`. Should the fix touch it?\nChoices:\nA) Change only the `Resolve integration ref` step in `.github/workflows/plan.yml`. Touch `internal-plan.yml` only if it has its own copy of the exit-75 branch, plus a regression test in `tests/` and a `changelog.d/` fragment. The test drives the step with a stubbed resolver that exits 75: it must fail on the reported head and pass with the fix. (RECOMMENDED)\nB) Change both workflows even if `internal-plan.yml` only calls `plan.yml`.",
+  "fingerprint": "f2fb93a2f1b6e9b95d57ce070f50ef045bdc927a76b8a4990f8f7238d62adca6",
+  "lineage": {
+    "issue_number": 9599,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43912361481",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43912361481",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261116174538_15a3cd69c6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9599,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43912361481"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9599 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-16T17:45:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
