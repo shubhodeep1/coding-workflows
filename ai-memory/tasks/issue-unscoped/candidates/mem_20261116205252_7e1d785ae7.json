@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_budget_watch.py:86 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_seconds` catches only TypeError and ValueError, so an AttributeError from `.replace` on a non-string timestamp propagates and crashes the watcher.\n  WHY: The AttributeError stops all job duration checks for the run. Reviewer rated it MAJOR. minimax_minimax-m3 raised the same point only as a hardening suggestion, not a finding.\n- scripts/ci_budget_watch.py:118-119 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When no step start parses, `_job_run_start` returns `starts[0]`, which may be None or an unparsable string, and `_seconds` then fails or gives an inconsistent duration.\n  WHY: The reviewer claims this raises AttributeError on NoneType or yields a wrong duration. Reviewer rated it MAJOR.\n- scripts/ci_budget_watch.py:118-119,144-146 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: When every step `started_at` is unparsable, `_seconds` returns None and `job_duration_findings` skips the job with no log line. The sibling no-step path prints a `::notice::`.\n  WHY: The job goes unmeasured with no signal. minimax_minimax-m3 rated it NIT with confidence 4. The other two raised it as a hardening suggestion only.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" (issue #9559)\n  expected_change_site: .github/workflows/ci.yml, job `tests-release-and-log-analysis`\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, anthropic_claude-sonnet-5_5]\n  EVIDENCE: No hunk touches .github/workflows/ci.yml, and the PR only changes scripts/ci_budget_watch.py and its tests. Severity ranged from NIT (anthropic_claude-sonnet-5_5, confidence 2) to MAJOR (the other two). anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash treat this as a deliberate plan-level scope decision, since the report is a false positive. z-ai_glm-5_3-flash did not re-flag it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- (No findings reported.)\nTASK_GAP:\n  Requirement: Issue #9559 body: \"Move its slowest steps ... into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, job `tests-release-and-log-analysis`.\n  Evidence of absence: No hunk touches `ci.yml`. The plan grant omits `ci.yml`, and the approved plan treats the report as a false positive. This is a deliberate scope decision.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\nHARDENING_SUGGESTIONS:\n- scripts/ci_budget_watch.py `_job_run_start` line 119, consumed at lines 144-146: when all step `started_at` values are unparsable, the job is skipped silently. Suggested fix: print an escaped `::notice::` before `continue`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ci_budget_watch.py:86 | severity=MAJOR | confidence=4\n  PROBLEM: `_seconds` catches only TypeError and ValueError, so an AttributeError from a None or invalid-type timestamp is not caught.\n  WHY: The AttributeError propagates and crashes the watcher, stopping all job duration checks for the run.\n- scripts/ci_budget_watch.py:118-119 | severity=MAJOR | confidence=3\n  PROBLEM: The fallback returns `starts[0]` when no step start is parsable, and it may be None or an unparsable string.\n  WHY: `_seconds` may raise AttributeError on None or compute an inconsistent duration from garbage input.\nTASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The PR diff has no changes to ci.yml. It only modifies the reporting logic in scripts/ci_budget_watch.py, so the requested migration is not performed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ci_budget_watch.py:118-119,144-146 | severity=NIT | confidence=4\n  PROBLEM: When every step `started_at` is unparsable, `_job_run_start` returns the raw malformed value, `_seconds` rejects it, and the job is dropped silently. The no-step skip path prints a `::notice::` at line 142.\n  WHY: A job that really approached its timeout yields no finding and no signal that it went unmeasured. Suggested fix: print one `::notice::` before `continue`, reusing the escaping at line 141.\nTASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (linked issue #9559)\n  Expected change site: `.github/workflows/ci.yml`, job `tests-release-and-log-analysis` (ci.yml:2377, `timeout-minutes` at ci.yml:2384), and the CI job chosen to receive the moved steps.\n  Evidence of absence: Neither the PR diff nor the last-run diff has a hunk in ci.yml. The plan grant `files_touched` omits ci.yml, so the stated requirement and the grant conflict and the gap is unresolved.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\nHARDENING_SUGGESTIONS:\n- scripts/ci_budget_watch.py line 238: the job-derived subject is printed into a workflow command without the `%`/`\\r`/`\\n` escaping the new notice uses. Suggested fix: apply the same replacements to `f['subject']` and `f.get('job')`. Estimated lines changed: 2.\n- scripts/ci_budget_watch.py line 86: add `AttributeError` to the except tuple. Estimated lines changed: 1. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (No findings reported.)\nHARDENING_SUGGESTIONS:\n- scripts/ci_budget_watch.py `_job_run_start` lines 118-119 feeding `job_duration_findings` lines 144-146: when every step `started_at` fails to parse, the job is dropped silently. Suggested fix: print a `::notice::ci_budget_watch:` line reusing the `safe_name` escaping from line 141. Estimated lines changed: 4. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "172e573bd778ed81de3bbdc374dfe01a8ec28cf760d03cb6a636f4babbadf67e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9576,
+    "run_id": "43920402341",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43920402341",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116205252_7e1d785ae7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9576,
+    "run_id": "43920402341"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T20:52:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
