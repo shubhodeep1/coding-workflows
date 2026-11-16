@@ -45,10 +45,13 @@ if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/nul
       reviewers_failure_log_args=()
       # reviewers_stage_stderr.txt (issue #9533) is the reviewer step's own
       # stderr, teed by the workflow, so a shell crash before any slot log
-      # exists (e.g. `render_prompt.sh: line 306: ...`) is evidence too.
-      for reviewers_failure_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log "${RUNTIME_DIR}/reviewers_stage_stderr.txt"; do
+      # exists (e.g. `render_prompt.sh: line 306: ...`) is evidence too. It
+      # goes in as --stage-stderr-file, the only source of a plain ERROR line
+      # (slot logs hold raw model-CLI stderr and review prose).
+      for reviewers_failure_log in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log; do
         [ -f "${reviewers_failure_log}" ] && reviewers_failure_log_args+=(--log-file "${reviewers_failure_log}")
       done
+      [ -f "${RUNTIME_DIR}/reviewers_stage_stderr.txt" ] && reviewers_failure_log_args+=(--stage-stderr-file "${RUNTIME_DIR}/reviewers_stage_stderr.txt")
       PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" reviewer-failure-evidence "${reviewers_failure_log_args[@]}" \
         > "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || : > "${RUNTIME_DIR}/reviewers_failure_evidence.txt"
       echo "AUTOFIX_REVIEWERS_FAILED reason=reviewers_failed $(grep -m1 '^dominant_rc=' "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || echo dominant_rc=unknown)"

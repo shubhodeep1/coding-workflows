@@ -36518,8 +36518,11 @@ echo "Noop-suspicious recovery skipped (fingerprint cap already applied on head)
 # reports reason=repeated_reviewer_failure (the review run's own block labels
 # it) instead of waiting_for_release (same cached comments, no extra read).
 # The fingerprint cap counts per support version, so a newer pinned support
-# SHA still re-dispatches as before. REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED
-# (default true) set to false turns this rule off, like the in-run block.
+# SHA still re-dispatches as before. The rule reads
+# REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED (default true; false turns it off)
+# only when the caller's environment sets it: orchestrate_poll.yml does not
+# map that repository variable today, so the poller applies the rule. Either
+# way it only relabels a waiting_for_release skip; no dispatch changes.
 
 # _issueless_review_retry_decide <entry_json> <trusted_login> <pinned_support_sha> <support_state> <now_epoch> <max_age_days>
 # Pure: prints one line "<decision>|<reason>|<head>|<failing_support>" where

@@ -5774,12 +5774,40 @@ def test_reviewer_failure_evidence_keeps_the_bash_diagnostic_line() -> None:
 	assert evidence.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
 	assert heal.failure_headline([evidence]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
 	assert "line 12" not in heal.reviewer_failure_evidence(["review.sh: line 12: looks fine\n"])
-	# Spec item 3: the first plain `ERROR:` line also reaches the evidence the
-	# headline reads; later ones are dropped and secrets are redacted.
-	plain = heal.reviewer_failure_evidence(["starting\n", "ERROR: reviewer prompt missing\n", "ERROR: second failure\n"])
+	# Spec item 3: the first plain `ERROR:` line of the step's own stderr also
+	# reaches the evidence the headline reads; later ones are dropped and
+	# secrets are redacted.
+	plain = heal.reviewer_failure_evidence([], ["starting\n", "ERROR: reviewer prompt missing\n", "ERROR: second failure\n"])
 	assert plain.splitlines() == ["reviewers_failed=true", "ERROR: reviewer prompt missing"]
 	assert heal.failure_headline([plain]) == "reviewer prompt missing"
-	assert "ghp_secret" not in heal.reviewer_failure_evidence(["ERROR: token ghp_secretvalue123 rejected\n"])
+	assert "ghp_secret" not in heal.reviewer_failure_evidence([], ["ERROR: token ghp_secretvalue123 rejected\n"])
+	# A slot log's ERROR line (model-CLI stderr or review prose) is never kept,
+	# so it can neither name the failure nor feed the fingerprint; the stage
+	# stderr's bash diagnostic still names the crash.
+	slot_noise = "  | ERROR 2026-11-16 request abcxyz rejected\nERROR: missing regression test for X\n"
+	assert heal.reviewer_failure_evidence([slot_noise]) == "reviewers_failed=true\n"
+	mixed = heal.reviewer_failure_evidence([slot_noise], ["starting\n", RENDER_PROMPT_CRASH])
+	assert mixed.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	assert heal.failure_headline([mixed]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+
+
+def test_reviewer_crash_fingerprint_carries_the_bash_diagnostic() -> None:
+	# Issue #9533 (spec item 3): the fingerprint names the cause, so two
+	# different shell crashes do not collapse to one "no-error-lines" fp and
+	# trip the 2-strike reviewers_failed cap together.
+	crash = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH])
+	other = heal.reviewer_failure_evidence([], ["/x/scripts/review_run_reviewers.sh: line 88: SLOT_ID: unbound variable\n"])
+	assert heal.error_signature(crash) != "no-error-lines"
+	fp_crash = heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=crash)["fp"]
+	fp_other = heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=other)["fp"]
+	assert fp_crash != fp_other
+	# The same crash under another runner path keeps one fingerprint.
+	moved = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH.replace("/home/runner/work/_temp/support", "/opt/elsewhere")])
+	assert heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=moved)["fp"] == fp_crash
+	# Review text shaped like a location is not a crash and stays out.
+	assert heal.error_signature("src/review.sh: line 12: looks fine\n") == "no-error-lines"
+	# An earlier bucket still wins, so existing signatures keep their value.
+	assert heal.error_signature("::error::boom\n" + RENDER_PROMPT_CRASH) == heal.error_signature("::error::boom\n")
 
 
 def test_failure_headline_redacts_credentials_and_stays_one_line() -> None:

@@ -575,6 +575,17 @@ _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
 	re.compile(r"\b[A-Z][A-Z0-9_]*_FAILED\b"),
 	re.compile(r"\bTraceback \(most recent call last\)|^\s*\w+Error:", re.MULTILINE),
 	re.compile(r"\bfatal:|\berror:|\bERROR\b|\bFAILED\b|\bexit code\b|\bexited with\b", re.IGNORECASE),
+	# Issue #9533, checked last so existing signatures keep their value: a
+	# normalised bash diagnostic (`render_prompt.sh: line 306: 1abc: invalid
+	# variable name`) names no "error", so without this bucket every such
+	# reviewer crash hashed to the constant "no-error-lines". The message
+	# must be error-shaped (the same words as _BASH_DIAGNOSTIC_MSG_RE).
+	re.compile(
+		r"^(?:\S*/)?(?:[A-Za-z0-9_.-]+\.sh|bash|sh|environment): line [0-9]+: .*(?:invalid|unbound variable|command not found"
+		r"|syntax error|bad substitution|no such file or directory|permission denied|ambiguous redirect|expression expected"
+		r"|too many arguments|readonly variable|not a valid identifier|bad array subscript|division by 0|unexpected)",
+		re.IGNORECASE,
+	),
 )
 # GitHub opens every `run:` step with a `##[group]Run <first line>` header that
 # echoes the whole script, one ANSI-cyan line per source line, before the
@@ -4008,7 +4019,7 @@ def _normalise_bash_diagnostic(line: str) -> str:
 	return f"{match.group('script')}: line {match.group('line')}: {match.group('msg').strip()}"
 
 
-def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
+def reviewer_failure_evidence(log_texts: Iterable[str], stage_stderr_texts: Iterable[str] = ()) -> str:
 	"""Summarise why the reviewer step failed, from the per-slot and summariser logs.
 
 	Emits one ``reviewer_slot_exit`` line per failed slot (its last recorded
@@ -4020,13 +4031,20 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 	prefixed with its own name (a slot's stderr is indented ``  | `` in its
 	log). The text feeds the failure fingerprint and the heal report, so it
 	keeps only stable fields: no timestamps, attempt counts or run ids.
+
+	``stage_stderr_texts`` (issue #9533) is the reviewer step's own stderr. It
+	is read after the logs, the same way, and is the only source of the one
+	plain ``ERROR: <msg>`` line kept: slot logs carry raw model-CLI stderr and
+	review prose, whose ``ERROR`` lines must not become the headline or the
+	fingerprint.
 	"""
 	slot_codes: dict[str, str] = {}
 	summariser_code = ""
 	summariser_empty_stdout_prefixes: set[str] = set()
 	helper_lines: list[str] = []
 	plain_error_kept = False
-	for text in log_texts:
+	sources = [(text, False) for text in log_texts] + [(text, True) for text in stage_stderr_texts]
+	for text, from_stage_stderr in sources:
 		for raw_line in sanitize_text(text).split("\n"):
 			line = raw_line.strip()
 			if line.startswith("| "):
@@ -4053,12 +4071,13 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 					if bash_diagnostic not in helper_lines:
 						helper_lines.append(bash_diagnostic)
 				continue
-			plain_error = _PLAIN_ERROR_LINE_RE.match(line)
+			plain_error = _PLAIN_ERROR_LINE_RE.match(line) if from_stage_stderr else None
 			if plain_error:
 				# Issue #9533 (spec item 3): keep the first plain `ERROR: <msg>`
-				# line too, so failure-headline (which reads this evidence)
-				# names it. One line only, redacted, so review text cannot
-				# flood the fingerprint.
+				# line of the step's own stderr too, so failure-headline (which
+				# reads this evidence) names it. One line only, redacted, and
+				# never from a slot log, so review text cannot feed the
+				# fingerprint.
 				if not plain_error_kept and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
 					helper_lines.append(single_line(redact_secrets("ERROR: " + plain_error.group("msg").strip()), 300))
 					plain_error_kept = True
@@ -9489,7 +9508,13 @@ def _cmd_reviewer_failure_evidence(args: argparse.Namespace) -> int:
 			texts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
 		except OSError:
 			continue
-	sys.stdout.write(reviewer_failure_evidence(texts))
+	stage_texts: list[str] = []
+	for path in getattr(args, "stage_stderr_file", None) or []:
+		try:
+			stage_texts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
+		except OSError:
+			continue
+	sys.stdout.write(reviewer_failure_evidence(texts, stage_texts))
 	return 0
 
 
@@ -11649,6 +11674,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
+	p.add_argument("--stage-stderr-file", action="append", default=[], help="the reviewer step's own stderr (issue #9533): the only source of the kept plain ERROR line; repeatable, unreadable files are skipped")
 	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
 	p = sub.add_parser(
