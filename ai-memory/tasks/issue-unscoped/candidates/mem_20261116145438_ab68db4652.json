@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/run_plan_codex.sh:298-306 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The host-verified \"Issue number: <N>\" line is written inside the region the planner prompt declares author-controlled/untrusted, directly above the untrusted issue body and comments, so an author-supplied \"Issue number:\" line can compete with it.\n  WHY: The planner could then name changelog.d/<other-number>-<slug>.md, and the plan is held with plan_files_outside_files_touched. This fails closed and is a NIT in the source.\n- scripts/run_plan_codex.sh:299-305 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: When ISSUE_NUMBER is unset or malformed, the \"Issue number:\" line is silently omitted and nothing is logged, although the static prompt still asks for changelog.d/<this issue number>-<slug>.md.\n  WHY: This is an observability nit only. plan.yml:84 exports ISSUE_NUMBER, so the branch is not reachable in production. Source severity is NIT; reviewer confidence was 2 (sonnet) and not stated for this item (minimax).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description's Change/Testing sections list the prompt edits, the test and the changelog, but not the `Issue number:` line added in scripts/run_plan_codex.sh.\n  expected_change_site: the PR description body (Change and Testing sections); documentation only\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: the line is documented only in changelog.d/9519-plan-prompt-files-touched-scope.md; the code and tests are in the diff at scripts/run_plan_codex.sh:299-305 and tests/test_plan_codex_step_extraction.py (:227-233, :400-402, :429, :466-471). Severity is NIT in both sources.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/run_plan_codex.sh:299-305 | severity=NIT | confidence=2\n  PROBLEM: When `ISSUE_NUMBER` is unset or malformed, the line is silently left out and nothing is logged.\n  WHY: ISSUE_NUMBER is exported at plan.yml:84 and a non-numeric value is not reachable from github.event.issue.number, so this is only an observability nit.\n- TASK_GAP: Requirement: The PR description's Change section lists the prompt edits, the test and the changelog; the `Issue number:` line added in scripts/run_plan_codex.sh is not listed.\n  Expected change site: the PR description body (documentation only).\n  Evidence of absence: described only in changelog.d/9519-plan-prompt-files-touched-scope.md; code and tests are at scripts/run_plan_codex.sh:299-305 and tests/test_plan_codex_step_extraction.py.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- Note: the pre-push gate flagged tests/test_files_touched_scope_guard.py as failing, but the reviewer could not map it to the diff, and head-SHA check-runs show no failures. No defect was demonstrated.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/run_plan_codex.sh:22-27 vs scripts/run_plan_codex.sh:298-306 | severity=NIT | confidence=4\n  PROBLEM: The new host-verified issue number is written inside the region the planner prompt declares author-controlled/untrusted, immediately before the untrusted context file.\n  WHY: An author-supplied \"Issue number: <other>\" line can compete with it, so the planner may name the wrong changelog fragment. is_own_issue_fragment (scripts/files_touched_scope_guard.py:532-537) exempts only the exact number, so the plan is held (fail-closed).\n- TASK_GAP: Requirement: PR description \"## Change\" enumerates the shipped change set and its \"## Testing\" section lists the verified suites.\n  Expected change site: the pull request description body (Change and Testing sections).\n  Evidence of absence: the `Issue number: <N>` line at scripts/run_plan_codex.sh:299-305, the ISSUE_NUMBER handling at tests/test_plan_codex_step_extraction.py:227-233 and :400-402, and the new tests at :429 and :466-471 are not mentioned. Only changelog.d/9519-plan-prompt-files-touched-scope.md:5 documents them.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING 1: scripts/run_plan_codex.sh lines 298-306 \u2014 emit the line before the `=== PLANNING CONTEXT ===` marker or label it `Issue number (host-verified): N` (about 3 lines).\n- HARDENING 2: scripts/run_plan_codex.sh lines 303-305 \u2014 add `echo \"::warning::PLAN_ISSUE_NUMBER_UNSET issue_number=${ISSUE_NUMBER:-}\"` in the else branch (about 2 lines).\n- HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "779ea4535ba2b55f31841c5d1cf0dec3ec162e0d3d4242c825ee801a82381a77",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9548,
+    "run_id": "43839939168",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43839939168",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116145438_ab68db4652",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9548,
+    "run_id": "43839939168"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T14:54:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
