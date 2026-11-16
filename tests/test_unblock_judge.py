@@ -5503,6 +5503,36 @@ def test_nothing_to_implement_closes_after_a_fixup_closed_without_merging(tmp_pa
 	assert not _closed_completed(state)
 
 
+def test_nothing_to_implement_close_after_a_fixup_closed_without_merging_is_retried(tmp_path: Path) -> None:
+	# The run that marks the wait done fails to close the issue; the next run
+	# reads the done wait (updated at 12:00Z, after the 10:00Z block) and still
+	# compares the block with the fix-up's recorded closed_at.
+	wait = _comment("Waiting.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 -->", BOT, "2026-10-04T08:00:00Z")
+	wait["id"] = 123
+	wait["updated_at"] = "2026-10-04T09:00:00Z"
+	issues = {"50": {"state": "closed", "state_reason": "not_planned", "closed_at": "2026-10-04T09:30:00Z", "labels": []}}
+	block = _no_wait_block(at="2026-10-04T10:00:00Z")
+	result, state = _judge(tmp_path, ISSUE, comments=[wait, block], verdict=NO_WAIT_VERDICT, issues=issues, FAKE_GH_FAIL_CLOSE="1")
+	assert "fixup=none op=nothing_to_implement outcome=skip reason=close_failed" in result.stdout, result.stdout + result.stderr
+	wait_bodies = [fields["body"] for endpoint, fields in state["patched"] if endpoint == "repos/o/r/issues/comments/123"]
+	assert len(wait_bodies) == 1
+	assert "<!-- ai:unblock-wait-ended:v1 at=2026-10-04T09:30:00Z -->" in wait_bodies[0]
+	assert wait_bodies[0].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
+	close_comment = state["comments"][-1]
+	assert close_comment["body"].endswith(NOTHING_TO_IMPLEMENT_NONE_MARKER)
+	done_wait = dict(wait, body=wait_bodies[0], updated_at="2026-10-04T12:00:00Z")
+	prior = [done_wait, block, _comment(close_comment["body"], BOT, "2026-10-04T12:00:00Z")]
+	result, state = _judge(tmp_path, ISSUE, comments=prior, verdict=NO_WAIT_VERDICT, issues=issues)
+	assert "fixup=none op=nothing_to_implement outcome=closed" in result.stdout, result.stdout + result.stderr
+	assert not any(comment["body"].endswith(NOTHING_TO_IMPLEMENT_NONE_MARKER) for comment in state["comments"])
+	assert _closed_completed(state)
+	# A done wait with no recorded close time keeps its update time as the end.
+	done_wait["body"] = "Fix-up #50 did not merge in time; the unblock judge decides again.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->"
+	result, state = _judge(tmp_path, ISSUE, comments=[done_wait, block], verdict=NO_WAIT_VERDICT, issues=issues)
+	assert "op=nothing_to_implement outcome=closed" not in result.stdout, result.stdout
+	assert not _closed_completed(state)
+
+
 def test_nothing_to_implement_no_wait_posts_the_marker_once(tmp_path: Path) -> None:
 	result, state = _judge(tmp_path, ISSUE, comments=[_no_wait_block()], verdict=NO_WAIT_VERDICT, FAKE_GH_FAIL_CLOSE="1")
 	assert "fixup=none op=nothing_to_implement outcome=skip reason=close_failed" in result.stdout, result.stdout + result.stderr

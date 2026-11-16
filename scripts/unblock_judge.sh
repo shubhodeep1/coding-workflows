@@ -1853,7 +1853,8 @@ unblock_main()
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
 	local last_activity="" wait_id wait_fixup wait_state wait_at wait_updated fixup_json
 	# #9518: when the latest fix-up wait ended (its last update if it was
-	# already done, or this run when it is patched done below). The no-wait
+	# already done, or the fix-up close time that done wait recorded; this run,
+	# or the fix-up's closed_at, when it is patched done below). The no-wait
 	# nothing-to-implement close only takes a block newer than this.
 	local wait_ended_at=""
 	wait=""
@@ -1863,6 +1864,17 @@ unblock_main()
 		if [ "${wait_state}" = "done" ]; then
 			last_activity="${wait_updated}"
 			wait_ended_at="${wait_updated}"
+			# #9518: a wait closed because its fix-up closed without merging
+			# records that close time; it may only move the end earlier.
+			local wait_recorded_end
+			wait_recorded_end="$(jq -r --arg login "${UNBLOCK_LOGIN}" --arg id "${wait_id}" '
+				[.[] | select((.user.login // "") == $login and ((.id // "") | tostring) == $id)
+					| (.body // "") | split("\n")[] | rtrimstr("\r")
+					| capture("^<!-- ai:unblock-wait-ended:v1 at=(?<at>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z) -->$")? | .at]
+				| first // ""' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true)"
+			if [[ "${wait_recorded_end}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && [[ "${wait_recorded_end}" < "${wait_updated}" ]]; then
+				wait_ended_at="${wait_recorded_end}"
+			fi
 		else
 			fixup_json="$(gh api "repos/${REPOSITORY}/issues/${wait_fixup}" --jq '{state, state_reason, closed_at, labels: [.labels[]?.name]}' 2>/dev/null || echo '{}')"
 			if ! jq -e '.state == "open" or .state == "closed"' <<< "${fixup_json}" >/dev/null 2>&1; then
@@ -2080,21 +2092,28 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 				return 0
 			fi
 			# Closed without merging, or waited too long: judge again.
-			unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} did not merge in time; the unblock judge decides again.
-
-<!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
-			last_activity="${now}"
 			# A block filed while this fix-up was still unresolved stays with the judge.
 			# A fix-up closed without merging was resolved when it closed, so a
 			# block filed after its closed_at (same lookup, no extra read) counts.
 			wait_ended_at="${now}"
+			local wait_ended_line=""
 			if [ "$(jq -r '.state // ""' <<< "${fixup_json}")" = "closed" ]; then
 				local fixup_closed_at
 				fixup_closed_at="$(jq -r '.closed_at // ""' <<< "${fixup_json}" 2>/dev/null || true)"
 				if [[ "${fixup_closed_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && [[ "${fixup_closed_at}" < "${now}" ]]; then
 					wait_ended_at="${fixup_closed_at}"
+					# Recorded in the done wait comment so a later run (after a failed
+					# or skipped close below) still compares the block with closed_at,
+					# not with this patch time. Not the last line, so the wait marker
+					# parse is unchanged.
+					wait_ended_line="
+<!-- ai:unblock-wait-ended:v1 at=${fixup_closed_at} -->"
 				fi
 			fi
+			unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} did not merge in time; the unblock judge decides again.
+${wait_ended_line}
+<!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
+			last_activity="${now}"
 		fi
 	fi
 
