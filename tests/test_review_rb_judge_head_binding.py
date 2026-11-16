@@ -973,7 +973,7 @@ def _ihold_run(
 			rb_security_merge_gate() { printf 'security_gate\\n' >> "${CALL_LOG}"; return "${IHOLD_SECURITY_GATE_RC:-0}"; }
 			"""
 		)
-		script = prelude + block + "\necho FELLTHROUGH\n"
+		script = prelude + _rb_post_helper_text() + block + "\necho FELLTHROUGH\n"
 		env = {
 			"PATH": "/usr/bin:/bin",
 			"CALL_LOG": str(calls),
@@ -1202,7 +1202,7 @@ def _rb_post_helper_text() -> str:
 	return match.group(0)
 
 
-def _run_rb_post_helper(tmp_path: Path, *, job_token: str, job_fails: bool) -> list[str]:
+def _run_rb_post_helper(tmp_path: Path, *, job_token: str, job_fails: bool, job_error: str = "HTTP 403: Resource not accessible by integration") -> tuple[int, list[str]]:
 	log = tmp_path / "gh.log"
 	script = "\n".join([
 		"set -euo pipefail",
@@ -1210,24 +1210,36 @@ def _run_rb_post_helper(tmp_path: Path, *, job_token: str, job_fails: bool) -> l
 		"PR_NUMBER=42",
 		"GH_TOKEN=pat",
 		f"RB_JUDGE_COMMENT_TOKEN={job_token!r}",
-		f'gh_retry() {{ echo "${{GH_TOKEN}} $*" >> {str(log)!r}; if [ "${{GH_TOKEN}}" = job ] && [ {"1" if job_fails else "0"} = 1 ]; then return 1; fi; return 0; }}',
+		f'gh_retry() {{ echo "${{GH_TOKEN}} $*" >> {str(log)!r}; if [ "${{GH_TOKEN}}" = job ] && [ {"1" if job_fails else "0"} = 1 ]; then echo {job_error!r} >&2; return 1; fi; return 0; }}',
 		_rb_post_helper_text(),
-		'rb_judge_post_issue_comment -f body="## Review-Blocked Judge Decision"',
+		'rc=0; rb_judge_post_issue_comment -f body="## Review-Blocked Judge Decision" || rc=$?',
+		'exit "${rc}"',
 	])
 	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
-	assert result.returncode == 0, result.stderr
-	return log.read_text(encoding="utf-8").splitlines()
+	return result.returncode, log.read_text(encoding="utf-8").splitlines()
 
 
 def test_rb_judge_comment_posts_with_the_job_token(tmp_path: Path) -> None:
-	calls = _run_rb_post_helper(tmp_path, job_token="job", job_fails=False)
+	rc, calls = _run_rb_post_helper(tmp_path, job_token="job", job_fails=False)
+	assert rc == 0
 	assert calls == ["job gh api repos/o/r/issues/42/comments -f body=## Review-Blocked Judge Decision"]
 
 
-def test_rb_judge_comment_falls_back_to_gh_token(tmp_path: Path) -> None:
-	assert [c.split()[0] for c in _run_rb_post_helper(tmp_path, job_token="job", job_fails=True)] == ["job", "pat"]
-	(tmp_path / "gh.log").unlink()
-	assert [c.split()[0] for c in _run_rb_post_helper(tmp_path, job_token="", job_fails=False)] == ["pat"]
+def test_rb_judge_comment_falls_back_to_gh_token_only_when_refused(tmp_path: Path) -> None:
+	for error in ("HTTP 403: Resource not accessible by integration", "gh: Bad credentials (HTTP 401)"):
+		rc, calls = _run_rb_post_helper(tmp_path, job_token="job", job_fails=True, job_error=error)
+		assert rc == 0 and [c.split()[0] for c in calls] == ["job", "pat"], (error, calls)
+		(tmp_path / "gh.log").unlink()
+	rc, calls = _run_rb_post_helper(tmp_path, job_token="", job_fails=False)
+	assert rc == 0 and [c.split()[0] for c in calls] == ["pat"]
+
+
+def test_rb_judge_comment_is_not_resent_after_an_ambiguous_failure(tmp_path: Path) -> None:
+	"""A timeout or 5xx may already have created the comment; never post it twice."""
+	for error in ("HTTP 502: Bad Gateway", "context deadline exceeded", ""):
+		rc, calls = _run_rb_post_helper(tmp_path, job_token="job", job_fails=True, job_error=error)
+		assert rc != 0 and [c.split()[0] for c in calls] == ["job"], (error, calls)
+		(tmp_path / "gh.log").unlink()
 
 
 def test_every_rb_judge_issue_comment_goes_through_the_helper() -> None:
@@ -1248,5 +1260,7 @@ def test_materiality_advisory_posts_with_the_job_token_and_refreshes_with_gh_tok
 	assert "MATERIALITY_COMMENT_TOKEN: ${{ github.token }}" in step
 	assert 'GH_TOKEN="${MATERIALITY_COMMENT_TOKEN}" gh_retry gh api -X POST' in step
 	assert "posted advisory comment (token=pat)." in step
+	assert "Resource not accessible by integration" in step
+	assert "(job token, not resent)." in step
 	# The in-place refresh of an existing PAT-authored advisory keeps GH_TOKEN.
 	assert 'if gh_retry gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${existing_comment_id}"' in step

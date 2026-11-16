@@ -814,13 +814,28 @@ resolve_review_state_for_post() {
 # (the retry count comes from commit history, and the judge's own context
 # keeps every comment with its author). So they are posted with the job token
 # (RB_JUDGE_COMMENT_TOKEN, the job's GITHUB_TOKEN), which starts no
-# issue_comment workflows (run-volume plan item 6). Unset or refused, the
-# post falls back to GH_TOKEN as before.
+# issue_comment workflows (run-volume plan item 6). When the token is unset,
+# or GitHub refuses it (401/403, e.g. a read-only fork token), the post goes
+# out with GH_TOKEN as before. Any other failure is returned as is: gh_retry
+# sends a POST once, and a timeout or 5xx may already have created the
+# comment, so resending would duplicate it.
 rb_judge_post_issue_comment()
 {
-  if [ -n "${RB_JUDGE_COMMENT_TOKEN:-}" ] \
-    && GH_TOKEN="${RB_JUDGE_COMMENT_TOKEN}" gh_retry gh api "repos/${REPOSITORY:-}/issues/${PR_NUMBER:-}/comments" "$@"; then
-    return 0
+  local rb_post_err rb_post_rc=0
+  if [ -n "${RB_JUDGE_COMMENT_TOKEN:-}" ]; then
+    rb_post_err="$(mktemp "${TMPDIR:-/tmp}/rb_judge_post_err.XXXXXX")"
+    GH_TOKEN="${RB_JUDGE_COMMENT_TOKEN}" gh_retry gh api "repos/${REPOSITORY:-}/issues/${PR_NUMBER:-}/comments" "$@" 2>"${rb_post_err}" || rb_post_rc=$?
+    if [ "${rb_post_rc}" -eq 0 ]; then
+      rm -f "${rb_post_err}"
+      return 0
+    fi
+    if ! grep -qiE 'HTTP 40[13]|Resource not accessible by integration|Bad credentials|Requires authentication' "${rb_post_err}"; then
+      cat "${rb_post_err}" >&2
+      rm -f "${rb_post_err}"
+      return "${rb_post_rc}"
+    fi
+    rm -f "${rb_post_err}"
+    echo "RB_JUDGE_COMMENT_TOKEN refused; posting with GH_TOKEN." >&2
   fi
   gh_retry gh api "repos/${REPOSITORY:-}/issues/${PR_NUMBER:-}/comments" "$@"
 }

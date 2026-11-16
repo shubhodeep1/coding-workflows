@@ -3555,13 +3555,29 @@ PY
 # in the tracker body, and security_pass_skip.py checks the tracker issue's
 # author, not its comments). With SECURITY_AUDIT_COMMENT_TOKEN (the job's
 # GITHUB_TOKEN, set by security-audit.yml) it starts no issue_comment
-# workflows (run-volume plan item 6); unset or refused, GH_TOKEN posts it.
-if [ -n "${SECURITY_AUDIT_COMMENT_TOKEN:-}" ] \
-	&& GH_TOKEN="${SECURITY_AUDIT_COMMENT_TOKEN}" gh_retry gh issue comment "${TRACKER_NUMBER}" \
+# workflows (run-volume plan item 6). Unset, or refused by GitHub (401/403),
+# GH_TOKEN posts it. Any other failure fails the run as before: a POST is
+# sent once, and resending after a timeout could duplicate the comment.
+tracker_comment_via_pat="true"
+if [ -n "${SECURITY_AUDIT_COMMENT_TOKEN:-}" ]; then
+	tracker_comment_err="$(mktemp)"
+	tracker_comment_rc=0
+	GH_TOKEN="${SECURITY_AUDIT_COMMENT_TOKEN}" gh_retry gh issue comment "${TRACKER_NUMBER}" \
 		--repo "${GITHUB_REPOSITORY}" \
-		--body-file "${TRACKER_COMMENT_FILE}"; then
-	echo "security-audit: tracker comment posted token=job"
-else
+		--body-file "${TRACKER_COMMENT_FILE}" 2>"${tracker_comment_err}" || tracker_comment_rc=$?
+	if [ "${tracker_comment_rc}" -eq 0 ]; then
+		echo "security-audit: tracker comment posted token=job"
+		tracker_comment_via_pat="false"
+	elif grep -qiE 'HTTP 40[13]|Resource not accessible by integration|Bad credentials|Requires authentication' "${tracker_comment_err}"; then
+		echo "security-audit: job token refused for the tracker comment; posting with GH_TOKEN" >&2
+	else
+		cat "${tracker_comment_err}" >&2
+		rm -f "${tracker_comment_err}"
+		exit "${tracker_comment_rc}"
+	fi
+	rm -f "${tracker_comment_err}"
+fi
+if [ "${tracker_comment_via_pat}" = "true" ]; then
 	gh_retry gh issue comment "${TRACKER_NUMBER}" \
 		--repo "${GITHUB_REPOSITORY}" \
 		--body-file "${TRACKER_COMMENT_FILE}"

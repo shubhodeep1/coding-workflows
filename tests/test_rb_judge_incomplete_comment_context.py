@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -248,6 +249,17 @@ def test_legacy_branch_success_keeps_comments_and_resets_inherited_flag(tmp_path
 # ---------------------------------------------------------------------------
 
 
+
+def _rb_post_helper_src() -> str:
+	"""The shipped rb_judge_post_issue_comment (run-volume plan item 6).
+
+	The extracted blocks post their comments through it; with
+	RB_JUDGE_COMMENT_TOKEN unset it calls the stubbed gh_retry unchanged.
+	"""
+	match = re.search(r"^rb_judge_post_issue_comment\(\)\n\{\n.*?^\}\n", RB_JUDGE.read_text(encoding="utf-8"), re.S | re.M)
+	assert match
+	return match.group(0)
+
 def _gate_block() -> str:
 	text = _text()
 	start = text.index(GATE_START_ANCHOR)
@@ -276,7 +288,7 @@ def _gate_run(
 		rb_security_merge_gate() { printf 'security_gate\\n' >> "${CALL_LOG}"; return 0; }
 		"""
 	)
-	script = prelude + _gate_block() + "\necho FELLTHROUGH\n"
+	script = prelude + _rb_post_helper_src() + _gate_block() + "\necho FELLTHROUGH\n"
 	env = {
 		"PATH": "/usr/bin:/bin",
 		"CALL_LOG": str(calls),
@@ -487,6 +499,7 @@ def test_helper_flag_reaches_the_merge_gate_end_to_end(tmp_path: Path, incomplet
 		'review_head_gate_post_status() { printf \'status %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
 		'_resilient_phase_swap() { printf \'phase_swap %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
 		'rb_security_merge_gate() { printf \'security_gate\\n\' >> "${CALL_LOG}"; return 0; }\n'
+		+ _rb_post_helper_src()
 		+ _marker_block(CTX_BEGIN, CTX_END)
 		+ "\n"
 		+ _gate_block()
