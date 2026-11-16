@@ -896,8 +896,13 @@ single_pass_followup_merge_guard()
 		single_pass_followup_guard_emit unverifiable parent_lookup_failed
 		return 0
 	fi
-	# The review job's /user result is not exported to this helper.
-	SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+	# The review job's /user result is not exported to this helper. Retried like
+	# the guard's other reads: one transient failure would hold the merge.
+	SECURITY_PASS_AUTHOR_LOGIN="$({ if type gh_retry >/dev/null 2>&1; then
+			gh_retry gh api user --jq '.login // ""'
+		else
+			gh api user --jq '.login // ""'
+		fi; } 2>/dev/null || true)"
 	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
 		SECURITY_PASS_AUTHOR_LOGIN="${SECURITY_PASS_AUTHOR_LOGIN_FALLBACK:-}"
 	fi

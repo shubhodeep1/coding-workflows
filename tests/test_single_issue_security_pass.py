@@ -1440,9 +1440,11 @@ def test_auto_merge_helper_runs_followup_guard_before_merge() -> None:
 	assert guard < text.index("gh_retry gh pr merge")
 	assert 'if [ "${_followup_guard_result}" != "allow" ]; then' in text[guard:status]
 	assert "exit 0" in text[guard:status]
-	# The guard runs again after the required-checks wait, before any --auto merge.
+	# The guard runs again after the required-checks wait, before any --auto
+	# merge, even when the wait returned without polling.
 	wait = text.index("_pr_wait_for_required_checks", status)
-	recheck = text.index('if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! run_security_followup_guard; then', wait)
+	recheck = text.index("\nif ! run_security_followup_guard; then\n\texit 0\nfi\n", wait)
+	assert "-gt 0 ] 2>/dev/null && ! run_security_followup_guard" not in text
 	assert recheck < text.index("gh_retry gh pr merge")
 
 

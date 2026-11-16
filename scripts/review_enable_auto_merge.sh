@@ -334,11 +334,14 @@ if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
 	exit 0
 fi
 
-# The base branch's head may have received a clean security audit during the
-# wait (#9479); the first guard result is a snapshot, so re-run it once more
-# when the wait actually polled. The success status posted above stays bound
-# to this PR's head; refusing here withholds auto-merge and merge labels.
-if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! run_security_followup_guard; then
+# The base branch's head may have received a clean security audit after the
+# first guard ran (#9479). That result is a snapshot, and security-audit.yml
+# posts its marker concurrently whether or not the checks wait polled, so
+# re-run the guard once more right before any --auto merge. PRs into the
+# default or an integration branch get `allow` with no API call. The success
+# status posted above stays bound to this PR's head; refusing here withholds
+# auto-merge and merge labels.
+if ! run_security_followup_guard; then
 	exit 0
 fi
 
