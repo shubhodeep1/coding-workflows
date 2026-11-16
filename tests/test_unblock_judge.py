@@ -5450,9 +5450,9 @@ def test_nothing_to_implement_closes_after_an_earlier_done_wait(tmp_path: Path) 
 	assert not any(endpoint == "repos/o/r/issues/comments/123" for endpoint, _ in state["patched"])
 
 
-@pytest.mark.parametrize("case", ["newer_plan", "project_item", "disabled", "untrusted_block", "other_reason", "block_before_done_wait"])
+@pytest.mark.parametrize("case", ["newer_plan", "project_item", "disabled", "untrusted_block", "other_reason", "block_before_done_wait", "block_during_timed_out_wait"])
 def test_nothing_to_implement_no_wait_keeps_the_judge_otherwise(tmp_path: Path, case: str) -> None:
-	item, env, comments = ISSUE, {}, [_no_wait_block()]
+	item, env, comments, issues = ISSUE, {}, [_no_wait_block()], None
 	if case == "newer_plan":
 		comments.append(_comment("Implementation Plan\n\n1. Do the thing.", BOT, "2026-10-04T11:00:00Z"))
 	elif case == "project_item":
@@ -5464,10 +5464,18 @@ def test_nothing_to_implement_no_wait_keeps_the_judge_otherwise(tmp_path: Path, 
 		comments = [_no_wait_block(block_login="someone-else")]
 	elif case == "other_reason":
 		comments = [_no_wait_block(NOTHING_TO_IMPLEMENT_BLOCK.replace("work is already on the planning ref; nothing to implement", "missing API key"))]
+	elif case == "block_during_timed_out_wait":
+		# The block came after the wait's last check but while fix-up #50 was
+		# still open; this run times the wait out, so the block stays with the judge.
+		wait = _comment("Waiting.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 -->", BOT, "2026-09-30T00:00:00Z")
+		wait["id"] = 123
+		wait["updated_at"] = "2026-10-04T09:00:00Z"
+		comments = [wait, _no_wait_block(at="2026-10-04T10:00:00Z")]
+		issues = {"50": {"state": "open", "state_reason": None, "labels": []}}
 	else:
 		# The block predates the wait: the judge already filed a fix-up for it.
 		comments = [_no_wait_block(at="2026-10-04T07:00:00Z"), _done_wait("2026-10-04T11:00:00Z")]
-	result, state = _judge(tmp_path, item, comments=comments, verdict=NO_WAIT_VERDICT, **env)
+	result, state = _judge(tmp_path, item, comments=comments, verdict=NO_WAIT_VERDICT, issues=issues, **env)
 	assert result.returncode == 0, result.stderr
 	assert "op=nothing_to_implement outcome=closed" not in result.stdout, result.stdout
 	assert not _closed_completed(state)

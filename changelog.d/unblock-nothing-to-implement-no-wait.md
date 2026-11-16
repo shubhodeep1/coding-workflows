@@ -6,7 +6,7 @@ Before this change, `scripts/unblock_judge.sh` ran this close only right after a
 - the block comes from the pipeline login and carries the exact reason line;
 - no trusted implementation plan was posted after the block;
 - the issue has no tracking issue (orchestrator items are unchanged);
-- the block is newer than any fix-up wait's last update.
+- the block is newer than the time the latest fix-up wait ended (its last update when it was already done, or this run when the judge times it out), so a block filed while the fix-up was still unresolved stays with the judge.
 
 The comment says no fix-up is pending. The marker and the existing `op=nothing_to_implement` log line carry `fixup=none`. A `fixup=none` marker counts as already posted only if it is no older than the newest block. The fix-up-wait path is unchanged. Setting `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=false` (default `true`) turns off both closes.
 

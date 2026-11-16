@@ -588,9 +588,10 @@ UNBLOCK_NOTHING_TO_IMPLEMENT_REASON="work is already on the planning ref; nothin
 # judged and escalated (#9215). The comment then names no fix-up, the log and
 # marker say `fixup=none`, and a `fixup=none` marker only counts as already
 # posted when it is no older than the newest block (a re-block after a reopen
-# gets its own comment). The optional <block after> timestamp (the newest wait
-# comment's updated_at) requires the newest block to be newer than it, so a
-# block the judge already filed a fix-up for stays with the judge.
+# gets its own comment). The optional <block after> timestamp (when the newest
+# fix-up wait ended) requires the newest block to be newer than it, so a block
+# the judge already filed a fix-up for, or one filed while that fix-up was
+# still unresolved, stays with the judge.
 # Signature: <fixup> <done text> <tracking> [<block after>].
 # API budget: at most three writes (comment, label, close), no reads; the
 # fix-up caller then marks the fix-up wait `done` (one more write, not
@@ -1851,12 +1852,17 @@ unblock_main()
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
 	local last_activity="" wait_id wait_fixup wait_state wait_at wait_updated fixup_json
+	# #9518: when the latest fix-up wait ended (its last update if it was
+	# already done, or this run when it is patched done below). The no-wait
+	# nothing-to-implement close only takes a block newer than this.
+	local wait_ended_at=""
 	wait=""
 	[ "${untrusted_project_pr}" = "true" ] || wait="$(unblock_latest_wait)"
 	if [ -n "${wait}" ]; then
 		read -r wait_id wait_fixup wait_state wait_at wait_updated <<< "${wait}"
 		if [ "${wait_state}" = "done" ]; then
 			last_activity="${wait_updated}"
+			wait_ended_at="${wait_updated}"
 		else
 			fixup_json="$(gh api "repos/${REPOSITORY}/issues/${wait_fixup}" --jq '{state, state_reason, labels: [.labels[]?.name]}' 2>/dev/null || echo '{}')"
 			if ! jq -e '.state == "open" or .state == "closed"' <<< "${fixup_json}" >/dev/null 2>&1; then
@@ -2078,6 +2084,8 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 			last_activity="${now}"
+			# A block filed while this fix-up was still unresolved stays with the judge.
+			wait_ended_at="${now}"
 		fi
 	fi
 
@@ -2211,9 +2219,10 @@ Still waiting for an operator; last checked ${now}.
 	fi
 
 	# #9518: a nothing-to-implement block with no pending fix-up wait is closed
-	# too. When a wait exists, the block must be newer than its last update:
-	# an older block is the one the judge already filed that fix-up for.
-	if [ "${ITEM_KIND}" = "issue" ] && unblock_nothing_to_implement_close "" "" "${tracking}" "${wait:+${wait_updated:-}}"; then
+	# too. When a wait exists, the block must be newer than the time that wait
+	# ended (wait_ended_at): an older block is the one the judge already filed
+	# that fix-up for, or one filed while the fix-up was still unresolved.
+	if [ "${ITEM_KIND}" = "issue" ] && unblock_nothing_to_implement_close "" "" "${tracking}" "${wait:+${wait_ended_at:-${wait_updated:-}}}"; then
 		return 0
 	fi
 
