@@ -2901,8 +2901,9 @@ jobs:
       # Moved from tests-promote-stall-and-review, which took 21m25s of its 20
       # minutes on main (run 43138350536, budget-watch issue #9363). The run's
       # step timings were not readable; the pick is an estimate from test and
-      # subprocess counts. This job checks out full history, which covers the
-      # depth-1 checkout both steps ran on before. Names and bodies unchanged.
+      # subprocess counts. This job also checks out at depth 1 (plus a bounded
+      # base-commit fetch), the shallow shape both steps ran on before. Names
+      # and bodies unchanged.
       - name: Judge Semble prefetch contract test
         run: |
           set -euo pipefail
@@ -2925,8 +2926,8 @@ jobs:
       # (budget-watch issue #9363). In the #9018 text below, "this job" means
       # tests-promote-stall-and-review; the Node pair it mentions now runs in
       # this job as well, so its "no single job takes both moves" no longer
-      # holds. Its depth-1 checkout claim does not describe this job either:
-      # this job checks out full history (fetch-depth: 0), a superset.
+      # holds. Its depth-1 checkout claim also holds for this job, which
+      # checks out at depth 1 plus a bounded base-commit fetch.
       # Moved from tests-heal-plan-and-validation, which took 17m59s of its 20
       # minutes on main (run 42413379208, budget-watch issue #9018). Step
       # timings were not readable when this was planned; it was chosen as that
