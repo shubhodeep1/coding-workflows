@@ -2324,6 +2324,12 @@ jobs:
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           BLOCKED_REASON: ${{ steps.parse_plan.outputs.blocked_reason }}
+          # The open-PR wait branch below promises an automatic resume only
+          # while the unblock judge runs (same default as orchestrate_poll.yml).
+          UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          # The pr_on_branch hold also needs the judge's `wait` verdict, which
+          # UNBLOCK_JUDGE_WAIT_ENABLED=false removes (same default as unblock_judge.yml).
+          UNBLOCK_JUDGE_WAIT_ENABLED: ${{ vars.UNBLOCK_JUDGE_WAIT_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -2353,35 +2359,76 @@ jobs:
           fi
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          {
-            printf '%s\n' "Planning blocked: human input required."
-            printf '\n'
-            printf '%s\n' "Reason: ${BLOCKED_REASON}"
-            printf '\n'
-            if [ "${BLOCKED_CHECK_TRIAGE}" = "true" ]; then
-              printf '%s\n' "This is a CI-failure triage issue. The unblock judge re-checks the failing check and closes this issue with evidence once it passes on the pull request's newer head or on the default branch; no reply is needed unless the check keeps failing."
+          # A block that only waits for another open PR (the planner's
+          # "work is delivered by open PR #<N>" self-check, #8335) needs no
+          # human: the unblock judge parks it on a pr_on_branch hold and
+          # resumes it after that PR merges. Say so, and page at WARNING
+          # instead of CRITICAL. Every other reason keeps the old comment and
+          # page. The "Planning blocked:" opening stays, because
+          # orchestrate_lib.py reads it as an automation comment.
+          PLAN_BLOCKED_WAIT_PR=""
+          plan_blocked_wait_re='^work is delivered by open PR #([1-9][0-9]{0,8}); resume once it is merged$'
+          if [[ "${BLOCKED_REASON}" =~ ${plan_blocked_wait_re} ]]; then
+            PLAN_BLOCKED_WAIT_PR="${BASH_REMATCH[1]}"
+          fi
+          # With the unblock judge off nothing resumes the issue, so keep the
+          # human-input comment and CRITICAL page.
+          if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
+            PLAN_BLOCKED_WAIT_PR=""
+          fi
+          # Without the judge's `wait` verdict (scripts/unblock_judge.sh passes
+          # --wait-disabled) no pr_on_branch hold is placed either. Parsed like
+          # unblock_wait_enabled: unset, empty or true keeps waits on.
+          case "${UNBLOCK_JUDGE_WAIT_ENABLED:-true}" in
+            ""|true|TRUE|True) ;;
+            *) PLAN_BLOCKED_WAIT_PR="" ;;
+          esac
+          if [ -n "${PLAN_BLOCKED_WAIT_PR}" ]; then
+            {
+              printf '%s\n' "Planning blocked: waiting on open PR #${PLAN_BLOCKED_WAIT_PR}."
               printf '\n'
-            fi
-            printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
-            printf '%s\n' "Provide the required input, then reply with /answer."
-            printf '\n'
-            printf '%s\n' "Run: ${RUN_URL}"
-          } > "${PLAN_COMMENT_FILE}"
+              printf '%s\n' "Reason: ${BLOCKED_REASON}"
+              printf '\n'
+              printf '%s\n' "No action is needed. The unblock judge resumes this issue after PR #${PLAN_BLOCKED_WAIT_PR} merges."
+              printf '\n'
+              printf '%s\n' "Run: ${RUN_URL}"
+            } > "${PLAN_COMMENT_FILE}"
+          else
+            {
+              printf '%s\n' "Planning blocked: human input required."
+              printf '\n'
+              printf '%s\n' "Reason: ${BLOCKED_REASON}"
+              printf '\n'
+              if [ "${BLOCKED_CHECK_TRIAGE}" = "true" ]; then
+                printf '%s\n' "This is a CI-failure triage issue. The unblock judge re-checks the failing check and closes this issue with evidence once it passes on the pull request's newer head or on the default branch; no reply is needed unless the check keeps failing."
+                printf '\n'
+              fi
+              printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
+              printf '%s\n' "Provide the required input, then reply with /answer."
+              printf '\n'
+              printf '%s\n' "Run: ${RUN_URL}"
+            } > "${PLAN_COMMENT_FILE}"
+          fi
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${PLAN_COMMENT_FILE}")" >/dev/null
 
-          BLOCKED_ALERT_LEVEL=CRITICAL
-          MSG="Planning blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
-          if [ "${BLOCKED_CHECK_TRIAGE}" = "true" ]; then
-            BLOCKED_ALERT_LEVEL=WARNING
+          if [ -n "${PLAN_BLOCKED_WAIT_PR}" ]; then
+            echo "PLAN_BLOCKED_WAIT issue=${ISSUE_NUMBER} pr=${PLAN_BLOCKED_WAIT_PR} level=WARNING"
+            MSG="Planning for issue #${ISSUE_NUMBER} is waiting on open PR #${PLAN_BLOCKED_WAIT_PR}; it resumes automatically after that PR merges."
+            PLAN_BLOCKED_TG_LEVEL="WARNING"
+          elif [ "${BLOCKED_CHECK_TRIAGE}" = "true" ]; then
             MSG="Planning blocked for issue #${ISSUE_NUMBER} (CI triage; the unblock judge will re-check): ${BLOCKED_REASON}"
+            PLAN_BLOCKED_TG_LEVEL="WARNING"
+          else
+            MSG="Planning blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
+            PLAN_BLOCKED_TG_LEVEL="CRITICAL"
           fi
           MSG+=$'\n'
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "${BLOCKED_ALERT_LEVEL}"
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "${PLAN_BLOCKED_TG_LEVEL}"
 
       - name: Complete /answer command (blocked)
         if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.blocked == 'true'
