@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:approx. line 880 (single_pass_followup_merge_guard) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The parent lookup gh api call is not paginated.\n  WHY: If the branch has more than 100 open PRs, the standalone parent PR may be missing from the first page, so the guard falls through to the allow-no-standalone-parent case and bypasses the merge protection. The source severity was MAJOR. anthropic_claude-sonnet-5_5 listed the same lookup only as a hardening suggestion that \"in practice never triggers\". z-ai_glm-5_3-flash rejected it because GitHub allows at most one open PR per head branch.\n- scripts/review_enable_auto_merge.sh:approx. lines 275-279 (run_security_followup_guard) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The parsing of the followup-guard script's output is fragile and incorrect.\n  WHY: The output is printed to grep in a pipeline that does not affect the following sed command, so sed parses the whole script output and extra lines can give incorrect or empty guard results. The source severity was MAJOR. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected it because the anchored `sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=//p' | tail -n 1` extraction fails closed.\n- scripts/review_single_issue_security_pass.sh:approx. lines 912-915, 924-926 (single_pass_followup_merge_guard) | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The function emits the same log reason (reason=parent_lookup_failed) for several distinct failure cases (author_unverifiable, markers_unverifiable, parent_lookup_failed) and posts no marker for any of them.\n  WHY: Log-based triage cannot tell these failure causes apart, which makes root-cause analysis of auto-merge holds harder. The source severity was NIT. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected a related comment=unverifiable ambiguity concern because the code already distinguishes `comment=existing|posted|failed|unverifiable`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/review_single_issue_security_pass.sh | single_pass_followup_merge_guard, the head-filtered parent lookup (`gh api \"repos/${REPOSITORY}/pulls?state=open&head=${guard_owner}:${guard_ref_uri}&per_page=100\"`)\n  PROBLEM: The lookup is not paginated, unlike the retirement listing. It only matters when one head ref has more than 100 open PRs, so in practice it never triggers.\n  WHY: Suggested minimal fix: add `--paginate` and fold the pages with `jq -s 'add // []'` before the existing shape check (estimated 4 lines changed). HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_single_issue_security_pass.sh:single_pass_followup_merge_guard (approx. line 880) | severity=MAJOR | confidence=4\n  PROBLEM: The parent lookup gh api call is not paginated.\n  WHY: If the branch has more than 100 open PRs, the standalone parent PR may not be returned in the first page, causing the guard to fall through to the allow-no-standalone-parent case and bypass the merge protection.\n- scripts/review_enable_auto_merge.sh:run_security_followup_guard (approx. lines 275-279) | severity=MAJOR | confidence=4\n  PROBLEM: The parsing of the followup-guard script's output is fragile and incorrect.\n  WHY: The code prints the output to grep in a pipeline that does not affect the subsequent sed command; sed then parses the entire script output, potentially leading to incorrect or empty guard results if extra lines are present.\n- scripts/review_single_issue_security_pass.sh:single_pass_followup_merge_guard (approx. lines 912-915, 924-926) | severity=NIT | confidence=2\n  PROBLEM: The function emits the same log reason (reason=parent_lookup_failed) for multiple distinct failure cases (author_unverifiable, markers_unverifiable, parent_lookup_failed) and does not post a marker for any of them.\n  WHY: During log-based triage it is impossible to distinguish these failure causes, complicating root-cause analysis for auto-merge holds.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bda43e450feeec965b84aa5bc883c432c603870734b103b20625c8d8b726c3ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9498,
+    "run_id": "43888476938",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43888476938",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116175531_e06f9f273e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9498,
+    "run_id": "43888476938"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-16T17:55:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
