@@ -415,7 +415,9 @@ def test_dependabot_helper_is_hash_checked_before_the_verify_job_runs_it() -> No
 	assert step["env"]["WORKFLOW_PROFILE_SELECTED"] == PROFILE_EXPRESSION
 	run = step["run"]
 	call = run.index('"${RELEASE_ROOT}/scripts/sync_dependabot_exclusions.py"')
-	guard = run.rindex('if [ "${DEPENDABOT_HELPER_ATTESTED:-}" = "true" ]; then', 0, call)
+	# VERIFIED=true too: with UPDATER_VERIFY_RELEASE_MANIFEST=false the update
+	# job never attests the helper, so the verify job must skip it as well.
+	guard = run.rindex('if [ "${VERIFIED:-}" = "true" ] && [ "${DEPENDABOT_HELPER_ATTESTED:-}" = "true" ]; then', 0, call)
 	assert "fi" not in run[guard:call].split()
 	invocation = run[call:run.index("\nfi\n", call)]
 	assert '--repo-root "${BASE_TREE}"' in invocation

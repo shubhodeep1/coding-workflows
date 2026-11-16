@@ -344,6 +344,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-6-luna, reasoning: medium).
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-6-luna to widen analysis coverage.
 - `scripts/sync_claude_live_copies.py` — Keep coding-workflows' live `.claude/` copies in step with their templates.
+- `scripts/sync_dependabot_exclusions.py` — Add the sync-managed wrappers to `exclude-paths` of a consumer's own root `github-actions` Dependabot entries (run by update_workflows.yml "Sync Dependabot exclusions for managed wrappers" and the verify job's `verify_reproduce`, only when the attested release manifest lists it; issue #9485).
 - `scripts/targeted_file_context.py` — Inline likely-to-be-edited files into the Codex prompt as a reference block so the editor doesn't waste budget reading them.
 - `scripts/task_state.py` — Mirror orchestrator wave-issue state into per-task JSON files and unblock mirrored dependents.
 - `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.

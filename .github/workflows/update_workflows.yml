@@ -2486,8 +2486,13 @@ jobs:
             --changed-paths-file "${WORK}/changelog_asset_files.txt" >/dev/null || reject reproduce changelog_assets_failed
           # Same fail-open as the update job's "Sync Dependabot exclusions for
           # managed wrappers", and run only when verify_release attested and
-          # hash-checked the helper (the update job's rule too).
-          if [ "${DEPENDABOT_HELPER_ATTESTED:-}" = "true" ]; then
+          # hash-checked the helper (the update job's rule too). The update job
+          # reads the attestation from its own verification, which is empty
+          # when UPDATER_VERIFY_RELEASE_MANIFEST=false (verified=skipped), while
+          # verify_release always attests; require VERIFIED=true as well so the
+          # two jobs skip the helper in exactly the same cases and
+          # verify-pr-tree never reports derived_missing for the config.
+          if [ "${VERIFIED:-}" = "true" ] && [ "${DEPENDABOT_HELPER_ATTESTED:-}" = "true" ]; then
             GITHUB_OUTPUT=/dev/null python3 -I -B "${RELEASE_ROOT}/scripts/sync_dependabot_exclusions.py" \
               --repo-root "${BASE_TREE}" \
               --templates-dir "${RELEASE_ROOT}/workflow-templates" \
