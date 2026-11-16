@@ -403,6 +403,9 @@ jobs:
         env:
           SECURITY_AUDIT_SUPPORT_DIR: ${{ github.workspace }}
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          # The tracker report comment posts with the job token, so it starts no
+          # issue_comment workflows (run-volume plan item 6).
+          SECURITY_AUDIT_COMMENT_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
