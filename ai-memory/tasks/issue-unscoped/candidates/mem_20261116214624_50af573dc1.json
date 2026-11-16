@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:22141-22146 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The new escalation-keep rule restores a judged `escalate_human` when the linked PR is closed or merged, and it does not check `ENABLE_STALL_HUMAN_TERMINALIZATION`. This is an undocumented second exception to that flag.\n  WHY: With the default `ENABLE_STALL_HUMAN_TERMINALIZATION=false`, the escalation reaches the escalate_human arm, which adds `ai:needs-human` and increments the recovery counter (or pauses stall recovery). README.md:311 / README.md:2575 document a downgrade with only the `MAX_JUDGE_REPLAY` exception. Both reviewers rated it NIT, mapped here to low. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash said they considered this item and chose not to raise it, because the behaviour is what #9482 asks for and the last run did not touch these lines.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The escalation guard exception (keeping `escalate_human` even when `ENABLE_STALL_HUMAN_TERMINALIZATION` is false) must be documented in `README.md:311` (Consensus Finding, ISSUE 001).\n  expected_change_site: README.md\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not contain any changes to `README.md`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING: scripts/orchestrate_poll_process.sh invoke_stall_judge, merged_at fallback branch (lines 21777-21779)\n  PROBLEM: With `merged_at` present but no boolean `merged`, `pr_state` becomes \"merged\" while both diagnostics builders (lines 21905 and 21945) emit `\"merged\":null`.\n  WHY: The judge sees a merge signal split across two fields that disagree. Fix: also set `pr_merged=\"true\"` in that branch (1-2 lines).\n- HARDENING: scripts/orchestrate_poll_process.sh run_standalone_stall_recovery, attempt_merge miss-reuse branch (lines 25991-25995)\n  PROBLEM: The branch restores only `STALL_IMPL_PR_FAILURE_REASON`. `STALL_IMPL_PR_NUM` and `STALL_IMPL_PR_JSON` are empty only because the resolver clears them on entry (line 23190 area).\n  WHY: A later code path could leave stale values in those globals. Fix: also set `STALL_IMPL_PR_NUM=\"\"` and `STALL_IMPL_PR_JSON=\"\"` (2 lines).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: The escalation guard exception (keeping `escalate_human` even when `ENABLE_STALL_HUMAN_TERMINALIZATION` is false) must be documented in `README.md:311` (Consensus Finding, ISSUE 001).\n  Expected change site: README.md\n  Evidence of absence: The PR diff does not contain any changes to `README.md`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:22141-22146 | severity=NIT | confidence=5\n  PROBLEM: The escalation-keep rule keeps a judged `escalate_human` for a closed or merged implementation PR. It fires only when `effective_action` was downgraded, which happens exactly when `ENABLE_STALL_HUMAN_TERMINALIZATION=false` (scripts/orchestrate_lib.py:2326-2327; the default is false at scripts/orchestrate_poll_process.sh:3110). That makes it a second, undocumented exception to the flag.\n  WHY: The escalation reaches the escalate_human arm (scripts/orchestrate_poll_process.sh:20583-20594), which adds `ai:needs-human` and increments the recovery counter. README.md:311 and README.md:2575 list only the `MAX_JUDGE_REPLAY` exception, and neither the changelog fragment nor the agents fragment mentions this one. Suggested fix: add a sentence to changelog.d/9482-standalone-stall-merged-linked-pr.md and agents.d/9482-standalone-stall-merged-linked-pr.md.\n- HARDENING: scripts/orchestrate_poll_process.sh invoke_stall_judge, merged-state branch at 21776 and diagnostics builders at 21904-21906 and 21944-21946\n  PROBLEM: With `merged_at` present but no boolean `.merged`, `pr_state` is \"merged\" while the diagnostics emit `\"merged\":null`.\n  WHY: The merged signal is split across two fields. Fix: set `pr_merged=\"true\"` in the fallback branch (1 line).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:22141-22145; README.md:311 | severity=NIT | confidence=5\n  PROBLEM: The new override restores `escalate_human` after normalization without checking `ENABLE_STALL_HUMAN_TERMINALIZATION`.\n  WHY: With the setting `false`, a judge escalation for a closed or merged implementation PR is still honored: the handler adds `ai:needs-human` and pauses stall recovery. This bypasses the README-documented downgrade, whose only exception is the repeated-`MAX_JUDGE_REPLAY` case.\n- HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING: scripts/orchestrate_poll_process.sh invoke_stall_judge, lines 21772-21778 (and the diagnostics builders at ~21905/~21945)\n  PROBLEM: With merged_at present but no boolean .merged, pr_state becomes \"merged\" while the diagnostics emit \"merged\":null.\n  WHY: The judge's merge signal is split across two fields. Fix: set pr_merged=\"true\" in the merged_at fallback branch (1 line). HARDENING_RISK_SCORE: 1\n- HARDENING: scripts/orchestrate_poll_process.sh run_standalone_stall_recovery, lines 25991-25995\n  PROBLEM: The miss-reuse branch restores STALL_IMPL_PR_FAILURE_REASON but leaves STALL_IMPL_PR_NUM/STALL_IMPL_PR_JSON as they are. This is safe today only because _resolve_issue_implementation_pr clears them on entry (lines 23188-23190).\n  WHY: The reused state could go stale after a future edit. Fix: set STALL_IMPL_PR_NUM=\"\"; STALL_IMPL_PR_JSON=\"\" (2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "01c5042cb134655e7e497d6fa56c1a659e87c2f2a40f541e458f04c85a689c46",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "43933582042",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43933582042",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116214624_50af573dc1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "43933582042"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T21:46:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
