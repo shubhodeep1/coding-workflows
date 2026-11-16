@@ -1415,8 +1415,8 @@ if endpoint.startswith("repos/o/r/issues/"):
 	issue = state["issues"].get(number, {})
 	if jq == '.state // ""':
 		done(issue.get("state") or "")
-	if jq == "{state, state_reason, labels: [.labels[]?.name]}":
-		done(json.dumps({"state": issue.get("state"), "state_reason": issue.get("state_reason"), "labels": [label["name"] for label in issue.get("labels", [])]}))
+	if jq == "{state, state_reason, closed_at, labels: [.labels[]?.name]}":
+		done(json.dumps({"state": issue.get("state"), "state_reason": issue.get("state_reason"), "closed_at": issue.get("closed_at"), "labels": [label["name"] for label in issue.get("labels", [])]}))
 	done(json.dumps(issue))
 done("")
 '''
@@ -5480,6 +5480,27 @@ def test_nothing_to_implement_no_wait_keeps_the_judge_otherwise(tmp_path: Path, 
 	assert "op=nothing_to_implement outcome=closed" not in result.stdout, result.stdout
 	assert not _closed_completed(state)
 	assert not any(comment["body"].endswith(NOTHING_TO_IMPLEMENT_NONE_MARKER) for comment in state["comments"])
+
+
+def test_nothing_to_implement_closes_after_a_fixup_closed_without_merging(tmp_path: Path) -> None:
+	# Fix-up #50 closed not_planned at 09:30Z, the block came at 10:00Z and this
+	# run (12:00Z) marks the wait done: the block is newer than the fix-up's
+	# closed_at, so no fix-up was pending and the issue closes.
+	wait = _comment("Waiting.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 -->", BOT, "2026-10-04T08:00:00Z")
+	wait["id"] = 123
+	wait["updated_at"] = "2026-10-04T09:00:00Z"
+	issues = {"50": {"state": "closed", "state_reason": "not_planned", "closed_at": "2026-10-04T09:30:00Z", "labels": []}}
+	result, state = _judge(tmp_path, ISSUE, comments=[wait, _no_wait_block(at="2026-10-04T10:00:00Z")], verdict=NO_WAIT_VERDICT, issues=issues)
+	assert result.returncode == 0, result.stderr
+	assert "fixup=none op=nothing_to_implement outcome=closed" in result.stdout, result.stdout + result.stderr
+	assert state["comments"][-1]["body"].endswith(NOTHING_TO_IMPLEMENT_NONE_MARKER)
+	assert _closed_completed(state)
+	# A block filed before the fix-up closed stays with the judge.
+	issues["50"]["closed_at"] = "2026-10-04T10:30:00Z"
+	result, state = _judge(tmp_path, ISSUE, comments=[wait, _no_wait_block(at="2026-10-04T10:00:00Z")], verdict=NO_WAIT_VERDICT, issues=issues)
+	assert result.returncode == 0, result.stderr
+	assert "op=nothing_to_implement outcome=closed" not in result.stdout, result.stdout
+	assert not _closed_completed(state)
 
 
 def test_nothing_to_implement_no_wait_posts_the_marker_once(tmp_path: Path) -> None:

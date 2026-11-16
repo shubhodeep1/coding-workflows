@@ -1864,7 +1864,7 @@ unblock_main()
 			last_activity="${wait_updated}"
 			wait_ended_at="${wait_updated}"
 		else
-			fixup_json="$(gh api "repos/${REPOSITORY}/issues/${wait_fixup}" --jq '{state, state_reason, labels: [.labels[]?.name]}' 2>/dev/null || echo '{}')"
+			fixup_json="$(gh api "repos/${REPOSITORY}/issues/${wait_fixup}" --jq '{state, state_reason, closed_at, labels: [.labels[]?.name]}' 2>/dev/null || echo '{}')"
 			if ! jq -e '.state == "open" or .state == "closed"' <<< "${fixup_json}" >/dev/null 2>&1; then
 				unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=fixup_unavailable"
 				return 0
@@ -2085,7 +2085,16 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 			last_activity="${now}"
 			# A block filed while this fix-up was still unresolved stays with the judge.
+			# A fix-up closed without merging was resolved when it closed, so a
+			# block filed after its closed_at (same lookup, no extra read) counts.
 			wait_ended_at="${now}"
+			if [ "$(jq -r '.state // ""' <<< "${fixup_json}")" = "closed" ]; then
+				local fixup_closed_at
+				fixup_closed_at="$(jq -r '.closed_at // ""' <<< "${fixup_json}" 2>/dev/null || true)"
+				if [[ "${fixup_closed_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && [[ "${fixup_closed_at}" < "${now}" ]]; then
+					wait_ended_at="${fixup_closed_at}"
+				fi
+			fi
 		fi
 	fi
 
