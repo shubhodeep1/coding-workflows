@@ -306,7 +306,7 @@ _conflict_prepare_guard_hook_template_merge()
   local ghm_live="${1:-${GUARD_HOOK_LIVE_PATH}}" ghm_tpl="${2:-${GUARD_HOOK_TEMPLATE_PATH}}"
   local ghm_stages="" ghm_tpl_entry="" ghm_tpl_mode="" ghm_tpl_oid="" ghm_tpl_stage="" ghm_tpl_path=""
   local ghm_side_ref="" ghm_side_stage="" ghm_side_reason="" ghm_tree_entry="" ghm_t_mode="" ghm_t_type="" ghm_t_oid="" ghm_t_path=""
-  local ghm_live_entry="" ghm_staged="" ghm_wt_oid="" ghm_parent=""
+  local ghm_live_entry="" ghm_staged="" ghm_wt_oid="" ghm_parent="" ghm_ancestor=""
 
   if [ "${CONFLICT_GUARD_HOOK_TEMPLATE_MERGE_ENABLED:-true}" != "true" ]; then
     echo "Guard-hook template merge: skipped reason=disabled path=${ghm_live}"
@@ -389,6 +389,16 @@ _conflict_prepare_guard_hook_template_merge()
     echo "Guard-hook template merge: skipped reason=unsafe_path path=${ghm_live}"
     return 1
   fi
+  # Every ancestor directory of the live path, so a pair outside
+  # .claude/hooks cannot skip the symlink check (the repo root is never tested).
+  ghm_ancestor="${ghm_live}"
+  while [[ "${ghm_ancestor}" == */* ]]; do
+    ghm_ancestor="${ghm_ancestor%/*}"
+    if [ -n "${ghm_ancestor}" ] && [ -L "${ghm_ancestor}" ]; then
+      echo "Guard-hook template merge: skipped reason=unsafe_path path=${ghm_live}"
+      return 1
+    fi
+  done
 
   # Collapse stages 1-3 into the template's merged stage-0 entry.
   git update-index --cacheinfo "${ghm_tpl_mode},${ghm_tpl_oid},${ghm_live}" || return 2
@@ -418,8 +428,8 @@ _conflict_prepare_guard_hook_template_merge()
 }
 
 _ghm_resolved=false
-_ghm_defer_commit=false
 _ghm_resolved_paths=""
+_ghm_defer_commit=false
 if [ "${_resolver_allowlist_count}" -gt 0 ] \
    && grep -q '^\.claude/hooks/' "${RESOLVER_ALLOWLIST_FILE}"; then
   # Under the per-run RUNTIME_DIR (not mktemp's default location) so a
