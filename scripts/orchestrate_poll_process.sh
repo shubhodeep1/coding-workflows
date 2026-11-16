@@ -14383,9 +14383,116 @@ Integration conflicts are cleared; final merge into \`${default_branch}\` will p
   fi
 }
 
+# _integration_sync_throttle_reason — decide whether this tick merges the
+# default branch into the integration branch (run-volume plan item 3,
+# docs/plans/reduce-actions-run-volume-plan.md).
+#
+# Every tick used to merge main into every open integration branch. Each such
+# push started two full CI runs (push + integration PR), and with main moving
+# 10-15 times a day a single project synced 13 times on 2026-11-12. The sync
+# now runs only when it is needed or overdue. Prints one reason token and
+# returns 0 to sync, 1 to skip:
+#   sync: forced | interval_disabled | not_clean | never_synced | clock_unreadable
+#         | interval_elapsed | final_pr_unmergeable | final_pr_unreadable
+#   skip: within_interval
+# The wave boundaries force a sync where they are decided: right before the
+# next wave's issues are dispatched and right before the completed project
+# enters its security pass (both pass "force"). A sync left unclean (conflict, failure, healing) is retried every tick as
+# before. INTEGRATION_SYNC_MIN_INTERVAL_SECS (default 86400) caps the gap
+# between syncs; 0 restores the sync on every tick, and an invalid value falls
+# back to the default with a warning.
+#
+# API budget (CLAUDE.md §15): no call unless the decision would otherwise be
+# a skip and the state records a final PR; then one REST read of that PR
+# (_fetch_pr_json). The same tick reads that PR again later (ensure_eager_final_pr,
+# the eager-PR validation section, the force-merge bypass), but those reads run
+# after this decision and are not cached for it; on a skipped tick this GET
+# replaces the merges POST the tick used to make, so the call count is
+# unchanged. A failed read fails open to a sync.
+_integration_sync_throttle_reason() {
+  local force="${1:-}"
+  local interval="${INTEGRATION_SYNC_MIN_INTERVAL_SECS:-86400}"
+  local last_sync_at last_epoch now_epoch final_pr pr_json pr_state pr_mergeable
+  if [ "${force}" = "force" ]; then
+    echo "forced"; return 0
+  fi
+  if ! [[ "${interval}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::INTEGRATION_SYNC_MIN_INTERVAL_SECS='${interval}' is not a non-negative integer; using 86400." >&2
+    interval=86400
+  fi
+  if [ "${interval}" -eq 0 ]; then
+    echo "interval_disabled"; return 0
+  fi
+  if [ "$(jq -r '.integration_sync_status // "clean"' "${STATE_FILE}" 2>/dev/null || echo unreadable)" != "clean" ] \
+    || [ -n "$(jq -r '.sync.last_conflict_fingerprint // ""' "${STATE_FILE}" 2>/dev/null || echo unreadable)" ]; then
+    echo "not_clean"; return 0
+  fi
+  last_sync_at="$(jq -r '.sync.last_default_sync_at // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  if [ -z "${last_sync_at}" ]; then
+    echo "never_synced"; return 0
+  fi
+  last_epoch="$(date -u -d "${last_sync_at}" +%s 2>/dev/null || true)"
+  now_epoch="$(date -u +%s 2>/dev/null || true)"
+  if ! [[ "${last_epoch}" =~ ^[0-9]+$ ]] || ! [[ "${now_epoch}" =~ ^[0-9]+$ ]]; then
+    echo "clock_unreadable"; return 0
+  fi
+  if [ $((now_epoch - last_epoch)) -ge "${interval}" ]; then
+    echo "interval_elapsed"; return 0
+  fi
+  final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  if [[ "${final_pr}" =~ ^[1-9][0-9]*$ ]]; then
+    pr_json="$(_fetch_pr_json "${final_pr}" 2>/dev/null || true)"
+    pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed' 2>/dev/null || true)"
+    pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false' 2>/dev/null || true)"
+    if [ -z "${pr_state}" ]; then
+      echo "final_pr_unreadable"; return 0
+    fi
+    if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "false" ]; then
+      echo "final_pr_unmergeable"; return 0
+    fi
+  fi
+  echo "within_interval"
+  return 1
+}
+
+# _integration_sync_at_boundary <integration_branch> <default_branch> <boundary>
+# — force one main -> integration sync at a wave boundary (run-volume plan
+# item 3): <boundary> is `wave-<n>` right before wave n's issues are
+# dispatched, or `complete` right before the security pass. It forces at most
+# once per boundary (.sync.boundary_forced records the last one, persisted
+# with the state) and not at all when this tick's per-tick sync already ran
+# the merges call (INTEGRATION_SYNC_ATTEMPTED_TRACKING), so a boundary that
+# stays blocked for days does not merge main on every retry and a conflict is
+# never healed twice in one tick. Returns what the sync returns (non-zero
+# only on a terminal failure, which already marked the project failed).
+_integration_sync_at_boundary() {
+  local boundary_branch="$1" boundary_default="$2" boundary_key="$3" boundary_rc=0
+  if [ "$(jq -r '.sync.boundary_forced // ""' "${STATE_FILE}" 2>/dev/null || true)" = "${boundary_key}" ]; then
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${boundary_branch} outcome=skip reason=boundary_already_forced boundary=${boundary_key}"
+    return 0
+  fi
+  if [ -n "${TRACKING_NUM:-}" ] && [ "${INTEGRATION_SYNC_ATTEMPTED_TRACKING:-}" = "${TRACKING_NUM}" ]; then
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${boundary_branch} outcome=skip reason=synced_this_tick boundary=${boundary_key}"
+  else
+    sync_default_into_integration_branch "${boundary_branch}" "${boundary_default}" force || boundary_rc=$?
+    [ "${boundary_rc}" -eq 0 ] || return "${boundary_rc}"
+  fi
+  if jq --arg b "${boundary_key}" '.sync = ((.sync // {}) + {"boundary_forced": $b})' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    post_state_comment || true
+  else
+    rm -f "${STATE_FILE}.tmp"
+  fi
+  return 0
+}
+
 sync_default_into_integration_branch() {
   local integration_branch="$1"
   local default_branch="$2"
+  # Optional third argument "force": skip the throttle (a caller that already
+  # established the sync is needed, e.g. an unmergeable final PR).
+  local sync_force="${3:-}"
+  local sync_throttle_reason
   local sync_status
   local prev_conflict_fingerprint
   local runbook_url
@@ -14475,11 +14582,37 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
 
   ensure_integration_conflict_state_fields
 
+  if sync_throttle_reason="$(_integration_sync_throttle_reason "${sync_force}")"; then
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${integration_branch} outcome=sync reason=${sync_throttle_reason}"
+  else
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${integration_branch} outcome=skip reason=${sync_throttle_reason:-within_interval}"
+    return 0
+  fi
+
   local merge_error
+  local sync_merge_out_file
+  # Read by _integration_sync_at_boundary: this tick already merged main in.
+  INTEGRATION_SYNC_ATTEMPTED_TRACKING="${TRACKING_NUM:-}"
+  sync_merge_out_file="$(mktemp "${TMPDIR:-/tmp}/integration_sync_merge.XXXXXX")"
   if merge_error="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/merges" \
     -f base="${integration_branch}" \
     -f head="${default_branch}" \
-    -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >/dev/null)"; then
+    -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >"${sync_merge_out_file}")"; then
+    # Throttle clock (_integration_sync_throttle_reason): recorded on every
+    # successful merges call. A 201 (merge commit created) prints the commit
+    # and is persisted at once; a 204 (already current) prints nothing and
+    # rides the next state write, so a no-op sync costs no comment edit.
+    if jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '.sync = ((.sync // {}) + {"last_default_sync_at": $now})' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      # The status block below posts the state itself when it changes it.
+      if [ -s "${sync_merge_out_file}" ] && [ "${sync_status}" = "active" ] && [ -z "${prev_conflict_fingerprint}" ]; then
+        post_state_comment || true
+      fi
+    else
+      rm -f "${STATE_FILE}.tmp"
+    fi
+    rm -f "${sync_merge_out_file}"
     if [ "${sync_status}" != "active" ] || [ -n "${prev_conflict_fingerprint}" ]; then
       jq '.sync = ((.sync // {}) + {
         "status": "active",
@@ -14493,6 +14626,7 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
     _dispatch_integration_test_repair "${TRACKING_NUM:-}" "${integration_branch}" "" "${default_branch}" || true
     return 0
   fi
+  rm -f "${sync_merge_out_file}"
 
   if ! printf '%s' "${merge_error}" | grep -Eqi '(HTTP 409|status code 409|merge conflict|conflict)'; then
     echo "::warning::Unable to sync '${default_branch}' into '${integration_branch}' due to transient GitHub API error; will retry next poll." >&2
@@ -14590,7 +14724,7 @@ security_pass_sync_final_pr_if_unmergeable() {
     return 0
   fi
   echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=sync reason=final_pr_unmergeable"
-  sync_default_into_integration_branch "${integration_branch}" "${default_branch}" || return $?
+  sync_default_into_integration_branch "${integration_branch}" "${default_branch}" force || return $?
   return 0
 }
 
@@ -34612,6 +34746,21 @@ PRs to revert: ${REVERT_COUNT}"
     complete)
       FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
       FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")}"
+      # Run-volume plan item 3: the per-tick sync is throttled, so bring the
+      # integration branch up to main once here, before the security pass
+      # binds to its head and validation / the final merge test it. Like the
+      # per-tick sync, only a terminal failure (project marked failed) stops
+      # the tick; a conflict is handed to the integration heal and the tick
+      # goes on.
+      if [ -n "${FINAL_INTEGRATION_BRANCH}" ]; then
+        if ! _integration_sync_at_boundary "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" complete; then
+          continue
+        fi
+        PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+        if [ "${PROJECT_STATUS}" = "failed" ]; then
+          continue
+        fi
+      fi
       if ! ensure_security_pass_before_completion "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}"; then
         continue
       fi
@@ -34963,6 +35112,20 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       # Advance to next wave
       NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
       if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
+        # Run-volume plan item 3: the next wave's issues branch from the
+        # integration branch, so bring it up to main once before dispatching
+        # them (the per-tick sync is throttled). Like the per-tick sync, only
+        # a terminal failure (project marked failed) defers the dispatch; a
+        # conflict is handed to the integration heal and the tick goes on.
+        if [ -n "${INTEGRATION_BRANCH_TRACKING:-}" ]; then
+          if ! _integration_sync_at_boundary "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" "wave-${NEXT_WAVE}"; then
+            continue
+          fi
+          PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+          if [ "${PROJECT_STATUS}" = "failed" ]; then
+            continue
+          fi
+        fi
         echo "Advancing to wave ${NEXT_WAVE}..."
         NEXT_WAVE_IDX=$(( NEXT_WAVE - 1 ))
 

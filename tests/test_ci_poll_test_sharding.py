@@ -2414,7 +2414,6 @@ MOVED_PROMOTE_8771_STEPS = {
 		POLL_JOB_ID,
 		(
 			"tests/test_check_failure_triage_workflow_security.py",
-			"tests/test_check_failure_triage_historical.py",
 			"tests/test_check_failure_triage_post_stage.py",
 		),
 	),
@@ -4364,7 +4363,6 @@ MOVED_RELEASE_9450_STEPS = {
 		POLL_JOB_ID,
 		(
 			"tests/test_check_failure_triage_workflow_security.py",
-			"tests/test_check_failure_triage_historical.py",
 			"tests/test_check_failure_triage_post_stage.py",
 		),
 	),

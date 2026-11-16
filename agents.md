@@ -1125,14 +1125,13 @@ fetching the job log on the host. The log is redacted with
 and only the first failure window reaches the isolated diagnosis. On a 404/410
 log, it parses same-run reproduction artifacts host-side and recounts them
 (`reproduced` / `complete_non_reproduction` / `incomplete`; complete needs
-the failing head SHA itself tested, every group, shard and step and zero jq/PyYAML skips). The single-use
-`check-failure-triage-historical.yml` (push to `main` + dispatch, PR #6611
-run 37922279826 / job 113792812346) drives it. Its guard dedups on trusted
-issues and caps failed runs at 3, and its `repro` matrix runs without
-secrets. Log keys: `CHECK_TRIAGE historical_mode`,
+the failing head SHA itself tested, every group, shard and step and zero jq/PyYAML skips). The
+single-use caller that drove it for PR #6611 (run 37922279826 / job
+113792812346) was removed after its issue (#7300) closed; the inputs stay for
+the next historical follow-up, which needs a new caller. Log keys:
+`CHECK_TRIAGE historical_mode`,
 `historical_evidence source=log|repro outcome=…`, `error
-historical_binding_mismatch|historical_evidence_unavailable|historical_inputs_incomplete`,
-and `HISTORICAL_TRIAGE` in the workflow.
+historical_binding_mismatch|historical_evidence_unavailable|historical_inputs_incomplete`.
 
 Check-triage already-resolved gate (#7095): clarify's `Decide clarify route`
 step runs `scripts/check_triage_resolution.py gate` (support-ref copy in
@@ -4439,7 +4438,6 @@ and shipped:
 - `VALIDATION_REFRESH_CLONE_RETRY` (`scripts/validation_refresh_runner.py`: `repository=`, `attempt=`, `max=`, `returncode=`, `delay_secs=`)
 - `CI_TRIAGE_PR_BRANCH_ROUTING` (`scripts/resolve_integration_ref.sh`: `issue= pr= outcome=routed branch=` on stderr, `::error::... outcome=refused reason=label_missing|marker_invalid|not_an_issue|author_untrusted|pr_association_mismatch|pr_lookup_failed|pr_not_open|pr_cross_repository|head_ref_invalid|branch_missing|branch_lookup_failed|issue_read_failed|issue_parse_failed|issue_json_invalid`, exit 3)
 - `CHECK_TRIAGE_BRANCH_GUARD` (`plan.yml` "Check-triage target-branch guard": `issue= enabled= check_triage=true|false|unknown resolver_status=resolved|routed|none|failed|unavailable|unknown outcome=skip|pass|blocked reason=disabled|not_check_triage|metadata_present|pr_head_routed|no_target_branch_metadata|target_branch_unverified|labels_unavailable`)
-- `HISTORICAL_TRIAGE` (`.github/workflows/check-failure-triage-historical.yml`: `skip reason=already_filed|failed_run_cap`, `run run= job= log_available= head_sha=`, `tested_tree= tested_sha=`, `extracted steps= group=`, `step= kind= rc=`)
 - `CHECK_TRIAGE_RESOLVED` (`scripts/check_triage_resolution.py`: `issue= pr= outcome=not_triage|disabled|already_resolved|resolved|unverified|write_failed reason= evidence_sha= traceback_jobs=`)
 - `SECURITY_PASS_AUDIT_TREE` (`scripts/orchestrate_poll_process.sh` `_security_pass_prepare_audit_tree` / `_security_pass_remove_audit_tree`: `tracking_issue= head_sha= outcome=prepared|failed reason=worktree_add_failed|head_mismatch|dirty_tree|runtime_dir_unavailable`, `tracking_issue= outcome=removed|remove_failed`)
 - `SYNC_MANIFEST` (`scripts/build_sync_manifest.py` and the release/updater steps: `outcome=built|uploaded|upload_failed|verified|rejected reason= version= commit= files=`)
@@ -4890,7 +4888,6 @@ LOG_PREFIX.name=POLL_FOLLOW_UP
 LOG_PREFIX.name=VALIDATION_REFRESH_CLONE_RETRY
 LOG_PREFIX.name=CI_TRIAGE_PR_BRANCH_ROUTING
 LOG_PREFIX.name=CHECK_TRIAGE_BRANCH_GUARD
-LOG_PREFIX.name=HISTORICAL_TRIAGE
 LOG_PREFIX.name=CHECK_TRIAGE_RESOLVED
 LOG_PREFIX.name=SECURITY_PASS_AUDIT_TREE
 LOG_PREFIX.name=SYNC_MANIFEST
@@ -5614,7 +5611,6 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/audit_consumer_drift.yml
 .github/workflows/auto-release-stable.yml
 .github/workflows/cancel_on_pr_close.yml
-.github/workflows/check-failure-triage-historical.yml
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
