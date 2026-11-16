@@ -122,6 +122,40 @@ def test_verified_tick_counts_escalate_streak() -> None:
 	assert state == {"judge_escalate_streak": {"42": 2}}, state
 
 
+def _run_judge_effective_label(effective: str, unverifiable: str) -> str:
+	"""Run invoke_stall_judge's human-facing effective-label block (verbatim)."""
+	text = caps.STALL_ARC_POLLER_TEXT
+	start = text.index('  local _judge_effective_label="${effective_action}"\n')
+	end = text.index("  local judge_comment\n", start)
+	block = text[start:end]
+	assert "STALL_ACTIVE_SET_UNVERIFIABLE" in block and block.count("local _judge_effective_label") == 1, block
+	with tempfile.TemporaryDirectory(prefix="stall-label-") as td:
+		script = (
+			"set -euo pipefail\n"
+			"run_block() {\n"
+			f"  local effective_action={effective}\n"
+			+ block
+			+ '  echo "LABEL=${_judge_effective_label}"\n'
+			"}\n"
+			f"STALL_ACTIVE_SET_UNVERIFIABLE={unverifiable}\n"
+			"run_block\n"
+		)
+		r = caps._stall_arc_run_bash(script, cwd=Path(td))
+		assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
+		return next(line.split("=", 1)[1] for line in r.stdout.splitlines() if line.startswith("LABEL="))
+
+
+def test_held_escalation_is_labelled_in_judge_comment_and_notify() -> None:
+	# The comment and Telegram line must not report an escalation that
+	# execute_stall_recovery_action holds on an unverifiable tick.
+	assert _run_judge_effective_label("escalate_human", "true") == "escalate_human (held: active_set_unverifiable)"
+	assert _run_judge_effective_label("escalate_human", "false") == "escalate_human"
+	assert _run_judge_effective_label("retrigger_review", "true") == "retrigger_review"
+	text = caps.STALL_ARC_POLLER_TEXT
+	assert "**Decision (effective):** ${_judge_effective_label}" in text
+	assert "effective=${_judge_effective_label}." in text
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	failed = 0

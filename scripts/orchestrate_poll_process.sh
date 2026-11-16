@@ -18417,7 +18417,7 @@ prime_phase_concurrency_snapshot() {
     # This is usually the first loader call of the tick: forward its
     # diagnostics (ACTIONS_RUNS_SOURCE, rate_limit_audit_fallback ...
     # reason=fetch_unconfirmed) instead of discarding them with the temp file.
-    cat "${actions_runs_fetch_err_file}" >&2 2>/dev/null || true
+    cat "${actions_runs_fetch_err_file}" >&2 || true
   else
     actions_runs_fetch_rc=$?
     actions_runs_fetch_error="$(tr '\n' ' ' < "${actions_runs_fetch_err_file}" | sed 's/[[:space:]]\+/ /g' | cut -c1-200)"
@@ -22811,11 +22811,20 @@ invoke_stall_judge() {
       "${_judge_state_file}" > "${_judge_state_file}.tmp" 2>/dev/null && mv "${_judge_state_file}.tmp" "${_judge_state_file}" || rm -f "${_judge_state_file}.tmp" 2>/dev/null || true
   fi
 
+  # Human-facing label only: when this tick's active set is unverifiable,
+  # execute_stall_recovery_action holds escalate_human (STALL_SKIP
+  # reason=active_set_unverifiable), so the comment and Telegram line must not
+  # claim an escalation ran. effective_action and the dispatch are unchanged.
+  local _judge_effective_label="${effective_action}"
+  if [ "${effective_action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
+    _judge_effective_label="${effective_action} (held: active_set_unverifiable)"
+  fi
+
   local judge_comment
   judge_comment="## 🧑‍⚖️ Stall Judge — Issue #${issue_num} attempt $((recovery_count + 1))
 
 **Decision (judge):** ${judge_action}
-**Decision (effective):** ${effective_action}
+**Decision (effective):** ${_judge_effective_label}
 **Justification:** ${judge_justification}
 
 **Diagnostics snapshot:**
@@ -22829,7 +22838,7 @@ ${diagnostics}
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${judge_comment}" >/dev/null 2>&1 || true
   fi
-  tg_notify "Stall judge evaluated issue #${issue_num}: judged=${judge_action}, effective=${effective_action}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+  tg_notify "Stall judge evaluated issue #${issue_num}: judged=${judge_action}, effective=${_judge_effective_label}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
 
   if [ "${effective_action}" != "${judge_action}" ]; then
     echo "::notice::Stall judge action '${judge_action}' normalized to '${effective_action}' for issue #${issue_num}."
