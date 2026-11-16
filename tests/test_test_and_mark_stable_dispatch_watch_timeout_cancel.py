@@ -4,10 +4,12 @@
 In release run 43590943288 three dispatched child runs stayed queued for hours
 with no runner. The watcher gave up, but nothing cancelled the children, so
 the orphaned orchestrate child later created a tracking issue and Wave 1
-issues that the gate's cleanup could not see. Each of the three dispatch steps
-now reads the timed-out child's jobs once, prints how many are queued with no
-runner, cancels the child (unless DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false) and
-still fails with the watcher's exit code.
+issues that the gate's cleanup could not see. Each dispatch step that waits
+for its child to complete (the three that timed out, plus update_workflows and
+internal-memory-maintenance) now reads the timed-out child's jobs once, prints
+how many are queued with no runner, cancels the child (unless
+DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false) and still fails with the watcher's exit
+code.
 """
 
 from __future__ import annotations
@@ -32,6 +34,8 @@ DISPATCH_STEPS = {
 	"Dispatch & watch — validation-refresh": "validation-refresh",
 	"Dispatch internal-orchestrate.yml with multi-issue project": "orchestrate",
 	"Dispatch internal-validate.yml standalone": "validate",
+	"Dispatch & watch — update_workflows (allow_workflow_edits=false)": "update_workflows",
+	"Dispatch & watch — internal-memory-maintenance": "internal-memory-maintenance",
 }
 
 JOBS_REPLY = (
@@ -75,9 +79,9 @@ def _block(run: str) -> str:
 	return run[start:end + len(BLOCK_END)]
 
 
-def test_three_dispatch_steps_carry_identical_timeout_block() -> None:
+def test_dispatch_steps_carry_identical_timeout_block() -> None:
 	blocks = {name: _block(run) for name, run in _step_runs().items()}
-	assert len(set(blocks.values())) == 1, "the three timeout blocks must be byte-identical"
+	assert len(set(blocks.values())) == 1, "the timeout blocks must be byte-identical"
 	block = next(iter(blocks.values()))
 	assert 'exit "${DW_TIMEOUT_RC}"' in block
 	assert "/cancel" in block and "-X POST" in block
@@ -108,6 +112,7 @@ def _run_step(
 	cancel_switch: str | None = None,
 	jobs_fail: bool = False,
 	cancel_fail: bool = False,
+	jobs_reply: str = JOBS_REPLY,
 ) -> tuple[int, str, list[str]]:
 	bash = shutil.which("bash")
 	assert bash is not None
@@ -144,7 +149,7 @@ def _run_step(
 			"GITHUB_RUN_ID": "555",
 			"GITHUB_OUTPUT": str(output),
 			"STUB_GH_LOG": str(gh_log),
-			"STUB_JOBS_REPLY": JOBS_REPLY,
+			"STUB_JOBS_REPLY": jobs_reply,
 			"STUB_JOBS_FAIL": "1" if jobs_fail else "0",
 			"STUB_CANCEL_FAIL": "1" if cancel_fail else "0",
 		}
@@ -200,6 +205,14 @@ def test_failed_jobs_read_reports_unknown_and_still_cancels() -> None:
 		assert [c for c in calls if "/cancel" in c], (name, calls)
 
 
+def test_jobs_reply_without_jobs_list_reports_unknown() -> None:
+	run = _step_runs()["Dispatch internal-validate.yml standalone"]
+	rc, out, calls = _run_step(run, _timeout_watcher("validate"), jobs_reply='{"message":"Not Found"}')
+	assert rc == 1, out
+	assert "jobs=unknown queued_without_runner=unknown" in out, out
+	assert [c for c in calls if "/cancel" in c], calls
+
+
 def test_non_timeout_failure_cancels_nothing() -> None:
 	watcher = 'echo "Watching run #4242"\necho "::error::validate run #4242 concluded failure"\nexit 1\n'
 	for name, run in _step_runs().items():
@@ -213,6 +226,111 @@ def test_successful_watch_makes_no_extra_calls() -> None:
 	rc, out, calls = _run_step(run, 'echo "Watching run #4242"\nexit 0\n')
 	assert rc == 0, out
 	assert calls == [], calls
+
+
+REAL_WATCHER_GH_STUB = """#!/usr/bin/env bash
+echo "$*" >> "${STUB_GH_LOG}"
+[ "${1:-}" = "workflow" ] && exit 0
+shift
+jq_expr=""
+path=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--jq) jq_expr="$2"; shift 2 ;;
+		-X) shift 2 ;;
+		*) path="$1"; shift ;;
+	esac
+done
+case "${path}" in
+	*"/runs?event=workflow_dispatch&per_page=1") body='{"workflow_runs":[]}' ;;
+	*"/runs?event=workflow_dispatch&"*) body='{"workflow_runs":[{"id":4242,"created_at":"2026-11-15T01:26:16Z"}]}' ;;
+	*"/actions/runs/4242/jobs?per_page=100") body="${STUB_JOBS_REPLY}" ;;
+	*"/actions/runs/4242/cancel") body='{}' ;;
+	*"/actions/runs/4242") body='{"status":"queued","conclusion":null}' ;;
+	*) exit 1 ;;
+esac
+if [ -n "${jq_expr}" ]; then
+	printf '%s' "${body}" | jq -r "${jq_expr}"
+else
+	printf '%s\\n' "${body}"
+fi
+"""
+
+
+def _run_real_watcher(cancel_switch: str | None = None) -> tuple[int, str, list[str]]:
+	"""Run the unmodified watcher against a stub gh whose child run stays queued,
+	followed by the step's timeout block, so a drift between the watcher's
+	timeout line and the block's sed extraction fails here."""
+	bash = shutil.which("bash")
+	assert bash is not None
+	block = _block(_step_runs()["Dispatch internal-validate.yml standalone"])
+	script = (
+		"set -euo pipefail\n"
+		'DW_TIMEOUT_LOG="$(mktemp)"\n'
+		"DW_TIMEOUT_RC=0\n"
+		"bash ./scripts/dispatch_and_watch_workflow_run.sh \\\n"
+		'  --repo "${TEST_REPO}" \\\n'
+		"  --workflow internal-validate.yml \\\n"
+		"  --display-name validate \\\n"
+		"  --registration-timeout-secs 30 \\\n"
+		"  --registration-poll-interval-secs 1 \\\n"
+		"  --completion-timeout-secs 2 \\\n"
+		"  --completion-poll-interval-secs 1 \\\n"
+		f"  {PIPE_LINE}\n"
+		f"{block}\n"
+	)
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		(tmp / "scripts").mkdir()
+		for helper in ("dispatch_and_watch_workflow_run.sh", "comprehensive_test_and_release_gh_api.sh"):
+			shutil.copyfile(REPO_ROOT / "scripts" / helper, tmp / "scripts" / helper)
+		bindir = tmp / "bin"
+		bindir.mkdir()
+		gh_log = tmp / "gh.log"
+		gh_log.write_text("", encoding="utf-8")
+		gh = bindir / "gh"
+		gh.write_text(REAL_WATCHER_GH_STUB, encoding="utf-8")
+		gh.chmod(0o755)
+		output = tmp / "github_output"
+		output.write_text("", encoding="utf-8")
+		env = {
+			"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+			"HOME": str(tmp),
+			"TEST_REPO": "owner/repo",
+			"GITHUB_OUTPUT": str(output),
+			"STUB_GH_LOG": str(gh_log),
+			"STUB_JOBS_REPLY": JOBS_REPLY,
+		}
+		if cancel_switch is not None:
+			env["DISPATCH_WATCH_CANCEL_ON_TIMEOUT"] = cancel_switch
+		proc = subprocess.run(
+			[bash, "-c", script],
+			cwd=tmp,
+			env=env,
+			capture_output=True,
+			text=True,
+			check=False,
+			timeout=120,
+		)
+		calls = [line for line in gh_log.read_text(encoding="utf-8").splitlines() if line]
+	return proc.returncode, proc.stdout + proc.stderr, calls
+
+
+def test_real_watcher_against_queued_stub_times_out_and_cancels_once() -> None:
+	rc, out, calls = _run_real_watcher()
+	assert rc == 1, out
+	assert "status=queued" in out, out
+	assert "::error::validate run #4242 timed out" in out, out
+	assert "::warning::Timed-out child run #4242: jobs=3 queued_without_runner=2" in out, out
+	cancels = [c for c in calls if "/cancel" in c]
+	assert cancels == ["api -X POST repos/owner/repo/actions/runs/4242/cancel"], calls
+
+
+def test_real_watcher_with_switch_off_issues_no_cancel() -> None:
+	rc, out, calls = _run_real_watcher(cancel_switch="false")
+	assert rc == 1, out
+	assert "::error::validate run #4242 timed out" in out, out
+	assert not [c for c in calls if "/cancel" in c], calls
 
 
 def main() -> int:

@@ -4535,7 +4535,7 @@ jobs:
           if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
             DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
             if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
-              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs // []) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs | arrays) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
               if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
                 DW_TIMEOUT_JOBS="unknown unknown"
               fi
@@ -4584,6 +4584,8 @@ jobs:
           # Retry transient GitHub API failures — see the validation-refresh
           # dispatch above for context (release v1.13.8 was blocked here by
           # a single HTTP 500 from /dispatches in run #26328466709).
+          DW_TIMEOUT_LOG="$(mktemp)"
+          DW_TIMEOUT_RC=0
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -4596,7 +4598,35 @@ jobs:
             --dispatch-backoff-base-secs 2 \
             --allowed-conclusions success,skipped \
             --field allow_workflow_edits=false \
-            --field alert_msg_level=SILENT
+            --field alert_msg_level=SILENT \
+            | tee "${DW_TIMEOUT_LOG}" || DW_TIMEOUT_RC=$?
+          # Dispatch-watch timeout: cancel the timed-out child run (#9532).
+          # Run 43590943288: three children stayed queued for hours with no runner,
+          # and the orphaned orchestrate child later created a tracking issue the
+          # cleanup could not see. Do not lengthen the watch timeouts as a fix.
+          # The step still fails with the watcher's exit code.
+          if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
+            DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
+            if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs | arrays) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+                DW_TIMEOUT_JOBS="unknown unknown"
+              fi
+              echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
+              DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
+              if [ "${DW_TIMEOUT_CANCEL}" = "false" ]; then
+                echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
+              elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
+                echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              else
+                echo "::warning::Could not cancel timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              fi
+            fi
+            rm -f "${DW_TIMEOUT_LOG}"
+            exit "${DW_TIMEOUT_RC}"
+          fi
+          rm -f "${DW_TIMEOUT_LOG}"
+          # End dispatch-watch timeout handling.
 
       - name: "Soft-error analyser (update_workflows)"
         if: always() && steps.dispatch_update_workflows.outputs.run_id != ''
@@ -4627,6 +4657,8 @@ jobs:
           # Retry transient GitHub API failures — see the validation-refresh
           # dispatch above for context (release v1.13.8 was blocked by a
           # single HTTP 500 from /dispatches in run #26328466709).
+          DW_TIMEOUT_LOG="$(mktemp)"
+          DW_TIMEOUT_RC=0
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -4636,7 +4668,35 @@ jobs:
             --completion-timeout-secs 2400 \
             --completion-poll-interval-secs 15 \
             --dispatch-max-attempts 5 \
-            --dispatch-backoff-base-secs 2
+            --dispatch-backoff-base-secs 2 \
+            | tee "${DW_TIMEOUT_LOG}" || DW_TIMEOUT_RC=$?
+          # Dispatch-watch timeout: cancel the timed-out child run (#9532).
+          # Run 43590943288: three children stayed queued for hours with no runner,
+          # and the orphaned orchestrate child later created a tracking issue the
+          # cleanup could not see. Do not lengthen the watch timeouts as a fix.
+          # The step still fails with the watcher's exit code.
+          if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
+            DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
+            if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs | arrays) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+                DW_TIMEOUT_JOBS="unknown unknown"
+              fi
+              echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
+              DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
+              if [ "${DW_TIMEOUT_CANCEL}" = "false" ]; then
+                echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
+              elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
+                echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              else
+                echo "::warning::Could not cancel timed-out child run #${DW_TIMEOUT_RUN_ID}"
+              fi
+            fi
+            rm -f "${DW_TIMEOUT_LOG}"
+            exit "${DW_TIMEOUT_RC}"
+          fi
+          rm -f "${DW_TIMEOUT_LOG}"
+          # End dispatch-watch timeout handling.
 
       - name: "Soft-error analyser (memory_maintenance)"
         if: always() && steps.dispatch_memory_maintenance.outputs.run_id != ''
@@ -4746,7 +4806,7 @@ jobs:
           if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
             DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
             if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
-              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs // []) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs | arrays) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
               if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
                 DW_TIMEOUT_JOBS="unknown unknown"
               fi
@@ -5053,7 +5113,7 @@ jobs:
           if [ "${DW_TIMEOUT_RC}" -ne 0 ]; then
             DW_TIMEOUT_RUN_ID="$(sed -n 's/^::error::.* run #\([0-9][0-9]*\) timed out$/\1/p' "${DW_TIMEOUT_LOG}" | tail -n 1)"
             if [[ "${DW_TIMEOUT_RUN_ID}" =~ ^[0-9]+$ ]]; then
-              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs // []) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
+              DW_TIMEOUT_JOBS="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/jobs?per_page=100" 2>/dev/null | jq -r '(.jobs | arrays) as $j | "\($j | length) \([$j[] | select(.status == "queued" and ((.runner_name // "") == ""))] | length)"' 2>/dev/null || true)"
               if ! [[ "${DW_TIMEOUT_JOBS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
                 DW_TIMEOUT_JOBS="unknown unknown"
               fi
