@@ -797,7 +797,7 @@ review_prepush_test_gate_repair()
 	# through to "ran" (today's behaviour).
 	if [ "${rpg_pre_repair_ok}" = true ] && [ -n "${rpg_pre_repair_changed}" ] \
 		&& [ "${rpg_pre_repair_status}" = pass ] && [ "${rpg_pre_repair_failures}" = 0 ] \
-		&& rpg_post_repair_changed="$(review_prepush_test_gate_changed_checked)" && [ -z "${rpg_post_repair_changed}" ]; then
+		&& [ "${rpg_post_repair_ok}" = true ] && [ -z "${rpg_post_repair_changed}" ]; then
 		review_prepush_test_gate_revert all || true
 		review_prepush_test_gate_log "outcome=repair_reverted reason=passing_change_erased"
 		rpg_repair="reverted (it removed the whole change though no test failed)"

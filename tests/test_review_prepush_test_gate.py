@@ -446,13 +446,16 @@ def test_repair_diagnostic_line_is_bounded_and_sanitised(tmp_path):
 	(repo / "extra").mkdir()
 	for index in range(24):
 		(repo / "extra" / f"f{index:02d}.txt").write_text("x\n", encoding="utf-8")
-	(repo / "extra" / "odd name=x,y.txt").write_text("x\n", encoding="utf-8")
+	# Sorts before extra/f00.txt, so it stays inside the 20-path window and
+	# reaches the sanitiser.
+	(repo / "extra" / "a odd=x,y.txt").write_text("x\n", encoding="utf-8")
 	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 3\\n' > lib/a.py\n", encoding="utf-8")
 	proc = _run_step(tmp_path, repo, env)
 	assert "STEP_RETURNED" in proc.stdout, proc.stderr
 	diag = _repair_diag(proc.stderr)
 	assert len(diag) == 1, proc.stderr
 	assert diag[0]["before"] == "26" and diag[0]["truncated"] == "1"
+	assert "extra/a_odd_x_y.txt" in diag[0]["before_paths"].split(",")
 	for key in ("before_paths", "after_paths"):
 		paths = diag[0][key].split(",")
 		assert 1 <= len(paths) <= 20
