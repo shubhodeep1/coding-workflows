@@ -120,9 +120,26 @@ def test_workflow_run_dedup_reuses_open_issue_per_pr_and_workflow() -> None:
 	assert 'log "skip reason=duplicate_open_issue' in script
 
 
+def test_consumer_wrapper_ignores_default_branch_runs_it_never_triages() -> None:
+	"""Default-branch runs (crons, comment wrappers, pushes) must not start a run.
+
+	The workflow_run job triages only `pull_request` runs, which run on the PR
+	head branch, so the trigger drops the default branch at the event filter
+	instead of creating one skipped triage run per consumer run.
+	"""
+	data = _load(CONSUMER)
+	trigger = _on(data)["workflow_run"]
+	assert trigger.get("branches-ignore") == ["main", "master"], trigger
+	assert "branches" not in trigger, trigger
+	condition = data["jobs"]["triage-workflow-run"]["if"]
+	assert "github.event.workflow_run.event == 'pull_request'" in condition
+	assert not _evaluate(condition, "workflow_run", _run_event("Tests", event="schedule"))
+	assert not _evaluate(condition, "workflow_run", _run_event("Tests", event="push"))
+
+
 def test_consumer_wrapper_listens_to_every_workflow_but_its_own() -> None:
 	data = _load(CONSUMER)
-	assert _on(data)["workflow_run"] == {"workflows": ["*"], "types": ["completed"]}
+	assert _on(data)["workflow_run"] == {"workflows": ["*"], "types": ["completed"], "branches-ignore": ["main", "master"]}
 	condition = data["jobs"]["triage-workflow-run"]["if"]
 	assert _evaluate(condition, "workflow_run", _run_event("Tests"))
 	assert _evaluate(condition, "workflow_run", _run_event("AI Integration Tests"))
