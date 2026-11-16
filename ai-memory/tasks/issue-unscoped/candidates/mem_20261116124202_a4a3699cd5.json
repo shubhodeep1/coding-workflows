@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml` (step selection and placement, comment at lines 1043-1063); `tests/test_ci_poll_test_sharding.py` (`MovedHeal9420StepsContractTest`, selection contract coverage)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Per-step durations for run 43314513853 were not available, `.github/workflows/ci.yml` lines 1043-1063 (1045-1055 per openai_gpt-6-luna) and the changelog fragment state the pick is an estimate from planning-sandbox timings, `tests/test_ci_poll_test_sharding.py` lines 3892-3897 and 3934-3980 verify placement and setup order but not that the moved steps were the slowest or that the target had the most headroom. Severity disagreement: anthropic_claude-sonnet-5_5 rated NIT, minimax_minimax-m3 and openai_gpt-6-luna rated MAJOR. Step names, job names and `timeout-minutes` are preserved.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml` (the choice of moved steps and target job); `tests/test_ci_poll_test_sharding.py` (coverage for that choice).\nEvidence of absence: Per-step durations for run 43314513853 were not available. The workflow comment at `.github/workflows/ci.yml` lines 1043-1063, the changelog fragment and the `tests/test_ci_poll_test_sharding.py` registry comment all say the pick is an estimate. The repo holds no timing data against which the \"slowest\" or \"most headroom\" criteria could be checked. The other parts of the requirement are met. This is a documented limitation that cannot be closed without data, and was already deferred in four earlier autofix passes.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml` lines 1043-1059 (the comment justifying the step selection) and the actual step placement; the matching `tests/test_ci_poll_test_sharding.py` `MovedHeal9420StepsContractTest` block.\nEvidence of absence: The comment at `.github/workflows/ci.yml:1043-1059` and `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md:1-4` state the pick is an estimate from planning-sandbox timings, not a measurement. `tests/test_ci_poll_test_sharding.py:3934-3980` (`MovedHeal9420StepsContractTest`) never asserts that the four steps chosen were the slowest, nor that `tests-hooks-and-orchestrator` had the most measured headroom. Step names, job names, `timeout-minutes` and the no-new-required-job-names constraint are preserved.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom.\u201d\nExpected change site: `.github/workflows/ci.yml`, step selection and placement; `tests/test_ci_poll_test_sharding.py`, selection contract coverage.\nEvidence of absence: `.github/workflows/ci.yml` lines 1045-1055 state the run\u2019s step durations were unavailable and the selection is an estimate; the target was selected from its own prior job total, without a comparison showing it had the most headroom. `tests/test_ci_poll_test_sharding.py` lines 3892-3897 and 3934-3980 verify placement and setup order, but not that these were the slowest steps or that the target had the most headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5688aaac7945732a6609579b52f7533f15f3b9b1559144d5a86bf44fa74205b0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9430,
+    "run_id": "43739185251",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43739185251",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116124202_a4a3699cd5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9430,
+    "run_id": "43739185251"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T12:42:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
