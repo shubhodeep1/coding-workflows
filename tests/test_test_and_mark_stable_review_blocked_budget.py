@@ -913,7 +913,7 @@ gh_api_safe_quiet_print() {
   local response="" entry=""
   entry=$(jq -c --argjson now "$(<"${RUNNER_TEMP}/clock")" '(map(select($now < .until)) | first) // last' "${RUNNER_TEMP}/timeline.json")
   case "$1" in
-    */actions/runs?branch=*) response=$(printf '%s' "$entry" | jq -c '{workflow_runs: [.run]}') ;;
+    */actions/runs?branch=*) response=$(printf '%s' "$entry" | jq -c '{workflow_runs: ([.run] | map(select(. != null)))}') ;;
     */actions/runs/*/jobs?*)
       if [ "$(printf '%s' "$entry" | jq -r '.jobs == null')" = true ]; then return 1; fi
       response=$(printf '%s' "$entry" | jq -c '.jobs') ;;
@@ -1046,6 +1046,26 @@ def test_phase4_runner_wait_ceiling_after_unanswered_poll_still_names_the_queue(
 	assert "was still waiting for a runner" not in result.stdout
 	assert "Review phase exceeded its 10-minute total wall-clock budget" in result.stdout
 	assert "Review phase stalled" not in result.stdout
+
+
+def test_phase4_runner_wait_survives_an_empty_runs_lookup_past_base_deadline() -> None:
+	# Pending past the base deadline (start+600), then one runs lookup comes
+	# back empty (poll at start+725) far below the ceiling (start+1800): the
+	# extension holds, no false outcome=ceiling, and the run then completes.
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 700, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 760, "run": None, "jobs": None},
+		{"until": _RW_START + 900, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": _rw_run("completed", "success"), "jobs": _rw_jobs()},
+	])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=30"]
+	assert "outcome=ceiling" not in result.stdout
+	assert "Review phase exceeded its" not in result.stdout
+	assert result.stdout.count("outcome=waiting") == 1
+	assert result.stdout.count("outcome=started") == 1
+	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=started waited_seconds=9\d\d", result.stdout)
+	assert "(runner wait unconfirmed this poll, " in result.stdout
 
 
 def test_phase4_active_step_without_state_change_still_stalls() -> None:

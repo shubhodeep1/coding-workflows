@@ -115,6 +115,10 @@ review_phase_deadline_extension_allowed() {
   [ $((ext_now + ext_margin)) -lt "${REVIEW_PHASE_DEADLINE_CEILING}" ] || return 1
   # One poll to find the successor of a just-dropped run or pin.
   if [ "${REVIEW_PHASE_HANDOFF_PENDING:-0}" = "1" ]; then return 0; fi
+  # An empty runs lookup during an open runner-wait stretch says nothing
+  # about the run (#9480); keep the stretch alive, still bounded by the
+  # ceiling check above and the inactivity rules.
+  if [ -n "${REVIEW_RUNNER_WAIT_RUN_ID:-}" ] && ! [[ "$ext_run_id" =~ ^[0-9]+$ ]]; then return 0; fi
   [[ "$ext_run_id" =~ ^[0-9]+$ ]] || return 1
   case ",${BAIT_UNCOVERED_RUN_IDS:-}," in
     *",${ext_run_id},"*) return 1 ;;
@@ -354,7 +358,12 @@ while true; do
       # stretch stays open across a poll that did not answer (empty runs
       # lookup, failed or unreadable jobs read), and the queue diagnosis
       # must survive that poll (#9480).
-      if [ -n "$REVIEW_RUNNER_WAIT_SINCE" ] && [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ]; then
+      # Only when the ceiling itself is reached: other refusals keep the
+      # generic wall-clock error alone, so outcome=ceiling stays true.
+      rw_margin="${POLL_INTERVAL:-0}"
+      [[ "$rw_margin" =~ ^[0-9]+$ ]] || rw_margin=0
+      if [ -n "$REVIEW_RUNNER_WAIT_SINCE" ] && [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ] \
+          && [ $((NOW + rw_margin)) -ge "${REVIEW_PHASE_DEADLINE_CEILING}" ]; then
         rw_waited=$((NOW - REVIEW_RUNNER_WAIT_SINCE))
         echo "E2E_REVIEW_RUNNER_WAIT run=${REVIEW_RUNNER_WAIT_RUN_ID} outcome=ceiling waited_seconds=${rw_waited}"
         if review_waiting_for_runner; then
