@@ -4544,7 +4544,12 @@ jobs:
               fi
               echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
               DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
-              if [ "${DW_TIMEOUT_CANCEL}" = "false" ]; then
+              # Repo boolean convention: unset, empty or true cancels; false skips;
+              # any other value also skips and warns without printing the value.
+              if [ "${DW_TIMEOUT_CANCEL}" != "true" ]; then
+                if [ "${DW_TIMEOUT_CANCEL}" != "false" ]; then
+                  echo "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false"
+                fi
                 echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
               elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
                 echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
@@ -4617,7 +4622,12 @@ jobs:
               fi
               echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
               DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
-              if [ "${DW_TIMEOUT_CANCEL}" = "false" ]; then
+              # Repo boolean convention: unset, empty or true cancels; false skips;
+              # any other value also skips and warns without printing the value.
+              if [ "${DW_TIMEOUT_CANCEL}" != "true" ]; then
+                if [ "${DW_TIMEOUT_CANCEL}" != "false" ]; then
+                  echo "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false"
+                fi
                 echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
               elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
                 echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
@@ -4687,7 +4697,12 @@ jobs:
               fi
               echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
               DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
-              if [ "${DW_TIMEOUT_CANCEL}" = "false" ]; then
+              # Repo boolean convention: unset, empty or true cancels; false skips;
+              # any other value also skips and warns without printing the value.
+              if [ "${DW_TIMEOUT_CANCEL}" != "true" ]; then
+                if [ "${DW_TIMEOUT_CANCEL}" != "false" ]; then
+                  echo "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false"
+                fi
                 echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
               elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
                 echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
@@ -4818,7 +4833,12 @@ jobs:
               fi
               echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
               DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
-              if [ "${DW_TIMEOUT_CANCEL}" = "false" ]; then
+              # Repo boolean convention: unset, empty or true cancels; false skips;
+              # any other value also skips and warns without printing the value.
+              if [ "${DW_TIMEOUT_CANCEL}" != "true" ]; then
+                if [ "${DW_TIMEOUT_CANCEL}" != "false" ]; then
+                  echo "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false"
+                fi
                 echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
               elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
                 echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"
@@ -5128,7 +5148,12 @@ jobs:
               fi
               echo "::warning::Timed-out child run #${DW_TIMEOUT_RUN_ID}: jobs=${DW_TIMEOUT_JOBS% *} queued_without_runner=${DW_TIMEOUT_JOBS#* }"
               DW_TIMEOUT_CANCEL="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
-              if [ "${DW_TIMEOUT_CANCEL}" = "false" ]; then
+              # Repo boolean convention: unset, empty or true cancels; false skips;
+              # any other value also skips and warns without printing the value.
+              if [ "${DW_TIMEOUT_CANCEL}" != "true" ]; then
+                if [ "${DW_TIMEOUT_CANCEL}" != "false" ]; then
+                  echo "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false"
+                fi
                 echo "Cancel of timed-out child run #${DW_TIMEOUT_RUN_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
               elif timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${DW_TIMEOUT_RUN_ID}/cancel" >/dev/null 2>&1; then
                 echo "Cancel requested for timed-out child run #${DW_TIMEOUT_RUN_ID}"

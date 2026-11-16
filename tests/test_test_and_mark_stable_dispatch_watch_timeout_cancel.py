@@ -205,6 +205,26 @@ def test_switch_off_skips_the_cancel() -> None:
 			assert "Cancel of timed-out child run #4242 skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)" in out
 
 
+def test_unrecognised_switch_value_skips_the_cancel_and_warns() -> None:
+	"""Repo boolean convention: a value other than true/false turns the cancel off."""
+	for switch in ("off", "0", "flase"):
+		for name, run in _step_runs().items():
+			rc, out, calls = _run_step(run, _timeout_watcher(DISPATCH_STEPS[name]), cancel_switch=switch)
+			assert rc == 1, (name, out)
+			assert not [c for c in calls if "/cancel" in c], (name, switch, calls)
+			assert "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false" in out, (name, out)
+			assert switch not in out.split("::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT", 1)[1].split("\n", 1)[0]
+
+
+def test_true_or_empty_switch_still_cancels() -> None:
+	run = _step_runs()["Dispatch internal-validate.yml standalone"]
+	for switch in ("true", "TRUE", ""):
+		rc, out, calls = _run_step(run, _timeout_watcher("validate"), cancel_switch=switch)
+		assert rc == 1, out
+		assert [c for c in calls if "/cancel" in c], (switch, calls)
+		assert "neither true nor false" not in out, out
+
+
 def test_failed_cancel_only_warns() -> None:
 	for name, run in _step_runs().items():
 		rc, out, _calls = _run_step(run, _timeout_watcher(DISPATCH_STEPS[name]), cancel_fail=True)
