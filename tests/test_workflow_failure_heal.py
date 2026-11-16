@@ -5770,7 +5770,7 @@ def test_failure_headline_falls_back_to_a_bash_diagnostic_line() -> None:
 
 
 def test_reviewer_failure_evidence_keeps_the_bash_diagnostic_line() -> None:
-	evidence = heal.reviewer_failure_evidence([RENDER_PROMPT_CRASH, "  | other/path/render_prompt.sh: line 306: 1abc: invalid variable name\n"])
+	evidence = heal.reviewer_failure_evidence([], [RENDER_PROMPT_CRASH, "  | other/path/render_prompt.sh: line 307: 2abc: invalid variable name\n"])
 	assert evidence.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
 	assert heal.failure_headline([evidence]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
 	assert "line 12" not in heal.reviewer_failure_evidence(["review.sh: line 12: looks fine\n"])
@@ -5789,6 +5789,19 @@ def test_reviewer_failure_evidence_keeps_the_bash_diagnostic_line() -> None:
 	mixed = heal.reviewer_failure_evidence([slot_noise], ["starting\n", RENDER_PROMPT_CRASH])
 	assert mixed.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
 	assert heal.failure_headline([mixed]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
+	# A diagnostic-shaped slot-log line (raw model-CLI stderr) is never kept.
+	assert heal.reviewer_failure_evidence(["bash: line 3: foo: command not found\n", RENDER_PROMPT_CRASH]) == "reviewers_failed=true\n"
+	# review_run_reviewers.sh re-emits the model CLI's stderr tail to the
+	# step's stderr indented `  | `: neither its ERROR line nor its diagnostic
+	# is kept, so the crash line still names the failure.
+	indented = heal.reviewer_failure_evidence([], [
+		"  | ERROR 2026-11-16 request abcxyz rejected\n",
+		"  | bash: line 3: foo: command not found\n",
+		RENDER_PROMPT_CRASH,
+	])
+	assert indented.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
+	# A kept bash diagnostic is redacted like the plain ERROR line.
+	assert "ghp_secret" not in heal.reviewer_failure_evidence([], ["deploy.sh: line 12: invalid token ghp_secretvalue123\n"])
 
 
 def test_reviewer_crash_fingerprint_carries_the_bash_diagnostic() -> None:
@@ -5806,6 +5819,9 @@ def test_reviewer_crash_fingerprint_carries_the_bash_diagnostic() -> None:
 	assert heal.autofix_failure_fingerprint(failure_reason="reviewers_failed", evidence_text=moved)["fp"] == fp_crash
 	# Review text shaped like a location is not a crash and stays out.
 	assert heal.error_signature("src/review.sh: line 12: looks fine\n") == "no-error-lines"
+	# A diagnostic whose message only says "errors" / "fail" still names itself.
+	assert heal.error_signature("x.sh: line 3: network errors detected\n") != "no-error-lines"
+	assert heal.error_signature("x.sh: line 5: upload failing\n") != "no-error-lines"
 	# An earlier bucket still wins, so existing signatures keep their value.
 	assert heal.error_signature("::error::boom\n" + RENDER_PROMPT_CRASH) == heal.error_signature("::error::boom\n")
 

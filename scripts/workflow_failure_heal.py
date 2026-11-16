@@ -583,7 +583,7 @@ _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
 	re.compile(
 		r"^(?:\S*/)?(?:[A-Za-z0-9_.-]+\.sh|bash|sh|environment): line [0-9]+: .*(?:invalid|unbound variable|command not found"
 		r"|syntax error|bad substitution|no such file or directory|permission denied|ambiguous redirect|expression expected"
-		r"|too many arguments|readonly variable|not a valid identifier|bad array subscript|division by 0|unexpected)",
+		r"|too many arguments|readonly variable|not a valid identifier|bad array subscript|division by 0|unexpected|error|fail)",
 		re.IGNORECASE,
 	),
 )
@@ -3998,8 +3998,10 @@ REVIEWER_FAILURE_HELPER_LINES_MAX = 10
 # name`. The directory is dropped so the fingerprint stays stable across
 # runner paths; see _normalise_bash_diagnostic.
 # Only a shell script name (or bash's own `bash` / `sh` / `environment`) and an
-# error-shaped message count, so review text in a slot log never feeds the
-# fingerprint.
+# error-shaped message count. reviewer_failure_evidence keeps one only from the
+# step's own stderr and never from a `  | `-indented line (the model CLI's
+# stderr that review_run_reviewers.sh re-emits), so model output in a slot log
+# or that indented tail never feeds the fingerprint.
 _BASH_DIAGNOSTIC_LINE_RE = re.compile(r"^(?:\S*/)?(?P<script>[A-Za-z0-9_.-]+\.sh|bash|sh|environment): line (?P<line>[0-9]+): (?P<msg>\S.*)$")
 _BASH_DIAGNOSTIC_MSG_RE = re.compile(
 	r"invalid|unbound variable|command not found|syntax error|bad substitution|no such file or directory|permission denied"
@@ -4033,9 +4035,11 @@ def reviewer_failure_evidence(log_texts: Iterable[str], stage_stderr_texts: Iter
 	keeps only stable fields: no timestamps, attempt counts or run ids.
 
 	``stage_stderr_texts`` (issue #9533) is the reviewer step's own stderr. It
-	is read after the logs, the same way, and is the only source of the one
-	plain ``ERROR: <msg>`` line kept: slot logs carry raw model-CLI stderr and
-	review prose, whose ``ERROR`` lines must not become the headline or the
+	is read after the logs, the same way, and is the only source of the kept
+	bash diagnostics and the one plain ``ERROR: <msg>`` line, and only from its
+	non-indented lines: slot logs carry raw model-CLI stderr and review prose,
+	and review_run_reviewers.sh re-emits the model CLI's stderr tail to the
+	step's stderr indented ``  | ``. Neither may become the headline or the
 	fingerprint.
 	"""
 	slot_codes: dict[str, str] = {}
@@ -4047,8 +4051,12 @@ def reviewer_failure_evidence(log_texts: Iterable[str], stage_stderr_texts: Iter
 	for text, from_stage_stderr in sources:
 		for raw_line in sanitize_text(text).split("\n"):
 			line = raw_line.strip()
-			if line.startswith("| "):
+			slot_stderr_indented = line.startswith("| ")
+			if slot_stderr_indented:
 				line = line[2:].strip()
+			# Issue #9533: only a non-indented line of the step's own stderr
+			# may supply a bash diagnostic or the plain ERROR line.
+			own_stage_line = from_stage_stderr and not slot_stderr_indented
 			slot_match = _REVIEWER_SLOT_EXIT_RE.search(line)
 			if slot_match:
 				slot_codes[single_line(slot_match.group("slot"), 100)] = slot_match.group("rc")
@@ -4062,16 +4070,16 @@ def reviewer_failure_evidence(log_texts: Iterable[str], stage_stderr_texts: Iter
 				summariser_code = "0"
 				summariser_empty_stdout_prefixes.add(empty_stdout_match.group("prefix"))
 				continue
-			bash_diagnostic = _normalise_bash_diagnostic(line)
+			bash_diagnostic = _normalise_bash_diagnostic(line) if own_stage_line else ""
 			if bash_diagnostic:
 				# Issue #9533: keep the shell's own crash line (directory
 				# stripped) so the fingerprint and the headline name the cause.
 				if len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
-					bash_diagnostic = single_line(bash_diagnostic, 300)
+					bash_diagnostic = single_line(redact_secrets(bash_diagnostic), 300)
 					if bash_diagnostic not in helper_lines:
 						helper_lines.append(bash_diagnostic)
 				continue
-			plain_error = _PLAIN_ERROR_LINE_RE.match(line) if from_stage_stderr else None
+			plain_error = _PLAIN_ERROR_LINE_RE.match(line) if own_stage_line else None
 			if plain_error:
 				# Issue #9533 (spec item 3): keep the first plain `ERROR: <msg>`
 				# line of the step's own stderr too, so failure-headline (which
