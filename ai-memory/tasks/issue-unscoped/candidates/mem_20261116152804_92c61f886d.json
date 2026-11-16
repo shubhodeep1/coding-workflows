@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/9418-cleanup-cancel-dispatch-review-run.md:2 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The fragment says \"the step makes no API call\" on the invalid-input path, but the cleanup still issues the branch-deletion API call afterward.\n  WHY: This is a documentation wording defect, not a runtime bug. The reviewers rated it NIT. The fragment's own closing sentence says cleanup goes on to delete the branch. Two reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) considered the same wording and rejected it as a finding, because \"no API call\" refers to the dispatch-review listing and cancel calls.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.d/9418-cleanup-cancel-dispatch-review-run.md:2 | severity=NIT | confidence=4\n  PROBLEM: The fragment incorrectly states that \"the step makes no API call\" in the case of invalid inputs, while the cleanup script proceeds to invoke the branch-deletion API.\n  WHY: Documentation misstates side effects; misleading for maintainers.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/9418-cleanup-cancel-dispatch-review-run.md:2 | severity=NIT | confidence=4\n  PROBLEM: The fragment says \"the step makes no API call and logs Skipped dispatch review-run cancel (missing or invalid inputs)\" for invalid inputs. The else-branch of the guard at `.github/workflows/test-and-mark-stable.yml:3916-3926` is followed by the unconditional branch-delete at `.github/workflows/test-and-mark-stable.yml:3921-3924`, so the `git/refs/heads/${BRANCH}` DELETE call still runs. The same sentence ends \"...In every case cleanup continues and goes on to delete the branch\", so the wording contradicts it.\n  WHY: This is a documentation wording defect, not a runtime bug. The workflow code at `test-and-mark-stable.yml:3916-3934` correctly skips only the dispatch-cancel API.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/9418-cleanup-cancel-dispatch-review-run.md:2 | severity=NIT | confidence=4\n  PROBLEM: The fragment says the step \"makes no API call\" when cancellation inputs are invalid. The cleanup step still calls the branch-deletion API afterward at `.github/workflows/test-and-mark-stable.yml:3931-3933`.\n  WHY: The documentation misstates the cleanup's side effects. Invalid cancellation inputs skip run cancellation but do not prevent the branch-deletion request.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7abfe2151141346b62f202f2504cfa7ae942779dd9666a86645c7184cd02a2d9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9456,
+    "run_id": "43858416563",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43858416563",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116152804_92c61f886d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9456,
+    "run_id": "43858416563"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T15:28:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
