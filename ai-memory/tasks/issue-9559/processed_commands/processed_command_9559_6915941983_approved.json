@@ -5,13 +5,24 @@
   "entry_id": "processed_command_9559_6915941983_approved",
   "issue_number": 9559,
   "metadata": {
+    "branch": "ai/issue-9559",
+    "changed_files": [
+      "changelog.d/9559-ci-budget-watch-unstarted-jobs.md",
+      "scripts/ci_budget_watch.py",
+      "tests/test_ci_budget_watch.py"
+    ],
+    "issue_number": 9559,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9559",
+    "pr_number": 9576,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/9576",
+    "run_attempt": "1",
+    "run_id": "43863588012",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/43863588012"
   },
   "run_attempt": 1,
   "run_id": "43863588012",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-16T13:33:29Z",
+  "status": "completed",
+  "timestamp": "2026-11-16T13:44:26Z",
   "workflow": "implement"
 }
