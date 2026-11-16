@@ -3554,6 +3554,7 @@ jobs:
               echo "AGENTS_MD_MATERIALITY: posted advisory comment (token=job)."
               materiality_post_via_pat=false
             elif ! grep -qiE 'HTTP 40[13]|Resource not accessible by integration|Bad credentials|Requires authentication' "${materiality_post_err}"; then
+              cat "${materiality_post_err}" >&2 || true
               echo "::warning::Failed to post AI Materiality Advisory comment on PR #${PR_NUMBER} (job token, not resent)."
               materiality_post_via_pat=false
             fi

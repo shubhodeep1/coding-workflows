@@ -823,18 +823,20 @@ rb_judge_post_issue_comment()
 {
   local rb_post_err rb_post_rc=0
   if [ -n "${RB_JUDGE_COMMENT_TOKEN:-}" ]; then
-    rb_post_err="$(mktemp "${TMPDIR:-/tmp}/rb_judge_post_err.XXXXXX")"
+    # A failed mktemp must not stop the post: errors then go to /dev/null and
+    # count as ambiguous (not resent).
+    rb_post_err="$(mktemp "${TMPDIR:-/tmp}/rb_judge_post_err.XXXXXX" 2>/dev/null)" || rb_post_err=/dev/null
     GH_TOKEN="${RB_JUDGE_COMMENT_TOKEN}" gh_retry gh api "repos/${REPOSITORY:-}/issues/${PR_NUMBER:-}/comments" "$@" 2>"${rb_post_err}" || rb_post_rc=$?
     if [ "${rb_post_rc}" -eq 0 ]; then
-      rm -f "${rb_post_err}"
+      [ "${rb_post_err}" = /dev/null ] || rm -f "${rb_post_err}"
       return 0
     fi
     if ! grep -qiE 'HTTP 40[13]|Resource not accessible by integration|Bad credentials|Requires authentication' "${rb_post_err}"; then
       cat "${rb_post_err}" >&2
-      rm -f "${rb_post_err}"
+      [ "${rb_post_err}" = /dev/null ] || rm -f "${rb_post_err}"
       return "${rb_post_rc}"
     fi
-    rm -f "${rb_post_err}"
+    [ "${rb_post_err}" = /dev/null ] || rm -f "${rb_post_err}"
     echo "RB_JUDGE_COMMENT_TOKEN refused; posting with GH_TOKEN." >&2
   fi
   gh_retry gh api "repos/${REPOSITORY:-}/issues/${PR_NUMBER:-}/comments" "$@"
