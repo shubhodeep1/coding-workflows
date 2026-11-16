@@ -77,6 +77,12 @@ SANDBOX_PYTHON_ENTRY_POINTS: dict[str, dict] = {
 		"tests": _RELAY_TESTS,
 		"families": ["clarify", "review"],
 	},
+	# ChatGPT reviewer relay bridge: review sandbox GPT slot (Refs #8969).
+	"/chatgpt_relay.py": {
+		"host": "scripts/chatgpt_codex_relay.py",
+		"tests": ["tests/test_review_chatgpt_reviewer_slot.py"],
+		"families": ["review"],
+	},
 	# codex-isolated-claude is the same bookworm base and Python as
 	# codex-isolated-codex plus the Claude CLI, so its files run there (D4).
 	"/support/claude_anthropic_relay.py": {
