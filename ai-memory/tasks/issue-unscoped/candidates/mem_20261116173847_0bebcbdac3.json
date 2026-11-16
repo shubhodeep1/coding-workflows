@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:4284-4287,4305-4310,4322-4325 | severity=major | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The three timeout override variables (`CI_SANDBOX_PYTHON_IMAGE_TIMEOUT_SECS`, `CI_SANDBOX_PYTHON_DERIVE_TIMEOUT_SECS`, `CI_SANDBOX_PYTHON_PYTEST_TIMEOUT_SECS`) are read from the shell environment, but the step's `env:` block maps only `CI_SANDBOX_PYTHON_FAMILY`, `CODEX_VERSION` and `OPENCODE_VERSION`.\n  WHY: Repository or organization variables are not exported to the step, so the documented overrides silently fall back to the defaults. Severity disagreement: google_gemini-3_1-flash-lite said MAJOR, while minimax_minimax-m3, openai_gpt-6-luna and z-ai_glm-5_3-flash said NIT. The highest is used.\n- .github/workflows/ci.yml:4305-4306,4349-4362 | severity=major | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The 300 s default cap on the whole `sandbox_image.sh build --family review` command includes the local `docker build` fallback, which production allows 900 s (scripts/review_untrusted_sandbox.sh:121).\n  WHY: When the GHCR pull misses, a slow but passing build becomes a hard CI failure (\"hit its 300s limit\"). The 300+180+480 s phase defaults also cannot absorb a 900 s build inside the 1200 s job.\n- .github/workflows/ci.yml:4306,4308,4310 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The accepted limit range of 1-9999 s is not bounded by the job's 20-minute budget, and the tests inspect only the defaults.\n  WHY: A large override such as 3000 s outlives the job, so the runner cancels it at 20 minutes with no error line. This is reachable once the limits are mapped from repository variables.\n- .github/workflows/ci.yml:4259-4281,4299-4302 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Only three of the five steps are bounded, and the unbounded network-bound `pip install` step (4276) shares roughly 210 s of headroom with the other unbounded steps.\n  WHY: If those steps run long, the runner cancels the job at its 20-minute timeout with no error line, which is the failure the issue reports.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:4322-4325 | severity=MAJOR | confidence=5\n  PROBLEM: The timeout environment variables are read from the shell environment but are not mapped into the step's `env`.\n  WHY: The step's `env:` block maps only `CI_SANDBOX_PYTHON_FAMILY`, `CODEX_VERSION` and `OPENCODE_VERSION`. The timeouts therefore always fall back to the hardcoded defaults, so the documented override does not work.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:4305-4306,4349-4362 | severity=MAJOR | confidence=4\n  PROBLEM: The 300 s cap covers the whole `sandbox_image.sh build` command, including the local `docker build` fallback, while production allows 900 s (scripts/review_untrusted_sandbox.sh:121). The codex leg falls back to a local build too (scripts/codex_isolated_exec.sh:308-348).\n  WHY: A slow but passing build becomes a hard CI failure when the GHCR pull misses. The phase defaults (300+180+480 = 960 s) cannot absorb a 900 s build inside the 1200 s job.\n- .github/workflows/ci.yml:4284-4287,4305-4310 | severity=NIT | confidence=4\n  PROBLEM: The step maps none of the three timeout variables. The changelog fragment changelog.d/9560-sandbox-python-phase-limits.md advertises them as knobs, and tests/test_sandbox_python_coverage.py:462 pins the env set without them.\n  WHY: Setting a repository variable has no effect, and the limit silently stays at its default.\n- .github/workflows/ci.yml:4306,4308,4310 | severity=NIT | confidence=4\n  PROBLEM: The accepted range of 1-9999 s is not bounded by the 20-minute job budget. The tests inspect only the defaults (tests/test_sandbox_python_coverage.py:417-431).\n  WHY: A large value such as 3000 s outlives the job, so the runner cancels it silently with no error line.\n- .github/workflows/ci.yml:4299-4302,4259-4281,4276 | severity=NIT | confidence=3\n  PROBLEM: The budget comment assumes about 2 minutes for the four unbounded steps, but the phase defaults already use 990 s of the 1200 s job.\n  WHY: If those steps run long, the runner cancels the job at 20 minutes with no error line.\n- HARDENING_SUGGESTIONS (3 related items), HARDENING_RISK_SCORE: 2\n  - ci.yml 4427-4430: run `docker logs --tail 50 \"${pytest_container}\" 2>&1 || true` before `docker kill`, to preserve the last pytest output (risk 2).\n  - ci.yml 4366-4369: include `rc=${image_rc}` in the image-resolution failure message (risk 1).\n  - ci.yml 4385-4389: retry the derive build once, or rebalance the derive and image defaults (risk 2).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:4284-4287,4305-4310 | severity=NIT | confidence=4\n  PROBLEM: The three timeout overrides are read from the shell environment, but the step maps only `CI_SANDBOX_PYTHON_FAMILY`, `CODEX_VERSION` and `OPENCODE_VERSION`.\n  WHY: Repository and organization variables are not auto-exported, so setting a documented timeout variable has no effect and the default limit is used.\n- HARDENING_SUGGESTIONS: NONE (HARDENING_RISK_SCORE: 0)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:4305-4310 (step `env:` at 4284-4287; changelog.d/9560-sandbox-python-phase-limits.md line 2) | severity=NIT | confidence=4\n  PROBLEM: The three timeout overrides are read from the shell environment, but the step's `env:` block does not map them.\n  WHY: Setting a repository variable with one of these names never reaches the step, so the limit stays at its 300/180/480 default. This contradicts the comment at ci.yml:4301-4302 and the changelog fragment. Either map `${{ vars.* }}` into the step `env:` or reword the docs to say overrides need a workflow edit.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5da99bceb4e12140e03fadd9f00a8c8c4b7f75e5dc2d275d17c74ad46f14e206",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9591,
+    "run_id": "43889355938",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43889355938",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116173847_0bebcbdac3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9591,
+    "run_id": "43889355938"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T17:38:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
