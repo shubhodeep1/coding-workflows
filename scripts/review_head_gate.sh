@@ -107,11 +107,13 @@ review_head_gate_updater_exempt()
 	{
 		echo "REVIEW_HEAD_GATE mode=updater_exempt pr=${ue_pr:-?} head=${ue_sha:-?} outcome=$1 reason=$2"
 	}
-	if [ "${REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED}" = "false" ]; then
+	# Case-insensitive, like the workflow's other switches: False/FALSE also disable.
+	local ue_exempt_flag="${REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED:-true}" ue_status_flag="${REVIEW_HEAD_GATE_STATUS_ENABLED:-true}"
+	if [ "${ue_exempt_flag,,}" = "false" ]; then
 		ue_log skipped disabled
 		return 1
 	fi
-	if [ "${REVIEW_HEAD_GATE_STATUS_ENABLED:-true}" = "false" ]; then
+	if [ "${ue_status_flag,,}" = "false" ]; then
 		ue_log skipped status_disabled
 		return 1
 	fi
@@ -196,9 +198,10 @@ review_head_gate_main()
 	fi
 	if [ "${DETERMINISTIC_SKIP:-false}" = "true" ]; then
 		review_head_gate_post_status "${REPOSITORY:-}" "${GATE_HEAD_SHA:-}" success "deterministic skip evaluated this head"
-	elif [ -n "${GATE_HEAD_SHA:-}" ]; then
+	elif [ -n "${GATE_HEAD_SHA:-}" ] && [ -n "${GATE_HEAD_REF:-}" ]; then
 		# Posted after any pending status above for the same SHA, so it wins.
-		# The early gate call passes no GATE_HEAD_REF and makes no API call.
+		# The early gate call passes no GATE_HEAD_REF, so it skips this (no
+		# API call and no misleading mode=updater_exempt log line).
 		review_head_gate_updater_exempt "${REPOSITORY:-}" "${PR_NUMBER:-}" "${GATE_HEAD_SHA}" "${GATE_HEAD_REF:-}" || true
 	fi
 }

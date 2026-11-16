@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
 from pathlib import Path
 
 
@@ -1514,8 +1515,6 @@ def test_workflow_runs_daily_and_restores_from_the_stable_tree() -> None:
 
 # ── Pin-age alarm (#9483) ────────────────────────────────────────────────
 
-from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-
 PIN_NOW = _dt(2026, 11, 14, 12, 0, tzinfo=_tz.utc)
 SHA_V1460 = "1" * 40
 SHA_V1470 = "2" * 40
@@ -1606,7 +1605,7 @@ def test_release_tags_file_keeps_only_versions_and_peeled_commits() -> None:
 					f"v1\t{'a' * 40}\t{SHA_V1472}\t1790000000",
 					f"v1.47.2\t{'b' * 40}\t{SHA_V1472}\t1790000100",
 					f"v1.47.0\t{SHA_V1470}\t\t1780000000",
-					f"v1.47.1\tnot-a-sha\t\t1785000000",
+					"v1.47.1\tnot-a-sha\t\t1785000000",
 					"garbage-row",
 					f"v1.46.0\t{SHA_V1460}\t\t",
 				]

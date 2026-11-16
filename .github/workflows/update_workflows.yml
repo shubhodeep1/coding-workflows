@@ -2491,11 +2491,14 @@ jobs:
           gate_log() {
             echo "REVIEW_HEAD_GATE mode=updater_exempt source=verify_job pr=${PR_NUMBER:-?} head=${PUSHED_SHA:-?} outcome=$1 reason=$2"
           }
-          if [ "${REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED:-true}" = "false" ]; then
+          # Case-insensitive: False/FALSE also disable (unset means true).
+          gate_exempt_flag="${REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED:-true}"
+          gate_status_flag="${REVIEW_HEAD_GATE_STATUS_ENABLED:-true}"
+          if [ "${gate_exempt_flag,,}" = "false" ]; then
             gate_log skipped disabled
             exit 0
           fi
-          if [ "${REVIEW_HEAD_GATE_STATUS_ENABLED:-true}" = "false" ]; then
+          if [ "${gate_status_flag,,}" = "false" ]; then
             gate_log skipped status_disabled
             exit 0
           fi

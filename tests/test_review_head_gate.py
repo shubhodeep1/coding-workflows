@@ -441,6 +441,8 @@ def test_updater_exemption_fails_closed(tmp_path: Path, kwargs: dict, reason: st
 	("ai/issue-9483", {}, "not_updater_branch"),
 	(UPDATER_REF, {"REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED": "false"}, "disabled"),
 	(UPDATER_REF, {"REVIEW_HEAD_GATE_STATUS_ENABLED": "false"}, "status_disabled"),
+	(UPDATER_REF, {"REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED": "FALSE"}, "disabled"),
+	(UPDATER_REF, {"REVIEW_HEAD_GATE_STATUS_ENABLED": "False"}, "status_disabled"),
 ])
 def test_updater_exemption_prefilter_makes_no_api_call(tmp_path: Path, hint: str, env: dict, reason: str) -> None:
 	result, calls = _run_exempt(tmp_path, hint=hint, **env)
@@ -456,6 +458,13 @@ def test_gate_main_runs_the_exemption_after_pending(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert "mode=updater_exempt" in result.stdout and "reason=not_updater_branch" in result.stdout
 	assert len(_statuses(calls)) == 1
+
+
+def test_gate_main_without_a_head_ref_skips_the_exemption_silently(tmp_path: Path) -> None:
+	# The early gate call passes no GATE_HEAD_REF: no updater_exempt log line.
+	result, _calls = _run(tmp_path, GATE_HEAD_REF="", GATE_AUTO_MERGE_ENABLED="false")
+	assert result.returncode == 0, result.stderr
+	assert "mode=updater_exempt" not in result.stdout
 
 
 def test_gate_main_skips_the_exemption_on_deterministic_skip(tmp_path: Path) -> None:

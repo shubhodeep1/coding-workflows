@@ -793,6 +793,7 @@ def test_head_gate_fails_closed(tmp_path: Path, seq: list | None, pr: dict | Non
 @pytest.mark.parametrize("env,reason", [
 	({"REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED": "false"}, "disabled"),
 	({"REVIEW_HEAD_GATE_STATUS_ENABLED": "false"}, "status_disabled"),
+	({"REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED": "FALSE"}, "disabled"),
 	({"PR_NUMBER": "abc"}, "invalid_input"),
 ])
 def test_head_gate_switches_make_no_api_call(tmp_path: Path, env: dict, reason: str) -> None:
