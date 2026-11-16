@@ -15,6 +15,18 @@ name: CI
   push:
     branches: [main, stable, "orchestrator/project-*"]
 
+# Cancel replaced PR CI (cut-ci-runner-time Phase 2). A pull_request run
+# shares one group per PR, so a newer push cancels the older run while it is
+# queued or running; the newest head still gets its full run and its own
+# `lint`. Every other run (pushes to main, stable and orchestrator/project-*)
+# gets a group of its own and is never cancelled, because check-failure
+# triage compares a failing PR against the base branch's newest push run.
+# The cancelled-CI rerun sweep (scripts/ci_cancelled_rerun.py) skips a
+# cancelled run whose head is no longer the PR's head (superseded_head).
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -257,6 +269,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_shallow_checkout_contract.py
+
+      - name: CI concurrency contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_concurrency.py
 
       - name: CI test wiring guard
         run: |
