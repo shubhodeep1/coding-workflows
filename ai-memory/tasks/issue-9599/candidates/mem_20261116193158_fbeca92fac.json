@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9599,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9599\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9604\",\"pr_number\":9604,\"branch\":\"ai/issue-9599\",\"run_id\":\"43934267383\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/43934267383\",\"changed_files\":[\".github/workflows/plan.yml\",\"changelog.d/9599-plan-defer-rate-limited-integration-ref.md\",\"tests/test_plan_check_triage_branch_guard.py\",\"tests/test_workflow_checkout_integration_ref_audit.py\"]}",
+  "fingerprint": "894ff44e2c1bc2aedecc37894c1ed99831ed28b3a6f877f978ef8fd182453d91",
+  "lineage": {
+    "issue_number": 9599,
+    "parent_ids": [],
+    "pr_number": 9604,
+    "run_id": "43934267383",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43934267383",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9604"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261116193158_fbeca92fac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9599,
+    "level": "run",
+    "pr_number": 9604,
+    "run_id": "43934267383"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9599: https://github.com/shubhodeep1/coding-workflows/pull/9604",
+  "timestamps": {
+    "created_at": "2026-11-16T19:31:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
