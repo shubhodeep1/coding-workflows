@@ -35529,7 +35529,7 @@ if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 							linked_pipeline: any($closing[]; any((.labels.nodes // [])[]?; (.name? // "") as $l | $pipeline | index($l) != null)),
 							comments: [($n.comments.nodes // [])[]? | (.body // "" | if type == "string" then . else "" end) as $b | {
 								a: ((.author.login // "") | if type == "string" then . else "" end),
-								fail: ($b | own_marker($fail_tag) | if . == null then null else {head: (.head // ""), reason: (.reason // ""), support: (.support // "")} end),
+								fail: ($b | own_marker($fail_tag) | if . == null then null else {head: (.head // ""), reason: (.reason // ""), support: (.support // ""), fp: (.fp // "")} end),
 								retry: ($b | own_marker($retry_tag) | if . == null then null else {head: (.head // ""), support: (.support // "")} end)
 							}]
 						}
@@ -36512,6 +36512,10 @@ echo "Noop-suspicious recovery skipped (fingerprint cap already applied on head)
 # Writes per eligible PR (capped by ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE):
 # the dispatch helper's in-flight read and dispatch, plus one marker comment.
 # Log prefix: ISSUELESS_REVIEW_RETRY.
+# Issue #9533: when the two newest trusted failure markers name this head,
+# reason reviewers_failed and one fp, the crash is deterministic and the pass
+# skips with reason=repeated_reviewer_failure instead of queueing another
+# review (same cached comments, no extra read).
 
 # _issueless_review_retry_decide <entry_json> <trusted_login> <pinned_support_sha> <support_state> <now_epoch> <max_age_days>
 # Pure: prints one line "<decision>|<reason>|<head>|<failing_support>" where
@@ -36531,6 +36535,8 @@ _issueless_review_retry_decide() {
 		| [$trusted[] | select(.retry == null)] as $plain
 		| [$trusted[] | .retry | select(. != null)] as $retries
 		| ($plain | last) as $newest
+		| [$plain[] | .fail | select(type == "object")] as $fails
+		| (if ($fails | length) >= 2 then $fails[-2] else null end) as $prior_fail
 		| if $newest == null or ($newest.fail | type) != "object" then "none|||"
 		else $newest.fail as $f
 		| if ($e.oid | sha | not) or $f.head != $e.oid or (($f.reason | type) != "string") or ($reasons | index($f.reason)) == null then "none|||"
@@ -36540,6 +36546,8 @@ _issueless_review_retry_decide() {
 		elif $e.draft != false then "skipped|draft\($tail)"
 		elif $e.linked_pipeline != false or (($e.closing_total // 2147483647) > ($e.closing_seen // 0)) then "skipped|linked_pipeline_issue\($tail)"
 		elif any(($e.labels // [])[]; . as $l | $exclude | index($l) != null) then "skipped|excluded_label\($tail)"
+		elif $f.reason == "reviewers_failed" and ($prior_fail | type) == "object" and $prior_fail.reason == "reviewers_failed"
+			and $prior_fail.head == $e.oid and (($f.fp // "") | test("^[0-9a-f]{64}$")) and $prior_fail.fp == $f.fp then "skipped|repeated_reviewer_failure\($tail)"
 		elif $max_age > 0 and ((($e.updated_at // "") | try fromdateiso8601 catch null) as $u | $u == null or $u < ($now - $max_age * 86400)) then "skipped|too_old\($tail)"
 		elif $state != "ok" or ($pinned | sha | not) then "skipped|support_unresolved\($tail)"
 		elif $fs == "" then "skipped|marker_support_missing\($tail)"

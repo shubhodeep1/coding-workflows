@@ -10977,3 +10977,148 @@ def test_review_collect_pr_metadata_does_not_shadow_shared_gh_retry() -> None:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+# --- Repeated reviewer failure stops the retry loop (issue #9533) ---------
+
+_RRF_REPO_ROOT = Path(__file__).resolve().parents[1]
+_RRF_POST_SUMMARY = _RRF_REPO_ROOT / "scripts" / "review_autofix_step_post_editor_summary.sh"
+_RRF_FAILURE_COMMENT = _RRF_REPO_ROOT / "scripts" / "review_autofix_step_failure_comment.sh"
+_RRF_HEAL_PY = _RRF_REPO_ROOT / "scripts" / "workflow_failure_heal.py"
+_RRF_HEAD = "a" * 40
+_RRF_CRASH = "/home/runner/work/_temp/support/scripts/render_prompt.sh: line 306: 1abc: invalid variable name\n"
+_RRF_FAKE_GH_HELPERS = '''gh_retry() {
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in body=*) printf '%s' "${arg#body=}" > "${FAKE_GH_BODY_FILE}" ;; esac
+  done
+  return 0
+}
+'''
+
+
+def _rrf_run(tmp_path: Path, script: Path, extra_env: dict[str, str]) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	support_dir = tmp_path / "support"
+	support_dir.mkdir(exist_ok=True)
+	(support_dir / "gh_helpers.sh").write_text(_RRF_FAKE_GH_HELPERS, encoding="utf-8")
+	runtime_dir = tmp_path / "runtime"
+	runtime_dir.mkdir(exist_ok=True)
+	(runtime_dir / "reviewers_stage_stderr.txt").write_text("starting reviewers\n" + _RRF_CRASH, encoding="utf-8")
+	summary_file = tmp_path / "editor_summary.txt"
+	summary_file.write_text("", encoding="utf-8")
+	github_env = tmp_path / "github_env"
+	github_env.write_text("", encoding="utf-8")
+	body_file = tmp_path / "posted_body.txt"
+	body_file.unlink(missing_ok=True)
+	env = {
+		"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+		"HOME": str(tmp_path),
+		"PYTHONDONTWRITEBYTECODE": "1",
+		"FAKE_GH_BODY_FILE": str(body_file),
+		"SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"RUNTIME_DIR": str(runtime_dir),
+		"EDITOR_SUMMARY_FILE": str(summary_file),
+		"COMMITTED_FILES_FILE": str(tmp_path / "missing_committed.txt"),
+		"PR_EDITOR_COMMENT_FILE": str(tmp_path / "pr_editor_comment.txt"),
+		"GITHUB_ENV": str(github_env),
+		"PR_NUMBER": "9356",
+		"REPOSITORY": "owner/repo",
+		"AUTOFIX_STEP_REPOSITORY": "owner/repo",
+		"AUTOFIX_STEP_SERVER_URL": "https://github.com",
+		"AUTOFIX_STEP_RUN_ID": "4242",
+		"GITHUB_RUN_ID": "4242",
+		"AUTOFIX_FAILURE_HEAD_SHA": _RRF_HEAD,
+		"REVIEW_SUPPORT_SHA": "1" * 40,
+		"AUTOFIX_FAILURE_HEAL_PY": str(_RRF_HEAL_PY),
+		"REVIEWERS_STEP_OUTCOME": "failure",
+		"REVIEW_FAILURE_RUN_URL": "https://github.com/owner/repo/actions/runs/4242",
+		**extra_env,
+	}
+	result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env, timeout=120)
+	body = body_file.read_text(encoding="utf-8") if body_file.exists() else ""
+	return result, body, github_env.read_text(encoding="utf-8")
+
+
+def _rrf_first_failure_fp(tmp_path: Path) -> str:
+	result, body, github_env = _rrf_run(tmp_path, _RRF_POST_SUMMARY, {})
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert "**AI review/autofix produced no output — will retry**" in body
+	assert "AUTOFIX_EDITOR_EMPTY_NOOP=true" in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED_REPEATED" not in github_env
+	# Specification item 3: the crash line is named.
+	assert "**First error:** `render_prompt.sh: line 306: 1abc: invalid variable name`" in body
+	match = re.search(r"<!-- review-autofix-failure:v1 head=" + _RRF_HEAD + r" reason=reviewers_failed fp=([0-9a-f]{64}) ", body)
+	assert match, body
+	return match.group(1)
+
+
+def _rrf_gate_env(fp: str, *, head: str = _RRF_HEAD, count: str = "1", reason: str = "reviewers_failed") -> dict[str, str]:
+	return {
+		"GATE_FINGERPRINT_CAP_FP": fp,
+		"GATE_FINGERPRINT_CAP_REASON": reason,
+		"GATE_FINGERPRINT_CAP_COUNT": count,
+		"GATE_HEAD_SHA_FOR_FINGERPRINT": head,
+	}
+
+
+def test_second_same_head_same_fp_reviewers_failed_blocks_instead_of_retrying(tmp_path: Path) -> None:
+	fp = _rrf_first_failure_fp(tmp_path)
+	result, body, github_env = _rrf_run(tmp_path, _RRF_POST_SUMMARY, _rrf_gate_env(fp))
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert body == "", "no 'will retry' comment on a repeated reviewer failure"
+	assert "AUTOFIX_EDITOR_EMPTY_NOOP=true" not in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED=true" in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED_REPEATED=true" in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED_REPEATED_COUNT=2" in github_env
+	assert f"AUTOFIX_REVIEWERS_FAILED_REPEATED_FP={fp}" in github_env
+	assert f"AUTOFIX_REVIEWERS_FAILED_REPEATED pr=9356 head={_RRF_HEAD} fp={fp} count=2 max=2" in result.stdout
+
+
+@pytest.mark.parametrize("variant", ["other_fp", "other_head", "other_reason", "no_prior", "cap_disabled"])
+def test_reviewers_failed_with_a_different_fp_or_head_still_retries(tmp_path: Path, variant: str) -> None:
+	fp = _rrf_first_failure_fp(tmp_path)
+	env = {
+		"other_fp": _rrf_gate_env("e" * 64),
+		"other_head": _rrf_gate_env(fp, head="b" * 40),
+		"other_reason": _rrf_gate_env(fp, reason="editor_empty_noop"),
+		"no_prior": _rrf_gate_env(fp, count="0"),
+		"cap_disabled": {**_rrf_gate_env(fp), "REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"},
+	}[variant]
+	result, body, github_env = _rrf_run(tmp_path, _RRF_POST_SUMMARY, env)
+	assert result.returncode == 1
+	assert "**AI review/autofix produced no output — will retry**" in body, variant
+	assert "AUTOFIX_EDITOR_EMPTY_NOOP=true" in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED_REPEATED" not in github_env
+
+
+def test_repeated_reviewer_failure_comment_names_fingerprint_and_first_error(tmp_path: Path) -> None:
+	fp = "c" * 64
+	result, body, _github_env = _rrf_run(tmp_path, _RRF_FAILURE_COMMENT, {
+		"AUTOFIX_REVIEWERS_FAILED_REPEATED": "true",
+		"AUTOFIX_REVIEWERS_FAILED_REPEATED_COUNT": "2",
+		"AUTOFIX_REVIEWERS_FAILED_REPEATED_FP": fp,
+		"AUTOFIX_FAILED_STEP": "Run reviewer models",
+		"AUTOFIX_FAILURE_FIRST_ERROR": "render_prompt.sh: line 306: 1abc: invalid variable name",
+		"AUTOFIX_FAILURE_MARKER": f"<!-- review-autofix-failure:v1 head={_RRF_HEAD} reason=reviewers_failed fp={fp} degraded=0 run=4242 -->",
+	})
+	assert result.returncode == 0, result.stderr
+	assert f"**Repeated reviewer failure:** this head failed 2 times with fingerprint `{fp[:16]}` (reason `reviewers_failed`), so the review is not retried." in body
+	assert "**First error:** `render_prompt.sh: line 306: 1abc: invalid variable name`" in body
+	assert body.rstrip().endswith(f"fp={fp} degraded=0 run=4242 -->")
+	plain, plain_body, _ = _rrf_run(tmp_path, _RRF_FAILURE_COMMENT, {})
+	assert plain.returncode == 0 and "Repeated reviewer failure" not in plain_body
+
+
+def test_repeated_reviewer_failure_workflow_wiring() -> None:
+	reviewers = _step_block("Run reviewer models")
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh" 2> >(tee -a "${RUNTIME_DIR:-/tmp}/reviewers_stage_stderr.txt" >&2) || reviewers_rc=$?' in reviewers
+	post_summary = _step_block("Post editor summary comment")
+	for line in (
+		"GATE_FINGERPRINT_CAP_FP: ${{ needs.gate.outputs.fingerprint_cap_fp }}",
+		"GATE_FINGERPRINT_CAP_REASON: ${{ needs.gate.outputs.fingerprint_cap_reason }}",
+		"GATE_FINGERPRINT_CAP_COUNT: ${{ needs.gate.outputs.fingerprint_cap_count }}",
+		"GATE_HEAD_SHA_FOR_FINGERPRINT: ${{ needs.gate.outputs.head_sha }}",
+		"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}",
+	):
+		assert line in post_summary, line
+	assert "REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}" in _step_block("Evaluate review gate")

@@ -856,6 +856,14 @@ FORCE_RB_JUDGE_CONFLICT_SKIP="false"
 case "${FINGERPRINT_CAP_MAX}" in
   ''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;
 esac
+# Issue #9533: a reviewer-stage crash (reason=reviewers_failed) that repeats
+# with the same fingerprint on the same head is deterministic, so it trips the
+# cap at REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED (default 2)
+# instead of the global default. Every other reason keeps FINGERPRINT_CAP_MAX.
+FINGERPRINT_CAP_REVIEWERS_FAILED_MAX="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED:-2}"
+case "${FINGERPRINT_CAP_REVIEWERS_FAILED_MAX}" in
+  ''|*[!0-9]*|0) FINGERPRINT_CAP_REVIEWERS_FAILED_MAX=2 ;;
+esac
 if [ "${SHOULD_RUN}" = "true" ] \
   && [ "${pr_base_retargeted}" != "true" ] \
   && { [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] || [ "${FORCE_RB_JUDGE:-false}" = "true" ]; } \
@@ -945,6 +953,9 @@ if [ "${SHOULD_RUN}" = "true" ] \
         FINGERPRINT_CAP_COUNT="${fingerprint_cap_count}"
         FINGERPRINT_CAP_FP="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "fp" { print $2 }' | tail -n 1)"
         FINGERPRINT_CAP_REASON="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "reason" { print $2 }' | tail -n 1)"
+        if [ "${FINGERPRINT_CAP_REASON}" = "reviewers_failed" ]; then
+          FINGERPRINT_CAP_MAX="${FINGERPRINT_CAP_REVIEWERS_FAILED_MAX}"
+        fi
         if [ "$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "cap_applied" { print $2 }' | tail -n 1)" = "true" ]; then
           FINGERPRINT_CAP_ALREADY_APPLIED="true"
           echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"

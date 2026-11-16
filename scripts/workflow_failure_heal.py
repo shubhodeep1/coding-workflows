@@ -3982,6 +3982,30 @@ _SUMMARISER_EMPTY_STDOUT_RE = re.compile(r"summariser \((?P<prefix>[A-Za-z0-9_.-
 _SELF_NAMED_SCRIPT_LINE_RE = re.compile(r"^(?:::error::|##\[error\])?\s*(?P<name>[a-z][a-z0-9]*_[a-z0-9_]*(?:\.(?:sh|py))?): (?P<rest>\S.*)$")
 _SELF_NAMED_SCRIPT_FAILURE_RE = re.compile(r"\b(?:[a-z0-9_]+_(?:failed|error)|fail(?:ed|ure)?|error|invalid|missing|denied|exhausted|exception|fatal)\b|\brc=[1-9][0-9]*\b", re.IGNORECASE)
 REVIEWER_FAILURE_HELPER_LINES_MAX = 10
+# Issue #9533: a bash diagnostic printed by the reviewer step's own shell, e.g.
+# `/home/runner/.../scripts/render_prompt.sh: line 306: 1abc: invalid variable
+# name`. The directory is dropped so the fingerprint stays stable across
+# runner paths; see _normalise_bash_diagnostic.
+# Only a shell script name (or bash's own `bash` / `sh` / `environment`) and an
+# error-shaped message count, so review text in a slot log never feeds the
+# fingerprint.
+_BASH_DIAGNOSTIC_LINE_RE = re.compile(r"^(?:\S*/)?(?P<script>[A-Za-z0-9_.-]+\.sh|bash|sh|environment): line (?P<line>[0-9]+): (?P<msg>\S.*)$")
+_BASH_DIAGNOSTIC_MSG_RE = re.compile(
+	r"invalid|unbound variable|command not found|syntax error|bad substitution|no such file or directory|permission denied"
+	r"|ambiguous redirect|expression expected|too many arguments|readonly variable|not a valid identifier|bad array subscript"
+	r"|division by 0|unexpected|error|fail",
+	re.IGNORECASE,
+)
+# A plain `ERROR: <message>` / `ERROR <message>` line.
+_PLAIN_ERROR_LINE_RE = re.compile(r"^ERROR:?\s+(?P<msg>\S.*)$")
+
+
+def _normalise_bash_diagnostic(line: str) -> str:
+	"""Return ``<script>: line <n>: <msg>`` for a bash diagnostic line, else ``""``."""
+	match = _BASH_DIAGNOSTIC_LINE_RE.match(line.strip())
+	if not match or not _BASH_DIAGNOSTIC_MSG_RE.search(match.group("msg")):
+		return ""
+	return f"{match.group('script')}: line {match.group('line')}: {match.group('msg').strip()}"
 
 
 def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
@@ -4018,6 +4042,15 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 			if empty_stdout_match:
 				summariser_code = "0"
 				summariser_empty_stdout_prefixes.add(empty_stdout_match.group("prefix"))
+				continue
+			bash_diagnostic = _normalise_bash_diagnostic(line)
+			if bash_diagnostic:
+				# Issue #9533: keep the shell's own crash line (directory
+				# stripped) so the fingerprint and the headline name the cause.
+				if len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
+					bash_diagnostic = single_line(bash_diagnostic, 300)
+					if bash_diagnostic not in helper_lines:
+						helper_lines.append(bash_diagnostic)
 				continue
 			helper_match = _SELF_NAMED_SCRIPT_LINE_RE.match(line)
 			if helper_match and (_CRASH_ERROR_LINE_RE.match(line) or _SELF_NAMED_SCRIPT_FAILURE_RE.search(helper_match.group("rest"))) and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
@@ -4841,7 +4874,13 @@ def failure_headline(texts: Iterable[str], limit: int = FAILURE_HEADLINE_LIMIT) 
 	are skipped. A ``  - item`` list printed right under the error (for
 	example the out-of-scope paths ``check_resolver_diff.sh`` names) is folded
 	into the line, up to three items. The result is one redacted line.
+
+	Issue #9533: when no text has such a line, the first bash diagnostic
+	(``<script>: line <n>: <msg>``, directory stripped) or plain ``ERROR:``
+	line is returned instead, so a shell crash that never printed
+	``::error::`` is still named.
 	"""
+	texts = list(texts)
 	for text in texts:
 		lines = sanitize_text(text).split("\n")
 		for index, raw in enumerate(lines):
@@ -4861,6 +4900,17 @@ def failure_headline(texts: Iterable[str], limit: int = FAILURE_HEADLINE_LIMIT) 
 			if details:
 				message = message.rstrip(":") + ": " + ", ".join(details)
 			return single_line(redact_secrets(message), limit)
+	for text in texts:
+		for raw in sanitize_text(text).split("\n"):
+			line = raw.strip()
+			if line.startswith("| "):
+				line = line[2:].strip()
+			fallback = _normalise_bash_diagnostic(line)
+			if not fallback:
+				plain = _PLAIN_ERROR_LINE_RE.match(line)
+				fallback = plain.group("msg").strip() if plain else ""
+			if fallback and not _GENERIC_ERROR_RE.match(fallback):
+				return single_line(redact_secrets(fallback), limit)
 	return ""
 
 

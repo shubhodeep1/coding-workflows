@@ -69,6 +69,14 @@ if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
 		sys.exit(0)
 	print(json.dumps({"id": 17, "body": next((arg[5:] for arg in args if arg.startswith("body=")), "")}))
 	sys.exit(0)
+# Issue #9533 base-sync carry: the shared freshness verifier reads the head
+# commit and the base compare (the fake prints what --jq would produce).
+if len(args) > 1 and args[0] == "api" and args[1].startswith("repos/o/r/commits/") and os.environ.get("FAKE_GH_COMMIT"):
+	print(os.environ["FAKE_GH_COMMIT"])
+	sys.exit(0)
+if len(args) > 1 and args[0] == "api" and args[1].startswith("repos/o/r/compare/") and os.environ.get("FAKE_GH_COMPARE"):
+	print(os.environ["FAKE_GH_COMPARE"])
+	sys.exit(0)
 if args[0] == "api" and "--paginate" in args:
 	if "comments_once" in fail and sum('"--paginate"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
 		sys.exit(1)
@@ -132,15 +140,18 @@ def _pr(base: str = "main", head_ref: str = "ai/issue-7", head_repo: str = "o/r"
 	}
 
 
-def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | None = None, env: dict | None = None, skip: bool = False, security_issues: list | str | None = None):
+def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | None = None, env: dict | None = None, skip: bool = False, security_issues: list | str | None = None, cwd: Path | None = None, real_git: bool = False):
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir(exist_ok=True)
 	gh = bin_dir / "gh"
 	gh.write_text(FAKE_GH, encoding="utf-8")
 	gh.chmod(0o755)
 	git = bin_dir / "git"
-	git.write_text(FAKE_GIT, encoding="utf-8")
-	git.chmod(0o755)
+	if real_git:
+		git.unlink(missing_ok=True)
+	else:
+		git.write_text(FAKE_GIT, encoding="utf-8")
+		git.chmod(0o755)
 	support = tmp_path / "support"
 	support.mkdir(exist_ok=True)
 	(support / "security_pass_skip.py").write_text(
@@ -182,7 +193,7 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	run_env.update(env or {})
 	for name in [key for key, value in run_env.items() if value is None]:
 		run_env.pop(name)
-	result = subprocess.run(["bash", str(SCRIPT), mode], capture_output=True, text=True, env=run_env, check=False)
+	result = subprocess.run(["bash", str(SCRIPT), mode], capture_output=True, text=True, env=run_env, check=False, cwd=str(cwd) if cwd else None)
 	calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
 	return result, calls, output.read_text(encoding="utf-8")
 
@@ -1224,3 +1235,132 @@ def test_skip_step_holds_when_python_ignores_safe_path(tmp_path: Path) -> None:
 	assert ["api", "user", "--jq", '.login // ""'] not in calls
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 	assert not any(any("/statuses/" in arg for arg in call) for call in calls)
+
+
+# --- Base-sync carry (issue #9533) ---------------------------------------
+# The pipeline's own freshness update (merge of main into an audited head,
+# recorded by an ai:merge-base-sync:v1 marker) carries the clean audit of
+# from= when the merge is pure; anything else audits the head as before.
+
+_CARRY_GIT_ENV = {
+	"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z",
+	"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid", "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z",
+	"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+}
+
+
+def _carry_git(repo: Path, *args: str) -> str:
+	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+	env.update(_CARRY_GIT_ENV)
+	return subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _carry_repo(tmp_path: Path, *, evil_merge: bool = False) -> tuple[Path, str, str, str]:
+	"""Build merge base -> PR head (from) and merge base -> main tip, then the update merge."""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_carry_git(repo, "init", "-q", "-b", "main")
+	(repo / "a.txt").write_text("".join(f"line {n}\n" for n in range(1, 21)), encoding="utf-8")
+	(repo / "b.txt").write_text("base\n", encoding="utf-8")
+	_carry_git(repo, "add", "-A")
+	_carry_git(repo, "commit", "-q", "-m", "base")
+	_carry_git(repo, "checkout", "-q", "-b", "ai/issue-7")
+	(repo / "a.txt").write_text((repo / "a.txt").read_text(encoding="utf-8").replace("line 3\n", "line 3 fixed\n"), encoding="utf-8")
+	_carry_git(repo, "commit", "-q", "-am", "pr fix")
+	from_sha = _carry_git(repo, "rev-parse", "HEAD")
+	_carry_git(repo, "checkout", "-q", "main")
+	(repo / "a.txt").write_text((repo / "a.txt").read_text(encoding="utf-8").replace("line 17\n", "line 17 on main\n"), encoding="utf-8")
+	(repo / "b.txt").write_text("base moved\n", encoding="utf-8")
+	_carry_git(repo, "commit", "-q", "-am", "main moves")
+	base_parent = _carry_git(repo, "rev-parse", "HEAD")
+	_carry_git(repo, "checkout", "-q", "ai/issue-7")
+	_carry_git(repo, "merge", "-q", "--no-ff", "--no-edit", "main")
+	if evil_merge:
+		(repo / "a.txt").write_text((repo / "a.txt").read_text(encoding="utf-8").replace("line 10\n", "line 10 sneaked in\n"), encoding="utf-8")
+		_carry_git(repo, "commit", "-q", "--amend", "--no-edit", "-a")
+	merge_sha = _carry_git(repo, "rev-parse", "HEAD")
+	return repo, from_sha, base_parent, merge_sha
+
+
+def _sync_comment(from_sha: str, base_parent: str, merge_sha: str, login: str = "owner", comment_id: int = 2) -> dict:
+	body = (
+		"**Branch updated from `main` before merging** (update 1; warning threshold 2).\n\n"
+		f"<!-- ai:merge-base-sync:v1 pr=42 from={from_sha} sync=1 base={base_parent} merge={merge_sha} -->"
+	)
+	return _comment(body, login=login, comment_id=comment_id)
+
+
+def _carry_run(tmp_path: Path, comments_for, *, evil_merge: bool = False):
+	repo, from_sha, base_parent, merge_sha = _carry_repo(tmp_path, evil_merge=evil_merge)
+	pr = _pr()
+	pr["head"]["sha"] = merge_sha
+	commit = json.dumps({"parents": [from_sha, base_parent], "verified": True, "committer": "web-flow"})
+	result, calls, output = _run(
+		tmp_path, "gate", pr=pr, comments=comments_for(from_sha, base_parent, merge_sha), cwd=repo, real_git=True,
+		env={"FAKE_GH_COMMIT": commit, "FAKE_GH_COMPARE": "ahead", "GH_RETRY_MAX_ATTEMPTS": "1"},
+	)
+	return result, calls, output, from_sha, merge_sha
+
+
+def test_base_sync_carries_the_clean_audit_of_a_pure_merge(tmp_path: Path) -> None:
+	result, calls, output, from_sha, merge_sha = _carry_run(
+		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m)],
+	)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert output == "hold=false\n", result.stdout + result.stderr
+	assert f"SINGLE_ISSUE_SECURITY_PASS mode=gate pr=42 head={merge_sha} outcome=clean reason=base_sync_carry from={from_sha}" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	assert any(len(call) > 1 and call[1] == f"repos/o/r/commits/{merge_sha}" for call in calls)
+
+
+def test_base_sync_that_changes_a_pr_file_is_audited(tmp_path: Path) -> None:
+	result, calls, output, _from_sha, merge_sha = _carry_run(
+		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m)], evil_merge=True,
+	)
+	assert f"head={merge_sha} outcome=carry_skipped reason=patch_mismatch" in result.stdout, result.stdout + result.stderr
+	assert "reason=base_sync_carry" not in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+@pytest.mark.parametrize("from_status", ["findings", "pending", None])
+def test_base_sync_of_a_head_that_was_not_clean_is_audited(tmp_path: Path, from_status: str | None) -> None:
+	def comments(f: str, b: str, m: str) -> list:
+		prior = [_comment(_marker(from_status, f, 1))] if from_status else []
+		return prior + [_sync_comment(f, b, m)]
+	result, calls, output, _from_sha, merge_sha = _carry_run(tmp_path, comments)
+	assert f"head={merge_sha} outcome=carry_skipped reason=from_not_clean" in result.stdout, result.stdout + result.stderr
+	assert "reason=base_sync_carry" not in result.stdout
+	assert output.startswith("hold=true\n")
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_base_sync_marker_by_another_author_is_ignored(tmp_path: Path) -> None:
+	result, calls, output, _from_sha, merge_sha = _carry_run(
+		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m, login="intruder")],
+	)
+	assert f"head={merge_sha} outcome=carry_skipped reason=freshness_unverified" in result.stdout, result.stdout + result.stderr
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert not any(len(call) > 1 and call[1].startswith("repos/o/r/commits/") for call in calls)
+
+
+def test_base_sync_carry_never_overrides_findings_for_the_head(tmp_path: Path) -> None:
+	result, calls, output, _from_sha, _merge_sha = _carry_run(
+		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m), _comment(_marker("findings", m, 2), comment_id=3)],
+	)
+	assert "reason=base_sync_carry" not in result.stdout
+	assert "carry_skipped" not in result.stdout
+	assert output.startswith("hold=true\n")
+
+
+def test_base_sync_carry_kill_switch(tmp_path: Path) -> None:
+	repo, from_sha, base_parent, merge_sha = _carry_repo(tmp_path)
+	pr = _pr()
+	pr["head"]["sha"] = merge_sha
+	result, calls, output = _run(
+		tmp_path, "gate", pr=pr, comments=[_comment(_marker("clean", from_sha, 1)), _sync_comment(from_sha, base_parent, merge_sha)],
+		cwd=repo, real_git=True, env={"SECURITY_PASS_BASE_SYNC_CARRY_ENABLED": "false"},
+	)
+	assert "outcome=carry_skipped reason=disabled" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+
