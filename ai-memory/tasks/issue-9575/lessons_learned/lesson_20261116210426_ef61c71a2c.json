@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-16T21:04:26Z",
+  "issue_number": 9575,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=scripts/stage_support_for_phase.sh:341-344; cited_path=scripts/stage_support_for_phase.sh; files_touched=.github/workflows/orchestrate_poll.yml, README.md, agents.d/stuck-states-p13b-security-pass-rebind.md, changelog.d/stuck-states-p13b-security-pass-rebind.md, docs/how-it-works.md, docs/plans/security-pass-convergence-plan.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrate_poll_process.py.",
+  "phase": "review_autofix",
+  "pr_number": 9602,
+  "record_id": "lesson_20261116210426_ef61c71a2c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/stage_support_for_phase.sh",
+    ".github/workflows/orchestrate_poll.yml",
+    "README.md",
+    "agents.d/stuck-states-p13b-security-pass-rebind.md",
+    "changelog.d/stuck-states-p13b-security-pass-rebind.md",
+    "docs/how-it-works.md",
+    "docs/plans/security-pass-convergence-plan.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrate_poll_process.py"
+  ]
+}
