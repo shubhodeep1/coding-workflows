@@ -50,7 +50,8 @@ RUN_URL = "https://github.com/owner/repo/actions/runs/1"
 RUN_GET = "api repos/owner/repo/actions/runs/1"
 JOBS_GET = "api -X GET repos/owner/repo/actions/runs/1/attempts/1/jobs -f per_page=100"
 RERUN_POST = "api -i -X POST repos/owner/repo/actions/runs/1/rerun-failed-jobs"
-BASE_RUN_GET_PREFIX = "api repos/owner/repo/actions/runs/1 --jq .workflow_id"
+# The base gate reads the run as `--jq [(.workflow_id ...), (.path ...)]`.
+BASE_RUN_GET_PREFIX = "api repos/owner/repo/actions/runs/1 --jq "
 
 # Annotation text from the 2026-11-08 failures.
 FOUNDRY = [

@@ -1100,14 +1100,17 @@ def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
 	]
 	assert prepare_jobs == ["tests-hooks-and-orchestrator"]
 	steps = ci_jobs["tests-hooks-and-orchestrator"]["steps"]
-	assert steps[0]["with"]["fetch-depth"] == 0
+	assert steps[0]["with"]["fetch-depth"] == 1
 	prepare = next(step for step in steps if step["name"] == "Prepare template-only PR live copies for parity tests")
 	prepare_if = " ".join(prepare["if"].split())
 	# Issue #7283: pull-request CI runs for every base, so every PR except one
 	# into stable (which checks the committed tree) is prepared.
 	assert "github.event_name == 'pull_request' && github.base_ref != 'stable'" in prepare_if
 	assert "github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-')" in prepare_if
-	assert prepare["env"]["PR_BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
+	# cut-ci-runner-time Phase 4: a final-CI dispatch run prepares too, with
+	# the base the shallow-fetch step exported from the PR's merge ref.
+	assert "github.event_name == 'workflow_dispatch' && env.CI_FINAL_PR_BASE_REF != 'stable'" in prepare_if
+	assert prepare["env"]["PR_BASE_SHA"] == "${{ github.event.pull_request.base.sha || env.CI_FINAL_PR_BASE_SHA }}"
 	assert prepare["env"]["PUSH_BEFORE_SHA"] == "${{ github.event.before }}"
 	assert 'before="${PR_BASE_SHA:-${PUSH_BEFORE_SHA}}"' in prepare["run"]
 	# A branch-creation or force push has no reachable before: fall back to

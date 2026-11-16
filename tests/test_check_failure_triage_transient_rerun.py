@@ -296,7 +296,7 @@ class TransientRerunWorkflowContractTests(unittest.TestCase):
 		script = SCRIPT.read_text(encoding="utf-8")
 		self.assertIn('"${CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED:-}"', script)
 		self.assertIn("''|true) transient_rerun_enabled=true ;;", script)
-		self.assertIn("all|collect|diagnose|route|supersede|supersede-check|transient-rerun) ;;", script)
+		self.assertIn("all|collect|diagnose|route|supersede|supersede-check|transient-rerun|base-tracked-note) ;;", script)
 
 
 if __name__ == "__main__":

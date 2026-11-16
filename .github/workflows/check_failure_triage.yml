@@ -257,6 +257,9 @@ jobs:
       # Issue #9387: one rerun-failed-jobs request when the triaged run failed
       # only for a transient reason; "false" turns the transient-rerun stage off.
       CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED: ${{ vars.CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED || 'true' }}
+      # Skip a failure the default branch already has when an open heal issue
+      # tracks that workflow there; the PR is noted on the heal issue instead.
+      CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED: ${{ vars.CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED || 'true' }}
       # Issue #9120: re-run a first-attempt run whose failed jobs only hit a
       # github.com release-download 502/503/504 once, instead of filing an issue.
       CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED || 'true' }}
@@ -674,6 +677,21 @@ jobs:
           CI_ACTION_RESOLUTION_RERUN_ENABLED: ${{ vars.CI_ACTION_RESOLUTION_RERUN_ENABLED || 'true' }}
           CI_CHECKOUT_FETCH_RERUN_ENABLED: ${{ vars.CI_CHECKOUT_FETCH_RERUN_ENABLED || 'true' }}
           CI_ABANDONED_JOB_RERUN_ENABLED: ${{ vars.CI_ABANDONED_JOB_RERUN_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
+          bash scripts/check_failure_triage.sh
+
+      # The collect stage filed no issue because the default branch fails the
+      # same workflow and an open heal issue tracks it (skip
+      # reason=base_failure_tracked). Add the PR to that heal issue with the
+      # Issues-scoped token. Never fails the job.
+      - name: Note PR failure on its base-branch heal issue
+        if: ${{ steps.collect_triage.outputs.base_failure_tracked != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
+          CHECK_TRIAGE_STAGE: base-tracked-note
         run: |
           set -euo pipefail
           cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
