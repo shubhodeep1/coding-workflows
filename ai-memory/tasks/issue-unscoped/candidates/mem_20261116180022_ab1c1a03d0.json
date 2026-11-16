@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:487 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The \"review / gate\" check-run fails at `support_main_json=\"$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/main)\"` with `GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403` and exit code 75, after `SUPPORT_REF source=promote_candidate_unprotected`. Under `bash -e` the step stops before it writes `review_support_sha`.\n  WHY: Both reviewers trace this to the GitHub API rate limit or a permission problem, not to this PR, which does not touch this workflow file. Re-running after the rate limit resets should clear it, and no change to the PR is needed. Both sources rated it SEVERITY: NIT, mapped here to low. Confidence differs: sonnet gave 2, luna gave 5.\n- scripts/orchestrate_poll_process.sh:25292-25308, 25976-25986 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new ai:ready-to-merge resolver fallback stores only success values in _std_prefetched_impl_pr_num / _std_prefetched_impl_pr_json. When the resolver returns 1, the attempt_merge branch calls _resolve_issue_implementation_pr again for the same issue in the same candidate iteration. That repeats the discovery work and API fetches (23196, 23215, 23199/23218), and the first call's STALL_IMPL_PR_FAILURE_REASON is lost because 23188 resets it.\n  WHY: Every standalone ai:ready-to-merge candidate whose implementation PR cannot be resolved pays the discovery cost twice per tick, and the second call changes no outcome. This contradicts the changelog's claim that the tick makes no extra API call. The source rated it SEVERITY: NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml:line 487, `support_main_json=\"$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/main)\"` in the review support-ref resolution step | severity=NIT | confidence=2\n  PROBLEM: The only failed check-run on head d5d2d2a7, \"review / gate\", failed at this read. The log shows `SUPPORT_REF source=promote_candidate_unprotected`, then `GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 attempt=1/5 wait_secs=1226`, then exit code 75. Under `bash -e` the step aborts before `review_support_sha` is written.\n  WHY: The GitHub core API rate limit ran out while the job was running. The PR does not touch this workflow file, and no diff hunk maps to the failure. A CI re-run after the rate limit resets should clear it, and no edit to the PR files is needed.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:25296 (merged-guard fallback: if _resolve_issue_implementation_pr \"${issue_num}\"; then) versus 25976-25986 (attempt_merge branch: elif _resolve_issue_implementation_pr \"${issue_num}\"; then) | severity=NIT | confidence=3\n  PROBLEM: The ai:ready-to-merge resolver fallback at 25292-25308 stores only success values (25304-25307). When the resolver returns 1, the prefetch variables stay empty and the guards fail open. The attempt_merge branch at 25976 then calls _resolve_issue_implementation_pr a second time, repeating _linked_prs_by_branch_name (23196), _issue_cross_ref_pr_numbers_unique (23215) and the pulls/<n> fetches (23199/23218). Because 23188 resets STALL_IMPL_PR_FAILURE_REASON, the first call's failure reason is lost.\n  WHY: Every unresolvable standalone ai:ready-to-merge candidate pays the discovery cost twice per tick with no change in outcome, which contradicts the changelog's \"no extra API call\" claim. Suggested fix: set a per-candidate flag next to the resets at 24936-24937 and reuse STALL_IMPL_PR_NUM / STALL_IMPL_PR_JSON / STALL_IMPL_PR_FAILURE_REASON in attempt_merge.\n- HARDENING: scripts/orchestrate_poll_process.sh:21772-21776 (invoke_stall_judge, merged-state derivation) | HARDENING_RISK_SCORE: 1\n  PROBLEM: pr_state is forced to \"merged\" when .merged is true OR when merged_at is non-empty. A payload with merged=false and a merged_at value would be reported as merged, and the escalation guard at 22139-22141 would then keep escalate_human.\n  WHY: This is defensive only, because GitHub's REST payload keeps the two fields consistent. Suggested fix: `if [ \"${pr_merged}\" = \"true\" ] || { [ -z \"${pr_merged}\" ] && [ -n \"${pr_merged_at}\" ]; }; then` (estimated 2 lines changed).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:line 487, `support_main_json=\"$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/main)\"` | severity=NIT | confidence=5\n  PROBLEM: The `review / gate` check failed when this call got HTTP 403 and returned exit code 75. Under `bash -e` the step stops before it writes `review_support_sha` to `$GITHUB_OUTPUT`.\n  WHY: The check-run log shows this exact call failing after `SUPPORT_REF source=promote_candidate_unprotected`, which blocks downstream review work for that run. The workflow file is outside the PR diff, and the failure looks like an API availability or permission issue, not a regression from this PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "19e0cf0a896bb98076f039ed206da0bfe2518e8b80842e3b33639c90c4e23871",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "43841465424",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43841465424",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116180022_ab1c1a03d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "43841465424"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T18:00:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
