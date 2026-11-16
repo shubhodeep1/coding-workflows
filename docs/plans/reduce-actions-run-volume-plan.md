@@ -137,7 +137,7 @@ User answers, 2026-11-16. Q9 to Q11 were taken as clear-winner assumptions and n
 
 - **Chosen:** push runs share the concurrency group `ci-push-<ref>` with `cancel-in-progress: false` (Q3 A, 2026-11-16).
 - **Alternatives considered:** keep one group per run (every pushed commit gets its own 37-job run); cancel the running push run too.
-- **Why:** on 2026-11-16 four `main` push runs (148 jobs) sat queued at once, and every commit had already passed its PR's own CI. The running run is never cancelled, so check-failure triage's base gate (`workflow_runs[0]` of the base's push runs) always reads a run that finishes. A replaced run ends `cancelled`, which `internal-check-failure-triage.yml` and `workflow-failure-heal-intake.yml` ignore, and `scripts/ci_cancelled_rerun.py` never re-runs, because the replaced commit is never a PR's current head.
+- **Why:** on 2026-11-16 four `main` push runs (148 jobs) sat queued at once, and every commit had already passed its PR's own CI. The running run is never cancelled, so check-failure triage's base gate (`workflow_runs[0]` of the base's push runs) always reads a run that finishes. A replaced run ends `cancelled`, which `internal-check-failure-triage.yml` and `workflow-failure-heal-intake.yml` ignore, and `scripts/ci_cancelled_rerun.py` never re-runs, because the replaced commit is never a PR's current head. Heal's stale auto-close (`heal_stale_decision` in `scripts/workflow_failure_heal.py`) used to keep a heal issue open for any post-anchor push run that was not `success`; it now skips `cancelled` runs, which count neither as green nor as red (Q5 A, 2026-11-16). Without that, one replaced run would keep a CI heal issue open until the next occurrence.
 
 ### D15 — Readiness check filters label events (item 10)
 
@@ -161,7 +161,7 @@ User answers, 2026-11-16. Q9 to Q11 were taken as clear-winner assumptions and n
    - registry, inventory and docs
 3. **PR (c): item 6.** The posting sites of the three comment kinds that passed the reader audit, changed per call.
 4. **PR (d): item 4.** `ci.yml`, `scripts/pr_checks_lib.sh` (`_pr_ensure_final_ci`) and the new `scripts/ci_docs_only_paths.sh`, built on top of #9528's `ci.yml` (#9563).
-5. **PR (e): items 10 and 14.** `ci.yml`'s concurrency block, `integration-pr-readiness.yml`, and their tests.
+5. **PR (e): items 10 and 14.** `ci.yml`'s concurrency block, `integration-pr-readiness.yml`, heal's stale auto-close window (`scripts/workflow_failure_heal.py`), and their tests.
 
 Each PR is independently revertable.
 
@@ -232,7 +232,7 @@ Push runs (`main`, `stable`, `orchestrator/project-*`) are never gated: check-fa
 - Item 12: the full test set that references the file, run before and after the removal.
 - Item 6: per-kind tests that the call uses the job token, and that readers still find the comment.
 - Item 4: `tests/test_ci_docs_only_final_ci.py`: the path list, `verify` against real merge commits, the workflow structure, a matrix over `lint`'s decision logic, and the dispatcher against a fake `gh`.
-- Item 14: `tests/test_ci_concurrency.py` evaluates the group for push runs on `main`, `stable` and an integration branch, and pins that the running push run is never cancelled.
+- Item 14: `tests/test_ci_concurrency.py` evaluates the group for push runs on `main`, `stable` and an integration branch, and pins that the running push run is never cancelled; `tests/test_workflow_failure_heal.py` pins that heal's stale auto-close skips `cancelled` runs without counting them as green.
 - Item 10: `tests/test_check_integration_pr_readiness.py` pins the job condition and checks its label matches the script's `OVERRIDE_LABEL`.
 
 ## Risks & Mitigations
@@ -242,6 +242,8 @@ Push runs (`main`, `stable`, `orchestrator/project-*`) are never gated: check-fa
 - Slower recovery of orphaned runs on conflicted closed PRs (item 8): bounded at one hour.
 - Intermediate commits on a branch get no push CI of their own (item 14): each passed its PR's CI before it merged, and the newest commit is always tested. A breakage introduced by one of them surfaces in the next run that does start. Heal's `HEAL_STALE_GREEN_RUNS` counts fewer green push runs, so its stale auto-close can take longer.
 - Pushes to one branch now wait for that branch's running CI (item 14): the newest waiting commit starts as soon as the running run finishes.
+- A run cancelled mid-failure is skipped by heal's stale auto-close (item 14, Q5 A): a failure that comes back posts an occurrence comment, which moves the anchor and keeps the issue open.
+- The release CI gate (`test-and-mark-stable.yml` `ci_lint_gate`, `scripts/release_ci_gate.sh`) needs `lint` on the exact `stable` SHA. If two pushes reach `stable` while its CI runs, the middle commit gets no run, and a release dispatched for it waits out the gate and fails closed; the `RELEASE_STALE_TIP` guard rejects that commit anyway, and the next dispatch targets the newer tip.
 
 ## Rollout
 

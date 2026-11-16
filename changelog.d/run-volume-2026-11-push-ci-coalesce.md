@@ -10,8 +10,8 @@ Every push to `main`, `stable` or an `orchestrator/project-*` branch used to sta
 | `main` push runs queued together on 2026-11-16 | 4 |
 | Readiness-check runner jobs avoided | about 170 a day (label changes) |
 
-What this means for operators: a busy branch no longer stacks one full CI run per merged commit. Intermediate commits get no push CI of their own; each one already passed its PR's CI, and the next run that starts covers it. A push now waits for the running CI on the same branch to finish, and heal's stale auto-close, which counts green push runs, can take longer.
+What this means for operators: a busy branch no longer stacks one full CI run per merged commit. Intermediate commits get no push CI of their own; each one already passed its PR's CI, and the next run that starts covers it. A push now waits for the running CI on the same branch to finish. Heal's stale auto-close skips a `cancelled` push run instead of keeping the heal issue open over it, and since it sees fewer green push runs it can take longer to close an issue.
 
 ### For contributors
 
-Decisions D14 and D15 in `docs/plans/reduce-actions-run-volume-plan.md`. Tests: `tests/test_ci_concurrency.py` (push group per branch, no cancellation of the running run) and `tests/test_check_integration_pr_readiness.py` (the job condition and its label).
+Decisions D14 and D15 in `docs/plans/reduce-actions-run-volume-plan.md`. Tests: `tests/test_ci_concurrency.py` (push group per branch, no cancellation of the running run), `tests/test_workflow_failure_heal.py` (stale auto-close skips `cancelled` runs) and `tests/test_check_integration_pr_readiness.py` (the job condition and its label).
