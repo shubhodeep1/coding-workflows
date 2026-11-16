@@ -20553,6 +20553,10 @@ STALL_EOF
           # already-dispatched/active (rc=2) as success.
           local _rtr_failed_conclusion=""
           local _rtr_failed_wf=""
+          # Set once a review dispatch has been tried in this call, so the
+          # dispatch-first step before the empty commit (cut-ci-runner-time
+          # Phase 3) never dispatches twice.
+          local _rtr_dispatch_attempted="false"
           # Newest createdAt among the completed head-branch runs seen, so a
           # PR-named failure (below) that a later head-branch run already
           # superseded is not acted on.
@@ -20640,6 +20644,7 @@ STALL_EOF
           if [ -n "${_rtr_failed_conclusion}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} last ${_rtr_failed_wf} run concluded '${_rtr_failed_conclusion}' — dispatching review workflow directly instead of pushing an empty commit."
             local _rtr_dispatch_rc=0
+            _rtr_dispatch_attempted="true"
             _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _rtr_dispatch_rc=$?
             if [ "${_rtr_dispatch_rc}" -eq 0 ]; then
               tg_notify "Stall recovery: re-dispatched review workflow for PR #${pr_num} (issue #${issue_num}, last run='${_rtr_failed_conclusion}', stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
@@ -20774,6 +20779,35 @@ STALL_EOF
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             return 1
           fi
+          # Dispatch first (cut-ci-runner-time Phase 3, plan D3): with no
+          # failed last run, re-trigger review by dispatching the review
+          # workflow, behind the same merge-train, capacity, conflict and
+          # in-flight guards the empty commit uses. An empty commit started a
+          # full CI run on identical code; it is now only the fallback when
+          # the dispatch itself fails (rc other than 0 and 2).
+          # §15 audit: the in-flight checks above read the cached runs blob and
+          # one branch-scoped listing; neither can be passed to the helper, whose
+          # _has_active_autofix_run guard reads up to three branch listings (plus
+          # the PR-named dispatch lookup) before one workflow_dispatch. That
+          # replaces the empty commit, which cost a full CI run.
+          if [ "${_rtr_dispatch_attempted}" != "true" ]; then
+            local _rtr_first_dispatch_rc=0
+            _rtr_dispatch_attempted="true"
+            _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _rtr_first_dispatch_rc=$?
+            if [ "${_rtr_first_dispatch_rc}" -eq 0 ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} dispatched the review workflow instead of pushing an empty commit."
+              tg_notify "Stall recovery: re-dispatched review workflow for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+              STALL_RECOVERY_SHOULD_INCREMENT="true"
+              STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              return 0
+            fi
+            if [ "${_rtr_first_dispatch_rc}" -eq 2 ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} dispatch helper skipped (already active or already dispatched this cycle); not incrementing stall recovery."
+              STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              return 0
+            fi
+            echo "  Issue #${issue_num} PR #${pr_num} dispatch helper returned rc=${_rtr_first_dispatch_rc}; falling back to empty-commit push."
+          fi
           if git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
             _rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
             if [[ "${_rtr_head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
@@ -20786,6 +20820,8 @@ STALL_EOF
               git config user.email "codex-bot@users.noreply.invalid"
               git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
               if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_empty_commit_fallback"
+                echo "  Issue #${issue_num} PR #${pr_num} pushed the empty-commit fallback (action=retrigger_review_empty_commit_fallback)."
                 tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
                 _rtr_push_succeeded="true"
               fi
@@ -26264,6 +26300,9 @@ STALL_EOF
         local pr_json
         local _std_rtr_inflight_blob _std_rtr_inflight_id _std_rtr_direct_inflight_id _std_rtr_now_epoch _std_rtr_stall_secs _std_rtr_origin_head_sha _std_rtr_push_succeeded
         _std_rtr_push_succeeded="false"
+        # Return code of the dispatch-first review dispatch (cut-ci-runner-time
+        # Phase 3); -1 means it was not tried.
+        local _std_rtr_dispatch_rc=-1
         if [[ "${_STD_ITER_PR_NUM_CACHED:-}" =~ ^[0-9]+$ ]]; then
           pr_num="${_STD_ITER_PR_NUM_CACHED}"
           pr_lookup_ok="true"
@@ -26399,25 +26438,57 @@ STALL_EOF
 			elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
-            elif git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
-              _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
-              if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
-                 [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then
-                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} head advanced from ${head_sha} to ${_std_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
-              elif git checkout "origin/${head_ref}" 2>/dev/null; then
-                git config user.name "codex-bot"
-                git config user.email "codex-bot@users.noreply.invalid"
-                git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
-                if git push origin "HEAD:${head_ref}" 2>/dev/null; then
-                  _std_rtr_push_succeeded="true"
-                fi
-                git checkout --detach HEAD 2>/dev/null || true
+            else
+              # Dispatch first (cut-ci-runner-time Phase 3, plan D3): re-trigger
+              # review by dispatching the review workflow, behind the same
+              # wrong-PR and in-flight guards as the empty commit. The empty
+              # commit, which started a full CI run on identical code, is only
+              # the fallback when the dispatch itself fails (rc other than 0/2).
+              # §15 audit: see the managed arm; the helper's active-run guard
+              # (up to three branch listings plus the PR-named lookup) and one
+              # workflow_dispatch replace the empty commit's full CI run.
+              _std_rtr_dispatch_rc=0
+              _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _std_rtr_dispatch_rc=$?
+              if [ "${_std_rtr_dispatch_rc}" -eq 0 ]; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} dispatched the review workflow instead of pushing an empty commit."
+                STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              elif [ "${_std_rtr_dispatch_rc}" -eq 2 ]; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} dispatch helper skipped (already active or already dispatched this cycle); not incrementing stall recovery."
+                STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
               else
-                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} dispatch helper returned rc=${_std_rtr_dispatch_rc}; falling back to empty-commit push."
+              fi
+              if [ "${_std_rtr_dispatch_rc}" -ne 0 ] && [ "${_std_rtr_dispatch_rc}" -ne 2 ] \
+                && git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+                _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
+                if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
+                   [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then
+                  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} head advanced from ${head_sha} to ${_std_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
+                elif git checkout "origin/${head_ref}" 2>/dev/null; then
+                  git config user.name "codex-bot"
+                  git config user.email "codex-bot@users.noreply.invalid"
+                  git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
+                  if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                    _std_rtr_push_succeeded="true"
+                    STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_empty_commit_fallback"
+                    echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} pushed the empty-commit fallback (action=retrigger_review_empty_commit_fallback)."
+                  fi
+                  git checkout --detach HEAD 2>/dev/null || true
+                else
+                  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
+                fi
               fi
             fi
           fi
-          if [ "${_std_rtr_push_succeeded}" = "true" ]; then
+          if [ "${_std_rtr_dispatch_rc}" -eq 0 ]; then
+            tg_notify_issue "${issue_num}" "Standalone stall recovery: re-dispatched the review workflow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            took_action="true"
+          elif [ "${_std_rtr_dispatch_rc}" -eq 2 ]; then
+            # A live or already-dispatched review run: reset the stall clock
+            # without spending recovery budget, like the managed arm's rc 2.
+            took_action="true"
+          elif [ "${_std_rtr_push_succeeded}" = "true" ]; then
             tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered review flow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
             STALL_RECOVERY_SHOULD_INCREMENT="true"
             took_action="true"

@@ -681,6 +681,26 @@ jobs:
           CI_CANCELLED_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
         run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py
 
+      # Final CI safety net (cut-ci-runner-time Phase 4): a non-draft PR head
+      # whose ai-review/head-gate is success but that has no run of the
+      # final-CI workflow gets one through _pr_ensure_final_ci. Reuses the
+      # enumerate step's PR snapshot; budget and logs in the script header.
+      # Off while REVIEW_FINAL_CI_WORKFLOW is empty (the script then makes no
+      # API call); the Phase 4 switch-over names ci.yml here.
+      - name: Ensure the final CI run on reviewed PR heads
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REVIEW_FINAL_CI_WORKFLOW: ""
+          FINAL_CI_SWEEP_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
+          FINAL_CI_SWEEP_MAX_PER_TICK: ${{ vars.FINAL_CI_SWEEP_MAX_PER_TICK || '10' }}
+          FINAL_CI_SWEEP_HELPERS_DIR: .ci-rerun-support/scripts
+          HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: bash .ci-rerun-support/scripts/review_final_ci_sweep.sh
+
       - name: Re-dispatch stale security holds
         if: github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true' && steps.provider_outage.outputs.paused != 'true'
         env:
