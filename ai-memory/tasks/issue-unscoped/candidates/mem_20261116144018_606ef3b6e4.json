@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:4445-5126 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: DISPATCH_WATCH_CANCEL_ON_TIMEOUT is read only inside the five dispatch step bodies (default \"true\") and is never mapped from a repository variable, workflow input or job env, so operators cannot disable the new cancel behaviour without editing the workflow.\n  WHY: The advertised kill switch is unreachable from the operator surface. Severity disagreement: gemini rated it MAJOR (mapped to high) and minimax rated it NIT; the highest is used.\n- .github/workflows/test-and-mark-stable.yml:(tee pipeline: `| tee \"${DW_TIMEOUT_LOG}\" || DW_TIMEOUT_RC=$?`) | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pipeline that captures the watcher output through tee is fragile.\n  WHY: A tee failure (IO error, disk full) gives a non-zero DW_TIMEOUT_RC even when the watcher succeeded, causing a false-positive timeout diagnostic and an unnecessary cancel attempt.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Re-run the release gate once the queue is clear.\"\n  expected_change_site: A release-gate run for .github/workflows/test-and-mark-stable.yml\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description says \"Post-merge: none\" and provides no release-gate rerun result.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:All five dispatch steps modified in the PR (e.g., lines 4511-4546, 4584-4621, 4657-4694, 4784-4821, 5089-5126) | severity=MAJOR | confidence=5\n  PROBLEM: The DISPATCH_WATCH_CANCEL_ON_TIMEOUT variable is not mapped to an external repository configuration or workflow input in the job environments for the modified dispatch steps.\n  WHY: Operators cannot disable the cancellation logic by setting a DISPATCH_WATCH_CANCEL_ON_TIMEOUT repository variable, despite the step-level logic allowing configurability.\n- .github/workflows/test-and-mark-stable.yml:`| tee \"${DW_TIMEOUT_LOG}\" || DW_TIMEOUT_RC=$?` | severity=NIT | confidence=2\n  PROBLEM: The pipeline capturing the watcher's output is fragile.\n  WHY: A failure of tee itself (e.g., IO error, disk full) would give a non-zero DW_TIMEOUT_RC even if the watcher script succeeded, triggering a false-positive timeout diagnostic and an unnecessary cancellation attempt.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:4543, 4616, 4686, 4814, 5121 (switch read, one per dispatch step); job env blocks 4445-4447 (orphan-workflows-test), 4724-4726 (orchestrate-decompose-test), 5057-5059 (validate-standalone-test) | severity=NIT | confidence=5\n  PROBLEM: The new child-run cancellation is gated by DISPATCH_WATCH_CANCEL_ON_TIMEOUT, but nothing populates that variable: it is read only in the five step bodies (default \"true\") and the three owning jobs set only GH_TOKEN and TEST_REPO, with no workflow_dispatch input and no vars.* mapping.\n  WHY: The kill switch the changelog advertises is not reachable from the operator surface, so stopping the cancel behaviour requires editing the workflow file, a declared-vs-effective capability gap.\n- HARDENING_SUGGESTIONS: add `DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}` to each of the three job env blocks (4445-4447, 4724-4726, 5057-5059). Estimated lines changed: 3. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Re-run the release gate once the queue is clear.\"\n  Expected change site: A release-gate run for `.github/workflows/test-and-mark-stable.yml`.\n  Evidence of absence: The PR description says \"Post-merge: none\" and provides no release-gate rerun result.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- HARDENING_SUGGESTIONS: NONE (HARDENING_RISK_SCORE: 0)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "92bdeaf846a25e2072afca22ea4ac43549cf78e12538e7fd99d6ae71aa5f7c08",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9547,
+    "run_id": "43837963119",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43837963119",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116144018_606ef3b6e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9547,
+    "run_id": "43837963119"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T14:40:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
