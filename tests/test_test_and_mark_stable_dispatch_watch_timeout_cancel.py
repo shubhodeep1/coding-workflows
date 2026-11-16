@@ -90,6 +90,21 @@ def test_dispatch_steps_carry_identical_timeout_block() -> None:
 	assert "${{" not in block
 
 
+JOB_ENV_SWITCH = "      DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}\n"
+
+
+def test_owning_jobs_map_the_cancel_switch_from_a_repo_variable() -> None:
+	"""Operators flip the switch with a repo variable, not a workflow edit."""
+	text = WORKFLOW.read_text(encoding="utf-8")
+	jobs = re.split(r"\n(?=  [A-Za-z0-9_-]+:\n)", text)
+	for name in DISPATCH_STEPS:
+		owners = [job for job in jobs if f"      - name: {name}\n" in job or f'      - name: "{name}"\n' in job]
+		assert len(owners) == 1, name
+		job = owners[0]
+		steps_at = job.index("    steps:\n")
+		assert JOB_ENV_SWITCH in job[:steps_at], name
+
+
 def test_watcher_call_is_piped_through_tee_before_the_block() -> None:
 	for name, run in _step_runs().items():
 		assert run.count("bash ./scripts/dispatch_and_watch_workflow_run.sh") == 1, name

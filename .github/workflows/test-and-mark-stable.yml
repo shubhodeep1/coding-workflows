@@ -4445,6 +4445,9 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
+      # Operator switch for the #9532 timeout cancel in this job's dispatch steps;
+      # set the repo variable to false to skip the cancel (the shell default stays true).
+      DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     steps:
       - name: Validate prerequisites
         run: |
@@ -4724,6 +4727,9 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
+      # Operator switch for the #9532 timeout cancel in this job's dispatch steps;
+      # set the repo variable to false to skip the cancel (the shell default stays true).
+      DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     outputs:
       tracking_issue: ${{ steps.dispatch.outputs.tracking_issue }}
       child_issues: ${{ steps.dispatch.outputs.child_issues }}
@@ -5057,6 +5063,9 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
+      # Operator switch for the #9532 timeout cancel in this job's dispatch steps;
+      # set the repo variable to false to skip the cancel (the shell default stays true).
+      DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     steps:
       - name: Validate prerequisites
         run: |
