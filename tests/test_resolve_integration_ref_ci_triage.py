@@ -40,7 +40,6 @@ REFUSAL_REASONS = {
 	"issue_parse_failed",
 	"issue_json_invalid",
 	"branch_lookup_failed",
-	"base_ref_invalid",
 }
 
 
@@ -263,23 +262,26 @@ def test_prose_marker_skip_outer_value_does_not_leak() -> None:
 # Issue #9170: an unblock-judge CI-failure reissue (lone `pr=` marker on line
 # 1, "Re-issued by the unblock judge from #N." on line 2, no label) whose
 # owning PR merged into a non-default branch of this repository resolves to
-# that base branch. A PR that did not merge keeps the default branch; any
-# failure on the merged path refuses (exit 3) instead of falling back.
+# that base branch. A PR that did not merge keeps the default branch, and so
+# does any lookup on the merged path that cannot be verified: it fails open
+# (exit 0, empty output) with one `::warning::... outcome=skipped reason=<token>`
+# line, per the approved plan (docs/plans/ci-reissue-branch-routing-and-sandbox-solc-plan.md,
+# "Fail-open, not fail-closed"). The tuple is (exit code, skip reason, stdout).
 REISSUE_FIXTURES = {
 	"reissue_lone_pr_marker_without_label_skips": (0, None, ""),
 	"reissue_closed_unmerged_pr_keeps_default": (0, None, ""),
 	"reissue_merged_pr_routes_to_base_branch": (0, None, "orchestrator/project-768"),
 	# The deleted base branch's own lookup worked and found no merge into the
 	# default branch (an abandoned branch).
-	"reissue_merged_pr_base_branch_missing_refuses": (3, "branch_missing", ""),
+	"reissue_merged_pr_base_branch_missing_keeps_default": (0, "branch_missing", ""),
 	# The helper's closed-PR lookup failed: not an abandoned branch.
-	"reissue_merged_pr_base_branch_lookup_failed_refuses": (3, "branch_lookup_failed", ""),
+	"reissue_merged_pr_base_branch_lookup_failed_keeps_default": (0, "branch_lookup_failed", ""),
 	# The deleted base branch was itself merged into the default branch
 	# (finalize uses --delete-branch): keep the default branch.
 	"reissue_merged_pr_base_branch_merged_into_default_keeps_default": (0, None, ""),
-	"reissue_merged_pr_cross_repository_refuses": (3, "pr_cross_repository", ""),
-	"reissue_pr_lookup_failed_refuses": (3, "pr_lookup_failed", ""),
-	"reissue_merged_pr_base_ref_invalid_refuses": (3, "base_ref_invalid", ""),
+	"reissue_merged_pr_cross_repository_keeps_default": (0, "pr_cross_repository", ""),
+	"reissue_pr_lookup_failed_keeps_default": (0, "pr_lookup_failed", ""),
+	"reissue_merged_pr_base_ref_invalid_keeps_default": (0, "base_ref_invalid", ""),
 }
 REISSUE_LINE_TWO = re.compile(r"Re-issued by the unblock judge from #[1-9][0-9]*\.")
 ROUTED_LOG_LITERAL = 'echo "CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=routed branch=${ref}" >&2'
@@ -291,7 +293,8 @@ def test_reissue_fixtures_shape_and_run(stem: str) -> None:
 	data = json.loads(path.read_text(encoding="utf-8"))
 	expected_rc, expected_reason, expected_stdout = REISSUE_FIXTURES[stem]
 	assert data["expected_exit_code"] == expected_rc
-	assert data.get("expected_error_reason") == expected_reason
+	assert data.get("expected_error_reason") is None
+	assert data.get("expected_warning") == (f"outcome=skipped reason={expected_reason}" if expected_reason else None)
 	assert data["expected_stdout"] == expected_stdout
 	issue = data["issues"]["101"]
 	assert issue["labels"] == []
@@ -300,7 +303,7 @@ def test_reissue_fixtures_shape_and_run(stem: str) -> None:
 	assert re.fullmatch(r"<!-- check-failure-triage:pr=[1-9][0-9]* -->", lines[0])
 	assert REISSUE_LINE_TWO.fullmatch(lines[1])
 	pulls = data.get("pulls") or {}
-	if stem == "reissue_pr_lookup_failed_refuses":
+	if stem == "reissue_pr_lookup_failed_keeps_default":
 		assert not pulls
 	else:
 		pull = next(iter(pulls.values()))
@@ -330,7 +333,7 @@ def _reissue_fixture(name: str, *, pull: dict | None, branch_exists: dict, stdou
 	if pull is not None:
 		data["pulls"] = {"6786": pull}
 	if reason:
-		data["expected_error_reason"] = reason
+		data["expected_warning"] = f"outcome=skipped reason={reason}"
 	return data
 
 
@@ -355,23 +358,33 @@ REISSUE_EDGE_CASES = {
 	"tracking_line_keeps_default": dict(pull=None, branch_exists=EXISTS, stdout="", rc=0, body="<!-- check-failure-triage:pr=6786 -->\nRe-issued by the unblock judge from #7.\n\n- Tracking issue: #900\n"),
 	"line_two_mismatch_keeps_default": dict(pull=_merged_pull(), branch_exists=EXISTS, stdout="", rc=0, body="<!-- check-failure-triage:pr=6786 -->\nPlease look at this.\n"),
 	"marker_not_first_line_keeps_default": dict(pull=_merged_pull(), branch_exists=EXISTS, stdout="", rc=0, body="Hello\n<!-- check-failure-triage:pr=6786 -->\nRe-issued by the unblock judge from #7.\n"),
-	"base_ref_leading_dash_refuses": dict(pull=_merged_pull(base_ref="-bad"), branch_exists=EXISTS, stdout="", rc=3, reason="base_ref_invalid"),
-	"base_ref_dotdot_refuses": dict(pull=_merged_pull(base_ref="a/../b"), branch_exists=EXISTS, stdout="", rc=3, reason="base_ref_invalid"),
-	"base_ref_head_refuses": dict(pull=_merged_pull(base_ref="HEAD"), branch_exists=EXISTS, stdout="", rc=3, reason="base_ref_invalid"),
-	"missing_default_branch_refuses": dict(pull=_merged_pull(default_branch=None), branch_exists=EXISTS, stdout="", rc=3, reason="pr_lookup_failed"),
-	"pr_number_mismatch_refuses": dict(pull={**_merged_pull(), "number": 1}, branch_exists=EXISTS, stdout="", rc=3, reason="pr_association_mismatch"),
+	"base_ref_leading_dash_keeps_default": dict(pull=_merged_pull(base_ref="-bad"), branch_exists=EXISTS, stdout="", rc=0, reason="base_ref_invalid"),
+	"base_ref_dotdot_keeps_default": dict(pull=_merged_pull(base_ref="a/../b"), branch_exists=EXISTS, stdout="", rc=0, reason="base_ref_invalid"),
+	"base_ref_head_keeps_default": dict(pull=_merged_pull(base_ref="HEAD"), branch_exists=EXISTS, stdout="", rc=0, reason="base_ref_invalid"),
+	"missing_default_branch_keeps_default": dict(pull=_merged_pull(default_branch=None), branch_exists=EXISTS, stdout="", rc=0, reason="pr_lookup_failed"),
+	"pr_number_mismatch_keeps_default": dict(pull={**_merged_pull(), "number": 1}, branch_exists=EXISTS, stdout="", rc=0, reason="pr_association_mismatch"),
 	"routing_flag_off_keeps_default": dict(pull=_merged_pull(), branch_exists=EXISTS, stdout="", rc=0),
+	# CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED turns off only this routing.
+	"reissue_flag_off_keeps_default": dict(pull=_merged_pull(), branch_exists=EXISTS, stdout="", rc=0),
+	"reissue_flag_unrecognised_keeps_default": dict(pull=_merged_pull(), branch_exists=EXISTS, stdout="", rc=0),
+	"reissue_flag_true_routes": dict(pull=_merged_pull(), branch_exists=EXISTS, stdout="orchestrator/project-768", rc=0),
 }
 
 
 @pytest.mark.parametrize("case", sorted(REISSUE_EDGE_CASES))
 def test_reissue_edge_cases(tmp_path: Path, case: str) -> None:
-	# Edge cases run from tmp_path; the committed fixture
-	# reissue_merged_pr_base_ref_invalid_refuses.json keeps base_ref_invalid in
-	# REFUSAL_REASONS and the full --self-test.
+	# Edge cases run from tmp_path; the committed reissue fixtures also run in
+	# the full --self-test.
 	data = _reissue_fixture(case, **REISSUE_EDGE_CASES[case])
 	if case == "routing_flag_off_keeps_default":
 		data["env"]["CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED"] = "false"
+	elif case == "reissue_flag_off_keeps_default":
+		data["env"]["CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED"] = "false"
+	elif case == "reissue_flag_unrecognised_keeps_default":
+		data["env"]["CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED"] = "maybe"
+		data["expected_warning"] = "CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED has an unrecognised value"
+	elif case == "reissue_flag_true_routes":
+		data["env"]["CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED"] = "TRUE"
 	path = tmp_path / f"{case}.json"
 	path.write_text(json.dumps(data), encoding="utf-8")
 	result = _run_case(path)

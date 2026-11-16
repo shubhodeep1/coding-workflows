@@ -1,5 +1,5 @@
 {
-  "name": "reissue_merged_pr_cross_repository_refuses",
+  "name": "reissue_merged_pr_cross_repository_keeps_default",
   "env": {
     "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true"
   },
@@ -37,6 +37,6 @@
     "orchestrator/project-768": true
   },
   "expected_stdout": "",
-  "expected_exit_code": 3,
-  "expected_error_reason": "pr_cross_repository"
+  "expected_exit_code": 0,
+  "expected_warning": "outcome=skipped reason=pr_cross_repository"
 }

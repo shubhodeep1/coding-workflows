@@ -163,6 +163,36 @@ ci_triage_prose_marker_skip_enabled() {
 	esac
 }
 
+# --- Merged-PR reissue base-branch routing (CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED)
+# On by default (#9170): unset, empty or `true` (any case) keeps it on;
+# `false` turns it off; any other value turns it off with a ::warning::. It
+# only matters while CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED is on (with that off
+# the resolver never reads the issue JSON), and it turns off only the
+# unblock-judge reissue routing, never the labelled ai:check-triage routing.
+# Off keeps the default branch for every reissue (reason=flag_off). The
+# resolver reads it from its own environment, like the prose-marker flag.
+ci_triage_reissue_base_routing_enabled() {
+	local raw="${CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED:-true}"
+	case "${raw,,}" in
+		true) return 0 ;;
+		false) return 1 ;;
+		*)
+			echo "::warning::CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED has an unrecognised value; merged-PR reissue base-branch routing is off. Use true or false." >&2
+			return 1
+			;;
+	esac
+}
+
+# Fail-open skip for the unblock-judge reissue path (#9170, plan: "Fail-open,
+# not fail-closed"): before this routing such a reissue always kept the
+# default branch, so a lookup that cannot be verified keeps it too. Logs one
+# warning line; the caller prints nothing and returns 0.
+ci_reissue_skip() {
+	local reason="$1"
+	local pr="${2:-none}"
+	echo "::warning::CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=skipped reason=${reason}; keeping the default branch" >&2
+}
+
 get_issue_json() {
 	local issue_num="$1"
 	# Same rate-limit-aware read as get_issue_body(); the caller maps any
@@ -441,6 +471,10 @@ resolve_ci_triage_branch() {
 			;;
 		reissue)
 			# `reissue <pr>`: the PR number is the second word.
+			if ! ci_triage_reissue_base_routing_enabled; then
+				echo "CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=skipped reason=flag_off" >&2
+				return 0
+			fi
 			resolve_ci_reissue_base_branch "${pr}"
 			return $?
 			;;
@@ -528,25 +562,39 @@ _ci_reissue_branch_state() {
 
 # Merged-PR base-branch routing for an unblock-judge CI-failure reissue
 # (#9170). Prints the verified base branch of a PR that merged into a
-# non-default branch of this repository (rc 0), prints nothing when the PR did
-# not merge, merged into the default branch, or merged into a base branch that
-# retarget_merged_base.sh shows was itself merged into the default branch and
-# deleted (rc 0, ::notice:: reason=base_branch_merged_into_default), exits 75
-# when a read is rate limited, or logs exactly one refusal and returns 3.
-# Never returns 2 or prints an empty line on failure: callers map those to the
-# default branch.
+# non-default branch of this repository (rc 0). Every other outcome prints
+# nothing and returns 0, so the reissue keeps the default branch it used
+# before this routing (plan: "Fail-open, not fail-closed"):
+# - the PR did not merge or merged into the default branch: silent skip;
+# - the base branch was deleted after being merged into the default branch
+#   (retarget_merged_base.sh): ::notice:: reason=base_branch_merged_into_default;
+# - anything that cannot be verified (pr_lookup_failed,
+#   pr_association_mismatch, pr_cross_repository, base_ref_invalid,
+#   branch_missing, branch_lookup_failed, issue_parse_failed): one
+#   ::warning:: ... outcome=skipped reason=<token> line (ci_reissue_skip).
+# A rate-limited read still exits 75. Never returns 2 or 3.
 resolve_ci_reissue_base_branch() {
 	local pr="$1"
-	local pr_json pr_rc classified verdict ref default_branch branch_state target helper_err helper_state
+	local pr_json pr_rc pr_err_file classified verdict ref default_branch branch_state target helper_err helper_state
 	pr_rc=0
-	pr_json="$(ci_triage_gh_get "repos/${REPO}/pulls/${pr}" 2>/dev/null)" || pr_rc=$?
+	pr_err_file="$(mktemp 2>/dev/null)" || pr_err_file=""
+	if [ -n "${pr_err_file}" ]; then
+		pr_json="$(ci_triage_gh_get "repos/${REPO}/pulls/${pr}" 2>"${pr_err_file}")" || pr_rc=$?
+	else
+		pr_json="$(ci_triage_gh_get "repos/${REPO}/pulls/${pr}" 2>/dev/null)" || pr_rc=$?
+	fi
 	if [ "${pr_rc}" -eq 75 ]; then
+		[ -z "${pr_err_file}" ] || rm -f "${pr_err_file}"
 		_resolver_rate_limited "pr-${pr}"
 	fi
 	if [ "${pr_rc}" -ne 0 ]; then
-		ci_triage_refuse "pr_lookup_failed" "${pr}"
-		return "${CI_TRIAGE_REFUSED_RC}"
+		# Keep the gh detail so a deleted PR can be told from an outage.
+		[ -z "${pr_err_file}" ] || cat "${pr_err_file}" >&2 || true
+		[ -z "${pr_err_file}" ] || rm -f "${pr_err_file}"
+		ci_reissue_skip "pr_lookup_failed" "${pr}"
+		return 0
 	fi
+	[ -z "${pr_err_file}" ] || rm -f "${pr_err_file}"
 	if ! classified="$(printf '%s' "${pr_json}" | python3 -I -c "${CI_TRIAGE_REISSUE_BASE_PY}" "${REPO}" "${pr}")"; then
 		classified="refuse pr_lookup_failed"
 	fi
@@ -559,18 +607,18 @@ resolve_ci_reissue_base_branch() {
 			return 0
 			;;
 		refuse)
-			ci_triage_refuse "${ref:-pr_lookup_failed}" "${pr}"
-			return "${CI_TRIAGE_REFUSED_RC}"
+			ci_reissue_skip "${ref:-pr_lookup_failed}" "${pr}"
+			return 0
 			;;
 		route)
 			if [ -z "${ref}" ]; then
-				ci_triage_refuse "issue_parse_failed" "${pr}"
-				return "${CI_TRIAGE_REFUSED_RC}"
+				ci_reissue_skip "issue_parse_failed" "${pr}"
+				return 0
 			fi
 			;;
 		*)
-			ci_triage_refuse "issue_parse_failed" "${pr}"
-			return "${CI_TRIAGE_REFUSED_RC}"
+			ci_reissue_skip "issue_parse_failed" "${pr}"
+			return 0
 			;;
 	esac
 
@@ -582,13 +630,12 @@ resolve_ci_reissue_base_branch() {
 		1)
 			# Finalize merges an integration branch into the default branch
 			# and deletes it (gh pr merge --delete-branch). Follow the deleted
-			# branch to the base its own merged PR went into; keep the default
-			# branch only when that is where the code went. Anything else
-			# (helper absent, lookup failed, abandoned branch) still refuses.
+			# branch to the base its own merged PR went into, only to name the
+			# skip reason: every outcome here keeps the default branch.
 			# The helper's switches are pinned so every workflow gets the same
 			# answer whatever RETARGET_MERGED_BASE_ENABLED the caller exports.
 			# A missing helper, a failed lookup (the helper logs
-			# reason=lookup_failed and fails open) or no output refuses as
+			# reason=lookup_failed and fails open) or no output skips as
 			# branch_lookup_failed; branch_missing means the lookup worked and
 			# found no merge into the default branch (an abandoned branch).
 			target=""
@@ -607,19 +654,19 @@ resolve_ci_reissue_base_branch() {
 				return 0
 			fi
 			if [ "${helper_state}" != ok ]; then
-				ci_triage_refuse "branch_lookup_failed" "${pr}"
-				return "${CI_TRIAGE_REFUSED_RC}"
+				ci_reissue_skip "branch_lookup_failed" "${pr}"
+				return 0
 			fi
-			ci_triage_refuse "branch_missing" "${pr}"
-			return "${CI_TRIAGE_REFUSED_RC}"
+			ci_reissue_skip "branch_missing" "${pr}"
+			return 0
 			;;
 		3)
-			ci_triage_refuse "branch_missing" "${pr}"
-			return "${CI_TRIAGE_REFUSED_RC}"
+			ci_reissue_skip "branch_missing" "${pr}"
+			return 0
 			;;
 		*)
-			ci_triage_refuse "branch_lookup_failed" "${pr}"
-			return "${CI_TRIAGE_REFUSED_RC}"
+			ci_reissue_skip "branch_lookup_failed" "${pr}"
+			return 0
 			;;
 	esac
 
@@ -717,7 +764,7 @@ run_case() {
 	local bin_dir="$2"
 	local out_file err_file actual_stdout actual_rc
 
-	local routing_flag prose_marker_flag
+	local routing_flag prose_marker_flag reissue_base_flag
 	out_file="$(mktemp)"
 	err_file="$(mktemp)"
 	# Always set the routing flag explicitly so an outer value cannot leak
@@ -739,6 +786,14 @@ env = fixture.get("env") if isinstance(fixture.get("env"), dict) else {}
 value = env.get("CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED")
 print("__unset__" if value is None else str(value))
 ' "${fixture_file}")"
+	# The reissue base-branch flag: same rules as the prose-marker flag.
+	reissue_base_flag="$(python3 -c '
+import json, pathlib, sys
+fixture = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+env = fixture.get("env") if isinstance(fixture.get("env"), dict) else {}
+value = env.get("CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED")
+print("__unset__" if value is None else str(value))
+' "${fixture_file}")"
 	(
 		export PATH="${bin_dir}:${PATH}"
 		export GH_FIXTURE_FILE="${fixture_file}"
@@ -755,6 +810,11 @@ print("__unset__" if value is None else str(value))
 			unset CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED
 		else
 			export CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED="${prose_marker_flag}"
+		fi
+		if [ "${reissue_base_flag}" = "__unset__" ]; then
+			unset CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED
+		else
+			export CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED="${reissue_base_flag}"
 		fi
 		if resolve_ref >"${out_file}" 2>"${err_file}"; then
 			echo 0 >"${out_file}.rc"

@@ -1,5 +1,5 @@
 {
-  "name": "reissue_merged_pr_base_branch_lookup_failed_refuses",
+  "name": "reissue_merged_pr_base_branch_missing_keeps_default",
   "env": {
     "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true"
   },
@@ -33,8 +33,11 @@
       }
     }
   },
+  "merged_pulls_by_head": {
+    "orchestrator/project-768": null
+  },
   "branch_exists": {},
   "expected_stdout": "",
-  "expected_exit_code": 3,
-  "expected_error_reason": "branch_lookup_failed"
+  "expected_exit_code": 0,
+  "expected_warning": "outcome=skipped reason=branch_missing"
 }

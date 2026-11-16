@@ -1,5 +1,5 @@
 {
-  "name": "reissue_pr_lookup_failed_refuses",
+  "name": "reissue_pr_lookup_failed_keeps_default",
   "env": {
     "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true"
   },
@@ -15,6 +15,6 @@
   },
   "branch_exists": {},
   "expected_stdout": "",
-  "expected_exit_code": 3,
-  "expected_error_reason": "pr_lookup_failed"
+  "expected_exit_code": 0,
+  "expected_warning": "outcome=skipped reason=pr_lookup_failed"
 }

@@ -1,5 +1,5 @@
 {
-  "name": "reissue_merged_pr_base_ref_invalid_refuses",
+  "name": "reissue_merged_pr_base_ref_invalid_keeps_default",
   "env": {
     "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true"
   },
@@ -35,6 +35,6 @@
   },
   "branch_exists": {},
   "expected_stdout": "",
-  "expected_exit_code": 3,
-  "expected_error_reason": "base_ref_invalid"
+  "expected_exit_code": 0,
+  "expected_warning": "outcome=skipped reason=base_ref_invalid"
 }
