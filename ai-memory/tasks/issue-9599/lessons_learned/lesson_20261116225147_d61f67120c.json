@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-16T22:51:47Z",
+  "issue_number": 9599,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=.github/workflows/plan.yml:451-467; cited_path=PR description acceptance table / PR comment (red-on-base and green-with-fix test run record); files_touched=.github/workflows/plan.yml, changelog.d/9599-plan-defer-rate-limited-integration-ref.md, tests/test_plan_check_triage_branch_guard.py, tests/test_workflow_checkout_integration_ref_audit.py.",
+  "phase": "review_autofix",
+  "pr_number": 9604,
+  "record_id": "lesson_20261116225147_d61f67120c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "PR description acceptance table / PR comment (red-on-base and green-with-fix test run record)",
+    ".github/workflows/plan.yml",
+    "changelog.d/9599-plan-defer-rate-limited-integration-ref.md",
+    "tests/test_plan_check_triage_branch_guard.py",
+    "tests/test_workflow_checkout_integration_ref_audit.py"
+  ]
+}
