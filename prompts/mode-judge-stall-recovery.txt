@@ -17,9 +17,9 @@ Context provided in the prompt includes:
 - Recent review/autofix workflow outcomes for the linked PR (last 3; with live
   review-run evidence on, up to 5 in every status, each with `head_sha`)
 - `review_waiting_for_runner` (when present): true when a review run on the
-  linked PR's current head is requested, queued, waiting or pending for a
-  runner, or a trusted PR-named review dispatch run (which carries the
-  default-branch SHA) is
+  linked PR's current head, or a trusted PR-named review dispatch run (which
+  carries the default-branch SHA), is requested, queued, waiting or pending
+  for a runner and is younger than REVIEW_RUN_MAX_RUNTIME_MINUTES
 - Current wave and prior recovery metadata from state
 
 Decision goals (ordered):
@@ -44,7 +44,7 @@ Allowed actions:
 Action guidance:
 - Strong preference: if linked PR `mergeable == false`, prefer `resolve_merge_conflict`.
 - Treat `mergeable == null` as unknown, not as conflict.
-- A queued, waiting or pending review run in `recent_review_workflow_outcomes`
+- A requested, queued, waiting or pending review run in `recent_review_workflow_outcomes`
   (or `review_waiting_for_runner == true`) means the PR is waiting for a
   runner, not failing. An empty `recent_review_workflow_outcomes` does not
   prove reviews were never dispatched. Never choose `escalate_human` or

@@ -114,7 +114,7 @@
 # repository_dispatch to shubhodeep1/coding-workflows; a `hold_request` op:
 # one comment on the tracking issue.
 # CONSIST-001: the identity, item, item re-check, item comments, cited-run
-# and linked open PR (#9546) reads go through gh_retry, so after a transient error (5xx, connection
+# and linked open PR list/detail/diff (#9546) reads go through gh_retry, so after a transient error (5xx, connection
 # reset) one of them may be attempted up to GH_RETRY_MAX_ATTEMPTS times in
 # total, with capped rate-limit waits. Permanent errors and every write still
 # make one attempt.
@@ -154,7 +154,7 @@ fi
 # CONSIST-001: retry transient GitHub errors (5xx, connection reset) on the
 # judge's read-only GETs the same way the poller paths do. gh_retry wraps only
 # the comments, identity, item-metadata, item re-check, cited-run and linked
-# open PR list/detail reads;
+# open PR list/detail/diff reads;
 # writes (comment POSTs, label POST/DELETE, PATCH, issue creation, dispatches)
 # stay single-attempt on purpose. gh_helpers.sh has a load guard, so this is a
 # no-op when label_helpers.sh already sourced it. A missing or unsourceable
@@ -2759,11 +2759,13 @@ unblock_ask_model()
 			# Issue #9546: the issue's work is on its open ai/issue-<item> PR.
 			local linked_diff_pr
 			linked_diff_pr="$(jq -r '.number' "${RUNTIME_DIR}/linked_pr.json")"
-			# Not a pipe: a failed read must be seen. On failure the linked PR is
-			# dropped (linked_pr.json becomes null), so the context and validation
-			# are as without a PR; the fingerprint keeps the number it already has.
+			# Not a pipe: a failed read must be seen. gh_retry (CONSIST-001) retries
+			# a transient 5xx like the lookup reads do. On final failure the linked
+			# PR is dropped (linked_pr.json becomes null), so the context and
+			# validation are as without a PR; the fingerprint keeps the number it
+			# already has.
 			if [[ "${linked_diff_pr}" =~ ^[1-9][0-9]*$ ]] \
-				&& gh api "repos/${REPOSITORY}/pulls/${linked_diff_pr}" -H "Accept: application/vnd.github.diff" > "${RUNTIME_DIR}/linked_pr_diff.raw" 2>/dev/null; then
+				&& gh_retry gh api "repos/${REPOSITORY}/pulls/${linked_diff_pr}" -H "Accept: application/vnd.github.diff" > "${RUNTIME_DIR}/linked_pr_diff.raw" 2>/dev/null; then
 				head -c 120000 "${RUNTIME_DIR}/linked_pr_diff.raw" > "${RUNTIME_DIR}/pr_diff.txt" || true
 			else
 				: > "${RUNTIME_DIR}/pr_diff.txt"

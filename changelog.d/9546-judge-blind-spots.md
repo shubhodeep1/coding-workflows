@@ -10,7 +10,7 @@ Now:
 | The numbers that matter | Value |
 | --- | --- |
 | Extra REST calls per stall judge call (open linked PR) | 1 (`gh run list --branch`) |
-| Extra REST calls per unblock judge run on an issue | 1, or 3 when an open PR is found (lookup, PR read, diff) |
+| Extra REST calls per unblock judge run on an issue | 1, or 3 when an open PR is found (lookup, PR read, diff); a transient error on one of these reads is retried up to `GH_RETRY_MAX_ATTEMPTS` times |
 | Review runs shown to the stall judge | up to 5, from a branch-scoped listing (was 3, from the repo-wide cached windows) |
 
 What this means for consumer repos: after the next `@stable` sync, both behaviours are on. Set the repository variable `STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED=false` or `UNBLOCK_JUDGE_LINKED_PR_ENABLED=false` to turn either off.
