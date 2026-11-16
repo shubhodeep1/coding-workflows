@@ -70,6 +70,24 @@ def test_etag_304_then_failed_refetch_marks_active_set_unverifiable() -> None:
 	assert "FORCE=false" in r.stdout
 
 
+def test_source_line_reports_unknown_self_run_for_unparseable_blob() -> None:
+	# A blob that cannot be parsed must not be reported as `self_run=absent`
+	# (a confirmed absence from a valid listing); it matches its `?` counts.
+	body = r'''
+	_ACTIONS_RUNS_BLOB_SOURCE=fallback
+	_ACTIONS_RUNS_BLOB_CACHE='not json'
+	_emit_actions_runs_source_line
+	_ACTIONS_RUNS_BLOB_CACHE='{"workflow_runs":[]}'
+	_emit_actions_runs_source_line
+	'''
+	r, gh_log = caps._stall_arc_drive(body, {"GITHUB_RUN_ID": str(caps.STALL_ARC_SELF_RUN_ID)})
+	assert "GH " not in gh_log, gh_log
+	assert ("ACTIONS_RUNS_SOURCE source=fallback forced_live=false total=? in_progress=? queued=? "
+		"completed=? self_run=unknown") in r.stderr, r.stderr
+	assert ("ACTIONS_RUNS_SOURCE source=fallback forced_live=false total=0 in_progress=0 queued=0 "
+		"completed=0 self_run=absent") in r.stderr, r.stderr
+
+
 def _run_judge_streak_block(stored: int | None, unverifiable: str) -> tuple[str, dict]:
 	"""Run invoke_stall_judge's escalate-streak block (verbatim from the poller)
 	for a judge escalate_human verdict; return (effective_action, state)."""

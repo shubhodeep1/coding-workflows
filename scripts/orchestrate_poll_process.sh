@@ -17997,7 +17997,7 @@ declare -g PHASE_CAPS_RUNNING_BY_STATE='{}'
 # Emit one ACTIONS_RUNS_SOURCE line (stderr; stdout carries the blob) naming
 # which path produced the memoised actions-runs blob and its counts. Counts
 # print `?` when jq fails (fail open); self_run is `unknown` when
-# GITHUB_RUN_ID is not numeric. No API calls.
+# GITHUB_RUN_ID is not numeric or the blob cannot be parsed. No API calls.
 _emit_actions_runs_source_line() {
   local _arsl_blob="${_ACTIONS_RUNS_BLOB_CACHE:-}"
   local _arsl_run_id="${GITHUB_RUN_ID:-}"
@@ -18014,7 +18014,9 @@ _emit_actions_runs_source_line() {
   if [[ "${_arsl_run_id}" =~ ^[0-9]+$ ]]; then
     if printf '%s' "${_arsl_blob}" | jq -e --argjson id "${_arsl_run_id}" 'any(.workflow_runs[]?; (.id // 0) == $id)' >/dev/null 2>&1; then
       _arsl_self='present'
-    else
+    elif [ "${_arsl_total}" != '?' ]; then
+      # Only a blob whose counts parsed is a valid listing; an unparseable
+      # blob stays `unknown`, like its `?` counts, instead of `absent`.
       _arsl_self='absent'
     fi
   fi
