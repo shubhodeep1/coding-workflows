@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: C\n\nRATIONALE:\nQ1: This heal issue cannot change `docs/INVENTORY.md`, and options A and B do not get around that. The frozen marker allows only `.github/workflows/ci.yml,tests/**,changelog.d/*.md`. A plan that names `docs/INVENTORY.md` is held as `heal_scope_plan_out_of_scope` (see `run_heal_plan_scope_gate` in `scripts/files_touched_scope_guard.py` and the hold text in `.github/workflows/plan.yml`). Implementation enforces the marker even after approval (`agents.md` L2212). For that case the repo's own route is to fix the defect outside the heal pipeline. A and B also rely on the pipeline filing a new issue and closing this one, which the planner and implementer cannot do (they only change files and open one PR). B's `HEAL_SCOPE_GUARD_TEST_SUBJECTS` change edits `scripts/workflow_failure_heal.py`, which is also outside this scope. C is the only option that can actually land.\n\nTo make the operator step a copy-and-paste, the planner should list `docs/INVENTORY.md` as the only file to change and spell out the exact edit. Add these two bullets in the Scripts section right after the `scripts/review_freshness_ci_failed.sh` entry (currently line 304), worded as in the issue's \"Suggested fix\":\n- `` - `scripts/review_final_ci_failed.sh` \u2014 Marks a PR head whose final CI run failed (`ai:final-ci-failed:v1`) and dispatches the PR's review workflow so autofix can fix the failing checks; run from the `final-ci-failed` job of `ci.yml`. ``\n- `` - `scripts/review_final_ci_sweep.sh` \u2014 Review-sweep safety net that hands PR heads with a successful `ai-review/head-gate` but no final CI run to `_pr_ensure_final_ci`. ``\n\n`docs/INVENTORY.md` on this checkout still has no `review_final_ci_` entry, so the gap is real.\n\nThe plan must not touch:\n- `tests/inventory_parity.py`, which must not be weakened;\n- `tests/test_prepush_affected_tests.py`, which is already fixed on `main`;\n- the scripts themselves, or their references in `README.md` / `agents.md`.\n\nRunning `python3 tests/inventory_parity.py` on `main` is the acceptance check, and it should pass once the two entries exist.\n\nThe plan gate will hold the plan as `heal_scope_plan_out_of_scope`. That hold is expected: it is how the repo hands an out-of-scope fix to a maintainer. Mapping `tests/inventory_parity.py` to `docs/INVENTORY.md` so future heals of this kind get a usable scope is out of scope here.",
+  "fingerprint": "5b74c868177ef2566cc5b70d8d3df00ef0572e393226a29a7fc68815e38158b3",
+  "lineage": {
+    "issue_number": 9577,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43883597867",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43883597867",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9577"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261116143224_0dd7d16fea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9577,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43883597867"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9577",
+  "timestamps": {
+    "created_at": "2026-11-16T14:32:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
