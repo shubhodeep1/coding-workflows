@@ -160,12 +160,17 @@ def test_heal_intake_takes_ci_only_for_pushes_to_the_default_branch() -> None:
 
 
 def test_ci_runs_on_orchestrator_integration_prs_and_pushes() -> None:
-	"""Q45 / issue #7283: pull-request CI runs for every base, so sub-issue
-	PRs into `orchestrator/project-*` and fix PRs routed to a failing PR's
-	head branch get CI before they merge. Pushes to main, stable and the
-	integration branches give triage's base gate a result."""
+	"""Q45 / issue #7283: every PR, for every base, gets CI before it merges,
+	so sub-issue PRs into `orchestrator/project-*` and fix PRs routed to a
+	failing PR's head branch are covered. Since cut-ci-runner-time Phase 4
+	that is `CI quick` (ci_pr_quick.yml, every base) on each push plus one
+	full ci.yml run per reviewed head (workflow_dispatch). Pushes to main,
+	stable and the integration branches give triage's base gate a result."""
 	on = _on(_load(CI))
-	assert on["pull_request"]["branches"] == ["**"], on["pull_request"]
+	assert "pull_request" not in on, on
+	assert "workflow_dispatch" in on, on
+	quick_on = _on(_load(CI.parent / "ci_pr_quick.yml"))
+	assert quick_on["pull_request"]["branches"] == ["**"], quick_on["pull_request"]
 	assert on["push"]["branches"] == ["main", "stable", "orchestrator/project-*"], on["push"]
 	# The base gate reads the newest completed CI push run on the PR's base.
 	script = TRIAGE_SCRIPT.read_text(encoding="utf-8")

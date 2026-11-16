@@ -2,25 +2,29 @@
 name: CI
 
 "on":
-  # Pull-request CI runs for every base (issue #7283). A fix PR routed to a
-  # failing PR's head branch (CI-triage routing, #6726 / #7042) then gets its
-  # own `CI / lint` before it merges, like a sub-issue PR into
-  # `orchestrator/project-*` (Q45). Push CI stays on main, stable and the
-  # integration branches, so check-failure triage has a base-branch result
-  # to compare a failing PR against (a green base means the failure is the
-  # PR's own and is left to its autofix). Heal intake and budget-watch act
-  # on main pushes only.
-  pull_request:
-    branches: ["**"]
+  # No pull_request trigger (cut-ci-runner-time Phase 4,
+  # docs/plans/cut-ci-runner-time-plan.md). Every PR, for every base (issue
+  # #7283: sub-issue PRs into `orchestrator/project-*` (Q45) and fix PRs
+  # routed to a failing PR's head branch (#6726 / #7042) included), gets:
+  #   - on every push, `static-checks` only, through
+  #     .github/workflows/ci_pr_quick.yml (checks named `quick / ...`, so a
+  #     quick run never creates a check named `lint`);
+  #   - once, when review has finished with a head, the full suite through
+  #     the workflow_dispatch trigger below, which reports `lint` on that
+  #     head. A head with a push run (orchestrator/project-*) gets no second
+  #     run.
+  # Push CI stays on main, stable and the integration branches, so
+  # check-failure triage has a base-branch result to compare a failing PR
+  # against (a green base means the failure is the PR's own and is left to
+  # its autofix). Heal intake and budget-watch act on main pushes only.
   push:
     branches: [main, stable, "orchestrator/project-*"]
-  # Final CI at the end of review (cut-ci-runner-time Phase 4,
-  # docs/plans/cut-ci-runner-time-plan.md). `_pr_ensure_final_ci`
+  # Final CI at the end of review. `_pr_ensure_final_ci`
   # (scripts/pr_checks_lib.sh) dispatches this workflow on a PR's head branch
-  # once review has finished with that head; the run checks out the PR's
-  # merge ref, so it tests what a pull_request run tests, and its check-runs
-  # (including `lint`) attach to the branch head, which is the PR head. Off
-  # until REVIEW_FINAL_CI_WORKFLOW names this file.
+  # once review has finished with that head (internal-review.yml passes
+  # final_ci_workflow: ci.yml); the run checks out the PR's merge ref, so it
+  # tests what a pull_request run used to test, and its check-runs
+  # (including `lint`) attach to the branch head, which is the PR head.
   workflow_dispatch:
     inputs:
       pr_number:
@@ -49,9 +53,9 @@ name: CI
 run-name: "${{ github.event_name == 'workflow_dispatch' && format('CI [pr:{0}]', inputs.pr_number) || '' }}"
 
 # Cancel replaced PR CI (cut-ci-runner-time Phase 2). A pull_request run
-# shares one group per PR, so a newer push cancels the older run while it is
-# queued or running; the newest head still gets its full run and its own
-# `lint`. Every other run (pushes to main, stable and orchestrator/project-*)
+# (none since Phase 4 removed the trigger; the arm stays for a workflow_call
+# caller with mode full) shares one group per PR, so a newer push cancels
+# the older run while it is queued or running. Every other run (pushes to main, stable and orchestrator/project-*)
 # gets a group of its own and is never cancelled, because check-failure
 # triage compares a failing PR against the base branch's newest push run.
 # The cancelled-CI rerun sweep (scripts/ci_cancelled_rerun.py) skips a
@@ -314,7 +318,7 @@ jobs:
       - name: CI concurrency contract tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_concurrency.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_concurrency.py tests/test_ci_pr_quick.py
 
       - name: CI test wiring guard
         run: |

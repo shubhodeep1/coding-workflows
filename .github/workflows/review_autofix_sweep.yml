@@ -685,15 +685,15 @@ jobs:
       # whose ai-review/head-gate is success but that has no run of the
       # final-CI workflow gets one through _pr_ensure_final_ci. Reuses the
       # enumerate step's PR snapshot; budget and logs in the script header.
-      # Off while REVIEW_FINAL_CI_WORKFLOW is empty (the script then makes no
-      # API call); the Phase 4 switch-over names ci.yml here.
+      # REVIEW_FINAL_CI_WORKFLOW must match internal-review.yml's
+      # final_ci_workflow; empty turns this step off (no API call).
       - name: Ensure the final CI run on reviewed PR heads
         if: ${{ !cancelled() }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           REPOSITORY: ${{ github.repository }}
-          REVIEW_FINAL_CI_WORKFLOW: ""
+          REVIEW_FINAL_CI_WORKFLOW: ci.yml
           FINAL_CI_SWEEP_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
           FINAL_CI_SWEEP_MAX_PER_TICK: ${{ vars.FINAL_CI_SWEEP_MAX_PER_TICK || '10' }}
           FINAL_CI_SWEEP_HELPERS_DIR: .ci-rerun-support/scripts
