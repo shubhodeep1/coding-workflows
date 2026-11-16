@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:7339-7357 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The `orchestrate-poll (1)` CI check fails on head 6ea36343 because `test_security_pass_cap_converts_low_keep_fixing_to_advisory` reports \"poller did not exit within 180s; process group killed\" (the poller hangs on shutdown after printing \"Project complete!\"); the dependent `lint` aggregator fails only because it collects that result.\n  WHY: The CI log shows the timeout, but no reviewer could tie it to this PR's code: neither `scripts/orchestrate_poll_process.sh` nor the test file is in the diff, `sandbox_solc_resolve_versions` returns early when `SANDBOX_SOLC_VERSIONS` is unset, and workflow failure heal issue #9199 already tracks it; the suggested check is to re-run the shard on the head and on merge-base 507ba62a. Severity disagreement: openai_gpt-6-luna=MAJOR (confidence 5); anthropic_claude-sonnet-5_5=NIT (confidence 1) and minimax_minimax-m3=NIT (confidence 2); the highest is used.\n- .github/workflows/:no workflow file for the copilot-pull-request-reviewer check exists in this repository; it is a GitHub App check configured outside the repo | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The copilot-pull-request-reviewer check fails with HTTP 422 errorCode custom_instructions_too_large (\"Prompt too big after adding system message\").\n  WHY: The third-party reviewer builds its prompt from AGENTS.md and CLAUDE.md and aborts before reading any diff; this PR edits neither file (only agents.d and changelog.d fragments), so no edit here can fix the check (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory (CI shard 0: \"poller did not exit within 180s; process group killed\") | severity=NIT | confidence=1\n  PROBLEM: The `orchestrate-poll (1)` check fails on head 6ea36343, and the `lint` aggregator fails only because it collects that result; the `CI_NEEDS_JSON` in the lint log shows the other five jobs succeeded.\n  WHY: The poller hangs on exit after printing \"Project complete!\". The reviewer could not map this to any code in the PR: neither `scripts/orchestrate_poll_process.sh` nor `tests/test_orchestrate_poll_process.py` is in the diff, `sandbox_solc_resolve_versions` returns early when `SANDBOX_SOLC_VERSIONS` is unset, and the in-container solc block runs only when `/opt/solc/...` exists. #9199 already tracks it. Suggested check: re-run on the head and on merge-base 507ba62a.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:7339 (test_security_pass_cap_converts_low_keep_fixing_to_advisory), reached through the \"orchestrate-poll (1)\" shard; the dependent \"lint\" job fails only because it aggregates that result | severity=NIT | confidence=2\n  PROBLEM: the orchestrate-poll (1) check fails on head 6ea36343: \"poller did not exit within 180s; process group killed\".\n  WHY: The poller printed \"Project complete!\" and then hung during shutdown. Neither scripts/orchestrate_poll_process.sh nor the test file is in the PR. In scripts/codex_isolated_exec.sh, sandbox_solc_resolve_versions returns at its first check when SANDBOX_SOLC_VERSIONS is unset, and the solc block runs only if /opt/solc/hardhat-nodejs/compilers-v2/linux-amd64 exists. #9199 tracks it. Suggested check: re-run on the head and on merge-base 507ba62a.\n- .github/workflows/:no workflow file for the copilot-pull-request-reviewer check exists in this repository; it is a GitHub App check configured outside the repo | severity=NIT | confidence=1\n  PROBLEM: the copilot-pull-request-reviewer check fails with HTTP 422 errorCode custom_instructions_too_large (\"Prompt too big after adding system message\").\n  WHY: The prompt is assembled from AGENTS.md and CLAUDE.md and aborts before reading any diff. This PR edits neither file, so no edit here can fix the check.\n- HARDENING: tests/test_resolve_integration_ref_ci_triage.py:line 402 (env = {**os.environ, \"CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED\": \"true\", \"RETARGET_MERGED_BASE_ENABLED\": \"false\"}) | HARDENING_RISK_SCORE: 1\n  PROBLEM: The test copies the whole ambient environment, so any RETARGET_MERGED_BASE_* key already set in CI would reach the helper call. There is no current failure path, because the pin at scripts/resolve_integration_ref.sh:595 overrides it.\n  WHY: Suggested fix: filter out keys starting with \"RETARGET_MERGED_BASE_\" before making the two explicit assignments (2 lines).\n- HARDENING: scripts/resolve_integration_ref.sh:line 517 (elif [ \"${GH_API_RETRY_LAST_STATUS:-}\" = \"404\" ] || grep -Eq 'status=404|HTTP 404' \"${err_file}\") | HARDENING_RISK_SCORE: 1\n  PROBLEM: The free-text grep fallback can treat an error body that merely mentions \"HTTP 404\" (for example a 422 payload) as \"branch deleted\". The resolver would then take the retarget_merged_base.sh path instead of refusing with branch_lookup_failed.\n  WHY: Suggested fix: match only the gh status line (for example 'gh: .*\\(HTTP 404\\)|status=404'), or drop the text fallback (1 line).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:7351-7357, `_run_poller(...)` in `test_security_pass_cap_converts_low_keep_fixing_to_advisory` | severity=MAJOR | confidence=5\n  PROBLEM: The `orchestrate-poll (1)` CI check fails because this test's poller does not exit within 180 seconds and its process group is killed; the dependent `lint` check also fails.\n  WHY: The PR check log reports the timeout and the test failure; the available evidence does not link the timeout to the latest change.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ee8aa45cb0a190344feec6a3a1db9393e6143db56520d8ae4bfd38ea8d673316",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9178,
+    "run_id": "43885176282",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43885176282",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116172410_3c38d9ac64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9178,
+    "run_id": "43885176282"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T17:24:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
