@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:4546 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The kill switch engages only for the exact token \"false\" (case-insensitive). Other false-ish values such as \"0\", \"no\", \"off\" or a typo leave the timed-out child-run cancel active (identical copies at 4619, 4689, 4820, 5130).\n  WHY: The README's boolean-variable convention treats anything other than the enable token as OFF, so an operator who sets \"off\" still gets a cancel POST. The reviewer rated this NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:4546 | severity=NIT | confidence=3\n  PROBLEM: The kill switch engages only for the exact token \"false\" (case-insensitive). Other false-ish values such as \"0\", \"no\", \"off\" or a typo leave the timed-out child-run cancel active (identical copies at 4619, 4689, 4820, 5130). The job-level mapping was added at lines 4450, 4732, 5068.\n  WHY: The README's boolean-variable convention (README lines 282 and 141) treats anything other than the enable token as OFF, so an operator who sets \"off\" still gets a cancel POST.\n- HARDENING (not a finding): .github/workflows/test-and-mark-stable.yml:4549 (copies at 4622, 4692, 4823, 5133) | HARDENING_RISK_SCORE: 2\n  PROBLEM: The cancel POST is a single attempt, so a transient 5xx or a `timeout 20` expiry leaves the orphan child run running.\n  WHY: The fix would retry the POST once and keep the warn-only failure path.\n- HARDENING (not a finding): .github/workflows/test-and-mark-stable.yml:4532 (copies at 4605, 4675, 4806, 5116) | HARDENING_RISK_SCORE: 1\n  PROBLEM: Piping the watcher's stdout through `tee` buffers its per-poll status lines into ~4 KB bursts.\n  WHY: The step log goes stale during long watches, and the fix would be `stdbuf -oL tee`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "42abbe9d7fc3656ca98685ca5906178633dc8ee74a914194ec5347a0bedbd571",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9547,
+    "run_id": "43895553800",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43895553800",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116183926_85c70c6c2f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9547,
+    "run_id": "43895553800"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-16T18:39:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
