@@ -77,6 +77,11 @@ on:
         required: false
         default: ""
         type: string
+      final_ci_workflow:
+        description: "Workflow file (under .github/workflows) to dispatch once per reviewed head as the PR's one full CI run (cut-ci-runner-time Phase 4); empty = off"
+        required: false
+        default: ""
+        type: string
     secrets:
       GH_PAT:
         required: true
@@ -126,6 +131,11 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: review_autofix
   REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
+  # Final CI at the end of review (cut-ci-runner-time Phase 4): read by
+  # _pr_ensure_final_ci (scripts/pr_checks_lib.sh) in the required-checks
+  # wait and by scripts/review_enable_auto_merge.sh. Empty (the default, and
+  # every workflow_dispatch run of this file) keeps today's behaviour.
+  REVIEW_FINAL_CI_WORKFLOW: ${{ inputs.final_ci_workflow || '' }}
   # Resolve base-branch conflicts BEFORE the reviewer/editor spend when the
   # pre-review merge-topology gate sees a content conflict (default on).
   PRE_REVIEW_CONFLICT_RESOLVE_ENABLED: ${{ vars.PRE_REVIEW_CONFLICT_RESOLVE_ENABLED || 'true' }}
@@ -3495,6 +3505,10 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # A new advisory is posted with the job token, so it starts no
+          # issue_comment workflows (run-volume plan item 6); refreshing an
+          # existing PAT-authored advisory stays on GH_TOKEN.
+          MATERIALITY_COMMENT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -3542,10 +3556,28 @@ jobs:
             echo "::warning::Failed to refresh AI Materiality Advisory comment #${existing_comment_id}; will try posting a new advisory."
           fi
 
-          if gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --input "${payload}" >/dev/null 2>&1; then
-            echo "AGENTS_MD_MATERIALITY: posted advisory comment."
-          else
-            echo "::warning::Failed to post AI Materiality Advisory comment on PR #${PR_NUMBER}."
+          # Fall back to GH_TOKEN only when GitHub refuses the job token
+          # (401/403): a POST is sent once, and resending after a timeout or
+          # 5xx could duplicate the advisory.
+          materiality_post_via_pat=true
+          if [ -n "${MATERIALITY_COMMENT_TOKEN:-}" ]; then
+            materiality_post_err="$(mktemp)"
+            if GH_TOKEN="${MATERIALITY_COMMENT_TOKEN}" gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --input "${payload}" >/dev/null 2>"${materiality_post_err}"; then
+              echo "AGENTS_MD_MATERIALITY: posted advisory comment (token=job)."
+              materiality_post_via_pat=false
+            elif ! grep -qiE 'HTTP 40[13]|Resource not accessible by integration|Bad credentials|Requires authentication' "${materiality_post_err}"; then
+              cat "${materiality_post_err}" >&2 || true
+              echo "::warning::Failed to post AI Materiality Advisory comment on PR #${PR_NUMBER} (job token, not resent)."
+              materiality_post_via_pat=false
+            fi
+            rm -f "${materiality_post_err}"
+          fi
+          if [ "${materiality_post_via_pat}" = "true" ]; then
+            if gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --input "${payload}" >/dev/null 2>&1; then
+              echo "AGENTS_MD_MATERIALITY: posted advisory comment (token=pat)."
+            else
+              echo "::warning::Failed to post AI Materiality Advisory comment on PR #${PR_NUMBER}."
+            fi
           fi
           rm -f "${payload}"
 
@@ -4168,7 +4200,7 @@ jobs:
         # per-attempt budget.  On hit, the EXIT trap in
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
-        # the */5 cron tick.
+        # the */15 cron tick.
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         timeout-minutes: 170
         env:
@@ -4529,6 +4561,9 @@ jobs:
         env:
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Judge comments are informational, so they post with the job token
+          # and start no issue_comment workflows (run-volume plan item 6).
+          RB_JUDGE_COMMENT_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           ENABLE_REVIEW_BLOCKED_JUDGE: ${{ vars.ENABLE_REVIEW_BLOCKED_JUDGE || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}

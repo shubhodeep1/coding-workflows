@@ -1161,6 +1161,10 @@ GROUP_PINNED_STEPS = {
 	# Moved from tests-release-and-log-analysis in #7689, and from group 3 to
 	# group 4 in #9037.
 	"Validation harness sandbox tests": 4,
+	# Moved from tests-release-and-log-analysis in #9450.
+	"Check-failure triage workflow security tests": 0,
+	# Moved from tests-hooks-and-orchestrator in #9391.
+	"Pre-push affected-test gate tests": 3,
 }
 # The only steps pinned to the last matrix group (#8118; #8772's step moved
 # on to group 0 in #8980; #9037 moved the Claude engine judges and validation
@@ -1478,6 +1482,7 @@ WIRING_PART1_MODULES = (
 	"tests/test_review_autofix_last_run_diff_oscillation_guard.py",
 	"tests/test_review_commit_new_files_preserved.py",
 	"tests/test_review_conflict_resolve_sandbox_only.py",
+	"tests/test_review_final_ci.py",
 	"tests/test_review_freshness_ci_failed.py",
 	"tests/test_review_head_gate.py",
 	"tests/test_review_parse_consolidator.py",
@@ -1560,7 +1565,7 @@ def run_wiring_part1_filter(
 
 
 class WiringGuardPartOneShardingContractTest(unittest.TestCase):
-	"""The wiring guard part 1 step runs its 42 modules in local shards (#8246).
+	"""The wiring guard part 1 step runs its 43 modules in local shards (#8246).
 
 	`tests-heal-plan-and-validation` took 15m06s of its 20 minutes (run
 	40626853481). The step stays in its job, by name and without a guard,
@@ -1594,8 +1599,8 @@ class WiringGuardPartOneShardingContractTest(unittest.TestCase):
 		array = re.search(r"wg1_modules=\((?P<mods>[^)]*)\)", self.run)
 		self.assertIsNotNone(array)
 		self.assertEqual(tuple(array.group("mods").split()), WIRING_PART1_MODULES)
-		self.assertEqual(len(WIRING_PART1_MODULES), 42)
-		self.assertEqual(len(set(WIRING_PART1_MODULES)), 42)
+		self.assertEqual(len(WIRING_PART1_MODULES), 43)
+		self.assertEqual(len(set(WIRING_PART1_MODULES)), 43)
 		for module in WIRING_PART1_MODULES:
 			with self.subTest(module=module):
 				self.assertTrue((REPO_ROOT / module).is_file(), module)
@@ -2383,7 +2388,9 @@ class MovedPromote8466StepsContractTest(unittest.TestCase):
 # job id, module paths its body names). The pick is an estimate from test and
 # subprocess counts; the run's step timings were not readable. The two steps
 # first went to different jobs; issue #8993 moved "Orchestrate lib unit tests"
-# on to tests-release-and-log-analysis, so both now run in that job.
+# on to tests-release-and-log-analysis, so both ran in that job until issue
+# #9450 moved the triage step on to orchestrate-poll group 0. The two steps no
+# longer share a job.
 PROMOTE_8771_SOURCE_JOB_ID = "tests-promote-stall-and-review"
 PROMOTE_8771_SETUP_STEP = "Install Python CI dependencies"
 MOVED_PROMOTE_8771_STEPS = {
@@ -2402,11 +2409,12 @@ MOVED_PROMOTE_8771_STEPS = {
 			"tests/test_orchestrator_concurrency_caps.py",
 		),
 	),
+	# Issue #9450 moved it on to orchestrate-poll group 0.
 	"Check-failure triage workflow security tests": (
-		"tests-release-and-log-analysis",
+		POLL_JOB_ID,
 		(
 			"tests/test_check_failure_triage_workflow_security.py",
-			"tests/test_check_failure_triage_historical.py",
+			"tests/test_check_failure_triage_post_stage.py",
 		),
 	),
 }
@@ -2432,10 +2440,17 @@ class MovedPromote8771StepsContractTest(unittest.TestCase):
 				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
 
 	def test_each_step_has_no_matrix_guard(self) -> None:
+		# Since #9450 the triage step runs in the orchestrate-poll matrix;
+		# without its group guard it would run once per group.
 		for name in MOVED_PROMOTE_8771_STEPS:
 			with self.subTest(step=name):
 				for _owner, step in self.owning_steps(name):
-					self.assertNotIn("if", step)
+					if name in GROUP_PINNED_STEPS:
+						group = GROUP_PINNED_STEPS[name]
+						self.assertLess(group, poll_group_count())
+						self.assertEqual(step.get("if"), f"strategy.job-index == {group}")
+					else:
+						self.assertNotIn("if", step)
 
 	def test_each_step_still_names_its_modules(self) -> None:
 		for name, (_job_id, modules) in MOVED_PROMOTE_8771_STEPS.items():
@@ -2918,9 +2933,12 @@ MOVED_POLL_GROUP_THREE_8472_STEPS = {
 }
 # Group 3's pinned steps once #8472 moved the step above out. #9037 then
 # moved the Claude engine judges and validation harness sandbox steps on to
-# group 4, so only the single-file module step stays.
+# group 4, so only the single-file module step stays. #9391 then pinned the
+# pre-push affected-test gate step (moved from tests-hooks-and-orchestrator)
+# to group 3.
 POLL_GROUP_THREE_8472_REMAINING_STEPS = {
 	SINGLE_FILE_MODULES_STEP,
+	"Pre-push affected-test gate tests",
 }
 
 
@@ -2977,7 +2995,8 @@ class MovedPollGroupThree8472StepsContractTest(unittest.TestCase):
 
 	def test_group_three_pins_the_single_file_judges_and_harness_steps(self) -> None:
 		# Since #9037 the judges and harness steps run in group 4, so group 3
-		# pins only the single-file module step (name kept for history).
+		# pins the single-file module step and, since #9391, also the pre-push
+		# gate step (name kept for history).
 		guarded = {
 			step.get("name")
 			for step in load_poll_job()["steps"]
@@ -3887,6 +3906,100 @@ class MovedHooks9078StepsContractTest(unittest.TestCase):
 				self.assertNotEqual(job_id, HOOKS_9078_SOURCE_JOB_ID)
 
 
+# Step moved out of tests-hooks-and-orchestrator, which took 15m32s of its 20
+# minutes (run 43220859648, budget-watch issue #9391): step name -> module
+# paths its body names. #9078's three-step move did not show in that job's
+# total, and the run's step timings were not readable, so this step was picked
+# by test and subprocess counts (the job's largest step that had never moved
+# and is not split), an estimate, not a measurement. It needs only temp git
+# repos, no Node, no git history beyond HEAD and no prepared .claude/ live
+# copies, so it runs once per CI run in orchestrate-poll group 3, the group
+# with the lightest pinned load.
+HOOKS_9391_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
+HOOKS_9391_TARGET_JOB_ID = POLL_JOB_ID
+HOOKS_9391_TARGET_GROUP = 3
+HOOKS_9391_SETUP_STEP = "Install Python CI dependencies"
+HOOKS_9391_RUFF_LINE = (
+	"ruff check --select E,F --ignore E501 workflow-templates/.claude/hooks/prepush_affected_tests.py"
+)
+MOVED_HOOKS_9391_STEPS = {
+	"Pre-push affected-test gate tests": (
+		"tests/test_prepush_affected_tests.py",
+		"tests/test_implement_prepush_test_gate.py",
+		"tests/test_review_prepush_test_gate.py",
+		"tests/test_attempt_journal.py",
+		"tests/test_acceptance_check.py",
+		"tests/test_persist_postmerge_verify.py",
+		"tests/test_persist_budget.py",
+		"tests/test_persist_orchestrator.py",
+		"tests/test_evidence_pack.py",
+		"tests/test_evidence_broker.py",
+	),
+}
+
+
+class MovedHooks9391StepsContractTest(unittest.TestCase):
+	"""The step moved out of tests-hooks-and-orchestrator runs once, in orchestrate-poll (3) (#9391)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:
+		for name in MOVED_HOOKS_9391_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(
+					[owner for owner, _step in self.owning_steps(name)],
+					[HOOKS_9391_TARGET_JOB_ID],
+				)
+
+	def test_each_step_runs_in_group_three(self) -> None:
+		# Without the guard the step would run in every group; a wrong index
+		# would skip it silently.
+		self.assertLess(HOOKS_9391_TARGET_GROUP, poll_group_count())
+		for name in MOVED_HOOKS_9391_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), HOOKS_9391_TARGET_GROUP)
+				self.assertIn(name, POLL_GROUP_THREE_8472_REMAINING_STEPS)
+				self.assertEqual(
+					poll_job_step(name).get("if"),
+					f"strategy.job-index == {HOOKS_9391_TARGET_GROUP}",
+				)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, modules in MOVED_HOOKS_9391_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			run = steps[0][1]["run"]
+			self.assertIn(HOOKS_9391_RUFF_LINE, run)
+			self.assertTrue((REPO_ROOT / "workflow-templates/.claude/hooks/prepush_affected_tests.py").is_file())
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, run)
+
+	def test_moved_steps_left_the_hooks_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[HOOKS_9391_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_HOOKS_9391_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_poll_job_setup(self) -> None:
+		names = [step.get("name") for step in load_poll_job()["steps"]]
+		self.assertIn(HOOKS_9391_SETUP_STEP, names)
+		for name in MOVED_HOOKS_9391_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				self.assertLess(names.index(HOOKS_9391_SETUP_STEP), names.index(name))
+
+
 # Issue #9021: orchestrate-poll (0) took 15m15s of its 20 minutes (run
 # 42426489708). The CI wiring guard part 2 step stayed in group 0, by name and
 # guard, until #9214, and splits its test functions across 4 local processes,
@@ -4221,8 +4334,101 @@ class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
 			for step in self.jobs()[POLL_GROUP_ZERO_9214_SOURCE_JOB_ID]["steps"]
 			if str(step.get("if", "")) == "strategy.job-index == 0"
 		]
-		self.assertEqual(group_zero_guarded, [POLL_GROUP_ZERO_9214_FAST_FAIL_STEP])
-		self.assertEqual({name for name, group in GROUP_PINNED_STEPS.items() if group == 0}, set())
+		# Issue #9450 pinned the check-failure triage step to group 0, after the
+		# fast-fail step.
+		self.assertEqual(
+			group_zero_guarded,
+			[POLL_GROUP_ZERO_9214_FAST_FAIL_STEP, RELEASE_9450_STEP_NAME],
+		)
+		self.assertEqual(
+			{name for name, group in GROUP_PINNED_STEPS.items() if group == 0},
+			{RELEASE_9450_STEP_NAME},
+		)
+
+
+# Step moved out of tests-release-and-log-analysis, which took 15m19s of its 20
+# minutes (run 43352637124, budget-watch issue #9450): step name -> (target job
+# id, module paths its body names). The run's step timings were not readable;
+# the pick is the job's slowest unsplit step after the CI wiring guard part 2
+# step in the planning sandbox (about 162s), a relative weight, not a
+# measurement. Group 0 has pinned no step since #9214 moved part 2 out of it.
+RELEASE_9450_SOURCE_JOB_ID = "tests-release-and-log-analysis"
+RELEASE_9450_SETUP_STEP = "Install Python CI dependencies"
+RELEASE_9450_DERIVE_STEP = "Derive orchestrate poll test subsets"
+RELEASE_9450_TARGET_GROUP = 0
+RELEASE_9450_TIMEOUT_MINUTES = 20
+RELEASE_9450_STEP_NAME = "Check-failure triage workflow security tests"
+MOVED_RELEASE_9450_STEPS = {
+	RELEASE_9450_STEP_NAME: (
+		POLL_JOB_ID,
+		(
+			"tests/test_check_failure_triage_workflow_security.py",
+			"tests/test_check_failure_triage_post_stage.py",
+		),
+	),
+}
+
+
+class MovedRelease9450StepsContractTest(unittest.TestCase):
+	"""The check-failure triage step runs once, in orchestrate-poll group 0 (#9450)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_target_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_RELEASE_9450_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
+
+	def test_each_step_runs_once_in_group_zero(self) -> None:
+		self.assertLess(RELEASE_9450_TARGET_GROUP, poll_group_count())
+		for name in MOVED_RELEASE_9450_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), RELEASE_9450_TARGET_GROUP)
+				for _owner, step in self.owning_steps(name):
+					self.assertEqual(step.get("if"), f"strategy.job-index == {RELEASE_9450_TARGET_GROUP}")
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_job_id, modules) in MOVED_RELEASE_9450_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[RELEASE_9450_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_RELEASE_9450_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_poll_job_setup_and_derive_steps(self) -> None:
+		for name, (job_id, _modules) in MOVED_RELEASE_9450_STEPS.items():
+			names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				for earlier in (RELEASE_9450_SETUP_STEP, RELEASE_9450_DERIVE_STEP):
+					self.assertIn(earlier, names, job_id)
+					self.assertLess(names.index(earlier), names.index(name))
+
+	def test_no_target_is_the_source_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_RELEASE_9450_STEPS.items():
+			with self.subTest(step=name):
+				self.assertNotEqual(job_id, RELEASE_9450_SOURCE_JOB_ID)
+
+	def test_source_and_target_timeouts_are_unchanged(self) -> None:
+		jobs = self.jobs()
+		self.assertEqual(jobs[RELEASE_9450_SOURCE_JOB_ID].get("timeout-minutes"), RELEASE_9450_TIMEOUT_MINUTES)
+		self.assertEqual(jobs[POLL_JOB_ID].get("timeout-minutes"), RELEASE_9450_TIMEOUT_MINUTES)
 
 
 # Issue #9045: tests-heal-plan-and-validation took 17m00s of its 20 minutes

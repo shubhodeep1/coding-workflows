@@ -393,6 +393,128 @@ class SweepZombieQueuedFloorTest(unittest.TestCase):
 		self.assertIn("ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}", text)
 
 
+def _write_stale_queued_fake_gh(tmp: Path, *, jobs_reply: str, jobs_rc: int = 0) -> Path:
+	"""Fake `gh` for one open PR whose review run has been queued for 200 min.
+
+	`jobs_reply` is what `GET actions/runs/<id>/jobs` prints (exit `jobs_rc`).
+	"""
+	import stat
+	import textwrap
+	created = (datetime.now(timezone.utc) - timedelta(minutes=200)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	runs = {"total_count": 1, "workflow_runs": [{
+		"id": 555, "status": "queued", "event": "pull_request", "head_branch": "ai/issue-1",
+		"created_at": created, "path": ".github/workflows/internal-review.yml",
+		"display_title": "PR 10",
+	}]}
+	prs = [{"number": 10, "draft": False, "title": "PR 10", "body": "", "head": {"ref": "ai/issue-1", "sha": "0" * 40}, "labels": []}]
+	(tmp / "pulls.json").write_text(json.dumps(prs), encoding="utf-8")
+	(tmp / "runs.json").write_text(json.dumps(runs), encoding="utf-8")
+	(tmp / "jobs.json").write_text(jobs_reply, encoding="utf-8")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text(textwrap.dedent(f"""\
+		#!/usr/bin/env bash
+		printf '%s\\n' "$*" >> "{tmp}/gh_calls.log"
+		if [ "$1" = "workflow" ] && [ "$2" = "run" ]; then
+			printf '%s\\n' "$*" >> "{tmp}/dispatches.log"
+			exit 0
+		fi
+		if [ "$1" = "api" ]; then
+			case "$*" in
+				"api repos/"*" --jq .default_branch") printf 'main\\n'; exit 0 ;;
+				*"/actions/runs/555/jobs"*) cat "{tmp}/jobs.json"; exit {jobs_rc} ;;
+				*"/pulls "*|*"/pulls") cat "{tmp}/pulls.json"; exit 0 ;;
+				*"internal-review.yml/runs"*"status=queued"*) cat "{tmp}/runs.json"; exit 0 ;;
+				*"/actions/workflows/"*) printf '%s' '{{"total_count":0,"workflow_runs":[]}}'; exit 0 ;;
+			esac
+		fi
+		echo "unexpected gh call: $*" >&2
+		exit 1
+		"""), encoding="utf-8")
+	gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+	return bin_dir
+
+
+@unittest.skipUnless(shutil.which("jq"), "jq is required")
+class SweepStaleQueuedRequiresNoJobsTest(unittest.TestCase):
+	"""A queued run past SWEEP_STALE_QUEUED_MINUTES is wedged only with zero jobs.
+
+	In the 2026-11 backlog every review run waited more than two hours for a
+	runner, so the age-only rule replaced each one with a pending duplicate on
+	every sweep. A run whose jobs exist is waiting, not wedged, and keeps
+	suppressing dispatch; it reviews the PR's current head when it starts.
+	"""
+
+	def setUp(self) -> None:
+		import os
+		import sys
+		sys.path.insert(0, str(Path(__file__).resolve().parent))
+		from test_review_autofix_sweep_merge_queued_skip import extract_step_script
+		self.script = extract_step_script()
+		self.tmp = Path(os.environ.get("TMPDIR", "/tmp")) / f"sweep_stale_jobs_{os.getpid()}_{self._testMethodName}"
+		if self.tmp.exists():
+			shutil.rmtree(self.tmp)
+		self.tmp.mkdir(parents=True)
+		self.addCleanup(shutil.rmtree, self.tmp, True)
+
+	def run_sweep(self, jobs_reply: str, jobs_rc: int = 0, **env: str) -> subprocess.CompletedProcess:
+		import os
+		bin_dir = _write_stale_queued_fake_gh(self.tmp, jobs_reply=jobs_reply, jobs_rc=jobs_rc)
+		full_env = {
+			"PATH": f"{bin_dir}:{os.environ['PATH']}",
+			"RUNNER_TEMP": str(self.tmp),
+			"REPOSITORY": "o/r",
+			"GH_TOKEN": "x",
+			"READ_TOKEN": "x",
+			"HEAD_REF_FILTER": "",
+			"DRY_RUN": "false",
+			"ALLOW_WORKFLOW_EDITS": "true",
+			"SWEEP_STALE_QUEUED_MINUTES": "120",
+		}
+		full_env.update(env)
+		return subprocess.run(["bash", "-c", self.script], env=full_env, capture_output=True, text=True, cwd=self.tmp)
+
+	def dispatched(self) -> bool:
+		return (self.tmp / "dispatches.log").exists()
+
+	def test_queued_run_with_jobs_still_suppresses_dispatch(self) -> None:
+		result = self.run_sweep('{"total_count": 3, "jobs": [{"id": 1}]}')
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertFalse(self.dispatched(), result.stdout)
+		self.assertIn("run_id=555", result.stdout)
+		self.assertIn("jobs=3 outcome=waiting_for_runner", result.stdout)
+		self.assertIn("AUTOFIX_SWEEP_SKIP pr=#10 reason=active_run", result.stdout)
+		self.assertNotIn("treating as wedged", result.stdout)
+
+	def test_queued_run_without_jobs_is_wedged_and_dispatched(self) -> None:
+		result = self.run_sweep('{"total_count": 0, "jobs": []}')
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertTrue(self.dispatched(), result.stdout)
+		self.assertIn("treating as wedged", result.stdout)
+
+	def test_unreadable_jobs_reply_keeps_the_wedged_path(self) -> None:
+		for reply, rc in (("", 1), ("not json", 0), ('{"message": "x"}', 0)):
+			with self.subTest(reply=reply, rc=rc):
+				shutil.rmtree(self.tmp)
+				self.tmp.mkdir()
+				result = self.run_sweep(reply, jobs_rc=rc)
+				self.assertEqual(result.returncode, 0, result.stderr)
+				self.assertTrue(self.dispatched(), result.stdout)
+				self.assertIn("treating as wedged", result.stdout)
+
+	def test_switch_off_restores_the_age_only_rule(self) -> None:
+		result = self.run_sweep('{"total_count": 3, "jobs": [{"id": 1}]}', SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS="false")
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertTrue(self.dispatched(), result.stdout)
+		calls = (self.tmp / "gh_calls.log").read_text()
+		self.assertNotIn("/actions/runs/555/jobs", calls)
+
+	def test_workflow_defaults_the_switch_on(self) -> None:
+		text = SWEEP_WF.read_text(encoding="utf-8")
+		self.assertIn("SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS: ${{ vars.SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS || 'true' }}", text)
+
+
 class SweepDefaultBranchProvenanceContractTest(unittest.TestCase):
 	"""Issue #6629: one default-branch read per tick with candidates, no
 	fallback, and a fail-closed skip of every dispatch when it fails."""

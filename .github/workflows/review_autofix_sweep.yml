@@ -214,6 +214,8 @@ jobs:
           SWEEP_STALE_QUEUED_MINUTES: ${{ vars.SWEEP_STALE_QUEUED_MINUTES || '120' }}
           # Wedged-queued floor (issue #9473); 0 disables it.
           ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
+          # A stale queued run is wedged only when GitHub created no jobs for it.
+          SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS: ${{ vars.SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS || 'true' }}
           PROVIDER_OUTAGE_PAUSED: ${{ steps.provider_outage.outputs.paused }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
           # Smoke-PR backstop age limit in hours (issue #8953); 0 disables
@@ -326,7 +328,7 @@ jobs:
 
           snapshot_active_review_runs() {
             local workflow="$1"
-            local status snapshot_json='{}' cached_head_ref cached_count stale_run_id stale_run_created_epoch queued_age_minutes
+            local status snapshot_json='{}' cached_head_ref cached_count stale_run_id stale_run_created_epoch queued_age_minutes stale_jobs_raw stale_jobs_total
             local stale_cutoff_epoch=0
             local stale_snapshot_epoch=0
 
@@ -473,6 +475,32 @@ jobs:
               queued_age_minutes="unknown"
               if [ "${stale_snapshot_epoch}" -gt 0 ] 2>/dev/null && [ "${stale_run_created_epoch}" -gt 0 ] 2>/dev/null; then
                 queued_age_minutes="$(((stale_snapshot_epoch - stale_run_created_epoch) / 60))"
+              fi
+              # A run that is only waiting for a runner is not wedged
+              # (2026-11 backlog: every review run queued > 2h, so each
+              # sweep replaced it with a pending duplicate). GitHub creates a
+              # run's jobs when it accepts the run; a wedged ghost run has
+              # none. One jobs read per stale candidate (§15: the runs
+              # listing above carries no job data). In a backlog every queued
+              # review run older than the cutoff is a candidate, so a tick
+              # costs one read per such run, bounded by the open PRs;
+              # a run with jobs still suppresses dispatch, and an unreadable
+              # answer keeps the wedged path (dispatch), as before.
+              # SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS=false restores the
+              # age-only rule.
+              if [ "${SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS:-true}" != "false" ] && [[ "${stale_run_id}" =~ ^[1-9][0-9]*$ ]]; then
+                stale_jobs_raw="${RUNNER_TEMP:-/tmp}/sweep-stale-jobs-${stale_run_id}.json"
+                stale_jobs_total=""
+                if GH_TOKEN="${READ_TOKEN}" gh_api_retry -X GET "repos/${REPOSITORY}/actions/runs/${stale_run_id}/jobs" \
+                  -f per_page=1 > "${stale_jobs_raw}" 2>/dev/null; then
+                  stale_jobs_total="$(jq -r '.total_count // empty' "${stale_jobs_raw}" 2>/dev/null || true)"
+                fi
+                rm -f "${stale_jobs_raw}"
+                if [[ "${stale_jobs_total}" =~ ^[0-9]+$ ]] && [ "${stale_jobs_total}" -gt 0 ]; then
+                  active_review_runs["${workflow}:${cached_head_ref}"]="$(( ${active_review_runs["${workflow}:${cached_head_ref}"]:-0} + 1 ))"
+                  echo "AUTOFIX_SWEEP_STALE_QUEUED workflow=${workflow} head_ref=${cached_head_ref} run_id=${stale_run_id} queued_age_minutes=${queued_age_minutes} queued_age_threshold_minutes=${SWEEP_STALE_QUEUED_MINUTES:-0} jobs=${stale_jobs_total} outcome=waiting_for_runner — still suppressing dispatch."
+                  continue
+                fi
               fi
               echo "::warning::AUTOFIX_SWEEP_STALE_QUEUED workflow=${workflow} head_ref=${cached_head_ref} run_id=${stale_run_id} queued_age_minutes=${queued_age_minutes} queued_age_threshold_minutes=${SWEEP_STALE_QUEUED_MINUTES:-0} — treating as wedged and no longer suppressing dispatch."
               if [ "${sweep_zq_cutoff}" -gt 0 ] 2>/dev/null && [ "${stale_run_created_epoch}" -gt 0 ] 2>/dev/null && [ "${stale_run_created_epoch}" -le "${sweep_zq_cutoff}" ]; then
@@ -696,6 +724,26 @@ jobs:
           CI_CANCELLED_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
           ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
         run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py
+
+      # Final CI safety net (cut-ci-runner-time Phase 4): a non-draft PR head
+      # whose ai-review/head-gate is success but that has no run of the
+      # final-CI workflow gets one through _pr_ensure_final_ci. Reuses the
+      # enumerate step's PR snapshot; budget and logs in the script header.
+      # REVIEW_FINAL_CI_WORKFLOW must match internal-review.yml's
+      # final_ci_workflow; empty turns this step off (no API call).
+      - name: Ensure the final CI run on reviewed PR heads
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REVIEW_FINAL_CI_WORKFLOW: ci.yml
+          FINAL_CI_SWEEP_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
+          FINAL_CI_SWEEP_MAX_PER_TICK: ${{ vars.FINAL_CI_SWEEP_MAX_PER_TICK || '10' }}
+          FINAL_CI_SWEEP_HELPERS_DIR: .ci-rerun-support/scripts
+          HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: bash .ci-rerun-support/scripts/review_final_ci_sweep.sh
 
       - name: Re-dispatch stale security holds
         if: github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true' && steps.provider_outage.outputs.paused != 'true'
