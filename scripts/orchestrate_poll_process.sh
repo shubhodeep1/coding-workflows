@@ -14383,9 +14383,116 @@ Integration conflicts are cleared; final merge into \`${default_branch}\` will p
   fi
 }
 
+# _integration_sync_throttle_reason — decide whether this tick merges the
+# default branch into the integration branch (run-volume plan item 3,
+# docs/plans/reduce-actions-run-volume-plan.md).
+#
+# Every tick used to merge main into every open integration branch. Each such
+# push started two full CI runs (push + integration PR), and with main moving
+# 10-15 times a day a single project synced 13 times on 2026-11-12. The sync
+# now runs only when it is needed or overdue. Prints one reason token and
+# returns 0 to sync, 1 to skip:
+#   sync: forced | interval_disabled | not_clean | never_synced | clock_unreadable
+#         | interval_elapsed | final_pr_unmergeable | final_pr_unreadable
+#   skip: within_interval
+# The wave boundaries force a sync where they are decided: right before the
+# next wave's issues are dispatched and right before the completed project
+# enters its security pass (both pass "force"). A sync left unclean (conflict, failure, healing) is retried every tick as
+# before. INTEGRATION_SYNC_MIN_INTERVAL_SECS (default 86400) caps the gap
+# between syncs; 0 restores the sync on every tick, and an invalid value falls
+# back to the default with a warning.
+#
+# API budget (CLAUDE.md §15): no call unless the decision would otherwise be
+# a skip and the state records a final PR; then one REST read of that PR
+# (_fetch_pr_json). The same tick reads that PR again later (ensure_eager_final_pr,
+# the eager-PR validation section, the force-merge bypass), but those reads run
+# after this decision and are not cached for it; on a skipped tick this GET
+# replaces the merges POST the tick used to make, so the call count is
+# unchanged. A failed read fails open to a sync.
+_integration_sync_throttle_reason() {
+  local force="${1:-}"
+  local interval="${INTEGRATION_SYNC_MIN_INTERVAL_SECS:-86400}"
+  local last_sync_at last_epoch now_epoch final_pr pr_json pr_state pr_mergeable
+  if [ "${force}" = "force" ]; then
+    echo "forced"; return 0
+  fi
+  if ! [[ "${interval}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::INTEGRATION_SYNC_MIN_INTERVAL_SECS='${interval}' is not a non-negative integer; using 86400." >&2
+    interval=86400
+  fi
+  if [ "${interval}" -eq 0 ]; then
+    echo "interval_disabled"; return 0
+  fi
+  if [ "$(jq -r '.integration_sync_status // "clean"' "${STATE_FILE}" 2>/dev/null || echo unreadable)" != "clean" ] \
+    || [ -n "$(jq -r '.sync.last_conflict_fingerprint // ""' "${STATE_FILE}" 2>/dev/null || echo unreadable)" ]; then
+    echo "not_clean"; return 0
+  fi
+  last_sync_at="$(jq -r '.sync.last_default_sync_at // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  if [ -z "${last_sync_at}" ]; then
+    echo "never_synced"; return 0
+  fi
+  last_epoch="$(date -u -d "${last_sync_at}" +%s 2>/dev/null || true)"
+  now_epoch="$(date -u +%s 2>/dev/null || true)"
+  if ! [[ "${last_epoch}" =~ ^[0-9]+$ ]] || ! [[ "${now_epoch}" =~ ^[0-9]+$ ]]; then
+    echo "clock_unreadable"; return 0
+  fi
+  if [ $((now_epoch - last_epoch)) -ge "${interval}" ]; then
+    echo "interval_elapsed"; return 0
+  fi
+  final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  if [[ "${final_pr}" =~ ^[1-9][0-9]*$ ]]; then
+    pr_json="$(_fetch_pr_json "${final_pr}" 2>/dev/null || true)"
+    pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed' 2>/dev/null || true)"
+    pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false' 2>/dev/null || true)"
+    if [ -z "${pr_state}" ]; then
+      echo "final_pr_unreadable"; return 0
+    fi
+    if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "false" ]; then
+      echo "final_pr_unmergeable"; return 0
+    fi
+  fi
+  echo "within_interval"
+  return 1
+}
+
+# _integration_sync_at_boundary <integration_branch> <default_branch> <boundary>
+# — force one main -> integration sync at a wave boundary (run-volume plan
+# item 3): <boundary> is `wave-<n>` right before wave n's issues are
+# dispatched, or `complete` right before the security pass. It forces at most
+# once per boundary (.sync.boundary_forced records the last one, persisted
+# with the state) and not at all when this tick's per-tick sync already ran
+# the merges call (INTEGRATION_SYNC_ATTEMPTED_TRACKING), so a boundary that
+# stays blocked for days does not merge main on every retry and a conflict is
+# never healed twice in one tick. Returns what the sync returns (non-zero
+# only on a terminal failure, which already marked the project failed).
+_integration_sync_at_boundary() {
+  local boundary_branch="$1" boundary_default="$2" boundary_key="$3" boundary_rc=0
+  if [ "$(jq -r '.sync.boundary_forced // ""' "${STATE_FILE}" 2>/dev/null || true)" = "${boundary_key}" ]; then
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${boundary_branch} outcome=skip reason=boundary_already_forced boundary=${boundary_key}"
+    return 0
+  fi
+  if [ -n "${TRACKING_NUM:-}" ] && [ "${INTEGRATION_SYNC_ATTEMPTED_TRACKING:-}" = "${TRACKING_NUM}" ]; then
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${boundary_branch} outcome=skip reason=synced_this_tick boundary=${boundary_key}"
+  else
+    sync_default_into_integration_branch "${boundary_branch}" "${boundary_default}" force || boundary_rc=$?
+    [ "${boundary_rc}" -eq 0 ] || return "${boundary_rc}"
+  fi
+  if jq --arg b "${boundary_key}" '.sync = ((.sync // {}) + {"boundary_forced": $b})' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    post_state_comment || true
+  else
+    rm -f "${STATE_FILE}.tmp"
+  fi
+  return 0
+}
+
 sync_default_into_integration_branch() {
   local integration_branch="$1"
   local default_branch="$2"
+  # Optional third argument "force": skip the throttle (a caller that already
+  # established the sync is needed, e.g. an unmergeable final PR).
+  local sync_force="${3:-}"
+  local sync_throttle_reason
   local sync_status
   local prev_conflict_fingerprint
   local runbook_url
@@ -14475,11 +14582,37 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
 
   ensure_integration_conflict_state_fields
 
+  if sync_throttle_reason="$(_integration_sync_throttle_reason "${sync_force}")"; then
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${integration_branch} outcome=sync reason=${sync_throttle_reason}"
+  else
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${integration_branch} outcome=skip reason=${sync_throttle_reason:-within_interval}"
+    return 0
+  fi
+
   local merge_error
+  local sync_merge_out_file
+  # Read by _integration_sync_at_boundary: this tick already merged main in.
+  INTEGRATION_SYNC_ATTEMPTED_TRACKING="${TRACKING_NUM:-}"
+  sync_merge_out_file="$(mktemp "${TMPDIR:-/tmp}/integration_sync_merge.XXXXXX")"
   if merge_error="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/merges" \
     -f base="${integration_branch}" \
     -f head="${default_branch}" \
-    -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >/dev/null)"; then
+    -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >"${sync_merge_out_file}")"; then
+    # Throttle clock (_integration_sync_throttle_reason): recorded on every
+    # successful merges call. A 201 (merge commit created) prints the commit
+    # and is persisted at once; a 204 (already current) prints nothing and
+    # rides the next state write, so a no-op sync costs no comment edit.
+    if jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '.sync = ((.sync // {}) + {"last_default_sync_at": $now})' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      # The status block below posts the state itself when it changes it.
+      if [ -s "${sync_merge_out_file}" ] && [ "${sync_status}" = "active" ] && [ -z "${prev_conflict_fingerprint}" ]; then
+        post_state_comment || true
+      fi
+    else
+      rm -f "${STATE_FILE}.tmp"
+    fi
+    rm -f "${sync_merge_out_file}"
     if [ "${sync_status}" != "active" ] || [ -n "${prev_conflict_fingerprint}" ]; then
       jq '.sync = ((.sync // {}) + {
         "status": "active",
@@ -14493,6 +14626,7 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
     _dispatch_integration_test_repair "${TRACKING_NUM:-}" "${integration_branch}" "" "${default_branch}" || true
     return 0
   fi
+  rm -f "${sync_merge_out_file}"
 
   if ! printf '%s' "${merge_error}" | grep -Eqi '(HTTP 409|status code 409|merge conflict|conflict)'; then
     echo "::warning::Unable to sync '${default_branch}' into '${integration_branch}' due to transient GitHub API error; will retry next poll." >&2
@@ -14590,7 +14724,7 @@ security_pass_sync_final_pr_if_unmergeable() {
     return 0
   fi
   echo "SECURITY_PASS_FINAL_PR_SYNC tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} outcome=sync reason=final_pr_unmergeable"
-  sync_default_into_integration_branch "${integration_branch}" "${default_branch}" || return $?
+  sync_default_into_integration_branch "${integration_branch}" "${default_branch}" force || return $?
   return 0
 }
 
@@ -20570,6 +20704,10 @@ STALL_EOF
           # already-dispatched/active (rc=2) as success.
           local _rtr_failed_conclusion=""
           local _rtr_failed_wf=""
+          # Set once a review dispatch has been tried in this call, so the
+          # dispatch-first step before the empty commit (cut-ci-runner-time
+          # Phase 3) never dispatches twice.
+          local _rtr_dispatch_attempted="false"
           # Newest createdAt among the completed head-branch runs seen, so a
           # PR-named failure (below) that a later head-branch run already
           # superseded is not acted on.
@@ -20657,6 +20795,7 @@ STALL_EOF
           if [ -n "${_rtr_failed_conclusion}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} last ${_rtr_failed_wf} run concluded '${_rtr_failed_conclusion}' — dispatching review workflow directly instead of pushing an empty commit."
             local _rtr_dispatch_rc=0
+            _rtr_dispatch_attempted="true"
             _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _rtr_dispatch_rc=$?
             if [ "${_rtr_dispatch_rc}" -eq 0 ]; then
               tg_notify "Stall recovery: re-dispatched review workflow for PR #${pr_num} (issue #${issue_num}, last run='${_rtr_failed_conclusion}', stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
@@ -20791,6 +20930,35 @@ STALL_EOF
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             return 1
           fi
+          # Dispatch first (cut-ci-runner-time Phase 3, plan D3): with no
+          # failed last run, re-trigger review by dispatching the review
+          # workflow, behind the same merge-train, capacity, conflict and
+          # in-flight guards the empty commit uses. An empty commit started a
+          # full CI run on identical code; it is now only the fallback when
+          # the dispatch itself fails (rc other than 0 and 2).
+          # §15 audit: the in-flight checks above read the cached runs blob and
+          # one branch-scoped listing; neither can be passed to the helper, whose
+          # _has_active_autofix_run guard reads up to three branch listings (plus
+          # the PR-named dispatch lookup) before one workflow_dispatch. That
+          # replaces the empty commit, which cost a full CI run.
+          if [ "${_rtr_dispatch_attempted}" != "true" ]; then
+            local _rtr_first_dispatch_rc=0
+            _rtr_dispatch_attempted="true"
+            _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _rtr_first_dispatch_rc=$?
+            if [ "${_rtr_first_dispatch_rc}" -eq 0 ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} dispatched the review workflow instead of pushing an empty commit."
+              tg_notify "Stall recovery: re-dispatched review workflow for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+              STALL_RECOVERY_SHOULD_INCREMENT="true"
+              STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              return 0
+            fi
+            if [ "${_rtr_first_dispatch_rc}" -eq 2 ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} dispatch helper skipped (already active or already dispatched this cycle); not incrementing stall recovery."
+              STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              return 0
+            fi
+            echo "  Issue #${issue_num} PR #${pr_num} dispatch helper returned rc=${_rtr_first_dispatch_rc}; falling back to empty-commit push."
+          fi
           if git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
             _rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
             if [[ "${_rtr_head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
@@ -20803,6 +20971,8 @@ STALL_EOF
               git config user.email "codex-bot@users.noreply.invalid"
               git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
               if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_empty_commit_fallback"
+                echo "  Issue #${issue_num} PR #${pr_num} pushed the empty-commit fallback (action=retrigger_review_empty_commit_fallback)."
                 tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
                 _rtr_push_succeeded="true"
               fi
@@ -26281,6 +26451,9 @@ STALL_EOF
         local pr_json
         local _std_rtr_inflight_blob _std_rtr_inflight_id _std_rtr_direct_inflight_id _std_rtr_now_epoch _std_rtr_stall_secs _std_rtr_origin_head_sha _std_rtr_push_succeeded
         _std_rtr_push_succeeded="false"
+        # Return code of the dispatch-first review dispatch (cut-ci-runner-time
+        # Phase 3); -1 means it was not tried.
+        local _std_rtr_dispatch_rc=-1
         if [[ "${_STD_ITER_PR_NUM_CACHED:-}" =~ ^[0-9]+$ ]]; then
           pr_num="${_STD_ITER_PR_NUM_CACHED}"
           pr_lookup_ok="true"
@@ -26416,25 +26589,57 @@ STALL_EOF
 			elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
-            elif git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
-              _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
-              if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
-                 [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then
-                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} head advanced from ${head_sha} to ${_std_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
-              elif git checkout "origin/${head_ref}" 2>/dev/null; then
-                git config user.name "codex-bot"
-                git config user.email "codex-bot@users.noreply.invalid"
-                git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
-                if git push origin "HEAD:${head_ref}" 2>/dev/null; then
-                  _std_rtr_push_succeeded="true"
-                fi
-                git checkout --detach HEAD 2>/dev/null || true
+            else
+              # Dispatch first (cut-ci-runner-time Phase 3, plan D3): re-trigger
+              # review by dispatching the review workflow, behind the same
+              # wrong-PR and in-flight guards as the empty commit. The empty
+              # commit, which started a full CI run on identical code, is only
+              # the fallback when the dispatch itself fails (rc other than 0/2).
+              # §15 audit: see the managed arm; the helper's active-run guard
+              # (up to three branch listings plus the PR-named lookup) and one
+              # workflow_dispatch replace the empty commit's full CI run.
+              _std_rtr_dispatch_rc=0
+              _dispatch_review_for_conflicts "${pr_num}" "${head_ref}" || _std_rtr_dispatch_rc=$?
+              if [ "${_std_rtr_dispatch_rc}" -eq 0 ]; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} dispatched the review workflow instead of pushing an empty commit."
+                STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
+              elif [ "${_std_rtr_dispatch_rc}" -eq 2 ]; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} dispatch helper skipped (already active or already dispatched this cycle); not incrementing stall recovery."
+                STALL_RECOVERY_EFFECTIVE_ACTION="redispatch_review_autofix"
               else
-                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} dispatch helper returned rc=${_std_rtr_dispatch_rc}; falling back to empty-commit push."
+              fi
+              if [ "${_std_rtr_dispatch_rc}" -ne 0 ] && [ "${_std_rtr_dispatch_rc}" -ne 2 ] \
+                && git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+                _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
+                if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
+                   [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then
+                  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} head advanced from ${head_sha} to ${_std_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
+                elif git checkout "origin/${head_ref}" 2>/dev/null; then
+                  git config user.name "codex-bot"
+                  git config user.email "codex-bot@users.noreply.invalid"
+                  git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
+                  if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                    _std_rtr_push_succeeded="true"
+                    STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_empty_commit_fallback"
+                    echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} pushed the empty-commit fallback (action=retrigger_review_empty_commit_fallback)."
+                  fi
+                  git checkout --detach HEAD 2>/dev/null || true
+                else
+                  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
+                fi
               fi
             fi
           fi
-          if [ "${_std_rtr_push_succeeded}" = "true" ]; then
+          if [ "${_std_rtr_dispatch_rc}" -eq 0 ]; then
+            tg_notify_issue "${issue_num}" "Standalone stall recovery: re-dispatched the review workflow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            took_action="true"
+          elif [ "${_std_rtr_dispatch_rc}" -eq 2 ]; then
+            # A live or already-dispatched review run: reset the stall clock
+            # without spending recovery budget, like the managed arm's rc 2.
+            took_action="true"
+          elif [ "${_std_rtr_push_succeeded}" = "true" ]; then
             tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered review flow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
             STALL_RECOVERY_SHOULD_INCREMENT="true"
             took_action="true"
@@ -34558,6 +34763,21 @@ PRs to revert: ${REVERT_COUNT}"
     complete)
       FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
       FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")}"
+      # Run-volume plan item 3: the per-tick sync is throttled, so bring the
+      # integration branch up to main once here, before the security pass
+      # binds to its head and validation / the final merge test it. Like the
+      # per-tick sync, only a terminal failure (project marked failed) stops
+      # the tick; a conflict is handed to the integration heal and the tick
+      # goes on.
+      if [ -n "${FINAL_INTEGRATION_BRANCH}" ]; then
+        if ! _integration_sync_at_boundary "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" complete; then
+          continue
+        fi
+        PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+        if [ "${PROJECT_STATUS}" = "failed" ]; then
+          continue
+        fi
+      fi
       if ! ensure_security_pass_before_completion "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}"; then
         continue
       fi
@@ -34909,6 +35129,20 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       # Advance to next wave
       NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
       if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
+        # Run-volume plan item 3: the next wave's issues branch from the
+        # integration branch, so bring it up to main once before dispatching
+        # them (the per-tick sync is throttled). Like the per-tick sync, only
+        # a terminal failure (project marked failed) defers the dispatch; a
+        # conflict is handed to the integration heal and the tick goes on.
+        if [ -n "${INTEGRATION_BRANCH_TRACKING:-}" ]; then
+          if ! _integration_sync_at_boundary "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" "wave-${NEXT_WAVE}"; then
+            continue
+          fi
+          PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+          if [ "${PROJECT_STATUS}" = "failed" ]; then
+            continue
+          fi
+        fi
         echo "Advancing to wave ${NEXT_WAVE}..."
         NEXT_WAVE_IDX=$(( NEXT_WAVE - 1 ))
 
@@ -35855,7 +36089,7 @@ NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON='[{"name":"codex-bot","email":"codex@user
 NOOP_FORCE_MERGE_SKIP_LABELS=$'e2e-smoke-test\nforce-review'
 
 # _noop_gate_failure_alert <gate> <message>: the force-merge gates and the
-# merge --auto step fail every sweep (about every 5 minutes) for as long as
+# merge --auto step fail every poll tick (cron every 15 minutes) for as long as
 # the PR stays in the same state, and each failure used to page again. Page
 # once per PR head and gate instead: the first failure posts a PR comment
 # carrying a marker and sends the ERROR alert; later sweeps find the marker
