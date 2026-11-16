@@ -354,7 +354,8 @@ single_pass_open_followups()
 # closed; otherwise their merges would move the clean head (#9479, PR #9356).
 # Matches PRs by the implement branch convention ai/issue-<n>, same repository.
 # API budget: the shared issues listing, one paginated pulls?base= listing only
-# when an issue matches, then a comment and a close per retired item. Fails
+# when an issue matches, then a comment and a close per retired item (a failed
+# comment still closes the item; closes use gh_retry when sourced). Fails
 # open: every failure logs outcome=followup_retire_failed and it returns 0.
 single_pass_retire_followups()
 {
@@ -404,11 +405,17 @@ single_pass_retire_followups()
 The single-issue security audit of \`${retire_sha}\` on PR #${retire_pr} came back clean, so this follow-up PR is superseded and closed.
 
 ${retire_marker}"
+		# The comment POST is not retried (not idempotent). A failed comment
+		# still closes the PR, so it cannot merge into the clean head.
 		if ! gh api "repos/${REPOSITORY}/issues/${retire_item}/comments" -f body="${retire_body}" >/dev/null 2>&1; then
-			single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followup_retire_failed reason=comment_failed item=${retire_item}"
-			continue
+			single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followup_retire_failed reason=comment_failed item=${retire_item} kind=pr"
 		fi
-		if ! gh api -X PATCH "repos/${REPOSITORY}/pulls/${retire_item}" -f state=closed >/dev/null 2>&1; then
+		# The close PATCH is idempotent, so gh_retry retries it when sourced.
+		if ! { if type gh_retry >/dev/null 2>&1; then
+			gh_retry gh api -X PATCH "repos/${REPOSITORY}/pulls/${retire_item}" -f state=closed
+		else
+			gh api -X PATCH "repos/${REPOSITORY}/pulls/${retire_item}" -f state=closed
+		fi; } >/dev/null 2>&1; then
 			single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followup_retire_failed reason=pr_close_failed item=${retire_item}"
 			continue
 		fi
@@ -424,10 +431,13 @@ The clean single-issue security audit of \`${retire_sha}\` (PR #${retire_pr}) su
 
 ${retire_marker}"
 		if ! gh api "repos/${REPOSITORY}/issues/${retire_item}/comments" -f body="${retire_body}" >/dev/null 2>&1; then
-			single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followup_retire_failed reason=comment_failed item=${retire_item}"
-			continue
+			single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followup_retire_failed reason=comment_failed item=${retire_item} kind=issue"
 		fi
-		if ! gh api -X PATCH "repos/${REPOSITORY}/issues/${retire_item}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
+		if ! { if type gh_retry >/dev/null 2>&1; then
+			gh_retry gh api -X PATCH "repos/${REPOSITORY}/issues/${retire_item}" -f state=closed -f state_reason=not_planned
+		else
+			gh api -X PATCH "repos/${REPOSITORY}/issues/${retire_item}" -f state=closed -f state_reason=not_planned
+		fi; } >/dev/null 2>&1; then
 			single_pass_log "mode=report pr=${retire_pr} head=${retire_sha} outcome=followup_retire_failed reason=issue_close_failed item=${retire_item}"
 			continue
 		fi

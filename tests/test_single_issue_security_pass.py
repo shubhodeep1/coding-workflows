@@ -63,6 +63,8 @@ if args[0] == "api" and any(arg.startswith("repos/o/r/pulls?state=open&head=") f
 		sys.exit(1)
 	print(open(os.environ["FAKE_GH_HEAD_PRS"]).read(), end="")
 	sys.exit(0)
+if "followup_comment" in fail and len(args) > 1 and args[1].startswith("repos/o/r/issues/") and args[1].endswith("/comments") and args[1] != "repos/o/r/issues/42/comments":
+	sys.exit(1)
 if args[:3] == ["api", "-X", "PATCH"]:
 	sys.exit(1 if "close" in fail else 0)
 if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
@@ -1336,6 +1338,19 @@ def test_clean_report_close_failures_fail_open(tmp_path: Path) -> None:
 	assert "reason=pr_close_failed item=9404" in result.stdout
 	assert "reason=issue_close_failed item=9399" in result.stdout
 	assert "outcome=followups_retired issues=0 prs=0" in result.stdout
+	assert REVIEW_DISPATCH in calls and "outcome=clean" in result.stdout
+
+
+def test_clean_report_comment_failure_still_closes_followups(tmp_path: Path) -> None:
+	result, calls, _ = _audit_report(tmp_path, env={"FAKE_GH_FAIL": "followup_comment"}, security_issues=[[_issue(9399, _followup_body())]], branch_prs=[[_branch_pr(9404, "ai/issue-9399")]])
+	assert result.returncode == 0
+	assert "reason=comment_failed item=9404 kind=pr" in result.stdout
+	assert "reason=comment_failed item=9399 kind=issue" in result.stdout
+	assert _patches(calls) == [
+		["api", "-X", "PATCH", "repos/o/r/pulls/9404", "-f", "state=closed"],
+		["api", "-X", "PATCH", "repos/o/r/issues/9399", *ISSUE_CLOSE],
+	]
+	assert "outcome=followups_retired issues=1 prs=1" in result.stdout
 	assert REVIEW_DISPATCH in calls and "outcome=clean" in result.stdout
 
 
