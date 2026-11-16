@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/INVENTORY.md:48-110 (Workflows section line 48, Scripts section line 110; tests/inventory_parity.py:245-248, 265-288) | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: docs/INVENTORY.md has no entries for .github/workflows/ci_pr_quick.yml, scripts/ci_docs_only_paths.sh, scripts/review_final_ci_failed.sh and scripts/review_final_ci_sweep.sh, so tests/inventory_parity.py exits 1 and turns tests-release-and-log-analysis and lint red.\n  WHY: The drift is inherited from the base branch orchestrator/project-9550 and not caused by the canary edit; the issue scope lock means the fix belongs on the integration branch. Severity disagreement: gemini-3_1-flash-lite said BLOCKER, the other reviewers said MAJOR; the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- docs/INVENTORY.md:Workflows and Scripts roster | severity=MAJOR | confidence=4\n  PROBLEM: No entries exist for `.github/workflows/ci_pr_quick.yml`, `scripts/ci_docs_only_paths.sh`, `scripts/review_final_ci_failed.sh` or `scripts/review_final_ci_sweep.sh`, so `tests/inventory_parity.py` exits 1 and `tests-release-and-log-analysis` and `lint` go red. README.md (148-150) and agents.md references to those paths are also reported as undocumented.\n  WHY: The drift comes from the base branch orchestrator/project-9550. The scope lock means the fix belongs on the integration branch, not in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- docs/INVENTORY.md:N/A (inherited environmental failure) | severity=BLOCKER | confidence=5\n  PROBLEM: CI job tests-release-and-log-analysis (tests/inventory_parity.py) fails due to missing entries for .github/workflows/ci_pr_quick.yml, scripts/ci_docs_only_paths.sh, scripts/review_final_ci_failed.sh, and scripts/review_final_ci_sweep.sh.\n  WHY: The job exits with code 1 and blocks the PR merge. The drift is inherited from the base branch (orchestrator/project-9550); per the issue scope lock, the fix belongs on the integration branch.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/INVENTORY.md:48 (## Workflows), docs/INVENTORY.md:110 (## Scripts); tests/inventory_parity.py:276-281, tests/inventory_parity.py:245-248 | severity=MAJOR | confidence=5\n  PROBLEM: The roster has no entries for .github/workflows/ci_pr_quick.yml, scripts/ci_docs_only_paths.sh, scripts/review_final_ci_failed.sh and scripts/review_final_ci_sweep.sh. README.md:148, README.md:149, README.md:150 and agents.md:1294 reference them, so tests/inventory_parity.py reports both the \"missing\" failure and the \"references ... but docs/INVENTORY.md does not document it\" failure for all four paths.\n  WHY: Check-run tests-release-and-log-analysis (run 43896387006, job 133400977730) exits 1 with 11 FAIL lines, and the aggregate lint job (133483567245) then fails. The drift is inherited from merge-base 305bc455cbf0352eeb7d462f9ca3b8aaf91d648e; issue #9552 locks scope, so the entries belong on orchestrator/project-9550 and no edit should be made in this PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/INVENTORY.md:48 (Workflows section begins); tests/inventory_parity.py:265-288 | severity=MAJOR | confidence=5\n  PROBLEM: The inventory omits `.github/workflows/ci_pr_quick.yml`, `scripts/ci_docs_only_paths.sh`, `scripts/review_final_ci_failed.sh`, and `scripts/review_final_ci_sweep.sh`, so the parity check fails in `tests-release-and-log-analysis` and `lint` fails too.\n  WHY: The failure is inventory drift outside the PR diff and unrelated to the canary edit; the linked issue requires changing no other repository file.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- docs/INVENTORY.md:inventory roster (check-run tests-release-and-log-analysis, run 43896387006, job 133400977730) | severity=MAJOR | confidence=5\n  PROBLEM: tests/inventory_parity.py reports 11 FAIL lines. docs/INVENTORY.md lacks entries for .github/workflows/ci_pr_quick.yml, scripts/ci_docs_only_paths.sh, scripts/review_final_ci_failed.sh and scripts/review_final_ci_sweep.sh, and README.md:148-150 / agents.md:1294,2089-2110 reference those paths without INVENTORY documentation.\n  WHY: The parity gate exits 1, so tests-release-and-log-analysis and the lint aggregation go red. The failure is inherited from base orchestrator/project-9550 (305bc455); the scope lock means the fix must land on the integration branch or main, not in this PR.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f22078754d17f77bef1a9f32d9c6f81579ab32dab0e21e6c45c11878301ec66f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9572,
+    "run_id": "43896829841",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43896829841",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116183253_959f2a0a8c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9572,
+    "run_id": "43896829841"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T18:32:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
