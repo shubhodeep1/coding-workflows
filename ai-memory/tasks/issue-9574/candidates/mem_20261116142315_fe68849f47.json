@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The fix cannot be made inside the verified heal scope. The touched-set computation that rejects the run is in `scripts/review_conflict_resolve.sh:4440-4467`: a path counts as touched only when it is absent (line 4447) or its blob or exec bit changed (line 4464). Invariant 4 is in `scripts/check_resolver_diff.sh:222-238`, and the missing modify/delete guidance belongs in `prompts/conflict-resolver.txt`, which has no modify/delete text today. None of these paths is in the intake-written `ai:workflow-heal-scope:v1` marker. The pipeline cannot widen that scope: `scripts/implement_heal_preflight.sh` refuses an edited heal body, and `run_heal_plan_scope_gate` in `scripts/files_touched_scope_guard.py` (lines 1260-1289) holds any plan path outside the verified scope. Option B adds almost nothing, because `tests/test_conflict_folded_fragment_keep.py::test_check_resolver_diff_names_an_untouched_unmerged_path` (line 187) already locks in the rejection it would reproduce, and the follow-up issue it relies on is something the pipeline cannot file. Option C leaves a defect in place that recurs on every PR whose base deletes a file the head edits. So the planner writes the full fix as an exact file list, and the heal plan gate is expected to hold it (`heal_scope_plan_paths_missing`) until a maintainer re-scopes or re-files it. The plan must not include steps that edit the issue body, re-file the issue, or act on PR #9452.\nQ2: Both parts are needed. Changing only the prompt fixes PR #9452, which needs a `git rm` to honour the base's deliberate deletion recorded in `changelog.d/run-volume-2026-11-sync-throttle-sweep.md`. But keeping a legitimate surviving side would still be rejected, so a person would still have to merge by hand. Changing only the harness adds a `KEEP_SURVIVING_SIDE:` line the model is never told about, and leaves the \"do not modify files without conflict markers\" rule steering it towards the outcome that is rejected. With both parts, `check_resolver_diff.sh` invariant 4 (lines 222-238) stays strict, so an undeclared, unchanged modify/delete path still fails.\n\nNotes for the planner (binding constraints that follow from these decisions):\n- Files to list exactly:\n  - `prompts/conflict-resolver.txt` (there is no `prompts/_templates/` twin; checked)\n  - `prompts/contracts/conflict-resolver.yml`\n  - `scripts/review_conflict_resolve.sh`\n  - `scripts/check_resolver_diff.sh`, error text only, which may mention the keep line; the check itself must not be loosened\n  - one regression test under `tests/`\n  - a `changelog.d/` fragment named after this issue\n- Keep-line acceptance applies only when all of these hold:\n  - the path has index stages `1 2` or `1 3`;\n  - the path is listed in `CONFLICTED_PATHS_FILE`;\n  - the file is present and its content is unchanged from the pre-resolver snapshot;\n  - it is named on an exact `KEEP_SURVIVING_SIDE: <path>` line in the resolver summary.\n- Accepted paths go into `RESOLVER_TOUCHED_FILE`. Staging then goes through the existing `stage_resolver_touched_path_or_fail`.\n- Follow the stage-aware keep handling already in the harness (the `CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED` / `CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED` paths covered by `tests/test_conflict_folded_fragment_keep.py`) rather than adding a competing mechanism. Gate the new behaviour behind a kill switch that defaults to `true` in the script itself (\u00a78).\n- The regression fixture is a base that deletes a file the head modified, with three cases:\n  - the file is left unchanged with no keep line: it fails with the existing invariant-4 error;\n  - the file is deleted: it passes and the deletion is staged;\n  - the file is left unchanged with `KEEP_SURVIVING_SIDE:`: it passes and HEAD's copy is staged.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered options.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "a0ba2ce8732819120c14f947e1a1163d7a31b3e3cd8d45b6bf7458fedf67ef3f",
+  "lineage": {
+    "issue_number": 9574,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43880729183",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43880729183",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9574"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261116142315_fe68849f47",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9574,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43880729183"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9574",
+  "timestamps": {
+    "created_at": "2026-11-16T14:23:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
