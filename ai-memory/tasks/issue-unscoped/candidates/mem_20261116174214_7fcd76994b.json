@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:716,882 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: Two different relay host files are mounted at the same sandbox entry point `/relay.py`: line 716 (`--mount \"type=bind,src=$(realpath \"${support}/claude_anthropic_relay.py\"),dst=/relay.py,readonly\"`) and line 882 (`--mount \"type=bind,src=$(realpath \"${support}/chatgpt_codex_relay.py\"),dst=/relay.py,readonly\"`). This conflicts with the coverage registry, which maps `/relay.py` -> `claude_anthropic_relay.py`.\n  WHY: `tests/test_sandbox_python_coverage.py:293` fails with `AssertionError: 'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'`, which turns six checks red on head SHA da9b888: `lint`, `tests-sandbox-python` (clarify, review, codex-isolated-codex), `tests-hooks-and-orchestrator` and `tests-system-python (11)`. Both reviewers say severity MAJOR (mapped here to high). Both say the defect is inherited from the base branch and not in this PR's diff. Issue #9449 forbids script changes, so the fix belongs on the base branch: either a dedicated mount path for the ChatGPT relay or a registry entry that accepts both basenames.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_sandbox.sh:line 716 (`--mount \"type=bind,src=$(realpath \"${support}/claude_anthropic_relay.py\"),dst=/relay.py,readonly\"`) and line 882 (`--mount \"type=bind,src=$(realpath \"${support}/chatgpt_codex_relay.py\"),dst=/relay.py,readonly\"`) | severity=MAJOR | confidence=5\n  PROBLEM: Two different host relay files are mounted at the same container entry-point path `/relay.py`. This contradicts the `tests/test_sandbox_python_coverage.py::RegistryCoverageTest::test_scanned_host_file_matches_the_registry` contract (`/relay.py` -> `claude_anthropic_relay.py`). The defect is inherited from the base branch and is outside this PR's diff.\n  WHY: The coverage scan raises `AssertionError: 'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'` (CI log line 293). That one failure cascades into all six failed checks on da9b888. Each container still gets one relay, so this is a gate failure, not a mis-mounted sandbox. Suggested base-branch fix: `dst=/chatgpt_relay.py` plus a matching registry entry, or a registry that accepts both basenames. The new test in `tests/test_review_chatgpt_reviewer_slot.py` runs in `tests-hooks-and-orchestrator` (`.github/workflows/ci.yml:779-782`), which is red, so the test's green status rests only on the local pre-push gate.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_untrusted_sandbox.sh:line 716 (`--mount \"type=bind,src=$(realpath \"${support}/claude_anthropic_relay.py\"),dst=/relay.py,readonly\"`) and line 882 (`--mount \"type=bind,src=$(realpath \"${support}/chatgpt_codex_relay.py\"),dst=/relay.py,readonly\"`) | severity=MAJOR | confidence=5\n  PROBLEM: Two different relay host files are mounted at the same sandbox entry point `/relay.py`. The registry test (`tests/test_sandbox_python_coverage.py:293`, run from CI merge checkout `98fdb7d`) fails with `AssertionError: 'chatgpt_codex_relay.py' != 'claude_anthropic_relay.py'`. Six check-runs are red on da9b888. This PR's diff does not introduce either line.\n  WHY: The coverage check exits nonzero on every PR run. This is an inherited base-branch defect and out of scope for this PR: #9449 forbids script changes, and neither file is in `files_touched`. The fix belongs on the base branch (a registry entry for both basenames, or a dedicated ChatGPT mount path). It should be rejected for application in this PR but tracked.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f6e6dc6d179784e5705ab82e793d6ca2b64a5b433194d57c3093152f400c1238",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9454,
+    "run_id": "43875882161",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43875882161",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116174214_7fcd76994b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9454,
+    "run_id": "43875882161"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T17:42:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
