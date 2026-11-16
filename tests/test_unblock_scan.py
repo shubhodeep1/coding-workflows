@@ -957,6 +957,7 @@ def test_wedged_queued_run_stays_ignored_under_a_long_inflight_window() -> None:
 		"created_at": _iso(25)}
 	assert scan._busy_items([finished], NOW, window) == {7}
 
+
 def test_zombie_filter_can_be_disabled(monkeypatch) -> None:
 	# Load first so the lazy load cannot overwrite the patched hours, and so
 	# teardown restores the real loaded value for later tests.
