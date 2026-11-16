@@ -3921,9 +3921,10 @@ jobs:
       # the CI wiring guard (part 2)" (Orchestrate lib about 72s, post-Codex
       # recovery about 31s, files_touched guard about 7s). Part 2 stays in
       # that job: moving it back would reverse #9214, and group 0 took 15m51s
-      # with it. Group 0 is the target because it has pinned no step since
-      # #9214 removed its heaviest one (658 test functions, 155 subprocess
-      # call sites), while groups 1-4 each pin steps. The tests create
+      # with it. Group 0 was the target because, when #9450 was planned, it
+      # had pinned no step since #9214 removed its heaviest one (658 test
+      # functions, 155 subprocess call sites), while groups 1-4 each pinned
+      # steps; since #9496 it also pins the merge-train step. The tests create
       # throwaway `git init` repositories and need no checkout history (this
       # job checks out at depth 1), Node or prepared .claude/ live copies; the
       # shared pip install provides PyYAML. The two #8771 steps no longer

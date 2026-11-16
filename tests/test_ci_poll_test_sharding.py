@@ -4123,6 +4123,16 @@ class MovedHooks9496StepsContractTest(unittest.TestCase):
 			with self.subTest(step=name):
 				self.assertLess(slice_index, names.index(name))
 
+	def test_group_one_guarded_steps_match_its_pins(self) -> None:
+		"""Every group-1 guarded step is pinned once in GROUP_PINNED_STEPS, and vice versa (#9496)."""
+		group_one_guarded = [
+			step.get("name")
+			for step in load_poll_job()["steps"]
+			if str(step.get("if", "")) == "strategy.job-index == 1"
+		]
+		self.assertEqual(len(group_one_guarded), len(set(group_one_guarded)))
+		self.assertEqual(set(group_one_guarded), {name for name, group in GROUP_PINNED_STEPS.items() if group == 1})
+
 
 # Issue #9021: orchestrate-poll (0) took 15m15s of its 20 minutes (run
 # 42426489708). The CI wiring guard part 2 step stayed in group 0, by name and
@@ -4477,7 +4487,8 @@ class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
 # id, module paths its body names). The run's step timings were not readable;
 # the pick is the job's slowest unsplit step after the CI wiring guard part 2
 # step in the planning sandbox (about 162s), a relative weight, not a
-# measurement. Group 0 has pinned no step since #9214 moved part 2 out of it.
+# measurement. When #9450 was planned, group 0 had pinned no step since #9214
+# moved part 2 out of it; since #9496 it also pins the merge-train step.
 RELEASE_9450_SOURCE_JOB_ID = "tests-release-and-log-analysis"
 RELEASE_9450_SETUP_STEP = "Install Python CI dependencies"
 RELEASE_9450_DERIVE_STEP = "Derive orchestrate poll test subsets"
