@@ -10,7 +10,9 @@ Context provided in the prompt includes:
 - Recent review/autofix workflow outcomes for the linked PR (last 3; with live
   review-run evidence on, up to 5 in every status, each with `head_sha`)
 - `review_waiting_for_runner` (when present): true when a review run on the
-  linked PR's current head is queued, waiting or pending for a runner
+  linked PR's current head is requested, queued, waiting or pending for a
+  runner, or a trusted PR-named review dispatch run (which carries the
+  default-branch SHA) is
 - Current wave and prior recovery metadata from state
 
 Decision goals (ordered):

@@ -22546,7 +22546,11 @@ invoke_stall_judge() {
   # current head is younger than REVIEW_RUN_MAX_RUNTIME_MINUTES. A cached
   # PR-named workflow_dispatch run (head_branch is the default branch, not the
   # PR head; it passed the trust rule above) also counts: it checks out the
-  # PR's current head when it starts, but carries the default-branch SHA. On a
+  # PR's current head when it starts, but carries the default-branch SHA. Its
+  # head_branch may also be null/empty (trusted_pr_named accepts that), so the
+  # branch arm below only requires head_branch != head_ref: live entries always
+  # carry head_ref, and a cached entry with any other branch reached
+  # workflow_outcomes only through head_sha or trusted_pr_named. On a
   # listing failure, or with the switch off, workflow_outcomes is exactly
   # today's list.
   local review_waiting_for_runner="false"
@@ -22576,7 +22580,7 @@ invoke_stall_judge() {
             [ .[]?
               | select((.status // "") == "requested" or (.status // "") == "queued" or (.status // "") == "waiting" or (.status // "") == "pending")
               | select(($head_sha != "" and (.head_sha // "") == $head_sha)
-                       or ((.head_branch // "") != "" and (.head_branch // "") != $head_ref))
+                       or ((.head_branch // "") != $head_ref))
               | ((.created_at // "") as $ts
                  | if $ts != "" then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now) else $now end) as $start_epoch
               | select(($now - $start_epoch) < $threshold)

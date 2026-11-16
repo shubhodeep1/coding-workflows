@@ -113,8 +113,8 @@
 # A `heal_report` op (harness routing): one actions/runs listing and one
 # repository_dispatch to shubhodeep1/coding-workflows; a `hold_request` op:
 # one comment on the tracking issue.
-# CONSIST-001: the identity, item, item re-check, item comments and cited-run
-# reads go through gh_retry, so after a transient error (5xx, connection
+# CONSIST-001: the identity, item, item re-check, item comments, cited-run
+# and linked open PR (#9546) reads go through gh_retry, so after a transient error (5xx, connection
 # reset) one of them may be attempted up to GH_RETRY_MAX_ATTEMPTS times in
 # total, with capped rate-limit waits. Permanent errors and every write still
 # make one attempt.
@@ -153,7 +153,8 @@ if [ -f "${SUPPORT_DIR}/scripts/label_helpers.sh" ]; then
 fi
 # CONSIST-001: retry transient GitHub errors (5xx, connection reset) on the
 # judge's read-only GETs the same way the poller paths do. gh_retry wraps only
-# the comments, identity, item-metadata, item re-check and cited-run reads;
+# the comments, identity, item-metadata, item re-check, cited-run and linked
+# open PR list/detail reads;
 # writes (comment POSTs, label POST/DELETE, PATCH, issue creation, dispatches)
 # stay single-attempt on purpose. gh_helpers.sh has a load guard, so this is a
 # no-op when label_helpers.sh already sourced it. A missing or unsourceable
@@ -1440,8 +1441,10 @@ PY
 # fix-up lookups above use); only when it returns a PR, one more
 # (pulls/<n>) for the size fields the list form lacks and to re-check the
 # head, repository and open state. The diff read happens in unblock_ask_model.
-# Fail-open: any error writes null, so context, fingerprint and validation
-# are exactly as before. Titles and bodies are never stored.
+# Both reads go through gh_retry (CONSIST-001), so one transient 5xx does not
+# drop the linked PR. Fail-open: any error left after the retries writes null,
+# so context, fingerprint and validation are exactly as before. Titles and
+# bodies are never stored.
 unblock_linked_open_pr()
 {
 	local out="${RUNTIME_DIR}/linked_pr.json" owner list_json number detail_json linked_obj
@@ -1455,7 +1458,7 @@ unblock_linked_open_pr()
 		return 0
 	fi
 	owner="${REPOSITORY%%/*}"
-	if ! list_json="$(gh api -X GET "repos/${REPOSITORY}/pulls" -f state=open -f head="${owner}:ai/issue-${ITEM}" -f per_page=1 2>/dev/null)"; then
+	if ! list_json="$(gh_retry gh api -X GET "repos/${REPOSITORY}/pulls" -f state=open -f head="${owner}:ai/issue-${ITEM}" -f per_page=1 2>/dev/null)"; then
 		echo "UNBLOCK_JUDGE_LINKED_PR outcome=failed item=${ITEM} pr=none reason=lookup_failed"
 		return 0
 	fi
@@ -1472,7 +1475,7 @@ unblock_linked_open_pr()
 		echo "UNBLOCK_JUDGE_LINKED_PR outcome=failed item=${ITEM} pr=none reason=lookup_failed"
 		return 0
 	fi
-	if ! detail_json="$(gh api "repos/${REPOSITORY}/pulls/${number}" 2>/dev/null)"; then
+	if ! detail_json="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${number}" 2>/dev/null)"; then
 		echo "UNBLOCK_JUDGE_LINKED_PR outcome=failed item=${ITEM} pr=${number} reason=lookup_failed"
 		return 0
 	fi
