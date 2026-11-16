@@ -2756,9 +2756,18 @@ unblock_ask_model()
 			# Issue #9546: the issue's work is on its open ai/issue-<item> PR.
 			local linked_diff_pr
 			linked_diff_pr="$(jq -r '.number' "${RUNTIME_DIR}/linked_pr.json")"
-			if [[ "${linked_diff_pr}" =~ ^[1-9][0-9]*$ ]]; then
-				gh api "repos/${REPOSITORY}/pulls/${linked_diff_pr}" -H "Accept: application/vnd.github.diff" 2>/dev/null | head -c 120000 > "${RUNTIME_DIR}/pr_diff.txt" || true
+			# Not a pipe: a failed read must be seen. On failure the linked PR is
+			# dropped (linked_pr.json becomes null), so the context and validation
+			# are as without a PR; the fingerprint keeps the number it already has.
+			if [[ "${linked_diff_pr}" =~ ^[1-9][0-9]*$ ]] \
+				&& gh api "repos/${REPOSITORY}/pulls/${linked_diff_pr}" -H "Accept: application/vnd.github.diff" > "${RUNTIME_DIR}/linked_pr_diff.raw" 2>/dev/null; then
+				head -c 120000 "${RUNTIME_DIR}/linked_pr_diff.raw" > "${RUNTIME_DIR}/pr_diff.txt" || true
+			else
+				: > "${RUNTIME_DIR}/pr_diff.txt"
+				echo 'null' > "${RUNTIME_DIR}/linked_pr.json"
+				echo "UNBLOCK_JUDGE_LINKED_PR outcome=failed item=${ITEM} pr=${linked_diff_pr:-none} reason=diff_failed"
 			fi
+			rm -f "${RUNTIME_DIR}/linked_pr_diff.raw"
 		fi
 	fi
 	echo '{}' > "${RUNTIME_DIR}/state_slice.json"
@@ -2807,6 +2816,9 @@ unblock_ask_model()
 			mv -f "${RUNTIME_DIR}/judge_context.json.tmp" "${RUNTIME_DIR}/judge_context.json"
 		else
 			rm -f "${RUNTIME_DIR}/judge_context.json.tmp"
+			# The judge was not shown the PR, so validation must not demand it.
+			echo "UNBLOCK_JUDGE_LINKED_PR outcome=failed item=${ITEM} pr=$(jq -r '.number' "${RUNTIME_DIR}/linked_pr.json" 2>/dev/null || echo none) reason=context_merge_failed"
+			echo 'null' > "${RUNTIME_DIR}/linked_pr.json"
 		fi
 	fi
 	# Attempt journal (issue #8428, P1): only with PERSIST_JOURNAL_ENABLED=true

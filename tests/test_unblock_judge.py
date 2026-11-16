@@ -1384,6 +1384,10 @@ if endpoint.startswith("repos/o/r/git/ref/heads/"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
 	done(json.dumps({"ref": "refs/heads/" + endpoint[len("repos/o/r/git/ref/heads/"):]}))
+if os.environ.get("FAKE_GH_FAIL_PR_DIFF") and "Accept: application/vnd.github.diff" in args:
+	state.setdefault("diff_reads", []).append(endpoint)
+	json.dump(state, open(state_path, "w"))
+	sys.exit(1)
 if os.environ.get("FAKE_GH_PR_DIFF") and "Accept: application/vnd.github.diff" in args:
 	state.setdefault("diff_reads", []).append(endpoint)
 	done(os.environ["FAKE_GH_PR_DIFF"])
@@ -5930,3 +5934,20 @@ def test_linked_pr_evidence_changes_the_fingerprint_only_by_number() -> None:
 	linked = ledger.fingerprint("blocked", {"reason": "x", "linked_pr": "31"})
 	assert plain != linked
 	assert linked == ledger.fingerprint("blocked", {"reason": "x", "linked_pr": 31})
+
+
+def test_linked_pr_diff_failure_drops_the_linked_pr_from_context_and_validation(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	# A blind retry_budget is accepted: the judge never saw the PR, so the
+	# linked-PR rule is not applied (issue #9546 fail-open).
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": "retry with a narrower change"}
+	result, state = _judge(tmp_path, ISSUE, verdict=verdict, **_linked_pr_env(FAKE_GH_FAIL_PR_DIFF="1"))
+	assert result.returncode == 0, result.stderr
+	assert "UNBLOCK_JUDGE_LINKED_PR outcome=found item=7 pr=31" in result.stdout
+	assert "UNBLOCK_JUDGE_LINKED_PR outcome=failed item=7 pr=31 reason=diff_failed" in result.stdout
+	assert state["diff_reads"] == ["repos/o/r/pulls/31"]
+	assert _rt_json(tmp_path, "linked_pr.json") is None
+	assert "linked_open_pr" not in _rt_json(tmp_path, "judge_context.json")
+	assert "linked_pr_check" not in result.stdout
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout

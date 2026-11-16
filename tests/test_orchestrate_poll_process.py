@@ -21668,7 +21668,7 @@ def _sjr_iso(minutes_ago: int) -> str:
 	return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _sjr_run_stall_judge(*, judge_action: str, runs: list[dict], env: dict | None = None, store_extra: dict | None = None) -> dict:
+def _sjr_run_stall_judge(*, judge_action: str, runs: list[dict], env: dict | None = None, store_extra: dict | None = None, terminalization: str = "true") -> dict:
 	"""Issue #9546: a stalled ai:done issue with open PR #77 reaching the stall judge."""
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
@@ -21694,7 +21694,7 @@ def _sjr_run_stall_judge(*, judge_action: str, runs: list[dict], env: dict | Non
 			},
 		],
 		active_autofix_runs=runs,
-		enable_stall_human_terminalization="true",
+		enable_stall_human_terminalization=terminalization,
 		mock_stall_judge_json={"action": judge_action, "justification": "no review ran", "target_pr": None, "head_ref": None},
 		env_overrides=env,
 		mock_store_extra=store_extra,
@@ -21800,6 +21800,30 @@ def test_stall_judge_stale_queued_review_run_does_not_hold_escalation():
 	assert diagnostics["recent_review_workflow_outcomes"][0]["status"] == "queued"
 	assert "reason=review_waiting_for_runner" not in result["stdout"]
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_held_escalation_with_default_terminalization_off():
+	# Default ENABLE_STALL_HUMAN_TERMINALIZATION=false normalizes a judged
+	# escalate_human to the ladder action; the hold still applies (#9546).
+	result = _sjr_run_stall_judge(judge_action="escalate_human", runs=[_sjr_review_run(status="queued")], terminalization="false")
+	assert "STALL_SKIP issue=10 reason=review_waiting_for_runner pr=77 run=4242" in result["stdout"]
+	assert "action=escalate_human" in result["stdout"]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
+
+
+def test_stall_judge_unparseable_output_fallback_is_held_while_review_queued():
+	# The judge answers garbage, so the ladder fallback (escalate_human at
+	# ai:done count 2 with terminalization on) runs through the same hold.
+	result = _sjr_run_stall_judge(
+		judge_action="escalate_human",
+		runs=[_sjr_review_run(status="queued")],
+		env={"MOCK_STALL_JUDGE_JSON": "not json at all"},
+	)
+	assert "falling back to escalate_human" in result["stdout"]
+	assert "STALL_SKIP issue=10 reason=review_waiting_for_runner pr=77 run=4242" in result["stdout"]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
 
 
 def test_stall_judge_escalate_human_issue_not_redetected_after_needs_human():
