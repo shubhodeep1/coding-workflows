@@ -4292,7 +4292,22 @@ jobs:
           # tests tests/test_sandbox_python_coverage.py registers for the family.
           # The test container gets no network, no credential, no capability and
           # no root: uid 65534, read-only root and checkout (/src), tmpfs /tmp.
+          #
+          # Each phase (image resolution, derived python3-pytest build, pytest
+          # run) is timed and bounded on its own (#9560: the review leg ran past
+          # the job's 20-minute timeout in run 43771105041 and was cancelled with
+          # no message). Budget: 300 + 180 + 480 = 960 s, plus 3 x 10 s kill-after,
+          # plus about 2 minutes for checkout, setup-python, pip install and the
+          # coverage guard: about 18 minutes, under timeout-minutes: 20. Each limit
+          # is overridable (1-9999 s; anything else falls back to the default).
           set -euo pipefail
+
+          image_limit="${CI_SANDBOX_PYTHON_IMAGE_TIMEOUT_SECS:-300}"
+          [[ "${image_limit}" =~ ^[1-9][0-9]{0,3}$ ]] || image_limit=300
+          derive_limit="${CI_SANDBOX_PYTHON_DERIVE_TIMEOUT_SECS:-180}"
+          [[ "${derive_limit}" =~ ^[1-9][0-9]{0,3}$ ]] || derive_limit=180
+          pytest_limit="${CI_SANDBOX_PYTHON_PYTEST_TIMEOUT_SECS:-480}"
+          [[ "${pytest_limit}" =~ ^[1-9][0-9]{0,3}$ ]] || pytest_limit=480
 
           family="${CI_SANDBOX_PYTHON_FAMILY:-}"
           codex_version="${CODEX_VERSION:-v0.114.0}"
@@ -4313,20 +4328,41 @@ jobs:
             exit 1
           fi
 
+          # One timing line per phase; GNU timeout exits 124 (TERM was enough) or
+          # 137 (kill-after fired), and either names the family and the phase.
+          ci_sandbox_phase_done()
+          {
+            local phase="$1" start="$2" rc="$3" limit="$4" limit_var="$5"
+            echo "sandbox-python timing family=${family} phase=${phase} elapsed_secs=$(( SECONDS - start )) rc=${rc}"
+            if [ "${rc}" -eq 124 ] || [ "${rc}" -eq 137 ]; then
+              echo "::error::Sandbox family ${family} phase ${phase} hit its ${limit}s limit (${limit_var}); see the sandbox-python timing lines above."
+              return 1
+            fi
+            return 0
+          }
+
           # No credential reaches the image helpers; GHCR pulls are anonymous.
+          # timeout (without --foreground) signals its whole process group, so a
+          # hanging local-build fallback's docker CLI is stopped too.
+          image_start="${SECONDS}"
+          image_rc=0
           case "${family}" in
             clarify)
-              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/sandbox_image.sh build --family clarify \
-                --build-arg "CODEX_VERSION=${codex_version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)" || image_id=""
+              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN timeout --signal=TERM --kill-after=10s "${image_limit}s" bash scripts/sandbox_image.sh build --family clarify \
+                --build-arg "CODEX_VERSION=${codex_version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)" || image_rc=$?
               ;;
             review)
-              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/sandbox_image.sh build --family review \
-                --build-arg "OPENCODE_VERSION=${opencode_version}" -f scripts/review_sandbox/Dockerfile scripts/review_sandbox)" || image_id=""
+              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN timeout --signal=TERM --kill-after=10s "${image_limit}s" bash scripts/sandbox_image.sh build --family review \
+                --build-arg "OPENCODE_VERSION=${opencode_version}" -f scripts/review_sandbox/Dockerfile scripts/review_sandbox)" || image_rc=$?
               ;;
             codex-isolated-codex)
-              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN CODEX_VERSION="${codex_version}" bash scripts/codex_isolated_exec.sh image | tail -n 1)" || image_id=""
+              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN CODEX_VERSION="${codex_version}" timeout --signal=TERM --kill-after=10s "${image_limit}s" bash scripts/codex_isolated_exec.sh image | tail -n 1)" || image_rc=$?
               ;;
           esac
+          ci_sandbox_phase_done image_resolve "${image_start}" "${image_rc}" "${image_limit}" CI_SANDBOX_PYTHON_IMAGE_TIMEOUT_SECS || exit 1
+          if [ "${image_rc}" -ne 0 ]; then
+            image_id=""
+          fi
           if ! [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::Could not resolve the ${family} sandbox image (got '${image_id}')."
             exit 1
@@ -4336,19 +4372,35 @@ jobs:
           run_tag="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$$"
           base_ref="ci-sandbox-python-base:${family}-${run_tag}"
           derived_ref="ci-sandbox-python:${family}-${run_tag}"
+          # Named so a timed-out run is killed on the daemon, not just its CLI.
+          pytest_container="ci-sandbox-python-${family}-${run_tag}"
           cleanup()
           {
+            docker rm -f "${pytest_container}" >/dev/null 2>&1 || true
             docker image rm -f "${derived_ref}" "${base_ref}" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
 
           docker tag "${image_id}" "${base_ref}"
+          derive_start="${SECONDS}"
+          derive_rc=0
           printf 'FROM %s\nUSER root\nRUN apt-get update \\\n && apt-get install -y --no-install-recommends python3-pytest \\\n && rm -rf /var/lib/apt/lists/*\n' "${base_ref}" \
-            | docker build -q -t "${derived_ref}" - >/dev/null
+            | timeout --signal=TERM --kill-after=10s "${derive_limit}s" docker build -q -t "${derived_ref}" - >/dev/null || derive_rc=$?
+          ci_sandbox_phase_done derive_build "${derive_start}" "${derive_rc}" "${derive_limit}" CI_SANDBOX_PYTHON_DERIVE_TIMEOUT_SECS || exit 1
+          if [ "${derive_rc}" -ne 0 ]; then
+            echo "::error::Sandbox family ${family} phase derive_build failed (rc=${derive_rc})."
+            exit 1
+          fi
 
           # Git identity and safe.directory live in the throwaway HOME, so tests that
           # commit in temp repos or read the read-only /src checkout work as uid 65534.
-          docker run --rm --network none --user 65534:65534 --cap-drop ALL \
+          # faulthandler_timeout (300 s, below the pytest phase limit) and
+          # --durations name a hanging or slow test, as tests-system-python does
+          # (run 43085524213); see #9560 / run 43771105041.
+          pytest_start="${SECONDS}"
+          set +e
+          timeout --signal=TERM --kill-after=10s "${pytest_limit}s" \
+            docker run --name "${pytest_container}" --rm --network none --user 65534:65534 --cap-drop ALL \
             --security-opt no-new-privileges --read-only \
             --tmpfs /tmp:rw,exec,size=512m \
             -e HOME=/tmp/home -e TMPDIR=/tmp -e PYTHONDONTWRITEBYTECODE=1 \
@@ -4367,9 +4419,16 @@ jobs:
               # Template/live-copy parity is not interpreter-specific; the 3.12 jobs and
               # tests-system-python check it with the PR-base drift tolerance this
               # shallow, base-SHA-free container cannot provide.
-              python3 -m pytest -q -p no:cacheprovider \
+              python3 -m pytest -q -p no:cacheprovider -o faulthandler_timeout=300 --durations=15 \
                 --deselect tests/test_gh_api_write_guard.py::test_template_parity "$@"
             ' _ "${family_tests[@]}"
+          pytest_rc=$?
+          set -e
+          if ! ci_sandbox_phase_done pytest_run "${pytest_start}" "${pytest_rc}" "${pytest_limit}" CI_SANDBOX_PYTHON_PYTEST_TIMEOUT_SECS; then
+            docker kill "${pytest_container}" >/dev/null 2>&1 || true
+            exit 1
+          fi
+          exit "${pytest_rc}"
 
   budget-watch:
     # Early warning for the two budgets CI has hit without notice (workflow
