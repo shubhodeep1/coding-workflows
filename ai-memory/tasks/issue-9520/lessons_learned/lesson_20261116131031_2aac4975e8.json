@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-16T13:10:31Z",
+  "issue_number": 9520,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 010 as out-of-scope; anchor=docs/INVENTORY.md:305-307; cited_path=docs/INVENTORY.md; files_touched=agents.d/stall-active-runs-self-check.md, changelog.d/stall-active-runs-self-check.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrator_concurrency_caps.py.",
+  "phase": "review_autofix",
+  "pr_number": 9564,
+  "record_id": "lesson_20261116131031_2aac4975e8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "docs/INVENTORY.md",
+    "agents.d/stall-active-runs-self-check.md",
+    "changelog.d/stall-active-runs-self-check.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrator_concurrency_caps.py"
+  ]
+}
