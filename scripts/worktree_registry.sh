@@ -14,6 +14,14 @@ if [ -f "${_WORKTREE_REGISTRY_SCRIPT_DIR}/emit_event.sh" ]; then
 	# shellcheck disable=SC1091
 	source "${_WORKTREE_REGISTRY_SCRIPT_DIR}/emit_event.sh" 2>/dev/null || true
 fi
+# Issue #9473: the wedged-queued run helpers (zombie_queued_*) live in
+# gh_helpers.sh. Callers run this script as its own `bash` process, so the
+# poller's copy is not inherited; load the sibling here. Fail-open: without it
+# every queued run stays active (pre-#9473 behaviour).
+if [ -f "${_WORKTREE_REGISTRY_SCRIPT_DIR}/gh_helpers.sh" ]; then
+	# shellcheck disable=SC1091
+	source "${_WORKTREE_REGISTRY_SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
+fi
 if ! command -v emit_event >/dev/null 2>&1; then
 	emit_event()
 	{
@@ -251,8 +259,8 @@ _worktree_registry_load_active_run_ids()
 
 	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
 	# wedged (zero jobs, cannot be cancelled) and is not active. The helpers
-	# come from gh_helpers.sh, which the poller sources; without them every
-	# queued run stays active (pre-#9473 behaviour).
+	# come from gh_helpers.sh, sourced at the top of this script; without them
+	# every queued run stays active (pre-#9473 behaviour).
 	local zq_cutoff="0" zq_def='def is_wedged_queued($cutoff): false;'
 	if declare -F zombie_queued_cutoff_epoch >/dev/null 2>&1 && declare -F zombie_queued_jq_def >/dev/null 2>&1; then
 		zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"

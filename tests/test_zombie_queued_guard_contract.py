@@ -185,3 +185,35 @@ def test_poll_validate_active_counter_ignores_only_the_wedged_queued_run(tmp_pat
 	result = _poll_validate_active_rc(tmp_path, [wedged], {"ZOMBIE_RUN_MAX_QUEUED_HOURS": "0"})
 	assert "rc=0" in result.stdout, result.stdout + result.stderr
 	assert "ZOMBIE_RUN_IGNORED" not in result.stderr
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required")
+def test_worktree_registry_filters_wedged_runs_in_its_own_process(tmp_path: Path) -> None:
+	"""Issue #9473: worktree_registry.sh runs as its own `bash` process, so it
+	must load gh_helpers.sh itself; a source-text check cannot catch that."""
+	import json
+	import os
+	from datetime import datetime, timedelta, timezone
+
+	def iso(hours: int) -> str:
+		return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+	runs = {"workflow_runs": [
+		{"id": 43095142301, "status": "queued", "created_at": iso(25), "path": ".github/workflows/implement.yml"},
+		{"id": 7, "status": "queued", "created_at": iso(1), "path": ".github/workflows/implement.yml"},
+		{"id": 8, "status": "in_progress", "created_at": iso(100), "path": ".github/workflows/implement.yml"},
+	]}
+	runs_file = tmp_path / "runs.json"
+	runs_file.write_text(json.dumps(runs), encoding="utf-8")
+	script = f'source "{REPO_ROOT / "scripts" / "worktree_registry.sh"}" >/dev/null\n_worktree_registry_load_active_run_ids\n'
+	env = {k: v for k, v in os.environ.items()
+		if k not in ("ZOMBIE_RUN_MAX_QUEUED_HOURS", "BASH_ENV", "ENV", "_GH_HELPERS_LOADED")}
+	env["WORKTREE_ACTIVE_RUNS_FILE"] = str(runs_file)
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60, cwd=tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout) == ["7", "8"], result.stdout + result.stderr
+	assert ("ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/implement.yml age_h=25 "
+		"guard=worktree_registry_active_runs") in result.stderr
+	env["ZOMBIE_RUN_MAX_QUEUED_HOURS"] = "0"
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60, cwd=tmp_path)
+	assert json.loads(result.stdout) == ["43095142301", "7", "8"], result.stdout + result.stderr
