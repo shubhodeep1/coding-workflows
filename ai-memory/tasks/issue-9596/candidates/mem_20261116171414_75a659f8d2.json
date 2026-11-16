@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the out-of-scope `docs/INVENTORY.md` fix be delivered, given that this heal issue's frozen scope does not include that file?\nChoices:\nA: Supersede this issue with a replacement heal issue whose scope marker includes `docs/INVENTORY.md`, using the existing heal-scope-recovery path (`<!-- ai:heal-scope-recovery:v1 replaced_by=N ... -->`). Then close this one. (RECOMMENDED)\nB: Close this issue without a pipeline change because open PR #9597 or #9598 (both touch `docs/INVENTORY.md`, for issues #9580/#9581) already adds these four entries. Pick this only after confirming one of them does.\nC: Keep this issue and add the four paths to `tests/inventory_exemptions.txt`, which is inside `tests/**`. This contradicts the issue's own constraint (\"Do not add exemptions\u2026 these are real shipped files\") and weakens the parity check.\n**Note:** C conflicts with the issue's \"do not weaken the failing check\" rule. Choosing it will likely be refused in review or need re-clarification.",
+  "fingerprint": "c88524481454578490824f808d3685884a192246a43e0bd48247d9addbfc0712",
+  "lineage": {
+    "issue_number": 9596,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43904553137",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43904553137",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261116171414_75a659f8d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9596,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43904553137"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9596 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-16T17:14:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
