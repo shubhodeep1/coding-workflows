@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal.py:6266-6285 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: test_intake_does_not_credit_the_runner_wait_twice uses an issue-kind `_consumer_payload(...)`, so the up-front credit and the double-credit guard at scripts/workflow_failure_heal_intake.sh:523,616 are never exercised for an engine_fallback report that also carries an identity.\n  WHY: Removing the guard would double-credit the runner wait (base + 2 * wait) and the test would still pass. Reviewers rated it NIT.\n- tests/test_workflow_failure_heal_synced_security.py:445-447,676-679 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The exemption `re.search(r\"/actions/runs/\\d+/attempts/\\d+$\", arg)` matches the attempts endpoint of any run in any repository, while the comment says it covers only the intake's own run attempt.\n  WHY: A future regression that reads a source or consumer run's attempts endpoint would keep the \"no source reads\" contract test green. Reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_failure_heal.py:6266-6285 | severity=NIT | confidence=4\n  PROBLEM: test_intake_does_not_credit_the_runner_wait_twice builds its payload with `_consumer_payload(...)` (kind=\"issue\"), so RUN_ATTEMPT_ELAPSED_SECONDS is never set and the guard in scripts/workflow_failure_heal_intake.sh is always true. No test combines `_engine_scoped_payload()` with `_identity_env(...)`.\n  WHY: Removing the guard would double-credit the runner wait and the test would still pass.\n- tests/test_workflow_failure_heal_synced_security.py:447,679 | severity=NIT | confidence=3\n  PROBLEM: The exemption regex accepts the attempts endpoint of any run in any repository, although the comment says it covers only the intake's own run attempt.\n  WHY: A later regression reading a source or consumer run's attempts endpoint would pass the contract test.\n- TASK COMPLETENESS: none. The three PR fixes are in the diff, and the #9454 item is explicitly not fixed here, so it is not a gap.\n- HARDENING_SUGGESTIONS: add an engine_fallback plus identity test (~10 lines); anchor the regex to the intake's own repo and run (~2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_failure_heal_synced_security.py:447,679 | severity=NIT | confidence=3\n  PROBLEM: The regex `re.search(r\"/actions/runs/\\d+/attempts/\\d+$\", arg)` exempting the intake's own run attempt from the \"no source reads\" check is overly broad.\n  WHY: It matches the attempts path for any repository, not just self.SELF_REPO, so a future regression reading a consumer or source run's attempts endpoint would bypass the guard.\n- TASK COMPLETENESS: Requirement: None; all intent points from the PR description seem addressed. Expected change site: N/A. Evidence of absence: N/A. SEVERITY: NIT. ISSUE_CONFIDENCE: 4. (No task gap.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_failure_heal.py:6266-6285 | severity=NIT | confidence=4\n  PROBLEM: The test uses `_consumer_payload(...)` (kind=\"issue\"), so the up-front runner-wait block at scripts/workflow_failure_heal_intake.sh:523 never runs and the guard at line 616 is trivially true. The test never exercises the engine_fallback plus identity case.\n  WHY: Removing the guard at line 616 would double-credit the runner wait (base + 2*wait - queue) and the test would still pass.\n- tests/test_workflow_failure_heal_synced_security.py:445-447,676-679 | severity=NIT | confidence=3\n  PROBLEM: The exemption regex matches any run's attempts endpoint in any repository, and is not anchored to SELF_REPO (imported at line 33), although the comment says it covers the intake's own run.\n  WHY: A regression reading `repos/<consumer_repo>/actions/runs/<n>/attempts/<n>` would not fail the assertion at line 447 or 679.\n- TASK COMPLETENESS: none. All three PR deliverables are reflected, and #9454 is explicitly deferred.\n- HARDENING_SUGGESTIONS: add an engine_fallback plus identity test with a stale iat (~20 lines); anchor the regex with `re.escape(SELF_REPO)` (~2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_workflow_failure_heal.py:6271 (also scripts/workflow_failure_heal_intake.sh:523,616) | severity=NIT | confidence=5\n  PROBLEM: test_intake_does_not_credit_the_runner_wait_twice uses an issue-kind payload, but the up-front credit and double-credit guard are reached only for an engine_fallback report, so the test does not exercise the guard.\n  WHY: If the guard regresses, the test still takes the identity retry with RUN_ATTEMPT_ELAPSED_SECONDS unset and passes, so a double-credit regression would go undetected.\n- TASK COMPLETENESS: none.\n- HARDENING_SUGGESTIONS: build the payload with `_engine_scoped_payload()` and keep the stale identity setup; assert the up-front credit is applied and the identity retry is skipped (~4 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_workflow_failure_heal.py:6266-6285 (vs scripts/workflow_failure_heal_intake.sh:523 and :616) | severity=NIT | confidence=4\n  PROBLEM: The double-credit regression test builds its payload with `_consumer_payload(...)` (kind=\"issue\"), so the engine_fallback-gated up-front credit never runs and the line 616 guard is trivially true. The test covers only the kind=issue retry path.\n  WHY: No runtime failure in shipped code. A regression reverting line 616 would double-credit the runner wait for engine_fallback reports that carry an identity, and the test would still pass.\n- tests/test_workflow_failure_heal_synced_security.py:447,679 | severity=NIT | confidence=3\n  PROBLEM: The \"no log, run or diagnosis read\" exemption matches the attempts endpoint of any run in any repository, while the comment (lines 445-446 and 676-677) says it covers only the intake's own run attempt.\n  WHY: No current failure. A future regression reading a source or consumer run's attempts endpoint would keep the \"no source reads\" assertion green.\n- TASK COMPLETENESS: none.\n- HARDENING_SUGGESTIONS: add one test combining `_engine_scoped_payload()` with `_identity_env(...)` and a stale iat (~10 lines); anchor the regex to the self repo (~2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "51daf2458d2750fb9f14248a15a8d8f0201e0c0a8f230304273390d78cdb69b2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9477,
+    "run_id": "43767562204",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43767562204",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116075804_29086e8f84",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9477,
+    "run_id": "43767562204"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T07:58:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
