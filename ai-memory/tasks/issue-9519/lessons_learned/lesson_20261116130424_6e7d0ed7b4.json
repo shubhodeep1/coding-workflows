@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-16T13:04:24Z",
+  "issue_number": 9519,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=docs/INVENTORY.md:1; cited_path=docs/INVENTORY.md; files_touched=agents.d/prepush-gate-passing-change-erased.md, changelog.d/prepush-gate-passing-change-erased.md, scripts/review_autofix_step_prepush_test_gate.sh, tests/test_review_prepush_test_gate.py.",
+  "phase": "review_autofix",
+  "pr_number": 9562,
+  "record_id": "lesson_20261116130424_6e7d0ed7b4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "docs/INVENTORY.md",
+    "agents.d/prepush-gate-passing-change-erased.md",
+    "changelog.d/prepush-gate-passing-change-erased.md",
+    "scripts/review_autofix_step_prepush_test_gate.sh",
+    "tests/test_review_prepush_test_gate.py"
+  ]
+}
