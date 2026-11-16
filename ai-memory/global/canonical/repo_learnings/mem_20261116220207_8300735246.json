@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "When changing a script or orchestration workflow, look for an existing focused test module and extend it or add a corresponding test. Merged changes repeatedly pair updates to scripts such as `orchestrate_poll_process.sh` with tests covering that behavior.",
+  "fingerprint": "cfa519859fc7dcd333070496d57e304f58dfc44c0ea7089aaf04609db54b8fa8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43956841741",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43956841741",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9008",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9417",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9472",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9568",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9569",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9011",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9427",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9495",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9586",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9587"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261116220207_8300735246",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow and script changes are commonly accompanied by focused regression tests that mirror the affected behavior.",
+  "timestamps": {
+    "created_at": "2026-11-16T22:02:07Z",
+    "promoted_at": "2026-11-16T22:02:54Z",
+    "superseded_at": null
+  }
+}
