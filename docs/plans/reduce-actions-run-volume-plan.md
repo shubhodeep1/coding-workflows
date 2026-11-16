@@ -28,7 +28,7 @@ Runner time is what jams the account. Skipped runs take no runner, but they floo
 
 - Item 3: an integration branch is synced from `main` only when it must be (its PR cannot merge, a wave is about to be dispatched, the final merge is next), or at most once every 24 hours.
 - Item 4: `ci.yml` skips its test jobs when every changed file is on a list of paths no test reads, and `lint` still reports a real result.
-- Item 6: four kinds of purely informational bot comments no longer start the four `issue_comment` wrappers.
+- Item 6: three kinds of purely informational bot comments no longer start the four `issue_comment` wrappers.
 - Item 7: a consumer's `AI Check Failure Triage` is no longer created for runs on the default branch.
 - Item 8: the poller cron runs every 15 minutes and the closed-PR sweep runs hourly, here and in consumers.
 - Item 9: the review sweep no longer treats a review run that is merely waiting for a runner as wedged.
@@ -73,7 +73,7 @@ User answers, 2026-11-16. Q9 to Q11 were taken as clear-winner assumptions and n
 
 ### D4 — Comment fan-out (item 6)
 
-- **Chosen:** only the four audited comment kinds, switched per call (Q4 A).
+- **Chosen:** only the audited comment kinds, switched per call (Q4 A). Four were proposed; the reader audit kept security-pass results on the PAT (see Approach), so three moved.
 - **Alternatives considered:** also add a router workflow; drop item 6.
 - **Why:** see Non-goals; most comment kinds are trusted by author login.
 
@@ -133,7 +133,7 @@ User answers, 2026-11-16. Q9 to Q11 were taken as clear-winner assumptions and n
    - `.github/workflows/review_autofix_sweep.yml`
    - removal of `.github/workflows/check-failure-triage-historical.yml` and `tests/test_check_failure_triage_historical.py`
    - registry, inventory and docs
-3. **PR (c): item 6.** The posting sites of the four comment kinds, changed per call, after a reader audit for each kind.
+3. **PR (c): item 6.** The posting sites of the three comment kinds that passed the reader audit, changed per call.
 4. **PR (d): item 4.** `ci.yml`, built on top of #9528's merged `ci.yml`.
 
 Each PR is independently revertable.
@@ -168,14 +168,13 @@ Otherwise the tick logs `INTEGRATION_SYNC_THROTTLE outcome=skip` and continues. 
 
 The workflow, its test, its `ci.yml` test-list line, its registry entry, its inventory line and the agents.md text are removed together.
 
-**Item 6.** Each `gh` call that posts one of these comment kinds uses `GH_TOKEN=${{ github.token }}` (or the job's `GITHUB_TOKEN`) for that call only, so `gh api user` identity lookups stay on the PAT:
+**Item 6.** Each `gh` call that posts one of these comment kinds uses the job's `GITHUB_TOKEN` for that call only, so `gh api user` identity lookups stay on the PAT:
 
-- security-pass results;
 - the materiality advisory;
-- the review-blocked judge decision;
-- the security-audit tracker.
+- the review-blocked judge decision and hold notices;
+- the security-audit tracker report.
 
-Each kind is moved only after its readers are confirmed not to filter by author and the comment is never edited in place by a PAT-authored step.
+A kind is moved only after its readers are confirmed not to filter by author. Security-pass results were the fourth candidate, and they failed that audit: the next pass trusts its own earlier markers only when the PAT login wrote them (`SECURITY_PASS_AUTHOR_LOGIN`), so they stay on the PAT. The fallback to the PAT happens only when GitHub refuses the job token (401/403). A POST is sent once, and any other failure is not resent, because a timeout may already have created the comment.
 
 **Item 4.** A `changes` job computes the changed files (the PR's base...head, or a push's before...after). An empty, unreadable or all-zero base means "code changed". The safe list is the set of paths no test or CI step reads:
 
