@@ -24298,7 +24298,10 @@ _check_triage_gate_invoke() {
 # holds it (reason=source_pr_closed_unmerged_run_active), and so does an
 # ai:planning / ai:implementing label on the gate core's fresh issue read
 # (reason=source_pr_closed_unmerged_phase_active), because an issue_comment
-# run reports the default branch as its head; a source PR whose head is an
+# run reports the default branch as its head; a not-completed clarify run whose
+# display_title is the issue title, from the cached actions-runs blob, holds it
+# (reason=source_pr_closed_unmerged_clarify_active; ai:clarification itself is
+# not held, it stays on while answers are pending); a source PR whose head is an
 # `orchestrator/project-*` integration branch holds it
 # (reason=source_pr_integration_head), because a closed integration PR's
 # content can reach the default branch through a re-issued PR (#739 / #753);
@@ -24417,6 +24420,28 @@ _close_sweep_check_triage_gate() {
   if jq -e '[.labels[]? | if type == "object" then (.name // "") else . end] | (index("ai:planning") != null or index("ai:implementing") != null)' \
       "${RUNTIME_DIR:-/tmp}/stall_check_triage_issue_${issue_num}.json" >/dev/null 2>&1; then
     echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_closed_unmerged_phase_active pr=${_CT_GATE_PR}"
+    return 1
+  fi
+  # A clarify run (/reclarify, or the issues-opened run) also reports the
+  # default branch as its head, and ai:clarification stays on while questions
+  # wait for an answer, so a label hold would keep waiting issues open for good.
+  # Instead hold while a not-completed clarify-family run's display_title (the
+  # issue title for issues / issue_comment events) equals this issue's title,
+  # read from this tick's cached actions-runs blob (loaded in this shell through
+  # a file so the per-tick memo stays; no new API call when it is primed). A
+  # title another issue shares only holds, never closes.
+  local _ctg_title="" _ctg_runs_file="${RUNTIME_DIR:-/tmp}/stall_check_triage_issue_${issue_num}.runs.json"
+  _ctg_title="$(jq -r '(.title // "") | strings' "${RUNTIME_DIR:-/tmp}/stall_check_triage_issue_${issue_num}.json" 2>/dev/null || echo "")"
+  if [ -n "${_ctg_title}" ] && declare -F _load_actions_runs_cached >/dev/null 2>&1 \
+      && _load_actions_runs_cached > "${_ctg_runs_file}" 2>/dev/null \
+      && jq -e --arg t "${_ctg_title}" 'any(.workflow_runs[]?;
+          ((.status // "") != "completed")
+          and ((.event // "") == "issue_comment" or (.event // "") == "issues")
+          and ((.display_title // "") == $t)
+          and ((.name // "") == "AI Clarify" or (.name // "") == "Internal: AI Clarify" or (.name // "") == "AI Clarify (Reusable)"
+               or ((.path // "") | test("(^|/)(ai-clarify|internal-clarify|clarify)\\.yml(@.*)?$"))))' \
+      "${_ctg_runs_file}" >/dev/null 2>&1; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_closed_unmerged_clarify_active pr=${_CT_GATE_PR}"
     return 1
   fi
   ensure_label_exists "ai:closed" >/dev/null 2>&1 || true

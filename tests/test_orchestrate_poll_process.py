@@ -19630,7 +19630,8 @@ def test_close_merged_sweep_logs_check_triage_rule_skip_reasons():
 
 
 def _close_sweep_gate_harness(tmp_path: Path, *, verdict: dict, timeline: list, prs: dict[int, dict] | None = None,
-		env: dict[str, str] | None = None, close_fails: bool = False, issue: dict | None = None) -> tuple[int, str, str]:
+		env: dict[str, str] | None = None, close_fails: bool = False, issue: dict | None = None,
+		runs: list | None = None) -> tuple[int, str, str]:
 	"""Run _close_sweep_check_triage_gate with a stub gate script and stub gh."""
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	gate_start = script.index('_CT_GATE_SKIP=""\n_CT_GATE_RC=0\n')
@@ -19661,6 +19662,7 @@ def _close_sweep_gate_harness(tmp_path: Path, *, verdict: dict, timeline: list, 
 		'if [ "$1 $2" = "issue close" ] && [ "${STUB_CLOSE_FAIL:-}" = "1" ]; then return 1; fi; return 0; }\n'
 		'_fetch_pr_json() { cat "${STUB_PR_DIR}/$1.json" 2>/dev/null || echo "{}"; }\n'
 		"ensure_label_exists() { :; }\n"
+		'_load_actions_runs_cached() { printf "%s" "${STUB_RUNS}"; }\n'
 		+ script[active_start:active_end] + "\n"
 		+ script[ref_start:ref_end] + "\n" + script[gate_start:gate_end] + "\n"
 		'rc=0; _close_sweep_check_triage_gate 10 "${STUB_TIMELINE}" main || rc=$?\n'
@@ -19678,6 +19680,7 @@ def _close_sweep_gate_harness(tmp_path: Path, *, verdict: dict, timeline: list, 
 		"STUB_CALLS": str(calls),
 		"STUB_CLOSE_FAIL": "1" if close_fails else "",
 		"STUB_ISSUE_JSON": json.dumps(issue if issue is not None else {"number": 10}),
+		"STUB_RUNS": json.dumps({"workflow_runs": runs or []}),
 	}
 	run_env.pop("CHECK_TRIAGE_RESOLVED_GATE_ENABLED", None)
 	run_env.pop("ACTIVE_WORKFLOW_ISSUES", None)
@@ -19850,6 +19853,20 @@ def test_close_merged_sweep_closes_triage_issue_when_source_pr_closed_unmerged()
 			issue={"number": 10, "labels": [{"name": "ai:check-triage"}, {"name": "ai:blocked"}]},
 		)
 		assert rc == 0 and "reason=source_pr_closed_unmerged pr=85" in out, out
+	# An in-flight clarify run for the issue (issue_comment /reclarify reports
+	# the default branch as its head) holds it; an idle ai:clarification issue,
+	# a completed clarify run or another issue's run does not.
+	titled = {"number": 10, "title": "CI failure: tests on PR #85", "labels": [{"name": "ai:check-triage"}, {"name": "ai:clarification"}]}
+	clarify_run = {"name": "AI Clarify", "path": ".github/workflows/ai-clarify.yml", "event": "issue_comment",
+		"status": "in_progress", "display_title": titled["title"], "head_branch": "main"}
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[], prs=source, issue=titled, runs=[clarify_run])
+		assert rc == 1 and "triage_rule=skip reason=source_pr_closed_unmerged_clarify_active pr=85" in out, out
+		assert "issue close" not in calls and "issue edit" not in calls
+	for other_runs in ([], [{**clarify_run, "status": "completed"}], [{**clarify_run, "display_title": "another issue"}]):
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, out, _ = _close_sweep_gate_harness(Path(tmp), verdict=closed, timeline=[], prs=source, issue=titled, runs=other_runs)
+			assert rc == 0 and "reason=source_pr_closed_unmerged pr=85" in out, out
 	# An open source PR keeps today's path.
 	with tempfile.TemporaryDirectory() as tmp:
 		rc, out, calls = _close_sweep_gate_harness(
@@ -19912,6 +19929,21 @@ def _run_target_merge_marker_base(tmp_path: Path) -> None:
 	assert run("", "orchestrator/project-768") == "yes:check_triage_marker_pr_base"
 	assert run("", "orchestrator/project-769") == "no"
 	assert run("orchestrator/project-768", "orchestrator/project-768") == "yes:check_triage_pr_branch"
+
+
+def test_close_sweep_check_triage_branch_logs_invalid_issue_number():
+	"""Issue #9481: the non-numeric guard logs its reason without the raw value."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index('_CLOSE_SWEEP_TRIAGE_BRANCH=""\n_CLOSE_SWEEP_TRIAGE_MARKER_BASE=""\n')
+	end = script.index("\n  return 0\n}\n", script.index("_close_sweep_check_triage_branch() {", start)) + len("\n  return 0\n}\n")
+	with tempfile.TemporaryDirectory() as tmp:
+		helper = Path(tmp) / "helper.sh"
+		helper.write_text(script[start:end], encoding="utf-8")
+		proc = subprocess.run(
+			["bash", "-c", 'source "$1"; rc=0; _close_sweep_check_triage_branch "1;x" "[]" "" "" || rc=$?; echo "RC=${rc}"', "_", str(helper)],
+			check=True, capture_output=True, text=True, cwd=tmp,
+		)
+	assert proc.stdout.splitlines() == ["CLOSE_MERGED_SWEEP issue=invalid triage_rule=skip reason=issue_num_invalid", "RC=1"], proc.stdout
 
 
 def test_pr_json_base_is_target_merge_accepts_marker_pr_base():
