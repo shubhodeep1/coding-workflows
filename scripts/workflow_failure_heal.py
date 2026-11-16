@@ -10469,6 +10469,13 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 			continue
 		if created <= anchor:
 			continue
+		# A cancelled run reports no result, green or red: since push CI
+		# coalesces per branch (ci.yml `ci-push-<ref>`, run-volume plan D14),
+		# a push replaced while it waited ends `cancelled`. Heal issues are
+		# only opened for `failure` / `timed_out`, and a failure that comes
+		# back posts an occurrence comment, which moves the anchor.
+		if run.get("conclusion") == "cancelled":
+			continue
 		window.append((created, run))
 	# One page (the newest HEAL_STALE_GREEN_RUNS+10 runs) is read. A page that
 	# neither reaches back to the anchor nor holds every run the API counted
