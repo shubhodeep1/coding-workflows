@@ -3753,11 +3753,13 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
 
-      # History: the step moved out of this job (15m52s of its 20 minutes, run
-      # 39038112755, budget-watch issue #7575) into orchestrate-poll group 1.
-      # Before that it moved here from tests-release-and-log-analysis (20m16s,
-      # run 39030079651, #7560), and earlier out of this job when it measured
-      # 19.6 of its 20 minutes (2026-10-09). In orchestrate-poll it ran in
+      # History: the step moved out of tests-hooks-and-orchestrator (15m52s of
+      # its 20 minutes, run 39038112755, budget-watch issue #7575) into
+      # orchestrate-poll group 1. Before that it moved into
+      # tests-hooks-and-orchestrator from tests-release-and-log-analysis
+      # (20m16s, run 39030079651, #7560), and earlier out of
+      # tests-hooks-and-orchestrator when it measured 19.6 of its 20 minutes
+      # (2026-10-09). In orchestrate-poll it ran in
       # group 1 only, because group 0 carried the fast-fail subset and (until
       # #8080 moved them to group 1) the single-file modules. Budget-watch
       # issue #7579: group 1 then took 15m13s of its 20 minutes (run
@@ -3768,7 +3770,7 @@ jobs:
       # in one more process beside them, on the runner's 4 cores. Every test
       # seeds its own temp dirs and fake gh, and each shard is a separate
       # pytest process. Step
-      # times here are estimates from test counts and earlier changelog
+      # times in this comment are estimates from test counts and earlier changelog
       # figures, not measurements of run 39047759102. The step seeds its own
       # git repositories and needs no Node or prepared .claude/ live copies.
       # Moved back from orchestrate-poll group 1, which took 15m42s of its 20
