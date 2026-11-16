@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: Option A keeps the guard that matters: nothing falls back to the default branch, and no ref is written. It also stops a rate-limit refusal from failing the job and filing more `plan_failed` heal reports. This is the same reasoning the #7516 `label_missing` hold uses at `.github/workflows/plan.yml:305-312`. Two repo facts make the hand-back work. First, `ai:planning` is not in the standalone stall loop's skip list (`scripts/orchestrate_poll_process.sh:25758`), so stall recovery picks the issue up again. Second, because the deferral writes no comment and no label, it makes no extra API calls while the limit is exhausted. Option B would need a human `/reclarify` for a cause that clears by itself. Option C needs changes outside the heal scope. One constraint is binding (see the execution plan): the deferral must also skip every setup step that the `label_missing` hold already skips. Otherwise \"Checkout repository\" runs with `ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}` (`plan.yml:475`), which checks out the default branch. Later API reads would then fail inside the same rate-limit window.\nQ2: Exit 2 (`api_unavailable`) covers permanent errors such as a revoked token or a 404, as well as transient retries that ran out (`scripts/resolve_integration_ref.sh:77-80`). Deferring it quietly would hide real defects. Only exit 75 is clearly a temporary rate limit. The exit-2 branch at `plan.yml:454-458` and the exit-3 branch at `plan.yml:448-450` stay exactly as they are.\nQ3: `.github/workflows/internal-plan.yml:55` only calls `shubhodeep1/coding-workflows/.github/workflows/plan.yml@promote-candidate`. It has no copy of the resolver branch, so it needs no change. The fix goes in `plan.yml`, plus a regression test under `tests/` and a `changelog.d/` fragment, all within the heal scope.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/plan.yml, `Resolve integration ref` step (id `refctx`): the exit-75 branch at lines 451-453 and the `hold_skip_plan` pattern at lines 362-369\n    - .github/workflows/plan.yml: steps gated on `steps.refctx.outputs.label_missing_hold != 'true'` (lines 472, 482, 496, 508, 553, 564, 574, 589, 600, 860, 881)\n    - tests/test_plan_check_triage_branch_guard.py (around line 245 and line 288): the existing pattern that extracts and dedents the refctx body and checks the label_missing hold outputs\n    - scripts/orchestrate_poll_process.sh:25758: the standalone stall skip list, which does not include `ai:planning`\n  steps:\n    - In the exit-75 branch of the refctx step (only when `resolver_ci_triage_routing_on=true`), stop running `exit 1`. Instead write `ref=` and `resolver_status=failed` to `$GITHUB_OUTPUT`, plus one new output whose name does not clash with any existing identifier (for example `rate_limited_defer=true`). Do not reuse or repurpose `label_missing_hold`. Write `SKIP_PLAN=true` to `$GITHUB_ENV`, then log `::warning::INTEGRATION_REF_RESOLVE outcome=deferred reason=rate_limited rc=75 issue=<n>; refusing to fall back to the default branch.` and exit 0. Make no `gh` calls in this branch. Keep the resolver's own `outcome=rate_limited what=...` stderr line exactly as it is.\n    - Add `&& steps.refctx.outputs.rate_limited_defer != 'true'` (or the equivalent new output name) to every step currently gated on `label_missing_hold != 'true'`. A deferred run must never reach \"Checkout repository\", where an empty ref resolves to the default branch, and must make no further API reads while rate-limited.\n    - Leave exit 75 with routing off unchanged: it keeps falling back to the default branch as before. Also leave the exit 2, exit 3, `label_missing` and `pr_not_open` branches unchanged.\n    - Regression test in `tests/`: extract the refctx body the same way existing tests do. Run it with a stub resolver that exits 75 and prints `::error::INTEGRATION_REF_RESOLVE outcome=rate_limited what=issue-<n>`, with routing on and a `gh` stub that records every call. Assert all of the following: exit 0; outputs contain `ref=`, `resolver_status=failed` and the new defer flag; `GITHUB_ENV` contains `SKIP_PLAN=true`; the `outcome=deferred reason=rate_limited` warning is present; no `gh` call was made. Also check statically that every step currently gated on `label_missing_hold` is gated on the defer flag too. Add one case each confirming that exit 2 and exit 3 with routing on still exit 1. The deferral test must fail on the reported head, where the step exits 1, and pass with the fix. Record both runs in the PR.\n    - Add a `changelog.d/` fragment describing the deferral.\n  replaces_acceptance_criterion: n/a (this pins down Option A; nothing is relaxed)\n  equivalence_argument: The fail-closed property is kept, since no default-branch checkout or plan happens on exit 75. The only change is that the job ends successfully and the run is deferred instead of failed. The issue stays in `ai:planning`, and standalone stall recovery re-posts `/answer` after the limit resets, so this is not a retry or backoff inside the step.\n  reversibility: Reverting the single refctx branch and the added `if:` clauses brings back the `exit 1` behavior. No labels, comments or state are written by the new path.\n\nESCALATION (required for any ESCALATE decision):\n(none)\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n(none)",
+  "fingerprint": "cce0bcf543b524b51dfe9bcd5ccaf9bcb1744664d2f1803e1cb84909d7c58a45",
+  "lineage": {
+    "issue_number": 9599,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43921664995",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43921664995",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9599"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261116181133_6737f9f14a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9599,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43921664995"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9599",
+  "timestamps": {
+    "created_at": "2026-11-16T18:11:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
