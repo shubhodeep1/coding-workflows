@@ -49,6 +49,14 @@ ADVISORY_JOB_IDS = frozenset({"budget-watch"})
 # Alias kept for the advisory-job wiring test below.
 POST_AGGREGATE_ADVISORY_JOBS = ADVISORY_JOB_IDS
 ADVISORY_JOB_IF = "always() && github.event_name == 'push' && github.ref == 'refs/heads/main'"
+# The final-CI hand-back job (cut-ci-runner-time Phase 4) runs only after a
+# failed `lint` in a workflow_dispatch run and gates nothing, so it is neither
+# a worker job nor in `lint.needs`. Pinned in FinalCiFailedJobTest below.
+FINAL_CI_JOB_IDS = frozenset({"final-ci-failed"})
+FINAL_CI_JOB_IF = "failure() && !cancelled() && github.event_name == 'workflow_dispatch' && needs.lint.result == 'failure'"
+# `lint` runs even when a needed job fails, except in quick mode, where its
+# needed test jobs are skipped (Phase 4).
+AGGREGATE_JOB_IF = "always() && inputs.mode != 'quick'"
 
 
 def _ci_jobs() -> dict:
@@ -60,7 +68,7 @@ def _ci_jobs() -> dict:
 
 
 def _worker_job_ids(jobs: dict) -> list[str]:
-	return [job_id for job_id in jobs if job_id != AGGREGATE_JOB_ID and job_id not in ADVISORY_JOB_IDS]
+	return [job_id for job_id in jobs if job_id != AGGREGATE_JOB_ID and job_id not in ADVISORY_JOB_IDS and job_id not in FINAL_CI_JOB_IDS]
 
 
 def _aggregate_step() -> dict:
@@ -107,7 +115,7 @@ class AggregateJobWiringTest(unittest.TestCase):
 				self.assertNotIn(job_id, needs)
 
 	def test_lint_runs_even_when_a_needed_job_fails(self) -> None:
-		self.assertEqual(_ci_jobs()[AGGREGATE_JOB_ID]["if"], "always()")
+		self.assertEqual(_ci_jobs()[AGGREGATE_JOB_ID]["if"], AGGREGATE_JOB_IF)
 
 	def test_lint_reads_every_needed_result(self) -> None:
 		self.assertEqual(_aggregate_step()["env"]["CI_NEEDS_JSON"], "${{ toJSON(needs) }}")
@@ -127,6 +135,39 @@ class AggregateJobWiringTest(unittest.TestCase):
 				self.assertNotIn(job_id, jobs[AGGREGATE_JOB_ID]["needs"])
 				self.assertEqual(jobs[job_id]["if"], ADVISORY_JOB_IF)
 				self.assertEqual(jobs[job_id]["steps"][0].get("name"), "Checkout repository")
+
+
+class FinalCiFailedJobTest(unittest.TestCase):
+	"""cut-ci-runner-time Phase 4: a red final CI run goes back to review."""
+
+	def test_job_runs_only_after_a_failed_lint_in_dispatch_runs(self) -> None:
+		jobs = _ci_jobs()
+		for job_id in sorted(FINAL_CI_JOB_IDS):
+			with self.subTest(job=job_id):
+				job = jobs[job_id]
+				self.assertEqual(job["needs"], AGGREGATE_JOB_ID)
+				self.assertEqual(job["if"], FINAL_CI_JOB_IF)
+				self.assertNotIn(job_id, jobs[AGGREGATE_JOB_ID]["needs"])
+
+	def test_job_runs_the_trusted_script_from_the_default_branch(self) -> None:
+		job = _ci_jobs()["final-ci-failed"]
+		checkout = job["steps"][0]
+		self.assertEqual(checkout["with"]["ref"], "${{ github.event.repository.default_branch }}")
+		self.assertIs(checkout["with"]["persist-credentials"], False)
+		step = job["steps"][1]
+		self.assertEqual(step["run"], "bash scripts/review_final_ci_failed.sh")
+		self.assertEqual(step["env"]["PR_NUMBER"], "${{ inputs.pr_number }}")
+		self.assertEqual(step["env"]["PR_HEAD_SHA"], "${{ github.sha }}")
+		self.assertTrue((REPO_ROOT / "scripts" / "review_final_ci_failed.sh").is_file())
+
+	def test_worker_jobs_skip_in_quick_mode_except_static_checks(self) -> None:
+		jobs = _ci_jobs()
+		for job_id in _worker_job_ids(jobs):
+			with self.subTest(job=job_id):
+				if job_id == "static-checks":
+					self.assertNotIn("if", jobs[job_id])
+				else:
+					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick'")
 
 
 class SystemPythonJobTest(unittest.TestCase):

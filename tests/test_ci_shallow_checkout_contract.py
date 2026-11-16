@@ -39,6 +39,9 @@ SHALLOW_JOBS = {
 FETCH_STEP_ENV = {
 	"PR_BASE_SHA": "${{ github.event.pull_request.base.sha }}",
 	"PUSH_BEFORE_SHA": "${{ github.event.before }}",
+	# cut-ci-runner-time Phase 4: final-CI dispatch runs.
+	"FINAL_CI_PR_NUMBER": "${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}",
+	"GH_TOKEN": "${{ github.token }}",
 }
 ZERO_SHA = "0" * 40
 
@@ -108,7 +111,7 @@ def test_contract_is_wired_into_static_checks() -> None:
 
 def _git_env(tmp_path: Path) -> dict:
 	env = {key: value for key, value in os.environ.items() if not key.startswith(("GIT_", "GITHUB_"))}
-	for key in ("PR_BASE_SHA", "PUSH_BEFORE_SHA", "SHALLOW_FETCH_RETRY_DELAY_SECONDS", "BASH_ENV"):
+	for key in ("PR_BASE_SHA", "PUSH_BEFORE_SHA", "SHALLOW_FETCH_RETRY_DELAY_SECONDS", "BASH_ENV", "FINAL_CI_PR_NUMBER", "GH_TOKEN"):
 		env.pop(key, None)
 	config = tmp_path / "gitconfig"
 	config.write_text("[user]\n\tname = t\n\temail = t@t\n[init]\n\tdefaultBranch = main\n", encoding="utf-8")
@@ -177,7 +180,7 @@ def _checkout(tmp_path: Path, origin: dict, sha: str) -> Path:
 	return work
 
 
-def _run(work: Path, origin: dict, *, event: str, ref: str, sha: str, pr_base: str = "", before: str = "") -> subprocess.CompletedProcess[str]:
+def _run(work: Path, origin: dict, *, event: str, ref: str, sha: str, pr_base: str = "", before: str = "", extra_env: dict | None = None) -> subprocess.CompletedProcess[str]:
 	env = dict(origin["env"])
 	env.update({
 		"GITHUB_EVENT_NAME": event,
@@ -187,7 +190,25 @@ def _run(work: Path, origin: dict, *, event: str, ref: str, sha: str, pr_base: s
 		"PUSH_BEFORE_SHA": before,
 		"SHALLOW_FETCH_RETRY_DELAY_SECONDS": "0",
 	})
+	env.update(extra_env or {})
 	return subprocess.run(["bash", "-c", _fetch_body()], cwd=work, env=env, capture_output=True, text=True, check=False)
+
+
+def _final_ci_env(tmp_path: Path, base_ref_output: str, gh_exit: int = 0) -> dict:
+	"""Env for a final-CI dispatch run: a stub `gh` and a GITHUB_ENV file."""
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	stub = bin_dir / "gh"
+	stub.write_text(f"#!/usr/bin/env bash\nprintf '%s\\n' '{base_ref_output}'\nexit {gh_exit}\n", encoding="utf-8")
+	stub.chmod(0o755)
+	github_env = tmp_path / "github_env"
+	github_env.write_text("", encoding="utf-8")
+	return {
+		"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+		"GITHUB_ENV": str(github_env),
+		"GITHUB_REPOSITORY": "o/r",
+		"FINAL_CI_PR_NUMBER": "7",
+	}
 
 
 def test_pull_request_gets_the_three_dot_diff(tmp_path: Path, origin: dict) -> None:
@@ -253,3 +274,62 @@ def test_merge_base_deeper_than_window_unshallows(tmp_path: Path, origin: dict) 
 	assert "unshallowing" in result.stdout
 	assert _git(work, origin["env"], "merge-base", origin["fork"], "HEAD").stdout.strip() == origin["fork"]
 	assert _git(work, origin["env"], "diff", "--name-only", f"{origin['fork']}...HEAD").returncode == 0
+
+
+def test_final_ci_dispatch_run_uses_the_merge_ref_base(tmp_path: Path, origin: dict) -> None:
+	# cut-ci-runner-time Phase 4: a workflow_dispatch run checks out the PR's
+	# merge ref (HEAD = GitHub's test merge) while GITHUB_SHA is the branch
+	# head. The step treats it like a pull_request run whose base is the merge
+	# commit's first parent, and exports that base and the PR's base branch.
+	work = _checkout(tmp_path, origin, origin["merge"])
+	extra = _final_ci_env(tmp_path, "orchestrator/project-x")
+	result = _run(work, origin, event="workflow_dispatch", ref="refs/heads/feature", sha=origin["feature"], extra_env=extra)
+	assert result.returncode == 0, result.stdout + result.stderr
+	exported = Path(extra["GITHUB_ENV"]).read_text(encoding="utf-8").splitlines()
+	assert f"CI_FINAL_PR_BASE_SHA={origin['project']}" in exported
+	assert "CI_FINAL_PR_BASE_REF=orchestrator/project-x" in exported
+	diff = _git(work, origin["env"], "diff", "--name-only", f"{origin['project']}...HEAD")
+	assert diff.stdout.split() == ["workflow-templates/.claude/hooks/guard.py"]
+	assert f"history ready for {origin['merge']}" in result.stdout
+
+
+def test_final_ci_dispatch_run_with_unreadable_base_branch_warns(tmp_path: Path, origin: dict) -> None:
+	work = _checkout(tmp_path, origin, origin["merge"])
+	extra = _final_ci_env(tmp_path, "", gh_exit=1)
+	result = _run(work, origin, event="workflow_dispatch", ref="refs/heads/feature", sha=origin["feature"], extra_env=extra)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "::warning::Shallow checkout: could not read the base branch of PR #7" in result.stdout
+	exported = Path(extra["GITHUB_ENV"]).read_text(encoding="utf-8").splitlines()
+	assert f"CI_FINAL_PR_BASE_SHA={origin['project']}" in exported
+	assert "CI_FINAL_PR_BASE_REF=" in exported
+
+
+def test_final_ci_dispatch_run_rejects_a_malformed_pr_number(tmp_path: Path, origin: dict) -> None:
+	work = _checkout(tmp_path, origin, origin["merge"])
+	extra = _final_ci_env(tmp_path, "main")
+	extra["FINAL_CI_PR_NUMBER"] = "7;touch pwned"
+	result = _run(work, origin, event="workflow_dispatch", ref="refs/heads/feature", sha=origin["feature"], extra_env=extra)
+	assert result.returncode != 0
+	assert "::error::Shallow checkout: final-CI pr_number is not a pull request number." in result.stdout
+	assert not (work / "pwned").exists()
+
+
+def test_checkouts_use_the_merge_ref_in_dispatch_runs() -> None:
+	ref = "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+	for job_id, job in _jobs().items():
+		if job_id in ("budget-watch", "lint", "final-ci-failed"):
+			continue
+		checkout = job["steps"][0]
+		assert checkout["name"] == "Checkout repository", job_id
+		assert checkout["with"]["ref"] == ref, job_id
+
+
+def test_final_ci_dispatch_run_refuses_a_merge_ref_of_another_head(tmp_path: Path, origin: dict) -> None:
+	# The merge ref merges `feature`; a run dispatched for another head must
+	# not report that merge's results on its own head.
+	work = _checkout(tmp_path, origin, origin["merge"])
+	extra = _final_ci_env(tmp_path, "main")
+	result = _run(work, origin, event="workflow_dispatch", ref="refs/heads/feature", sha=origin["project"], extra_env=extra)
+	assert result.returncode != 0
+	assert f"not the dispatched head {origin['project']}" in result.stdout
+	assert Path(extra["GITHUB_ENV"]).read_text(encoding="utf-8") == ""
