@@ -469,7 +469,9 @@ jobs:
               # sweep replaced it with a pending duplicate). GitHub creates a
               # run's jobs when it accepts the run; a wedged ghost run has
               # none. One jobs read per stale candidate (§15: the runs
-              # listing above carries no job data, and candidates are rare);
+              # listing above carries no job data). In a backlog every queued
+              # review run older than the cutoff is a candidate, so a tick
+              # costs one read per such run, bounded by the open PRs;
               # a run with jobs still suppresses dispatch, and an unreadable
               # answer keeps the wedged path (dispatch), as before.
               # SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS=false restores the

@@ -5,8 +5,9 @@ The orchestrator poller used to merge `main` into every open `orchestrator/proje
 
 - the last sync is older than `INTEGRATION_SYNC_MIN_INTERVAL_SECS` (default 24 hours);
 - it was not clean;
-- the current wave's issues are all merged or skipped;
 - the integration PR reports a conflict.
+
+In addition, one sync is forced right before the next wave is dispatched and right before a finished project starts its security pass.
 
 The poller logs `INTEGRATION_SYNC_THROTTLE` lines. `review_autofix_sweep.yml` still treats a review run queued past `SWEEP_STALE_QUEUED_MINUTES` as wedged, but now only when GitHub created no jobs for it (`SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS`, default `true`). Before, it replaced about 86 waiting reviews a day with pending duplicates. `.github/workflows/check-failure-triage-historical.yml`, which ran on every push to `main` and always skipped after its issue #7300 closed, is removed with its test, registry entry and docs.
 
@@ -17,7 +18,7 @@ The poller logs `INTEGRATION_SYNC_THROTTLE` lines. `review_autofix_sweep.yml` st
 | Sweep dispatches replaced while pending (2026-11-12) | 86 |
 | Extra API reads | 1 per stale queued review run (sweep); 1 final-PR read per would-be skip with a final PR (poller) |
 
-What this means for operators and consumer repos: integration branches pick up `main` at least daily and at every wave boundary, and a conflict on the integration PR still triggers a sync at once. Set `INTEGRATION_SYNC_MIN_INTERVAL_SECS=0` to go back to syncing every tick. No review is lost: a waiting review run reviews the PR's current head when it starts. Consumers receive the poller and sweep changes on their next `@stable` sync.
+What this means for operators and consumer repos: integration branches pick up `main` at least daily, before every new wave and before the final security pass, and a conflict on the integration PR still triggers a sync at once. Set `INTEGRATION_SYNC_MIN_INTERVAL_SECS=0` to go back to syncing every tick. No review is lost: a waiting review run reviews the PR's current head when it starts. Consumers receive the poller and sweep changes on their next `@stable` sync.
 
 ### For contributors
 

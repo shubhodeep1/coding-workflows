@@ -187,7 +187,6 @@ def test_throttle_syncs_when_needed_or_overdue() -> None:
 		("interval_elapsed", _recent_state(sync={"status": "active", "last_default_sync_at": _iso_ago(90000)}), None),
 		("not_clean", _recent_state(integration_sync_status="conflict"), None),
 		("not_clean", _recent_state(sync={"status": "active", "last_default_sync_at": _iso_ago(60), "last_conflict_fingerprint": "abc"}), None),
-		("wave_complete", _recent_state(waves=[{"issues": [{"id": "a", "status": "merged"}, {"id": "b", "status": "skipped"}]}]), None),
 		("final_pr_unmergeable", _recent_state(final_merge_pr=7), {"state": "open", "mergeable": False}),
 		("final_pr_unreadable", _recent_state(final_merge_pr=7), {}),
 		("clock_unreadable", _recent_state(sync={"status": "active", "last_default_sync_at": "not-a-date"}), None),
@@ -215,9 +214,29 @@ def test_throttle_honours_force_and_the_interval_switch() -> None:
 	assert "INTEGRATION_SYNC_MIN_INTERVAL_SECS='soon' is not a non-negative integer; using 86400." in bad.stderr
 
 
-def test_throttle_treats_an_empty_wave_as_incomplete() -> None:
-	result = _throttle(_recent_state(waves=[{"issues": []}]))
-	assert "reason=within_interval rc=1" in result.stdout
+def test_throttle_does_not_sync_every_tick_while_a_complete_wave_lingers() -> None:
+	"""A complete wave can wait many ticks (judge, persist wave-check hold).
+
+	The boundary syncs are forced where they are decided (next-wave dispatch,
+	project completion), so the throttle itself ignores wave status: syncing
+	on every lingering tick would restart the integration PR's checks.
+	"""
+	for statuses in (["merged", "skipped"], ["merged", "closed"], []):
+		state = _recent_state(waves=[{"issues": [{"id": str(i), "status": st} for i, st in enumerate(statuses)]}])
+		result = _throttle(state)
+		assert "reason=within_interval rc=1" in result.stdout, (statuses, result.stdout)
+
+
+def test_wave_advance_and_project_completion_force_one_sync() -> None:
+	text = _poller_text()
+	advance_at = text.index('echo "Advancing to wave ${NEXT_WAVE}..."')
+	advance_block = text[advance_at - 1200: advance_at]
+	assert 'sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" force; then\n            continue' in advance_block
+	assert '[ "${PROJECT_STATUS}" = "merge_conflict" ]' in advance_block
+	complete_at = text.index("    complete)\n      FINAL_INTEGRATION_BRANCH=")
+	complete_block = text[complete_at: text.index("ensure_security_pass_before_completion", complete_at)]
+	assert 'sync_default_into_integration_branch "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" force; then\n          continue' in complete_block
+	assert '[ "${PROJECT_STATUS}" = "merge_conflict" ]' in complete_block
 
 
 def test_sync_checks_the_throttle_before_the_merges_call_and_records_the_clock() -> None:

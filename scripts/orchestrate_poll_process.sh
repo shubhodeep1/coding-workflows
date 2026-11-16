@@ -14393,20 +14393,22 @@ Integration conflicts are cleared; final merge into \`${default_branch}\` will p
 # now runs only when it is needed or overdue. Prints one reason token and
 # returns 0 to sync, 1 to skip:
 #   sync: forced | interval_disabled | not_clean | never_synced | clock_unreadable
-#         | interval_elapsed | wave_complete | final_pr_unmergeable | final_pr_unreadable
+#         | interval_elapsed | final_pr_unmergeable | final_pr_unreadable
 #   skip: within_interval
-# A wave whose issues are all merged or skipped is about to be judged and
-# followed by the next wave's dispatch or the final merge, so it syncs then.
-# A sync left unclean (conflict, failure, healing) is retried every tick as
+# The wave boundaries force a sync where they are decided: right before the
+# next wave's issues are dispatched and right before the completed project
+# enters its security pass (both pass "force"). A sync left unclean (conflict, failure, healing) is retried every tick as
 # before. INTEGRATION_SYNC_MIN_INTERVAL_SECS (default 86400) caps the gap
 # between syncs; 0 restores the sync on every tick, and an invalid value falls
 # back to the default with a warning.
 #
 # API budget (CLAUDE.md §15): no call unless the decision would otherwise be
 # a skip and the state records a final PR; then one REST read of that PR
-# (_fetch_pr_json). The tick reads the final PR elsewhere only in the
-# security-pass states, which do not reach this per-tick sync. A failed read
-# fails open to a sync.
+# (_fetch_pr_json). The same tick reads that PR again later (ensure_eager_final_pr,
+# the eager-PR validation section, the force-merge bypass), but those reads run
+# after this decision and are not cached for it; on a skipped tick this GET
+# replaces the merges POST the tick used to make, so the call count is
+# unchanged. A failed read fails open to a sync.
 _integration_sync_throttle_reason() {
   local force="${1:-}"
   local interval="${INTEGRATION_SYNC_MIN_INTERVAL_SECS:-86400}"
@@ -14436,13 +14438,6 @@ _integration_sync_throttle_reason() {
   fi
   if [ $((now_epoch - last_epoch)) -ge "${interval}" ]; then
     echo "interval_elapsed"; return 0
-  fi
-  if jq -e '
-      (.waves // [])[((.current_wave // 1) - 1)] as $wave
-      | ($wave.issues // []) as $issues
-      | ($issues | length) > 0 and all($issues[]; (.status // "") | IN("merged", "skipped"))
-    ' "${STATE_FILE}" >/dev/null 2>&1; then
-    echo "wave_complete"; return 0
   fi
   final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
   if [[ "${final_pr}" =~ ^[1-9][0-9]*$ ]]; then
@@ -34647,6 +34642,19 @@ PRs to revert: ${REVERT_COUNT}"
     complete)
       FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
       FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")}"
+      # Run-volume plan item 3: the per-tick sync is throttled, so bring the
+      # integration branch up to main once here, before the security pass
+      # binds to its head and validation / the final merge test it. Same
+      # failure handling as the per-tick sync.
+      if [ -n "${FINAL_INTEGRATION_BRANCH}" ]; then
+        if ! sync_default_into_integration_branch "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" force; then
+          continue
+        fi
+        PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+        if [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
+          continue
+        fi
+      fi
       if ! ensure_security_pass_before_completion "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}"; then
         continue
       fi
@@ -34998,6 +35006,19 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       # Advance to next wave
       NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
       if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
+        # Run-volume plan item 3: the next wave's issues branch from the
+        # integration branch, so bring it up to main once before dispatching
+        # them (the per-tick sync is throttled). Same failure handling as the
+        # per-tick sync: a failed or conflicting sync defers the dispatch.
+        if [ -n "${INTEGRATION_BRANCH_TRACKING:-}" ]; then
+          if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" force; then
+            continue
+          fi
+          PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+          if [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
+            continue
+          fi
+        fi
         echo "Advancing to wave ${NEXT_WAVE}..."
         NEXT_WAVE_IDX=$(( NEXT_WAVE - 1 ))
 
