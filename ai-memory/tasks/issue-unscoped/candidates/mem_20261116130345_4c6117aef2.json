@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:22139 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `_pr_json_is_issue_implementation_pr` check uses `linked_pr_json`, which is only populated if the `target_pr` loop successfully fetched it in lines 21762-21764; an empty `target_pr` or a failed fetch leaves it empty.\n  WHY: The reviewer says an empty `linked_pr_json` \"could lead to incorrect resolution or runtime errors\" (source severity MAJOR, mapped to high). anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash rejected this in their notes: the guard at 22139-22141 short-circuits unless `pr_state` is closed or merged, and the helper at 22934-22951 returns 1 for empty or `{}` JSON.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Report state as merged when it merged.\" (from the Proposed fix section)\n  expected_change_site: scripts/orchestrate_poll_process.sh\n  confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The logic in `invoke_stall_judge` (lines 21768-21773) correctly sets `pr_state=\"merged\"`, but the reviewer says the surrounding code and diagnostic reporting still rely on the REST `.state`, which returns `closed` for merged PRs (source severity NIT). anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected this in their notes: `pr_state` is rewritten from `.merged`/`.merged_at` (21766-21773) before both jq builders (21882-21947) consume it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- scripts/orchestrate_poll_process.sh:22143 | HARDENING_SUGGESTION (not a finding) | HARDENING_RISK_SCORE=1\n  PROBLEM: In invoke_stall_judge, `head_ref` from the PR's REST payload goes into the \"escalate_human kept\" ::notice:: line without sanitising. The STALL_SKIP line at 23635 sanitises with `_close_sweep_log_ref`.\n  WHY: Consistency only, because Git refnames cannot contain newlines or control characters, so no workflow command can be injected. Suggested fix: replace (head=${head_ref:-unknown}) with (head=$(_close_sweep_log_ref \"${head_ref}\" \"unknown\")), 1 line.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:22139 | severity=MAJOR | confidence=3\n  PROBLEM: The condition checking `_pr_json_is_issue_implementation_pr` uses `linked_pr_json`, which is only populated if the `target_pr` loop successfully fetched it in lines 21762-21764.\n  WHY: If `target_pr` is empty or the fetch fails (e.g., due to an invalid or unreachable PR ID), `linked_pr_json` will be empty, which could lead to incorrect resolution or runtime errors when `_pr_json_is_issue_implementation_pr` is evaluated.\n- TASK_GAP | severity=NIT | confidence=2\n  Requirement: \"Report state as merged when it merged.\" (from the Proposed fix section)\n  Expected change site: scripts/orchestrate_poll_process.sh\n  Evidence of absence: The logic in `invoke_stall_judge` (lines 21768-21773) correctly sets `pr_state=\"merged\"`, but the surrounding code and diagnostic reporting still rely on the REST `.state` (which returns `closed` for merged PRs). This may lead to diagnostics reporting a merged PR as `closed` in some contexts.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- scripts/orchestrate_poll_process.sh:22143 | HARDENING_SUGGESTION (not a finding) | HARDENING_RISK_SCORE=1\n  PROBLEM: In invoke_stall_judge, `head_ref` from the PR author's REST payload is put into the `escalate_human kept` `::notice::` command unsanitised. The sibling `STALL_SKIP` lines sanitise branch names via `_close_sweep_log_ref`.\n  WHY: Consistency only, because Git ref names cannot contain newlines or `:`. Suggested fix: use `(head=$(_close_sweep_log_ref \"${head_ref}\" \"unknown\"))`, 1 line.\n- scripts/orchestrate_poll_process.sh:24933-24936 | HARDENING_SUGGESTION (not a finding) | HARDENING_RISK_SCORE=1\n  PROBLEM: `_STALL_STANDALONE_NT_SKIP_LOGGED` is reset only inside `_reconcile_standalone_merged_pr_issue`, not on each pass of the run_standalone_stall_recovery candidate loop.\n  WHY: Safe today because the flag is read only right after the reconcile call, which resets it on entry. Suggested fix: add `_STALL_STANDALONE_NT_SKIP_LOGGED=false` next to the existing `_std_prefetched_impl_pr_num=\"\"` loop reset, 1 line.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "38e2c3ff2caed0f7a966019730e40c773388f2632f1f11cce9b3a19781b43397",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9502,
+    "run_id": "43727992322",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43727992322",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116130345_4c6117aef2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9502,
+    "run_id": "43727992322"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-16T13:03:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
