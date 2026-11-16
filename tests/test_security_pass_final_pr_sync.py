@@ -227,16 +227,84 @@ def test_throttle_does_not_sync_every_tick_while_a_complete_wave_lingers() -> No
 		assert "reason=within_interval rc=1" in result.stdout, (statuses, result.stdout)
 
 
-def test_wave_advance_and_project_completion_force_one_sync() -> None:
+def test_wave_advance_and_project_completion_use_the_boundary_helper() -> None:
 	text = _poller_text()
 	advance_at = text.index('echo "Advancing to wave ${NEXT_WAVE}..."')
-	advance_block = text[advance_at - 1200: advance_at]
-	assert 'sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" force; then\n            continue' in advance_block
-	assert '[ "${PROJECT_STATUS}" = "merge_conflict" ]' in advance_block
+	advance_block = text[text.rindex("Run-volume plan item 3", 0, advance_at): advance_at]
+	assert '_integration_sync_at_boundary "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" "wave-${NEXT_WAVE}"; then\n            continue' in advance_block
 	complete_at = text.index("    complete)\n      FINAL_INTEGRATION_BRANCH=")
 	complete_block = text[complete_at: text.index("ensure_security_pass_before_completion", complete_at)]
-	assert 'sync_default_into_integration_branch "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" force; then\n          continue' in complete_block
-	assert '[ "${PROJECT_STATUS}" = "merge_conflict" ]' in complete_block
+	assert '_integration_sync_at_boundary "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" complete; then\n          continue' in complete_block
+	for block in (advance_block, complete_block):
+		# Only a terminal failure stops the tick; merge_conflict is never written.
+		assert '[ "${PROJECT_STATUS}" = "failed" ]' in block
+		assert "merge_conflict" not in block
+
+
+def _boundary_helper_text() -> str:
+	match = re.search(r"^_integration_sync_at_boundary\(\) \{\n.*?^\}\n", _poller_text(), re.S | re.M)
+	assert match
+	return match.group(0)
+
+
+def _boundary(state: dict, *, key: str, attempted: str = "", sync_rc: int = 0) -> tuple[subprocess.CompletedProcess, dict]:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		state_file = tmp / "state.json"
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		calls = tmp / "calls"
+		script = "\n".join([
+			"set -euo pipefail",
+			f"STATE_FILE={str(state_file)!r}",
+			"TRACKING_NUM=12",
+			f"INTEGRATION_SYNC_ATTEMPTED_TRACKING={attempted!r}",
+			f'sync_default_into_integration_branch() {{ echo "sync $*" >> {str(calls)!r}; return {sync_rc}; }}',
+			f'post_state_comment() {{ echo "post" >> {str(calls)!r}; }}',
+			_boundary_helper_text(),
+			f'rc=0; _integration_sync_at_boundary orchestrator/project-12 main {key} || rc=$?',
+			'echo "rc=${rc}"',
+			f'cat {str(calls)!r} 2>/dev/null || true',
+		])
+		result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+		return result, json.loads(state_file.read_text(encoding="utf-8"))
+
+
+def test_boundary_forces_one_sync_and_records_it() -> None:
+	result, state = _boundary({"sync": {"status": "active"}}, key="wave-2")
+	assert result.returncode == 0, result.stderr
+	assert "sync orchestrator/project-12 main force" in result.stdout
+	assert "post" in result.stdout and "rc=0" in result.stdout
+	assert state["sync"]["boundary_forced"] == "wave-2"
+
+
+def test_boundary_already_forced_does_not_sync_again() -> None:
+	result, _ = _boundary({"sync": {"boundary_forced": "wave-2"}}, key="wave-2")
+	assert "outcome=skip reason=boundary_already_forced boundary=wave-2" in result.stdout
+	assert "sync " not in result.stdout
+	# A new boundary forces again.
+	result, state = _boundary({"sync": {"boundary_forced": "wave-2"}}, key="complete")
+	assert "sync orchestrator/project-12 main force" in result.stdout
+	assert state["sync"]["boundary_forced"] == "complete"
+
+
+def test_boundary_skips_when_this_tick_already_synced() -> None:
+	result, state = _boundary({"sync": {}}, key="wave-3", attempted="12")
+	assert "outcome=skip reason=synced_this_tick boundary=wave-3" in result.stdout
+	assert "sync " not in result.stdout
+	assert state["sync"]["boundary_forced"] == "wave-3"
+
+
+def test_boundary_returns_a_terminal_sync_failure_without_recording() -> None:
+	result, state = _boundary({"sync": {}}, key="wave-3", sync_rc=1)
+	assert "rc=1" in result.stdout
+	assert "boundary_forced" not in state["sync"]
+	assert "post" not in result.stdout
+
+
+def test_sync_marks_the_merges_attempt_for_this_tick() -> None:
+	body = _sync_function_text()
+	mark_at = body.index('INTEGRATION_SYNC_ATTEMPTED_TRACKING="${TRACKING_NUM:-}"')
+	assert body.index('sync_throttle_reason="$(_integration_sync_throttle_reason') < mark_at < body.index('gh api "repos/${GITHUB_REPOSITORY}/merges"')
 
 
 def test_sync_checks_the_throttle_before_the_merges_call_and_records_the_clock() -> None:

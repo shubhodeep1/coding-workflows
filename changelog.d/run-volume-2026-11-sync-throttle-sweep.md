@@ -7,7 +7,7 @@ The orchestrator poller used to merge `main` into every open `orchestrator/proje
 - it was not clean;
 - the integration PR reports a conflict.
 
-In addition, one sync is forced right before the next wave is dispatched and right before a finished project starts its security pass.
+In addition, one sync is forced right before the next wave is dispatched and right before a finished project starts its security pass, once per boundary.
 
 The poller logs `INTEGRATION_SYNC_THROTTLE` lines. `review_autofix_sweep.yml` still treats a review run queued past `SWEEP_STALE_QUEUED_MINUTES` as wedged, but now only when GitHub created no jobs for it (`SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS`, default `true`). Before, it replaced about 86 waiting reviews a day with pending duplicates. `.github/workflows/check-failure-triage-historical.yml`, which ran on every push to `main` and always skipped after its issue #7300 closed, is removed with its test, registry entry and docs.
 

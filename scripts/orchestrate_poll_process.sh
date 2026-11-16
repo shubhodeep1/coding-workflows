@@ -14455,6 +14455,37 @@ _integration_sync_throttle_reason() {
   return 1
 }
 
+# _integration_sync_at_boundary <integration_branch> <default_branch> <boundary>
+# — force one main -> integration sync at a wave boundary (run-volume plan
+# item 3): <boundary> is `wave-<n>` right before wave n's issues are
+# dispatched, or `complete` right before the security pass. It forces at most
+# once per boundary (.sync.boundary_forced records the last one, persisted
+# with the state) and not at all when this tick's per-tick sync already ran
+# the merges call (INTEGRATION_SYNC_ATTEMPTED_TRACKING), so a boundary that
+# stays blocked for days does not merge main on every retry and a conflict is
+# never healed twice in one tick. Returns what the sync returns (non-zero
+# only on a terminal failure, which already marked the project failed).
+_integration_sync_at_boundary() {
+  local boundary_branch="$1" boundary_default="$2" boundary_key="$3" boundary_rc=0
+  if [ "$(jq -r '.sync.boundary_forced // ""' "${STATE_FILE}" 2>/dev/null || true)" = "${boundary_key}" ]; then
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${boundary_branch} outcome=skip reason=boundary_already_forced boundary=${boundary_key}"
+    return 0
+  fi
+  if [ -n "${TRACKING_NUM:-}" ] && [ "${INTEGRATION_SYNC_ATTEMPTED_TRACKING:-}" = "${TRACKING_NUM}" ]; then
+    echo "INTEGRATION_SYNC_THROTTLE tracking_issue=${TRACKING_NUM:-?} branch=${boundary_branch} outcome=skip reason=synced_this_tick boundary=${boundary_key}"
+  else
+    sync_default_into_integration_branch "${boundary_branch}" "${boundary_default}" force || boundary_rc=$?
+    [ "${boundary_rc}" -eq 0 ] || return "${boundary_rc}"
+  fi
+  if jq --arg b "${boundary_key}" '.sync = ((.sync // {}) + {"boundary_forced": $b})' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    post_state_comment || true
+  else
+    rm -f "${STATE_FILE}.tmp"
+  fi
+  return 0
+}
+
 sync_default_into_integration_branch() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -14560,6 +14591,8 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
 
   local merge_error
   local sync_merge_out_file
+  # Read by _integration_sync_at_boundary: this tick already merged main in.
+  INTEGRATION_SYNC_ATTEMPTED_TRACKING="${TRACKING_NUM:-}"
   sync_merge_out_file="$(mktemp "${TMPDIR:-/tmp}/integration_sync_merge.XXXXXX")"
   if merge_error="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/merges" \
     -f base="${integration_branch}" \
@@ -34644,14 +34677,16 @@ PRs to revert: ${REVERT_COUNT}"
       FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")}"
       # Run-volume plan item 3: the per-tick sync is throttled, so bring the
       # integration branch up to main once here, before the security pass
-      # binds to its head and validation / the final merge test it. Same
-      # failure handling as the per-tick sync.
+      # binds to its head and validation / the final merge test it. Like the
+      # per-tick sync, only a terminal failure (project marked failed) stops
+      # the tick; a conflict is handed to the integration heal and the tick
+      # goes on.
       if [ -n "${FINAL_INTEGRATION_BRANCH}" ]; then
-        if ! sync_default_into_integration_branch "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" force; then
+        if ! _integration_sync_at_boundary "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" complete; then
           continue
         fi
         PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
-        if [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
+        if [ "${PROJECT_STATUS}" = "failed" ]; then
           continue
         fi
       fi
@@ -35008,14 +35043,15 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
         # Run-volume plan item 3: the next wave's issues branch from the
         # integration branch, so bring it up to main once before dispatching
-        # them (the per-tick sync is throttled). Same failure handling as the
-        # per-tick sync: a failed or conflicting sync defers the dispatch.
+        # them (the per-tick sync is throttled). Like the per-tick sync, only
+        # a terminal failure (project marked failed) defers the dispatch; a
+        # conflict is handed to the integration heal and the tick goes on.
         if [ -n "${INTEGRATION_BRANCH_TRACKING:-}" ]; then
-          if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" force; then
+          if ! _integration_sync_at_boundary "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" "wave-${NEXT_WAVE}"; then
             continue
           fi
           PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
-          if [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
+          if [ "${PROJECT_STATUS}" = "failed" ]; then
             continue
           fi
         fi
