@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The fix needs files outside this issue's verified heal scope. How should we go ahead?\nChoices:\nA) A maintainer re-scopes the work so implement allows `prompts/conflict-resolver.txt`, `prompts/contracts/conflict-resolver.yml`, `scripts/review_conflict_resolve.sh`, `scripts/check_resolver_diff.sh` and the regression test. For example, re-file it as a regular issue with a `files_touched:` list covering those paths, or have the heal intake issue a new scope marker. Planning then targets the full fix. (RECOMMENDED)\nB) Stay inside the current scope and only add a regression test under `tests/**` that reproduces the modify/delete rejection. The actual prompt and harness fix goes to a separate follow-up issue.\n   **Note:** Q2 does not apply if you choose B, because B makes no prompt or harness change.\nC) Do not fix it in code. Close this heal and resolve PR #9452 by hand (merge the base, then `git rm .github/workflows/check-failure-triage-historical.yml` on `ai/issue-9422`).\nQ2: Assuming Q1:A, how much should the resolver fix cover for modify/delete conflicts (index stages `1 2` / `1 3`)?\nChoices:\nA) Both parts suggested in the issue:\n   - Prompt: explain modify/delete conflicts, say which side deleted each path, default to honouring a base-branch deletion with `git rm`, and say that the \"leave files without conflict markers alone\" rule does not apply to these paths.\n   - Harness: accept an explicit `KEEP_SURVIVING_SIDE: <path>` line, only for stage-`1 2`/`1 3` paths that are listed in `CONFLICTED_PATHS_FILE` and are present and unchanged.\n   - Invariant 4 in `check_resolver_diff.sh` stays strict.\n   (RECOMMENDED)\nB) Prompt guidance only, with no harness change. Deleting the file is then the only way to resolve a modify/delete conflict that passes. Keeping the modified side still fails and still needs a person.\nC) Harness `KEEP_SURVIVING_SIDE:` support only, without changing the prompt.",
+  "fingerprint": "b0bef4e32f162a4bc8ee539101a965163d28bd2bbc74b868df2b557fd9e2c80a",
+  "lineage": {
+    "issue_number": 9574,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43874191082",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43874191082",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261116135721_75d6d5f7d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9574,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43874191082"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9574 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-16T13:57:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
