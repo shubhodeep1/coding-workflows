@@ -6,7 +6,7 @@ On 2026-11-15, #9503 (a judge addition of project #9116) was blocked at planning
 | The numbers that matter | Value |
 | --- | --- |
 | Stall on #9503 | about 6 hours |
-| New GitHub API calls | 0 |
+| New GitHub API calls | 1 label create per routed block, 1 identity read per `/answer` on an `ai:scope-blocked` issue |
 | New repo variables (both default `true`) | 2 |
 
 What this means for consumer repos: after the next `@stable` sync, judge-created issues carry the companion scope entries, and a scope-only planning block can be cleared by the unblock judge instead of a person. Set either variable to `false` to keep today's behaviour.

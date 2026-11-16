@@ -21,16 +21,22 @@
 #     $GITHUB_OUTPUT and logs one line:
 #       PLAN_SCOPE_BLOCK outcome=routed|not_routed issue=<n> paths=<n> [reason=...]
 #     Reasons: disabled, invalid_input, not_an_issue, no_scope_lines,
-#     invalid_path, too_many_paths, no_files_touched, already_in_scope,
+#     not_scope_only (not exactly one BLOCKED: line, or a PLAN_SELF_CHECK:
+#     BLOCKER line), invalid_path, too_many_paths (over MAX_OVERRIDE_PATHS
+#     lines, counted before dedup), no_files_touched, already_in_scope,
 #     helper_failed.
 #
 #   answer-release
 #     Env: ISSUE_NUMBER, ISSUE_META_FILE, ISSUE_COMMENTS_FILE (both already
-#     fetched). Prints `release=true|false` on stdout and logs
+#     fetched), PLAN_SCOPE_PIPELINE_LOGIN (the GH_PAT login; default empty,
+#     which fails closed with reason=identity_unavailable). Prints
+#     `release=true|false` on stdout and logs
 #       PLAN_SCOPE_BLOCK outcome=released|kept issue=<n> reason=<...>
 #     on stderr. `true` only when the issue carries ai:blocked and
-#     ai:scope-blocked and the newest trusted guard rejection on it is a
-#     planning one, so a human /answer never clears an implement-time latch.
+#     ai:scope-blocked and the newest guard rejection written by the pipeline
+#     login (the same trust rule as unblock_ledger.latest_rejection) is a
+#     planning scope/out-of-scope one, so a human /answer never clears an
+#     implement-time latch.
 #     Not gated by PLAN_SCOPE_BLOCK_ROUTING_ENABLED, so markers posted before
 #     a kill-switch flip can still be released. Fails closed (`false`).
 #
@@ -82,6 +88,8 @@ from unblock_ledger import MAX_OVERRIDE_PATHS, REJECTION_RE, UsageError, _clean_
 from files_touched_scope_guard import entry_matches, extract_files_touched, normalize_allowlist
 
 SCOPE_LINE_RE = re.compile(r"^\s*SCOPE_MISSING:\s*(.+?)\s*$")
+BLOCKED_LINE_RE = re.compile(r"^\s*BLOCKED:\s*(.*\S)\s*$", re.IGNORECASE)
+SELF_CHECK_BLOCKER_RE = re.compile(r"^\s*PLAN_SELF_CHECK:\s*BLOCKER:", re.IGNORECASE)
 GLOB_CHARS = set("*?[]{}")
 
 
@@ -123,6 +131,14 @@ for line in parse_text.splitlines():
 	raw_paths.append(value)
 if not raw_paths:
 	emit(False, "no_scope_lines", 0)
+# Scope-only form: exactly one BLOCKED: line (parse_plan's rule) and no
+# self-check blocker, so a block with another cause keeps today's handling.
+blocked_lines = [line for line in parse_text.splitlines() if BLOCKED_LINE_RE.match(line)]
+if len(blocked_lines) != 1 or any(SELF_CHECK_BLOCKER_RE.match(line) for line in parse_text.splitlines()):
+	emit(False, "not_scope_only", len(raw_paths))
+# The prompt allows at most MAX_OVERRIDE_PATHS lines; count before dedup.
+if len(raw_paths) > MAX_OVERRIDE_PATHS:
+	emit(False, "too_many_paths", len(raw_paths))
 
 paths = []
 for value in raw_paths:
@@ -184,10 +200,9 @@ import re
 import sys
 
 sys.path.insert(0, os.environ.get("PSBR_SCRIPT_DIR", ""))
-from unblock_ledger import GUARD_REJECTION_HEADERS, REJECTION_RE
+from unblock_ledger import GUARD_REJECTION_HEADERS, LOGIN_RE, REJECTION_RE
 
 PLANNING_HEADER = "🚨 **files_touched scope guard rejected this planning run.**"
-TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 
 def emit(release, reason):
@@ -218,6 +233,9 @@ def load_comments(path):
 issue = os.environ.get("ISSUE_NUMBER", "")
 if not re.fullmatch(r"[1-9][0-9]*", issue):
 	emit(False, "invalid_input")
+trusted_login = os.environ.get("PLAN_SCOPE_PIPELINE_LOGIN", "")
+if not LOGIN_RE.fullmatch(trusted_login):
+	emit(False, "identity_unavailable")
 try:
 	with open(os.environ.get("ISSUE_META_FILE", ""), encoding="utf-8") as handle:
 		meta = json.load(handle)
@@ -236,7 +254,7 @@ for comment in comments:
 	if not isinstance(comment, dict):
 		continue
 	user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
-	if comment.get("author_association") not in TRUSTED_ASSOCIATIONS and user.get("type") != "Bot":
+	if (user.get("login") or comment.get("author_login") or "") != trusted_login:
 		continue
 	lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
 	if not lines:
@@ -250,6 +268,7 @@ if (
 	not match
 	or int(match.group("item")) != int(issue)
 	or match.group("guard") != "scope"
+	or match.group("reason") != "out-of-scope"
 	or len(newest) < 2
 	or newest[-2] != PLANNING_HEADER
 ):

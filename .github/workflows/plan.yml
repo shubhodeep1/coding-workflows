@@ -1051,10 +1051,16 @@ jobs:
             # Issue #9534: a human /answer also clears the ai:scope-blocked a
             # routed planning block added, but only when the newest trusted
             # guard rejection is that planning one (fail closed; no API call).
+            # The ledger trusts only the pipeline login, so answer-release needs
+            # it. No earlier step of this job caches it (§14): the one identity
+            # read runs only when the fetched metadata already has ai:scope-blocked.
             PLAN_SCOPE_RELEASE_ARGS=()
             if [ -f scripts/plan_scope_block_route.sh ] &&
-              [ "$(bash scripts/plan_scope_block_route.sh answer-release || true)" = "release=true" ]; then
-              PLAN_SCOPE_RELEASE_ARGS=(--remove-label 'ai:scope-blocked')
+              jq -e 'any(.labels[]?.name; . == "ai:scope-blocked")' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+              PLAN_SCOPE_PIPELINE_LOGIN="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
+              if [ "$(PLAN_SCOPE_PIPELINE_LOGIN="${PLAN_SCOPE_PIPELINE_LOGIN}" bash scripts/plan_scope_block_route.sh answer-release || true)" = "release=true" ]; then
+                PLAN_SCOPE_RELEASE_ARGS=(--remove-label 'ai:scope-blocked')
+              fi
             fi
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --add-label 'ai:planning' --remove-label 'ai:blocked' ${PLAN_SCOPE_RELEASE_ARGS[@]+"${PLAN_SCOPE_RELEASE_ARGS[@]}"} >/dev/null 2>&1 || true
@@ -2397,11 +2403,15 @@ jobs:
             SCOPE_LABEL_ARGS=(--add-label 'ai:scope-blocked')
           fi
           ensure_label_exists "ai:blocked" "${{ github.repository }}"
-          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+          # A failed edit stays non-fatal as before; without ai:scope-blocked the
+          # header and marker are left out too.
+          if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --add-label 'ai:blocked' ${SCOPE_LABEL_ARGS[@]+"${SCOPE_LABEL_ARGS[@]}"} \
             --remove-label 'ai:planning' \
             --remove-label 'ai:clarification' \
-            --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
+            --remove-label 'ai:awaiting-approval' >/dev/null 2>&1; then
+            SCOPE_ROUTE_ACTIVE=false
+          fi
 
           # Issue #9120: a blocked ai:check-triage issue is re-checked by the
           # unblock judge, so it alerts at WARNING, not CRITICAL. Labels come from
@@ -2471,8 +2481,16 @@ jobs:
             } > "${PLAN_COMMENT_FILE}"
           fi
 
-          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="$(cat "${PLAN_COMMENT_FILE}")" >/dev/null
+          if ! gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="$(cat "${PLAN_COMMENT_FILE}")" >/dev/null; then
+            # Issue #9534: never leave ai:scope-blocked without its marker
+            # comment (this removal runs only on the failure path).
+            if [ "${SCOPE_ROUTE_ACTIVE}" = "true" ]; then
+              gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+                --remove-label 'ai:scope-blocked' >/dev/null 2>&1 || true
+            fi
+            exit 1
+          fi
 
           if [ -n "${PLAN_BLOCKED_WAIT_PR}" ]; then
             echo "PLAN_BLOCKED_WAIT issue=${ISSUE_NUMBER} pr=${PLAN_BLOCKED_WAIT_PR} level=WARNING"

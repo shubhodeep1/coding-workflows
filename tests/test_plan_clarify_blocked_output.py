@@ -968,7 +968,7 @@ def test_prompts_carry_the_scope_missing_and_reused_job_rules() -> None:
 	for path in (PROMPT_PLAN, REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
 		text = _read(path)
 		assert "SCOPE_MISSING: <repo-relative path>" in text, path
-		assert "Never emit `SCOPE_MISSING:` for\n  any other blocker." in text, path
+		assert "at most 20). Never emit `SCOPE_MISSING:` for any other blocker." in text, path
 	for path in (REPO_ROOT / "prompts" / "mode-judge.txt", REPO_ROOT / "prompts" / "_templates" / "mode-judge.txt"):
 		text = _read(path)
 		assert "workflow job or step, its `files_touched:` block must list every repository\nscript that job or step runs" in text, path

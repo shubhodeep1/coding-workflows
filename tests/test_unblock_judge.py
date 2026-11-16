@@ -5803,11 +5803,17 @@ def test_scope_override_without_plan_reclarifies_and_clears_both_block_labels() 
 		{"op": "comment", "issue": 7, "body": "/reclarify"},
 		{"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"},
 	]
+	# An older "Implementation Plan" comment (has_plan) never turns a planning
+	# scope block into /approved of that superseded plan.
 	with_plan = actions.plan(_verdict("override_guard", paths=["tests/test_x.py"]), _ctx(stop="scope-blocked", labels=labels, has_plan=True))
-	assert with_plan[0]["op"] == "edit_files_touched"
-	assert {"op": "remove_label", "issue": 7, "label": "ai:blocked"} in with_plan
-	assert {"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"} in with_plan
-	assert _bodies(with_plan) == ["/approved"] and with_plan[-1]["body"] == "/approved"
+	assert with_plan == ops
+	# An implement-time scope block (no ai:blocked) with a plan keeps /approved.
+	implement_time = actions.plan(_verdict("override_guard", paths=["tests/test_x.py"]),
+		_ctx(stop="scope-blocked", labels=["ai:scope-blocked"], has_plan=True))
+	assert implement_time[0]["op"] == "edit_files_touched"
+	assert {"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"} in implement_time
+	assert {"op": "remove_label", "issue": 7, "label": "ai:blocked"} not in implement_time
+	assert _bodies(implement_time) == ["/approved"] and implement_time[-1]["body"] == "/approved"
 
 
 def test_reset_ops_clears_ai_blocked_only_for_scope_blocked() -> None:
@@ -5819,7 +5825,7 @@ def test_reset_ops_clears_ai_blocked_only_for_scope_blocked() -> None:
 		{"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"},
 	]
 	planned = actions.reset_ops(_ctx(stop="scope-blocked", labels=labels, has_plan=True), "granted")
-	assert planned[-2:] == [{"op": "remove_label", "issue": 7, "label": "ai:blocked"}, {"op": "comment", "issue": 7, "body": "/approved"}]
+	assert planned == no_plan
 	# Without ai:blocked, or for another guard stop, nothing extra is removed.
 	assert actions.reset_ops(_ctx(stop="scope-blocked"), "x") == [
 		{"op": "comment", "issue": 7, "body": "/reclarify"},

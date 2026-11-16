@@ -101,6 +101,10 @@ def test_valid_scope_lines_route_with_a_marker_the_ledger_parses(tmp_path: Path)
 		(_blocked("docs/"), "invalid_path"),
 		("BLOCKED: x\nSCOPE_MISSING: two words.md\n", "invalid_path"),
 		(_blocked(*[f"docs/f{i}.md" for i in range(21)]), "too_many_paths"),
+		(_blocked(*(["docs/a.md"] * 21)), "too_many_paths"),
+		("SCOPE_MISSING: docs/a.md\n", "not_scope_only"),
+		("BLOCKED: needs a credential\n" + _blocked("docs/a.md"), "not_scope_only"),
+		("PLAN_SELF_CHECK: BLOCKER: design unclear\n" + _blocked("docs/a.md"), "not_scope_only"),
 		(_blocked("src/app.py"), "already_in_scope"),
 		(_blocked("tests/test_new.py"), "already_in_scope"),
 		(_blocked("docs/a.md", "src/app.py"), "already_in_scope"),
@@ -110,7 +114,7 @@ def test_refused_scope_lines_are_not_routed(tmp_path: Path, plan_output: str, re
 	result, out = _route(tmp_path, plan_output)
 	assert result.returncode == 0, result.stderr
 	assert out == {"scope_routed": "false", "scope_marker": ""}
-	assert f"outcome=not_routed issue=77" in result.stdout
+	assert "outcome=not_routed issue=77" in result.stdout
 	assert result.stdout.rstrip().endswith(f"reason={reason}"), result.stdout
 
 
@@ -139,7 +143,11 @@ def test_scope_lines_inside_a_fence_are_ignored(tmp_path: Path) -> None:
 	assert out["scope_routed"] == "false" and "reason=no_scope_lines" in result.stdout
 
 
-def _release(tmp_path: Path, comments: object, labels: list[str], *, raw_comments: str | None = None) -> subprocess.CompletedProcess[str]:
+PIPELINE_LOGIN = "pipeline-bot"
+
+
+def _release(tmp_path: Path, comments: object, labels: list[str], *, raw_comments: str | None = None,
+		login: str = PIPELINE_LOGIN) -> subprocess.CompletedProcess[str]:
 	meta_file = tmp_path / "issue_meta.json"
 	meta_file.write_text(json.dumps({"number": 77, "labels": [{"name": n} for n in labels]}), encoding="utf-8")
 	comments_file = tmp_path / "issue_comments.json"
@@ -150,22 +158,23 @@ def _release(tmp_path: Path, comments: object, labels: list[str], *, raw_comment
 		"ISSUE_META_FILE": str(meta_file),
 		"ISSUE_COMMENTS_FILE": str(comments_file),
 		"PLAN_SCOPE_BLOCK_ROUTING_ENABLED": "false",
+		"PLAN_SCOPE_PIPELINE_LOGIN": login,
 	}
 	return subprocess.run(["bash", str(SCRIPT), "answer-release"], env=env, capture_output=True, text=True, timeout=60, check=False)
 
 
-def _marker(guard: str = "scope", item: int = 77) -> str:
+def _marker(guard: str = "scope", item: int = 77, reason: str = "out-of-scope") -> str:
 	encoded = base64.b64encode(json.dumps(["docs/a.md"], separators=(",", ":")).encode()).decode()
-	return f"<!-- ai:guard-rejection:v1 item={item} guard={guard} reason=out-of-scope run=9 count=1 truncated=false paths={encoded} -->"
+	return f"<!-- ai:guard-rejection:v1 item={item} guard={guard} reason={reason} run=9 count=1 truncated=false paths={encoded} -->"
 
 
-def _planning_comment(association: str = "OWNER") -> dict:
-	return {"author_association": association, "user": {"login": "owner", "type": "User"},
-		"body": f"Planning blocked: human input required.\n\nRun: x\n\n{PLANNING_HEADER}\n{_marker()}"}
+def _planning_comment(login: str = PIPELINE_LOGIN, reason: str = "out-of-scope") -> dict:
+	return {"author_association": "OWNER", "user": {"login": login, "type": "User"},
+		"body": f"Planning blocked: human input required.\n\nRun: x\n\n{PLANNING_HEADER}\n{_marker(reason=reason)}"}
 
 
 def _implement_comment() -> dict:
-	return {"author_association": "NONE", "user": {"login": "bot[bot]", "type": "Bot"},
+	return {"author_association": "NONE", "user": {"login": PIPELINE_LOGIN, "type": "User"},
 		"body": f"🚨 **files_touched scope guard rejected this implementation run.**\n\nPaths.\n{_marker()}"}
 
 
@@ -186,7 +195,11 @@ def test_answer_release_reads_concatenated_paginated_pages(tmp_path: Path) -> No
 	("comments", "labels", "reason"),
 	[
 		([_planning_comment(), _implement_comment()], ["ai:blocked", "ai:scope-blocked"], "newest_not_planning"),
-		([_planning_comment("NONE")], ["ai:blocked", "ai:scope-blocked"], "no_rejection"),
+		# Only the pipeline login is trusted, as in unblock_ledger.latest_rejection:
+		# a collaborator or any other bot cannot forge a planning rejection.
+		([_planning_comment("collaborator")], ["ai:blocked", "ai:scope-blocked"], "no_rejection"),
+		([_planning_comment("other-app[bot]")], ["ai:blocked", "ai:scope-blocked"], "no_rejection"),
+		([_planning_comment(reason="unscoped-file")], ["ai:blocked", "ai:scope-blocked"], "newest_not_planning"),
 		([_planning_comment()], ["ai:scope-blocked"], "labels_absent"),
 		([_planning_comment()], ["ai:blocked"], "labels_absent"),
 		([], ["ai:blocked", "ai:scope-blocked"], "no_rejection"),
@@ -198,6 +211,12 @@ def test_answer_release_keeps_the_latch(tmp_path: Path, comments: list, labels: 
 	assert f"outcome=kept issue=77 reason={reason}" in result.stderr
 
 
+def test_answer_release_fails_closed_without_the_pipeline_login(tmp_path: Path) -> None:
+	result = _release(tmp_path, [_planning_comment()], ["ai:blocked", "ai:scope-blocked"], login="")
+	assert result.stdout.strip() == "release=false"
+	assert "reason=identity_unavailable" in result.stderr
+
+
 def test_answer_release_fails_closed_on_unreadable_comments(tmp_path: Path) -> None:
 	result = _release(tmp_path, None, ["ai:blocked", "ai:scope-blocked"], raw_comments="{not json")
 	assert result.stdout.strip() == "release=false"
@@ -205,7 +224,7 @@ def test_answer_release_fails_closed_on_unreadable_comments(tmp_path: Path) -> N
 
 
 def test_answer_release_ignores_a_header_only_implement_comment_as_newer(tmp_path: Path) -> None:
-	header_only = {"author_association": "OWNER", "user": {"type": "User"},
+	header_only = {"author_association": "OWNER", "user": {"login": PIPELINE_LOGIN, "type": "User"},
 		"body": "🚨 **Issue scope-lock rejected this implementation run.**\n\nno marker"}
 	result = _release(tmp_path, [_planning_comment(), header_only], ["ai:blocked", "ai:scope-blocked"])
 	assert result.stdout.strip() == "release=false"

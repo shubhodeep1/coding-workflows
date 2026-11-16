@@ -10446,6 +10446,7 @@ for idx in range(start + 1, len(lines)):
 			first_idx = idx
 		last_idx = idx
 if walked != entries or first_idx < 0:
+	sys.stderr.write("reason=entry_mismatch\n")
 	sys.exit(3)
 prefix = re.match(r"^(\s*-\s+)", lines[first_idx]).group(1)
 present = {normalize_path(entry) for entry in entries}
@@ -10472,7 +10473,7 @@ sys.stderr.write(f"added={len(missing)}\n")
 # JUDGE_COMPANIONS_BODY to the body to post (the original on any failure) and
 # logs one line:
 #   JUDGE_SCOPE_COMPANIONS outcome=added|unchanged|skipped issue_kind=<kind>
-#     local_id=<id> added=<n> [reason=disabled|no_block|helper_failed]
+#     local_id=<id> added=<n> [reason=disabled|no_block|entry_mismatch|helper_failed]
 # Always returns 0. API calls: 0.
 apply_judge_files_touched_companions() {
 	local ajc_kind="${1:-}" ajc_id="${2:-}" ajc_body="${3:-}"
@@ -10492,7 +10493,12 @@ apply_judge_files_touched_companions() {
 	ajc_status="$(tail -n 1 "${ajc_status_file}" 2>/dev/null || true)"
 	rm -f "${ajc_status_file}"
 	if [ "${ajc_rc}" -ne 0 ]; then
-		echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=helper_failed"
+		# entry_mismatch: the block walk disagreed with extract_files_touched.
+		if [ "${ajc_status}" = "reason=entry_mismatch" ]; then
+			echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=entry_mismatch"
+		else
+			echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=helper_failed"
+		fi
 		return 0
 	fi
 	case "${ajc_status}" in
