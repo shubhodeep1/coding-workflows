@@ -26712,6 +26712,7 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh '
 		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh chatgpt_codex_relay.py"'
 	) in stage_helper_body
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_docs_only_paths.sh"' in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
 	assert 'src=".codex-workflow-src/scripts/${f}"' in stage_helper_body
 	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." not in stage_helper_body

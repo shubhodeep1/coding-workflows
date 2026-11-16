@@ -11,10 +11,13 @@
   * a quick run (`workflow_call` with `mode: quick`, whose event is the
     caller's `pull_request`) gets `ci-quick-<run id>` and no cancellation;
     its caller workflow cancels replaced quick runs itself;
-  * every other run (pushes to main, stable and orchestrator/project-*) gets
-    the group `ci-<run id>`, unique per run, with no cancellation, because
-    check-failure triage compares a failing PR against the base branch's
-    newest push run.
+  * a push run (main, stable and orchestrator/project-*) joins
+    `ci-push-<ref>` with no cancellation (run-volume plan, D14): the running
+    run always finishes, because check-failure triage compares a failing PR
+    against the base branch's newest push run, and GitHub replaces only a
+    run still waiting in the group with the newer push;
+  * every other run gets the group `ci-<run id>`, unique per run, with no
+    cancellation.
 
 The expressions are evaluated here for each event with a small evaluator
 that understands exactly the operators the block uses (`==`, `!=`, `&&`,
@@ -40,6 +43,7 @@ GROUP_EXPR = (
 	"${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id)"
 	" || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number)"
 	" || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number)"
+	" || github.event_name == 'push' && format('ci-push-{0}', github.ref)"
 	" || format('ci-{0}', github.run_id) }}"
 )
 CANCEL_EXPR = (
@@ -183,7 +187,27 @@ def test_quick_runs_never_cancel_here_and_never_share_a_group() -> None:
 	assert _evaluate(block["cancel-in-progress"], quick_a) is False
 
 
-@pytest.mark.parametrize("event", ["push", "workflow_call", "schedule"])
+def test_push_runs_share_one_non_cancelling_group_per_branch() -> None:
+	block = _concurrency()
+	older = _context("push", run_id=201, **{"github.ref": "refs/heads/main"})
+	newer = _context("push", run_id=202, **{"github.ref": "refs/heads/main"})
+	integration = _context("push", run_id=203, **{"github.ref": "refs/heads/orchestrator/project-9116"})
+	stable = _context("push", run_id=204, **{"github.ref": "refs/heads/stable"})
+	assert _evaluate(block["group"], older) == "ci-push-refs/heads/main"
+	assert _evaluate(block["group"], newer) == _evaluate(block["group"], older)
+	assert _evaluate(block["group"], integration) == "ci-push-refs/heads/orchestrator/project-9116"
+	assert _evaluate(block["group"], stable) == "ci-push-refs/heads/stable"
+	# The running push run is never cancelled: triage reads its result.
+	assert _evaluate(block["cancel-in-progress"], older) is False
+	# A push group never collides with a PR, final-CI or per-run group.
+	pr_run = _context("pull_request", run_id=205, **{"github.event.pull_request.number": 9116})
+	final_run = _context("workflow_dispatch", run_id=206, **{"inputs.pr_number": "9116"})
+	assert _evaluate(block["group"], older) not in {
+		_evaluate(block["group"], pr_run), _evaluate(block["group"], final_run), "ci-201",
+	}
+
+
+@pytest.mark.parametrize("event", ["workflow_call", "schedule"])
 def test_other_runs_never_cancel_and_never_share_a_group(event: str) -> None:
 	block = _concurrency()
 	run_a = _context(event, run_id=101)

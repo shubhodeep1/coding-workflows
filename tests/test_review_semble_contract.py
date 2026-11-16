@@ -213,6 +213,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh '
 		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh chatgpt_codex_relay.py"'
 	) in stage_helper
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_docs_only_paths.sh"' in stage_helper
 	assert (
 		"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-\n"
 		"    codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh\n"

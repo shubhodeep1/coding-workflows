@@ -2,25 +2,29 @@
 name: CI
 
 "on":
-  # Pull-request CI runs for every base (issue #7283). A fix PR routed to a
-  # failing PR's head branch (CI-triage routing, #6726 / #7042) then gets its
-  # own `CI / lint` before it merges, like a sub-issue PR into
-  # `orchestrator/project-*` (Q45). Push CI stays on main, stable and the
-  # integration branches, so check-failure triage has a base-branch result
-  # to compare a failing PR against (a green base means the failure is the
-  # PR's own and is left to its autofix). Heal intake and budget-watch act
-  # on main pushes only.
-  pull_request:
-    branches: ["**"]
+  # No pull_request trigger (cut-ci-runner-time Phase 4,
+  # docs/plans/cut-ci-runner-time-plan.md). Every PR, for every base (issue
+  # #7283: sub-issue PRs into `orchestrator/project-*` (Q45) and fix PRs
+  # routed to a failing PR's head branch (#6726 / #7042) included), gets:
+  #   - on every push, `static-checks` only, through
+  #     .github/workflows/ci_pr_quick.yml (checks named `quick / ...`, so a
+  #     quick run never creates a check named `lint`);
+  #   - once, when review has finished with a head, the full suite through
+  #     the workflow_dispatch trigger below, which reports `lint` on that
+  #     head. A head with a push run (orchestrator/project-*) gets no second
+  #     run.
+  # Push CI stays on main, stable and the integration branches, so
+  # check-failure triage has a base-branch result to compare a failing PR
+  # against (a green base means the failure is the PR's own and is left to
+  # its autofix). Heal intake and budget-watch act on main pushes only.
   push:
     branches: [main, stable, "orchestrator/project-*"]
-  # Final CI at the end of review (cut-ci-runner-time Phase 4,
-  # docs/plans/cut-ci-runner-time-plan.md). `_pr_ensure_final_ci`
+  # Final CI at the end of review. `_pr_ensure_final_ci`
   # (scripts/pr_checks_lib.sh) dispatches this workflow on a PR's head branch
-  # once review has finished with that head; the run checks out the PR's
-  # merge ref, so it tests what a pull_request run tests, and its check-runs
-  # (including `lint`) attach to the branch head, which is the PR head. Off
-  # until REVIEW_FINAL_CI_WORKFLOW names this file.
+  # once review has finished with that head (internal-review.yml passes
+  # final_ci_workflow: ci.yml); the run checks out the PR's merge ref, so it
+  # tests what a pull_request run used to test, and its check-runs
+  # (including `lint`) attach to the branch head, which is the PR head.
   workflow_dispatch:
     inputs:
       pr_number:
@@ -31,6 +35,17 @@ name: CI
         description: "PR head SHA review finished with (run name and logs only)"
         required: false
         default: ""
+        type: string
+      # Docs-only final CI (run-volume plan item 4,
+      # docs/plans/reduce-actions-run-volume-plan.md). `_pr_ensure_final_ci`
+      # passes "true" only when every changed file of the PR is on the
+      # scripts/ci_docs_only_paths.sh list. The test jobs then skip, and
+      # `lint` re-checks the merged tree before it accepts their `skipped`.
+      # Any other value, including a manual dispatch without it, runs every job.
+      docs_only:
+        description: "true skips the test jobs; lint fails unless every changed file is docs-only"
+        required: false
+        default: "false"
         type: string
   # Per-push quick checks (Phase 4): a caller workflow runs only
   # `static-checks` with mode `quick`; every other job is skipped by `if:`.
@@ -49,11 +64,14 @@ name: CI
 run-name: "${{ github.event_name == 'workflow_dispatch' && format('CI [pr:{0}]', inputs.pr_number) || '' }}"
 
 # Cancel replaced PR CI (cut-ci-runner-time Phase 2). A pull_request run
-# shares one group per PR, so a newer push cancels the older run while it is
-# queued or running; the newest head still gets its full run and its own
-# `lint`. Every other run (pushes to main, stable and orchestrator/project-*)
-# gets a group of its own and is never cancelled, because check-failure
-# triage compares a failing PR against the base branch's newest push run.
+# (none since Phase 4 removed the trigger; the arm stays for a workflow_call
+# caller with mode full) shares one group per PR, so a newer push cancels
+# the older run while it is queued or running. A push run (main, stable and
+# orchestrator/project-*) shares `ci-push-<ref>` without cancel-in-progress
+# (run-volume plan, D14): the running run always finishes, so check-failure
+# triage still reads a real result from the branch's newest push run, and a
+# newer push replaces only the run still waiting in the group. Every other
+# run gets a group of its own and is never cancelled.
 # The cancelled-CI rerun sweep (scripts/ci_cancelled_rerun.py) skips a
 # cancelled run whose head is no longer the PR's head (superseded_head).
 # Phase 4: a final-CI dispatch run shares `ci-final-pr-<PR number>` and
@@ -61,7 +79,7 @@ run-name: "${{ github.event_name == 'workflow_dispatch' && format('CI [pr:{0}]',
 # (its event is the caller's pull_request) gets a group of its own here,
 # because its caller workflow cancels replaced quick runs itself.
 concurrency:
-  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-{0}', github.run_id) }}
+  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('ci-push-{0}', github.ref) || format('ci-{0}', github.run_id) }}
   cancel-in-progress: ${{ inputs.mode != 'quick' && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') }}
 
 env:
@@ -314,7 +332,7 @@ jobs:
       - name: CI concurrency contract tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_concurrency.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_concurrency.py tests/test_ci_pr_quick.py
 
       - name: CI test wiring guard
         run: |
@@ -667,7 +685,7 @@ jobs:
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1296,7 +1314,7 @@ jobs:
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1779,7 +1797,7 @@ jobs:
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -2277,6 +2295,7 @@ jobs:
             tests/test_review_commit_new_files_preserved.py
             tests/test_review_conflict_resolve_sandbox_only.py
             tests/test_review_final_ci.py
+            tests/test_ci_docs_only_final_ci.py
             tests/test_review_freshness_ci_failed.py
             tests/test_review_head_gate.py
             tests/test_review_parse_consolidator.py
@@ -2383,7 +2402,7 @@ jobs:
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -3160,7 +3179,7 @@ jobs:
     # Since #9391, group 3 also pins the pre-push affected-test gate step
     # (moved from tests-hooks-and-orchestrator).
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -3948,7 +3967,7 @@ jobs:
     # runs the functions with NR % total == index; raise the shard count by
     # editing the matrix list alone (job-index / job-total feed the step).
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -4250,7 +4269,7 @@ jobs:
     # gains an entry point it does not list. The test container gets no
     # network, no credential and no root.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick'
+    if: inputs.mode != 'quick' && inputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -4437,9 +4456,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Docs-only final CI (run-volume plan item 4): the test jobs were skipped
+      # on the dispatcher's word, so check the tree this run reports on before
+      # their `skipped` counts. Same ref as static-checks; depth 2 holds the
+      # merge's base and head parents.
+      - name: Checkout the merged tree for the docs-only check
+        if: inputs.docs_only == 'true'
+        uses: actions/checkout@v5
+        with:
+          ref: "${{ format('refs/pull/{0}/merge', inputs.pr_number) }}"
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify every changed file is docs-only
+        id: docs_only_verify
+        if: inputs.docs_only == 'true'
+        env:
+          CI_DOCS_ONLY_HEAD_SHA: ${{ github.sha }}
+        run: bash scripts/ci_docs_only_paths.sh verify
+
       - name: Require every CI job to succeed
         env:
           CI_NEEDS_JSON: ${{ toJSON(needs) }}
+          # "true" only in a docs-only run whose check above passed. Then, and
+          # only for these jobs, `skipped` counts like `success`.
+          CI_DOCS_ONLY_VERIFIED: ${{ steps.docs_only_verify.outcome == 'success' }}
+          CI_DOCS_ONLY_GATED_JOBS: "tests-hooks-and-orchestrator tests-heal-plan-and-validation tests-promote-stall-and-review tests-release-and-log-analysis orchestrate-poll tests-system-python tests-sandbox-python"
         run: |
           set -euo pipefail
           ci_needs_count="$(printf '%s' "${CI_NEEDS_JSON}" | jq -r 'length')"
@@ -4448,7 +4490,12 @@ jobs:
             exit 1
           fi
           printf '%s' "${CI_NEEDS_JSON}" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          ci_unsuccessful_jobs="$(printf '%s' "${CI_NEEDS_JSON}" | jq -r '[to_entries[] | select(.value.result != "success") | .key] | join(", ")')"
+          ci_skip_allowed_jobs="[]"
+          if [ "${CI_DOCS_ONLY_VERIFIED:-false}" = "true" ]; then
+            ci_skip_allowed_jobs="$(jq -cn --arg names "${CI_DOCS_ONLY_GATED_JOBS:-}" '$names | split(" ") | map(select(length > 0))')"
+            echo "Docs-only run: skipped is accepted for ${CI_DOCS_ONLY_GATED_JOBS:-}."
+          fi
+          ci_unsuccessful_jobs="$(printf '%s' "${CI_NEEDS_JSON}" | jq -r --argjson skip_ok "${ci_skip_allowed_jobs}" '[to_entries[] | select(.value.result != "success") | select((.value.result == "skipped" and (.key as $k | $skip_ok | index($k))) | not) | .key] | join(", ")')"
           if [ -n "${ci_unsuccessful_jobs}" ]; then
             echo "::error::CI jobs that did not succeed: ${ci_unsuccessful_jobs}"
             exit 1
