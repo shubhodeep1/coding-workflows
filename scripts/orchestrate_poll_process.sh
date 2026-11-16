@@ -23512,6 +23512,7 @@ _pr_json_base_is_target_merge() {
 # Issue #9481: every early return prints
 #   CLOSE_MERGED_SWEEP issue=<n> triage_rule=skip reason=<label|support_missing|
 #     login_empty|author_mismatch|marker|marker_pr_cross_repo|marker_head_empty>
+# (a non-numeric issue number logs `issue=invalid ... reason=issue_num_invalid`)
 # and success prints `triage_rule=ok marker_pr=<N> head=<ref>
 # marker_merged=<true|false> marker_base=<ref|none>`. When the marker PR has
 # MERGED into a same-repository `orchestrator/project-<N>` base and issue <N>
@@ -23533,7 +23534,11 @@ _close_sweep_check_triage_branch() {
   local _triage_merged _triage_base_ref _triage_base_repo _triage_project _triage_tracking
   _CLOSE_SWEEP_TRIAGE_BRANCH=""
   _CLOSE_SWEEP_TRIAGE_MARKER_BASE=""
-  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  if ! [[ "${issue_num}" =~ ^[0-9]+$ ]]; then
+    # The raw value is not printed: it failed validation.
+    echo "CLOSE_MERGED_SWEEP issue=invalid triage_rule=skip reason=issue_num_invalid"
+    return 1
+  fi
   if ! printf '%s' "${labels_json:-[]}" | jq -e '[.[]? | if type == "object" then (.name // "") else . end] | index("ai:check-triage") != null' >/dev/null 2>&1; then
     echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=label"
     return 1
