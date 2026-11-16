@@ -143,6 +143,11 @@ def job_duration_findings(jobs: list[dict[str, Any]], timeouts: dict[str, int], 
 			continue
 		took = _seconds(run_start, job.get("completed_at"))
 		if took is None:
+			# A finished job whose start time does not parse is logged rather
+			# than skipped silently; a job still running (no completed_at) is not.
+			if run_start and job.get("completed_at"):
+				unmeasured_name = name.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+				print(f"::notice::ci_budget_watch: job {unmeasured_name} has no usable start time (conclusion={job.get('conclusion')}); duration not checked.")
 			continue
 		if took >= ratio * minutes * 60:
 			findings.append({"kind": "job_duration", "subject": base, "value": took, "limit": minutes * 60, "job": name})

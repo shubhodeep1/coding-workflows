@@ -95,6 +95,19 @@ def test_job_duration_findings_drop_unparsable_step_starts(tmp_path: Path, capsy
 	assert "job tests-a%0A::error::x ran no step" in capsys.readouterr().out
 
 
+def test_job_duration_findings_log_jobs_with_no_usable_start(tmp_path: Path, capsys) -> None:
+	# Every step time is malformed: the job is not measured, and that is logged.
+	root = _tree(tmp_path, {}, CI)
+	timeouts = cbw.job_timeouts(root / ".github" / "workflows" / "ci.yml")
+	job = {**_job("tests-a", 19 * 60), "steps": [{"name": "Broken", "started_at": "not-a-time"}]}
+	assert cbw.job_duration_findings([job], timeouts, 0.75) == []
+	assert "::notice::ci_budget_watch: job tests-a has no usable start time (conclusion=success); duration not checked." in capsys.readouterr().out
+	# A job still running has no completed_at and is skipped without a notice.
+	running = {"name": "tests-a", "started_at": "2026-10-09T10:00:00Z", "completed_at": None, "conclusion": None}
+	assert cbw.job_duration_findings([running], timeouts, 0.75) == []
+	assert "ci_budget_watch" not in capsys.readouterr().out
+
+
 def test_issue_text_names_the_fix_and_carries_the_marker() -> None:
 	size = {"kind": "workflow_size", "subject": ".github/workflows/review_autofix.yml", "value": 481_287, "limit": 480_000}
 	assert cbw.issue_title(size) == "CI budget: .github/workflows/review_autofix.yml is 481,287 bytes (guard 480,000)"
