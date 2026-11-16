@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan: set the canary-b decompose-run ID to 43590943288\n\nPlanning ref: `orchestrator/project-9523` at `4ab8f89db502e1353b2bd4766f9ab289299f4a02`. The integration branch matches, so planning continues.\n\n`tests/e2e_smoke_canary_b.txt` on this ref is currently:\n```\nstatus: ok\ndecompose-run: 41445772297\n```\nIt already has a single trailing newline. Only line 2 changes.\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_review_conflict_resolve_smoke_deterministic.py\nACCEPTANCE: post-merge none: the canary is a data-only smoke fixture and no workflow checks its contents after merge\n\nThe real done-check is the file's bytes. It must be exactly `status: ok\\ndecompose-run: 43590943288\\n`, which is 38 bytes and 2 lines.\n\n## Functions or modules to implement\n- None. This is a data-file edit. Line 2 becomes `decompose-run: 43590943288`.\n\n## Data structures affected\n- The smoke canary fixture, which has two `key: value` lines.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Rewrite the whole file instead of patching one line\n- Chosen: Write the exact two-line content, ending with a single `\\n`.\n- Alternatives considered: Edit only line 2 with a regex substitution.\n- Why: It guarantees the exact-bytes acceptance criteria and avoids a substitution that silently matches nothing.\n\n## Security considerations\n- No trust boundary, endpoint, secret or money path is touched. The run ID is a public number taken from the issue.\n- Abuse case: extra content added to the canary. The scope is limited to this one file, and the exact bytes are checked.\n\n## Potential risks or edge cases\n- Conflict: open PR #9572 (for issue #9552) also touches this file. If #9552 is this issue, #9572 is a prior attempt at the same change. If it is a different issue, the two branches may conflict on the integration branch. The fix is to keep the content `43590943288`.\n- Adding a CRLF ending or a second trailing newline would break the \"exactly two lines\" criterion.\n- `tests/test_review_conflict_resolve_smoke_deterministic.py` only mentions the canary path in a comment, so the edit does not affect it.\n\n## Testing considerations\n- Check the file with `wc -l` (expect 2) and `cat -A` (expect lines ending in `$` with no `^M`).\n- Check the diff with `git diff --stat`: expect 1 file changed, 1 insertion and 1 deletion.\n- Run the existing deterministic smoke test as a regression check.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue fully specifies a one-line value change in a single file and forbids touching any other file. No helpers, workflows or tests need to change, and the complete fix is also the smallest one (\u00a76: Correctness & safety ranks above Speed).\n\nPLAN_SELF_CHECK: WARNING: open PR #9572 for issue #9552 touches the same file; if #9552 is not this issue, expect a merge conflict whose resolution keeps decompose-run 43590943288\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"the canary is a data-only smoke fixture and no workflow checks its contents after merge\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_review_conflict_resolve_smoke_deterministic.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "f9c63f478f598e70324a1610c462870f0048750bd52ccbd8a37cafaf7c16947a",
+  "lineage": {
+    "issue_number": 9569,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43870502455",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43870502455",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9569"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261116135258_18f06e337c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9569,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43870502455"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9569",
+  "timestamps": {
+    "created_at": "2026-11-16T13:52:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
