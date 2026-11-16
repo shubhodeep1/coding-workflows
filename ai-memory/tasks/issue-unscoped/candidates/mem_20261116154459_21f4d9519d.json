@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml \u2014 the selection of the four steps moved out of tests-heal-plan-and-validation and the choice of tests-hooks-and-orchestrator as destination job\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: provenance comment at .github/workflows/ci.yml:1043-1063 and changelog.d/9420-ci-heal-job-steps-to-hooks-job.md state the run's step list had no durations so the step pick and destination are estimates, not measurements; per-step durations for run 43314513853 are not in the repository; other constraints (unchanged steps, kept names, no timeout raise, no new job names) are met and locked by MovedHeal9420StepsContractTest. Severity disagreement: NIT (anthropic_claude-sonnet-5_5, confidence 3) vs MAJOR (others); highest used.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, the choice of which steps leave `tests-heal-plan-and-validation` and which job receives them.\nEvidence of absence: The provenance comment (about lines 1043-1063) and the changelog fragment both say the run's step list had no durations, so step selection and the choice of `tests-hooks-and-orchestrator` are estimates. Other constraints are met and locked by `MovedHeal9420StepsContractTest`. Per-step durations for run 43314513853 are not in the repository; documented limitation; budget-watch backstops.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (linked issue #9420)\nExpected change site: .github/workflows/ci.yml \u2014 selection of which four steps to move out of tests-heal-plan-and-validation and the choice of tests-hooks-and-orchestrator as the destination job.\nEvidence of absence: The provenance comment at .github/workflows/ci.yml:1043-1060 (and matching text in changelog.d/9420-ci-heal-job-steps-to-hooks-job.md:2) states the evidence round returned the step list without durations, so the pick is an estimate; the pick was driven by sandbox-relative weights and destination not chosen by measured headroom comparison. The last run diff only refreshes the baseline figure (ci.yml:1051-1052) to the #9391 figure (15m32s, run 43220859648). Other constraints satisfied and locked by MovedHeal9420StepsContractTest. Deferred across autofix passes; budget-watch will re-open if a job nears timeout.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP\nRequirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom.\u201d\nExpected change site: `.github/workflows/ci.yml` \u2014 the selection of steps moved from `tests-heal-plan-and-validation` and the choice of destination job.\nEvidence of absence: The workflow comment at `.github/workflows/ci.yml:1045-1063` says the run\u2019s step list had no durations and that both the selection and destination are estimates. The diff does not establish that the moved steps were the slowest or that `tests-hooks-and-orchestrator` had the most headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml \u2014 the selection of the four steps moved out of tests-heal-plan-and-validation and the choice of the destination job (tests-hooks-and-orchestrator, new comment block starting near line 1045).\nEvidence of absence: The provenance comment states the run's step list came without durations, the pick is \"an estimate, not a measurement\", and the destination was chosen from recorded job totals rather than a measured headroom comparison; per-step durations for run 43314513853 are not in the repository. Other constraints satisfied and locked by MovedHeal9420StepsContractTest (tests/test_ci_poll_test_sharding.py, HEAL_9420_* registry, test class near line 3892). The last run diff corrected only the baseline figure; limitation documented in workflow comment, changelog fragment, test-registry comment; budget-watch backstops.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b64b919f413a824271a7fac6e2504763408a8d7cf4b3f7773fee1adfc25128ec",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9430,
+    "run_id": "43858181147",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43858181147",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116154459_21f4d9519d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9430,
+    "run_id": "43858181147"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T15:44:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
