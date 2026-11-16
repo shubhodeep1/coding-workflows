@@ -4700,5 +4700,44 @@ def test_security_audit_prompts_require_final_array_only() -> None:
 	assert contract_blocks[0] == contract_blocks[1]
 
 
+
+def _tracker_comment_block() -> str:
+	text = SCRIPT_PATH.read_text(encoding="utf-8")
+	start = text.index("# The tracker comment is a report: nothing reads it back")
+	pat_branch = text.index('if [ "${tracker_comment_via_pat}" = "true" ]; then', start)
+	end = text.index("\nfi\n", pat_branch) + len("\nfi\n")
+	return text[start:end]
+
+
+def _run_tracker_comment(job_token: str, job_fails: bool, job_error: str = "HTTP 403: Resource not accessible by integration") -> tuple[int, list[str]]:
+	with tempfile.TemporaryDirectory(prefix="security-audit-tracker-comment-") as tmp:
+		log = Path(tmp) / "gh.log"
+		script = "\n".join([
+			"set -euo pipefail",
+			"GITHUB_REPOSITORY=o/r",
+			"TRACKER_NUMBER=7",
+			"TRACKER_COMMENT_FILE=/dev/null",
+			"GH_TOKEN=pat",
+			f"SECURITY_AUDIT_COMMENT_TOKEN={job_token!r}",
+			f'gh_retry() {{ echo "${{GH_TOKEN}} $*" >> {str(log)!r}; if [ "${{GH_TOKEN}}" = job ] && [ {"1" if job_fails else "0"} = 1 ]; then echo {job_error!r} >&2; return 1; fi; return 0; }}',
+			_tracker_comment_block(),
+		])
+		proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+		return proc.returncode, [line.split()[0] for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+def test_tracker_comment_posts_with_the_job_token_and_falls_back() -> None:
+	"""Run-volume plan item 6: the tracker report starts no issue_comment workflows."""
+	assert _run_tracker_comment("job", False) == (0, ["job"])
+	assert _run_tracker_comment("job", True) == (0, ["job", "pat"])
+	assert _run_tracker_comment("", False) == (0, ["pat"])
+	# An ambiguous failure (timeout, 5xx) may already have created the comment:
+	# the run fails as before instead of posting it twice.
+	rc, calls = _run_tracker_comment("job", True, job_error="HTTP 502: Bad Gateway")
+	assert rc != 0 and calls == ["job"]
+	workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert "SECURITY_AUDIT_COMMENT_TOKEN: ${{ github.token }}" in workflow
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
