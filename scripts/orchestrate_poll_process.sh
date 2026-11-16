@@ -24935,6 +24935,8 @@ run_standalone_stall_recovery() {
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
     _std_prefetched_impl_pr_num=""
     _std_prefetched_impl_pr_json=""
+    # Issue #9482: per-candidate reset so a stale true never leaks across issues.
+    _STALL_STANDALONE_NT_SKIP_LOGGED=false
     [ -n "${issue_num}" ] || continue
 
     if [ -n "${orchestrator_managed_set}" ] && echo "${orchestrator_managed_set}" | grep -qxF "${issue_num}"; then
