@@ -170,6 +170,9 @@ jobs:
           UNBLOCK_JUDGE_WAIT_MAX_DAYS: ${{ vars.UNBLOCK_JUDGE_WAIT_MAX_DAYS || '14' }}
           # Refuse verdict instructions the network-less implementer cannot run, and re-ask once.
           UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED: ${{ vars.UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED || 'true' }}
+          # #9546: show the judge an issue's open ai/issue-<n> PR and require
+          # retry_budget/reissue/descope to name it.
+          UNBLOCK_JUDGE_LINKED_PR_ENABLED: ${{ vars.UNBLOCK_JUDGE_LINKED_PR_ENABLED || 'true' }}
           # Q129: the check-triage resolution gate clarify runs (#7095).
           CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
           # Q148: close a heal issue whose failure a sibling already fixed.

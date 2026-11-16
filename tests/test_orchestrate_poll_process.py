@@ -1825,6 +1825,19 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 	if event == 'workflow_dispatch' and store.get('pr_named_listing_fail'):
 		print('dispatch run listing unavailable', file=sys.stderr)
 		sys.exit(1)
+	# Issue #9546: the stall judge's live review-run listing is the only
+	# branch-scoped listing that asks for headSha; record it and let a test
+	# make it fail.
+	json_fields = ''
+	for i, arg in enumerate(args):
+		if arg == '--json' and i + 1 < len(args):
+			json_fields = args[i + 1]
+	if branch and 'headSha' in json_fields.split(','):
+		store.setdefault('stall_judge_run_list_calls', []).append({'branch': branch, 'json': json_fields})
+		save()
+		if store.get('stall_judge_run_list_fail'):
+			print('gh: Server Error (HTTP 502)', file=sys.stderr)
+			sys.exit(1)
 	runs = []
 	for run in store.get('active_autofix_runs', []):
 		if workflow and run.get('workflow') != workflow:
@@ -1843,7 +1856,7 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 			'startedAt': run.get('startedAt', '2999-01-01T00:00:00Z'),
 			'databaseId': run.get('databaseId', 99),
 		}
-		for key in ('event', 'displayTitle', 'createdAt', 'startedAt', 'databaseId'):
+		for key in ('event', 'displayTitle', 'createdAt', 'startedAt', 'databaseId', 'name', 'workflowName', 'headSha'):
 			if key in run:
 				entry[key] = run[key]
 		runs.append(entry)
@@ -21644,6 +21657,149 @@ def test_stall_judge_escalate_human_allowed_when_human_terminalization_enabled()
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
 	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("**Decision (judge):** escalate_human" in body and "**Decision (effective):** escalate_human" in body for body in tracking_comments)
+
+
+_SJR_HEAD_SHA = "a" * 40
+
+
+def _sjr_iso(minutes_ago: int) -> str:
+	import datetime as _dt
+	stamp = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=minutes_ago)
+	return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _sjr_run_stall_judge(*, judge_action: str, runs: list[dict], env: dict | None = None, store_extra: dict | None = None) -> dict:
+	"""Issue #9546: a stalled ai:done issue with open PR #77 reaching the stall judge."""
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 77},
+		prs=[
+			{
+				"number": 77,
+				"state": "open",
+				"mergeable": False,
+				"headRefName": "ai/issue-10",
+				"headRefFromApi": "ai/issue-10",
+				"headSha": _SJR_HEAD_SHA,
+				"baseRefName": "main",
+			},
+		],
+		active_autofix_runs=runs,
+		enable_stall_human_terminalization="true",
+		mock_stall_judge_json={"action": judge_action, "justification": "no review ran", "target_pr": None, "head_ref": None},
+		env_overrides=env,
+		mock_store_extra=store_extra,
+	)
+
+
+def _sjr_review_run(*, status: str, conclusion: str = "", minutes_ago: int = 5, run_id: int = 4242) -> dict:
+	# `workflow` matches no --workflow filter, so only the branch-scoped
+	# listings (no --workflow) see this run.
+	return {
+		"workflow": "sjr-review.yml",
+		"branch": "ai/issue-10",
+		"name": "AI Review",
+		"workflowName": "AI Review",
+		"status": status,
+		"conclusion": conclusion,
+		"headSha": _SJR_HEAD_SHA,
+		"createdAt": _sjr_iso(minutes_ago),
+		"startedAt": _sjr_iso(minutes_ago),
+		"databaseId": run_id,
+	}
+
+
+def _sjr_judge_diagnostics(result: dict) -> dict:
+	for comment in result["issues"]["192"]["comments"]:
+		body = comment.get("body", "")
+		if "Stall Judge — Issue #10" in body:
+			return json.loads(body.split("```json", 1)[1].split("```", 1)[0])
+	raise AssertionError("no stall judge comment: " + result["stdout"][-4000:])
+
+
+def test_stall_judge_escalate_human_waits_while_review_queued_for_runner():
+	result = _sjr_run_stall_judge(judge_action="escalate_human", runs=[_sjr_review_run(status="queued")])
+	diagnostics = _sjr_judge_diagnostics(result)
+	assert diagnostics["review_waiting_for_runner"] is True
+	outcomes = diagnostics["recent_review_workflow_outcomes"]
+	assert outcomes and outcomes[0]["id"] == 4242 and outcomes[0]["status"] == "queued"
+	assert outcomes[0]["head_sha"] == _SJR_HEAD_SHA
+	assert "STALL_SKIP issue=10 reason=review_waiting_for_runner pr=77 run=4242" in result["stdout"]
+	assert "STALL_JUDGE_REVIEW_RUNS outcome=ok issue=10 pr=77 runs=1 waiting=true" in result["stdout"]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	tracking = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("**Decision (effective):** wait (review_waiting_for_runner)" in body for body in tracking)
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
+
+
+def test_stall_judge_close_and_reissue_waits_while_review_queued_for_runner():
+	result = _sjr_run_stall_judge(judge_action="close_and_reissue", runs=[_sjr_review_run(status="waiting")])
+	assert "reason=review_waiting_for_runner" in result["stdout"]
+	assert "action=close_and_reissue" in result["stdout"]
+	assert not result["issues"]["10"].get("closed", False)
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
+
+
+def test_stall_judge_completed_failed_review_is_evidence_and_escalation_proceeds():
+	result = _sjr_run_stall_judge(
+		judge_action="escalate_human",
+		runs=[_sjr_review_run(status="completed", conclusion="failure")],
+	)
+	diagnostics = _sjr_judge_diagnostics(result)
+	assert diagnostics["review_waiting_for_runner"] is False
+	assert diagnostics["recent_review_workflow_outcomes"][0]["conclusion"] == "failure"
+	assert "waiting=false" in result["stdout"]
+	assert "reason=review_waiting_for_runner" not in result["stdout"]
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_review_run_listing_failure_keeps_context():
+	result = _sjr_run_stall_judge(
+		judge_action="escalate_human",
+		runs=[_sjr_review_run(status="queued")],
+		store_extra={"stall_judge_run_list_fail": True},
+	)
+	diagnostics = _sjr_judge_diagnostics(result)
+	assert "STALL_JUDGE_REVIEW_RUNS outcome=failed issue=10 pr=77 runs=0 waiting=false reason=list_failed" in result["stdout"]
+	assert diagnostics["review_waiting_for_runner"] is False
+	assert diagnostics["recent_review_workflow_outcomes"] == []
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_live_review_runs_disabled_keeps_context_and_makes_no_run_list_call():
+	result = _sjr_run_stall_judge(
+		judge_action="escalate_human",
+		runs=[_sjr_review_run(status="queued")],
+		env={"STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED": "false"},
+	)
+	diagnostics = _sjr_judge_diagnostics(result)
+	assert "review_waiting_for_runner" not in diagnostics
+	assert diagnostics["recent_review_workflow_outcomes"] == []
+	assert result.get("stall_judge_run_list_calls", []) == []
+	assert "STALL_JUDGE_REVIEW_RUNS outcome=skipped issue=10 pr=77 runs=0 waiting=false reason=disabled" in result["stdout"]
+	assert "reason=review_waiting_for_runner" not in result["stdout"]
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_stale_queued_review_run_does_not_hold_escalation():
+	result = _sjr_run_stall_judge(
+		judge_action="escalate_human",
+		runs=[_sjr_review_run(status="queued", minutes_ago=3 * 24 * 60)],
+	)
+	diagnostics = _sjr_judge_diagnostics(result)
+	assert diagnostics["review_waiting_for_runner"] is False
+	assert diagnostics["recent_review_workflow_outcomes"][0]["status"] == "queued"
+	assert "reason=review_waiting_for_runner" not in result["stdout"]
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
 
 
 def test_stall_judge_escalate_human_issue_not_redetected_after_needs_human():

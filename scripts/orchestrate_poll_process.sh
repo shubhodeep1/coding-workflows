@@ -3154,6 +3154,16 @@ else
   ENABLE_STALL_JUDGE="false"
 fi
 
+# Issue #9546: give the stall judge the linked PR's queued/waiting/completed
+# review runs (one branch-scoped `gh run list` per judge call) and hold
+# escalate_human / close_and_reissue while a review run on the PR head waits
+# for a runner. Default on; only an explicit false/0/no/off turns it off.
+STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED="${STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED:-true}"
+case "$(printf '%s' "${STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
+  false|0|no|off) STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED="false" ;;
+  *) STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED="true" ;;
+esac
+
 ENABLE_STALL_HUMAN_TERMINALIZATION="${ENABLE_STALL_HUMAN_TERMINALIZATION:-false}"
 if is_truthy "${ENABLE_STALL_HUMAN_TERMINALIZATION}"; then
   ENABLE_STALL_HUMAN_TERMINALIZATION="true"
@@ -18599,6 +18609,63 @@ _direct_inflight_review_run_on_branch()
 	printf '%s\n' "${_di_match}"
 }
 
+# _stall_judge_review_runs_for_pr — live review-run evidence for the stall
+# judge (issue #9546).
+#
+# Args: $1 = PR head branch, $2 = PR head SHA (informational; the caller
+# compares it). Output (stdout): a JSON array of review-family runs on that
+# branch in every status (queued, waiting, pending, in_progress, completed),
+# newest first, each shaped
+#   {id, workflow, conclusion, status, head_branch, head_sha, created_at}
+# matching the existing recent_review_workflow_outcomes entries plus head_sha.
+#
+# Cost: one REST call (`gh run list --branch`), issued only from
+# invoke_stall_judge, which runs once per stalled issue per tick when the
+# ladder reaches the judge; never per loop iteration.
+#
+# §14 audit: _load_actions_runs_cached lists only in_progress runs
+# (status=in_progress&per_page=50), so it cannot show a review that is queued
+# for a runner or already finished — the judge read that empty list as "no
+# review ever ran" (tele-funtoken-msg-scoring#5241). Changing that blob's
+# status filter would change every other caller. _direct_inflight_review_run_on_branch
+# makes the same branch-scoped call but returns one live run id, not the run
+# list. This helper reuses its call shape and its review-name filter.
+#
+# Fail-open: on any gh/jq error it prints nothing and returns non-zero; the
+# caller keeps today's cached-blob evidence.
+_stall_judge_review_runs_for_pr()
+{
+	local _sjr_branch="$1"
+	local _sjr_runs_json="" _sjr_rc=0 _sjr_out=""
+	[ -n "${_sjr_branch}" ] || return 1
+	_sjr_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+		--branch "${_sjr_branch}" \
+		--limit 20 \
+		--json databaseId,name,workflowName,status,conclusion,headSha,createdAt \
+		2>/dev/null)" || _sjr_rc=$?
+	if [ "${_sjr_rc}" -ne 0 ] || [ -z "${_sjr_runs_json}" ] \
+		|| ! printf '%s' "${_sjr_runs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+		return 1
+	fi
+	_sjr_out="$(printf '%s' "${_sjr_runs_json}" | jq -c --arg head_ref "${_sjr_branch}" '
+		def review_name: . == "AI Review" or . == "Internal Review" or . == "Review Autofix"
+			or . == "Internal: AI Review & Autofix" or . == "Codex PR Self-Healing Semantic Agent";
+		[ .[]?
+			| select(((.name // "") | review_name) or ((.workflowName // "") | review_name))
+			| select((.databaseId // null) != null)
+			| {id: .databaseId,
+			   workflow: (((.workflowName // "") | if . == "" then null else . end) // (.name // "")),
+			   conclusion: (.conclusion // ""),
+			   status: (.status // ""),
+			   head_branch: $head_ref,
+			   head_sha: (.headSha // ""),
+			   created_at: (.createdAt // "")}
+		] | sort_by(.created_at) | reverse
+	' 2>/dev/null)" || return 1
+	[ -n "${_sjr_out}" ] || return 1
+	printf '%s\n' "${_sjr_out}"
+}
+
 # Build a set of issue numbers that have *genuinely active* (in_progress or
 # queued) workflow runs — i.e., runs that started recently enough that they
 # could still be making progress.
@@ -22442,6 +22509,70 @@ invoke_stall_judge() {
     | .[:3]
   ' 2>/dev/null || echo '[]')"
 
+  # Live review-run evidence (issue #9546). The cached blob above lists only
+  # in_progress runs, so a review queued for a runner or already finished was
+  # invisible and the judge escalated a reviewable PR as "no review ever ran"
+  # (tele-funtoken-msg-scoring#5241). With STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED
+  # (default true) and an open linked PR, one branch-scoped listing
+  # (_stall_judge_review_runs_for_pr) is merged in: entries gain head_sha, are
+  # de-duplicated by run id, newest first, at most 5. review_waiting_for_runner
+  # is true when a queued/waiting/pending review run on the PR's current head
+  # is younger than REVIEW_RUN_MAX_RUNTIME_MINUTES. On a listing failure, or
+  # with the switch off, workflow_outcomes is exactly today's list.
+  local review_waiting_for_runner="false"
+  local _stall_review_wait_run_id=""
+  if [ "${STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED:-true}" = "true" ]; then
+    local _sjr_outcome="skipped" _sjr_reason="" _sjr_live_runs="" _sjr_merged="" _sjr_count=0 _sjr_now=""
+    if [ "${pr_state}" = "open" ] && [ -n "${head_ref}" ]; then
+      if _sjr_live_runs="$(_stall_judge_review_runs_for_pr "${head_ref}" "${head_sha}")" && [ -n "${_sjr_live_runs}" ]; then
+        _sjr_now="$(date +%s 2>/dev/null || echo "")"
+        # No clock: the flag stays false (fail open to today's actions).
+        [[ "${_sjr_now}" =~ ^[0-9]+$ ]] || _sjr_now=""
+        # The cached entries are today's workflow_outcomes (already filtered by
+        # the review-name / branch / PR-named trust rule above); each gains
+        # head_sha by run id from the same cached blob, so no second
+        # trust-rule matcher is needed.
+        _sjr_merged="$(printf '%s' "${workflows_json}" | jq -c --argjson live_runs "${_sjr_live_runs}" --argjson cached_outcomes "${workflow_outcomes:-[]}" '
+          ([.workflow_runs[]? | select(.id != null) | {key: (.id | tostring), value: (.head_sha // "")}] | from_entries) as $sha_by_id
+          | [ $cached_outcomes[]? | . + {head_sha: ($sha_by_id[(.id | tostring)] // "")} ] as $cached
+          | ($live_runs + $cached)
+          | unique_by(.id)
+          | sort_by(.created_at)
+          | reverse
+        ' 2>/dev/null || echo "")"
+        if [ -n "${_sjr_merged}" ] && printf '%s' "${_sjr_merged}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+          [ -n "${_sjr_now}" ] && _stall_review_wait_run_id="$(printf '%s' "${_sjr_merged}" | jq -r --arg head_sha "${head_sha}" \
+            --argjson now "${_sjr_now}" --argjson threshold "$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))" '
+            [ .[]?
+              | select((.status // "") == "queued" or (.status // "") == "waiting" or (.status // "") == "pending")
+              | select($head_sha != "" and (.head_sha // "") == $head_sha)
+              | ((.created_at // "") as $ts
+                 | if $ts != "" then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now) else $now end) as $start_epoch
+              | select(($now - $start_epoch) < $threshold)
+            ] | (.[0].id // empty) | tostring
+          ' 2>/dev/null || echo "")"
+          if [ -n "${_stall_review_wait_run_id}" ]; then
+            review_waiting_for_runner="true"
+          fi
+          workflow_outcomes="$(printf '%s' "${_sjr_merged}" | jq -c '.[:5]' 2>/dev/null || echo "${workflow_outcomes}")"
+          _sjr_count="$(printf '%s' "${workflow_outcomes}" | jq -r 'length' 2>/dev/null || echo 0)"
+          _sjr_outcome="ok"
+        else
+          _sjr_outcome="failed"
+          _sjr_reason="merge_failed"
+        fi
+      else
+        _sjr_outcome="failed"
+        _sjr_reason="list_failed"
+      fi
+    else
+      _sjr_reason="no_pr"
+    fi
+    echo "STALL_JUDGE_REVIEW_RUNS outcome=${_sjr_outcome} issue=${issue_num} pr=${target_pr:-none} runs=${_sjr_count} waiting=${review_waiting_for_runner}${_sjr_reason:+ reason=${_sjr_reason}}"
+  else
+    echo "STALL_JUDGE_REVIEW_RUNS outcome=skipped issue=${issue_num} pr=${target_pr:-none} runs=0 waiting=false reason=disabled"
+  fi
+
   # Attempt journal (issue #8428, P1). Only with PERSIST_JOURNAL_ENABLED=true
   # (default false): render the item's journal from comments this tick
   # already holds (issue_comments_json for a standalone issue, the per-tick
@@ -22537,6 +22668,15 @@ invoke_stall_judge() {
       current_wave: $current_wave,
       prior_recovery_actions: $prior_actions
     }' 2>/dev/null || echo '')"
+  # Issue #9546: the queued-review flag, only with the switch on (off: the
+  # diagnostics are unchanged). The fallback payload below is not touched.
+  if [ "${STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED:-true}" = "true" ] && [ -n "${diagnostics}" ]; then
+    local _sjr_diag=""
+    if _sjr_diag="$(printf '%s' "${diagnostics}" | jq -c --argjson w "${review_waiting_for_runner}" \
+      'if type == "object" then . + {review_waiting_for_runner: $w} else . end' 2>/dev/null)" && [ -n "${_sjr_diag}" ]; then
+      diagnostics="${_sjr_diag}"
+    fi
+  fi
 
   # Defensive guard: if the diagnostics builder above silently failed
   # (empty output or non-JSON), the judge would otherwise receive a
@@ -22730,7 +22870,13 @@ invoke_stall_judge() {
   # judge picks any non-escalate action so a one-off escalation cannot latch.
   # Threshold reuses MAX_JUDGE_REPLAY for parity with the input-hash cap.
   local _judge_escalate_streak=0
-  if [ "${_judge_state_file_ready}" = "true" ]; then
+  # Issue #9546: a tick where a review run on the PR head is waiting for a
+  # runner neither increments nor resets the streak for escalate_human; the
+  # escalation is held below and the flag expires after
+  # REVIEW_RUN_MAX_RUNTIME_MINUTES, after which the backstops work as before.
+  if [ "${review_waiting_for_runner}" = "true" ] && [ "${judge_action}" = "escalate_human" ]; then
+    :
+  elif [ "${_judge_state_file_ready}" = "true" ]; then
     if [ "${judge_action}" = "escalate_human" ]; then
       _judge_escalate_streak="$(jq -r --arg n "${issue_num}" '.judge_escalate_streak[$n] // 0' "${_judge_state_file}" 2>/dev/null || echo "0")"
       [[ "${_judge_escalate_streak}" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
@@ -22751,6 +22897,20 @@ invoke_stall_judge() {
     effective_action="escalate_human"
   else
     effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"
+  fi
+  # Issue #9546: a review run on the PR's current head is queued for a runner,
+  # so the PR is waiting, not failing. Hold escalate_human / close_and_reissue
+  # (including a forced escalation) for this tick: the comment is posted, then
+  # the judge returns 1 (no action, no recovery attempt counted), the same
+  # convention as the merge_train_queued / claude_capacity_wait skips.
+  local _sjr_held_action=""
+  if [ "${STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED:-true}" = "true" ] && [ "${review_waiting_for_runner}" = "true" ]; then
+    case "${effective_action}" in
+      escalate_human|close_and_reissue)
+        _sjr_held_action="${effective_action}"
+        effective_action="wait (review_waiting_for_runner)"
+        ;;
+    esac
   fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
@@ -22792,6 +22952,12 @@ ${diagnostics}
 
   if [ "${effective_action}" != "${judge_action}" ]; then
     echo "::notice::Stall judge action '${judge_action}' normalized to '${effective_action}' for issue #${issue_num}."
+  fi
+
+  if [ -n "${_sjr_held_action}" ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=review_waiting_for_runner pr=${target_pr:-none} run=${_stall_review_wait_run_id:-none} phase=${phase} action=${_sjr_held_action}"
+    STALL_RECOVERY_EFFECTIVE_ACTION="review_waiting_for_runner"
+    return 1
   fi
 
   case "${effective_action}" in

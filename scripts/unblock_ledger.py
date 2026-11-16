@@ -65,6 +65,12 @@ Rules enforced here:
     `variable_step_placeholders`: the item's newest trusted operator_step
     verdict comment records `Operator step kind: `variable_or_secret`.` for it
     (issue #9484). Any other operator step is escalated to a person instead.
+  - `retry_budget`, `reissue` and `descope` on an issue whose open
+    ai/issue-<item> pull request the caller found (`validate
+    --linked-pr-file`) must name that PR as `#<number>` in `instructions`,
+    so the judge builds on the existing work instead of re-implementing it
+    blind (issue #9546); otherwise the verdict is refused with
+    `linked_pr_unreferenced:<number>`. Without the flag nothing changes.
 
 Subcommands (one JSON line on stdout; exit 0 ok, 1 bad arguments or a refused
 verdict, 2 unreadable input):
@@ -84,14 +90,16 @@ verdict, 2 unreadable input):
       terminal (and why); `holds_used` and `holds_met` count the item's
       trusted hold markers.
   validate --verdict-file <path> --decision-file <path> --repo <owner/repo>
-           [--sandbox-check]
+           [--sandbox-check] [--linked-pr-file <path>]
       Check a judge verdict against the `decide` output and the hard limits,
       and print the normalised verdict. With --sandbox-check, instructions a
       fix-up would run in the network-less implement sandbox are refused with
       `sandbox_incompatible:<id>` (SANDBOX_INCOMPATIBLE_PATTERNS).
       `target_repo` (`consumer` | `harness`) is kept for the instruction
       verdicts (TARGET_REPO_VERDICTS); a missing or empty value becomes
-      `consumer`, any other value refuses the verdict.
+      `consumer`, any other value refuses the verdict. With --linked-pr-file
+      (a JSON object with a positive `number`, or JSON null for none),
+      `retry_budget`, `reissue` and `descope` must name `#<number>`.
   rejection --item <n> --stop <id> --comments-file <path> --trusted-login <login>
       Find the latest trusted, unused guard rejection on the blocked item.
   protected-rejection --item <n> --comments-file <path> --trusted-login <login>
@@ -227,7 +235,7 @@ IMPLEMENT_WORKFLOW_PATHS = {
 }
 
 EVIDENCE_LIST_KEYS = ("checks", "findings", "issues", "paths")
-EVIDENCE_SCALAR_KEYS = ("reason", "validation_class", "validation_status", "pr")
+EVIDENCE_SCALAR_KEYS = ("reason", "validation_class", "validation_status", "pr", "linked_pr")
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{12}$")
 MARKER_RE = re.compile(
 	r"^<!-- ai:unblock:v1 item=(?P<item>[1-9][0-9]*) stop=(?P<stop>[a-z-]+) "
@@ -324,6 +332,9 @@ SANDBOX_CHECKED_VERDICTS = ("retry_budget", "descope", "reissue", "accept_with_f
 # scripts/unblock_actions.py routes to a heal report instead of a fix-up).
 TARGET_REPOS = ("consumer", "harness")
 TARGET_REPO_VERDICTS = SANDBOX_CHECKED_VERDICTS
+# Verdicts that start new implementation work; with an open linked PR they
+# must name it (issue #9546).
+LINKED_PR_REFERENCE_VERDICTS = ("retry_budget", "reissue", "descope")
 
 
 # Issue #9484: an `_UNSET_OPERATOR_STEP` operator step is held for
@@ -1101,10 +1112,17 @@ def validate(
 	rejected: object = None,
 	*,
 	sandbox_check: bool = False,
+	linked_pr: dict | None = None,
 ) -> dict:
 	"""Refuse anything outside the menu or the hard limits; return the normalised verdict."""
 	if not isinstance(verdict, dict) or not isinstance(decision, dict):
 		raise UsageError("verdict and decision must be JSON objects")
+	linked_pr_number = None
+	if linked_pr is not None:
+		number = linked_pr.get("number") if isinstance(linked_pr, dict) else None
+		if type(number) is not int or number < 1:
+			raise UsageError("invalid --linked-pr-file")
+		linked_pr_number = number
 	name = verdict.get("verdict")
 	allowed = decision.get("allowed") or []
 	if name not in VERDICTS:
@@ -1230,6 +1248,11 @@ def validate(
 	# written for a person and `answer` is a reply, neither runs in the sandbox.
 	if sandbox_check and name in SANDBOX_CHECKED_VERDICTS:
 		_check_sandbox_instructions(normalised.get("instructions", ""))
+	# Issue #9546: the issue's work already sits on an open PR; a verdict that
+	# starts new work must name it, so it builds on that PR.
+	if linked_pr_number is not None and name in LINKED_PR_REFERENCE_VERDICTS \
+		and not re.search(rf"#{linked_pr_number}(?!\d)", normalised.get("instructions", "")):
+		raise UsageError(f"linked_pr_unreferenced:{linked_pr_number}")
 	return normalised
 
 
@@ -1278,6 +1301,7 @@ def build_parser() -> argparse.ArgumentParser:
 	validate_cmd.add_argument("--repo", required=True)
 	validate_cmd.add_argument("--rejected-deletions-file")
 	validate_cmd.add_argument("--sandbox-check", action="store_true")
+	validate_cmd.add_argument("--linked-pr-file")
 	rejection_cmd = sub.add_parser("rejection-snapshot")
 	rejection_cmd.add_argument("--run-file", required=True)
 	rejection_cmd.add_argument("--artifact-file", required=True)
@@ -1312,6 +1336,18 @@ def build_parser() -> argparse.ArgumentParser:
 	hold_cmd.add_argument("--ref", required=True)
 	hold_cmd.add_argument("--state", default="")
 	return parser
+
+
+def _read_linked_pr(path: str | None) -> dict | None:
+	"""The --linked-pr-file content: None when absent or JSON null (issue #9546)."""
+	if not path:
+		return None
+	data = _read_json(path, "--linked-pr-file")
+	if data is None:
+		return None
+	if not isinstance(data, dict):
+		raise UsageError("invalid --linked-pr-file")
+	return data
 
 
 def run(argv: list[str] | None = None) -> dict:
@@ -1372,6 +1408,7 @@ def run(argv: list[str] | None = None) -> dict:
 			_read_json(args.rejection_file, "--rejection-file") if args.rejection_file else None,
 			_read_json(args.rejected_deletions_file, "--rejected-deletions-file") if args.rejected_deletions_file else None,
 			sandbox_check=args.sandbox_check,
+			linked_pr=_read_linked_pr(args.linked_pr_file),
 		)
 	if args.command == "rejection-snapshot":
 		try:

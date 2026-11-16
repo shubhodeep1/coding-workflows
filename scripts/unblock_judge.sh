@@ -56,6 +56,11 @@
 # UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED (default true; any value other than
 # `false` keeps it on: verdict instructions that need network or remote access
 # are refused and the model is asked once more, op=instruction_sandbox_check),
+# UNBLOCK_JUDGE_LINKED_PR_ENABLED (default true; `false` turns it off: for an
+# issue item, the open same-repository ai/issue-<item> pull request is looked
+# up once (unblock_linked_open_pr), its diff goes into the prompt, the context
+# gets `linked_open_pr`, and a retry_budget / reissue / descope verdict must
+# name that PR, issue #9546; log prefix UNBLOCK_JUDGE_LINKED_PR),
 # MOCK_UNBLOCK_JUDGE_JSON (tests only: used instead of the model),
 # MOCK_UNBLOCK_JUDGE_JSON_REASK (tests only, default empty: the model's answer
 # to the sandbox re-ask when set),
@@ -137,6 +142,7 @@ mkdir -p "${RUNTIME_DIR}"
 UNBLOCK_SOURCE_REPO="shubhodeep1/coding-workflows"
 NEEDS_HUMAN_DIGEST_ENABLED="${NEEDS_HUMAN_DIGEST_ENABLED:-true}"
 UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED="${UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED:-true}"
+UNBLOCK_JUDGE_LINKED_PR_ENABLED="${UNBLOCK_JUDGE_LINKED_PR_ENABLED:-true}"
 # Spliced into the re-ask prompt, so it is never taken from the environment.
 UNBLOCK_JUDGE_REASK_NOTE=""
 # Set by unblock_ask_model when the model gave no answer; never from the environment.
@@ -1379,7 +1385,7 @@ PY
 # so the same failure keeps the same fingerprint across runs.
 unblock_evidence()
 {
-	unblock_py - "${RUNTIME_DIR}/item_comments.json" "${UNBLOCK_LOGIN}" "${RUNTIME_DIR}/failing_checks.json" "${ITEM_KIND}" "${ITEM}" <<'PY'
+	unblock_py - "${RUNTIME_DIR}/item_comments.json" "${UNBLOCK_LOGIN}" "${RUNTIME_DIR}/failing_checks.json" "${ITEM_KIND}" "${ITEM}" "${RUNTIME_DIR}/linked_pr.json" <<'PY'
 import json, re, sys
 comments = json.load(open(sys.argv[1], encoding="utf-8"))
 login, kind, item = sys.argv[2], sys.argv[4], sys.argv[5]
@@ -1387,6 +1393,10 @@ try:
 	checks = json.load(open(sys.argv[3], encoding="utf-8"))
 except (OSError, ValueError):
 	checks = []
+try:
+	linked_pr = json.load(open(sys.argv[6], encoding="utf-8"))
+except (OSError, ValueError):
+	linked_pr = None
 def norm(text):
 	text = re.sub(r"https?://\S+", "", text)
 	text = re.sub(r"\b[0-9a-f]{7,40}\b", "", text)
@@ -1406,8 +1416,88 @@ if kind == "pr":
 	evidence["pr"] = item
 	if isinstance(checks, list) and checks:
 		evidence["checks"] = sorted({str(name) for name in checks if name})[:30]
+# Issue #9546: only the linked PR's number, so a review fix's new head does
+# not open a fresh verdict menu; no PR leaves the evidence unchanged.
+if kind == "issue" and isinstance(linked_pr, dict) and type(linked_pr.get("number")) is int and linked_pr["number"] > 0:
+	evidence["linked_pr"] = str(linked_pr["number"])
 print(json.dumps(evidence))
 PY
+}
+
+# unblock_linked_open_pr — the open pull request that holds a blocked issue's
+# work (issue #9546). The unblock judge read only the default branch, so for
+# an orchestrator issue whose finished PR waited on review it concluded the
+# work "never landed" and ordered a re-implementation
+# (tele-funtoken-msg-scoring#5258).
+#
+# Always writes ${RUNTIME_DIR}/linked_pr.json: JSON null, or
+#   {number, head_ref, head_sha, base_ref, changed_files, additions, deletions}
+# for the open PR whose head is exactly ai/issue-<item> in this repository.
+# Only for an issue item with UNBLOCK_JUDGE_LINKED_PR_ENABLED not `false`.
+#
+# API budget (CLAUDE.md §15): once per judge run. One REST read
+# (pulls?head=<owner>:ai/issue-<item>&state=open&per_page=1, the shape the
+# fix-up lookups above use); only when it returns a PR, one more
+# (pulls/<n>) for the size fields the list form lacks and to re-check the
+# head, repository and open state. The diff read happens in unblock_ask_model.
+# Fail-open: any error writes null, so context, fingerprint and validation
+# are exactly as before. Titles and bodies are never stored.
+unblock_linked_open_pr()
+{
+	local out="${RUNTIME_DIR}/linked_pr.json" owner list_json number detail_json linked_obj
+	echo 'null' > "${out}"
+	if [ "${ITEM_KIND}" != "issue" ]; then
+		echo "UNBLOCK_JUDGE_LINKED_PR outcome=skipped item=${ITEM} pr=none reason=not_issue"
+		return 0
+	fi
+	if [ "${UNBLOCK_JUDGE_LINKED_PR_ENABLED}" = "false" ]; then
+		echo "UNBLOCK_JUDGE_LINKED_PR outcome=skipped item=${ITEM} pr=none reason=disabled"
+		return 0
+	fi
+	owner="${REPOSITORY%%/*}"
+	if ! list_json="$(gh api -X GET "repos/${REPOSITORY}/pulls" -f state=open -f head="${owner}:ai/issue-${ITEM}" -f per_page=1 2>/dev/null)"; then
+		echo "UNBLOCK_JUDGE_LINKED_PR outcome=failed item=${ITEM} pr=none reason=lookup_failed"
+		return 0
+	fi
+	if [ -z "${list_json}" ] || ! jq -e 'type == "array"' <<< "${list_json}" >/dev/null 2>&1; then
+		echo "UNBLOCK_JUDGE_LINKED_PR outcome=failed item=${ITEM} pr=none reason=lookup_failed"
+		return 0
+	fi
+	number="$(jq -r 'if (.[0].number | type) == "number" then .[0].number else "" end' <<< "${list_json}" 2>/dev/null || true)"
+	if [ -z "${number}" ]; then
+		echo "UNBLOCK_JUDGE_LINKED_PR outcome=none item=${ITEM} pr=none"
+		return 0
+	fi
+	if ! [[ "${number}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+		echo "UNBLOCK_JUDGE_LINKED_PR outcome=failed item=${ITEM} pr=none reason=lookup_failed"
+		return 0
+	fi
+	if ! detail_json="$(gh api "repos/${REPOSITORY}/pulls/${number}" 2>/dev/null)"; then
+		echo "UNBLOCK_JUDGE_LINKED_PR outcome=failed item=${ITEM} pr=${number} reason=lookup_failed"
+		return 0
+	fi
+	linked_obj="$(jq -c --argjson n "${number}" --arg ref "ai/issue-${ITEM}" --arg repo "${REPOSITORY}" '
+		def count: if type == "number" and . >= 0 then . else null end;
+		select(type == "object" and .number == $n and (.state // "") == "open"
+			and (.head.ref // "") == $ref
+			and ((.head.repo.full_name // "") | ascii_downcase) == ($repo | ascii_downcase)
+			and ((.head.sha // "") | type == "string" and test("^[0-9a-f]{40}$")))
+		| {number: .number, head_ref: .head.ref, head_sha: .head.sha,
+		   base_ref: (if (.base.ref | type) == "string" then .base.ref else null end),
+		   changed_files: (.changed_files | count), additions: (.additions | count), deletions: (.deletions | count)}
+	' <<< "${detail_json}" 2>/dev/null || true)"
+	if [ -z "${linked_obj}" ]; then
+		echo "UNBLOCK_JUDGE_LINKED_PR outcome=none item=${ITEM} pr=none reason=head_mismatch"
+		return 0
+	fi
+	printf '%s\n' "${linked_obj}" > "${out}"
+	echo "UNBLOCK_JUDGE_LINKED_PR outcome=found item=${ITEM} pr=${number}"
+}
+
+# 0 when ${RUNTIME_DIR}/linked_pr.json holds a checked linked PR (issue #9546).
+unblock_has_linked_pr()
+{
+	jq -e 'type == "object" and (.number | type) == "number" and .number >= 1' "${RUNTIME_DIR}/linked_pr.json" >/dev/null 2>&1
 }
 
 # Item/comments/check-runs and the optional run-log read do not include Actions
@@ -2196,6 +2286,7 @@ Still waiting for an operator; last checked ${now}.
 				> "${RUNTIME_DIR}/failing_checks.json" 2>/dev/null || echo '[]' > "${RUNTIME_DIR}/failing_checks.json"
 		fi
 	fi
+	unblock_linked_open_pr
 	unblock_evidence > "${RUNTIME_DIR}/evidence.json" 2>/dev/null || echo '{"reason": "unreadable"}' > "${RUNTIME_DIR}/evidence.json"
 	fp="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" fingerprint --stop "${ITEM_STOP}" --evidence-file "${RUNTIME_DIR}/evidence.json" | jq -r '.fingerprint // empty')"
 	if ! [[ "${fp}" =~ ^[0-9a-f]{12}$ ]]; then
@@ -2328,11 +2419,33 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		if [ "${UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED}" != "false" ]; then
 			validate_args+=(--sandbox-check)
 		fi
+		if unblock_has_linked_pr; then
+			validate_args+=(--linked-pr-file "${RUNTIME_DIR}/linked_pr.json")
+		fi
 		if unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" "${validate_args[@]}" > "${RUNTIME_DIR}/verdict.json"; then
 			validate_ok="true"
 			break
 		fi
 		validate_err="$(jq -r '.error // ""' "${RUNTIME_DIR}/verdict.json" 2>/dev/null || true)"
+		# Issue #9546: a verdict that would re-implement an issue whose work is
+		# already on an open PR gets the same single re-ask as a sandbox refusal
+		# (one re-ask per run, whatever the reason).
+		if [[ "${validate_err}" == linked_pr_unreferenced:* ]]; then
+			local linked_pr_number
+			linked_pr_number="$(printf '%s' "${validate_err#linked_pr_unreferenced:}" | tr -cd '0-9' | cut -c1-10)"
+			if [ "${sandbox_reasked}" = "true" ] || [ "${terminal}" = "true" ]; then
+				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=linked_pr_check outcome=refused_after_reask pr=${linked_pr_number}"
+				break
+			fi
+			sandbox_reasked="true"
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=linked_pr_check outcome=reasked pr=${linked_pr_number}"
+			UNBLOCK_JUDGE_REASK_NOTE="Your previous verdict was refused: open PR #${linked_pr_number} already holds this issue's work. Build on it and name #${linked_pr_number} in the instructions; do not re-implement from scratch."
+			if ! unblock_ask_model; then
+				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=linked_pr_check outcome=refused_after_reask reason=ask_failed"
+				return 0
+			fi
+			continue
+		fi
 		if [[ "${validate_err}" != sandbox_incompatible:* ]]; then
 			# A re-asked answer that fails for another reason still closes the re-ask in the log.
 			[ "${sandbox_reasked}" = "true" ] && unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=instruction_sandbox_check outcome=refused_after_reask reason=other"
@@ -2393,8 +2506,13 @@ ${invalid_marker}" >/dev/null 2>&1 || invalid_record_rc=$?
 		terminal="true"
 		jq -n --arg reason "$(jq -r '"Terminal: invalid_verdicts (" + (.invalid_verdict_streak | tostring) + " refused answers in a row on this block, " + (.item_rounds | tostring) + " round(s) on this item)."' "${RUNTIME_DIR}/decision.json")" \
 			'{verdict: "close", reason: ($reason + " The unblock judge could not produce a usable verdict, so a person must decide.")}' > "${RUNTIME_DIR}/verdict_raw.json"
+		local -a park_validate_extra=()
+		if unblock_has_linked_pr; then
+			park_validate_extra=(--linked-pr-file "${RUNTIME_DIR}/linked_pr.json")
+		fi
 		if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" validate --verdict-file "${RUNTIME_DIR}/verdict_raw.json" \
-			--decision-file "${RUNTIME_DIR}/decision.json" --repo "${REPOSITORY}" --rejection-file "${RUNTIME_DIR}/rejection.json" > "${RUNTIME_DIR}/verdict.json"; then
+			--decision-file "${RUNTIME_DIR}/decision.json" --repo "${REPOSITORY}" --rejection-file "${RUNTIME_DIR}/rejection.json" \
+			"${park_validate_extra[@]}" > "${RUNTIME_DIR}/verdict.json"; then
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=invalid_verdict_park outcome=skip reason=validate_failed"
 			[ "${invalid_record_rc}" -ne 0 ] && unblock_tg WARNING "Unblock judge could not record a refused answer on #${ITEM} (${ITEM_STOP}) and could not park it for a person (validate_failed); it will be retried, but refused answers are not counted until the write succeeds."
 			return 0
@@ -2634,6 +2752,13 @@ unblock_ask_model()
 		: > "${RUNTIME_DIR}/pr_diff.txt"
 		if [ "${ITEM_KIND}" = "pr" ]; then
 			gh api "repos/${REPOSITORY}/pulls/${ITEM}" -H "Accept: application/vnd.github.diff" 2>/dev/null | head -c 120000 > "${RUNTIME_DIR}/pr_diff.txt" || true
+		elif [ "${ITEM_KIND}" = "issue" ] && unblock_has_linked_pr; then
+			# Issue #9546: the issue's work is on its open ai/issue-<item> PR.
+			local linked_diff_pr
+			linked_diff_pr="$(jq -r '.number' "${RUNTIME_DIR}/linked_pr.json")"
+			if [[ "${linked_diff_pr}" =~ ^[1-9][0-9]*$ ]]; then
+				gh api "repos/${REPOSITORY}/pulls/${linked_diff_pr}" -H "Accept: application/vnd.github.diff" 2>/dev/null | head -c 120000 > "${RUNTIME_DIR}/pr_diff.txt" || true
+			fi
 		fi
 	fi
 	echo '{}' > "${RUNTIME_DIR}/state_slice.json"
@@ -2674,6 +2799,16 @@ unblock_ask_model()
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=skip reason=context_failed"
 		return 1
 	}
+	# Issue #9546: `linked_open_pr` only when an open ai/issue-<item> PR was
+	# found, so the context is byte-identical with the switch off or no PR.
+	if [ "${ITEM_KIND}" = "issue" ] && unblock_has_linked_pr; then
+		if jq --slurpfile linked "${RUNTIME_DIR}/linked_pr.json" '. + {linked_open_pr: $linked[0]}' \
+			"${RUNTIME_DIR}/judge_context.json" > "${RUNTIME_DIR}/judge_context.json.tmp" 2>/dev/null; then
+			mv -f "${RUNTIME_DIR}/judge_context.json.tmp" "${RUNTIME_DIR}/judge_context.json"
+		else
+			rm -f "${RUNTIME_DIR}/judge_context.json.tmp"
+		fi
+	fi
 	# Attempt journal (issue #8428, P1): only with PERSIST_JOURNAL_ENABLED=true
 	# (default false) is `attempt_journal` added, so the context is
 	# byte-identical with the switch off. Rendered from the comments already

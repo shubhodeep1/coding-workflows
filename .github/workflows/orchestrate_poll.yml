@@ -971,6 +971,7 @@ jobs:
       # Run on every cron tick, even with no active orchestrator project.
       - name: Replay failed trusted reclarify commands
         env:
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -1476,6 +1477,7 @@ jobs:
           MAX_STALL_RECOVERIES_DONE: ${{ vars.MAX_STALL_RECOVERIES_DONE || '99' }}
           STALL_JUDGE_TRIGGER_COUNT: ${{ vars.STALL_JUDGE_TRIGGER_COUNT || '2' }}
           ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}
           ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
           # Issue #8685: close a complete project's tracking issue once its follow-ups settle.
@@ -1676,6 +1678,7 @@ jobs:
           MAX_STALL_RECOVERIES_DONE: ${{ vars.MAX_STALL_RECOVERIES_DONE || '99' }}
           STALL_JUDGE_TRIGGER_COUNT: ${{ vars.STALL_JUDGE_TRIGGER_COUNT || '2' }}
           ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}
           ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
           # Issue #8685: close a complete project's tracking issue once its follow-ups settle.
@@ -1722,6 +1725,7 @@ jobs:
       - name: Release staged-support latches without active projects
         if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows' }}
         env:
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1745,6 +1749,7 @@ jobs:
       - name: Run unblock scan without active projects
         if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' }}
         env:
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1787,6 +1792,7 @@ jobs:
         # skip the worktree registry GC that follows.
         continue-on-error: true
         env:
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
