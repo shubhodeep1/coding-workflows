@@ -31,6 +31,10 @@ UNWIRED_ALLOWLIST: dict[str, str] = {
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_orchestrate_integration_ahead_by_gate.py, which collects them"
 	),
+	"tests/test_orchestrate_issueless_review_retry.py": (
+		"ci.yml is outside the file grant of the issue that added it (#9487); its cases run in CI "
+		"through tests/test_alert_levels_human_only.py, which collects them"
+	),
 	"tests/test_orchestrate_poll_conflict_sweep_outcome.py": (
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_alert_levels_human_only.py, which collects them"
@@ -79,9 +83,17 @@ UNWIRED_ALLOWLIST: dict[str, str] = {
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
 		"through tests/test_alert_levels_human_only.py, which collects them"
 	),
+	"tests/test_test_and_mark_stable_clarify_wait.py": (
+		"ci.yml is outside the file grant of the issue that added it (#9223); its cases run in CI "
+		"through tests/test_release_smoke_run_lookup.py, which collects them"
+	),
 	"tests/test_plan_run_codex_failure_diagnostic.py": (
 		"ci.yml is outside the file grant of the issue that added it (#9266); its cases run in CI "
 		"through tests/test_plan_codex_step_extraction.py, which collects them"
+	),
+	"tests/test_test_and_mark_stable_cleanup_cancels_dispatch_review.py": (
+		"ci.yml is outside the file grant of the issue that added it (#9418); its cases run in CI "
+		"through tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py, which collects them"
 	),
 	"tests/test_orchestrate_poll_cycle_summary.py": (
 		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "

@@ -1891,7 +1891,7 @@ def test_cancel_on_close_wrappers_keep_event_and_add_matching_schedule() -> None
 	for wrapper in wrappers:
 		workflow = wrapper.read_text(encoding="utf-8")
 		assert "pull_request:\n    types: [closed]" in workflow
-		assert 'schedule:\n    - cron: "*/5 * * * *"' in workflow
+		assert 'schedule:\n    - cron: "23 * * * *"' in workflow
 		assert "pull_request_target" not in workflow
 		assert "  actions: write" in workflow
 		assert "  contents: read" in workflow
