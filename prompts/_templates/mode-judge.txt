@@ -119,6 +119,9 @@ When a `new_issues[].body` limits the files the fix may change, write a
 entry, indented two spaces. Name automation paths (`.github/`, `.claude/`,
 `scripts/`, `prompts/`, `workflow-templates/`) as exact files: a directory or
 glob there is never granted.
+When a `new_issues[].body` tells the implementer to reuse an existing
+workflow job or step, its `files_touched:` block must list every repository
+script that job or step runs, as exact paths.
 `lessons_learned`: optional; omit this field or use `[]` when there is no
 grounded plan-divergence lesson to carry forward. When present,
 `lesson_kind` should be one of `out_of_plan_fix`,

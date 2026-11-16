@@ -3097,6 +3097,11 @@ if ! [[ "${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS}" =~ ^[0-9]+$ ]]; then
   STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS="3"
 fi
 
+# Judge-written issue scopes (issue #9534): add tests/**, changelog.d/* and
+# agents.d/* to a judge addition's or fix-up's files_touched block when they
+# are absent. Set to false to post the judge's list unchanged.
+JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED="${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}"
+
 # Issue-less review retry pass (issue #9487): re-dispatches, at most this
 # many times per cycle, the review of an open same-repository PR with no
 # linked pipeline issue whose newest pipeline comment is the "will retry"
@@ -10377,6 +10382,137 @@ judge_tracking_issue_closed_skip() {
   return 1
 }
 
+# add_files_touched_companions (issue #9534): add the standard companion
+# entries to a judge-written issue body's `files_touched:` block.
+#   Input:  the issue body on stdin.
+#   Output: the body on stdout; the first `files_touched:` block (found with
+#           the rules of extract_files_touched in
+#           scripts/files_touched_scope_guard.py, flush-indented lists
+#           included) gains each of PIPELINE_PLAN_GRANT_COMPANIONS
+#           (tests/**, changelog.d/*, agents.d/*) it lacks, after its last
+#           entry and at its entries' indent. Entries the judge wrote are never
+#           removed or reordered; every other line is kept byte for byte. A
+#           body without a block is printed unchanged.
+#   Status: one line on stderr, `added=<n>` or `reason=no_block`.
+#   Exit:   0 when the body was processed, non-zero when the helper failed
+#           (the caller then keeps the original body: fail open).
+#   API calls: 0.
+add_files_touched_companions() {
+	local aftc_script_dir=""
+	aftc_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || return 1
+	[ -f "${aftc_script_dir}/files_touched_scope_guard.py" ] || return 1
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+import re
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from files_touched_scope_guard import PIPELINE_PLAN_GRANT_COMPANIONS, extract_files_touched, normalize_path
+
+text = sys.stdin.read()
+entries = extract_files_touched(text)
+if entries is None:
+	sys.stdout.write(text)
+	sys.stderr.write("reason=no_block\n")
+	sys.exit(0)
+pieces = text.splitlines(keepends=True)
+lines = [piece.splitlines()[0] if piece.splitlines() else "" for piece in pieces]
+start = next(i for i, raw in enumerate(lines) if raw.strip() in {"files_touched:", "- files_touched:"})
+base_indent = len(lines[start]) - len(lines[start].lstrip(" "))
+flush_allowed = lines[start].strip() == "files_touched:"
+flush = None
+walked = []
+first_idx = last_idx = -1
+for idx in range(start + 1, len(lines)):
+	candidate = lines[idx]
+	if not candidate.strip():
+		if walked:
+			break
+		continue
+	indent = len(candidate) - len(candidate.lstrip(" "))
+	if flush is None:
+		flush = flush_allowed and indent == base_indent
+	if flush:
+		if indent != base_indent:
+			break
+	elif indent <= base_indent:
+		break
+	match = re.match(r"^\s*-\s+(.+?)\s*$", candidate)
+	if not match:
+		break
+	entry = match.group(1).strip()
+	if entry:
+		walked.append(entry)
+		if first_idx < 0:
+			first_idx = idx
+		last_idx = idx
+if walked != entries or first_idx < 0:
+	sys.exit(3)
+prefix = re.match(r"^(\s*-\s+)", lines[first_idx]).group(1)
+present = {normalize_path(entry) for entry in entries}
+missing = [companion for companion in PIPELINE_PLAN_GRANT_COMPANIONS if companion not in present]
+if not missing:
+	sys.stdout.write(text)
+	sys.stderr.write("added=0\n")
+	sys.exit(0)
+last_piece = pieces[last_idx]
+if last_piece == lines[last_idx]:
+	pieces[last_idx] = last_piece + "\n"
+	inserted = "\n".join(prefix + companion for companion in missing)
+else:
+	inserted = "".join(prefix + companion + "\n" for companion in missing)
+pieces.insert(last_idx + 1, inserted)
+sys.stdout.write("".join(pieces))
+sys.stderr.write(f"added={len(missing)}\n")
+' "${aftc_script_dir}"
+}
+
+# apply_judge_files_touched_companions <addition|fixup> <local_id> <body>
+# (issue #9534): runs add_files_touched_companions on a judge-written issue
+# body unless JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED is false. Sets
+# JUDGE_COMPANIONS_BODY to the body to post (the original on any failure) and
+# logs one line:
+#   JUDGE_SCOPE_COMPANIONS outcome=added|unchanged|skipped issue_kind=<kind>
+#     local_id=<id> added=<n> [reason=disabled|no_block|helper_failed]
+# Always returns 0. API calls: 0.
+apply_judge_files_touched_companions() {
+	local ajc_kind="${1:-}" ajc_id="${2:-}" ajc_body="${3:-}"
+	local ajc_status_file="" ajc_out="" ajc_status="" ajc_rc=0
+	JUDGE_COMPANIONS_BODY="${ajc_body}"
+	ajc_id="$(printf '%s' "${ajc_id}" | tr -c 'A-Za-z0-9_.:-' '_' | cut -c1-80)"
+	if [ "$(printf '%s' "${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" = "false" ]; then
+		echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=disabled"
+		return 0
+	fi
+	ajc_status_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/judge_companions.XXXXXX" 2>/dev/null)" || ajc_status_file=""
+	if [ -z "${ajc_status_file}" ]; then
+		echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=helper_failed"
+		return 0
+	fi
+	ajc_out="$(printf '%s' "${ajc_body}" | add_files_touched_companions 2>"${ajc_status_file}")" || ajc_rc=$?
+	ajc_status="$(tail -n 1 "${ajc_status_file}" 2>/dev/null || true)"
+	rm -f "${ajc_status_file}"
+	if [ "${ajc_rc}" -ne 0 ]; then
+		echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=helper_failed"
+		return 0
+	fi
+	case "${ajc_status}" in
+		reason=no_block)
+			echo "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=no_block"
+			;;
+		added=0)
+			echo "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=${ajc_kind} local_id=${ajc_id} added=0"
+			;;
+		added=[1-9])
+			JUDGE_COMPANIONS_BODY="${ajc_out}"
+			echo "JUDGE_SCOPE_COMPANIONS outcome=added issue_kind=${ajc_kind} local_id=${ajc_id} ${ajc_status}"
+			;;
+		*)
+			echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=helper_failed"
+			;;
+	esac
+	return 0
+}
+
 create_judge_fixup_issues_from_verdict() {
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ] && ! judge_tracking_issue_closed_skip judge-fix-up; then
         echo "Processing ${NEW_ISSUES_COUNT} judge fix-up candidate(s)..."
@@ -10412,6 +10548,9 @@ create_judge_fixup_issues_from_verdict() {
             fi
           fi
 
+          # Issue #9534: the standard companion entries, as plan grants get them.
+          apply_judge_files_touched_companions fixup "${FIX_ID}" "${FIX_BODY}"
+          FIX_BODY="${JUDGE_COMPANIONS_BODY}"
           FULL_FIX_BODY="${FIX_BODY}
 
 ---
@@ -34817,6 +34956,9 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
             fi
           fi
 
+          # Issue #9534: the standard companion entries, as plan grants get them.
+          apply_judge_files_touched_companions addition "${NEW_ID}" "${NEW_BODY}"
+          NEW_BODY="${JUDGE_COMPANIONS_BODY}"
           FULL_NEW_BODY="${NEW_BODY}
 
 ---

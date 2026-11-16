@@ -32294,5 +32294,93 @@ def test_final_merge_auto_resume_ignores_other_failed_projects() -> None:
 	assert result["latest_state"]["status"] == "failed"
 
 
+
+# Issue #9534: judge-written files_touched blocks gain the plan-grant companions.
+def _run_judge_companions(body: str, *, enabled: str | None = None, break_helper: bool = False) -> tuple[str, str]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helpers = (
+		_extract_bash_function(script, "add_files_touched_companions() {")
+		+ _extract_bash_function(script, "apply_judge_files_touched_companions() {")
+	)
+	with tempfile.TemporaryDirectory() as temp_dir:
+		temp_path = Path(temp_dir)
+		scripts_dir = temp_path / "scripts"
+		scripts_dir.mkdir()
+		if not break_helper:
+			shutil.copy(REPO_ROOT / "scripts" / "files_touched_scope_guard.py", scripts_dir / "files_touched_scope_guard.py")
+		harness = scripts_dir / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			+ helpers
+			+ '\napply_judge_files_touched_companions fixup "fx-1" "$(cat "$1")"\n'
+			+ 'printf "%s" "${JUDGE_COMPANIONS_BODY}" > "$2"\n',
+			encoding="utf-8",
+		)
+		body_path = temp_path / "body.txt"
+		body_path.write_text(body, encoding="utf-8")
+		out_path = temp_path / "out.txt"
+		env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "RUNTIME_DIR": str(temp_path)}
+		if enabled is not None:
+			env["JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED"] = enabled
+		result = subprocess.run(
+			["bash", str(harness), str(body_path), str(out_path)],
+			env=env, capture_output=True, text=True, timeout=60, check=True,
+		)
+		return out_path.read_text(encoding="utf-8"), result.stdout
+
+
+def test_judge_companions_added_at_block_indent_without_reordering() -> None:
+	body = "Fix it.\n\nfiles_touched:\n  - scripts/b.sh\n  - scripts/a.sh\n\nMore text."
+	out, log = _run_judge_companions(body)
+	assert out == (
+		"Fix it.\n\nfiles_touched:\n  - scripts/b.sh\n  - scripts/a.sh\n"
+		"  - tests/**\n  - changelog.d/*\n  - agents.d/*\n\nMore text."
+	)
+	assert "JUDGE_SCOPE_COMPANIONS outcome=added issue_kind=fixup local_id=fx-1 added=3" in log
+
+
+def test_judge_companions_only_adds_missing_entries_and_flush_lists() -> None:
+	out, log = _run_judge_companions("files_touched:\n  - tests/**\n  - src/a.py")
+	assert out == "files_touched:\n  - tests/**\n  - src/a.py\n  - changelog.d/*\n  - agents.d/*"
+	assert "added=2" in log
+	out, _ = _run_judge_companions("Scope:\nfiles_touched:\n- src/a.py\n- src/b.py\nTail")
+	assert out == "Scope:\nfiles_touched:\n- src/a.py\n- src/b.py\n- tests/**\n- changelog.d/*\n- agents.d/*\nTail"
+	full = "files_touched:\n  - ./tests/**\n  - changelog.d/*\n  - agents.d/*\n"
+	out, log = _run_judge_companions(full)
+	# The harness reads the body with $(cat), which drops the trailing newline.
+	assert out == full.rstrip("\n")
+	assert "outcome=unchanged" in log and "added=0" in log
+
+
+def test_judge_companions_no_block_disabled_and_helper_failure_keep_body() -> None:
+	out, log = _run_judge_companions("No scope list here.")
+	assert out == "No scope list here."
+	assert "outcome=unchanged issue_kind=fixup local_id=fx-1 added=0 reason=no_block" in log
+	body = "files_touched:\n  - src/a.py"
+	out, log = _run_judge_companions(body, enabled="false")
+	assert out == body and "outcome=skipped issue_kind=fixup local_id=fx-1 added=0 reason=disabled" in log
+	out, log = _run_judge_companions(body, break_helper=True)
+	assert out == body and "outcome=skipped issue_kind=fixup local_id=fx-1 added=0 reason=helper_failed" in log
+
+
+def test_judge_companions_wired_into_both_judge_create_sites_only() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED="${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}"' in script
+	fixup = _extract_bash_function(script, "create_judge_fixup_issues_from_verdict() {")
+	call = 'apply_judge_files_touched_companions fixup "${FIX_ID}" "${FIX_BODY}"'
+	assert call in fixup and fixup.index(call) < fixup.index('FULL_FIX_BODY="${FIX_BODY}')
+	assert 'FIX_BODY="${JUDGE_COMPANIONS_BODY}"' in fixup
+	call = 'apply_judge_files_touched_companions addition "${NEW_ID}" "${NEW_BODY}"'
+	assert script.count(call) == 1
+	assert script.index(call) < script.index('FULL_NEW_BODY="${NEW_BODY}')
+	# The review-blocked reissue site is a different judge and stays unchanged.
+	reissue = script.index('FULL_NEW_BODY="${NEW_ISSUE_BODY}')
+	assert "apply_judge_files_touched_companions" not in script[reissue - 600:reissue]
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert workflow.count(
+		"JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED: ${{ vars.JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED || 'true' }}"
+	) == workflow.count("STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{") == 3
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

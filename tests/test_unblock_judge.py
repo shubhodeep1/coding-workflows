@@ -5738,3 +5738,92 @@ def test_pr_check_green_ignores_a_cached_verdict_for_another_item(tmp_path: Path
 	result, _, calls = _green_judge(tmp_path, ISSUE, gate)
 	assert f"hold=pr_check_green ref={GREEN_REF} outcome=holding" in result.stdout, result.stdout
 	assert len(calls) == 1 and "--dry-run" in calls[0]
+
+
+# Issue #9534: a scope-only planning block is routed to override_guard.
+PLANNING_SCOPE_HEADER = "🚨 **files_touched scope guard rejected this planning run.**"
+
+
+def _planning_scope_comment(marker: str | None, login: str = BOT) -> dict:
+	lines = ["Planning blocked: human input required.", "", "Reason: needed files are outside files_touched", "",
+		"Run: https://github.com/acme/app/actions/runs/9", "", PLANNING_SCOPE_HEADER]
+	if marker is not None:
+		lines.append(marker)
+	return _comment("\n".join(lines) + "\n", login)
+
+
+def test_planning_scope_header_is_a_documented_guard_rejection_header() -> None:
+	assert PLANNING_SCOPE_HEADER in ledger.GUARD_REJECTION_HEADERS
+	# The implement headers keep their order and text.
+	assert ledger.GUARD_REJECTION_HEADERS[:4] == (
+		"🚨 **files_touched scope guard rejected this implementation run.**",
+		"🚨 **Issue scope-lock rejected this implementation run.**",
+		"🚨 **Automation-path grant guard rejected this implementation run.**",
+		"🚨 **Destructive-commit guard rejected this implementation run.**",
+	)
+
+
+def test_planning_scope_block_resolves_to_scope_blocked_and_offers_override_guard() -> None:
+	assert ledger.stop_for_labels([{"name": "ai:blocked"}, {"name": "ai:scope-blocked"}], False) == "scope-blocked"
+	comments = [_planning_scope_comment(_rejection_marker(["tests/test_x.py", "scripts/x.sh"], run="43654804149"))]
+	rejection = ledger.latest_rejection(comments, BOT, 7, "scope-blocked")
+	assert rejection["status"] == "ok" and rejection["paths"] == ["tests/test_x.py", "scripts/x.sh"]
+	decision = ledger.decide(7, "scope-blocked", FP, [], None, NOW, rejection=rejection)
+	assert "override_guard" in decision["allowed"]
+	# A scripts/ path is still refused in coding-workflows; the exact set is required.
+	with pytest.raises(ledger.UsageError):
+		ledger.validate({"verdict": "override_guard", "reason": "r", "paths": ["tests/test_x.py", "scripts/x.sh"]},
+			decision, "shubhodeep1/coding-workflows", rejection)
+	tests_only = [_planning_scope_comment(_rejection_marker(["tests/test_x.py"]))]
+	rejection = ledger.latest_rejection(tests_only, BOT, 7, "scope-blocked")
+	decision = ledger.decide(7, "scope-blocked", FP, [], None, NOW, rejection=rejection)
+	verdict = ledger.validate({"verdict": "override_guard", "reason": "r", "paths": ["tests/test_x.py"]},
+		decision, "shubhodeep1/coding-workflows", rejection)
+	assert verdict["paths"] == ["tests/test_x.py"]
+
+
+def test_planning_scope_header_without_or_with_a_broken_marker_never_offers_override_guard() -> None:
+	missing = ledger.latest_rejection([_planning_scope_comment(None)], BOT, 7, "scope-blocked")
+	assert missing == {"status": "none", "reason": "missing"}
+	broken = _rejection_marker(["tests/test_x.py"]).replace("truncated=false", "truncated=maybe")
+	malformed = ledger.latest_rejection([_planning_scope_comment(broken)], BOT, 7, "scope-blocked")
+	assert malformed == {"status": "none", "reason": "malformed"}
+	forged = ledger.latest_rejection([_planning_scope_comment(_rejection_marker(["tests/a.py"]), "mallory")], BOT, 7, "scope-blocked")
+	assert forged["reason"] == "untrusted"
+	for rejection in (missing, malformed, forged):
+		assert "override_guard" not in ledger.decide(7, "scope-blocked", FP, [], None, NOW, rejection=rejection)["allowed"]
+
+
+def test_scope_override_without_plan_reclarifies_and_clears_both_block_labels() -> None:
+	labels = ["ai:blocked", "ai:scope-blocked"]
+	ops = actions.plan(_verdict("override_guard", paths=["tests/test_x.py"]), _ctx(stop="scope-blocked", labels=labels))
+	assert ops == [
+		{"op": "edit_files_touched", "issue": 7, "paths": ["tests/test_x.py"]},
+		{"op": "remove_label", "issue": 7, "label": "ai:blocked"},
+		{"op": "comment", "issue": 7, "body": "/reclarify"},
+		{"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"},
+	]
+	with_plan = actions.plan(_verdict("override_guard", paths=["tests/test_x.py"]), _ctx(stop="scope-blocked", labels=labels, has_plan=True))
+	assert with_plan[0]["op"] == "edit_files_touched"
+	assert {"op": "remove_label", "issue": 7, "label": "ai:blocked"} in with_plan
+	assert {"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"} in with_plan
+	assert _bodies(with_plan) == ["/approved"] and with_plan[-1]["body"] == "/approved"
+
+
+def test_reset_ops_clears_ai_blocked_only_for_scope_blocked() -> None:
+	labels = ["ai:blocked", "ai:scope-blocked"]
+	no_plan = actions.reset_ops(_ctx(stop="scope-blocked", labels=labels), "granted")
+	assert no_plan == [
+		{"op": "remove_label", "issue": 7, "label": "ai:blocked"},
+		{"op": "comment", "issue": 7, "body": "/reclarify"},
+		{"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"},
+	]
+	planned = actions.reset_ops(_ctx(stop="scope-blocked", labels=labels, has_plan=True), "granted")
+	assert planned[-2:] == [{"op": "remove_label", "issue": 7, "label": "ai:blocked"}, {"op": "comment", "issue": 7, "body": "/approved"}]
+	# Without ai:blocked, or for another guard stop, nothing extra is removed.
+	assert actions.reset_ops(_ctx(stop="scope-blocked"), "x") == [
+		{"op": "comment", "issue": 7, "body": "/reclarify"},
+		{"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"},
+	]
+	destructive = actions.reset_ops(_ctx(stop="destructive-blocked", labels=["ai:blocked", "ai:destructive-blocked"]), "x")
+	assert {"op": "remove_label", "issue": 7, "label": "ai:blocked"} not in destructive

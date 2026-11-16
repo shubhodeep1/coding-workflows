@@ -403,3 +403,15 @@ Copy this block when adding a new entry:
   - `gh run list -R shubhodeep1/tele-funtoken-msg-scoring --workflow ai-cs-investigate.yml --created ">=$(date -u -d '30 days ago' +%F)" --json databaseId --jq length` prints `0` (no `cs_investigate.yml` run in the last 30 days), for every caller repo.
   - `tests/test_cs_bridge_query.py` (and its `ci.yml` entry) is removed in the same PR.
 - **Owner:** @shubhodeep1
+
+### `scripts/plan_scope_block_route.sh`
+
+- **Introduced in:** PR for #9534 (2026-11-16), Refs #9503
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It routes a scope-only planning block to the unblock judge's `override_guard` (the "Route planning scope block" step of `.github/workflows/plan.yml`) and releases the planning `ai:scope-blocked` latch on a human `/answer` (the "Validate planning phase label" step), behind `PLAN_SCOPE_BLOCK_ROUTING_ENABLED`.
+- **Removal preflight checks:**
+  - `rg -n "plan_scope_block_route" .github scripts` returns only the lines being removed in the same PR.
+  - No `PLAN_SCOPE_BLOCK outcome=routed` or `outcome=released` line in plan runs from the last 30 days.
+  - No open issue carries both `ai:blocked` and `ai:scope-blocked` with a planning-run marker as its newest guard rejection: `gh issue list -R shubhodeep1/coding-workflows -l ai:blocked -l ai:scope-blocked -s open --json number --jq length` prints `0`, or every listed issue's newest guard rejection is an implement one.
+  - `tests/test_plan_scope_block_route.py` (and its `ci.yml` entry) is removed in the same PR.
+- **Owner:** @shubhodeep1

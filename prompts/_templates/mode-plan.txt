@@ -141,6 +141,13 @@ Rules:
   collections + contracts + indexes, broad cross-cutting refactors, or one
   feature that needs a new write path AND a new read path AND a new
   background worker.
+- Scope-only blocker: when the only blocker is that files the plan needs
+  are outside the issue's `files_touched:` list, emit the
+  `BLOCKED: <short reason>` line, then one `SCOPE_MISSING: <repo-relative path>`
+  line per missing file. Each line names one exact file path, never a
+  directory or glob, starts at the beginning of a line outside any code
+  fence, and there are at most 20 of them. Never emit `SCOPE_MISSING:` for
+  any other blocker.
 - Boil the Lake forcing question: if shipping the complete implementation
   costs ≤30 LOC more and ≤10 minutes more than the shortcut, and neither
   option adds a new dependency nor a new external interface, pick the

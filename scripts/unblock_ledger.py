@@ -277,6 +277,11 @@ GUARD_REJECTION_HEADERS = (
 	"🚨 **Issue scope-lock rejected this implementation run.**",
 	"🚨 **Automation-path grant guard rejected this implementation run.**",
 	"🚨 **Destructive-commit guard rejected this implementation run.**",
+	# A scope-only planning block routed to the unblock judge (issue #9534,
+	# scripts/plan_scope_block_route.sh). Documentary: that comment opens with
+	# "Planning blocked: human input required." and ends with this header and
+	# its marker, so the first-line checks below never see it.
+	"🚨 **files_touched scope guard rejected this planning run.**",
 )
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
 # Commands the implement sandbox (scripts/codex_isolated_exec.sh: no network,

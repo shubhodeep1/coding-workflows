@@ -818,9 +818,20 @@ def reset_ops(ctx: dict, note: str) -> list[dict]:
 		return ops
 	present = label if label in ctx["labels"] else ""
 	if stop in GUARD_STOPS or stop == "implement-diagnose-failed":
+		# Issue #9534: a scope-only planning block carries ai:scope-blocked and
+		# ai:blocked together, and neither /reclarify nor /approved removes
+		# ai:blocked, so the reset clears it too; otherwise the item would be
+		# judged again as stop=blocked after the grant.
+		extra_blocked = (
+			[{"op": "remove_label", "issue": item, "label": "ai:blocked"}]
+			if stop == "scope-blocked" and "ai:blocked" in ctx["labels"] else []
+		)
+		# The label goes before the resume command, so the run that command
+		# starts never sees the stale ai:blocked.
 		if ctx["has_plan"]:
-			return _approve(item, ctx["labels"], present)
-		ops = [{"op": "comment", "issue": item, "body": "/reclarify"}]
+			approve_ops = _approve(item, ctx["labels"], present)
+			return approve_ops[:-1] + extra_blocked + approve_ops[-1:]
+		ops = extra_blocked + [{"op": "comment", "issue": item, "body": "/reclarify"}]
 		return ops + ([{"op": "remove_label", "issue": item, "label": present}] if present else [])
 	if stop == "blocked":
 		if ctx["has_plan"]:
@@ -1094,7 +1105,13 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 	elif name == "override_guard":
 		if ctx["stop"] == "scope-blocked":
 			ops.append({"op": "edit_files_touched", "issue": item, "paths": verdict["paths"]})
-		ops += _approve(item, ctx["labels"], _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else "")
+			# Issue #9534: through the guard-stop reset, so a scope block raised
+			# at planning (no plan yet) resumes with /reclarify, not /approved.
+			# With a plan this is the same _approve as before, plus clearing
+			# the ai:blocked a planning scope block carries.
+			ops += reset_ops(ctx, verdict.get("reason", ""))
+		else:
+			ops += _approve(item, ctx["labels"], _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else "")
 	elif name == "reissue":
 		title = f"Re-issue of #{item}: {ctx['title']}"[:240]
 		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
