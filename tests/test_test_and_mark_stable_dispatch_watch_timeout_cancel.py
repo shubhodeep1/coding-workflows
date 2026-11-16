@@ -214,6 +214,9 @@ def test_unrecognised_switch_value_skips_the_cancel_and_warns() -> None:
 			assert not [c for c in calls if "/cancel" in c], (name, switch, calls)
 			assert "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false" in out, (name, out)
 			assert switch not in out.split("::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT", 1)[1].split("\n", 1)[0]
+			# The skip line must not claim a value of false the operator never set.
+			assert "Cancel of timed-out child run #4242 skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT unrecognised)" in out, (name, out)
+			assert "DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false" not in out, (name, switch, out)
 
 
 def test_true_or_empty_switch_still_cancels() -> None:
