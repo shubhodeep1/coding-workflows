@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Plan: put run 43708007145 in canary B\n\nPlanning ref: `orchestrator/project-9550` at `305bc455cbf0352eeb7d462f9ca3b8aaf91d648e` (integration branch mismatch: false).\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Acceptance\nACCEPTANCE: check lint\nACCEPTANCE: post-merge none: this smoke canary data file has no post-merge workflow consumer\n\n## Functions or modules to implement\n- None. This is a data-file edit.\n- Replace line 2 of `tests/e2e_smoke_canary_b.txt`, which reads `decompose-run: 41445772297`, with `decompose-run: 43708007145`.\n- Keep line 1 as `status: ok`.\n- End the file with exactly one trailing newline and no extra lines.\n- Final bytes: `status: ok\\ndecompose-run: 43708007145\\n`.\n\n## Data structures affected\n- None.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file with the exact two-line content\n- Chosen: write the full two-line content, ending in a newline, so the bytes match the acceptance criteria exactly.\n- Alternatives considered: change only the run ID in line 2 with a regex substitution.\n- Why: writing the whole file avoids a silent regex miss (\u00a74) and makes sure the trailing newline is correct.\n\n## Security considerations\n- No trust boundary, endpoint, input handling or secret is touched. It is a static text fixture.\n- Abuse cases: none.\n\n## Potential risks or edge cases\n- Open smoke PRs #9531, #9536, #9537, #9539 and #9540 touch the same file for earlier runs. The issue says to ignore them, so the edit targets run 43708007145 only.\n- `tests/test_review_conflict_resolve_smoke_deterministic.py` mentions this file only in a comment (line 80) and does not check its contents.\n- The PR must target `orchestrator/project-9550`.\n\n## Testing considerations\n- Check that `git diff --stat` shows exactly one file with one line changed.\n- Check the bytes: `cat -A` should show `status: ok$` and `decompose-run: 43708007145$`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue names one file and its exact final content. Nothing beyond that edit is needed or allowed (\"No other file is changed\").\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[{\"name\":\"lint\"}],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this smoke canary data file has no post-merge workflow consumer\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "297fb485c45ab3184c243cb77794a780896351c0b7e70a1a521f0bf9b798fc59",
+  "lineage": {
+    "issue_number": 9613,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43960830951",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43960830951",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9613"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261116221411_733a4fda22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9613,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43960830951"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9613",
+  "timestamps": {
+    "created_at": "2026-11-16T22:14:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
