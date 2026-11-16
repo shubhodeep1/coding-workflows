@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stable_e2e_step_wait_review.sh:121 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: In `review_phase_deadline_extension_allowed`, line 121 (`if [ -n \"${REVIEW_RUNNER_WAIT_RUN_ID:-}\" ] && ! [[ \"$ext_run_id\" =~ ^[0-9]+$ ]]; then return 0; fi`) keeps the deadline extended for any number of consecutive empty runs lookups, because `RUN_ID=\"unknown\"` (lines 521-523) never closes the stretch (lines 870-873 need a numeric `RUN_ID`); only the ceiling check at line 115 stops it.\n  WHY: An empty lookup that lasts (for example a GitHub API outage that is not a rate limit, or the run dropping out of the per_page=100 / leg-(b) filter) used to exit at once with `status=timeout`; now it polls for up to REVIEW_TIMEOUT (60 minutes by default) and then exits through lines 923-929 with a false `status=no_review_triggered` (\"No review workflow run ... ever appeared\"), which goes against the #9480 Non-goals; the test `test_phase4_runner_wait_survives_an_empty_runs_lookup_past_base_deadline` covers only one empty poll. The reviewer marked this NIT, recorded here as low.\n- scripts/stable_e2e_step_wait_review.sh:354 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Possible regression in runner-wait stretch handling: the fix relies on REVIEW_RUNNER_WAIT_RUN_ID staying set.\n  WHY: If the variable is cleared unexpectedly, or the polling loop does not keep the stretch across transient failures, the deadline-ceiling branch error reporting (lines 364-374) might be skipped or report misleading errors; the reviewer called the logic complex and prone to future regressions. The reviewer gave no severity; low is a placeholder.\n- scripts/stable_e2e_step_wait_review.sh:854 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The inactivity timer (LAST_ACTIVITY and IDLE) is reset only when review_waiting_for_runner returns 0 (line 858), so a poll that cannot read the jobs JSON during an open runner-wait stretch does not reset it.\n  WHY: A long run of failed poll reads during a runner wait can let the inactivity timer expire and raise a \"Review phase stalled\" error even when the run was really waiting for a runner and the failures were transient; the reviewer says this is the behaviour the plan intended. The reviewer gave no severity; low is a placeholder.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add changelog.d/<issue>-e2e-review-runner-wait.md (<!-- changelog: fixed -->), per \u00a720.\"\n  expected_change_site: changelog.d/9480-e2e-review-runner-wait.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The changelog fragment file exists in the PR (per PR CHANGED FILES) but it is NOT in the latest commit's changed files (per last_run_changed_files.txt), suggesting it might have been removed or lost in the latest autofix run, causing test failures (`tests/test_changelog_fragment_contract.py`). (Reviewer severity: BLOCKER.)\n- requirement: \"Add tests that verify the runner wait logic.\"\n  expected_change_site: tests/test_test_and_mark_stable_review_blocked_budget.py\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: While tests were added, the latest pre-push gate reports failures in `test_ai_label_precreation_contract.py` and `test_review_autofix_provider_outage_contract.py` which are attributed to this change, suggesting side effects or dependencies that are not fully accounted for. (Reviewer severity: BLOCKER.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stable_e2e_step_wait_review.sh:Line 121 in `review_phase_deadline_extension_allowed` (interacts with lines 521-523, 870-873, 923-929) | severity=NIT | confidence=3\n  PROBLEM: Nothing limits how many consecutive empty runs lookups keep the deadline extended. `RUN_ID` stays \"unknown\", the elif at line 871 needs a numeric `RUN_ID`, and line 121 keeps returning 0; only the ceiling check at line 115 stops the loop.\n  WHY: An empty lookup after the base deadline used to exit with `status=timeout`. Now, after REVIEW_TIMEOUT (60 minutes by default) of empty polls, the inactivity branch at line 923 exits with a false `status=no_review_triggered` that names the wrong cause, which goes against #9480 Non-goals. The test covers only one empty poll. Hardening suggestion: add an `REVIEW_RUNNER_WAIT_EMPTY_POLLS` counter and let line 121 return 0 only while it is at most 2 (estimated 5 lines). HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stable_e2e_step_wait_review.sh:354 | confidence=2\n  PROBLEM: Potential regression in runner-wait stretch handling.\n  WHY: The fix relies on REVIEW_RUNNER_WAIT_RUN_ID being set; if it is cleared unexpectedly or the stretch is not kept across transient failures, the deadline-ceiling branch error reporting (lines 364-374) might be skipped or misleading.\n- scripts/stable_e2e_step_wait_review.sh:854 | confidence=3\n  PROBLEM: Inactivity timer reset only on confirmed polls.\n  WHY: LAST_ACTIVITY/IDLE are reset only when review_waiting_for_runner returns 0 (line 858); long runs of failed jobs-JSON reads during a runner wait can trigger a \"Review phase stalled\" error, even though the plan intended this behaviour.\n- TASK_GAP\n  Requirement: \"Add changelog.d/<issue>-e2e-review-runner-wait.md (<!-- changelog: fixed -->), per \u00a720.\"\n  Expected change site: changelog.d/9480-e2e-review-runner-wait.md\n  Evidence of absence: Fragment is in PR CHANGED FILES but NOT in last_run_changed_files.txt; it may have been removed or lost in the latest autofix run, causing `tests/test_changelog_fragment_contract.py` failures.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"Add tests that verify the runner wait logic.\"\n  Expected change site: tests/test_test_and_mark_stable_review_blocked_budget.py\n  Evidence of absence: The pre-push gate reports failures in `test_ai_label_precreation_contract.py` and `test_review_autofix_provider_outage_contract.py` that are attributed to this change, suggesting unaccounted side effects or dependencies.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4c05978cc4c00301012a715352cb1c410416e36cbb283467d1a96863f2786513",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9501,
+    "run_id": "43832815265",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43832815265",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116141502_3ad6d1394e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9501,
+    "run_id": "43832815265"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-16T14:15:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
