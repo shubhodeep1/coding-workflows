@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the assertion in tests/test_prepush_affected_tests.py to accept both CLAUDE_PARITY_PR_BASE_SHA assignment shapes, while retaining the check that release-gate workflows never set the variable.\n  expected_change_site: tests/test_prepush_affected_tests.py::test_ci_runs_this_suite_and_sets_the_parity_base_only_from_the_pr_event\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no hunk for tests/test_prepush_affected_tests.py, and the file is not listed in the PR changed files summary. Severity disagreement: gemini=BLOCKER, luna=NIT. Luna notes the assertion on the current checkout already accepts both shapes. minimax and glm reported no gap, saying the guard already passes on base.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: Update the assertion in tests/test_prepush_affected_tests.py to accept both CLAUDE_PARITY_PR_BASE_SHA assignment shapes (with an optional || env.CI_FINAL_PR_BASE_SHA), while retaining the check that release-gate workflows never set the variable.\n  Expected change site: tests/test_prepush_affected_tests.py (within test_ci_runs_this_suite_and_sets_the_parity_base_only_from_the_pr_event)\n  Evidence of absence: The PR diff contains no modifications for tests/test_prepush_affected_tests.py, and the file is not listed in the PR changed files summary. The parity-base count assertion failing at runtime (Failure 2 in the triage) remains unaddressed.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Update the assertion in tests/test_prepush_affected_tests.py to accept both CLAUDE_PARITY_PR_BASE_SHA assignment shapes,\" while retaining the check that release-gate workflows never set the variable.\n  Expected change site: tests/test_prepush_affected_tests.py::test_ci_runs_this_suite_and_sets_the_parity_base_only_from_the_pr_event\n  Evidence of absence: The PR diff contains no hunk for tests/test_prepush_affected_tests.py. The assertion on the current checkout already accepts both assignment shapes and expects six fallback assignments, but that requested deliverable is not included in this PR's diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2f5019621323e708d906fdd309540015d6def3ca84a801af6491afa07ad433c4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9601,
+    "run_id": "43919641584",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43919641584",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116203149_03f217494e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9601,
+    "run_id": "43919641584"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T20:31:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
