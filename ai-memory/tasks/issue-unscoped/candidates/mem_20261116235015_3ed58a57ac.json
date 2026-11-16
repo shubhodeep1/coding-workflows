@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding): scripts/orchestrate_poll_process.sh | `_emit_actions_runs_source_line`, the `self_run=` computation (lines ~18014-18020) | HARDENING_RISK_SCORE: 1\n  PROBLEM: `jq -e 'any(...)'` exits non-zero both when the result is false and when the blob can't be parsed, so a malformed blob is reported as `self_run=absent` while the counts on the same line correctly degrade to `?`.\n  WHY: A reader may conclude the poller's run is missing from a valid listing when the listing couldn't be parsed at all. Suggested fix: probe parseability first and emit `unknown` for an unparseable blob (~6 lines).\n- HARDENING_SUGGESTION (not a finding): scripts/orchestrate_poll_process.sh | `_ensure_actions_runs_blob_has_self_run`, the self-run presence check (lines ~18272-18278) | HARDENING_RISK_SCORE: 2\n  PROBLEM: The same `jq -e` mix-up sits on the decision path, so an unparseable blob reads as \"absent\". That triggers a forced live refetch (3 REST reads). If the refetch also gives a non-live source, it sets `STALL_ACTIVE_SET_UNVERIFIABLE=true` and holds escalation for the tick.\n  WHY: The hold would be justified by a parse failure rather than a confirmed absence. Suggested fix: treat an unparseable blob as \"cannot tell\" (fail open), emit `ACTIONS_RUNS_SELF_CHECK result=skipped ... reason=blob_unparseable` and skip the refetch (~6 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0d1672aab3130e1ee555faddae62641ad60652edc742ee72dda48d9c776247dd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9564,
+    "run_id": "43952334663",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43952334663",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116235015_3ed58a57ac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9564,
+    "run_id": "43952334663"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-16T23:50:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
