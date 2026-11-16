@@ -14,7 +14,10 @@ review_head_gate_valid_repo()
 review_head_gate_post_status()
 {
 	local status_repo="${1:-}" status_sha="${2:-}" status_state="${3:-}" status_description="${4:-}"
-	if [ "${REVIEW_HEAD_GATE_STATUS_ENABLED}" = "false" ]; then
+	# Case-insensitive, like review_head_gate_updater_exempt and the updater
+	# verify job: "False"/"FALSE" must not post a pending that no success replaces.
+	local status_flag="${REVIEW_HEAD_GATE_STATUS_ENABLED:-true}"
+	if [ "${status_flag,,}" = "false" ]; then
 		echo "REVIEW_HEAD_GATE mode=status pr=${PR_NUMBER:-?} head=${status_sha:-?} state=${status_state:-?} outcome=disabled"
 		return 0
 	fi

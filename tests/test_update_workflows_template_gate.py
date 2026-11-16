@@ -566,6 +566,8 @@ def test_merge_blocked_step_fails_the_job_after_mark_verify_failure() -> None:
 	# #9483 fix 1 removed the read:org dependency; do not send operators there.
 	assert "read:org" not in run
 	assert "curl -sS --fail -X POST" in run
+	# A hung Telegram endpoint must not hold the failure until the job timeout.
+	assert "--max-time 30" in run
 	assert step["env"]["ALERT_MSG_LEVEL"].endswith("|| vars.ALERT_MSG_LEVEL || 'WARNING' }}")
 	assert run.rstrip().endswith("exit 1")
 	# The verify status is never touched: a human can still merge the PR.

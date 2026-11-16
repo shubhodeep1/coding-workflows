@@ -115,6 +115,9 @@ def test_changed_event_head_marks_both_heads_pending(tmp_path: Path) -> None:
 @pytest.mark.parametrize("overrides,expected", [
 	({"GATE_HEAD_SHA": "invalid", "PR_EVENT_HEAD_SHA": "invalid", "GATE_AUTO_MERGE_ENABLED": "false"}, 0),
 	({"REVIEW_HEAD_GATE_STATUS_ENABLED": "false", "GATE_AUTO_MERGE_ENABLED": "false"}, 0),
+	# Read case-insensitively, like the updater exemption (#9483).
+	({"REVIEW_HEAD_GATE_STATUS_ENABLED": "FALSE", "GATE_AUTO_MERGE_ENABLED": "false"}, 0),
+	({"REVIEW_HEAD_GATE_STATUS_ENABLED": "False", "GATE_AUTO_MERGE_ENABLED": "false"}, 0),
 	({"FAKE_FAIL": "status", "GATE_AUTO_MERGE_ENABLED": "false"}, 1),
 	({"REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED": "false"}, 1),
 ])

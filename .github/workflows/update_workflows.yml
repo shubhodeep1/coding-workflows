@@ -2652,6 +2652,7 @@ jobs:
           Run: ${SYNC_RUN_URL}"
                 # --fail: an HTTP 4xx/5xx reply reaches the warning below.
                 curl -sS --fail -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+                  --max-time 30 \
                   -d "chat_id=${TG_ADMIN_CHAT_ID}" \
                   -d "disable_web_page_preview=true" \
                   --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
