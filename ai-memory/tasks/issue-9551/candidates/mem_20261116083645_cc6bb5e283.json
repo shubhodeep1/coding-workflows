@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-9550` at `e62d40a6446b81ac1368b75296972037f4f82b1e`. The integration branch matches, so the plan is not blocked.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check CI\nACCEPTANCE: post-merge none: this is a smoke-test canary file edit with no runtime behaviour, so no workflow needs to pass after merge\n\n## Functions or modules to implement\n- No code changes. Edit one text file.\n- The file currently contains exactly two lines: `status: ok` and `decompose-run: 41445772297`, and it ends with a newline.\n- Replace line 2 with `decompose-run: 43708007145`.\n- Keep line 1 as `status: ok` and keep the single trailing newline. The result is `status: ok\\ndecompose-run: 43708007145\\n`.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Edit only the canary file\n- Chosen: change only `tests/e2e_smoke_canary.txt`.\n- Alternatives considered: also editing the \"Expected files\" test modules the decomposition suggested.\n- Why: those tests only mention the file's path. None of them refers to `decompose-run` or to the old run ID (checked with grep). The issue also requires that no other file change.\n\n## Security considerations\n- No trust boundary, endpoint or external input is involved.\n- The file holds no secrets.\n- The PR body must say `Refs #9550`, not an auto-close keyword, because #9550 is the tracking issue.\n\n## Risks and edge cases\n- Conflict between the issue and the codebase: the \"Expected files\" list names 11 test modules, but the issue's discipline section says to edit `tests/e2e_smoke_canary.txt` only. The issue's rule wins.\n- Do not touch `tests/e2e_smoke_canary_b.txt`, which belongs to the sibling issue.\n- Make sure the file keeps its trailing newline and does not gain an extra blank line.\n\n## Testing considerations\n- `head -n 1 tests/e2e_smoke_canary.txt` must print `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` must print `decompose-run: 43708007145`.\n- `git diff --stat` must show only this one file.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a one-line change to one existing file. No helper or pattern is relevant, and widening the scope would break the acceptance criterion that no other file changes.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "aa3601abeb9476a51fd67f08b5a13e46ad960a9917c7ef16b9a122d4b908e6e9",
+  "lineage": {
+    "issue_number": 9551,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43807156020",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43807156020",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9551"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261116083645_cc6bb5e283",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9551,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43807156020"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9551",
+  "timestamps": {
+    "created_at": "2026-11-16T08:36:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
