@@ -64,6 +64,8 @@ REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=0
 # runner, cleared when it starts, completes or is replaced.
 REVIEW_RUNNER_WAIT_SINCE=""
 REVIEW_RUNNER_WAIT_RUN_ID=""
+# Consecutive polls whose runs lookup came back empty (#9480).
+REVIEW_RUNNER_WAIT_EMPTY_POLLS=0
 if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] \
     && [[ "${E2E_JOB_TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]] \
     && [[ "${EDITOR_RETRY_BUDGET_MINUTES:-}" =~ ^[0-9]+$ ]] \
@@ -117,8 +119,10 @@ review_phase_deadline_extension_allowed() {
   if [ "${REVIEW_PHASE_HANDOFF_PENDING:-0}" = "1" ]; then return 0; fi
   # An empty runs lookup during an open runner-wait stretch says nothing
   # about the run (#9480); keep the stretch alive, still bounded by the
-  # ceiling check above and the inactivity rules.
-  if [ -n "${REVIEW_RUNNER_WAIT_RUN_ID:-}" ] && ! [[ "$ext_run_id" =~ ^[0-9]+$ ]]; then return 0; fi
+  # ceiling check above and the inactivity rules. At most 2 empty
+  # lookups in a row: a lasting one falls back to status=timeout.
+  if [ -n "${REVIEW_RUNNER_WAIT_RUN_ID:-}" ] && ! [[ "$ext_run_id" =~ ^[0-9]+$ ]] \
+      && [ "${REVIEW_RUNNER_WAIT_EMPTY_POLLS:-0}" -le 2 ]; then return 0; fi
   [[ "$ext_run_id" =~ ^[0-9]+$ ]] || return 1
   case ",${BAIT_UNCOVERED_RUN_IDS:-}," in
     *",${ext_run_id},"*) return 1 ;;
@@ -858,6 +862,11 @@ while true; do
   # a runner is never inactivity. The wall clock stays bounded by the
   # #8004 deadline ceiling checked at the top of the loop.
   REVIEW_RUNNER_WAIT_POLL_CONFIRMED=0
+  if [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then
+    REVIEW_RUNNER_WAIT_EMPTY_POLLS=0
+  else
+    REVIEW_RUNNER_WAIT_EMPTY_POLLS=$((REVIEW_RUNNER_WAIT_EMPTY_POLLS + 1))
+  fi
   if review_waiting_for_runner; then
     REVIEW_RUNNER_WAIT_POLL_CONFIRMED=1
     if [ "${REVIEW_RUNNER_WAIT_RUN_ID}" != "${RUN_ID}" ]; then

@@ -1068,6 +1068,24 @@ def test_phase4_runner_wait_survives_an_empty_runs_lookup_past_base_deadline() -
 	assert "(runner wait unconfirmed this poll, " in result.stdout
 
 
+def test_phase4_runner_wait_lasting_empty_runs_lookup_falls_back_to_timeout() -> None:
+	# Pending past the base deadline (start+600), then the runs lookup stays
+	# empty (polls at start+725, 785, 845). Two empty polls keep the
+	# extension; the third refuses it, far below the ceiling (start+1800),
+	# so the generic wall-clock timeout fires instead of an hour of empty
+	# polls ending in a misattributed status.
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 700, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": None, "jobs": None},
+	])
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert output.splitlines() == ["status=timeout"]
+	assert "Review phase exceeded its 10-minute total wall-clock budget" in result.stdout
+	assert "outcome=ceiling" not in result.stdout
+	assert "Review phase stalled" not in result.stdout
+	assert result.stdout.count("(runner wait unconfirmed this poll, ") == 3
+
+
 def test_phase4_active_step_without_state_change_still_stalls() -> None:
 	result, output = _run_phase4_runner_wait([
 		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_active_job(_RW_START))},
