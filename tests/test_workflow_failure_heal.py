@@ -6285,6 +6285,28 @@ def test_intake_does_not_credit_the_runner_wait_twice() -> None:
 		assert not any(any(part == attempt_path for part in call) for call in state_after.get("calls", []))
 
 
+def test_intake_engine_fallback_identity_skips_the_identity_stale_retry() -> None:
+	"""An engine_fallback report that also carries an identity gets the up-front
+	attempt credit, so the identity_stale retry must not add the same runner
+	wait again. Token 4300 s old, 600 s wait: base + wait (4200) still rejects
+	it as identity_stale; base + 2 * wait (4800) would pass the age check."""
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+	now = int(time.time())
+	with tempfile.TemporaryDirectory(prefix="heal-engine-identity-no-double-credit-") as tmp_name:
+		token_file, jwks_file, _ = _fresh_identity(Path(tmp_name), iat=now - 4300, nbf=now - 4300)
+		state = _intake_state(extra_run_details={own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": _iso_utc(now - 600)}})
+		state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 600)}
+		result, state_after, _ = _run_intake(_engine_scoped_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert len(re.findall(r"^WORKFLOW_HEAL report_age_credit outcome=applied ", result.stdout, re.MULTILINE)) == 1, result.stdout
+		assert "report_identity_age_credit" not in result.stdout, result.stdout
+		assert "report_auth=rejected reason=identity_stale" in result.stdout, result.stdout
+		assert _api_writes(state_after) == []
+		calls = state_after.get("calls", [])
+		assert len([call for call in calls if any(part == attempt_path for part in call)]) == 1
+		assert not any(any(part == own_run_path for part in call) for call in calls)
+
+
 def test_intake_credits_runner_queue_wait_against_a_stale_identity() -> None:
 	# 2026-11-14: six reports sat ~3h50m waiting for a runner and were all
 	# rejected identity_stale; the age limit applies at arrival (run_started_at).
