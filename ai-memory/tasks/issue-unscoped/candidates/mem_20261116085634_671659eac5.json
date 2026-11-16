@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1045-1271 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Moved steps running in `tests-hooks-and-orchestrator` lack required environment setup (e.g. GH_TOKEN or permissions) that was available in `tests-heal-plan-and-validation`.\n  WHY: The pre-push gate reports failures for these moved steps, so they will fail to authenticate or set up correctly (reviewer rated BLOCKER; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash examined this claim and found it unsupported, noting failed_count 0 and an unchanged step body).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps moved from tests-heal-plan-and-validation and their destination job (tests-hooks-and-orchestrator)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR acknowledges the run's step list lacked durations and the pick is an estimate, not a measurement; .github/workflows/ci.yml:1045-1052, changelog.d/9420-ci-heal-job-steps-to-hooks-job.md:2, tests/test_ci_poll_test_sharding.py:3892-3897 show no measured step timings or headroom comparison establishing the moved steps are the slowest or the destination has the most headroom.\n- requirement: \"Add exactly one fragment when the PR changes observable behaviour: [...] new or changed workflows.\" (agents.md \u00a730 in CLAUDE.md)\n  expected_change_site: agents.d/\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR modified .github/workflows/ci.yml but added no fragment in agents.d/.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP (examined and rejected by the reviewer, not reported as gaps):\n- Requirement: \"Move its slowest steps (see the run's step timings)\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: Reviewer rejected it. Per-step durations were unavailable and the PR discloses the pick as an estimate. `timeout-minutes` is unchanged and no new required job names were added.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- Requirement: missing `agents.d/` fragment\n  Expected change site: agents.d/\n  Evidence of absence: Reviewer rejected it. The PR changes no documented job name, step name, timeout or required check, and the changelog fragment documents the move.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1045-1271 | severity=BLOCKER | confidence=4\n  PROBLEM: Moved steps running in `tests-hooks-and-orchestrator` lack required environment setup.\n  WHY: The pre-push gate reports failures for these moved steps. Steps like `Release CI gate tests` (stubbed gh) likely depend on environment variables or permissions (like GH_TOKEN) from `tests-heal-plan-and-validation`, and none were added for the destination job.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, selection of steps moved from tests-heal-plan-and-validation\n  Evidence of absence: The PR acknowledges the step list had no durations and the pick is an estimate. No step timing or job headroom data justifies the selection.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"Add exactly one fragment when the PR changes observable behaviour: [...] new or changed workflows.\" (from agents.md \u00a730 in CLAUDE.md)\n  Expected change site: agents.d/\n  Evidence of absence: The PR modified .github/workflows/ci.yml but did not add a fragment in agents.d/.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\" (issue #9420)\n  Expected change site: `.github/workflows/ci.yml` \u2014 selection of which steps to move from `tests-heal-plan-and-validation` and which CI job receives them.\n  Evidence of absence: `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md:2` and `.github/workflows/ci.yml:1043-1060` say the step list \"came without durations\" and the pick is \"an estimate, not a measurement\". The destination was chosen because \"its last recorded total (15m32s, run 43220859648, #9391) was followed only by steps moving out\", not by a measured headroom comparison. The PR acknowledges this in three places, including `tests/test_ci_poll_test_sharding.py:3892-3897`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-heal-plan-and-validation` and their destination job.\n  Evidence of absence: `.github/workflows/ci.yml:1045-1052` says the step list lacked durations and describes the selection and destination as estimates. The diff does not establish these are the slowest steps or that `tests-hooks-and-orchestrator` had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nDeferred residual (not re-raised, noted in reviewer text): the \"slowest steps / most headroom\" superlative remains an estimate, as the step durations of run 43314513853 were never obtainable. Six prior editor passes recorded it as TASK_GAP_DEFERRED. The estimate is disclosed in ci.yml:1043-1063, changelog.d/9420-ci-heal-job-steps-to-hooks-job.md and tests/test_ci_poll_test_sharding.py:3892-3896. The agents.d/ fragment request was rejected in prior passes as advisory-only.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b94b9cd1b954f815106ff84791254693db1f70c3eacf7e668ae09eee5c8e06ca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9430,
+    "run_id": "43774073153",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43774073153",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116085634_671659eac5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9430,
+    "run_id": "43774073153"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T08:56:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
