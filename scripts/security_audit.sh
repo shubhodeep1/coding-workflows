@@ -3551,9 +3551,21 @@ followup_summary_env_path.write_text(
 )
 PY
 
-gh_retry gh issue comment "${TRACKER_NUMBER}" \
-	--repo "${GITHUB_REPOSITORY}" \
-	--body-file "${TRACKER_COMMENT_FILE}"
+# The tracker comment is a report: nothing reads it back (the run markers live
+# in the tracker body, and security_pass_skip.py checks the tracker issue's
+# author, not its comments). With SECURITY_AUDIT_COMMENT_TOKEN (the job's
+# GITHUB_TOKEN, set by security-audit.yml) it starts no issue_comment
+# workflows (run-volume plan item 6); unset or refused, GH_TOKEN posts it.
+if [ -n "${SECURITY_AUDIT_COMMENT_TOKEN:-}" ] \
+	&& GH_TOKEN="${SECURITY_AUDIT_COMMENT_TOKEN}" gh_retry gh issue comment "${TRACKER_NUMBER}" \
+		--repo "${GITHUB_REPOSITORY}" \
+		--body-file "${TRACKER_COMMENT_FILE}"; then
+	echo "security-audit: tracker comment posted token=job"
+else
+	gh_retry gh issue comment "${TRACKER_NUMBER}" \
+		--repo "${GITHUB_REPOSITORY}" \
+		--body-file "${TRACKER_COMMENT_FILE}"
+fi
 
 declare -A LAST_FOLLOWUP_BY_FILE=()
 while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLLOWUP_EXISTING_NUMBER; do

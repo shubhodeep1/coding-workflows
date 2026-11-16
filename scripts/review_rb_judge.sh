@@ -809,6 +809,22 @@ resolve_review_state_for_post() {
   printf '%s' "${logical_state}"
 }
 
+# rb_judge_post_issue_comment -f body=<text> — post one judge comment on the PR.
+# The judge's comments are informational: nothing reads them back by author
+# (the retry count comes from commit history, and the judge's own context
+# keeps every comment with its author). So they are posted with the job token
+# (RB_JUDGE_COMMENT_TOKEN, the job's GITHUB_TOKEN), which starts no
+# issue_comment workflows (run-volume plan item 6). Unset or refused, the
+# post falls back to GH_TOKEN as before.
+rb_judge_post_issue_comment()
+{
+  if [ -n "${RB_JUDGE_COMMENT_TOKEN:-}" ] \
+    && GH_TOKEN="${RB_JUDGE_COMMENT_TOKEN}" gh_retry gh api "repos/${REPOSITORY:-}/issues/${PR_NUMBER:-}/comments" "$@"; then
+    return 0
+  fi
+  gh_retry gh api "repos/${REPOSITORY:-}/issues/${PR_NUMBER:-}/comments" "$@"
+}
+
 post_review_blocked_assessment() {
   local body_file="$1"
   local review_state="$2"
@@ -828,7 +844,7 @@ post_review_blocked_assessment() {
     echo "::warning::Review-blocked judge failed to post PR review via post_review_comment.sh; falling back to a PR comment." >&2
   fi
 
-  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+  rb_judge_post_issue_comment \
     -f body="$(cat "${body_file}")" >/dev/null 2>&1 || return 1
   return 0
 }
@@ -2074,7 +2090,7 @@ if [ "${PR_ALREADY_MERGED:-false}" = "true" ] && [ "${RB_ACTION}" != "merge" ] &
 The judge selected **${RB_ACTION}** but PR #${PR_NUMBER} is already merged. \`${RB_ACTION}\` is unsafe for merged PRs (fix would push to a merged branch; close_and_reissue would reissue work that already landed). Only \`merge\` and \`merge_with_followup\` are safe at this point.
 
 Leaving the linked issue in ai:review-blocked for operator review. Rerun the judge with revised context if you want it to choose merge / merge_with_followup."
-  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+  rb_judge_post_issue_comment \
     -f body="${REFUSAL_COMMENT}" >/dev/null 2>&1 || true
   exit 0
 fi
@@ -2212,7 +2228,7 @@ if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
   echo "judge_handled=true" >> "$GITHUB_OUTPUT"
   echo "judge_action=updater_verify_hold" >> "$GITHUB_OUTPUT"
   echo "judge_skip_reason=updater_pr_verify_job_owns_merge" >> "$GITHUB_OUTPUT"
-  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+  rb_judge_post_issue_comment \
     -f body="## Review-Blocked Judge — action held for the updater verify job
 
 The judge chose **${RB_ACTION}**, but this is a consumer-updater pull request. Only the update_workflows.yml verify job may change or merge it, so no action was taken." >/dev/null 2>&1 || true
@@ -2229,7 +2245,7 @@ rb_judge_comments_incomplete_defer_merge()
 {
   local _rbci_action="${1:-unknown}"
   echo "RB_JUDGE_CONTEXT_INCOMPLETE pr=${PR_NUMBER:-unknown} reasons=${RB_JUDGE_COMMENTS_INCOMPLETE_REASONS:-unspecified} action=merge_withheld judge_action=${_rbci_action}"
-  gh_retry gh api "repos/${REPOSITORY:-}/issues/${PR_NUMBER:-}/comments" \
+  rb_judge_post_issue_comment \
     -f body="## Review-Blocked Judge — merge deferred: PR comment context incomplete
 
 The judge chose **${_rbci_action}**, but the PR comments could not be fully read (reasons: ${RB_JUDGE_COMMENTS_INCOMPLETE_REASONS:-unspecified}). No merge, auto-merge, head-gate status or ready-to-merge label was set. The next judge cycle decides again." >/dev/null 2>&1 || true
@@ -2298,7 +2314,7 @@ if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
   if [ "${RB_ACTION}" = "fix" ]; then
     RB_ORCH_HOLD_FINAL_FIX_NOTE=" Judge fix retries are exhausted, so the final-attempt fix counts as a merge; no fix commit was created."
   fi
-  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+  rb_judge_post_issue_comment \
     -f body="## Review-Blocked Judge — action held for the orchestrator final merge
 
 The judge chose **${RB_ACTION}**, but this is an orchestrator integration pull request.${RB_ORCH_HOLD_FINAL_FIX_NOTE} The judge does not merge or close it. The orchestrator merges this PR (finalize_integration_merge_if_needed) once the current integration head passes runtime validation." >/dev/null 2>&1 || true
@@ -2311,7 +2327,7 @@ if [ "${RB_MERGE_ACTION}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true
     RB_SECURITY_FINAL_FIX_NOTE="The final-attempt fix is treated as a merge because judge fix retries are exhausted; no fix commit was created. "
   fi
   echo "Judge chose ${RB_ACTION} for PR #${PR_NUMBER}; ${RB_SECURITY_FINAL_FIX_NOTE}the single-issue security pass holds the merge."
-  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+  rb_judge_post_issue_comment \
     -f body="## Review-Blocked Judge — merge held for the security pass
 
 The judge chose **${RB_ACTION}**. ${RB_SECURITY_FINAL_FIX_NOTE}This PR's single-issue security audit has not passed for its current head, so the merge waits. The audit result re-runs the review, and the judge decides again then." >/dev/null 2>&1 || true
@@ -3043,7 +3059,7 @@ ${RB_FIX_DESC}"
 The judge selected **merge_with_followup** but did not provide \`followup_issue.title\` and/or \`followup_issue.body\`. Refusing the action — the whole point of \`merge_with_followup\` is to track the deferred gap, and silently downgrading to a plain merge would lose it.
 
 Leaving the PR's linked issues in ai:review-blocked. The workflow's review-blocked fallback will fire and stall recovery / a subsequent judge run can retry."
-      gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+      rb_judge_post_issue_comment \
         -f body="${MWF_REFUSAL_COMMENT}" >/dev/null 2>&1 || true
     else
       # Poll mergeability BEFORE the label swap / follow-up creation so

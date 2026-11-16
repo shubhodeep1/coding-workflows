@@ -4700,5 +4700,40 @@ def test_security_audit_prompts_require_final_array_only() -> None:
 	assert contract_blocks[0] == contract_blocks[1]
 
 
+
+def _tracker_comment_block() -> str:
+	text = SCRIPT_PATH.read_text(encoding="utf-8")
+	start = text.index("# The tracker comment is a report: nothing reads it back")
+	end = text.index("\nfi\n", start) + len("\nfi\n")
+	return text[start:end]
+
+
+def _run_tracker_comment(job_token: str, job_fails: bool) -> list[str]:
+	with tempfile.TemporaryDirectory(prefix="security-audit-tracker-comment-") as tmp:
+		log = Path(tmp) / "gh.log"
+		script = "\n".join([
+			"set -euo pipefail",
+			"GITHUB_REPOSITORY=o/r",
+			"TRACKER_NUMBER=7",
+			"TRACKER_COMMENT_FILE=/dev/null",
+			"GH_TOKEN=pat",
+			f"SECURITY_AUDIT_COMMENT_TOKEN={job_token!r}",
+			f'gh_retry() {{ echo "${{GH_TOKEN}} $*" >> {str(log)!r}; if [ "${{GH_TOKEN}}" = job ] && [ {"1" if job_fails else "0"} = 1 ]; then return 1; fi; return 0; }}',
+			_tracker_comment_block(),
+		])
+		proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+		assert proc.returncode == 0, proc.stderr
+		return [line.split()[0] for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+def test_tracker_comment_posts_with_the_job_token_and_falls_back() -> None:
+	"""Run-volume plan item 6: the tracker report starts no issue_comment workflows."""
+	assert _run_tracker_comment("job", False) == ["job"]
+	assert _run_tracker_comment("job", True) == ["job", "pat"]
+	assert _run_tracker_comment("", False) == ["pat"]
+	workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert "SECURITY_AUDIT_COMMENT_TOKEN: ${{ github.token }}" in workflow
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
