@@ -18032,6 +18032,9 @@ _emit_actions_runs_source_line() {
 #     hit is skipped and no If-None-Match is sent, so it costs exactly 3 extra
 #     reads on success (1 on failure). The ai-memory cache is still read so the
 #     stale-cache fallback and the post-fetch cache write behave as before.
+#     Note: a ttl_hit or etag_304 blob was written by an earlier poller run, so
+#     it normally lacks the current run; stall ticks that start from those
+#     sources should expect to pay this refetch, not only on a broken cache.
 # Every non-memo path records _ACTIONS_RUNS_BLOB_SOURCE and emits one
 # ACTIONS_RUNS_SOURCE line on stderr (when the emitter is defined).
 _load_actions_runs_cached() {
@@ -18295,7 +18298,11 @@ _ensure_actions_runs_blob_has_self_run() {
     if printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE:-}" | jq -e --argjson id "${_arsc_run_id}" 'any(.workflow_runs[]?; (.id // 0) == $id)' >/dev/null 2>&1; then
       _arsc_self='present'
     fi
-    echo "ACTIONS_RUNS_SELF_CHECK result=refetched source=live prior_source=${_arsc_prior_source} run_id=${_arsc_run_id} reason=self_run_missing self_run=${_arsc_self}"
+    # A confirmed live blob that still lacks this run (eventual consistency /
+    # 50-item page cap) is used as-is but logged as a warning annotation.
+    local _arsc_annotation=''
+    [ "${_arsc_self}" = "present" ] || _arsc_annotation='::warning::'
+    echo "${_arsc_annotation}ACTIONS_RUNS_SELF_CHECK result=refetched source=live prior_source=${_arsc_prior_source} run_id=${_arsc_run_id} reason=self_run_missing self_run=${_arsc_self}"
     return 0
   fi
 
@@ -22751,7 +22758,12 @@ invoke_stall_judge() {
   # Threshold reuses MAX_JUDGE_REPLAY for parity with the input-hash cap.
   local _judge_escalate_streak=0
   if [ "${_judge_state_file_ready}" = "true" ]; then
-    if [ "${judge_action}" = "escalate_human" ]; then
+    if [ "${judge_action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
+      # The escalation is held this tick (execute_stall_recovery_action,
+      # reason=active_set_unverifiable): leave the stored streak unchanged so a
+      # held tick does not count toward the MAX_JUDGE_REPLAY backstop.
+      :
+    elif [ "${judge_action}" = "escalate_human" ]; then
       _judge_escalate_streak="$(jq -r --arg n "${issue_num}" '.judge_escalate_streak[$n] // 0' "${_judge_state_file}" 2>/dev/null || echo "0")"
       [[ "${_judge_escalate_streak}" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
       _judge_escalate_streak=$(( _judge_escalate_streak + 1 ))

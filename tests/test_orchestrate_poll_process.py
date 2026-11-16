@@ -3919,6 +3919,11 @@ sys.exit(proc.returncode)
 		# Exercise the script default of the automation-path plan gate (#7181)
 		# unless a test sets the flag through env_overrides.
 		env.pop("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", None)
+		# An Actions runner's real GITHUB_RUN_ID is never in the mocked
+		# actions-runs fixtures, so the stall self-run check
+		# (_ensure_actions_runs_blob_has_self_run) would force an extra live
+		# fetch only in CI. Tests that need a run id set it via env_overrides.
+		env.pop("GITHUB_RUN_ID", None)
 		env.update(
 			{
 				"HOME": str(home_dir),
