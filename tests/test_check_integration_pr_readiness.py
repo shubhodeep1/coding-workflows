@@ -509,32 +509,6 @@ def test_post_commit_status_logs_subprocess_failures():
 		mod.subprocess.run = original_run
 
 
-def main() -> int:
-	try:
-		import sys as _sys
-		_sys.stdout.reconfigure(line_buffering=True)
-	except Exception:
-		pass
-	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-	passed = 0
-	failed = 0
-	for func in test_funcs:
-		name = func.__name__
-		try:
-			func()
-			print(f"  PASS  {name}", flush=True)
-			passed += 1
-		except Exception as e:
-			print(f"  FAIL  {name}: {e}", flush=True)
-			failed += 1
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
-	return 1 if failed > 0 else 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 def test_workflow_skips_label_events_for_every_label_but_the_override():
 	"""Run-volume plan item 10: a label change that the script never reads
 	skips the job (no runner); the override label still re-runs it."""
@@ -561,3 +535,29 @@ def test_workflow_skips_label_events_for_every_label_but_the_override():
 		assert runs(action)
 	assert runs("labeled", mod.OVERRIDE_LABEL) and runs("unlabeled", mod.OVERRIDE_LABEL)
 	assert not runs("labeled", "ai:review-blocked") and not runs("unlabeled", "ai:in-progress")
+
+
+def main() -> int:
+	try:
+		import sys as _sys
+		_sys.stdout.reconfigure(line_buffering=True)
+	except Exception:
+		pass
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}", flush=True)
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}", flush=True)
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
