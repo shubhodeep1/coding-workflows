@@ -523,3 +523,151 @@ type gh_retry >/dev/null 2>&1 || {
 | Code modularization | `scripts/label_helpers.sh`, `.github/workflows/review_autofix.yml`, `scripts/orchestrate_poll_process.sh`, `scripts/validate_process.sh`, `scripts/review_rb_judge.sh`, `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh`, `scripts/review_autofix_step_mark_ready_to_merge.sh`, `scripts/review_autofix_step_post_editor_summary.sh`, `scripts/review_autofix_step_assemble_failure_evidence.sh`, `.github/workflows/update_workflows.yml`, `tests/test_workflow_support_ref_follows_pin.py` | Large |
 | Expression size reduction | `.github/workflows/implement.yml`, `.github/workflows/review_autofix.yml`, `tests/test_workflow_file_size_limit.py` | Small |
 | Medium/Low fixes | `.github/workflows/lint-pr-body-auto-close.yml`, `.github/workflows/integration-pr-readiness.yml`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/review_autofix_sweep.yml`, `.github/workflows/promote-candidate-follow.yml`, `scripts/promote_candidate_follow.sh`, `scripts/drift_audit.sh`, `scripts/unblock_judge.sh`, `.github/workflows/sync_ai_labels.yml`, `.github/workflows/update_workflows.yml`, `scripts/gh_helpers.sh` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-11-16)
+
+### Safety Tag Legend
+- `SAFE_TO_MERGE`: the change can be made as written. Both reads hit the same endpoint with the same filters, pagination and token. They sit in the same function with nothing written between them, and error handling stays the same.
+- `NEEDS_VERIFICATION`: the change is probably correct, but reading the code was not enough to prove it. The listed checks must pass before anyone implements it.
+- `RISKY_SKIP`: shown so it is visible, but it must not be implemented automatically. It touches at least one hard trigger: the poller (`orchestrate_poll_process.sh`), a stall-recovery path, an identity or auth read, a rate-limit probe, pagination, a retry loop, or a log key that something else reads.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001**: `RISKY_SKIP`
+- **What:** in the reclarify-only poller run, two `GET /rate_limit` reads happen back to back.
+- **Files:** `scripts/orchestrate_poll_process.sh:191` (`replay_failed_reclarify_commands`), `:304` (`detect_unrouted_blocked_comments`), both called at `:356-359`.
+- **Calls:** 2 per run now; 1 after the change.
+- **Endpoint:** `GET /rate_limit`.
+- **Evidence:** both functions run back to back in one process. This mode is turned on at `orchestrate_poll.yml:977` (`RECLARIFY_REQUEUE_SWEEP_ONLY: "true"`). Each reads the same field and gates on the same 500 threshold:
+  ```bash
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || return 0        # :191
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || budget=""     # :304
+  ```
+- **Proposed fix:** read the value once before `:357` and pass it to both functions.
+- **Why RISKY_SKIP:**
+  - It is a rate-limit probe inside `orchestrate_poll_process.sh`, which are two hard triggers.
+  - The replay loop between the two reads makes POST and DELETE calls (`:228`, `:241`, `:245`), so the second read deliberately sees a lower budget.
+  - Failure handling differs: `:191` returns 0, while `:304` logs `RECLARIFY_UNROUTED outcome=skip reason=budget_low`.
+  - Benefit is small: `gh_helpers.sh:30` notes that `/rate_limit` does not use up the primary REST allowance.
+- **Handoff:** do not implement automatically. A reviewer must accept that the unrouted check would gate on a budget read before the replay's writes. The `RECLARIFY_UNROUTED ... remaining=` value must stay the same.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001**: `RISKY_SKIP`
+- **What:** in one poller tick, `GET /user` is read through four separate caches, and one of them is not cached at all.
+- **Files and lines:**
+  - `scripts/orchestrate_poll_process.sh:4355-4374`: `unblock_trusted_login`, cached once per tick and also caches a failure.
+  - `:21181`, `:21204-21207`, `:21329`, `:21565`, `:21942`, `:22011`: `PERSIST_JOURNAL_LOGIN_CACHE`. A failure is not cached, so each later call site reads again.
+  - `:35795`, `:36053-36061`: `NOOP_CAP_TRUSTED_LOGIN`, which is lowercased.
+  - `:31523`, `:31545`: `RB_ISOLATION_ACTOR` reads `.id` inside the review-blocked loop with no cache.
+- **Calls:** now 3 + up to 2 per escalated isolation issue, plus repeated persist-journal reads after a failure. After the change, 1 per tick.
+- **Endpoint:** `GET /user`, all with the same `GH_TOKEN`.
+- **Evidence:**
+  ```bash
+  UNBLOCK_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' ...)"      # :4363
+  PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login ...)"               # :21205 (x5 sites)
+  RB_ISOLATION_ACTOR="$(gh_retry _safe_gh_jq user --jq '.id' ...)"                    # :31523, :31545
+  NOOP_CAP_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' ... | tr ...)"  # :36054
+  ```
+- **Proposed fix:**
+  - Extend `unblock_trusted_login` to also cache `.id` from the same response, for example in `UNBLOCK_TRUSTED_USER_ID`.
+  - Have the persist-journal, noop-cap and isolation sites read those cached values. Each site keeps its own regex and lowercasing.
+- **Why RISKY_SKIP:** this is identity and authorization data in `orchestrate_poll_process.sh`.
+  - The caches handle failure differently. `unblock_trusted_login` caches the failure and sends a CRITICAL Telegram alert (`:4369-4371`). The persist journal retries and logs `reason=identity_unavailable`. Noop-cap logs a `::warning::`.
+  - Merging them changes which failures alert, and which log lines appear.
+- **Handoff:** do not implement automatically. A reviewer must first:
+  1. Confirm none of these sites run in a `$(...)` subshell, where the cache would be lost.
+  2. Decide the failure policy each site should keep.
+  3. Confirm that every site sees the same `GH_TOKEN` within the tick.
+
+**REUSE-002**: `RISKY_SKIP`
+- **What:** in one review-sweep job, three steps each read the token's login separately.
+- **Files and lines:**
+  - `.github/workflows/review_autofix_sweep.yml:504-512`: enumerate step, `GH_TOKEN` = `GH_PAT` (`:208`). Read only when a smoke PR is present.
+  - `scripts/workflow_failure_heal_non_retryable_backfill.sh:150`: backfill step, `GH_PAT` (`review_autofix_sweep.yml:647`).
+  - `scripts/review_security_hold_sweep.py:229`: legacy token mode, `GH_PAT || github.token` (`review_autofix_sweep.yml:687`).
+- **Calls:** up to 3 per tick now; 1 after the change.
+- **Endpoint:** `GET /user`.
+- **Evidence:** each step parses `gh api user --jq .login` and checks it against its own login regex.
+- **Proposed fix:** resolve the login once in an early step, expose it as a step output, and pass it in through `env:`.
+- **Why RISKY_SKIP:**
+  - This is an identity read that decides which comment markers and PR authors are trusted, so it counts as an auth or permission flow.
+  - It crosses step boundaries. The backfill runs on `!cancelled()` even when the enumerate step fails (`:643-645`).
+  - The security-hold step can fall back to `github.token`, so the auth scope is not always the same.
+- **Handoff:** do not implement automatically. Review the trust model of all three helpers. The value would come from an env var instead of a live read, which matters most for the helper run from the trusted `.ci-rerun-support` checkout.
+
+**REUSE-003**: `RISKY_SKIP`
+- **What:** the backfill counts open PRs with its own query, even though the sweep has already listed all open PRs.
+- **Files:** `scripts/workflow_failure_heal_non_retryable_backfill.sh:172-187` (`COUNT_QUERY` `totalCount`) and `.github/workflows/review_autofix_sweep.yml:236-247` (paginated listing of open PRs).
+- **Calls:** 1 GraphQL call per tick now; 0 after the change.
+- **Endpoint:** GraphQL `repository.pullRequests(states: OPEN){totalCount}`, compared with REST `GET repos/{repo}/pulls?state=open`.
+- **Evidence:** the count only decides which window of PRs the backfill reads (`:188-226`). The sweep's raw REST pages hold every open PR, but the snapshot it writes keeps only non-draft PRs (`:238`).
+- **Proposed fix:** have the sweep save the unfiltered count, and have the backfill read it, keeping a fallback to a live query.
+- **Why RISKY_SKIP:**
+  - The count feeds the backfill's page-window calculation, which is the pagination trigger.
+  - The tokens differ (`READ_TOKEN` = `github.token`, compared with `GH_PAT`).
+  - The backfill is deliberately independent of the enumerate step (`:643-644`).
+- **Handoff:** do not implement automatically. It saves only 1 call per tick and couples two steps that are meant to be independent.
+
+**REUSE-004**: `NEEDS_VERIFICATION`
+- **What:** the unblock judge's fallback read of the repo's default branch can run twice in one run.
+- **Files:** `scripts/unblock_judge.sh:540-543` (`unblock_check_triage_resolved`) and `:361-364` (`unblock_pr_check_green_condition`).
+- **Calls:** 0-2 per run now; 0-1 after the change.
+- **Endpoint:** `GET repos/{repo}` (`.default_branch`).
+- **Evidence:** both functions run `git symbolic-ref`, then fall back to the same read:
+  ```bash
+  default_branch="$(gh api "repos/${REPOSITORY}" --jq '.default_branch // ""' 2>/dev/null || true)"
+  ```
+  - The second read happens when the gate at `:550-551` exits non-zero. In that case `triage_resolution.json` is not written (`:552-554`), so `:356` falls through to `:363`.
+- **Proposed fix:** cache the resolved value in one script-level variable, for example `UNBLOCK_DEFAULT_BRANCH_CACHE`, after checking that name is not already used. Both functions read the cache first. Keep the regex check at `:365` and `:544`.
+- **Why NEEDS_VERIFICATION:** the two reads are in different functions, which fails the same-function precondition.
+- **Verification steps:**
+  1. Confirm `TARGET_DIR` and `SUPPORT_DIR` cannot change between the two calls.
+  2. Confirm neither function runs in a subshell.
+  3. Confirm, with `grep -n 'repos/\${REPOSITORY}"' scripts/unblock_judge.sh`, that no other site expects a fresh read.
+
+### Dead Calls (DEAD-API-###)
+
+**DEAD-API-001**: `RISKY_SKIP` (extends the Deep Audit's DEAD-001)
+- **What:** the "API-based revert" creates a PR from a branch that was never pushed, so it can never succeed.
+- **Files:** `scripts/orchestrate_poll_process.sh:34727-34733`; the fallback is at `:34734-34756`.
+- **Calls:** 1 wasted POST per reverted PR now; 0 after the change.
+- **Endpoint:** `POST repos/{repo}/pulls`.
+- **New detail beyond DEAD-001:**
+  1. **Cost:** `gh_retry` treats POST creates as non-idempotent and allows one attempt (`gh_helpers.sh:1211-1213`). The guaranteed validation failure therefore costs exactly 1 call, not a retry burst.
+  2. **Log text:** the only reader of `"API revert failed; creating revert commit..."` (`:34735`) is that line itself; nothing else in the repo searches for it. Removing it does not break a log-key contract.
+  3. **Overlap with SEC-001:** this POST is one of SEC-001's three PR-body sinks that skip the lint (`:34731-34733`). Removing it leaves only `gh pr create` at `:34743` to lint.
+- **Why RISKY_SKIP:** the code sits in the poller's auto-recovery path, which is both a stall-recovery path and inside `orchestrate_poll_process.sh`.
+- **Handoff:** do not implement automatically. Fix this together with SEC-001 and DEAD-001, and have a person review the recovery path, including the `echo | while read` subshell at `:34721`.
+
+**DEAD-API-002**: `NEEDS_VERIFICATION` (extends report Cost item 4)
+- **What:** drift audit fetches logs for `skipped` runs, which probably never have logs.
+- **Files:** `scripts/drift_audit.sh:816-824`, `:458-467`, `:70`, `:152-154`.
+- **Calls:** 1 per `skipped` run now; 0 after the change.
+- **Endpoint:** `gh run view <id> --log`, which reads `GET repos/{repo}/actions/runs/{id}/logs`.
+- **Evidence:** `UNSCANNABLE_CONCLUSIONS = frozenset({"cancelled", "skipped"})` (`:70`). The only test fixture with a `skipped` run (`tests/test_drift_audit_job.py:920`, `:926`) returns `log not found`. The test that keeps scanning cancelled runs (`:946`) has no counterpart for skipped runs.
+- **New detail:** a skipped run must still be added to `unscannable_run_ids` without the fetch. The `DRIFT_AUDIT_COVERAGE ... unscannable=N unscannable_run_ids=...` line (`:152-154`) is checked word for word at `tests/test_drift_audit_job.py:933-934`, and the summary reports "Cancelled/skipped runs without logs" (`:943`).
+- **Proposed fix:** in `main()`, if `conclusion == "skipped"`, append the run ID to `unscannable_run_ids` and `continue` before `_fetch_run_log`. Keep fetching for `cancelled` runs.
+- **Why NEEDS_VERIFICATION:** the change is safe only if a skipped run never returns a log. If one ever does, `fetched=` drops and its markers are no longer scanned.
+- **Verification steps:**
+  1. Run `gh run view <id> --log` on 3 or more recent `skipped` review_autofix or internal-review runs and confirm each fails with "log not found".
+  2. Confirm that `_run_drift_audit` in the tests does not assert on the fetch-call count for run 813. The test's state recording was not inspected.
+
+### Cross-References to Deep Audit Section
+- BATCH-001: RISKY_SKIP — the code is in `orchestrate_poll_process.sh`. The re-read at `:33089-33090` deliberately comes after this tick's own label writes ("Re-read labels since we may have changed them"), so a batched read must be just as fresh and fall back per key.
+- BATCH-002: RISKY_SKIP — the code is in `orchestrate_poll_process.sh`. Blocker issues are usually not wave or candidate issues, so `_candidate_details_json` will mostly miss them and the REST fallback will still run. Measure the hit rate before claiming any saving.
+- BATCH-003: NEEDS_VERIFICATION — it depends on a new label in the label contract, and existing open trackers without that label would need a one-time backfill to stay findable.
+- API-001: NEEDS_VERIFICATION — `_is_gh_permanent_failure` (`gh_helpers.sh:228-230`) does not include HTTP 409. GitHub's reply to cancelling an already-completed run, likely 409, would then be retried up to the full attempt budget under the job's 5-minute timeout. Add 409 handling before passing `--idempotent`.
+- API-002: RISKY_SKIP — the code is in `orchestrate_poll_process.sh`, and the header (`:184-188`) says the live issue read is a deliberate trust check before a replay.
+- API-003: NEEDS_VERIFICATION — `ci-cancelled-pr-snapshot.json` is read by `ci_cancelled_rerun.py`, and its row schema is checked in `tests/test_review_autofix_sweep_merge_queued_skip.py:206`. Take `default_branch` from the raw pages into a separate variable instead of a row field, and keep the `AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable` behavior.
+- API-004: RISKY_SKIP — the fetch is inside a hand-written retry loop that is also the wait for the approval comment to appear (`implement.yml:2283-2294`). A newer paginated read at `implement.yml:902` already documents its own exception, so do not merge the two either.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-004, DEAD-API-002 |
+| RISKY_SKIP | 5 | MERGE-001, REUSE-001, REUSE-002, REUSE-003, DEAD-API-001 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
