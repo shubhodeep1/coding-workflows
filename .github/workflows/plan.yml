@@ -319,6 +319,10 @@ jobs:
               sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::notice::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
             elif [ "${resolver_label_missing}" = "true" ]; then
               sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::warning::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
+            elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+              # The exit-75 deferral (#9599) ends the step green, so the
+              # resolver's rate-limit line is replayed as a warning.
+              sed 's/^::error::INTEGRATION_REF_RESOLVE outcome=rate_limited /::warning::INTEGRATION_REF_RESOLVE outcome=rate_limited /' "${resolver_err_file}" >&2
             else
               cat "${resolver_err_file}" >&2
             fi
@@ -464,6 +468,9 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
             echo "::warning::INTEGRATION_REF_RESOLVE outcome=deferred reason=rate_limited rc=${resolver_rc} ci_triage_routing=on issue=${issue_number}; refusing to fall back to the default branch."
+            # "Write run summary" skips on SKIP_PLAN, so leave a trace here for
+            # installs without standalone stall recovery (core profile).
+            echo "Planning for issue #${issue_number} was deferred: the integration-ref lookup was rate-limited (exit 75) with CI-triage routing on. The issue keeps ai:planning; stall recovery re-posts /answer after the limit resets. Without stall recovery, post /answer again by hand." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
             exit 0
           elif [ "${resolver_rc}" -eq 2 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
             # Exit 2 = resolver API failure (retries exhausted or permanent error).

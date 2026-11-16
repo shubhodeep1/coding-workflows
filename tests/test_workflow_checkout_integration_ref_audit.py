@@ -1036,12 +1036,23 @@ def test_plan_rate_limited_refusal_defers_without_failing() -> None:
 		assert "SKIP_PLAN=true" in env_text, f"{label}: {env_text!r}"
 		assert ("::warning::INTEGRATION_REF_RESOLVE outcome=deferred reason=rate_limited rc=75 "
 			"ci_triage_routing=on issue=5") in out, out
-		assert "outcome=rate_limited what=issue-5" in out, out
-		assert "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=" not in out, out
+		# The resolver's own line is replayed as a warning: the run is green.
+		assert "::warning::INTEGRATION_REF_RESOLVE outcome=rate_limited what=issue-5" in out, out
+		assert "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited" not in out, out
 		assert calls == [], f"{label}: {calls!r}"
-	# Routing off keeps the legacy default-branch fallback.
+	# The deferral leaves a run-summary trace ("Write run summary" skips on SKIP_PLAN).
+	with tempfile.TemporaryDirectory() as summary_tmp:
+		summary_path = Path(summary_tmp) / "step_summary"
+		rc, out, _gh_output, _env_text, _calls = _run_refctx_core(
+			"plan.yml", "ok", "true", {**rate_limited, "GITHUB_STEP_SUMMARY": str(summary_path)})
+		assert rc == 0, out
+		summary_text = summary_path.read_text(encoding="utf-8")
+		assert "Planning for issue #5 was deferred" in summary_text, summary_text
+		assert "post /answer again by hand" in summary_text, summary_text
+	# Routing off keeps the legacy default-branch fallback and the error replay.
 	rc, out, gh_output, env_text, _calls = _run_refctx_core("plan.yml", "ok", "false", rate_limited)
 	assert rc == 0 and "ref=\n" in gh_output, out
+	assert "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited what=issue-5" in out, out
 	assert "rate_limited_defer" not in gh_output and "SKIP_PLAN" not in env_text, (gh_output, env_text)
 	# Exit 2 and exit 3 with routing on still fail the step.
 	for extra in (

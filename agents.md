@@ -1064,9 +1064,9 @@ no `ai:check-triage` label whose only triage marker is a
 Clarify alone keeps the default branch on a `reason=pr_not_open` refusal
 (the PR merged or closed), so the check-triage resolution gate (#7095) can
 close the issue with evidence; the refusal is logged as a `::notice::`. While
-routing is on, clarify, plan and clarify-respond also fail closed on a
+routing is on, clarify and clarify-respond also fail closed on a
 rate-limited resolver (exit 75, `INTEGRATION_REF_RESOLVE outcome=rate_limited`)
-instead of using the default branch.
+instead of using the default branch; plan defers it without failing (#9599).
 
 Check-failure triage can also route its fix with a `Target branch:` line:
 with `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED=true` (default `false`) a new
