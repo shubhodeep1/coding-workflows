@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-16T22:51:10Z",
+  "issue_number": 9532,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 007 as out-of-scope; anchor=scripts/dispatch_and_watch_workflow_run.sh:329; cited_path=scripts/dispatch_and_watch_workflow_run.sh; files_touched=.github/workflows/test-and-mark-stable.yml, changelog.d/9532-release-gate-cancel-timed-out-dispatch.md, tests/test_ci_wires_every_test_file.py, tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py, tests/test_test_and_mark_stable_dispatch_watch_timeout_cancel.py.",
+  "phase": "review_autofix",
+  "pr_number": 9547,
+  "record_id": "lesson_20261116225110_726f782243",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/dispatch_and_watch_workflow_run.sh",
+    ".github/workflows/test-and-mark-stable.yml",
+    "changelog.d/9532-release-gate-cancel-timed-out-dispatch.md",
+    "tests/test_ci_wires_every_test_file.py",
+    "tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py",
+    "tests/test_test_and_mark_stable_dispatch_watch_timeout_cancel.py"
+  ]
+}
