@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "For user-visible or workflow behavior changes, check whether a `changelog.d/<issue>-<slug>.md` entry is expected. Changes to agent-facing workflow behavior also often include a matching `agents.d` document; consult existing neighboring entries to determine the appropriate documentation scope.",
+  "fingerprint": "9bedda99d21da9f3f6804df3f208b3ad7b074ce60e406e6f71f7de0b009f62e6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43956841741",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43956841741",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9008",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9417",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9472",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9568",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9569",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9011",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9427",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9495",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9586",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9587"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261116220335_9c831f171a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Issue-scoped changelog entries are a recurring convention for behavioral changes, with agent documentation added when relevant.",
+  "timestamps": {
+    "created_at": "2026-11-16T22:03:35Z",
+    "promoted_at": "2026-11-16T22:04:33Z",
+    "superseded_at": null
+  }
+}
