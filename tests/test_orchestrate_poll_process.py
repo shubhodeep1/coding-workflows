@@ -3461,8 +3461,10 @@ print(json.dumps(parsed))
 
 		_write_exec(
 			bin_dir / "python3",
-			r'''#!/usr/bin/python3
-import json
+			# Use the interpreter running the tests (not a hardcoded /usr/bin/python3);
+			# an env shebang would resolve to this shim itself on PATH and recurse.
+			f"#!{sys.executable}\n"
+			+ r'''import json
 import os
 import subprocess
 import sys
@@ -6313,6 +6315,190 @@ def test_standalone_security_followup_releases_only_after_prerequisite_merges() 
 		mock_gh_issue_list_label_filter=True,
 	)
 	assert len([c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]) == 2
+
+
+_CLARIFY_NO_OUTPUT_RERUN_PREFIX = "/reclarify\n<!-- ai:clarify-no-output-rerun:700 -->"
+
+
+def _standalone_clarification_state_comment(recovery_count: int = 0) -> str:
+	return (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:clarification",
+			"status_since_ts": 1,
+			"stall_recovery_count": recovery_count,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+
+
+def _run_standalone_clarification_tick(comments: list[str | dict], **extra) -> dict:
+	"""One standalone poller tick for issue #700 sitting in ai:clarification (issue #9486)."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	return _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:clarification"]},
+		issue_comments={700: list(comments)}, mock_gh_issue_list_label_filter=True,
+		**extra,
+	)
+
+
+def test_standalone_clarification_without_output_reruns_clarify_once() -> None:
+	"""shubhodeep1/digital_pa#146: labelled ai:clarification with no clarify output.
+
+	The first miss posts one marked /reclarify instead of answering questions
+	that were never asked.
+	"""
+	result = _run_standalone_clarification_tick([_standalone_clarification_state_comment()])
+	log = result["stdout"] + result["stderr"]
+	comments = result["issues"]["700"]["comments"]
+	reruns = [c for c in comments if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)]
+	assert len(reruns) == 1
+	assert "no clarification output" in reruns[0]["body"]
+	assert not any(c["body"].startswith("/answer [auto-answered-by-poller]") for c in comments)
+	assert "STALL_RECOVERY issue=700 reason=clarify_no_output phase=ai:clarification action=retrigger_pipeline" in log
+	assert "ai:needs-human" not in result["issues"]["700"]["labels"]
+
+	# A forged marker from an untrusted commenter does not count as the first
+	# miss: the real rerun is still posted, and no escalation happens.
+	forged = {
+		"body": _CLARIFY_NO_OUTPUT_RERUN_PREFIX + "\n",
+		"author_association": "NONE", "user": {"login": "stranger"},
+		"created_at": "2026-01-01T00:00:01Z",
+	}
+	forged_result = _run_standalone_clarification_tick([_standalone_clarification_state_comment(), forged])
+	forged_reruns = [
+		c for c in forged_result["issues"]["700"]["comments"]
+		if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)
+	]
+	assert len(forged_reruns) == 2
+	assert "reason=clarify_no_output phase=" in forged_result["stdout"] + forged_result["stderr"]
+	assert "ai:needs-human" not in forged_result["issues"]["700"]["labels"]
+
+	# An untrusted /answer is not clarify output either.
+	spam = {"body": "/answer whatever", "author_association": "NONE", "user": {"login": "stranger"}}
+	spam_result = _run_standalone_clarification_tick([_standalone_clarification_state_comment(), spam])
+	assert len([
+		c for c in spam_result["issues"]["700"]["comments"]
+		if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)
+	]) == 1
+
+
+def test_standalone_clarification_without_output_escalates_on_second_miss() -> None:
+	old_marker = {
+		"body": _CLARIFY_NO_OUTPUT_RERUN_PREFIX + "\n\n_rerun_",
+		"author_association": "NONE", "user": {"login": "github-actions[bot]"},
+		"created_at": "2026-01-01T00:00:01Z",
+	}
+	result = _run_standalone_clarification_tick([_standalone_clarification_state_comment(1), old_marker])
+	log = result["stdout"] + result["stderr"]
+	assert "STALL_RECOVERY issue=700 reason=clarify_no_output_second_miss phase=ai:clarification action=escalate_human" in log
+	assert "ai:needs-human" in result["issues"]["700"]["labels"]
+	assert "Action: escalate_human" in log
+	comments = result["issues"]["700"]["comments"]
+	assert len([c for c in comments if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)]) == 1
+	assert not any(c["body"].startswith("/answer [auto-answered-by-poller]") for c in comments)
+
+	# A marker younger than the stall threshold holds escalation: the rerun
+	# clarify gets one full threshold to produce output.
+	fresh_marker = {
+		**old_marker,
+		"author_association": "OWNER", "user": {"login": "workflow-owner"},
+		"created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+	}
+	pending = _run_standalone_clarification_tick([_standalone_clarification_state_comment(1), fresh_marker])
+	pending_log = pending["stdout"] + pending["stderr"]
+	assert "STALL_SKIP issue=700 reason=clarify_no_output_rerun_pending phase=ai:clarification action=none" in pending_log
+	assert "reason=clarify_no_output_second_miss" not in pending_log
+	assert "ai:needs-human" not in pending["issues"]["700"]["labels"]
+	pending_comments = pending["issues"]["700"]["comments"]
+	assert len([c for c in pending_comments if c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)]) == 1
+	assert not any(c["body"].startswith("/answer [auto-answered-by-poller]") for c in pending_comments)
+
+
+def test_standalone_clarification_with_questions_keeps_auto_respond() -> None:
+	questions = {
+		"body": "<!-- ai:clarification-questions -->\nClarification required\n\nQ1: Pick one?\nA) yes (RECOMMENDED)\nB) no",
+		"author_association": "NONE", "user": {"login": "github-actions[bot]"},
+	}
+	result = _run_standalone_clarification_tick([_standalone_clarification_state_comment(), questions])
+	log = result["stdout"] + result["stderr"]
+	comments = result["issues"]["700"]["comments"]
+	assert any(c["body"].startswith("/answer [auto-answered-by-poller]") for c in comments)
+	assert not any(c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX) for c in comments)
+	assert "reason=clarify_no_output" not in log
+
+	# Without the complete comment history, absence is never inferred: the
+	# legacy action runs and a warning is logged.
+	unavailable = _run_standalone_clarification_tick(
+		[_standalone_clarification_state_comment()], gql_comments_unavailable_for=[700],
+	)
+	unavailable_log = unavailable["stdout"] + unavailable["stderr"]
+	assert "reason=clarify_no_output phase=" not in unavailable_log
+	assert not any(
+		c["body"].startswith(_CLARIFY_NO_OUTPUT_RERUN_PREFIX)
+		for c in unavailable["issues"]["700"]["comments"]
+	)
+
+
+def test_standalone_security_dependency_hold_posts_one_advisory() -> None:
+	dependent_body = "<!-- ai:security-finding:SEC-TEST -->\n- Depends on: #701\n"
+	marker = "<!-- ai:security-dependency-held:700:701 -->"
+
+	def _tick(*, closed: bool, comments: list, **extra) -> dict:
+		state = _base_state(status="in_progress")
+		state["waves"][0]["issues"][0]["status"] = "merged"
+		return _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security"], 701: []},
+			issue_bodies={700: dependent_body}, issue_closed={701: closed},
+			issue_comments={700: list(comments)}, mock_gh_issue_list_label_filter=True,
+			**extra,
+		)
+
+	def _advisories(result: dict) -> list[str]:
+		return [c["body"] for c in result["issues"]["700"]["comments"] if marker in c["body"]]
+
+	def _assert_inert(result: dict) -> None:
+		for comment in result["issues"]["700"]["comments"]:
+			lines = comment["body"].split("\n")
+			assert not any(line.startswith(("/reclarify", "/answer")) for line in lines)
+			assert "<!-- ai:clarification-questions -->" not in comment["body"]
+
+	held_open = _tick(closed=False, comments=[])
+	log = held_open["stdout"] + held_open["stderr"]
+	assert "STALL_SKIP issue=700 reason=security_dependency_held detail=open action=none" in log
+	assert "STALL_SKIP issue=700 reason=security_dependency_held_advisory depends_on=701 detail=open action=advisory_posted" in log
+	advisories = _advisories(held_open)
+	assert len(advisories) == 1
+	assert "#701" in advisories[0] and "No action is needed" in advisories[0]
+	assert advisories[0].rstrip().endswith(marker)
+	_assert_inert(held_open)
+
+	held_closed = _tick(closed=True, comments=[])
+	closed_advisories = _advisories(held_closed)
+	assert len(closed_advisories) == 1
+	assert "A maintainer must act" in closed_advisories[0]
+	assert "detail=closed_without_ai_merged action=advisory_posted" in held_closed["stdout"] + held_closed["stderr"]
+	_assert_inert(held_closed)
+
+	existing = {"body": "advisory\n\n" + marker, "author_association": "NONE", "user": {"login": "github-actions[bot]"}}
+	present = _tick(closed=False, comments=[existing])
+	assert len(_advisories(present)) == 1
+	assert "action=advisory_present" in present["stdout"] + present["stderr"]
+
+	# A forged marker from an untrusted commenter does not suppress the advisory.
+	forged = {"body": marker, "author_association": "NONE", "user": {"login": "stranger"}}
+	forged_result = _tick(closed=False, comments=[forged])
+	assert len(_advisories(forged_result)) == 2
+	assert "action=advisory_posted" in forged_result["stdout"] + forged_result["stderr"]
+
+	incomplete = _tick(closed=False, comments=[], gql_comments_unavailable_for=[700])
+	assert _advisories(incomplete) == []
+	assert "depends_on=701 detail=open action=advisory_comments_incomplete" in incomplete["stdout"] + incomplete["stderr"]
+	_assert_inert(incomplete)
 
 
 def _run_pr_dependency_tick(*, merged: bool, files: dict[str, str], comments: list[dict] | None = None, extra: dict | None = None) -> dict:
@@ -15550,6 +15736,9 @@ def test_standalone_retrigger_review_retargets_verified_implementation_pr():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[416],
 	)
 	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
 	assert standalone_state is not None
@@ -15561,6 +15750,77 @@ def test_standalone_retrigger_review_retargets_verified_implementation_pr():
 		"/approved" in str(comment.get("body", ""))
 		for comment in result["issues"]["501"]["comments"]
 	)
+
+
+def _standalone_dispatch_first_run(**extra) -> dict:
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	return _run_poller(
+		state=_base_state(status="complete"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 503: ["ai:done"]},
+		issue_comments={503: [standalone_state_comment]},
+		issue_linked_prs={503: 418},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 418,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-503",
+				"headRefFromApi": "ai/issue-503",
+				"headSha": "sha418",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+		**extra,
+	)
+
+
+def test_standalone_retrigger_review_dispatches_review_first():
+	# cut-ci-runner-time Phase 3: the standalone arm dispatches the review
+	# workflow instead of pushing an empty commit.
+	result = _standalone_dispatch_first_run()
+	assert any(d.get("pr_number") == 418 for d in result.get("review_dispatches", [])), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	standalone_state = _extract_latest_standalone_state(result["issues"]["503"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert "Issue #503 PR #418 dispatched the review workflow instead of pushing an empty commit." in result["stdout"]
+
+
+def test_standalone_retrigger_review_falls_back_to_empty_commit_when_dispatch_fails():
+	result = _standalone_dispatch_first_run(review_dispatch_fail_for_prs=[418])
+	assert ["origin", "HEAD:ai/issue-503"] in result.get("git_push_calls", []), result["stdout"]
+	standalone_state = _extract_latest_standalone_state(result["issues"]["503"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert "Issue #503 PR #418 dispatch helper returned rc=1; falling back to empty-commit push." in result["stdout"]
+	assert "action=retrigger_review_empty_commit_fallback" in result["stdout"]
+
+
+def test_standalone_retrigger_review_dispatch_skip_spends_no_budget():
+	# A queued review run on the branch: no dispatch, no push, no budget.
+	result = _standalone_dispatch_first_run(active_autofix_runs=[
+		{"workflow": "review_autofix.yml", "branch": "ai/issue-503", "status": "queued", "conclusion": ""},
+	])
+	assert [d for d in result.get("review_dispatches", []) if d.get("pr_number") == 418] == []
+	assert result.get("git_push_calls", []) == []
+	assert "Issue #503 PR #418 dispatch helper skipped (already active or already dispatched this cycle)" in result["stdout"]
+	standalone_state = _extract_latest_standalone_state(result["issues"]["503"]["comments"])
+	assert standalone_state is None or standalone_state["stall_recovery_count"] == 0
 
 
 def test_standalone_retrigger_review_mixed_fetch_failure_counts_conclusive_rejection():
@@ -15987,6 +16247,9 @@ def test_standalone_retrigger_review_does_not_increment_when_empty_commit_checko
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[417],
 		mock_git_checkout_fail=True,
 	)
 	standalone_state = _extract_latest_standalone_state(result["issues"]["502"]["comments"])
@@ -21661,6 +21924,9 @@ def test_candidate_and_linked_status_helpers_share_repo_filter():
 
 
 def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure():
+	# cut-ci-runner-time Phase 3: with no prior failed review run the review
+	# workflow is dispatched first; the empty commit stays as the fallback
+	# when that dispatch fails, and is logged as the fallback action.
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
 	issue["status"] = "in_progress"
@@ -21687,18 +21953,90 @@ def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure(
 			},
 		],
 		mock_git_push_success=True,
+		review_dispatch_fail_for_prs=[78],
 	)
 	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "78"]
-	assert dispatches_for_pr == [], (
-		f"expected no review_autofix redispatch when no prior failed autofix run exists; "
-		f"got: {dispatches_for_pr}"
-	)
+	assert dispatches_for_pr == [], dispatches_for_pr
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1
 	assert result.get("git_push_calls", []), (
-		"expected the no-prior-failure case to exercise the empty-commit push path"
+		"expected a failed dispatch to fall back to the empty-commit push"
 	)
+	assert "Issue #10 PR #78 dispatch helper returned rc=1; falling back to empty-commit push." in result["stdout"]
+	assert "action=retrigger_review_empty_commit_fallback" in result["stdout"]
 
+
+def test_retrigger_review_dispatches_review_first_when_last_review_succeeded():
+	# cut-ci-runner-time Phase 3 (plan D3): a stalled PR whose last review run
+	# succeeded is re-triggered by a review dispatch, not an empty commit.
+	state, prs = _retrigger_review_pr_state(97, "claude/retrigger-review-dispatch-first")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 97}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-dispatch-first",
+				"status": "completed", "conclusion": "success", "createdAt": "2026-11-15T01:00:00Z"},
+		],
+		mock_git_push_success=True,
+	)
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if d.get("pr_number") == 97]
+	assert len(dispatches_for_pr) == 1, result.get("review_dispatches")
+	assert result.get("git_push_calls", []) == [], "dispatch-first must not push an empty commit"
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+	assert "Issue #10 PR #97 dispatched the review workflow instead of pushing an empty commit." in result["stdout"]
+	assert "action=retrigger_review_empty_commit_fallback" not in result["stdout"]
+
+
+def test_retrigger_review_dispatch_first_with_no_review_history():
+	# No review run at all on the branch: still dispatch first, no empty commit.
+	state, prs = _retrigger_review_pr_state(98, "claude/retrigger-review-dispatch-first-none")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 98}, prs=prs,
+		mock_git_push_success=True,
+	)
+	assert any(d.get("pr_number") == 98 for d in result.get("review_dispatches", [])), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 1
+
+
+def test_retrigger_review_dispatch_first_skip_does_not_push_or_increment():
+	# A queued review run on the branch: neither the dispatch (rc 2 / in-flight
+	# guard) nor the empty commit fires, and no recovery budget is spent.
+	state, prs = _retrigger_review_pr_state(99, "claude/retrigger-review-dispatch-first-active")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 99}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "review_autofix.yml", "branch": "claude/retrigger-review-dispatch-first-active",
+				"status": "queued", "conclusion": ""},
+		],
+		mock_git_push_success=True,
+	)
+	assert [d for d in result.get("review_dispatches", []) if d.get("pr_number") == 99] == []
+	assert result.get("git_push_calls", []) == []
+	assert "Issue #10 PR #99 dispatch helper skipped (already active or already dispatched this cycle)" in result["stdout"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_retrigger_review_failed_redispatch_falls_back_once_without_second_dispatch():
+	# Last run failed and its redispatch failed: the empty-commit fallback
+	# runs and the dispatch-first step is not tried a second time.
+	state, prs = _retrigger_review_pr_state(100, "claude/retrigger-review-failed-then-fallback")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 100}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "review_autofix.yml", "branch": "claude/retrigger-review-failed-then-fallback",
+				"status": "completed", "conclusion": "failure"},
+		],
+		mock_git_push_success=True,
+		review_dispatch_fail_for_prs=[100],
+	)
+	assert result.get("git_push_calls", []), result["stdout"]
+	assert result["stdout"].count("Issue #10 PR #100 dispatch helper returned rc=1; falling back to empty-commit push.") == 1, result["stdout"]
+	assert "action=retrigger_review_empty_commit_fallback" in result["stdout"]
 
 def test_retrigger_review_retries_inconclusive_pr_lookup_without_reimplementing():
 	state = _base_state(status="in_progress")
@@ -21985,6 +22323,9 @@ def test_retrigger_review_ignores_pr_named_dispatch_run_of_another_pr():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[91],
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1, issue_entry
@@ -22035,6 +22376,9 @@ def test_retrigger_review_pushes_past_spoofed_pr_named_run():
 			prs=prs,
 			actions_runs_workflow_runs=[_retrigger_review_spoof_run(93, **overrides)],
 			mock_git_push_success=True,
+			# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+			# dispatch reaches the guarded empty-commit fallback this test covers.
+			review_dispatch_fail_for_prs=[93],
 		)
 		issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 		assert issue_entry["stall_recovery_count"] == 1, (overrides, issue_entry)
@@ -22265,6 +22609,9 @@ def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_bran
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[93],
 	)
 	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "93"]
 	assert dispatches_for_pr == [], dispatches_for_pr
@@ -22366,6 +22713,9 @@ def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[81],
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1, (
@@ -22421,6 +22771,9 @@ def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[82],
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1, (
@@ -22528,6 +22881,9 @@ def test_retrigger_review_skips_empty_commit_when_pr_head_advanced_after_snapsho
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[83],
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 0, (
@@ -22568,6 +22924,9 @@ def test_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
 			},
 		],
 		mock_git_push_success=True,
+		# Phase 3 (cut-ci-runner-time): review is dispatched first; a failed
+		# dispatch reaches the guarded empty-commit fallback this test covers.
+		review_dispatch_fail_for_prs=[85],
 		mock_git_checkout_fail=True,
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
@@ -26351,7 +26710,7 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
 		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
 		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh '
-		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh"'
+		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh ci_docs_only_paths.sh"'
 	) in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
 	assert 'src=".codex-workflow-src/scripts/${f}"' in stage_helper_body
@@ -31746,6 +32105,366 @@ def test_no_automation_reopens_closed_heal_issues() -> None:
 		text = (REPO_ROOT / relative).read_text(encoding="utf-8")
 		assert "reopen" not in text.lower(), relative
 		assert not re.search(r"PATCH[^\n]*state=open|state=open[^\n]*PATCH", text), relative
+
+
+
+# ---------------------------------------------------------------------------
+# Issue #8984: FINAL_MERGE_AUTO_RESUME — a project parked by final-merge
+# exhaustion is retried once per final PR head once its blocker clears
+# (incident shubhodeep1/fun-token-multi-chain#579 / #596).
+# ---------------------------------------------------------------------------
+
+_FMAR_PR = 352
+_FMAR_BRANCH = "orchestrator/project-192"
+
+
+def _final_merge_exhausted_state(**extra: object) -> dict:
+	state = _base_state(status="failed")
+	state.update(
+		{
+			"integration_branch": _FMAR_BRANCH,
+			"validation_cycle": 2,
+			"final_merge_pr": _FMAR_PR,
+			"final_merge_status": "failed",
+			"final_merge_attempt_count": 3,
+			"final_merge_error": "required status check coding-workflows/workflow-integrity failed",
+			"final_merge_failure_kind": "final_merge_exhausted",
+			"final_merge_failure_head_sha": "",
+			"validation_last_passed_sha": "__integration_head__",
+		}
+	)
+	state.update(extra)
+	return state
+
+
+def _final_merge_open_pr(**extra: object) -> dict:
+	pr = {
+		"number": _FMAR_PR,
+		"state": "open",
+		"draft": False,
+		"baseRefName": "main",
+		"headRefName": _FMAR_BRANCH,
+		"headSha": "__integration_head__",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	pr.update(extra)
+	return pr
+
+
+def _fmar_history_payload() -> dict:
+	return _validation_history_payload(
+		integration_sha="__integration_head__",
+		entries=[_extfin_history_entry("passed")],
+	)
+
+
+def _run_final_merge_exhausted_tick(
+	state: dict,
+	*,
+	prs: list[dict] | None = None,
+	env_overrides: dict[str, str] | None = None,
+	tracking_labels: list[str] | None = None,
+	**poller_kwargs: object,
+) -> dict:
+	poller_kwargs.setdefault("compare_ahead_by", 1)
+	# validation passed and was recorded for the parked head.
+	poller_kwargs.setdefault("mock_validation_history_payload", _fmar_history_payload())
+	return _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:blocked"] if tracking_labels is None else tracking_labels,
+		issue_labels={10: ["ai:merged"]},
+		prs=[_final_merge_open_pr()] if prs is None else prs,
+		existing_branches=["main", _FMAR_BRANCH],
+		pull_ref_shas={_FMAR_PR: "__integration_head__"},
+		capture_telegram_calls=True,
+		env_overrides=env_overrides or {},
+		**poller_kwargs,
+	)
+
+
+def _fmar_log(result: dict) -> str:
+	return result["stdout"] + result["stderr"]
+
+
+def _fmar_marker_comments(result: dict) -> list[str]:
+	return [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if "<!-- final-merge-auto-resume:" in comment["body"]
+	]
+
+
+def test_final_merge_auto_resume_retries_green_mergeable_pr() -> None:
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state())
+	head = result["sandbox_sha_aliases"]["__integration_head__"]
+	log = _fmar_log(result)
+	assert f"FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=resumed final_pr={_FMAR_PR} head_sha={head}" in log
+	assert _FMAR_PR in result.get("merged_prs", [])
+	latest = result["latest_state"]
+	assert latest["status"] == "complete"
+	assert latest["final_merge_attempt_count"] == 0
+	assert latest["final_merge_failure_kind"] is None
+	assert latest["final_merge_auto_resume_head_shas"] == [head]
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:blocked" not in result["tracking_labels"]
+	assert "ai:needs-human" not in result["tracking_labels"]
+	markers = _fmar_marker_comments(result)
+	assert len(markers) == 1
+	assert markers[0].startswith(f"<!-- final-merge-auto-resume:{head} -->")
+	assert "FINAL_MERGE_AUTO_RESUME_ENABLED=false" in markers[0]
+	assert "Project already failed, skipping." not in log
+
+
+def test_final_merge_exhaustion_records_failure_kind_and_head_sha() -> None:
+	state = _base_state(status="validating")
+	state.update(
+		{
+			"integration_branch": _FMAR_BRANCH,
+			"validation_cycle": 2,
+			"final_merge_pr": _FMAR_PR,
+			"final_merge_status": "pending",
+			"final_merge_attempt_count": 0,
+			"validation_last_dispatch_ts": 0,
+			"validation_last_dispatch_cycle": 2,
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating", "ai:validated"],
+		validation_workflow_runs=[{
+			"status": "completed",
+			"conclusion": "success",
+			"created_at": "2026-01-01T00:00:00Z",
+			"display_title": "Internal: AI Validate [tracking:192]",
+		}],
+		issue_labels={10: ["ai:merged"]},
+		prs=[_final_merge_open_pr(merge_error="merge refused by branch protection")],
+		existing_branches=["main", _FMAR_BRANCH],
+		pull_ref_shas={_FMAR_PR: "__integration_head__"},
+		compare_ahead_by=1,
+		mock_validation_history_payload=_fmar_history_payload(),
+		capture_telegram_calls=True,
+		env_overrides={"MAX_FINAL_MERGE_ATTEMPTS": "1"},
+	)
+	head = result["sandbox_sha_aliases"]["__integration_head__"]
+	latest = result["latest_state"]
+	assert latest["status"] == "failed", _fmar_log(result)[-4000:]
+	assert latest["final_merge_status"] == "failed"
+	assert latest["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert latest["final_merge_failure_head_sha"] == head
+	assert "ai:blocked" in result["tracking_labels"]
+	assert _FMAR_PR not in result.get("merged_prs", [])
+
+
+def test_final_merge_auto_resume_once_per_head_sha() -> None:
+	first = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(),
+		prs=[_final_merge_open_pr(merge_error="merge refused by branch protection")],
+		env_overrides={"MAX_FINAL_MERGE_ATTEMPTS": "1"},
+	)
+	head = first["sandbox_sha_aliases"]["__integration_head__"]
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=resumed" in _fmar_log(first)
+	first_state = first["latest_state"]
+	# The retry was refused again: the project re-parks with the marker.
+	assert first_state["status"] == "failed"
+	assert first_state["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert first_state["final_merge_auto_resume_head_shas"] == [head]
+	assert "ai:blocked" in first["tracking_labels"]
+	assert _FMAR_PR not in first.get("merged_prs", [])
+
+	# Next tick, same final PR head (each harness run builds a fresh sandbox,
+	# so pin the head to the literal SHA the first tick recorded).
+	second_state = dict(first_state)
+	second_state["validation_last_passed_sha"] = head
+	second = _run_final_merge_exhausted_tick(second_state, prs=[_final_merge_open_pr(headSha=head)])
+	log = _fmar_log(second)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=already_resumed_on_head" in log
+	assert "outcome=resumed" not in log
+	assert "Project already failed, skipping." in log
+	assert _FMAR_PR not in second.get("merged_prs", [])
+	assert second["latest_state"]["status"] == "failed"
+	assert second["tracking_labels"] == ["ai:blocked"]
+	assert not _fmar_marker_comments(second)
+
+
+def _assert_final_merge_auto_resume_skipped(result: dict, expected: str) -> None:
+	log = _fmar_log(result)
+	assert f"FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip {expected}" in log, log[-4000:]
+	assert "outcome=resumed" not in log
+	assert "Project already failed, skipping." in log
+	assert _FMAR_PR not in result.get("merged_prs", [])
+	latest = result["latest_state"]
+	assert latest["status"] == "failed"
+	assert latest["final_merge_attempt_count"] == 3
+	assert latest["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert latest.get("final_merge_auto_resume_head_shas", []) == []
+	assert result["tracking_labels"] == ["ai:blocked"]
+	assert not _fmar_marker_comments(result)
+
+
+def test_final_merge_auto_resume_skip_reasons() -> None:
+	# Red required checks on the PR head (blocked_check_shas takes a literal SHA).
+	red_head = "d" * 40
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(validation_last_passed_sha=red_head),
+		prs=[_final_merge_open_pr(headSha=red_head)],
+		blocked_check_shas=[red_head],
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=checks_not_green detail=blocking")
+	# GitHub reports the PR not cleanly mergeable.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(), prs=[_final_merge_open_pr(mergeable=False, mergeable_state="dirty")]
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=not_mergeable detail=dirty")
+	# Mergeability still computing.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(), prs=[_final_merge_open_pr(mergeable=None, mergeable_state="unknown")]
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=not_mergeable detail=unknown")
+	# Closed PR.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), prs=[_final_merge_open_pr(state="closed")])
+	_assert_final_merge_auto_resume_skipped(result, "reason=pr_not_open detail=closed")
+	# Draft PR.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), prs=[_final_merge_open_pr(draft=True)])
+	_assert_final_merge_auto_resume_skipped(result, "reason=pr_not_open detail=draft")
+	# Failed PR lookup (the fake returns {} for an unknown PR).
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), prs=[])
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=pr_read")
+	# Failed compare lookup.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), compare_ahead_by_force_error=True)
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=compare")
+	# Integration branch no longer ahead of the default branch.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), compare_ahead_by=0)
+	_assert_final_merge_auto_resume_skipped(result, "reason=not_ahead")
+	# Head moved after validation passed, but the new head is not clean:
+	# the moved-head path applies every gate before re-validating.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(),
+		prs=[_final_merge_open_pr(headSha="__advanced_integration_head__", mergeable=False, mergeable_state="dirty")],
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=not_mergeable detail=dirty")
+	# No validation pass recorded.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(validation_last_passed_sha=""))
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=no_validated_sha")
+	# The exhaustion park already aborted the comprehensive cycle, so the
+	# promotion gate could not apply on a retry.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(
+			comprehensive_release_callback={"handled": True, "status": "failed", "handled_at": "2026-01-01T00:00:00Z"}
+		)
+	)
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=comprehensive_cycle_aborted")
+	assert result.get("pr_get_calls", {}).get(str(_FMAR_PR), 0) == 0
+
+
+def test_final_merge_auto_resume_state_persist_failure_keeps_project_parked() -> None:
+	# The state comment is the durable copy of the once-per-head ledger: when
+	# it cannot be written the resume is abandoned before any label change.
+	result = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), fail_issue_comment_post_for=[192])
+	_assert_final_merge_auto_resume_skipped(result, "reason=lookup_failed detail=state_persist")
+
+
+def test_final_merge_auto_resume_label_failure_parks_and_spends_head() -> None:
+	# The resumed state was already persisted when the label write fails: the
+	# parked state is restored and re-persisted with the head kept in the
+	# ledger, so later ticks do not re-qualify it (no write/restore churn).
+	first = _run_final_merge_exhausted_tick(_final_merge_exhausted_state(), fail_issue_edit_for=[192])
+	head = first["sandbox_sha_aliases"]["__integration_head__"]
+	log = _fmar_log(first)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=lookup_failed detail=label_write" in log, log[-4000:]
+	assert "outcome=resumed" not in log
+	assert "Project already failed, skipping." in log
+	assert _FMAR_PR not in first.get("merged_prs", [])
+	latest = first["latest_state"]
+	assert latest["status"] == "failed"
+	assert latest["final_merge_status"] == "failed"
+	assert latest["final_merge_attempt_count"] == 3
+	assert latest["final_merge_failure_kind"] == "final_merge_exhausted"
+	assert latest["final_merge_auto_resume_head_shas"] == [head]
+	assert first["tracking_labels"] == ["ai:blocked"]
+	assert not _fmar_marker_comments(first)
+
+	second_state = dict(latest)
+	second_state["validation_last_passed_sha"] = head
+	second = _run_final_merge_exhausted_tick(second_state, prs=[_final_merge_open_pr(headSha=head)])
+	log = _fmar_log(second)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=already_resumed_on_head" in log
+	assert "outcome=resumed" not in log
+	assert _FMAR_PR not in second.get("merged_prs", [])
+
+
+def test_final_merge_auto_resume_revalidates_moved_head() -> None:
+	# Issue #9320 item 4: a head change re-enables one automatic retry, but an
+	# unvalidated head is never merged on an older pass: it is re-validated.
+	result = _run_final_merge_exhausted_tick(
+		_final_merge_exhausted_state(), prs=[_final_merge_open_pr(headSha="__advanced_integration_head__")]
+	)
+	log = _fmar_log(result)
+	new_head = result["sandbox_sha_aliases"]["__advanced_integration_head__"]
+	assert (
+		f"FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=resumed final_pr={_FMAR_PR} head_sha={new_head} action=revalidate"
+		in log
+	), log[-4000:]
+	assert _FMAR_PR not in result.get("merged_prs", [])
+	assert len(result["validation_dispatches"]) == 1, log[-4000:]
+	latest = result["latest_state"]
+	assert latest["status"] == "validating"
+	assert latest["final_merge_attempt_count"] == 0
+	assert latest["final_merge_failure_kind"] is None
+	assert latest["final_merge_auto_resume_head_shas"] == [new_head]
+	assert "ai:validating" in result["tracking_labels"]
+	assert "ai:validated" not in result["tracking_labels"]
+	assert "ai:blocked" not in result["tracking_labels"]
+	markers = _fmar_marker_comments(result)
+	assert len(markers) == 1
+	assert markers[0].startswith(f"<!-- final-merge-auto-resume:{new_head} -->")
+	assert "Project already failed, skipping." not in log
+
+
+def test_final_merge_auto_resume_disabled_keeps_project_parked() -> None:
+	for value in ("false", "0", "off"):
+		result = _run_final_merge_exhausted_tick(
+			_final_merge_exhausted_state(), env_overrides={"FINAL_MERGE_AUTO_RESUME_ENABLED": value}
+		)
+		_assert_final_merge_auto_resume_skipped(result, "reason=disabled")
+		assert result.get("pr_get_calls", {}).get(str(_FMAR_PR), 0) == 0, value
+
+
+def test_final_merge_auto_resume_ignores_other_failed_projects() -> None:
+	# Parked before the marker existed, or failed for another reason: untouched.
+	legacy = _final_merge_exhausted_state()
+	legacy.pop("final_merge_failure_kind")
+	legacy.pop("final_merge_failure_head_sha")
+	result = _run_final_merge_exhausted_tick(legacy)
+	log = _fmar_log(result)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=not_final_merge_exhausted" in log
+	assert "outcome=resumed" not in log
+	assert "Project already failed, skipping." in log
+	assert _FMAR_PR not in result.get("merged_prs", [])
+	assert result["latest_state"]["status"] == "failed"
+	assert result["tracking_labels"] == ["ai:blocked"]
+	assert result.get("pr_get_calls", {}).get(str(_FMAR_PR), 0) == 0
+
+	# A validation-failed project never reaches the check at all.
+	validation_failed = _final_merge_exhausted_state(status="validation-failed")
+	result = _run_final_merge_exhausted_tick(validation_failed, tracking_labels=["ai:validation-failed"])
+	log = _fmar_log(result)
+	assert "FINAL_MERGE_AUTO_RESUME" not in log
+	assert "Project already validation-failed, skipping." in log
+	assert result["latest_state"]["status"] == "validation-failed"
+
+	# Security-pass-failed projects keep their own path (engine unchanged).
+	sp_failed = _security_pass_failed_state_for_auto_reset("b" * 40)
+	result = _run_failed_project_tick(sp_failed, {"ORCHESTRATE_ENGINE_SHA": "b" * 40})
+	log = _fmar_log(result)
+	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=not_final_merge_exhausted" in log
+	assert "Project already failed, skipping." in log
+	assert result["latest_state"]["status"] == "failed"
 
 
 if __name__ == "__main__":

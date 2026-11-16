@@ -1400,6 +1400,27 @@ def _assert_detect_stalls_skips_latch_label(latch_label: str) -> None:
 	assert stalls[0]["recovery_action"] == "auto_approve"
 
 
+def test_detect_stalls_skips_workflow_heal_escalated_latch():
+	"""Issue #9248: a heal issue the workflow-failure heal intake escalated
+	(ai:workflow-heal-escalated) must not be retried or auto-answered by
+	stall recovery; the poller reports it as a human-gated latch instead.
+	"""
+	_assert_detect_stalls_skips_latch_label("ai:workflow-heal-escalated")
+
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	labels = {"10": ["ai:awaiting-approval", "ai:workflow-heal-escalated"]}
+	latched = orchestrate_lib.detect_stall_latched_issues(state, labels)
+	assert latched == [
+		{
+			"id": "issue-1",
+			"github_issue": 10,
+			"phase": "ai:awaiting-approval",
+			"latch_label": "ai:workflow-heal-escalated",
+		}
+	]
+
+
 def test_stall_recovery_latch_label_helper():
 	assert orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval"]) is None
 	assert orchestrate_lib.stall_recovery_latch_label([]) is None
@@ -1412,6 +1433,15 @@ def test_stall_recovery_latch_label_helper():
 	assert (
 		orchestrate_lib.stall_recovery_latch_label(["ai:scope-blocked", "ai:implementing"])
 		== "ai:scope-blocked"
+	)
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval", "ai:workflow-heal-escalated"])
+		== "ai:workflow-heal-escalated"
+	)
+	# Appended last: first-match order for the older latch labels holds.
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:workflow-heal-escalated", "ai:destructive-blocked"])
+		== "ai:destructive-blocked"
 	)
 	# Every latch label is a plain marker, never a phase label, so the
 	# phase machine keeps reporting the underlying pipeline phase.
