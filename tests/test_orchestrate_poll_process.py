@@ -15495,6 +15495,27 @@ def test_standalone_ready_to_merge_open_linked_pr_still_attempts_merge():
 	assert sum(path.endswith("/pulls/825") for path in result["api_calls"]) <= 3
 
 
+def test_standalone_ready_to_merge_unresolved_impl_pr_does_not_repeat_resolver():
+	# The only cross-reference is an open mention-only PR, so the merged-guard
+	# fallback resolver misses. attempt_merge must reuse that miss instead of
+	# re-running discovery and the per-PR fetch in the same tick.
+	result = _run_standalone_ready_to_merge_tick_9482(
+		pr_overrides={
+			"state": "open",
+			"merged": False,
+			"body": "Refs #823",
+			"headRefName": "feature/unrelated",
+			"headRefFromApi": "feature/unrelated",
+		},
+		stall_recovery_count=0,
+	)
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Action: attempt_merge" in result["stdout"]
+	assert combined_log.count("STALL_LINKED_PR_REJECTED issue=823 pr=825 reason=not_implementation_pr") == 1
+	assert "no implementation PR could be resolved" in result["stdout"]
+	assert result.get("merge_calls", []) == []
+
+
 def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():
 	state = _base_state(status="complete")
 	standalone_state_comment = (

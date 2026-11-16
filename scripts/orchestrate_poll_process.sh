@@ -21771,7 +21771,9 @@ invoke_stall_judge() {
     # signal from the payload already in hand (no extra API call).
     pr_merged="$(_jq_field "${linked_pr_json}" '.merged' 'true|false')"
     pr_merged_at="$(_jq_field "${linked_pr_json}" '.merged_at')"
-    if [ "${pr_merged}" = "true" ] || [ -n "${pr_merged_at}" ]; then
+    # `.merged` is authoritative when present; merged_at only fills in when
+    # the payload lacks a boolean merged field.
+    if [ "${pr_merged}" = "true" ] || { [ -z "${pr_merged}" ] && [ -n "${pr_merged_at}" ]; }; then
       pr_state="merged"
     fi
     pr_mergeable="$(_jq_field "${linked_pr_json}" '.mergeable' 'true|false')"
@@ -24930,11 +24932,15 @@ run_standalone_stall_recovery() {
   # reused by attempt_merge so the tick does not fetch it twice.
   local _std_prefetched_impl_pr_num=""
   local _std_prefetched_impl_pr_json=""
+  # Failure reason when that fallback ran and missed; attempt_merge reuses it
+  # instead of repeating the same discovery in the same tick.
+  local _std_prefetched_impl_pr_miss_reason=""
 
   for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
     _std_prefetched_impl_pr_num=""
     _std_prefetched_impl_pr_json=""
+    _std_prefetched_impl_pr_miss_reason=""
     # Issue #9482: per-candidate reset so a stale true never leaks across issues.
     _STALL_STANDALONE_NT_SKIP_LOGGED=false
     [ -n "${issue_num}" ] || continue
@@ -25305,6 +25311,10 @@ PY
           _std_prefetched_impl_pr_num="${STALL_IMPL_PR_NUM}"
           _std_prefetched_impl_pr_json="${STALL_IMPL_PR_JSON}"
         fi
+      else
+        # Empty reason is normalised to not_implementation_pr, matching how
+        # attempt_merge treats any non-pr_fetch_failed miss.
+        _std_prefetched_impl_pr_miss_reason="${STALL_IMPL_PR_FAILURE_REASON:-not_implementation_pr}"
       fi
     fi
     if [ "${phase}" = "ai:done" ] && _linked_pr_is_merge_queued "${_std_linked_json}"; then
@@ -25978,6 +25988,11 @@ STALL_EOF
           # verified) the implementation PR this tick; reuse it.
           merge_pr="${_std_prefetched_impl_pr_num}"
           merge_pr_json="${_std_prefetched_impl_pr_json}"
+        elif [ -n "${_std_prefetched_impl_pr_miss_reason}" ]; then
+          # The fallback already ran the resolver this tick and missed; reuse
+          # its failure reason rather than repeating discovery and fetches.
+          merge_pr=""
+          STALL_IMPL_PR_FAILURE_REASON="${_std_prefetched_impl_pr_miss_reason}"
         elif _resolve_issue_implementation_pr "${issue_num}"; then
           merge_pr="${STALL_IMPL_PR_NUM}"
           merge_pr_json="${STALL_IMPL_PR_JSON:-}"
