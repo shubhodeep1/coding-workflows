@@ -828,7 +828,11 @@ def _run_blocked_planning_step_with_gh(
 			encoding="utf-8",
 		)
 		gh = tmp / "bin" / "gh"
-		gh.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "${GH_LOG}"\nexit 0\n', encoding="utf-8")
+		gh.write_text(
+			'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "${GH_LOG}"\n'
+			'if [ -n "${GH_FAIL_MATCH:-}" ] && [[ "$*" == *"${GH_FAIL_MATCH}"* ]]; then exit 1; fi\nexit 0\n',
+			encoding="utf-8",
+		)
 		gh.chmod(0o755)
 		env = {
 			"GH_LOG": str(tmp / "gh.log"),
@@ -952,6 +956,30 @@ def test_wait_on_pr_block_is_never_scope_routed() -> None:
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert PLANNING_SCOPE_HEADER not in comment and "ai:guard-rejection" not in comment
 	assert not any("ai:scope-blocked" in call for call in gh_calls)
+
+
+def test_failed_comment_post_removes_only_the_scope_label_this_run_added() -> None:
+	routed = {"SCOPE_ROUTED": "true", "SCOPE_MARKER": SCOPE_MARKER_746, "GH_FAIL_MATCH": "issues/746/comments"}
+	result, _, _, gh_calls = _run_blocked_planning_step_with_gh(["ai:planning"], routed)
+	assert result.returncode != 0
+	assert any(call.startswith("issue edit 746") and "--remove-label ai:scope-blocked" in call for call in gh_calls)
+	# A latch already on the issue (kept planning or implement-time) is never removed.
+	for labels in (["ai:planning", "ai:scope-blocked"], None):
+		result, _, _, gh_calls = _run_blocked_planning_step_with_gh(labels, routed)
+		assert result.returncode != 0
+		assert not any("--remove-label ai:scope-blocked" in call for call in gh_calls), (labels, gh_calls)
+
+
+def test_failed_label_edit_never_removes_a_pre_existing_scope_latch() -> None:
+	routed = {"SCOPE_ROUTED": "true", "SCOPE_MARKER": SCOPE_MARKER_746, "GH_FAIL_MATCH": "--add-label ai:blocked"}
+	result, comment, _, gh_calls = _run_blocked_planning_step_with_gh(["ai:planning"], routed)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "ai:guard-rejection" not in comment
+	assert any(call == "issue edit 746 --repo owner/repo --remove-label ai:scope-blocked" for call in gh_calls)
+	result, comment, _, gh_calls = _run_blocked_planning_step_with_gh(["ai:planning", "ai:scope-blocked"], routed)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "ai:guard-rejection" not in comment
+	assert not any("--remove-label ai:scope-blocked" in call for call in gh_calls), gh_calls
 
 
 def test_answer_on_blocked_issue_releases_a_planning_scope_latch() -> None:

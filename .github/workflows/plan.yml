@@ -2406,6 +2406,14 @@ jobs:
             SCOPE_ROUTE_ACTIVE=true
             SCOPE_LABEL_ARGS=(--add-label 'ai:scope-blocked')
           fi
+          # The rollbacks below undo only this run's own add: a latch already on
+          # the issue (a kept planning one or an implement-time one) is never
+          # removed. Unreadable metadata counts as present (fail closed).
+          SCOPE_LABEL_PREEXISTING=true
+          if [ -s "${ISSUE_META_FILE:-}" ] &&
+            jq -e 'any((.labels // [])[]?.name; . == "ai:scope-blocked") | not' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+            SCOPE_LABEL_PREEXISTING=false
+          fi
           ensure_label_exists "ai:blocked" "${{ github.repository }}"
           # A failed edit stays non-fatal as before; without ai:scope-blocked the
           # header and marker are left out too.
@@ -2416,7 +2424,7 @@ jobs:
             --remove-label 'ai:awaiting-approval' >/dev/null 2>&1; then
             # gh applies label adds and removes separately, so a failed edit can
             # still have added ai:scope-blocked: take it off again (best effort).
-            if [ "${SCOPE_ROUTE_ACTIVE}" = "true" ]; then
+            if [ "${SCOPE_ROUTE_ACTIVE}" = "true" ] && [ "${SCOPE_LABEL_PREEXISTING}" != "true" ]; then
               gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
                 --remove-label 'ai:scope-blocked' >/dev/null 2>&1 || true
             fi
@@ -2495,7 +2503,7 @@ jobs:
             -f body="$(cat "${PLAN_COMMENT_FILE}")" >/dev/null; then
             # Issue #9534: never leave ai:scope-blocked without its marker
             # comment (this removal runs only on the failure path).
-            if [ "${SCOPE_ROUTE_ACTIVE}" = "true" ]; then
+            if [ "${SCOPE_ROUTE_ACTIVE}" = "true" ] && [ "${SCOPE_LABEL_PREEXISTING}" != "true" ]; then
               gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
                 --remove-label 'ai:scope-blocked' >/dev/null 2>&1 || true
             fi
