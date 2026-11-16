@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_log_analysis_deliver_report.sh:212-217 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The best-effort deepen loop (`git fetch ... || true`) does not check whether the fetch succeeded before running `git merge-base`. It also does not tell a malformed base ref apart from transient network or auth errors.\n  WHY: If a deepen fetch fails, for example on an auth error or a network timeout, the loop continues silently and `git merge-base --is-ancestor` then fails with `section_base_invalid`, which hides the original fetch failure from the operator. Severity disagreement: the reviewer filed two entries with the same root cause, one rated NIT (lines 213-217, CORRECTNESS) and one rated MAJOR (lines 212-217, ERROR PATHS). The highest rating, MAJOR, is shown here as high. One reviewer (anthropic_claude-sonnet-5_5) judged line 216 fine because the `|| true` best-effort semantics are intended.\n- scripts/workflow_log_analysis_deliver_report.sh:212-217, 243-249 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The ancestry-failure path uses one reason key, `section_base_invalid`, for two different conditions: the base is not an ancestor of the target (line 243), or the base is not an ancestor of the run branch (line 244). The deepen loop's break condition at line 213 checks only the target's ancestry.\n  WHY: The operator gets one `::error::... reason=section_base_invalid` with a fetch log that shows the fetches succeeding. A run branch re-created from a different base looks the same as a target that moved past the fetch window, and in the run-branch case the two extra fetches are spent on the wrong ref. The source rated this NIT. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash said they deliberately did not re-raise it because it already existed and is not a runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If behaviour changes in a way operators must opt out of, add a kill switch that defaults to the new behaviour.\"\n  expected_change_site: .github/workflows/workflow-log-analysis.yml and README.md\n  confidence=(not stated)\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR adds `WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR` with `vars.WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR || 'true'` and documents it in the README. The reviewer itself concludes \"The implementation follows this. No gap.\"\n- requirement: Add no new GitHub API calls beyond the deliver-report job's existing calls.\n  expected_change_site: scripts/workflow_log_analysis_deliver_report.sh\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer's own evidence says \"The implementation correctly skips the `pr_list` call in sections-only mode.\" Even so, the reviewer labelled the entry SEVERITY: MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_log_analysis_deliver_report.sh:213-217 | severity=NIT | confidence=4\n  PROBLEM: The best-effort deepen fetches do not tell errors from a malformed base ref apart from transient network or auth issues, which can hide genuine ancestry failures.\n  WHY: If `git fetch --deepen` fails, for example on a network timeout or auth error hidden by `> /dev/null` or the `>> fetch_log` logic, `git merge-base` then fails with `section_base_invalid` and the real cause is lost.\n- scripts/workflow_log_analysis_deliver_report.sh:212-217 | severity=MAJOR | confidence=4\n  PROBLEM: The best-effort deepen loop (`git fetch ... || true`) does not check whether the fetch succeeded before running `git merge-base`.\n  WHY: A failed deepen fetch lets the loop continue silently, and `git merge-base --is-ancestor` then fails with `section_base_invalid`, which hides the original fetch failure.\n- TASK_GAP\n  Requirement: Add a kill switch if behavior changes in a way operators must opt out of.\n  Expected change site: .github/workflows/workflow-log-analysis.yml and README.md\n  Evidence of absence: The kill switch `WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR` is added with the default `vars.WORKFLOW_LOG_ANALYSIS_REPORT_SECTIONS_VIA_PR || 'true'` and documented in the README. The reviewer concludes \"No gap.\"\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: Add no new GitHub API calls beyond the deliver-report job's existing calls.\n  Expected change site: scripts/workflow_log_analysis_deliver_report.sh\n  Evidence of absence: \"The implementation correctly skips the `pr_list` call in sections-only mode.\"\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_log_analysis_deliver_report.sh:lines 243-249 (the ancestry check the last run edited) and lines 212-217 (the deepen loop) | severity=NIT | confidence=4\n  PROBLEM: The `section_base_invalid` failure covers two conditions: the base is not an ancestor of the target (line 243), or the base is not an ancestor of the run branch (line 244). The deepen loop's break condition at line 213 checks only the target, so in the run-branch case both target-only fetches (line 216) still run.\n  WHY: The operator cannot tell which ref rejected the base. A run branch re-created from a different base on a rerun looks the same as a target that moved past the 200/400-commit fetch window, and the extra fetches are spent on the wrong ref.\n- HARDENING_SUGGESTION | .github/workflows/workflow-log-analysis.yml:step \"Sync latest report from target branch\" in job api-redundancy, lines 3180-3181 | HARDENING_RISK_SCORE: 2\n  PROBLEM: The new `git fetch origin \"+refs/heads/${SECTION_BRANCH}:refs/remotes/origin/${SECTION_BRANCH}\"` has no bounded retry. The push loops at lines 2928-2953 and 3619-3644 retry with exponential backoff.\n  WHY: The first transient network error fails the whole api-redundancy job and the API-redundancy section with it. Suggested fix: wrap the fetch in the same 3-attempt loop with 5s/10s backoff, ending with an `::error::` that names the branch (about 8 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ad52d4b3fdffae001383ee3ea71eef05111809c1a813453a7cddcfa34d0c9d7d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9545,
+    "run_id": "43879617269",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43879617269",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116170535_59d3771d00",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9545,
+    "run_id": "43879617269"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-16T17:05:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
