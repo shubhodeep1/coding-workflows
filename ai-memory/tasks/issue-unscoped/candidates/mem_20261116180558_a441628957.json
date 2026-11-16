@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_workflow_logs.py:2098 | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new `coverage_page_limit_reached` flag is set to true when `budget_meta.get(\"page_limit_reached\")` is true, but it is not reset between repository iterations.\n  WHY: Once set to true for any repository, it remains true for all subsequent repositories in the loop, resulting in a false report of page limit reached for the entire collection process even if later repositories were collected successfully.\n- .github/workflows/workflow-log-analysis.yml:189 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new window marker `wla_window_end` is calculated as `$(date -u +%Y-%m-%dT%H:%M:%SZ)` and written to outputs *before* the log collection begins.\n  WHY: If log collection takes a long time, `window_end` will be older than the actual end of collection, so the next run's `since_last_report` can start at the earlier timestamp and miss logs generated between `window_end` and the actual finish time.\n- scripts/collect_workflow_logs.py:2137 | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `repo_truncated` is calculated using `budget_repo_incomplete` but `budget_repo_incomplete` is not reset between repository iterations.\n  WHY: If a repository is truncated, subsequent repositories in the loop will also be marked as truncated in `coverage_truncated`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When the `workflow-log-output` directory is missing, or its path cannot be resolved or staged for the sandbox, the step logs `WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing`...\" (from agents.d/analysis-findings-p2-consumer-coverage.md)\n  expected_change_site: .github/workflows/workflow-log-analysis.yml step \"Run workflow log analysis\" (id `analyze`)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: the `echo \"WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing\"` line is inside `if ! RUN_LOGS_DIR=\"$(realpath -e ...)\"` or the safety check, but NOT inside the initial missing-check `if [ -z \"${RUN_LOGS_DIR:-}\" ]` block, so nothing logs it when the `workflow-log-output` artifact is simply not present\n- requirement: The validation checks listed in the \"Pre-push test gate\" (like `tests/test_workflow_checkout_integration_ref_audit.py` and `tests/test_orchestrate_lib.py`) fail due to the new changes.\n  expected_change_site: Various\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The \"Pre-push test gate\" failure indicates that the new changes are causing regressions in existing tests (`tests/test_orchestrate_lib.py`, `tests/test_workflow_checkout_integration_ref_audit.py`).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/collect_workflow_logs.py:2098 | confidence=5\n  PROBLEM: The new `coverage_page_limit_reached` flag is set to true when `budget_meta.get(\"page_limit_reached\")` is true, but it is not reset between repository iterations.\n  WHY: Once it is true for one repository, it stays true for every later repository, so the whole collection reports that the page limit was reached even when later repositories were collected successfully.\n- .github/workflows/workflow-log-analysis.yml:189 | confidence=4\n  PROBLEM: The new window marker `wla_window_end` is calculated as `$(date -u +%Y-%m-%dT%H:%M:%SZ)` and written to outputs *before* the log collection begins.\n  WHY: Slow collection leaves `window_end` older than the real finish time, so the next run's `since_last_report` can miss logs generated between `window_end` and the actual finish.\n- scripts/collect_workflow_logs.py:2137 | confidence=5\n  PROBLEM: `repo_truncated` is calculated using `budget_repo_incomplete` but `budget_repo_incomplete` is not reset between repository iterations.\n  WHY: If a repository is truncated, subsequent repositories in the loop will also be marked as truncated in `coverage_truncated`.\n- TASK_GAP\n  Requirement: \"When the `workflow-log-output` directory is missing, or its path cannot be resolved or staged for the sandbox, the step logs `WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing`...\" (from agents.d/analysis-findings-p2-consumer-coverage.md)\n  Expected change site: .github/workflows/workflow-log-analysis.yml step \"Run workflow log analysis\" (id `analyze`)\n  Evidence of absence: The `WORKFLOW_LOG_ANALYSIS_COVERAGE logs=missing` echo is inside `if ! RUN_LOGS_DIR=\"$(realpath -e ...)\"` or the safety check, but NOT inside the initial missing-check `if [ -z \"${RUN_LOGS_DIR:-}\" ]` block, so it is not emitted when the `workflow-log-output` artifact is simply not present.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: The validation checks listed in the \"Pre-push test gate\" (like `tests/test_workflow_checkout_integration_ref_audit.py` and `tests/test_orchestrate_lib.py`) fail due to the new changes.\n  Expected change site: Various\n  Evidence of absence: The \"Pre-push test gate\" failure indicates that the new changes are causing regressions in existing tests (`tests/test_orchestrate_lib.py`, `tests/test_workflow_checkout_integration_ref_audit.py`).\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "037a0897182553356aab2d70ae71cb096e250930d40f63cd54f276c79d77266a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9124,
+    "run_id": "43892639685",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43892639685",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116180558_a441628957",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9124,
+    "run_id": "43892639685"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-16T18:05:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
