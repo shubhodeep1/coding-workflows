@@ -1752,7 +1752,8 @@ def test_workflow_passes_release_tags_and_pin_age_threshold() -> None:
 	assert "git fetch --no-tags --depth=1 --filter=tree:0 origin '+refs/tags/v*:refs/tags/v*'" in workflow_text
 	assert "git for-each-ref --format='%(refname:strip=2)%09%(objectname)%09%(*objectname)%09%(creatordate:unix)' 'refs/tags/v*'" in workflow_text
 	assert '--release-tags-file "${RELEASE_TAGS_TSV}"' in workflow_text
-	assert '--pin-max-age-seconds "${CONSUMER_PIN_MAX_AGE_SECONDS}"' in workflow_text
+	# "=" form: a value starting with "-" still binds to the option (argparse).
+	assert '--pin-max-age-seconds="${CONSUMER_PIN_MAX_AGE_SECONDS}"' in workflow_text
 	# The tag fetch overwrites FETCH_HEAD, so it must follow the archive.
 	assert workflow_text.index("git archive FETCH_HEAD") < workflow_text.index("--filter=tree:0")
 

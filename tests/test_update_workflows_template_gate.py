@@ -680,13 +680,13 @@ sys.exit(1)
 '''
 
 
-def _gate_statuses(verify: str | None = "success", integrity: str | None = "success") -> dict:
+def _gate_statuses(verify: str | None = "success", integrity: str | None = "success", total: int | None = None) -> dict:
 	statuses = []
 	if verify is not None:
 		statuses.append({"context": STATUS_CONTEXT, "state": verify})
 	if integrity is not None:
 		statuses.append({"context": "coding-workflows/workflow-integrity", "state": integrity})
-	return {"state": "pending", "total_count": len(statuses), "statuses": statuses}
+	return {"state": "pending", "total_count": len(statuses) if total is None else total, "statuses": statuses}
 
 
 def _gate_pr(**head: object) -> dict:
@@ -772,6 +772,7 @@ def test_head_gate_waits_for_a_late_integrity_status(tmp_path: Path) -> None:
 	([_gate_statuses(integrity="failure")], None, "integrity_not_success", 1),
 	([_gate_statuses(verify="failure")], None, "verify_not_success", 1),
 	([_gate_statuses(integrity=None)], None, "integrity_missing", 3),
+	([_gate_statuses(integrity=None, total=150)], None, "status_page_incomplete", 1),
 	([None], None, "status_read_failed", 3),
 	([{"statuses": "nope"}], None, "invalid_response", 1),
 	(None, _gate_pr(sha="b" * 40), "head_moved", 1),
@@ -785,6 +786,8 @@ def test_head_gate_fails_closed(tmp_path: Path, seq: list | None, pr: dict | Non
 	assert not _gate_posts(calls)
 	assert f"outcome=skipped reason={reason}" in result.stdout
 	assert sum(call["args"][1].endswith("/status?per_page=100") for call in calls) == reads
+	# Only an expired wait window (still missing or pending) raises the warning.
+	assert ("left pending" in result.stdout) == (reason in {"integrity_missing", "status_read_failed"})
 
 
 @pytest.mark.parametrize("env,reason", [

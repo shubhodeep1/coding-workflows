@@ -2545,6 +2545,10 @@ jobs:
             esac
           done
           if [ "${verdict%% *}" != "ok" ]; then
+            # The wait window ran out: make the still-pending gate visible.
+            if [ "${verdict%% *}" = "wait" ]; then
+              echo "::warning::ai-review/head-gate on #${PR_NUMBER} left pending: ${verdict#* } after ${attempt} status reads; review re-checks it on its next run."
+            fi
             gate_log skipped "${verdict#* }"
             exit 0
           fi

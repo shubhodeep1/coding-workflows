@@ -102,7 +102,7 @@ jobs:
             --output "${SUMMARY_JSON}" \
             --max-diff-lines 25 \
             --release-tags-file "${RELEASE_TAGS_TSV}" \
-            --pin-max-age-seconds "${CONSUMER_PIN_MAX_AGE_SECONDS}" \
+            --pin-max-age-seconds="${CONSUMER_PIN_MAX_AGE_SECONDS}" \
             "${REPAIR_ARGS[@]}"
 
       - name: Build report artifacts
