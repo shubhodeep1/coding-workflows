@@ -99,7 +99,10 @@
 # into the default or an integration branch; otherwise one head-filtered pulls
 # listing, one /user read, one paginated parent comments read, at most one
 # paginated read of this PR's comments (skipped when PR_ISSUE_COMMENTS_FILE is
-# usable) and at most one comment.
+# usable) and at most one comment. Those counts are per invocation: the
+# "Enable auto-merge on PR" step (review_enable_auto_merge.sh) invokes it up to
+# twice, before the success status and again after the required-checks wait,
+# so one step can double them; a refusal on the first call skips the second.
 #
 # Log: SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=
 #      (followup_guard adds parent=; retirement adds item=, issues=, prs=)
