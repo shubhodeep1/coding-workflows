@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-16T13:47:35Z",
+  "issue_number": 9503,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=docs/INVENTORY.md:1; cited_path=docs/INVENTORY.md; files_touched=.github/workflows/workflow-log-analysis.yml, README.md, agents.d/analysis-findings-p1-report-pr.md, agents.d/analysis-findings-p1b-deliver-audit-sections.md, changelog.d/analysis-findings-p1b-deliver-audit-sections.md, scripts/workflow_log_analysis_deliver_report.sh, tests/test_workflow_log_analysis_report_delivery.py, tests/test_workflow_log_analysis_report_pr.py.",
+  "phase": "review_autofix",
+  "pr_number": 9545,
+  "record_id": "lesson_20261116134735_6ed99914d5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "docs/INVENTORY.md",
+    ".github/workflows/workflow-log-analysis.yml",
+    "README.md",
+    "agents.d/analysis-findings-p1-report-pr.md",
+    "agents.d/analysis-findings-p1b-deliver-audit-sections.md",
+    "changelog.d/analysis-findings-p1b-deliver-audit-sections.md",
+    "scripts/workflow_log_analysis_deliver_report.sh",
+    "tests/test_workflow_log_analysis_report_delivery.py",
+    "tests/test_workflow_log_analysis_report_pr.py"
+  ]
+}
