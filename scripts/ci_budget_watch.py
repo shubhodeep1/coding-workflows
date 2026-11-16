@@ -35,7 +35,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -82,9 +82,10 @@ def _seconds(start: str | None, end: str | None) -> int | None:
 	try:
 		a = datetime.fromisoformat(start.replace("Z", "+00:00"))
 		b = datetime.fromisoformat(end.replace("Z", "+00:00"))
-	except ValueError:
+		return max(0, int((b - a).total_seconds()))
+	except (TypeError, ValueError):
+		# TypeError: a naive time mixed with an aware one; not checked.
 		return None
-	return max(0, int((b - a).total_seconds()))
 
 
 def _job_run_start(job: dict[str, Any]) -> str | None:
@@ -102,14 +103,21 @@ def _job_run_start(job: dict[str, Any]) -> str | None:
 	starts = [step.get("started_at") for step in steps if isinstance(step, dict) and step.get("started_at")]
 	if not starts:
 		return None
-	# Compare parsed times, not strings, so mixed offsets order correctly; an
-	# unparsable time is passed through and `_seconds` rejects it.
-	def _key(value: str) -> datetime:
-		return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-	try:
-		return min(starts, key=_key)
-	except (TypeError, ValueError):
+	# Compare parsed times, not strings, so mixed offsets order correctly. Each
+	# start is parsed on its own and an unparsable one is dropped, so one
+	# malformed step time cannot move the start later. A naive time is taken as
+	# UTC (GitHub emits `Z` times). When no start parses, the first is returned
+	# and `_seconds` rejects it, so the duration is not checked.
+	_parsed_starts: list[datetime] = []
+	for value in starts:
+		try:
+			when = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+		except ValueError:
+			continue
+		_parsed_starts.append(when if when.tzinfo else when.replace(tzinfo=timezone.utc))
+	if not _parsed_starts:
 		return starts[0]
+	return min(_parsed_starts).isoformat()
 
 
 def job_duration_findings(jobs: list[dict[str, Any]], timeouts: dict[str, int], ratio: float) -> list[dict[str, Any]]:
@@ -129,7 +137,9 @@ def job_duration_findings(jobs: list[dict[str, Any]], timeouts: dict[str, int], 
 			continue
 		run_start = _job_run_start(job)
 		if run_start is None and isinstance(job.get("steps"), list):
-			print(f"::notice::ci_budget_watch: job {name} ran no step (conclusion={job.get('conclusion')}); duration not checked.")
+			# Escape workflow-command data so a name cannot end the command line.
+			safe_name = name.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+			print(f"::notice::ci_budget_watch: job {safe_name} ran no step (conclusion={job.get('conclusion')}); duration not checked.")
 			continue
 		took = _seconds(run_start, job.get("completed_at"))
 		if took is None:

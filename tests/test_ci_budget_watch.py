@@ -78,6 +78,23 @@ def test_job_duration_findings_measure_from_first_started_step(tmp_path: Path) -
 	assert [(f["subject"], f["value"]) for f in findings] == [("tests-a", 1200)]
 
 
+def test_job_duration_findings_drop_unparsable_step_starts(tmp_path: Path, capsys) -> None:
+	# A malformed step time is dropped instead of moving the start later.
+	root = _tree(tmp_path, {}, CI)
+	timeouts = cbw.job_timeouts(root / ".github" / "workflows" / "ci.yml")
+	job = {**_job("tests-a", 19 * 60), "steps": [
+		{"name": "Run tests", "started_at": "2026-10-09T10:16:00Z"},
+		{"name": "Broken", "started_at": "not-a-time"},
+		{"name": "Set up job", "started_at": "2026-10-09T10:00:00"},
+	]}
+	findings = cbw.job_duration_findings([job], timeouts, 0.75)
+	assert [(f["subject"], f["value"]) for f in findings] == [("tests-a", 1140)]
+	# The no-step notice escapes the job name so it cannot end the command.
+	queued = {**_job("tests-a\n::error::x", 60, conclusion="cancelled"), "steps": []}
+	assert cbw.job_duration_findings([queued], {"tests-a\n::error::x": 20}, 0.75) == []
+	assert "job tests-a%0A::error::x ran no step" in capsys.readouterr().out
+
+
 def test_issue_text_names_the_fix_and_carries_the_marker() -> None:
 	size = {"kind": "workflow_size", "subject": ".github/workflows/review_autofix.yml", "value": 481_287, "limit": 480_000}
 	assert cbw.issue_title(size) == "CI budget: .github/workflows/review_autofix.yml is 481,287 bytes (guard 480,000)"
