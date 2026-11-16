@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-16T08:23:35Z",
+  "issue_number": 9480,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=.github/workflows/ci.yml:3851-3881; cited_path=.github/workflows/ci.yml; files_touched=.github/workflows/test-and-mark-stable.yml, agents.d/9480-e2e-review-runner-wait.md, changelog.d/9480-e2e-review-runner-wait.md, scripts/stable_e2e_step_wait_review.sh, tests/test_test_and_mark_stable_review_blocked_budget.py.",
+  "phase": "review_autofix",
+  "pr_number": 9501,
+  "record_id": "lesson_20261116082335_7681a0c958",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/test-and-mark-stable.yml",
+    "agents.d/9480-e2e-review-runner-wait.md",
+    "changelog.d/9480-e2e-review-runner-wait.md",
+    "scripts/stable_e2e_step_wait_review.sh",
+    "tests/test_test_and_mark_stable_review_blocked_budget.py"
+  ]
+}
