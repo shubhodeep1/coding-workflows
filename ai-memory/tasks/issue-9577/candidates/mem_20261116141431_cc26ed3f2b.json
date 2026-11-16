@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The only file the fix needs, `docs/INVENTORY.md`, is outside this heal issue's scope. How should the fix be delivered?\nChoices:\nA) File a normal (non-heal) issue for the pipeline that changes only `docs/INVENTORY.md`, adding the `scripts/review_final_ci_failed.sh` and `scripts/review_final_ci_sweep.sh` entries next to line 304 with the descriptions suggested in this issue. Then close this heal issue as superseded. (RECOMMENDED)\nB) Same as A, and the normal issue also fixes the heal intake. It adds a `HEAL_SCOPE_GUARD_TEST_SUBJECTS` entry linking `tests/inventory_parity.py` to `docs/INVENTORY.md` in `scripts/workflow_failure_heal.py`, plus a contract test, so future inventory-parity heals get a scope they can actually fix.\nC) An operator merges the two-entry `docs/INVENTORY.md` change by hand, and this heal issue is closed with no pipeline implementation.",
+  "fingerprint": "0126af980316eaf483ed76710ba851dd247e8d104487ba211b207171d58fa659",
+  "lineage": {
+    "issue_number": 9577,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43879677843",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43879677843",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261116141431_cc26ed3f2b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9577,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43879677843"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9577 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-16T14:14:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
