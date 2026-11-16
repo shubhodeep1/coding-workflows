@@ -112,3 +112,131 @@ def test_call_site_runs_only_in_security_pass_states_before_the_pass_logic() -> 
 	# conflict does not move the audited head.
 	tick_sync = text[text.index('    && [ "${PROJECT_STATUS}" != "security-pass" ] \\'):]
 	assert tick_sync.index('    && [ "${PROJECT_STATUS}" != "security-pass-fixing" ] \\') < tick_sync.index('sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}"')
+
+
+# --- Integration sync throttle (run-volume plan item 3) -----------------------
+# docs/plans/reduce-actions-run-volume-plan.md: the per-tick main -> integration
+# sync ran on every poll tick, and each push started two full CI runs.
+# _integration_sync_throttle_reason decides whether this tick syncs.
+
+
+def _throttle_text() -> str:
+	match = re.search(r"^_integration_sync_throttle_reason\(\) \{\n.*?^\}\n", _poller_text(), re.S | re.M)
+	assert match
+	return match.group(0)
+
+
+def _sync_function_text() -> str:
+	match = re.search(r"^sync_default_into_integration_branch\(\) \{\n.*?^\}\n", _poller_text(), re.S | re.M)
+	assert match
+	return match.group(0)
+
+
+def _iso_ago(seconds: int) -> str:
+	import datetime
+	stamp = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=seconds)
+	return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _throttle(state: dict, pr_json: dict | None = None, *, force: str = "", interval: str | None = None) -> subprocess.CompletedProcess:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		state_file = tmp / "state.json"
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		calls = tmp / "calls"
+		pr_file = tmp / "pr.json"
+		pr_file.write_text(json.dumps(pr_json) if pr_json is not None else "{}", encoding="utf-8")
+		lines = [
+			"set -euo pipefail",
+			_jq_field_text(),
+			f"STATE_FILE={str(state_file)!r}",
+			f'_fetch_pr_json() {{ echo "fetch $1" >> {str(calls)!r}; cat {str(pr_file)!r}; }}',
+			_throttle_text(),
+		]
+		if interval is not None:
+			lines.append(f"INTEGRATION_SYNC_MIN_INTERVAL_SECS={interval!r}")
+		lines += [
+			f'rc=0; reason="$(_integration_sync_throttle_reason {force!r})" || rc=$?',
+			'echo "reason=${reason} rc=${rc}"',
+			f'cat {str(calls)!r} 2>/dev/null || true',
+		]
+		return subprocess.run(["bash", "-c", "\n".join(lines)], capture_output=True, text=True, timeout=30)
+
+
+def _recent_state(**extra) -> dict:
+	state = {
+		"integration_sync_status": "clean",
+		"sync": {"status": "active", "last_default_sync_at": _iso_ago(600)},
+		"current_wave": 1,
+		"waves": [{"issues": [{"id": "a", "status": "in_progress"}, {"id": "b", "status": "merged"}]}],
+	}
+	state.update(extra)
+	return state
+
+
+def test_throttle_skips_a_recent_clean_sync_mid_wave() -> None:
+	result = _throttle(_recent_state())
+	assert result.returncode == 0, result.stderr
+	assert "reason=within_interval rc=1" in result.stdout
+	assert "fetch" not in result.stdout
+
+
+def test_throttle_syncs_when_needed_or_overdue() -> None:
+	cases = [
+		("never_synced", _recent_state(sync={"status": "active"}), None),
+		("interval_elapsed", _recent_state(sync={"status": "active", "last_default_sync_at": _iso_ago(90000)}), None),
+		("not_clean", _recent_state(integration_sync_status="conflict"), None),
+		("not_clean", _recent_state(sync={"status": "active", "last_default_sync_at": _iso_ago(60), "last_conflict_fingerprint": "abc"}), None),
+		("wave_complete", _recent_state(waves=[{"issues": [{"id": "a", "status": "merged"}, {"id": "b", "status": "skipped"}]}]), None),
+		("final_pr_unmergeable", _recent_state(final_merge_pr=7), {"state": "open", "mergeable": False}),
+		("final_pr_unreadable", _recent_state(final_merge_pr=7), {}),
+		("clock_unreadable", _recent_state(sync={"status": "active", "last_default_sync_at": "not-a-date"}), None),
+	]
+	for reason, state, pr_json in cases:
+		result = _throttle(state, pr_json)
+		assert result.returncode == 0, result.stderr
+		assert f"reason={reason} rc=0" in result.stdout, (reason, result.stdout)
+
+
+def test_throttle_skips_with_a_mergeable_or_computing_final_pr() -> None:
+	for pr_json in ({"state": "open", "mergeable": True}, {"state": "open", "mergeable": None}, {"state": "closed", "mergeable": False}):
+		result = _throttle(_recent_state(final_merge_pr=7), pr_json)
+		assert "reason=within_interval rc=1" in result.stdout, (pr_json, result.stdout)
+		assert "fetch 7" in result.stdout
+
+
+def test_throttle_honours_force_and_the_interval_switch() -> None:
+	assert "reason=forced rc=0" in _throttle(_recent_state(), force="force").stdout
+	assert "reason=interval_disabled rc=0" in _throttle(_recent_state(), interval="0").stdout
+	# A short custom interval elapses after the recorded 600 s.
+	assert "reason=interval_elapsed rc=0" in _throttle(_recent_state(), interval="300").stdout
+	bad = _throttle(_recent_state(), interval="soon")
+	assert "reason=within_interval rc=1" in bad.stdout
+	assert "INTEGRATION_SYNC_MIN_INTERVAL_SECS='soon' is not a non-negative integer; using 86400." in bad.stderr
+
+
+def test_throttle_treats_an_empty_wave_as_incomplete() -> None:
+	result = _throttle(_recent_state(waves=[{"issues": []}]))
+	assert "reason=within_interval rc=1" in result.stdout
+
+
+def test_sync_checks_the_throttle_before_the_merges_call_and_records_the_clock() -> None:
+	body = _sync_function_text()
+	throttle_at = body.index('sync_throttle_reason="$(_integration_sync_throttle_reason "${sync_force}")"')
+	merges_at = body.index('gh api "repos/${GITHUB_REPOSITORY}/merges"')
+	superseded_at = body.index("evaluate_sync_superseded_by_main")
+	assert superseded_at < throttle_at < merges_at
+	assert "outcome=skip reason=${sync_throttle_reason:-within_interval}" in body
+	assert '"last_default_sync_at": $now' in body
+	assert body.index('"last_default_sync_at": $now') > merges_at
+	# Only a merge that created a commit (201, output on stdout) posts the state.
+	assert 'if [ -s "${sync_merge_out_file}" ] && [ "${sync_status}" = "active" ]' in body
+
+
+def test_security_pass_caller_forces_the_sync() -> None:
+	assert 'sync_default_into_integration_branch "${integration_branch}" "${default_branch}" force || return $?' in _sync_helper_text()
+
+
+def test_poll_step_passes_the_interval_with_a_default() -> None:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "INTEGRATION_SYNC_MIN_INTERVAL_SECS: ${{ vars.INTEGRATION_SYNC_MIN_INTERVAL_SECS || '86400' }}" in workflow

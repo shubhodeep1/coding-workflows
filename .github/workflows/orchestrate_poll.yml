@@ -1403,6 +1403,8 @@ jobs:
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
+          # Gap cap between main -> integration syncs (run-volume plan item 3); 0 syncs every tick.
+          INTEGRATION_SYNC_MIN_INTERVAL_SECS: ${{ vars.INTEGRATION_SYNC_MIN_INTERVAL_SECS || '86400' }}
           HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
