@@ -199,17 +199,22 @@ for head_ref in ${other_branches[@]+"${other_branches[@]}"}; do
 done
 fetch_log="${work_tmp}/fetch.log"
 if [ "${wla_sections_only}" = "true" ]; then
-	# Deep enough to reach the recorded base from the current target tip. In
-	# a shallow checkout --depth does not move a boundary the fetch already
-	# has (the target tip), so deepen from it instead.
-	wla_sections_depth_flag="--depth=${WLA_DELIVER_SECTIONS_FETCH_DEPTH}"
-	if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
-		wla_sections_depth_flag="--deepen=${WLA_DELIVER_SECTIONS_FETCH_DEPTH}"
-	fi
-	if ! git fetch --no-tags "${wla_sections_depth_flag}" origin "${fetch_specs[0]}" "${fetch_specs[1]}" >"${fetch_log}" 2>&1; then
+	# Deep enough to reach the recorded base from the run branch tip and
+	# from the current target tip. --depth counts from each fetched tip. A
+	# combined fetch does not deepen the fetch-depth: 1 checkout's target tip
+	# when that ref is already up to date, so the target is then deepened on
+	# its own: --depth first, --deepen (relative to the shallow boundary) as
+	# the fallback, since git versions differ in which one moves it.
+	if ! git fetch --no-tags "--depth=${WLA_DELIVER_SECTIONS_FETCH_DEPTH}" origin "${fetch_specs[0]}" "${fetch_specs[1]}" >"${fetch_log}" 2>&1; then
 		wla_deliver_redact "${fetch_log}"
 		wla_deliver_fail fetch_failed "branch=${REPORT_BRANCH}"
 	fi
+	for wla_sections_deepen_flag in "--depth=${WLA_DELIVER_SECTIONS_FETCH_DEPTH}" "--deepen=${WLA_DELIVER_SECTIONS_FETCH_DEPTH}"; do
+		if git merge-base --is-ancestor "${wla_sections_base}" "refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null; then
+			break
+		fi
+		git fetch --no-tags "${wla_sections_deepen_flag}" origin "${fetch_specs[0]}" >/dev/null 2>&1 || true
+	done
 elif ! git fetch --no-tags --depth=1 origin "${fetch_specs[@]}" >"${fetch_log}" 2>&1; then
 	wla_deliver_redact "${fetch_log}"
 	# One missing branch (a PR merged since the listing) fails the whole
@@ -230,6 +235,11 @@ fi
 if [ "${wla_sections_only}" = "true" ]; then
 	# The base must sit on both the target and the run branch, so the PR's
 	# merge base is the base and the PR diff is exactly the diff checked below.
+	# The reason key stays section_base_invalid; this line tells a base the
+	# fetch did not bring in apart from a base that is not an ancestor.
+	if ! git cat-file -e "${wla_sections_base}^{commit}" 2>/dev/null; then
+		echo "Recorded section base ${wla_sections_base} is not in the delivery checkout after a ${WLA_DELIVER_SECTIONS_FETCH_DEPTH}-commit fetch."
+	fi
 	if ! git merge-base --is-ancestor "${wla_sections_base}" "refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null \
 		|| ! git merge-base --is-ancestor "${wla_sections_base}" "${run_ref}" 2>/dev/null; then
 		wla_deliver_fail section_base_invalid "branch=${REPORT_BRANCH}"
