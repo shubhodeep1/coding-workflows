@@ -3503,6 +3503,10 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # A new advisory is posted with the job token, so it starts no
+          # issue_comment workflows (run-volume plan item 6); refreshing an
+          # existing PAT-authored advisory stays on GH_TOKEN.
+          MATERIALITY_COMMENT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -3550,10 +3554,28 @@ jobs:
             echo "::warning::Failed to refresh AI Materiality Advisory comment #${existing_comment_id}; will try posting a new advisory."
           fi
 
-          if gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --input "${payload}" >/dev/null 2>&1; then
-            echo "AGENTS_MD_MATERIALITY: posted advisory comment."
-          else
-            echo "::warning::Failed to post AI Materiality Advisory comment on PR #${PR_NUMBER}."
+          # Fall back to GH_TOKEN only when GitHub refuses the job token
+          # (401/403): a POST is sent once, and resending after a timeout or
+          # 5xx could duplicate the advisory.
+          materiality_post_via_pat=true
+          if [ -n "${MATERIALITY_COMMENT_TOKEN:-}" ]; then
+            materiality_post_err="$(mktemp)"
+            if GH_TOKEN="${MATERIALITY_COMMENT_TOKEN}" gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --input "${payload}" >/dev/null 2>"${materiality_post_err}"; then
+              echo "AGENTS_MD_MATERIALITY: posted advisory comment (token=job)."
+              materiality_post_via_pat=false
+            elif ! grep -qiE 'HTTP 40[13]|Resource not accessible by integration|Bad credentials|Requires authentication' "${materiality_post_err}"; then
+              cat "${materiality_post_err}" >&2 || true
+              echo "::warning::Failed to post AI Materiality Advisory comment on PR #${PR_NUMBER} (job token, not resent)."
+              materiality_post_via_pat=false
+            fi
+            rm -f "${materiality_post_err}"
+          fi
+          if [ "${materiality_post_via_pat}" = "true" ]; then
+            if gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --input "${payload}" >/dev/null 2>&1; then
+              echo "AGENTS_MD_MATERIALITY: posted advisory comment (token=pat)."
+            else
+              echo "::warning::Failed to post AI Materiality Advisory comment on PR #${PR_NUMBER}."
+            fi
           fi
           rm -f "${payload}"
 
@@ -4537,6 +4559,9 @@ jobs:
         env:
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Judge comments are informational, so they post with the job token
+          # and start no issue_comment workflows (run-volume plan item 6).
+          RB_JUDGE_COMMENT_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           ENABLE_REVIEW_BLOCKED_JUDGE: ${{ vars.ENABLE_REVIEW_BLOCKED_JUDGE || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
