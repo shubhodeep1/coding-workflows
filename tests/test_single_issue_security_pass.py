@@ -1255,7 +1255,7 @@ def _carry_git(repo: Path, *args: str) -> str:
 	return subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, text=True, check=True).stdout.strip()
 
 
-def _carry_repo(tmp_path: Path, *, evil_merge: bool = False) -> tuple[Path, str, str, str]:
+def _carry_repo(tmp_path: Path, *, evil_merge: bool = False, whitespace_merge: bool = False) -> tuple[Path, str, str, str]:
 	"""Build merge base -> PR head (from) and merge base -> main tip, then the update merge."""
 	repo = tmp_path / "repo"
 	repo.mkdir()
@@ -1278,6 +1278,10 @@ def _carry_repo(tmp_path: Path, *, evil_merge: bool = False) -> tuple[Path, str,
 	if evil_merge:
 		(repo / "a.txt").write_text((repo / "a.txt").read_text(encoding="utf-8").replace("line 10\n", "line 10 sneaked in\n"), encoding="utf-8")
 		_carry_git(repo, "commit", "-q", "--amend", "--no-edit", "-a")
+	if whitespace_merge:
+		# Indentation-only change to the PR's own line, inside the merge.
+		(repo / "a.txt").write_text((repo / "a.txt").read_text(encoding="utf-8").replace("line 3 fixed\n", "  line 3 fixed\n"), encoding="utf-8")
+		_carry_git(repo, "commit", "-q", "--amend", "--no-edit", "-a")
 	merge_sha = _carry_git(repo, "rev-parse", "HEAD")
 	return repo, from_sha, base_parent, merge_sha
 
@@ -1290,8 +1294,8 @@ def _sync_comment(from_sha: str, base_parent: str, merge_sha: str, login: str = 
 	return _comment(body, login=login, comment_id=comment_id)
 
 
-def _carry_run(tmp_path: Path, comments_for, *, evil_merge: bool = False):
-	repo, from_sha, base_parent, merge_sha = _carry_repo(tmp_path, evil_merge=evil_merge)
+def _carry_run(tmp_path: Path, comments_for, *, evil_merge: bool = False, whitespace_merge: bool = False):
+	repo, from_sha, base_parent, merge_sha = _carry_repo(tmp_path, evil_merge=evil_merge, whitespace_merge=whitespace_merge)
 	pr = _pr()
 	pr["head"]["sha"] = merge_sha
 	commit = json.dumps({"parents": [from_sha, base_parent], "verified": True, "committer": "web-flow"})
@@ -1319,6 +1323,16 @@ def test_base_sync_that_changes_a_pr_file_is_audited(tmp_path: Path) -> None:
 	)
 	assert f"head={merge_sha} outcome=carry_skipped reason=patch_mismatch" in result.stdout, result.stdout + result.stderr
 	assert "reason=base_sync_carry" not in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_base_sync_with_a_whitespace_only_change_to_a_pr_line_is_audited(tmp_path: Path) -> None:
+	# `git patch-id --stable` ignores whitespace; the carry must not.
+	result, calls, output, _from_sha, merge_sha = _carry_run(
+		tmp_path, lambda f, b, m: [_comment(_marker("clean", f, 1)), _sync_comment(f, b, m)], whitespace_merge=True,
+	)
+	assert f"head={merge_sha} outcome=carry_skipped reason=patch_mismatch" in result.stdout, result.stdout + result.stderr
 	assert output == "hold=true\nhold_reason=audit_dispatched\n"
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 

@@ -5774,6 +5774,12 @@ def test_reviewer_failure_evidence_keeps_the_bash_diagnostic_line() -> None:
 	assert evidence.splitlines() == ["reviewers_failed=true", "render_prompt.sh: line 306: 1abc: invalid variable name"]
 	assert heal.failure_headline([evidence]) == "render_prompt.sh: line 306: 1abc: invalid variable name"
 	assert "line 12" not in heal.reviewer_failure_evidence(["review.sh: line 12: looks fine\n"])
+	# Spec item 3: the first plain `ERROR:` line also reaches the evidence the
+	# headline reads; later ones are dropped and secrets are redacted.
+	plain = heal.reviewer_failure_evidence(["starting\n", "ERROR: reviewer prompt missing\n", "ERROR: second failure\n"])
+	assert plain.splitlines() == ["reviewers_failed=true", "ERROR: reviewer prompt missing"]
+	assert heal.failure_headline([plain]) == "reviewer prompt missing"
+	assert "ghp_secret" not in heal.reviewer_failure_evidence(["ERROR: token ghp_secretvalue123 rejected\n"])
 
 
 def test_failure_headline_redacts_credentials_and_stays_one_line() -> None:

@@ -10975,10 +10975,6 @@ def test_review_collect_pr_metadata_does_not_shadow_shared_gh_retry() -> None:
 	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in text
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 # --- Repeated reviewer failure stops the retry loop (issue #9533) ---------
 
 _RRF_REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -11122,3 +11118,48 @@ def test_repeated_reviewer_failure_workflow_wiring() -> None:
 	):
 		assert line in post_summary, line
 	assert "REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}" in _step_block("Evaluate review gate")
+	# The base-sync carry kill switch reaches every security-pass step.
+	workflow_text = (_RRF_REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	assert workflow_text.count("SECURITY_PASS_BASE_SYNC_CARRY_ENABLED: ${{ vars.SECURITY_PASS_BASE_SYNC_CARRY_ENABLED || 'true' }}") == 3
+
+
+_RRF_MARK_BLOCKED = _RRF_REPO_ROOT / "scripts" / "review_autofix_step_mark_review_blocked_workflow_failure.sh"
+
+
+@pytest.mark.parametrize("variant", ["fallback_issue", "issueless", "not_repeated"])
+def test_repeated_reviewer_failure_labels_fallback_issue_before_the_pr(tmp_path: Path, variant: str) -> None:
+	# Issue #9533: the PR itself is labelled only when no issue is found by
+	# closingIssuesReferences, the fallback numbers or the PR title/body.
+	support_dir = tmp_path / "support"
+	support_dir.mkdir()
+	calls_file = tmp_path / "gh_calls.txt"
+	(support_dir / "gh_helpers.sh").write_text('gh_retry() { printf \'%s\\n\' "$*" >> "${FAKE_GH_CALLS}"; return 0; }\n', encoding="utf-8")
+	pr_meta = tmp_path / "pr_meta.json"
+	pr_meta.write_text(json.dumps({"title": "t", "body": "no refs"}), encoding="utf-8")
+	env = {
+		"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+		"HOME": str(tmp_path),
+		"FAKE_GH_CALLS": str(calls_file),
+		"SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"REPOSITORY": "owner/repo",
+		"PR_NUMBER": "9356",
+		"PR_META_FILE": str(pr_meta),
+		"LINKED_ISSUES_JSON": "[]",
+		"LINKED_ISSUE_FALLBACK_NUMBERS_JSON": "[77]" if variant == "fallback_issue" else "[]",
+		"AUTOFIX_REVIEWERS_FAILED_REPEATED": "false" if variant == "not_repeated" else "true",
+	}
+	result = subprocess.run(["bash", str(_RRF_MARK_BLOCKED)], capture_output=True, text=True, env=env, timeout=60, check=False)
+	assert result.returncode == 0, result.stdout + result.stderr
+	calls = calls_file.read_text(encoding="utf-8") if calls_file.exists() else ""
+	if variant == "fallback_issue":
+		assert "repos/owner/repo/issues/77/labels" in calls
+		assert "issues/9356/labels" not in calls
+	elif variant == "issueless":
+		assert "repos/owner/repo/issues/9356/labels" in calls
+	else:
+		assert "/labels" not in calls
+		assert "No linked issues found for PR #9356" in result.stdout
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

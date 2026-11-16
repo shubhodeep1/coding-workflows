@@ -115,6 +115,7 @@ if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/nul
       --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
       --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
       --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
+      --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
       --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
       --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
       --support-sha "${REVIEW_SUPPORT_SHA:-}" \
@@ -139,7 +140,9 @@ if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/nul
   esac
   reviewers_failed_prior_count="${GATE_FINGERPRINT_CAP_COUNT:-0}"
   [[ "${reviewers_failed_prior_count}" =~ ^[0-9]{1,6}$ ]] || reviewers_failed_prior_count=0
-  reviewers_failed_gate_head="$(printf '%s' "${GATE_HEAD_SHA_FOR_FINGERPRINT:-${AUTOFIX_FAILURE_HEAD_SHA:-}}" | tr 'A-F' 'a-f')"
+  # No fallback to this run's head: an unset gate head fails the same-head
+  # check and keeps the retry.
+  reviewers_failed_gate_head="$(printf '%s' "${GATE_HEAD_SHA_FOR_FINGERPRINT:-}" | tr 'A-F' 'a-f')"
   reviewers_failed_this_head="$(printf '%s' "${AUTOFIX_FAILURE_HEAD_SHA:-}" | tr 'A-F' 'a-f')"
   if [ "${autofix_empty_failure_reason}" = "reviewers_failed" ] \
     && [ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ] \

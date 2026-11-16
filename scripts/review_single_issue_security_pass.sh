@@ -343,7 +343,9 @@ single_pass_marker_age_hours()
 #     parent have exactly one merge base, and the PR's changed files
 #     (base parent..head) equal the audited ones (merge base..from);
 #   - over those files, the -U0 diffs merge base..from and base parent..head
-#     have the same `git patch-id --stable`, so the merge changed none of the
+#     have the same `git patch-id --verbatim` (stable ordering, whitespace
+#     kept: an indentation-only change is a mismatch; a git without
+#     --verbatim yields no id and fails closed), so the merge changed none of the
 #     PR's own lines and added nothing the base side did not already contain.
 # Sets single_pass_carry_from on success. Logs outcome=carry_skipped
 # reason=<token> otherwise. API budget: the helper's one commits/<head> and
@@ -437,8 +439,8 @@ single_pass_base_sync_carry()
 		return 1
 	fi
 	mapfile -d '' -t carry_paths < "${carry_pr_files}"
-	carry_patch_audited="$(GIT_LITERAL_PATHSPECS=1 git diff --no-ext-diff --no-textconv --no-renames --binary -U0 "${carry_mb}" "${carry_from}" -- "${carry_paths[@]}" 2>/dev/null | git patch-id --stable 2>/dev/null | awk '{ print $1 }')" || carry_patch_audited=""
-	carry_patch_head="$(GIT_LITERAL_PATHSPECS=1 git diff --no-ext-diff --no-textconv --no-renames --binary -U0 "${carry_base_parent}" "${head_sha}" -- "${carry_paths[@]}" 2>/dev/null | git patch-id --stable 2>/dev/null | awk '{ print $1 }')" || carry_patch_head=""
+	carry_patch_audited="$(GIT_LITERAL_PATHSPECS=1 git diff --no-ext-diff --no-textconv --no-renames --binary -U0 "${carry_mb}" "${carry_from}" -- "${carry_paths[@]}" 2>/dev/null | git patch-id --verbatim 2>/dev/null | awk '{ print $1 }')" || carry_patch_audited=""
+	carry_patch_head="$(GIT_LITERAL_PATHSPECS=1 git diff --no-ext-diff --no-textconv --no-renames --binary -U0 "${carry_base_parent}" "${head_sha}" -- "${carry_paths[@]}" 2>/dev/null | git patch-id --verbatim 2>/dev/null | awk '{ print $1 }')" || carry_patch_head=""
 	rm -rf "${carry_tmp}"
 	if ! [[ "${carry_patch_audited}" =~ ^[0-9a-f]{40}$ ]] || [ "${carry_patch_audited}" != "${carry_patch_head}" ]; then
 		single_pass_carry_skip "${head_sha}" patch_mismatch

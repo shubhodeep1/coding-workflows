@@ -4025,6 +4025,7 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 	summariser_code = ""
 	summariser_empty_stdout_prefixes: set[str] = set()
 	helper_lines: list[str] = []
+	plain_error_kept = False
 	for text in log_texts:
 		for raw_line in sanitize_text(text).split("\n"):
 			line = raw_line.strip()
@@ -4051,6 +4052,16 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 					bash_diagnostic = single_line(bash_diagnostic, 300)
 					if bash_diagnostic not in helper_lines:
 						helper_lines.append(bash_diagnostic)
+				continue
+			plain_error = _PLAIN_ERROR_LINE_RE.match(line)
+			if plain_error:
+				# Issue #9533 (spec item 3): keep the first plain `ERROR: <msg>`
+				# line too, so failure-headline (which reads this evidence)
+				# names it. One line only, redacted, so review text cannot
+				# flood the fingerprint.
+				if not plain_error_kept and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
+					helper_lines.append(single_line(redact_secrets("ERROR: " + plain_error.group("msg").strip()), 300))
+					plain_error_kept = True
 				continue
 			helper_match = _SELF_NAMED_SCRIPT_LINE_RE.match(line)
 			if helper_match and (_CRASH_ERROR_LINE_RE.match(line) or _SELF_NAMED_SCRIPT_FAILURE_RE.search(helper_match.group("rest"))) and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:

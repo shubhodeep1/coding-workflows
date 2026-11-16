@@ -32,18 +32,6 @@ ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true
 
 ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
-# Repeated reviewer failure on an issue-less PR (issue #9533): there is no
-# linked issue to block, so label the PR itself, like the fingerprint-cap-block
-# job does. LINKED_ISSUES_JSON must be exactly [] (unset or unparseable keeps
-# the legacy fallbacks below).
-if [ "${AUTOFIX_REVIEWERS_FAILED_REPEATED:-false}" = "true" ] && [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] \
-  && [ -n "${LINKED_ISSUES_JSON:-}" ] \
-  && printf '%s' "${LINKED_ISSUES_JSON}" | jq -e 'type == "array" and length == 0' >/dev/null 2>&1; then
-  echo "Setting ai:review-blocked on PR #${PR_NUMBER} (repeated reviewer failure, no linked issue)"
-  set_issue_phase_label_resilient "${PR_NUMBER}" "ai:review-blocked" "${REPOSITORY}"
-  exit 0
-fi
-
 if [ -z "${ISSUE_NUMBERS}" ]; then
   ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
 fi
@@ -60,6 +48,18 @@ if [ -z "${ISSUE_NUMBERS}" ]; then
     ISSUE_NUMBERS=""
   fi
   if [ -z "${ISSUE_NUMBERS}" ]; then
+    # Repeated reviewer failure on an issue-less PR (issue #9533): neither
+    # closingIssuesReferences nor the fallback numbers nor the PR title/body
+    # name an issue, so label the PR itself, like the fingerprint-cap-block
+    # job does. LINKED_ISSUES_JSON must be exactly [] (unset or unparseable
+    # keeps the legacy no-op).
+    if [ "${AUTOFIX_REVIEWERS_FAILED_REPEATED:-false}" = "true" ] && [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] \
+      && [ -n "${LINKED_ISSUES_JSON:-}" ] \
+      && printf '%s' "${LINKED_ISSUES_JSON}" | jq -e 'type == "array" and length == 0' >/dev/null 2>&1; then
+      echo "Setting ai:review-blocked on PR #${PR_NUMBER} (repeated reviewer failure, no linked issue)"
+      set_issue_phase_label_resilient "${PR_NUMBER}" "ai:review-blocked" "${REPOSITORY}"
+      exit 0
+    fi
     echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
     exit 0
   fi
