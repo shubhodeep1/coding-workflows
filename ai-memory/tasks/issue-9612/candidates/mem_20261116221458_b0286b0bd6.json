@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for issue: set the smoke canary file to run 43708007145 (canary-a-redo)\n\nPlanning ref: `orchestrator/project-9550` at `305bc455cbf0352eeb7d462f9ca3b8aaf91d648e`. The integration branch matches the metadata (mismatch: false).\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check CI\nACCEPTANCE: post-merge none: this only edits smoke data on the orchestrator integration branch, so no post-merge workflow covers it\n\n## Functions or modules to implement\nNone. This is a data-only edit. Replace the whole contents of `tests/e2e_smoke_canary.txt` with these two lines, each ending in `\\n`:\n```\nstatus: ok\ndecompose-run: 43708007145\n```\nI checked the current state: the file is exactly `status: ok\\ndecompose-run: 41445772297\\n`. So only line 2 changes, and the trailing newline stays.\n\n## Data structures affected\nOnly the canary text file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite line 2 only\n- Chosen: Change line 2 to `decompose-run: 43708007145` and keep line 1 and the trailing newline as they are.\n- Alternatives considered: Also update `tests/e2e_smoke_canary_b.txt`, which has the same stale run ID. Or rebase onto, or reuse, the other open smoke PRs.\n- Why: The issue says no other file may change, and it says this work does not depend on the canary-b fix-up. The canary-b file belongs to another child issue.\n\n## Security considerations\nNo trust boundary, endpoint, input handling, secret or money path is touched. The file holds a plain public workflow run ID.\n\n## Potential risks or edge cases\n- I grepped `tests/` and `scripts/` for the old value and found only `tests/e2e_smoke_canary_b.txt`. No test pins the exact run ID, so the edit should not break any test.\n- The open smoke PRs (#9531, #9536, #9537, #9539 and #9540) edit the same file for earlier runs. They may conflict when merged, but the issue says to ignore them.\n- The file must keep its trailing newline, and line endings must stay LF.\n\n## Testing considerations\nAfter the edit, run `cat -A tests/e2e_smoke_canary.txt`. It should print exactly `status: ok$` and `decompose-run: 43708007145$`. Then `git diff --stat` should list only this one file. No new tests are needed.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue spells out the exact end state for one file and forbids touching any other. The smallest complete change is a one-line replacement, so there is nothing to add and nothing to reduce. Under the \u00a76 priority order (correctness before speed), the full change and the shortcut are the same edit here.\n\n## Pre-execution self-check\nThe target file exists on the planning ref. The exact contents are given in the issue, no other file changes, and the PR targets `orchestrator/project-9550`.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "0694b63b00741581a62715e1a6f3d3098758e597e2815c34da545366a1c4e6e9",
+  "lineage": {
+    "issue_number": 9612,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43960665482",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43960665482",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9612"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261116221458_b0286b0bd6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9612,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43960665482"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9612",
+  "timestamps": {
+    "created_at": "2026-11-16T22:14:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
