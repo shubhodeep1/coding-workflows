@@ -19630,7 +19630,7 @@ def test_close_merged_sweep_logs_check_triage_rule_skip_reasons():
 
 
 def _close_sweep_gate_harness(tmp_path: Path, *, verdict: dict, timeline: list, prs: dict[int, dict] | None = None,
-		env: dict[str, str] | None = None, close_fails: bool = False) -> tuple[int, str, str]:
+		env: dict[str, str] | None = None, close_fails: bool = False, issue: dict | None = None) -> tuple[int, str, str]:
 	"""Run _close_sweep_check_triage_gate with a stub gate script and stub gh."""
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	gate_start = script.index('_CT_GATE_SKIP=""\n_CT_GATE_RC=0\n')
@@ -19657,7 +19657,7 @@ def _close_sweep_gate_harness(tmp_path: Path, *, verdict: dict, timeline: list, 
 		"set -euo pipefail\n"
 		'gh_retry() { "$@"; }\n'
 		'gh() { printf "%s\\n" "$*" >> "${STUB_CALLS}"; '
-		'if [ "$1" = api ]; then echo \'{"number": 10}\'; return 0; fi; '
+		'if [ "$1" = api ]; then printf "%s\\n" "${STUB_ISSUE_JSON}"; return 0; fi; '
 		'if [ "$1 $2" = "issue close" ] && [ "${STUB_CLOSE_FAIL:-}" = "1" ]; then return 1; fi; return 0; }\n'
 		'_fetch_pr_json() { cat "${STUB_PR_DIR}/$1.json" 2>/dev/null || echo "{}"; }\n'
 		"ensure_label_exists() { :; }\n"
@@ -19677,6 +19677,7 @@ def _close_sweep_gate_harness(tmp_path: Path, *, verdict: dict, timeline: list, 
 		"STUB_PR_DIR": str(pr_dir),
 		"STUB_CALLS": str(calls),
 		"STUB_CLOSE_FAIL": "1" if close_fails else "",
+		"STUB_ISSUE_JSON": json.dumps(issue if issue is not None else {"number": 10}),
 	}
 	run_env.pop("CHECK_TRIAGE_RESOLVED_GATE_ENABLED", None)
 	run_env.pop("ACTIVE_WORKFLOW_ISSUES", None)
@@ -19833,6 +19834,22 @@ def test_close_merged_sweep_closes_triage_issue_when_source_pr_closed_unmerged()
 			Path(tmp), verdict=closed, timeline=[], prs=source, env={"ACTIVE_WORKFLOW_ISSUES": "7\n100"},
 		)
 		assert rc == 0 and "reason=source_pr_closed_unmerged pr=85" in out, out
+	# An issue_comment-triggered run reports the default branch as its head, so
+	# ACTIVE_WORKFLOW_ISSUES misses it: the in-flight phase label holds the issue.
+	for phase in ("ai:planning", "ai:implementing"):
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, out, calls = _close_sweep_gate_harness(
+				Path(tmp), verdict=closed, timeline=[], prs=source, env={"ACTIVE_WORKFLOW_ISSUES": ""},
+				issue={"number": 10, "labels": [{"name": "ai:check-triage"}, {"name": phase}]},
+			)
+			assert rc == 1 and "triage_rule=skip reason=source_pr_closed_unmerged_phase_active pr=85" in out, out
+			assert "issue close" not in calls and "issue edit" not in calls
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, _ = _close_sweep_gate_harness(
+			Path(tmp), verdict=closed, timeline=[], prs=source,
+			issue={"number": 10, "labels": [{"name": "ai:check-triage"}, {"name": "ai:blocked"}]},
+		)
+		assert rc == 0 and "reason=source_pr_closed_unmerged pr=85" in out, out
 	# An open source PR keeps today's path.
 	with tempfile.TemporaryDirectory() as tmp:
 		rc, out, calls = _close_sweep_gate_harness(
@@ -19866,6 +19883,8 @@ def test_close_merged_sweep_check_triage_gate_wiring_contract():
 	idle_block = script[idle:script.index("  exit 0\nfi\n", idle)]
 	assert idle_block.index("run_standalone_stall_recovery") < idle_block.index("close_merged_issues_sweep triage_only || echo ")
 	assert '_sweep_mode="${1:-full}"' in body
+	# The gate kill switch and a zero cap stop the idle-tick pass before any list call.
+	assert body.index('echo "CLOSE_MERGED_SWEEP outcome=skip reason=triage_only_disabled"') < body.index('--label "ai:check-triage"')
 	assert body.index('if [ "${_sweep_mode}" != "triage_only" ]; then') < body.index('--label "ai:merged"')
 	assert body.index('--label "ai:ready-to-merge"') < body.index('--label "ai:check-triage"')
 	assert body.index('if [ "${_sweep_mode}" = "triage_only" ] && [[ "${_sweep_gate_window}" != *" ${issue_num} "* ]]; then') \

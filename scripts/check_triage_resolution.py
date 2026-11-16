@@ -76,7 +76,10 @@ trees and every removed file is absent (``content_check=tree_match``). Success
 resolves with ``evidence_ref=default_branch_content:<sha>``; otherwise the
 reason is ``integration_fallback_default_check_failed`` (with
 ``fallback_detail``), ``integration_fallback_content_absent`` or
-``integration_fallback_unreadable``.
+``integration_fallback_unreadable``. The fallback checks the triaged PR, not
+a separate fix PR: a fix PR merges into the triaged PR's head before that PR
+merges into the project branch, so the triaged PR's merge commit already
+contains the fix.
 Every other base keeps the default-branch path (``evidence_ref=default``).
 Any other conclusion (``neutral``, ``skipped``, pending, ...) or any read
 failure is ``unverified``: a failed check is never treated as passed.

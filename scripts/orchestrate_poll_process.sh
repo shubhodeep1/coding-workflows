@@ -5518,8 +5518,11 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # STANDALONE_RECOVERY_SWEEP_ONLY branch calls `close_merged_issues_sweep
 # triage_only`: only the ai:check-triage list call is made (no ai:merged /
 # ai:ready-to-merge lists) and only issues in this tick's gate window are
-# processed (timeline read, merged-candidate rules, then the gate pass). With
-# no argument the sweep is unchanged.
+# processed (timeline read, merged-candidate rules, then the gate pass). That
+# mode returns before any call (reason=triage_only_disabled) when
+# CHECK_TRIAGE_RESOLVED_GATE_ENABLED=false or the cap is 0. It runs only in the
+# idle-tick step, which needs ENABLE_STANDALONE_STALL_RECOVERY on. With no
+# argument the sweep is unchanged.
 #
 # Third origin class (issue #8955):
 #   - check_triage: open ai:check-triage issue carrying neither ai:merged nor
@@ -5551,6 +5554,13 @@ close_merged_issues_sweep() {
   local _sweep_mode="${1:-full}"
   if [ "${ENABLE_CLOSE_MERGED_ISSUES}" != "true" ]; then
     echo "Close merged issues sweep disabled by ENABLE_CLOSE_MERGED_ISSUES=${ENABLE_CLOSE_MERGED_ISSUES}."
+    return 0
+  fi
+  # The idle-tick pass exists only for the gate: its kill switch and a zero cap
+  # stop it before any list call or merged-candidate close.
+  if [ "${_sweep_mode}" = "triage_only" ] && { [[ "${CHECK_TRIAGE_GATE_SWEEP_MAX_PER_TICK:-10}" =~ ^0{1,4}$ ]] \
+      || [ "$(printf '%s' "${CHECK_TRIAGE_RESOLVED_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; }; then
+    echo "CLOSE_MERGED_SWEEP outcome=skip reason=triage_only_disabled"
     return 0
   fi
 
@@ -24280,7 +24290,10 @@ _check_triage_gate_invoke() {
 # (reason=source_pr_state_unreadable); a source PR the fresh read shows open
 # or merged holds it (reason=source_pr_state_changed); an active pipeline run
 # for the issue (issue_has_active_workflow, this tick's ACTIVE_WORKFLOW_ISSUES)
-# holds it (reason=source_pr_closed_unmerged_run_active); a source PR whose head is an
+# holds it (reason=source_pr_closed_unmerged_run_active), and so does an
+# ai:planning / ai:implementing label on the gate core's fresh issue read
+# (reason=source_pr_closed_unmerged_phase_active), because an issue_comment
+# run reports the default branch as its head; a source PR whose head is an
 # `orchestrator/project-*` integration branch holds it
 # (reason=source_pr_integration_head), because a closed integration PR's
 # content can reach the default branch through a re-issued PR (#739 / #753);
@@ -24342,8 +24355,9 @@ _close_sweep_check_triage_gate() {
     echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_integration_head pr=${_CT_GATE_PR} head=$(_close_sweep_log_ref "${_ctg_source_head}" "none")"
     return 1
   fi
-  # Same-repository PR cross-references whose state is not "closed"; a missing
-  # state is read as unreadable below (fail closed: the issue stays open).
+  # Same-repository PR cross-references whose state is not "closed". A missing
+  # state is kept, and the PR fetch below decides: an unreadable fetch holds
+  # the issue (source_pr_state_unreadable).
   if ! _ctg_open_prs="$(printf '%s' "${timeline_json}" | jq -r '
       [.[]
         | select(.event == "cross-referenced")
@@ -24390,6 +24404,14 @@ _close_sweep_check_triage_gate() {
   if [ -n "${ACTIVE_WORKFLOW_ISSUES+x}" ] && declare -F issue_has_active_workflow >/dev/null 2>&1 \
       && issue_has_active_workflow "${issue_num}"; then
     echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_closed_unmerged_run_active pr=${_CT_GATE_PR}"
+    return 1
+  fi
+  # build_active_issue_set sees a run only through its head branch, and an
+  # issue_comment-triggered plan/implement run reports the default branch, so
+  # also hold on the in-flight phase labels of the gate core's fresh issue read.
+  if jq -e '[.labels[]? | if type == "object" then (.name // "") else . end] | (index("ai:planning") != null or index("ai:implementing") != null)' \
+      "${RUNTIME_DIR:-/tmp}/stall_check_triage_issue_${issue_num}.json" >/dev/null 2>&1; then
+    echo "CLOSE_MERGED_SWEEP issue=${issue_num} triage_rule=skip reason=source_pr_closed_unmerged_phase_active pr=${_CT_GATE_PR}"
     return 1
   fi
   ensure_label_exists "ai:closed" >/dev/null 2>&1 || true
