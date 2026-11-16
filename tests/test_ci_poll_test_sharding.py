@@ -1498,6 +1498,7 @@ WIRING_PART1_MODULES = (
 	"tests/test_review_autofix_last_run_diff_oscillation_guard.py",
 	"tests/test_review_commit_new_files_preserved.py",
 	"tests/test_review_conflict_resolve_sandbox_only.py",
+	"tests/test_review_final_ci.py",
 	"tests/test_review_freshness_ci_failed.py",
 	"tests/test_review_head_gate.py",
 	"tests/test_review_parse_consolidator.py",
@@ -1580,7 +1581,7 @@ def run_wiring_part1_filter(
 
 
 class WiringGuardPartOneShardingContractTest(unittest.TestCase):
-	"""The wiring guard part 1 step runs its 42 modules in local shards (#8246).
+	"""The wiring guard part 1 step runs its 43 modules in local shards (#8246).
 
 	`tests-heal-plan-and-validation` took 15m06s of its 20 minutes (run
 	40626853481). The step stays in its job, by name and without a guard,
@@ -1614,8 +1615,8 @@ class WiringGuardPartOneShardingContractTest(unittest.TestCase):
 		array = re.search(r"wg1_modules=\((?P<mods>[^)]*)\)", self.run)
 		self.assertIsNotNone(array)
 		self.assertEqual(tuple(array.group("mods").split()), WIRING_PART1_MODULES)
-		self.assertEqual(len(WIRING_PART1_MODULES), 42)
-		self.assertEqual(len(set(WIRING_PART1_MODULES)), 42)
+		self.assertEqual(len(WIRING_PART1_MODULES), 43)
+		self.assertEqual(len(set(WIRING_PART1_MODULES)), 43)
 		for module in WIRING_PART1_MODULES:
 			with self.subTest(module=module):
 				self.assertTrue((REPO_ROOT / module).is_file(), module)
@@ -2429,7 +2430,6 @@ MOVED_PROMOTE_8771_STEPS = {
 		POLL_JOB_ID,
 		(
 			"tests/test_check_failure_triage_workflow_security.py",
-			"tests/test_check_failure_triage_historical.py",
 			"tests/test_check_failure_triage_post_stage.py",
 		),
 	),
@@ -4488,7 +4488,6 @@ MOVED_RELEASE_9450_STEPS = {
 		POLL_JOB_ID,
 		(
 			"tests/test_check_failure_triage_workflow_security.py",
-			"tests/test_check_failure_triage_historical.py",
 			"tests/test_check_failure_triage_post_stage.py",
 		),
 	),
