@@ -22759,10 +22759,19 @@ invoke_stall_judge() {
   local _judge_escalate_streak=0
   if [ "${_judge_state_file_ready}" = "true" ]; then
     if [ "${judge_action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
-      # The escalation is held this tick (execute_stall_recovery_action,
-      # reason=active_set_unverifiable): leave the stored streak unchanged so a
-      # held tick does not count toward the MAX_JUDGE_REPLAY backstop.
-      :
+      # Active set unverifiable this tick: compute the streak this verdict
+      # would reach so the MAX_JUDGE_REPLAY backstop still yields
+      # effective_action=escalate_human (then held by
+      # execute_stall_recovery_action as STALL_SKIP
+      # reason=active_set_unverifiable) instead of falling through to the
+      # ladder action. The stored streak is NOT written, so a held tick does not
+      # count toward the backstop. Below the cap, in the default configuration
+      # (ENABLE_STALL_HUMAN_TERMINALIZATION=false), the verdict is still
+      # normalized to the ladder action as on a verified tick, and no STALL_SKIP
+      # line is printed.
+      _judge_escalate_streak="$(jq -r --arg n "${issue_num}" '.judge_escalate_streak[$n] // 0' "${_judge_state_file}" 2>/dev/null || echo "0")"
+      [[ "${_judge_escalate_streak}" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
+      _judge_escalate_streak=$(( _judge_escalate_streak + 1 ))
     elif [ "${judge_action}" = "escalate_human" ]; then
       _judge_escalate_streak="$(jq -r --arg n "${issue_num}" '.judge_escalate_streak[$n] // 0' "${_judge_state_file}" 2>/dev/null || echo "0")"
       [[ "${_judge_escalate_streak}" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0

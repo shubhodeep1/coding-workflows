@@ -12,7 +12,9 @@ Runnable under pytest or directly as `python3 tests/<this file>.py`.
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -68,12 +70,56 @@ def test_etag_304_then_failed_refetch_marks_active_set_unverifiable() -> None:
 	assert "FORCE=false" in r.stdout
 
 
-def test_judge_escalate_streak_is_not_counted_on_unverifiable_ticks() -> None:
+def _run_judge_streak_block(stored: int | None, unverifiable: str) -> tuple[str, dict]:
+	"""Run invoke_stall_judge's escalate-streak block (verbatim from the poller)
+	for a judge escalate_human verdict; return (effective_action, state)."""
 	text = caps.STALL_ARC_POLLER_TEXT
-	hold = text.index('if [ "${judge_action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then')
-	increment = text.index("_judge_escalate_streak=$(( _judge_escalate_streak + 1 ))", hold)
-	branch = text.index('elif [ "${judge_action}" = "escalate_human" ]; then', hold)
-	assert hold < branch < increment
+	start = text.index("  local _judge_escalate_streak=0\n")
+	end = text.index('  STALL_JUDGE_TARGET_PR="$(echo', start)
+	block = text[start:end]
+	with tempfile.TemporaryDirectory(prefix="stall-streak-") as td:
+		tmp = Path(td)
+		state = {} if stored is None else {"judge_escalate_streak": {"42": stored}}
+		(tmp / "state.json").write_text(json.dumps(state), encoding="utf-8")
+		script = (
+			"set -euo pipefail\n"
+			'normalize_stall_recovery_action() { echo "retrigger_review"; }\n'
+			"run_block() {\n"
+			"  local _judge_state_file_ready=true _judge_state_file=state.json\n"
+			"  local judge_action=escalate_human issue_num=42 _judge_force_escalate=false\n"
+			"  local phase=ai:done recovery_count=1\n"
+			+ block
+			+ '  echo "EFFECTIVE=${effective_action}"\n'
+			"}\n"
+			"MAX_JUDGE_REPLAY=2\n"
+			f"STALL_ACTIVE_SET_UNVERIFIABLE={unverifiable}\n"
+			"run_block\n"
+		)
+		r = caps._stall_arc_run_bash(script, cwd=tmp)
+		assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
+		effective = next(line.split("=", 1)[1] for line in r.stdout.splitlines() if line.startswith("EFFECTIVE="))
+		return effective, json.loads((tmp / "state.json").read_text(encoding="utf-8"))
+
+
+def test_unverifiable_tick_at_streak_cap_keeps_escalate_human_for_the_hold() -> None:
+	# The backstop must still produce escalate_human so execute_stall_recovery_action
+	# holds it (STALL_SKIP reason=active_set_unverifiable) instead of dispatching
+	# the ladder action (retrigger_review) on an unverifiable tick.
+	effective, state = _run_judge_streak_block(stored=1, unverifiable="true")
+	assert effective == "escalate_human", effective
+	assert state == {"judge_escalate_streak": {"42": 1}}, state
+
+
+def test_unverifiable_tick_below_cap_does_not_count_toward_streak() -> None:
+	effective, state = _run_judge_streak_block(stored=None, unverifiable="true")
+	assert effective == "retrigger_review", effective
+	assert state == {}, state
+
+
+def test_verified_tick_counts_escalate_streak() -> None:
+	effective, state = _run_judge_streak_block(stored=1, unverifiable="false")
+	assert effective == "escalate_human", effective
+	assert state == {"judge_escalate_streak": {"42": 2}}, state
 
 
 def main() -> int:

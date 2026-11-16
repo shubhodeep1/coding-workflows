@@ -6,7 +6,7 @@ binance-blessings #557 and #559 were escalated ("stuck in ai:done") while their 
 Changes in `scripts/orchestrate_poll_process.sh`:
 - `_load_actions_runs_cached` records the source of each blob (`ttl_hit`, `etag_304`, `live`, `fallback`, `no_repo`) and prints one `ACTIONS_RUNS_SOURCE` line on stderr with the counts and whether the current run is in the blob.
 - The new `_ensure_actions_runs_blob_has_self_run` runs before `build_active_issue_set` in both the tracking stall block and `run_standalone_stall_recovery`. At most once per tick, it refetches live (TTL skipped, no `If-None-Match`) when the blob lacks `GITHUB_RUN_ID` and is not live. It logs its result as `ACTIONS_RUNS_SELF_CHECK`.
-- When the refetch is not confirmed, `execute_stall_recovery_action` and the standalone direct dispatch print `STALL_SKIP ... reason=active_set_unverifiable` and skip `escalate_human`. All other stall actions run unchanged.
+- When the refetch is not confirmed, `execute_stall_recovery_action` and the standalone direct dispatch print `STALL_SKIP ... reason=active_set_unverifiable` and skip `escalate_human`. All other stall actions run unchanged. A held stall-judge escalation does not add to the stored `judge_escalate_streak`, but the backstop still sees the streak it would reach, so an at-cap escalation is held rather than turned into a review retrigger.
 - `prime_phase_concurrency_snapshot` now forwards the loader's stderr when the load succeeds.
 
 | The numbers that matter | Value |
