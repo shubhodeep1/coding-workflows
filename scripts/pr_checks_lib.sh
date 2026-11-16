@@ -598,8 +598,9 @@ _pr_ruleset_required_check_blockers()
 # variable cannot hold an empty string and the workflow passes `|| ''`. A
 # value with a comma or control character, or longer than 100 characters,
 # warns and falls back to the repository default.
-# Optional $1: the PR's base ref, kept for the callers' signature. ci.yml's
-# pull_request trigger covers every base since issue #7283, so the `lint`
+# Optional $1: the PR's base ref, kept for the callers' signature. Every PR,
+# for every base since issue #7283, gets one full ci.yml run when review
+# finishes with its head (cut-ci-runner-time Phase 4), so the `lint`
 # default applies to every base: a PR stacked on another branch (a fix PR
 # routed to a failing PR's ai/issue-* head, a heal PR) waits for its own CI
 # `lint` before it merges. An explicitly configured name also applies to
