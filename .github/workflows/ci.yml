@@ -14,6 +14,55 @@ name: CI
     branches: ["**"]
   push:
     branches: [main, stable, "orchestrator/project-*"]
+  # Final CI at the end of review (cut-ci-runner-time Phase 4,
+  # docs/plans/cut-ci-runner-time-plan.md). `_pr_ensure_final_ci`
+  # (scripts/pr_checks_lib.sh) dispatches this workflow on a PR's head branch
+  # once review has finished with that head; the run checks out the PR's
+  # merge ref, so it tests what a pull_request run tests, and its check-runs
+  # (including `lint`) attach to the branch head, which is the PR head. Off
+  # until REVIEW_FINAL_CI_WORKFLOW names this file.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request whose merge ref the full suite tests"
+        required: true
+        type: string
+      head_sha:
+        description: "PR head SHA review finished with (run name and logs only)"
+        required: false
+        default: ""
+        type: string
+  # Per-push quick checks (Phase 4): a caller workflow runs only
+  # `static-checks` with mode `quick`; every other job is skipped by `if:`.
+  # The caller's check-runs are named `<caller job> / <job>`, so a quick run
+  # never creates a check named `lint`.
+  workflow_call:
+    inputs:
+      mode:
+        description: "full (every job) or quick (static-checks only)"
+        required: false
+        default: full
+        type: string
+
+# Dispatch runs carry their PR in the run name, like the review wrappers'
+# `[pr:N]` runs; every other event keeps GitHub's default name.
+run-name: "${{ github.event_name == 'workflow_dispatch' && format('CI [pr:{0}]', inputs.pr_number) || '' }}"
+
+# Cancel replaced PR CI (cut-ci-runner-time Phase 2). A pull_request run
+# shares one group per PR, so a newer push cancels the older run while it is
+# queued or running; the newest head still gets its full run and its own
+# `lint`. Every other run (pushes to main, stable and orchestrator/project-*)
+# gets a group of its own and is never cancelled, because check-failure
+# triage compares a failing PR against the base branch's newest push run.
+# The cancelled-CI rerun sweep (scripts/ci_cancelled_rerun.py) skips a
+# cancelled run whose head is no longer the PR's head (superseded_head).
+# Phase 4: a final-CI dispatch run shares `ci-final-pr-<PR number>` and
+# cancels the PR's older final run; a quick run called with mode `quick`
+# (its event is the caller's pull_request) gets a group of its own here,
+# because its caller workflow cancels replaced quick runs itself.
+concurrency:
+  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-{0}', github.run_id) }}
+  cancel-in-progress: ${{ inputs.mode != 'quick' && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -67,6 +116,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
+          # other event keeps the default ref.
+          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
       - name: Shared shell-block anti-regression checks
         run: |
@@ -253,6 +306,16 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_job_split_contract.py
 
+      - name: CI shallow checkout contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_shallow_checkout_contract.py
+
+      - name: CI concurrency contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_concurrency.py
+
       - name: CI test wiring guard
         run: |
           set -euo pipefail
@@ -296,12 +359,38 @@ jobs:
       # same-repository head targeting the default branch, so a branch name
       # alone does not exempt an ordinary PR.
       - name: agents.md direct-edit check (CLAUDE.md §30)
-        if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == github.event.repository.default_branch && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-')))
+        if: >-
+          (github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == github.event.repository.default_branch && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-')))) ||
+          github.event_name == 'workflow_dispatch'
+        env:
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=2 origin "${GITHUB_SHA}"
+          head_commit="${GITHUB_SHA}"
+          if [ -n "${FINAL_CI_PR_NUMBER:-}" ]; then
+            # Final-CI dispatch run (cut-ci-runner-time Phase 4): HEAD is the
+            # PR's merge ref, and the pull_request skips above are applied from
+            # the PR's metadata (one read; a failed read fails the step).
+            if ! [[ "${FINAL_CI_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::final-CI pr_number is not a pull request number."
+              exit 1
+            fi
+            pr_meta="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${FINAL_CI_PR_NUMBER}" --jq '[(.head.repo.full_name // ""), (.base.ref // ""), (.head.ref // ""), (.base.repo.default_branch // "")] | join(" ")')"
+            read -r pr_head_repo pr_base_ref pr_head_ref pr_default_branch <<< "${pr_meta}"
+            if [ "${pr_head_repo:-}" = "${GITHUB_REPOSITORY}" ] && [ -n "${pr_base_ref:-}" ] && [ "${pr_base_ref}" = "${pr_default_branch:-}" ]; then
+              case "${pr_head_ref:-}" in
+                orchestrator/project-*|auto/forward-merge-stable-*)
+                  echo "agents.md direct-edit check: PR #${FINAL_CI_PR_NUMBER} (${pr_head_ref}) is skipped, as on pull_request runs."
+                  exit 0
+                  ;;
+              esac
+            fi
+            head_commit="$(git rev-parse HEAD)"
+          fi
+          git fetch --no-tags --depth=2 origin "${head_commit}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_agents_md_direct_edits.py \
-            --base "$(git rev-parse "${GITHUB_SHA}^1")" --head "${GITHUB_SHA}"
+            --base "$(git rev-parse "${head_commit}^1")" --head "${head_commit}"
 
       # The actionlint release download from github.com returned HTTP 504 in
       # CI runs 35615284953, 42465389350 and 42470227946 (issue #9056), the
@@ -577,20 +666,156 @@ jobs:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
+    # Skipped in quick mode (Phase 4): only static-checks runs there.
+    if: inputs.mode != 'quick'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
+          # other event keeps the default ref.
+          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          # Shallow: the next step fetches the base commit and the history
+          # window that the parity/drift `base...HEAD` diff and the Prepare
+          # step's sync need, and fails the job if it cannot.
+          fetch-depth: 1
+
+      - name: Fetch base commits for the shallow checkout (hooks and orchestrator)
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The checkout above is depth 1 (cut-ci-runner-time Phase 1). Two readers
+          # need more than the checked-out commit: tests/claude_template_drift.py
+          # diffs `base...HEAD`, which needs the merge-base, and the Prepare step's
+          # sync runs a per-path `git log` and `merge-base --is-ancestor`. So this
+          # step fetches a 200-commit window of HEAD and main plus the base (or push
+          # before) commit, and unshallows those two refs only when the merge-base
+          # is deeper. A missing commit fails the job; it never skips the parity or
+          # drift tests.
+          retry_delay="${SHALLOW_FETCH_RETRY_DELAY_SECONDS:-5}"
+          case "${retry_delay}" in
+            ''|*[!0-9]*) retry_delay=5 ;;
+          esac
+          shallow_fetch() {
+            local attempt
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --quiet "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                sleep "$(( attempt * retry_delay ))"
+              fi
+            done
+            return 1
+          }
+          event="${GITHUB_EVENT_NAME:-}"
+          head_commit="${GITHUB_SHA}"
+          final_ci=false
+          if [ "${event}" = "workflow_dispatch" ] && [ -n "${FINAL_CI_PR_NUMBER:-}" ]; then
+            # Final-CI dispatch run (Phase 4): the checkout is the PR's merge
+            # ref, so HEAD is GitHub's test merge and its first parent is the
+            # base tip, exactly what a pull_request run's base.sha names. The
+            # base is resolved below and exported for the later steps.
+            if ! [[ "${FINAL_CI_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Shallow checkout: final-CI pr_number is not a pull request number."
+              exit 1
+            fi
+            final_ci=true
+            event="pull_request"
+            head_commit="$(git rev-parse HEAD)"
+          fi
+          case "${GITHUB_REF:-}" in
+            refs/heads/orchestrator/project-*) project_push=true ;;
+            *) project_push=false ;;
+          esac
+          if [ "${event}" != "pull_request" ] && [ "${project_push}" != "true" ]; then
+            # Pushes to main and stable read no base: the Prepare steps are off and
+            # CLAUDE_PARITY_PR_BASE_SHA is empty.
+            echo "Shallow checkout: ${event:-unknown} on ${GITHUB_REF:-unknown} reads no base commit; nothing to fetch."
+            exit 0
+          fi
+          main_refspec="+refs/heads/main:refs/remotes/origin/main"
+          if ! shallow_fetch --depth=200 origin "${head_commit}" "${main_refspec}"; then
+            echo "::error::Shallow checkout: could not fetch history for ${head_commit} and main from origin."
+            exit 1
+          fi
+          base="${PR_BASE_SHA:-${PUSH_BEFORE_SHA:-}}"
+          if [ "${final_ci}" = "true" ]; then
+            # The run's check-runs attach to GITHUB_SHA (the dispatched branch
+            # tip), so the merge ref must merge exactly that head: a stale
+            # merge ref would report another head's results on this one.
+            merged_head="$(git rev-parse --verify --quiet "${head_commit}^2" || true)"
+            if [ "${merged_head}" != "${GITHUB_SHA}" ]; then
+              echo "::error::Shallow checkout: refs/pull/${FINAL_CI_PR_NUMBER}/merge merges ${merged_head:-no second parent}, not the dispatched head ${GITHUB_SHA}; this run cannot report on that head."
+              exit 1
+            fi
+            base="$(git rev-parse --verify --quiet "${head_commit}^1" || true)"
+            # One read for the base branch name (the Prepare step skips PRs
+            # into stable, as pull_request runs do); a failed read only warns.
+            final_base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${FINAL_CI_PR_NUMBER}" --jq '.base.ref // ""' 2>/dev/null || true)"
+            if ! [[ "${final_base_ref}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+              echo "::warning::Shallow checkout: could not read the base branch of PR #${FINAL_CI_PR_NUMBER}; the template-parity Prepare step runs as for a non-stable base."
+              final_base_ref=""
+            fi
+            {
+              echo "CI_FINAL_PR_BASE_SHA=${base}"
+              echo "CI_FINAL_PR_BASE_REF=${final_base_ref}"
+            } >> "${GITHUB_ENV}"
+          fi
+          shown_base="${base:-empty}"
+          base_usable=false
+          if [[ "${base}" =~ ^[0-9a-f]{40}$ ]]; then
+            if [ -n "${base//0/}" ]; then
+              if git cat-file -e "${base}^{commit}" 2>/dev/null || shallow_fetch --depth=1 origin "${base}"; then
+                base_usable=true
+              fi
+            fi
+          elif [ -n "${base}" ]; then
+            shown_base="invalid"
+          fi
+          if [ "${base_usable}" != "true" ]; then
+            if [ "${event}" = "pull_request" ]; then
+              echo "::error::Shallow checkout: the pull request base ${shown_base} is not a commit origin can serve; parity and drift tests cannot run."
+              exit 1
+            fi
+            echo "::warning::Shallow checkout: push before=${shown_base} is not a reachable commit; the Prepare step falls back to the merge-base with main."
+            base=""
+          fi
+          history_ready() {
+            if [ -z "${base}" ]; then
+              git merge-base HEAD origin/main >/dev/null 2>&1
+            elif [ "${event}" = "pull_request" ]; then
+              git merge-base "${base}" HEAD >/dev/null 2>&1
+            fi
+          }
+          if ! history_ready; then
+            if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+              echo "Shallow checkout: the merge-base is deeper than the 200-commit window; unshallowing ${head_commit} and main."
+              if ! shallow_fetch --unshallow origin "${head_commit}" "${main_refspec}"; then
+                echo "::error::Shallow checkout: could not unshallow ${head_commit} and main from origin."
+                exit 1
+              fi
+            fi
+            if ! history_ready; then
+              echo "::error::Shallow checkout: no common history between ${base:-HEAD} and HEAD/main after unshallow; parity and drift tests cannot run."
+              exit 1
+            fi
+          fi
+          echo "Shallow checkout: history ready for ${head_commit} (base=${base:-none})."
 
       - name: Prepare template-only PR live copies for parity tests
         if: >-
           (github.event_name == 'pull_request' && github.base_ref != 'stable') ||
-          (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-'))
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-')) ||
+          (github.event_name == 'workflow_dispatch' && env.CI_FINAL_PR_BASE_REF != 'stable')
         env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || env.CI_FINAL_PR_BASE_SHA }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -670,7 +895,7 @@ jobs:
           # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
           # its base already has (tests/claude_template_drift.py). Empty on
           # pushes, so main stays strict; the release gates never set it.
-          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || env.CI_FINAL_PR_BASE_SHA }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_merge_status_guard.py
@@ -680,7 +905,7 @@ jobs:
           # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
           # its base already has (tests/claude_template_drift.py). Empty on
           # pushes, so main stays strict; the release gates never set it.
-          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || env.CI_FINAL_PR_BASE_SHA }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_template_live_parity.py
@@ -690,7 +915,7 @@ jobs:
           # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
           # its base already has (tests/claude_template_drift.py). Empty on
           # pushes, so main stays strict; the release gates never set it.
-          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || env.CI_FINAL_PR_BASE_SHA }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_watch_guard.py
@@ -711,7 +936,7 @@ jobs:
           # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
           # its base already has (tests/claude_template_drift.py). Empty on
           # pushes, so main stays strict; the release gates never set it.
-          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || env.CI_FINAL_PR_BASE_SHA }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_gh_api_write_guard.py
@@ -1050,11 +1275,17 @@ jobs:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
+    # Skipped in quick mode (Phase 4): only static-checks runs there.
+    if: inputs.mode != 'quick'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
+          # other event keeps the default ref.
+          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -1510,8 +1741,9 @@ jobs:
       # tests-hooks-and-orchestrator (#7798) and moves as a pair: the Node setup
       # runs first and the vitest step keeps its working directory. None of the
       # four steps needs git history, so this job's default depth-1 checkout is
-      # enough (the source job fetches full history only for
-      # tests/claude_template_drift.py). Names and bodies unchanged.
+      # enough (the source job fetches base history only for
+      # tests/claude_template_drift.py and the Prepare step). Names and bodies
+      # unchanged.
       # The Node pair moved on to tests-release-and-log-analysis in #9018.
       - name: Workflow log analysis contract tests
         run: |
@@ -1531,11 +1763,17 @@ jobs:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
+    # Skipped in quick mode (Phase 4): only static-checks runs there.
+    if: inputs.mode != 'quick'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
+          # other event keeps the default ref.
+          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -2023,6 +2261,7 @@ jobs:
             tests/test_review_autofix_last_run_diff_oscillation_guard.py
             tests/test_review_commit_new_files_preserved.py
             tests/test_review_conflict_resolve_sandbox_only.py
+            tests/test_review_final_ci.py
             tests/test_review_freshness_ci_failed.py
             tests/test_review_head_gate.py
             tests/test_review_parse_consolidator.py
@@ -2128,15 +2367,148 @@ jobs:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
+    # Skipped in quick mode (Phase 4): only static-checks runs there.
+    if: inputs.mode != 'quick'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          # Full history: tests/claude_template_drift.py diffs against the PR
-          # base SHA, which a depth-1 checkout does not contain.
-          fetch-depth: 0
+          # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
+          # other event keeps the default ref.
+          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          # Shallow: tests/claude_template_drift.py diffs against the PR base
+          # SHA, so the next step fetches that commit and the history window
+          # its `base...HEAD` diff needs, and fails the job if it cannot.
+          fetch-depth: 1
+
+      - name: Fetch base commits for the shallow checkout (release and log analysis)
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The checkout above is depth 1 (cut-ci-runner-time Phase 1). Two readers
+          # need more than the checked-out commit: tests/claude_template_drift.py
+          # diffs `base...HEAD`, which needs the merge-base, and the Prepare step's
+          # sync runs a per-path `git log` and `merge-base --is-ancestor`. So this
+          # step fetches a 200-commit window of HEAD and main plus the base (or push
+          # before) commit, and unshallows those two refs only when the merge-base
+          # is deeper. A missing commit fails the job; it never skips the parity or
+          # drift tests.
+          retry_delay="${SHALLOW_FETCH_RETRY_DELAY_SECONDS:-5}"
+          case "${retry_delay}" in
+            ''|*[!0-9]*) retry_delay=5 ;;
+          esac
+          shallow_fetch() {
+            local attempt
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --quiet "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                sleep "$(( attempt * retry_delay ))"
+              fi
+            done
+            return 1
+          }
+          event="${GITHUB_EVENT_NAME:-}"
+          head_commit="${GITHUB_SHA}"
+          final_ci=false
+          if [ "${event}" = "workflow_dispatch" ] && [ -n "${FINAL_CI_PR_NUMBER:-}" ]; then
+            # Final-CI dispatch run (Phase 4): the checkout is the PR's merge
+            # ref, so HEAD is GitHub's test merge and its first parent is the
+            # base tip, exactly what a pull_request run's base.sha names. The
+            # base is resolved below and exported for the later steps.
+            if ! [[ "${FINAL_CI_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Shallow checkout: final-CI pr_number is not a pull request number."
+              exit 1
+            fi
+            final_ci=true
+            event="pull_request"
+            head_commit="$(git rev-parse HEAD)"
+          fi
+          case "${GITHUB_REF:-}" in
+            refs/heads/orchestrator/project-*) project_push=true ;;
+            *) project_push=false ;;
+          esac
+          if [ "${event}" != "pull_request" ] && [ "${project_push}" != "true" ]; then
+            # Pushes to main and stable read no base: the Prepare steps are off and
+            # CLAUDE_PARITY_PR_BASE_SHA is empty.
+            echo "Shallow checkout: ${event:-unknown} on ${GITHUB_REF:-unknown} reads no base commit; nothing to fetch."
+            exit 0
+          fi
+          main_refspec="+refs/heads/main:refs/remotes/origin/main"
+          if ! shallow_fetch --depth=200 origin "${head_commit}" "${main_refspec}"; then
+            echo "::error::Shallow checkout: could not fetch history for ${head_commit} and main from origin."
+            exit 1
+          fi
+          base="${PR_BASE_SHA:-${PUSH_BEFORE_SHA:-}}"
+          if [ "${final_ci}" = "true" ]; then
+            # The run's check-runs attach to GITHUB_SHA (the dispatched branch
+            # tip), so the merge ref must merge exactly that head: a stale
+            # merge ref would report another head's results on this one.
+            merged_head="$(git rev-parse --verify --quiet "${head_commit}^2" || true)"
+            if [ "${merged_head}" != "${GITHUB_SHA}" ]; then
+              echo "::error::Shallow checkout: refs/pull/${FINAL_CI_PR_NUMBER}/merge merges ${merged_head:-no second parent}, not the dispatched head ${GITHUB_SHA}; this run cannot report on that head."
+              exit 1
+            fi
+            base="$(git rev-parse --verify --quiet "${head_commit}^1" || true)"
+            # One read for the base branch name (the Prepare step skips PRs
+            # into stable, as pull_request runs do); a failed read only warns.
+            final_base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${FINAL_CI_PR_NUMBER}" --jq '.base.ref // ""' 2>/dev/null || true)"
+            if ! [[ "${final_base_ref}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+              echo "::warning::Shallow checkout: could not read the base branch of PR #${FINAL_CI_PR_NUMBER}; the template-parity Prepare step runs as for a non-stable base."
+              final_base_ref=""
+            fi
+            {
+              echo "CI_FINAL_PR_BASE_SHA=${base}"
+              echo "CI_FINAL_PR_BASE_REF=${final_base_ref}"
+            } >> "${GITHUB_ENV}"
+          fi
+          shown_base="${base:-empty}"
+          base_usable=false
+          if [[ "${base}" =~ ^[0-9a-f]{40}$ ]]; then
+            if [ -n "${base//0/}" ]; then
+              if git cat-file -e "${base}^{commit}" 2>/dev/null || shallow_fetch --depth=1 origin "${base}"; then
+                base_usable=true
+              fi
+            fi
+          elif [ -n "${base}" ]; then
+            shown_base="invalid"
+          fi
+          if [ "${base_usable}" != "true" ]; then
+            if [ "${event}" = "pull_request" ]; then
+              echo "::error::Shallow checkout: the pull request base ${shown_base} is not a commit origin can serve; parity and drift tests cannot run."
+              exit 1
+            fi
+            echo "::warning::Shallow checkout: push before=${shown_base} is not a reachable commit; the Prepare step falls back to the merge-base with main."
+            base=""
+          fi
+          history_ready() {
+            if [ -z "${base}" ]; then
+              git merge-base HEAD origin/main >/dev/null 2>&1
+            elif [ "${event}" = "pull_request" ]; then
+              git merge-base "${base}" HEAD >/dev/null 2>&1
+            fi
+          }
+          if ! history_ready; then
+            if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+              echo "Shallow checkout: the merge-base is deeper than the 200-commit window; unshallowing ${head_commit} and main."
+              if ! shallow_fetch --unshallow origin "${head_commit}" "${main_refspec}"; then
+                echo "::error::Shallow checkout: could not unshallow ${head_commit} and main from origin."
+                exit 1
+              fi
+            fi
+            if ! history_ready; then
+              echo "::error::Shallow checkout: no common history between ${base:-HEAD} and HEAD/main after unshallow; parity and drift tests cannot run."
+              exit 1
+            fi
+          fi
+          echo "Shallow checkout: history ready for ${head_commit} (base=${base:-none})."
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -2177,7 +2549,7 @@ jobs:
           # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
           # its base already has (tests/claude_template_drift.py). Empty on
           # pushes, so main stays strict; the release gates never set it.
-          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || env.CI_FINAL_PR_BASE_SHA }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
@@ -2411,8 +2783,9 @@ jobs:
       # slowest unsplit step in the planning sandbox (about 56s, a relative
       # weight only). This job has the fewest test functions of the 20-minute
       # non-matrix jobs (about 1,374) and lost 557 test functions in #8777.
-      # Release checks out full history; the step needs no Node or prepared
-      # .claude/ live copies. Name and body unchanged.
+      # Release checks out at depth 1 plus the base-history fetch step; the
+      # step needs no Node or prepared .claude/ live copies. Name and body
+      # unchanged.
       # Moved again from tests-promote-stall-and-review, which took 16m02s of
       # its 20 minutes on main (run 41704793081, budget-watch issue #8771).
       # The run's step timings could not be read, so the pick is an estimate
@@ -2519,8 +2892,9 @@ jobs:
       # budget-watch total was 15m36s (#8777), after which it lost 557 test
       # functions. If this job is flagged next, read that run's step timings
       # before moving anything again. The step needs only checkout, Python 3.12
-      # and the shared pip install; this job's full-history checkout is a
-      # superset of the depth-1 checkout it had, and it needs no Node or
+      # and the shared pip install; this job's depth-1 checkout plus its
+      # base-history fetch is a superset of the depth-1 checkout it had, and
+      # it needs no Node or
       # prepared .claude/ live copies. It runs once per CI run, unguarded, since
       # this job has no matrix; the group 0 guard is the only line dropped.
       # Name and body unchanged.
@@ -2705,7 +3079,8 @@ jobs:
       # only), not a measurement. Per-job durations could not be read either,
       # so "most headroom" is a proxy, not a measured comparison: this job has
       # the fewest subprocess call sites of the 20-minute non-matrix test jobs
-      # (about 284) and checks out full history. None of the three steps needs
+      # (about 284) and checks out at depth 1 plus the base-history fetch
+      # step. None of the three steps needs
       # Node or the prepared .claude/ live copies. Names and bodies unchanged.
       - name: Implement post-Codex recovery unit tests
         run: |
@@ -2769,6 +3144,8 @@ jobs:
     # tests-release-and-log-analysis instead of group 0.
     # Since #9391, group 3 also pins the pre-push affected-test gate step
     # (moved from tests-hooks-and-orchestrator).
+    # Skipped in quick mode (Phase 4): only static-checks runs there.
+    if: inputs.mode != 'quick'
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -2779,6 +3156,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
+          # other event keeps the default ref.
+          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -3539,7 +3920,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_post_stage.py
 
   tests-system-python:
@@ -3552,6 +3932,8 @@ jobs:
     # step proves sys.base_prefix is /usr. The shard step collects once and
     # runs the functions with NR % total == index; raise the shard count by
     # editing the matrix list alone (job-index / job-total feed the step).
+    # Skipped in quick mode (Phase 4): only static-checks runs there.
+    if: inputs.mode != 'quick'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -3562,20 +3944,156 @@ jobs:
         system-python-shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     permissions:
       contents: read
+      # The fetch step reads the PR's base branch in final-CI runs (Phase 4).
+      pull-requests: read
     env:
       CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
+          # other event keeps the default ref.
+          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          # Shallow: the next step fetches the base commit and the history
+          # window that the parity/drift `base...HEAD` diff and the Prepare
+          # step's sync need, and fails the job if it cannot.
+          fetch-depth: 1
+
+      - name: Fetch base commits for the shallow checkout (system Python)
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The checkout above is depth 1 (cut-ci-runner-time Phase 1). Two readers
+          # need more than the checked-out commit: tests/claude_template_drift.py
+          # diffs `base...HEAD`, which needs the merge-base, and the Prepare step's
+          # sync runs a per-path `git log` and `merge-base --is-ancestor`. So this
+          # step fetches a 200-commit window of HEAD and main plus the base (or push
+          # before) commit, and unshallows those two refs only when the merge-base
+          # is deeper. A missing commit fails the job; it never skips the parity or
+          # drift tests.
+          retry_delay="${SHALLOW_FETCH_RETRY_DELAY_SECONDS:-5}"
+          case "${retry_delay}" in
+            ''|*[!0-9]*) retry_delay=5 ;;
+          esac
+          shallow_fetch() {
+            local attempt
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --quiet "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                sleep "$(( attempt * retry_delay ))"
+              fi
+            done
+            return 1
+          }
+          event="${GITHUB_EVENT_NAME:-}"
+          head_commit="${GITHUB_SHA}"
+          final_ci=false
+          if [ "${event}" = "workflow_dispatch" ] && [ -n "${FINAL_CI_PR_NUMBER:-}" ]; then
+            # Final-CI dispatch run (Phase 4): the checkout is the PR's merge
+            # ref, so HEAD is GitHub's test merge and its first parent is the
+            # base tip, exactly what a pull_request run's base.sha names. The
+            # base is resolved below and exported for the later steps.
+            if ! [[ "${FINAL_CI_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Shallow checkout: final-CI pr_number is not a pull request number."
+              exit 1
+            fi
+            final_ci=true
+            event="pull_request"
+            head_commit="$(git rev-parse HEAD)"
+          fi
+          case "${GITHUB_REF:-}" in
+            refs/heads/orchestrator/project-*) project_push=true ;;
+            *) project_push=false ;;
+          esac
+          if [ "${event}" != "pull_request" ] && [ "${project_push}" != "true" ]; then
+            # Pushes to main and stable read no base: the Prepare steps are off and
+            # CLAUDE_PARITY_PR_BASE_SHA is empty.
+            echo "Shallow checkout: ${event:-unknown} on ${GITHUB_REF:-unknown} reads no base commit; nothing to fetch."
+            exit 0
+          fi
+          main_refspec="+refs/heads/main:refs/remotes/origin/main"
+          if ! shallow_fetch --depth=200 origin "${head_commit}" "${main_refspec}"; then
+            echo "::error::Shallow checkout: could not fetch history for ${head_commit} and main from origin."
+            exit 1
+          fi
+          base="${PR_BASE_SHA:-${PUSH_BEFORE_SHA:-}}"
+          if [ "${final_ci}" = "true" ]; then
+            # The run's check-runs attach to GITHUB_SHA (the dispatched branch
+            # tip), so the merge ref must merge exactly that head: a stale
+            # merge ref would report another head's results on this one.
+            merged_head="$(git rev-parse --verify --quiet "${head_commit}^2" || true)"
+            if [ "${merged_head}" != "${GITHUB_SHA}" ]; then
+              echo "::error::Shallow checkout: refs/pull/${FINAL_CI_PR_NUMBER}/merge merges ${merged_head:-no second parent}, not the dispatched head ${GITHUB_SHA}; this run cannot report on that head."
+              exit 1
+            fi
+            base="$(git rev-parse --verify --quiet "${head_commit}^1" || true)"
+            # One read for the base branch name (the Prepare step skips PRs
+            # into stable, as pull_request runs do); a failed read only warns.
+            final_base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${FINAL_CI_PR_NUMBER}" --jq '.base.ref // ""' 2>/dev/null || true)"
+            if ! [[ "${final_base_ref}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+              echo "::warning::Shallow checkout: could not read the base branch of PR #${FINAL_CI_PR_NUMBER}; the template-parity Prepare step runs as for a non-stable base."
+              final_base_ref=""
+            fi
+            {
+              echo "CI_FINAL_PR_BASE_SHA=${base}"
+              echo "CI_FINAL_PR_BASE_REF=${final_base_ref}"
+            } >> "${GITHUB_ENV}"
+          fi
+          shown_base="${base:-empty}"
+          base_usable=false
+          if [[ "${base}" =~ ^[0-9a-f]{40}$ ]]; then
+            if [ -n "${base//0/}" ]; then
+              if git cat-file -e "${base}^{commit}" 2>/dev/null || shallow_fetch --depth=1 origin "${base}"; then
+                base_usable=true
+              fi
+            fi
+          elif [ -n "${base}" ]; then
+            shown_base="invalid"
+          fi
+          if [ "${base_usable}" != "true" ]; then
+            if [ "${event}" = "pull_request" ]; then
+              echo "::error::Shallow checkout: the pull request base ${shown_base} is not a commit origin can serve; parity and drift tests cannot run."
+              exit 1
+            fi
+            echo "::warning::Shallow checkout: push before=${shown_base} is not a reachable commit; the Prepare step falls back to the merge-base with main."
+            base=""
+          fi
+          history_ready() {
+            if [ -z "${base}" ]; then
+              git merge-base HEAD origin/main >/dev/null 2>&1
+            elif [ "${event}" = "pull_request" ]; then
+              git merge-base "${base}" HEAD >/dev/null 2>&1
+            fi
+          }
+          if ! history_ready; then
+            if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+              echo "Shallow checkout: the merge-base is deeper than the 200-commit window; unshallowing ${head_commit} and main."
+              if ! shallow_fetch --unshallow origin "${head_commit}" "${main_refspec}"; then
+                echo "::error::Shallow checkout: could not unshallow ${head_commit} and main from origin."
+                exit 1
+              fi
+            fi
+            if ! history_ready; then
+              echo "::error::Shallow checkout: no common history between ${base:-HEAD} and HEAD/main after unshallow; parity and drift tests cannot run."
+              exit 1
+            fi
+          fi
+          echo "Shallow checkout: history ready for ${head_commit} (base=${base:-none})."
 
       - name: Prepare template-only PR live copies for system-Python tests
         if: >-
           (github.event_name == 'pull_request' && github.base_ref != 'stable') ||
-          (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-'))
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-')) ||
+          (github.event_name == 'workflow_dispatch' && env.CI_FINAL_PR_BASE_REF != 'stable')
         env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || env.CI_FINAL_PR_BASE_SHA }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -3633,6 +4151,10 @@ jobs:
         env:
           CI_SYSTEM_PYTHON_SHARD_INDEX: ${{ strategy.job-index }}
           CI_SYSTEM_PYTHON_SHARD_TOTAL: ${{ strategy.job-total }}
+          # Final-CI dispatch runs (Phase 4) have no pull_request payload; the
+          # fetch step exported the merge ref's base. The job-level value
+          # still covers pull_request runs.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || env.CI_FINAL_PR_BASE_SHA }}
         run: |
           # Same scheme as the heal-modules step: collect tests/ once, fail on a
           # collection error, group parametrized cases under their function, and
@@ -3712,6 +4234,8 @@ jobs:
     # tests/test_sandbox_python_coverage.py, which fails when a launch script
     # gains an entry point it does not list. The test container gets no
     # network, no credential and no root.
+    # Skipped in quick mode (Phase 4): only static-checks runs there.
+    if: inputs.mode != 'quick'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -3724,6 +4248,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
+          # Final-CI dispatch runs test the PR's merge ref (Phase 4); every
+          # other event keeps the default ref.
+          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
           fetch-depth: 1
           persist-credentials: false
 
@@ -3888,7 +4415,10 @@ jobs:
       - orchestrate-poll
       - tests-system-python
       - tests-sandbox-python
-    if: always()
+    # Skipped in quick mode (Phase 4): its needed test jobs are skipped there,
+    # and the quick caller's checks are named `<caller job> / ...`, never
+    # `lint`.
+    if: always() && inputs.mode != 'quick'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -3909,3 +4439,41 @@ jobs:
             exit 1
           fi
           echo "All ${ci_needs_count} CI jobs succeeded."
+
+  final-ci-failed:
+    # Red final CI goes back to review (cut-ci-runner-time Phase 4). Runs only
+    # in final-CI dispatch runs whose `lint` failed (never when the run was
+    # cancelled, e.g. replaced by a newer final run): it posts one
+    # `<!-- ai:final-ci-failed:v1 pr=<n> head=<sha> -->` marker per head and
+    # dispatches the PR's review workflow, which collects the failing
+    # check-runs so the autofix can fix them. It is not in `lint.needs` and
+    # gates nothing. Script and log contract: scripts/review_final_ci_failed.sh.
+    needs: lint
+    if: failure() && !cancelled() && github.event_name == 'workflow_dispatch' && needs.lint.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          # Trusted script from the default branch, not the PR head this run
+          # tested; this job holds a write token.
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Send the PR back to review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          # The head this run tested: the dispatched branch's tip, which is
+          # where the run's check-runs attach.
+          PR_HEAD_SHA: ${{ github.sha }}
+          ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) }}
+          FINAL_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}
+        run: bash scripts/review_final_ci_failed.sh
