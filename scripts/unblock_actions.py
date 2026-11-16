@@ -826,14 +826,14 @@ def reset_ops(ctx: dict, note: str) -> list[dict]:
 			[{"op": "remove_label", "issue": item, "label": "ai:blocked"}]
 			if stop == "scope-blocked" and "ai:blocked" in ctx["labels"] else []
 		)
-		# The label goes before the resume command, so the run that command
-		# starts never sees the stale ai:blocked. That pair marks a block raised
-		# at planning, so the newest planning run produced no plan: re-plan with
-		# /reclarify even when an older "Implementation Plan" comment sets
-		# has_plan, so a superseded plan is never approved.
+		# That pair marks a block raised at planning, so the newest planning run
+		# produced no plan: re-plan with /reclarify even when an older
+		# "Implementation Plan" comment sets has_plan, so a superseded plan is
+		# never approved. Keep the `not extra_blocked` guard for that reason.
 		if ctx["has_plan"] and not extra_blocked:
-			approve_ops = _approve(item, ctx["labels"], present)
-			return approve_ops[:-1] + extra_blocked + approve_ops[-1:]
+			return _approve(item, ctx["labels"], present)
+		# The label goes before the resume command, so the run that command
+		# starts never sees the stale ai:blocked.
 		ops = extra_blocked + [{"op": "comment", "issue": item, "body": "/reclarify"}]
 		return ops + ([{"op": "remove_label", "issue": item, "label": present}] if present else [])
 	if stop == "blocked":

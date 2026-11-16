@@ -1050,7 +1050,7 @@ jobs:
             ensure_label_exists "ai:planning" "${{ github.repository }}"
             # Issue #9534: a human /answer also clears the ai:scope-blocked a
             # routed planning block added, but only when the newest trusted
-            # guard rejection is that planning one (fail closed; no API call).
+            # guard rejection is that planning one (fail closed).
             # The ledger trusts only the pipeline login, so answer-release needs
             # it. No earlier step of this job caches it (§14): the one identity
             # read runs only when the fetched metadata already has ai:scope-blocked.
@@ -2358,7 +2358,11 @@ jobs:
         run: |
           set -uo pipefail
           if [ ! -f scripts/plan_scope_block_route.sh ]; then
-            echo "PLAN_SCOPE_BLOCK outcome=not_routed issue=${ISSUE_NUMBER} paths=0 reason=helper_failed"
+            plan_scope_missing_reason=helper_failed
+            if [ "$(printf '%s' "${PLAN_SCOPE_BLOCK_ROUTING_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" = "false" ]; then
+              plan_scope_missing_reason=disabled
+            fi
+            echo "PLAN_SCOPE_BLOCK outcome=not_routed issue=${ISSUE_NUMBER} paths=0 reason=${plan_scope_missing_reason}"
             echo "scope_routed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -2410,6 +2414,12 @@ jobs:
             --remove-label 'ai:planning' \
             --remove-label 'ai:clarification' \
             --remove-label 'ai:awaiting-approval' >/dev/null 2>&1; then
+            # gh applies label adds and removes separately, so a failed edit can
+            # still have added ai:scope-blocked: take it off again (best effort).
+            if [ "${SCOPE_ROUTE_ACTIVE}" = "true" ]; then
+              gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+                --remove-label 'ai:scope-blocked' >/dev/null 2>&1 || true
+            fi
             SCOPE_ROUTE_ACTIVE=false
           fi
 
