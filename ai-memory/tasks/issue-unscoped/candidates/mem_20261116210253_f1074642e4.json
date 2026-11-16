@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:9613-9638 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `while IFS= read -r rebind_commit` loop in `security_pass_rebind_if_no_new_project_lines` starts two git processes (`git rev-list --parents -n 1` and `git show`) for every commit in `head ^last_audited ^merge_base`, with no upper bound.\n  WHY: The cost is O(N) in the number of commits, so a large range can slow the poller tick badly and spawn too many processes. Severity is mapped from the source's SEVERITY: MAJOR. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 raised the same concern only as hardening suggestions, without a severity.\n- agents.d/stuck-states-p13b-security-pass-rebind.md:2 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The fragment says \"Local git only; no new GitHub API call.\", but the success path calls `reconcile_tracking_body_after_security_pass_transition` (which can run `gh issue edit`) and `post_state_comment` (see scripts/orchestrate_poll_process.sh:9656-9657).\n  WHY: This is a documentation-accuracy defect with no runtime failure, because the call count matches the clean-audit path it replaces. It still misleads operators reasoning about API side effects and budget. Both sources rated it NIT. anthropic_claude-sonnet-5_5 explicitly rejected this finding as accurate.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING: scripts/orchestrate_poll_process.sh | security_pass_rebind_if_no_new_project_lines, the `while IFS= read -r rebind_commit` loop\n  PROBLEM: The loop starts two git processes per commit in `head ^last_audited ^merge_base`, with no upper bound. It only costs much when there are many consecutive merges.\n  WHY: Suggested fix: before the loop, skip with `reason=too_many_commits` when `git rev-list --count` is over a small bound such as 50 (about 4 lines). HARDENING_RISK_SCORE: 1.\n- NOTE: Rejected the pass-1 finding about the \"no new GitHub API call\" wording in agents.d/stuck-states-p13b-security-pass-rebind.md as accurate.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:lines 9613-9638 (inside `security_pass_rebind_if_no_new_project_lines`) | severity=MAJOR | confidence=4\n  PROBLEM: The `while IFS= read -r rebind_commit` loop spawns two git processes (`git rev-list --parents -n 1` and `git show`) for every commit in the range `head ^last_audited ^merge_base`.\n  WHY: The loop is O(N). A large N (for example, a long-lived feature branch merged before a sync merge) causes significant slowdown and excessive process spawning during the poller tick.\n- agents.d/stuck-states-p13b-security-pass-rebind.md:line 2 (\"Local git only; no new GitHub API call.\") | severity=NIT | confidence=4\n  PROBLEM: The fragment is inaccurate, because the success path calls `reconcile_tracking_body_after_security_pass_transition` (`gh issue edit`) and `post_state_comment`.\n  WHY: This is a documentation-accuracy defect that misleads operators about the side effects of `SECURITY_PASS_REBOUND`.\n- HARDENING: scripts/stage_support_for_phase.sh:lines 341-344 (new optional host-python install loop)\n  PROBLEM: An absent optional helper is skipped with a bare `continue` and nothing is logged.\n  WHY: Suggested fix: emit a `::warning::` naming the missing helper (1 line). HARDENING_RISK_SCORE: 1.\n- HARDENING: scripts/orchestrate_poll_process.sh:security_pass_rebind_if_no_new_project_lines, `while` loop (lines 9613-9638)\n  PROBLEM: There is no bound on the number of commits the loop processes, and nothing is logged when the count is large.\n  WHY: Suggested fix: run `git rev-list --count` first; above about 50, log `SECURITY_PASS_REBIND_SKIPPED reason=too_many_commits` and fall back to the audit (6 lines). HARDENING_RISK_SCORE: 3.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/stuck-states-p13b-security-pass-rebind.md:line 2 (\"Local git only; no new GitHub API call.\") vs scripts/orchestrate_poll_process.sh:9656-9657 | severity=NIT | confidence=4\n  PROBLEM: The fragment claims \"no new GitHub API call\", but the success path calls `reconcile_tracking_body_after_security_pass_transition` (can run `gh issue edit`; see scripts/orchestrate_poll_process.sh:7243) and `post_state_comment`.\n  WHY: There is no runtime failure, since the call count matches the clean-audit path. The defect is the accuracy of a contractual fragment that operators read to reason about API budget.\n- HARDENING: scripts/stage_support_for_phase.sh:lines 341-344 (the new `stage_support_optional_host_python_scripts` install loop)\n  PROBLEM: A missing helper is skipped with a bare `continue` and no log line, while the sibling loop warns (line 324). The clarify evidence-pack build (clarify.yml:1505) can disappear silently.\n  WHY: Suggested fix: emit `::warning::Optional host Python helper ${stage_support_file} is unavailable; its PERSIST_* feature skips this run.` before `continue` (3 lines).\n- HARDENING: scripts/orchestrate_poll_process.sh:security_pass_rebind_if_no_new_project_lines, `while IFS= read -r rebind_commit` loop (lines 9613-9638)\n  PROBLEM: The loop spawns two git processes per commit with no upper bound, and the commit count is only reported after the loop.\n  WHY: Suggested fix: run `git rev-list --count` first and skip with a logged `reason=too_many_commits` above about 50 (6 lines). HARDENING_RISK_SCORE: 2.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- NOTE: Disputes the stage_support_for_phase.sh lines 341-344 \"no log line\" hardening item. The same run's loop at lines 320-327 already emits `::warning::Optional support script ... is unavailable`.\n- NOTE: Treats the agents-fragment wording and the rebind-loop git-spawn count as NIT-level pass-1 items with no runtime failure path, and did not re-emit them.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3aa27a278f2f3b8b7dae46f90405c5ddc0fda61d141cbdf2f109e87cb49cd726",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9602,
+    "run_id": "43923392243",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43923392243",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116210253_f1074642e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9602,
+    "run_id": "43923392243"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T21:02:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
