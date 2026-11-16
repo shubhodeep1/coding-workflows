@@ -1907,7 +1907,7 @@ jobs:
             # PR mode takes these deletions back out of the report PR before
             # any merge call (see below), so it only selects them.
             if [ "${report_delivery_mode}" = "pr" ]; then
-              echo "INFO: selected ${purged_count} workflow-optimization report(s) older than ${cutoff_date} for the age-based purge; PR mode keeps them (see WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending)."
+              echo "INFO: selected ${purged_count} workflow-optimization report(s) older than ${cutoff_date} for the age-based purge; PR mode takes these deletions out of the report PR before any merge call (see WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending, or the purge-deletion warning if that fails)."
             else
               echo "INFO: purged ${purged_count} workflow-optimization report(s) older than ${cutoff_date}."
             fi
