@@ -618,6 +618,9 @@ unblock_nothing_to_implement_close()
 			| (.created_at // "")] | max // "") as $plan
 		| if $block.match and ($plan == "" or $plan < $block.at) and ($after == "" or $block.at > $after) then $block.at else false end
 	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null)" || return 1
+	# Fail closed: a block without a UTC timestamp would disable the
+	# `fixup=none` marker age check below.
+	[[ "${block_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
 	marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${fixup_label} -->"
 	marker_since=""
 	if [ -n "${fixup}" ]; then
@@ -2250,7 +2253,9 @@ Still waiting for an operator; last checked ${now}.
 	# too. When a wait exists, the block must be newer than the time that wait
 	# ended (wait_ended_at): an older block is the one the judge already filed
 	# that fix-up for, or one filed while the fix-up was still unresolved.
-	if [ "${ITEM_KIND}" = "issue" ] && unblock_nothing_to_implement_close "" "" "${tracking}" "${wait:+${wait_ended_at:-${wait_updated:-}}}"; then
+	# Fail closed: a wait with no derivable end time would turn the age guard off.
+	if [ "${ITEM_KIND}" = "issue" ] && { [ -z "${wait}" ] || [ -n "${wait_ended_at:-${wait_updated:-}}" ]; } \
+		&& unblock_nothing_to_implement_close "" "" "${tracking}" "${wait:+${wait_ended_at:-${wait_updated:-}}}"; then
 		return 0
 	fi
 
