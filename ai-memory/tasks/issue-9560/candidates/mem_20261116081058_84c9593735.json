@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the `review` leg of `tests-sandbox-python` get back under its 20-minute budget? (`timeout-minutes` stays at 20.)\nChoices:\n- A: Remove `review` from the `sandbox-family` matrix. Move the \"Sandbox-image Python tests\" step, with `CI_SANDBOX_PYTHON_FAMILY=review` fixed, plus the \"Sandbox Python coverage guard\" step into the existing CI job with the most headroom. Step names and the step body stay the same. The check `tests-sandbox-python (review)` disappears, but `CI / lint` still covers it.\n- B: Keep the matrix and all job and step names. Fix the slow or hanging part inside the `review` leg's step, for example by bounding image resolution or the `docker run` with its own timeout so it fails clearly, or by speeding up the slow part shown in the step timings. No step moves to another job. (RECOMMENDED)\n- C: Do both: move the `review` leg as in A, and also add the clear-failure bound from B to the moved step.\nQ2: Which part of the \"Sandbox-image Python tests\" step used the time in run 43771105041? This decides what B or C targets. If you don't know, choose C.\nChoices:\n- A: Resolving or building the image (`scripts/sandbox_image.sh build --family review` fell back to a local build, or the derived `python3-pytest` image build was slow).\n- B: Running the pytest suite inside the container.\n- C: Unknown. Let the plan add per-phase timing output and bound both phases. (RECOMMENDED)",
+  "fingerprint": "11f197adb74084a2cae4377e0d5b9b9beb8e428b18d553338f0254ededaedbdf",
+  "lineage": {
+    "issue_number": 9560,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "43801696040",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43801696040",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261116081058_84c9593735",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9560,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "43801696040"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9560 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-16T08:10:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
