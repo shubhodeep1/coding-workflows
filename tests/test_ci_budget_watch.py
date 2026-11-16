@@ -50,6 +50,34 @@ def test_job_duration_findings_match_matrix_jobs_and_skip_skipped(tmp_path: Path
 	assert findings[1]["job"] == "orchestrate-poll (2)"
 
 
+def test_job_duration_findings_ignore_jobs_that_ran_no_step(tmp_path: Path, capsys) -> None:
+	# #9559: a job cancelled while queued has started_at/completed_at 33m49s
+	# apart but no step ran; that is wait time, not a near-timeout job.
+	root = _tree(tmp_path, {}, CI)
+	timeouts = cbw.job_timeouts(root / ".github" / "workflows" / "ci.yml")
+	queued = {**_job("tests-a", 33 * 60 + 49, conclusion="cancelled"), "steps": []}
+	assert cbw.job_duration_findings([queued], timeouts, 0.75) == []
+	unstarted = {**queued, "steps": [{"name": "Set up job", "started_at": None}, {"name": "Run tests", "started_at": None}]}
+	assert cbw.job_duration_findings([unstarted], timeouts, 0.75) == []
+	assert "::notice::ci_budget_watch: job tests-a ran no step (conclusion=cancelled); duration not checked." in capsys.readouterr().out
+
+
+def test_job_duration_findings_measure_from_first_started_step(tmp_path: Path) -> None:
+	root = _tree(tmp_path, {}, CI)
+	timeouts = cbw.job_timeouts(root / ".github" / "workflows" / "ci.yml")
+	# Queued 15 minutes, then ran 5: no finding at a 20-minute timeout.
+	job = {**_job("tests-a", 20 * 60), "steps": [
+		{"name": "Run tests", "started_at": "2026-10-09T10:16:00Z"},
+		{"name": "Set up job", "started_at": "2026-10-09T10:15:00Z"},
+		{"name": "Post", "started_at": None},
+	]}
+	assert cbw.job_duration_findings([job], timeouts, 0.75) == []
+	# A job that hit its timeout ran its steps; it is still reported.
+	timed_out = {**_job("tests-a", 20 * 60, conclusion="cancelled"), "steps": [{"name": "Set up job", "started_at": "2026-10-09T10:00:00Z"}]}
+	findings = cbw.job_duration_findings([timed_out], timeouts, 0.75)
+	assert [(f["subject"], f["value"]) for f in findings] == [("tests-a", 1200)]
+
+
 def test_issue_text_names_the_fix_and_carries_the_marker() -> None:
 	size = {"kind": "workflow_size", "subject": ".github/workflows/review_autofix.yml", "value": 481_287, "limit": 480_000}
 	assert cbw.issue_title(size) == "CI budget: .github/workflows/review_autofix.yml is 481,287 bytes (guard 480,000)"
