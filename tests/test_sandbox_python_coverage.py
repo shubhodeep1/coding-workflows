@@ -412,7 +412,11 @@ class SandboxJobWiringTest(unittest.TestCase):
 			run,
 		)
 		self.assertIn("::error::Sandbox family ${family} phase ${phase} hit its ${limit}s limit (${limit_var})", run)
-		self.assertIn('[ "${rc}" -eq 124 ] || [ "${rc}" -eq 137 ]', run)
+		# 137 is a limit hit only once the limit elapsed; earlier it is an OOM kill.
+		self.assertIn(
+			'[ "${rc}" -eq 124 ] || { [ "${rc}" -eq 137 ] && [ "$(( SECONDS - start ))" -ge "${limit}" ]; }',
+			run,
+		)
 
 	def test_sandbox_phase_limits_fit_the_job_timeout(self) -> None:
 		job = _ci_jobs()[SANDBOX_JOB_ID]

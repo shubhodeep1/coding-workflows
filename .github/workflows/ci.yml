@@ -4333,11 +4333,15 @@ jobs:
 
           # One timing line per phase; GNU timeout exits 124 (TERM was enough) or
           # 137 (kill-after fired), and either names the family and the phase.
+          # 137 is also an OOM kill, so it counts as a limit hit only once the
+          # limit has elapsed (as scripts/run_workspace_hook.sh and
+          # scripts/review_untrusted_sandbox.sh do); an earlier 137 is reported
+          # by the caller as an ordinary phase failure with its rc.
           ci_sandbox_phase_done()
           {
             local phase="$1" start="$2" rc="$3" limit="$4" limit_var="$5"
             echo "sandbox-python timing family=${family} phase=${phase} elapsed_secs=$(( SECONDS - start )) rc=${rc}"
-            if [ "${rc}" -eq 124 ] || [ "${rc}" -eq 137 ]; then
+            if [ "${rc}" -eq 124 ] || { [ "${rc}" -eq 137 ] && [ "$(( SECONDS - start ))" -ge "${limit}" ]; }; then
               echo "::error::Sandbox family ${family} phase ${phase} hit its ${limit}s limit (${limit_var}); see the sandbox-python timing lines above."
               return 1
             fi
