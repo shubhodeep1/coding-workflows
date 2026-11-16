@@ -69,12 +69,13 @@ WAIT_LABEL = "ai:waiting-on-dependency"
 BLOCKED_LABEL = "ai:blocked"
 NEEDS_HUMAN_LABEL = "ai:needs-human"
 # Human-latch labels that stop dependency-wait seeding (stuck-states P8d).
-# Mirrors workflow_failure_heal.HUMAN_NEEDED_LABELS and covers
-# orchestrate_lib.STALL_RECOVERY_LATCH_LABELS. Copied, not imported: the helper
-# runs as ``python3 -I`` without sibling imports. A parity test keeps them aligned.
-# ``ai:workflow-heal-escalated`` (#9248) is a stall-recovery latch but is left
-# out of HUMAN_NEEDED_LABELS on purpose, because that tuple drives the
-# heal-intake ``if:`` predicates.
+# The set is workflow_failure_heal.HUMAN_NEEDED_LABELS plus every
+# orchestrate_lib.STALL_RECOVERY_LATCH_LABELS entry, which today adds
+# ai:workflow-heal-escalated (#9248, Refs #9432). That heal escalation label
+# stays out of HUMAN_NEEDED_LABELS on purpose: that set starts heal reports
+# (it drives the heal-intake ``if:`` predicates).
+# Copied, not imported: the helper runs as ``python3 -I`` without sibling
+# imports. A parity test keeps them aligned.
 SEED_HUMAN_LATCH_LABELS: frozenset[str] = frozenset((
 	NEEDS_HUMAN_LABEL,
 	"ai:check-triage-escalated",
