@@ -879,11 +879,11 @@ if [ "${engine}" = chatgpt ]; then
 		--mount "type=bind,src=${root}/socket,dst=/socket,readonly" \
 		--mount "type=bind,src=${chatgpt_home},dst=/home/agent" \
 		--mount "type=bind,src=${root}/prompt,dst=/prompt,readonly" \
-		--mount "type=bind,src=$(realpath "${support}/chatgpt_codex_relay.py"),dst=/relay.py,readonly" \
+		--mount "type=bind,src=$(realpath "${support}/chatgpt_codex_relay.py"),dst=/chatgpt_relay.py,readonly" \
 		--env HOME=/home/agent --env CODEX_HOME=/home/agent/.codex \
 		--env "MODEL=${model}" --workdir /source "${image}" /bin/bash -c '
 			set -uo pipefail
-			python3 /relay.py bridge /socket/provider.sock &
+			python3 /chatgpt_relay.py bridge /socket/provider.sock &
 			bridge_pid=$!
 			trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
 			python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\'' || exit 1
