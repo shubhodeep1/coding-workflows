@@ -1,0 +1,26 @@
+{
+  "discovered_at": "2026-11-16T13:54:04Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=tests/test_prepush_affected_tests.py:687; cited_path=tests/test_prepush_affected_tests.py; files_touched=.github/workflows/review_autofix.yml, README.md, agents.d/9454-heal-runner-wait-and-false-human-holds.md, changelog.d/9454-heal-runner-wait-and-false-human-holds.md, scripts/review_autofix_step_post_editor_summary.sh, scripts/review_rb_judge_security_pass.sh, scripts/review_single_issue_security_pass.sh, scripts/workflow_failure_heal_intake.sh, tests/test_review_editor_sandbox_excluded_escalation.py, tests/test_review_rb_judge_security_pass.py, tests/test_single_issue_security_pass.py, tests/test_workflow_failure_heal.py, tests/test_workflow_failure_heal_synced_security.py.",
+  "phase": "review_autofix",
+  "pr_number": 9477,
+  "record_id": "lesson_20261116135404_37882155c8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_prepush_affected_tests.py",
+    ".github/workflows/review_autofix.yml",
+    "README.md",
+    "agents.d/9454-heal-runner-wait-and-false-human-holds.md",
+    "changelog.d/9454-heal-runner-wait-and-false-human-holds.md",
+    "scripts/review_autofix_step_post_editor_summary.sh",
+    "scripts/review_rb_judge_security_pass.sh",
+    "scripts/review_single_issue_security_pass.sh",
+    "scripts/workflow_failure_heal_intake.sh",
+    "tests/test_review_editor_sandbox_excluded_escalation.py",
+    "tests/test_review_rb_judge_security_pass.py",
+    "tests/test_single_issue_security_pass.py",
+    "tests/test_workflow_failure_heal.py",
+    "tests/test_workflow_failure_heal_synced_security.py"
+  ]
+}
