@@ -11307,8 +11307,20 @@ def test_heal_stale_keeps_with_too_few_or_failed_runs() -> None:
 	runs = _stale_runs(6)
 	runs["workflow_runs"][2]["conclusion"] = "failure"
 	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
+	# A cancelled run (a push replaced while it waited, run-volume plan D14)
+	# counts neither way: the other five green runs close the issue.
 	runs["workflow_runs"][2]["conclusion"] = "cancelled"
-	assert _stale_decide(runs=runs)["decision"] == "keep"
+	result = _stale_decide(runs=runs)
+	assert result["decision"] == "close" and result["green_runs"] == 5
+	assert result["first_green"]["id"] == 4000 and result["newest_green"]["id"] == 4005
+	# ...but it does not stand in for a green run either.
+	runs = _stale_runs(5)
+	runs["workflow_runs"][4]["conclusion"] = "cancelled"
+	result = _stale_decide(runs=runs)
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 4
+	# A failure beside a cancelled run still keeps the issue.
+	runs["workflow_runs"][1]["conclusion"] = "failure"
+	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
 	# Runs at or before the anchor, other branches and other events do not count.
 	old = _stale_runs(5)
 	old["workflow_runs"][0]["created_at"] = "2025-12-31T00:00:00Z"
