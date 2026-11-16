@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:4340-4342 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: ci_sandbox_phase_done treats every rc=137 as \"hit its limit\", although 137 can also come from an OOM kill well before the limit elapsed.\n  WHY: The error message names the wrong cause, so operators are pointed at the timeout knobs instead of memory. The repo's own convention gates 137 on elapsed time (scripts/review_untrusted_sandbox.sh:210-216, 251-252, 302-307; scripts/run_workspace_hook.sh:548-551). Both reviewers rated it NIT. The leg fails either way.\n- .github/workflows/ci.yml:whole diff (evidence tests/test_gh_api_write_guard.py:1108-1134, tests/test_pr_watch_guard.py:255-311, tests/test_workflow_checkout_integration_ref_audit.py:28-88, tests/test_agents_fragment_contract.py:17) | severity=high | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate attributes 5 test failures to this change, but none of those tests read anything the PR modifies, and the head-SHA check-runs report 0 failures.\n  WHY: The gate stays red on every round and no edit within the granted files can fix it. The reviewer rated it MAJOR; this ledger records that as high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:4340 (helper ci_sandbox_phase_done, ci.yml:4336-4345; called from ci.yml:4365, 4392, 4430) | severity=NIT | confidence=4\n  PROBLEM: The helper classifies every rc=137 as \"hit its limit\". An OOM kill of the container or of docker build also exits 137, and the repo convention gates 137 on elapsed time (scripts/review_untrusted_sandbox.sh:210-216, 302-307; scripts/run_workspace_hook.sh:548-551).\n  WHY: The new diagnostic names a timeout that never happened instead of the OOM kill. The leg fails either way. The suggested fix is to gate 137 on `SECONDS - start >= limit`.\n- HARDENING_SUGGESTIONS: .github/workflows/ci.yml line 4370 (risk score 1)\n  PROBLEM: image_id has already failed the sha256 check, but it is interpolated verbatim into the `::error::` line. A multi-line value could forge workflow annotations.\n  WHY: Suggested fix: strip at the first newline before interpolating (`${image_id%%$'\\n'*}`). Estimated 1 line changed.\n- TASK COMPLETENESS / INTENT GAPS: NONE. The in-place bounding was the approved plan (AD-1=B, AD-2=C).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:whole diff (evidence tests/test_gh_api_write_guard.py:1108-1134, tests/test_pr_watch_guard.py:255-311, tests/test_workflow_checkout_integration_ref_audit.py:28-88, tests/test_agents_fragment_contract.py:17) | severity=MAJOR | confidence=3\n  PROBLEM: The pre-push gate classifies 5 failures as \"caused by this change\", but none of those tests read anything the PR modifies, and the head-SHA check-runs report failed_count: 0.\n  WHY: The gate is marked failed every round and repair turns are spent on failures no edit within the granted paths can resolve, so the merge gate stays red.\n- .github/workflows/ci.yml:4340-4342 | severity=NIT | confidence=4\n  PROBLEM: Every rc=137 is reported as \"phase X hit its <limit>s limit\", even when an OOM-killed child exited well before the limit (see scripts/review_untrusted_sandbox.sh:251-252 and :302-307).\n  WHY: An OOM kill is misdiagnosed as a limit hit, which points operators at the timeout knobs. Only the diagnostic is affected. The suggested fix is to gate 137 on elapsed time and update the pinned string at tests/test_sandbox_python_coverage.py:415.\n- TASK COMPLETENESS / INTENT GAPS: NONE. The in-place bounding was the approved plan (AD-1=B, AD-2=C).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "35f3633446ad047329b1d6079cb1e7cd3e9e144d1902ecd130026eb11931060a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9591,
+    "run_id": "43926281785",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "43926281785",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261116212611_590882713d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9591,
+    "run_id": "43926281785"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-16T21:26:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
