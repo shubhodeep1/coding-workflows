@@ -635,8 +635,13 @@ jobs:
           fi
           if [ "${support_unified}" = "true" ]; then
             bash .codex-workflow-src/scripts/stage_support_for_phase.sh plan
+            # As in implement.yml: a listed optional helper the bundle skipped
+            # must not hide a consumer-owned scripts/<name> via scripts/.gitignore.
+            support_bundle_dir="$(sed -n 's/^SUPPORT_SCRIPTS_DIR=//p' "${GITHUB_ENV}" | tail -n 1)"
             while IFS= read -r support_list_name; do
-              if [ -n "${support_list_name}" ]; then _fetched_scripts+=("${support_list_name}"); fi
+              [ -n "${support_list_name}" ] || continue
+              if [ -d "${support_bundle_dir}" ] && { [ ! -f "${support_bundle_dir}/${support_list_name}" ] || [ -L "${support_bundle_dir}/${support_list_name}" ]; }; then continue; fi
+              _fetched_scripts+=("${support_list_name}")
             done <<< "${support_list_names}"
             _fetched_scripts+=(codex_model_catalog.json)
             # SUPPORT_SCRIPTS_DIR is only visible from the next step; the
