@@ -598,8 +598,9 @@ _pr_ruleset_required_check_blockers()
 # variable cannot hold an empty string and the workflow passes `|| ''`. A
 # value with a comma or control character, or longer than 100 characters,
 # warns and falls back to the repository default.
-# Optional $1: the PR's base ref, kept for the callers' signature. ci.yml's
-# pull_request trigger covers every base since issue #7283, so the `lint`
+# Optional $1: the PR's base ref, kept for the callers' signature. Every PR,
+# for every base since issue #7283, gets one full ci.yml run when review
+# finishes with its head (cut-ci-runner-time Phase 4), so the `lint`
 # default applies to every base: a PR stacked on another branch (a fix PR
 # routed to a failing PR's ai/issue-* head, a heal PR) waits for its own CI
 # `lint` before it merges. An explicitly configured name also applies to
@@ -737,13 +738,18 @@ _pr_head_ci_runs_pending()
 # (1); it never fails its caller's step.
 # API calls (§15): one `GET actions/workflows/<file>/runs?head_sha=<sha>&per_page=20`
 # unless PR_FINAL_CI_RUNS_JSON is given; one `GET pulls/<pr>` only when
-# <head ref> is empty; at most one `workflow_dispatch`. Fail-open: a failed
+# <head ref> is empty; one `GET pulls/<pr>/files?per_page=100` only when it
+# dispatches (docs-only final CI, run-volume plan item 4; one
+# `REVIEW_FINAL_CI_DOCS_ONLY pr= head= docs_only= reason=` line); at most one
+# `workflow_dispatch`, or two when a docs_only=true dispatch is refused and
+# the full-suite dispatch is tried once more. Fail-open: a failed
 # read dispatches anyway, because a duplicate run is harmless and a missing
 # run blocks the merge (the required `lint` check never appears).
 _pr_ensure_final_ci()
 {
 	local repo="$1" pr="$2" sha="$3" ref="${4:-}"
 	local wf="${REVIEW_FINAL_CI_WORKFLOW:-}" runs_json="" decision="" reason="" pr_json="" head_repo=""
+	local final_ci_docs_only="false" final_ci_docs_only_classifier="" final_ci_docs_only_files="" final_ci_docs_only_verdict=""
 	PR_FINAL_CI_OUTCOME=""
 	if [ -z "${wf}" ]; then
 		PR_FINAL_CI_OUTCOME="disabled"
@@ -800,6 +806,36 @@ _pr_ensure_final_ci()
 		PR_FINAL_CI_OUTCOME="dispatch_failed"
 		echo "::warning::REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=dispatch_failed reason=head_ref_unavailable"
 		return 0
+	fi
+	# Docs-only final CI (run-volume plan item 4): a PR whose changed files
+	# are all on the scripts/ci_docs_only_paths.sh list gets docs_only=true,
+	# so ci.yml skips its test jobs and `lint` re-checks the merged tree.
+	# Anything unreadable, a full first page (100 files, maybe more), or a
+	# missing classifier counts as code and dispatches the full suite.
+	final_ci_docs_only="false"
+	final_ci_docs_only_classifier="${BASH_SOURCE[0]%/*}/ci_docs_only_paths.sh"
+	if [ -f "${final_ci_docs_only_classifier}" ]; then
+		final_ci_docs_only_files="$(gh_retry _safe_gh_jq "repos/${repo}/pulls/${pr}/files?per_page=100" 2>/dev/null || echo "")"
+		[ -n "${final_ci_docs_only_files}" ] && final_ci_docs_only_verdict="$(printf '%s' "${final_ci_docs_only_files}" \
+			| jq -j 'if type == "array" and length > 0 and length < 100 and all(.[]; type == "object" and ((.filename // null) | type) == "string" and ((.previous_filename // "") | type) == "string") then .[] | .filename, (.previous_filename // empty) | (. + "\u0000") else empty end' 2>/dev/null \
+			| bash "${final_ci_docs_only_classifier}" classify 2>/dev/null)"
+		# The whole output must be the one word: anything else is code.
+		[ "${final_ci_docs_only_verdict}" = "docs_only" ] && final_ci_docs_only="true"
+		final_ci_docs_only_verdict="${final_ci_docs_only_verdict%%[[:space:]]*}"
+		echo "REVIEW_FINAL_CI_DOCS_ONLY pr=${pr} head=${sha} docs_only=${final_ci_docs_only} reason=${final_ci_docs_only_verdict:-files_unreadable}"
+	else
+		echo "REVIEW_FINAL_CI_DOCS_ONLY pr=${pr} head=${sha} docs_only=false reason=classifier_missing"
+	fi
+	if [ "${final_ci_docs_only}" = "true" ]; then
+		if gh workflow run "${wf}" --repo "${repo}" --ref "${ref}" -f pr_number="${pr}" -f head_sha="${sha}" -f docs_only=true >/dev/null 2>&1; then
+			PR_FINAL_CI_OUTCOME="dispatched"
+			echo "REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=dispatched reason=${reason} workflow=${wf}"
+			return 0
+		fi
+		# A branch whose workflow predates the docs_only input refuses the
+		# dispatch; the full-suite dispatch below still covers the head (a
+		# duplicate run after a lost success response is harmless).
+		echo "::warning::REVIEW_FINAL_CI_DOCS_ONLY pr=${pr} head=${sha} docs_only=dispatch_refused (retrying once without docs_only)"
 	fi
 	# One attempt: a retry after a lost success response would start a
 	# second run; the review sweep's safety net retries a failed dispatch.
