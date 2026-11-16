@@ -2,7 +2,7 @@
 
 ## Summary
 
-Change the default of the 11 `PERSIST_*_ENABLED` repo variables from `false` to `true` in the reusable workflows and the scripts they call, so every consumer gets the persistent-unattended-workflows features (Refs #8427) on its next `@stable` sync without setting anything. Each switch stays, so a repository opts out by setting the variable to `false`. The same PR fixes two behaviours the audit found would hit consumers that never opted in. (1) P6 stops counting time while an issue waits on a person. (2) P9 waits less when a repository has no CI check runs at all.
+Change the default of the 11 `PERSIST_*_ENABLED` repo variables from `false` to `true` in the reusable workflows and the scripts they call, so every consumer gets the persistent-unattended-workflows features (Refs #8427) on its next `@stable` sync without setting anything. Each switch stays, so a repository opts out by setting the variable to `false`. The same PR fixes three behaviours that would hit consumers that never opted in. (1) P6 stops counting time while an issue waits on a person. (2) P6 stops counting review rounds toward `max_rounds`, because review already stops itself with `ai:review-blocked`. (3) P9 waits less when a repository has no CI check runs at all.
 
 ## Context
 
@@ -13,8 +13,15 @@ Change the default of the 11 `PERSIST_*_ENABLED` repo variables from `false` to 
 - A read-only audit of `origin/main` found every phase fails open when a prerequisite is missing (a plan with no `ACCEPTANCE:` lines, a stale consumer hook, a GitHub API failure), with two exceptions this plan fixes:
   - **P6:** `scripts/persist_budget.py` `decide()` escalates on `max_hours` (48 h from the first journal entry) whatever stage the issue is in. The standalone skip list in `scripts/orchestrate_poll_process.sh` (the `case` before `persist_budget_govern_issue ... standalone`) does not skip `ai:awaiting-approval`, `ai:clarification`, `ai:ready-to-merge` or `ai:review-blocked`. A plan left unapproved for 48 h gets `ai:needs-human`.
   - **P9:** `no_checks` (no check runs on the integration PR head) holds the wave for the full `PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES` (90) at every wave boundary. Repositories with no CI wait 90 minutes per wave.
+- Running P6 in coding-workflows from 2026-11-09 to 2026-11-14 confirmed the `max_hours` problem and found a second one:
+  - `max_rounds` counts review rounds. The comment at `scripts/persist_budget.py:344` says each review round is journalled `ok` because it is an autofix commit. So a PR whose review pushes 5 fixes is escalated with `open_pr:max_rounds`, even though review has its own stop (`ai:review-blocked`).
+  - Between 2026-11-11T05:30Z and 2026-11-13T01:05Z, P6 wrote 19 "Persistence budget reached" comments on 15 issues:
+    - 8 for `max_hours`: #9120, #9130 (4 times), #9004, #8963, #9212;
+    - 11 for `open_pr:max_rounds`: #8953, #9203, #9313, #9261, #9202 (twice), #9248, #9249, #9320, #9233, #9362.
+  - Parked PRs merged after `ai:needs-human` was cleared, 45 minutes to 10 hours later (#9117, #8953, #9203).
+  - On 2026-11-14 the operator set `PERSIST_BUDGET_ENABLED=false` in coding-workflows until this fix ships.
 
-### Decisions (operator, 2026-11-09)
+### Decisions (operator, 2026-11-09 to 2026-11-14)
 
 | ID | Decision |
 | --- | --- |
@@ -27,12 +34,16 @@ Change the default of the 11 `PERSIST_*_ENABLED` repo variables from `false` to 
 | Q8: A | Add a shorter wait for the "no check runs at all" case. |
 | Q10: A | Keep P5's reopen-on-recurrence behaviour as designed. |
 | Q11: A | Correct all docs that say "default `false`"; add one changelog fragment. |
+| Q13: A (revised 2026-11-13) | Review rounds no longer count toward P6 `max_rounds`; P6 caps implement, resolver and post-merge rounds only. |
+| Q14 (2026-11-14) | The operator set `PERSIST_BUDGET_ENABLED=false` in coding-workflows until this PR ships. |
+| Q15/Q16: A | Wait for a promote cycle that runs its proving and verifying runs and releases; checked daily for up to 5 days. |
 
 ## Goals
 
 - G1. With no repo variable set, all 11 phases run in this repo and in every consumer.
 - G2. Setting any switch to `false` (exact string) turns that phase off, byte-for-byte the same as today's default-off behaviour.
 - G3. P6 never escalates an issue for time it spent waiting on a person.
+- G3b. P6 `max_rounds` never escalates on review rounds; a PR that keeps getting review autofixes is stopped by review's own `ai:review-blocked`, not by P6.
 - G4. P9 moves on after at most 15 minutes (default) when the integration PR head has no check runs at all.
 - G5. Docs, tests and the changelog say "default `true`".
 
@@ -70,6 +81,10 @@ Change the default of the 11 `PERSIST_*_ENABLED` repo variables from `false` to 
      - from then on it passes it as `--window-start`.
 
      Time spent waiting therefore never counts, and a resumed issue gets a fresh 48 h. The state update follows the existing `persist_budget_basis` pattern in the same function.
+3b. **P6 review rounds (Q13: A):**
+   - In `scripts/persist_budget.py`, the `max_rounds` check counts only rounds whose stage is `implement`, `resolver` or `postmerge`. `review` entries no longer count toward it.
+   - Keep `ROUND_STAGES` unchanged (§6). `review` entries still count for `failed_rounds`, no-progress detection, and the "Rounds on the current approach" summary text. Only the `max_rounds` comparison changes.
+   - Rewrite the comment at `scripts/persist_budget.py:344` to say why: review stops itself with `ai:review-blocked`, so P6 does not cap review churn a second time.
 4. **P9 no-checks wait (Q8):**
    - New env `PERSIST_ORCH_WAVE_CHECK_NO_CHECKS_WAIT_MINUTES` in `orchestrate_poll.yml`, next to `PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES`: `${{ vars.PERSIST_ORCH_WAVE_CHECK_NO_CHECKS_WAIT_MINUTES || '15' }}`.
    - In `scripts/persist_orchestrator.py`'s wave-check decision, the `no_checks` outcome uses this shorter limit, then takes today's skip (`no_checks_timeout`).
@@ -127,6 +142,7 @@ One phase, one PR (Q2: A). It is independently mergeable and production-safe at 
    - `persist_postmerge_verify.py:32,38`
    - `persist_budget.py:45`
 6. P6 human-wait: `persist_budget.py` (constant, `human_wait` reason, `--window-start`) and `persist_budget_govern_issue` in `orchestrate_poll_process.sh` (`persist_budget_resume_at`).
+6b. P6 review rounds: the `max_rounds` comparison in `persist_budget.py` `decide()` (around line 347) counts only `implement`, `resolver` and `postmerge` rounds. Update the comment at line 344, the module docstring, and the `agents.md` P6 section.
 7. P9 no-checks wait: `orchestrate_poll.yml` env line, `persist_orchestrator.py` wave-check decision, and the wave-check caller in `orchestrate_poll_process.sh`, if it passes the limits.
 8. Docs and changelog:
    - correct "default `false`" in the `agents.md` P1–P11 sections (§30.B: direct edit to correct existing text);
@@ -171,6 +187,7 @@ None. No MongoDB collection or contract is touched. The only new state is the is
   - P6 `decide()` returns `ignore human_wait` for each of the four labels;
   - `--window-start` moves the `max_hours` start;
   - `persist_budget_govern_issue` sets `persist_budget_resume_at` on the first tick after the label drops, and an issue waiting 72 h then resumed is not escalated.
+  - P6 `max_rounds`: 5 or more `review=ok` rounds with no other rounds do not escalate; 5 `implement`/`resolver`/`postmerge` rounds still do; review rounds still count toward `failed_rounds` and no-progress. Use the shape of #8953 / #9117 (5 × `review=ok`, 0 failed in a row) as a regression case.
   - P9 `no_checks` times out at the new limit (default 15, clamped); `pending` still uses 90.
   - Every flipped workflow default, and `issue_pr_status.yml:853`, still yields off when the variable is exactly `false`.
 - Run the full suite. Some tests may assume unset means off; fix those that fail because of this change.
@@ -183,12 +200,14 @@ None. No MongoDB collection or contract is touched. The only new state is the is
 | P5 reopens a merged issue after an unrelated post-merge failure | Only when the plan named a post-merge workflow; capped at `PERSIST_MAX_APPROACHES` (3). Kept as designed (Q10). |
 | More AI usage in consumers | Up to 2 extra repair turns per failing gate (P3); one extra planner run per evidence request (P11); one judge call per red/timeout wave check (P9) or revise (P10, cap 2). Caps unchanged. |
 | A missed `false` fallback leaves a phase off by default somewhere | Step 4's re-grep, plus a test that greps `.github/workflows` and `scripts` for `PERSIST_[A-Z_]*_ENABLED` with a `false` fallback and fails if any remains. |
+| A PR churns through many review autofix rounds without P6 stopping it | Review's own stop (`ai:review-blocked`) already handles that; P6 still caps implement, resolver and post-merge rounds, and `max_hours` still applies outside human-wait stages. |
 | P6 resume tracking misses a label drop between ticks | The field is set on the first tick without a human-wait label, so the worst case is one tick of counted time. |
 
 ## Rollout
 
-1. Precondition (Q1: A): the issue is opened only after a `stable` release tagged after 2026-11-09T08:16Z (when all 11 switches were on here) has passed its promote cycle (smoke gate, proving and verifying apply-analysis runs). This holds the flip back from the release that proves the current code.
+1. Precondition (Q1: A): the issue is opened only after a `stable` release tagged after 2026-11-09T08:16Z (when the switches were on here) has passed a full promote cycle (smoke gate, proving and verifying apply-analysis runs). This holds the flip back from the release that proves the current code. P6 has been off here since 2026-11-14 (Q14), so that cycle proves the other 10. P6's new behaviour is proven by this PR's tests and by the next cycle after it merges.
 2. The PR merges to `main` through the normal pipeline.
+2b. Operator step after merge: delete the explicit `PERSIST_BUDGET_ENABLED=false` in coding-workflows (`gh variable delete PERSIST_BUDGET_ENABLED -R shubhodeep1/coding-workflows`) so P6 follows the new default.
 3. The next daily promote cycle proves `main` with the new defaults (its proving and verifying runs exercise them here) and tags `stable`.
 4. Consumers pick it up on their sync (`update_workflows.yml`, daily 04:00 UTC, plus the `@stable` `repository_dispatch`).
 5. Rollback: revert the PR, or set the variable(s) to `false` in the affected repository.

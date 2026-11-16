@@ -77,6 +77,11 @@ on:
         required: false
         default: ""
         type: string
+      final_ci_workflow:
+        description: "Workflow file (under .github/workflows) to dispatch once per reviewed head as the PR's one full CI run (cut-ci-runner-time Phase 4); empty = off"
+        required: false
+        default: ""
+        type: string
     secrets:
       GH_PAT:
         required: true
@@ -126,6 +131,11 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: review_autofix
   REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
+  # Final CI at the end of review (cut-ci-runner-time Phase 4): read by
+  # _pr_ensure_final_ci (scripts/pr_checks_lib.sh) in the required-checks
+  # wait and by scripts/review_enable_auto_merge.sh. Empty (the default, and
+  # every workflow_dispatch run of this file) keeps today's behaviour.
+  REVIEW_FINAL_CI_WORKFLOW: ${{ inputs.final_ci_workflow || '' }}
   # Resolve base-branch conflicts BEFORE the reviewer/editor spend when the
   # pre-review merge-topology gate sees a content conflict (default on).
   PRE_REVIEW_CONFLICT_RESOLVE_ENABLED: ${{ vars.PRE_REVIEW_CONFLICT_RESOLVE_ENABLED || 'true' }}
@@ -1154,6 +1164,7 @@ jobs:
           fetch-depth: 1
           sparse-checkout: |
             scripts/pr_checks_lib.sh
+            scripts/ci_docs_only_paths.sh
             scripts/gh_helpers.sh
             scripts/review_freshness_ci_failed.sh
             scripts/review_single_issue_security_pass.sh
@@ -3493,6 +3504,10 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # A new advisory is posted with the job token, so it starts no
+          # issue_comment workflows (run-volume plan item 6); refreshing an
+          # existing PAT-authored advisory stays on GH_TOKEN.
+          MATERIALITY_COMMENT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -3540,10 +3555,28 @@ jobs:
             echo "::warning::Failed to refresh AI Materiality Advisory comment #${existing_comment_id}; will try posting a new advisory."
           fi
 
-          if gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --input "${payload}" >/dev/null 2>&1; then
-            echo "AGENTS_MD_MATERIALITY: posted advisory comment."
-          else
-            echo "::warning::Failed to post AI Materiality Advisory comment on PR #${PR_NUMBER}."
+          # Fall back to GH_TOKEN only when GitHub refuses the job token
+          # (401/403): a POST is sent once, and resending after a timeout or
+          # 5xx could duplicate the advisory.
+          materiality_post_via_pat=true
+          if [ -n "${MATERIALITY_COMMENT_TOKEN:-}" ]; then
+            materiality_post_err="$(mktemp)"
+            if GH_TOKEN="${MATERIALITY_COMMENT_TOKEN}" gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --input "${payload}" >/dev/null 2>"${materiality_post_err}"; then
+              echo "AGENTS_MD_MATERIALITY: posted advisory comment (token=job)."
+              materiality_post_via_pat=false
+            elif ! grep -qiE 'HTTP 40[13]|Resource not accessible by integration|Bad credentials|Requires authentication' "${materiality_post_err}"; then
+              cat "${materiality_post_err}" >&2 || true
+              echo "::warning::Failed to post AI Materiality Advisory comment on PR #${PR_NUMBER} (job token, not resent)."
+              materiality_post_via_pat=false
+            fi
+            rm -f "${materiality_post_err}"
+          fi
+          if [ "${materiality_post_via_pat}" = "true" ]; then
+            if gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --input "${payload}" >/dev/null 2>&1; then
+              echo "AGENTS_MD_MATERIALITY: posted advisory comment (token=pat)."
+            else
+              echo "::warning::Failed to post AI Materiality Advisory comment on PR #${PR_NUMBER}."
+            fi
           fi
           rm -f "${payload}"
 
@@ -4166,7 +4199,7 @@ jobs:
         # per-attempt budget.  On hit, the EXIT trap in
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
-        # the */5 cron tick.
+        # the */15 cron tick.
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'
         timeout-minutes: 170
         env:
@@ -4527,6 +4560,9 @@ jobs:
         env:
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Judge comments are informational, so they post with the job token
+          # and start no issue_comment workflows (run-volume plan item 6).
+          RB_JUDGE_COMMENT_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           ENABLE_REVIEW_BLOCKED_JUDGE: ${{ vars.ENABLE_REVIEW_BLOCKED_JUDGE || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
@@ -4593,6 +4629,7 @@ jobs:
           if [ "${_judge_exit}" -ne 0 ]; then
             echo "::warning::review_rb_judge.sh exited ${_judge_exit} — degrading to ai:review-blocked recovery path"
             echo "rb_judge_status=failed" >> "$GITHUB_OUTPUT"
+            echo "rb_judge_exit_code=${_judge_exit}" >> "$GITHUB_OUTPUT"
           else
             echo "rb_judge_status=ok" >> "$GITHUB_OUTPUT"
           fi
@@ -4787,11 +4824,15 @@ jobs:
             --run-id "${{ github.run_id }}"
 
       - name: Post review-blocked comment on PR (autofix exhaustion)
+        id: rb_blocked_comment
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
+          RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
+          RB_JUDGE_PROVIDER_UNAVAILABLE: ${{ steps.rb_judge.outputs.rb_judge_provider_unavailable }}
+          AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
           AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
           AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
@@ -5453,6 +5494,10 @@ jobs:
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
           JUDGE_MERGE_STATUS: ${{ steps.rb_judge.outputs.judge_merge_status }}
           JUDGE_REISSUE_CREATED: ${{ steps.rb_judge.outputs.judge_reissue_created }}
+          RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
+          RB_JUDGE_EXIT_CODE: ${{ steps.rb_judge.outputs.rb_judge_exit_code }}
+          AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
+          RB_BLOCKED_REPEAT: ${{ steps.rb_blocked_comment.outputs.rb_judge_crash_repeat }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
@@ -5604,6 +5649,34 @@ jobs:
               *)
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations)\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
             esac
+          fi
+          # Issue #9249: a judge crash (or llm_failed*/json_parse_failed*)
+          # before autofix ran out is not autofix exhaustion. Same condition
+          # as scripts/review_autofix_step_post_review_blocked_comment.sh; a
+          # repeat for the same head and reason (its marker) is logged only.
+          JUDGE_CRASH_REASON=""
+          if [ "${JUDGE_HANDLED}" != "true" ] && [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]] && [[ "${MAX_AUTOFIX_ITERATIONS:-}" =~ ^[0-9]+$ ]] && [ "${AUTOFIX_ITERATION}" -lt "${MAX_AUTOFIX_ITERATIONS}" ]; then
+            if [ "${RB_JUDGE_STATUS:-}" = "failed" ]; then
+              JUDGE_CRASH_REASON="judge_crashed"
+            elif [[ "${JUDGE_SKIP_REASON:-}" == llm_failed* || "${JUDGE_SKIP_REASON:-}" == json_parse_failed* ]]; then
+              JUDGE_CRASH_REASON="unknown"
+              [[ ! "${JUDGE_SKIP_REASON}" =~ ^[a-z0-9_]+$ ]] || JUDGE_CRASH_REASON="${JUDGE_SKIP_REASON}"
+            fi
+          fi
+          if [ -n "${JUDGE_CRASH_REASON}" ]; then
+            # A skip reason written before the crash may have set DEBUG.
+            JUDGE_ALERT_LEVEL="CRITICAL"
+            JUDGE_CRASH_DETAIL="${JUDGE_CRASH_REASON}"
+            if [ "${JUDGE_CRASH_REASON}" = "judge_crashed" ] && [[ "${RB_JUDGE_EXIT_CODE:-}" =~ ^[0-9]+$ ]]; then
+              JUDGE_CRASH_DETAIL="exit ${RB_JUDGE_EXIT_CODE}"
+            fi
+            MSG="$(printf 'PR review blocked — review-blocked judge failed (%s; %s autofix commits, max %s)\nNo autofix exhaustion: the judge itself could not complete. Needs a look at the run log' "${JUDGE_CRASH_DETAIL}" "${AUTOFIX_ITERATION}" "${MAX_AUTOFIX_ITERATIONS}")"
+            # unchecked: the comment step (and its marker dedupe) did not run,
+            # e.g. a security-pass-only run; that path pages as before.
+            JUDGE_CRASH_REPEAT="${RB_BLOCKED_REPEAT:-unchecked}"
+            [ "${JUDGE_CRASH_REPEAT}" != "true" ] || JUDGE_ALERT_LEVEL="SUPPRESSED"
+            echo "RB_JUDGE_CRASH_ALERT pr=${PR_NUMBER} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${JUDGE_CRASH_REASON} repeat=${JUDGE_CRASH_REPEAT} level=${JUDGE_ALERT_LEVEL}"
+            [ "${JUDGE_CRASH_REPEAT}" != "true" ] || exit 0
           fi
           MSG+=$'\n'
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"

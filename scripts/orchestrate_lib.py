@@ -1602,12 +1602,22 @@ DEDICATED_HANDLER_PHASES: set[str] = {
 # codex stall-judge run plus Telegram alerts, until the recovery budget
 # closed the issue and the judge regenerated it under a fresh number
 # (issue #3906 on shubhodeep1/tele-funtoken-msg-scoring, 2026-09-01).
-# The guard that latches these labels already posted the human-facing
-# comment and CRITICAL alert, so stall recovery must pause exactly like
+# The guard that latches ai:destructive-blocked / ai:scope-blocked
+# already posted the human-facing comment and CRITICAL alert, so stall recovery must pause exactly like
 # it does for ai:needs-human until a human removes the latch.
+# ai:workflow-heal-escalated (issue #9248) is latched too: the workflow
+# failure heal intake sets it when a heal issue's own clarify / plan /
+# implement run fails the way the issue was filed for, or when the heal
+# lineage cap is hit, and post-merge verification
+# (workflow_failure_heal_verify.sh) sets it when a heal fix did not hold
+# for the second time.  Retrying such an issue only re-runs the failing
+# phase and adds another occurrence, so stall recovery pauses until a
+# human removes the label.  Appended last so first-match results for
+# the existing labels do not change.
 STALL_RECOVERY_LATCH_LABELS: tuple[str, ...] = (
 	"ai:destructive-blocked",
 	"ai:scope-blocked",
+	"ai:workflow-heal-escalated",
 )
 
 
@@ -2565,9 +2575,9 @@ def detect_stalls(
 		if "ai:needs-human" in labels:
 			continue
 		if stall_recovery_latch_label(labels) is not None:
-			# Human-gated latch (ai:destructive-blocked / ai:scope-blocked):
-			# implement.yml refuses every redispatch until a human removes
-			# it, so any recovery action here is a guaranteed no-op loop.
+			# Human-gated latch (any STALL_RECOVERY_LATCH_LABELS entry):
+			# the latch holds until a human removes it, so any recovery
+			# action here is a guaranteed no-op (or failing) loop.
 			# detect_stall_latched_issues() reports these for logging.
 			continue
 		phase = determine_phase(labels)
@@ -2847,6 +2857,90 @@ def extract_integration_branch(body: str) -> str:
 	if not alias_match:
 		return ""
 	return (alias_match.group(1) or alias_match.group(2) or "").strip()
+
+
+# Issue #8955: the failing-PR marker scripts/check_failure_triage.sh writes
+# into an ai:check-triage issue body. Must stay identical to
+# check_triage_resolution.PR_MARKER_RE (a test compares the two patterns);
+# copied rather than imported because issue_pr_status.yml stages only this
+# module, and check_triage_resolution imports workflow_failure_heal.
+CHECK_TRIAGE_PR_MARKER_RE = re.compile(r"^ {0,3}<!-- check-failure-triage:pr=([1-9][0-9]{0,9}) -->\s*$")
+CHECK_TRIAGE_LABEL_NAME = "ai:check-triage"
+
+
+def _check_triage_lines_outside_fences(body: str) -> list[str]:
+	"""Body lines outside code fences.
+
+	Copy of check_triage_resolution._lines_outside_fences (a test compares
+	the two), so a marker quoted inside a fence is not counted.
+	"""
+	fence: str | None = None
+	kept: list[str] = []
+	for line in body.split("\n"):
+		match = re.match(r" {0,3}(`{3,}|~{3,})", line)
+		if fence is None:
+			if match:
+				fence = match.group(1)
+				continue
+			kept.append(line)
+		elif match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) and not line[match.end():].strip():
+			fence = None
+	return kept
+
+
+def check_triage_target_branch(
+	issue_body: Any,
+	labels: Any,
+	author_login: Any,
+	pipeline_login: Any,
+) -> int | None:
+	"""Return the failing PR number an ai:check-triage issue names, or None.
+
+	Issue #8955: a check-triage fix PR merges into the head branch of the PR
+	whose check failed, not into the default branch. Callers
+	(issue_pr_status.yml and close_merged_issues_sweep) count a merge into
+	that PR's head branch as completion with reason ``check_triage_pr_branch``.
+
+	Trust rules (all must hold, otherwise None):
+	- ``labels`` contains ``ai:check-triage`` (strings or ``{"name": ...}``
+	objects; anything else is ignored);
+	- ``author_login`` and ``pipeline_login`` are non-empty and equal,
+	case-insensitively (the issue was written by the pipeline login);
+	- the body has exactly one ``<!-- check-failure-triage:pr=<N> -->`` line
+	outside code fences (CHECK_TRIAGE_PR_MARKER_RE, fence rule shared with
+	check_triage_resolution); zero or several markers return None.
+
+	API budget: this function makes no API calls. Callers make at most one
+	``GET pulls/<N>`` per issue, only after the existing target-branch rules
+	have rejected the merge, and compare the API's ``head.ref`` (never issue
+	text) with the merged PR's base, requiring a same-repository head.
+	"""
+	if not isinstance(labels, list):
+		return None
+	label_names: set[str] = set()
+	for entry in labels:
+		if isinstance(entry, str):
+			label_names.add(entry)
+		elif isinstance(entry, dict) and isinstance(entry.get("name"), str):
+			label_names.add(entry["name"])
+	if CHECK_TRIAGE_LABEL_NAME not in label_names:
+		return None
+	if not isinstance(author_login, str) or not isinstance(pipeline_login, str):
+		return None
+	author = author_login.strip()
+	pipeline = pipeline_login.strip()
+	if not author or not pipeline or author.lower() != pipeline.lower():
+		return None
+	if not isinstance(issue_body, str) or not issue_body:
+		return None
+	markers = [
+		match.group(1)
+		for match in (CHECK_TRIAGE_PR_MARKER_RE.match(line.rstrip("\r")) for line in _check_triage_lines_outside_fences(issue_body))
+		if match
+	]
+	if len(markers) != 1:
+		return None
+	return int(markers[0])
 
 
 def extract_tracking_issue_number(body: str) -> int | None:
@@ -3750,6 +3844,25 @@ def cmd_extract_integration_branch(args: argparse.Namespace) -> int:
 	branch = extract_integration_branch(body)
 	if branch:
 		print(branch)
+	return 0
+
+
+def cmd_check_triage_target_pr(args: argparse.Namespace) -> int:
+	"""Print the failing PR number an ai:check-triage issue names, or nothing.
+
+	Issue #8955. Reads the issue body from stdin and applies
+	check_triage_target_branch with ``--labels-json``, ``--author`` and
+	``--pipeline-login``. Always exits 0; malformed ``--labels-json`` prints
+	nothing so callers fail closed. Makes no API calls.
+	"""
+	body = sys.stdin.read()
+	try:
+		labels = json.loads(args.labels_json or "[]")
+	except (TypeError, ValueError):
+		return 0
+	pr_number = check_triage_target_branch(body, labels, args.author or "", args.pipeline_login or "")
+	if pr_number is not None:
+		print(pr_number)
 	return 0
 
 
@@ -4703,6 +4816,15 @@ def build_parser() -> argparse.ArgumentParser:
 		help="Print the integration branch declared in an issue body read from stdin",
 	)
 	p_extract_branch.set_defaults(func=cmd_extract_integration_branch)
+
+	p_triage_target = subparsers.add_parser(
+		"check-triage-target-pr",
+		help="Print the failing PR number a pipeline-authored ai:check-triage issue body (stdin) names",
+	)
+	p_triage_target.add_argument("--labels-json", default="[]")
+	p_triage_target.add_argument("--author", default="")
+	p_triage_target.add_argument("--pipeline-login", default="")
+	p_triage_target.set_defaults(func=cmd_check_triage_target_pr)
 
 	p_unrouted = subparsers.add_parser("unrouted-blocked-comments", help="Flag blocked issues whose newest trusted human reply was never routed (JSON on stdin)")
 	p_unrouted.add_argument("--grace-minutes", type=int, default=15)

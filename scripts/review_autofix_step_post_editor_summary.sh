@@ -115,12 +115,22 @@ if [ ! -s "${EDITOR_SUMMARY_FILE}" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/nul
       AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
     fi
   fi
+  # Issue-less PRs (issue #9487): the standalone stall poller follows only
+  # labelled issues, so for a PR whose LINKED_ISSUES_JSON (exported by the
+  # "Collect PR metadata" step) is exactly an empty array the retry comes
+  # from the poller's issue-less review retry pass. Unset, unparseable or
+  # non-empty values keep the legacy sentence.
+  issueless_retry_note="The stall poller will retry the review on a subsequent cycle."
+  if [ -n "${LINKED_ISSUES_JSON:-}" ] \
+    && printf '%s' "${LINKED_ISSUES_JSON}" | jq -e 'type == "array" and length == 0' >/dev/null 2>&1; then
+    issueless_retry_note="This PR has no linked issue, so the orchestrator poller's issue-less review retry pass re-dispatches this review once, after a newer review-support (\`@stable\`) release is pinned."
+  fi
   NOOP_BODY="$(cat <<EOF
 **AI review/autofix produced no output — will retry**
 
 ${noop_explanation} No \`ai:review-blocked\` label is being applied for this run.
 
-[View workflow run](${RUN_URL}) for details. The stall poller will retry the review on a subsequent cycle.
+[View workflow run](${RUN_URL}) for details. ${issueless_retry_note}
 EOF
 )"
   if [ "${autofix_empty_failure_reason}" = "provider_unavailable" ]; then

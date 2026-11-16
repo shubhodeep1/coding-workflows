@@ -74,6 +74,11 @@ name: "Internal: AI Review Autofix Sweep"
 #     was still queued. With the train disabled nothing removes the label,
 #     so the sweep keeps dispatching; removing the label by hand (the
 #     documented one-shot bypass) makes the next tick dispatch.
+#   - Smoke-PR backstop (issue #8953): a pipeline-authored `e2e-smoke-test`
+#     PR on an `ai/issue-<N>` head is closed, never dispatched, once issue
+#     <N> is closed or the PR is older than SWEEP_SMOKE_PR_MAX_AGE_HOURS
+#     (default 6; 0 disables the age rule). Seven such PRs, opened after the
+#     release gate gave up, took 83.5% of Claude pool spend on Nov 5-7.
 
 on:
   schedule:
@@ -207,8 +212,13 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
           SWEEP_STALE_QUEUED_MINUTES: ${{ vars.SWEEP_STALE_QUEUED_MINUTES || '120' }}
+          # A stale queued run is wedged only when GitHub created no jobs for it.
+          SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS: ${{ vars.SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS || 'true' }}
           PROVIDER_OUTAGE_PAUSED: ${{ steps.provider_outage.outputs.paused }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
+          # Smoke-PR backstop age limit in hours (issue #8953); 0 disables
+          # the age rule (an issue_closed match still closes).
+          SWEEP_SMOKE_PR_MAX_AGE_HOURS: ${{ vars.SWEEP_SMOKE_PR_MAX_AGE_HOURS || '6' }}
         run: |
           set -euo pipefail
           # Classified retry for the active-run snapshot (issue #6634): the
@@ -233,7 +243,9 @@ jobs:
               head_sha: .head.sha,
               title: (.title // ""),
               body: (.body // ""),
-              labels: [.labels[]?.name // empty]
+              labels: [.labels[]?.name // empty],
+              created_at: (.created_at // ""),
+              author: (.user.login // "")
             })')"
 
           printf '%s\n' "${prs_json}" > "${RUNNER_TEMP}/ci-cancelled-pr-snapshot.json"
@@ -254,6 +266,21 @@ jobs:
           skipped_skip_ai=0
           skipped_merge_queued=0
           failures=0
+          # Smoke-PR backstop (issue #8953): release-gate smoke PRs whose
+          # Implement run started after the gate gave up stayed open for days
+          # and were re-reviewed every tick. Only a PR with the e2e-smoke-test
+          # label, an ai/issue-<N> head and the pipeline login (GH_PAT's user,
+          # read once per tick and only when such a PR exists) as author is
+          # closed, when issue <N> is closed or the PR is older than the limit.
+          closed_smoke=0
+          smoke_max_age_hours="${SWEEP_SMOKE_PR_MAX_AGE_HOURS:-6}"
+          if ! [[ "${smoke_max_age_hours}" =~ ^[0-9]{1,6}$ ]]; then
+            echo "::warning::SWEEP_SMOKE_PR_MAX_AGE_HOURS is not a non-negative integer; using 6."
+            smoke_max_age_hours=6
+          fi
+          smoke_max_age_hours=$((10#${smoke_max_age_hours}))
+          smoke_pipeline_login=""
+          smoke_login_state=unresolved
           # Identical to the gate's copy in review_autofix.yml (issue #4985):
           # only a body line holding nothing but the marker, outside a fenced
           # block, counts. A fence closes only on a matching fence (same
@@ -271,7 +298,7 @@ jobs:
           esac
 
           if [ "${total}" -eq 0 ]; then
-            echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total}"
+            echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} closed_smoke=${closed_smoke}"
             exit 0
           fi
 
@@ -285,7 +312,7 @@ jobs:
           sweep_default_branch="$(GH_TOKEN="${READ_TOKEN}" gh api "repos/${REPOSITORY}" --jq .default_branch 2>/dev/null || true)"
           if ! [[ "${sweep_default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || [ "${sweep_default_branch}" = "null" ]; then
             echo "::warning::AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable — review dispatch runs cannot be verified; no dispatch this tick."
-            echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
+            echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total} closed_smoke=${closed_smoke}"
             exit 0
           fi
 
@@ -299,7 +326,7 @@ jobs:
 
           snapshot_active_review_runs() {
             local workflow="$1"
-            local status snapshot_json='{}' cached_head_ref cached_count stale_run_id stale_run_created_epoch queued_age_minutes
+            local status snapshot_json='{}' cached_head_ref cached_count stale_run_id stale_run_created_epoch queued_age_minutes stale_jobs_raw stale_jobs_total
             local stale_cutoff_epoch=0
             local stale_snapshot_epoch=0
 
@@ -437,6 +464,32 @@ jobs:
               if [ "${stale_snapshot_epoch}" -gt 0 ] 2>/dev/null && [ "${stale_run_created_epoch}" -gt 0 ] 2>/dev/null; then
                 queued_age_minutes="$(((stale_snapshot_epoch - stale_run_created_epoch) / 60))"
               fi
+              # A run that is only waiting for a runner is not wedged
+              # (2026-11 backlog: every review run queued > 2h, so each
+              # sweep replaced it with a pending duplicate). GitHub creates a
+              # run's jobs when it accepts the run; a wedged ghost run has
+              # none. One jobs read per stale candidate (§15: the runs
+              # listing above carries no job data). In a backlog every queued
+              # review run older than the cutoff is a candidate, so a tick
+              # costs one read per such run, bounded by the open PRs;
+              # a run with jobs still suppresses dispatch, and an unreadable
+              # answer keeps the wedged path (dispatch), as before.
+              # SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS=false restores the
+              # age-only rule.
+              if [ "${SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS:-true}" != "false" ] && [[ "${stale_run_id}" =~ ^[1-9][0-9]*$ ]]; then
+                stale_jobs_raw="${RUNNER_TEMP:-/tmp}/sweep-stale-jobs-${stale_run_id}.json"
+                stale_jobs_total=""
+                if GH_TOKEN="${READ_TOKEN}" gh_api_retry -X GET "repos/${REPOSITORY}/actions/runs/${stale_run_id}/jobs" \
+                  -f per_page=1 > "${stale_jobs_raw}" 2>/dev/null; then
+                  stale_jobs_total="$(jq -r '.total_count // empty' "${stale_jobs_raw}" 2>/dev/null || true)"
+                fi
+                rm -f "${stale_jobs_raw}"
+                if [[ "${stale_jobs_total}" =~ ^[0-9]+$ ]] && [ "${stale_jobs_total}" -gt 0 ]; then
+                  active_review_runs["${workflow}:${cached_head_ref}"]="$(( ${active_review_runs["${workflow}:${cached_head_ref}"]:-0} + 1 ))"
+                  echo "AUTOFIX_SWEEP_STALE_QUEUED workflow=${workflow} head_ref=${cached_head_ref} run_id=${stale_run_id} queued_age_minutes=${queued_age_minutes} queued_age_threshold_minutes=${SWEEP_STALE_QUEUED_MINUTES:-0} jobs=${stale_jobs_total} outcome=waiting_for_runner — still suppressing dispatch."
+                  continue
+                fi
+              fi
               echo "::warning::AUTOFIX_SWEEP_STALE_QUEUED workflow=${workflow} head_ref=${cached_head_ref} run_id=${stale_run_id} queued_age_minutes=${queued_age_minutes} queued_age_threshold_minutes=${SWEEP_STALE_QUEUED_MINUTES:-0} — treating as wedged and no longer suppressing dispatch."
             done < <(printf '%s' "${snapshot_json}" | jq -r '(.stale // [])[]?' 2>/dev/null || true)
           }
@@ -464,6 +517,55 @@ jobs:
 
             if [ -n "${HEAD_REF_FILTER}" ] && ! printf '%s' "${head_ref}" | grep -qF "${HEAD_REF_FILTER}"; then
               skipped_filter=$((skipped_filter + 1))
+              continue
+            fi
+
+            # Smoke-PR backstop (issue #8953, rules above). Checked before the
+            # skip-ai, merge-queue, capacity and active-run checks so a smoke
+            # PR held by any of them is still closed. A closed (or chosen)
+            # smoke PR is never dispatched. Any API error skips the close
+            # and never blocks the tick.
+            smoke_close_reason=""
+            if [[ "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
+              smoke_issue_number="${BASH_REMATCH[1]}"
+              if printf '%s' "${row}" | jq -e '(.labels // []) | index("e2e-smoke-test") != null' >/dev/null 2>&1; then
+                if [ "${smoke_login_state}" = "unresolved" ]; then
+                  smoke_pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"
+                  if [[ "${smoke_pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+                    smoke_login_state=ok
+                  else
+                    smoke_login_state=failed
+                    smoke_pipeline_login=""
+                  fi
+                fi
+                smoke_pr_author="$(printf '%s' "${row}" | jq -r '.author // ""')"
+                if [ "${smoke_login_state}" != "ok" ]; then
+                  echo "::warning::AUTOFIX_SWEEP_SMOKE_CLOSE_FAILED pr=#${pr_number} reason=author_unavailable"
+                elif [ -n "${smoke_pr_author}" ] && [ "${smoke_pr_author}" = "${smoke_pipeline_login}" ]; then
+                  smoke_issue_state="$(GH_TOKEN="${READ_TOKEN}" gh api "repos/${REPOSITORY}/issues/${smoke_issue_number}" --jq '.state // ""' 2>/dev/null || true)"
+                  if [ "${smoke_issue_state}" = "closed" ]; then
+                    smoke_close_reason=issue_closed
+                  elif [ "${smoke_max_age_hours}" -gt 0 ] \
+                    && printf '%s' "${row}" | jq -e --argjson max "${smoke_max_age_hours}" '(.created_at // "") as $c | $c != "" and ((now - ($c | fromdateiso8601)) / 3600 >= $max)' >/dev/null 2>&1; then
+                    smoke_close_reason=max_age
+                  fi
+                fi
+              fi
+            fi
+            if [ -n "${smoke_close_reason}" ]; then
+              if [ "${DRY_RUN}" = "true" ]; then
+                echo "AUTOFIX_SWEEP_SMOKE_CLOSE pr=#${pr_number} reason=${smoke_close_reason} dry_run=true"
+                continue
+              fi
+              if gh api -X PATCH "repos/${REPOSITORY}/pulls/${pr_number}" -f state=closed >/dev/null 2>&1; then
+                gh api "repos/${REPOSITORY}/issues/${pr_number}/comments" \
+                  -f body="Closed by the review sweep: this pipeline-authored e2e-smoke-test PR was left open by a release-gate smoke run (reason: ${smoke_close_reason}). To keep it, remove the e2e-smoke-test label, then reopen it." \
+                  >/dev/null 2>&1 || true
+                echo "AUTOFIX_SWEEP_SMOKE_CLOSE pr=#${pr_number} reason=${smoke_close_reason}"
+                closed_smoke=$((closed_smoke + 1))
+              else
+                echo "::warning::AUTOFIX_SWEEP_SMOKE_CLOSE_FAILED pr=#${pr_number} reason=close_failed"
+              fi
               continue
             fi
 
@@ -556,7 +658,7 @@ jobs:
             fi
           done
 
-          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete}"
+          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete} closed_smoke=${closed_smoke}"
 
       # Non-retryable failure backfill (issue #7291): re-send a review/autofix
       # failure whose trusted current-head marker names a non-retryable reason
@@ -606,6 +708,26 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           CI_CANCELLED_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
         run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py
+
+      # Final CI safety net (cut-ci-runner-time Phase 4): a non-draft PR head
+      # whose ai-review/head-gate is success but that has no run of the
+      # final-CI workflow gets one through _pr_ensure_final_ci. Reuses the
+      # enumerate step's PR snapshot; budget and logs in the script header.
+      # REVIEW_FINAL_CI_WORKFLOW must match internal-review.yml's
+      # final_ci_workflow; empty turns this step off (no API call).
+      - name: Ensure the final CI run on reviewed PR heads
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REVIEW_FINAL_CI_WORKFLOW: ci.yml
+          FINAL_CI_SWEEP_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
+          FINAL_CI_SWEEP_MAX_PER_TICK: ${{ vars.FINAL_CI_SWEEP_MAX_PER_TICK || '10' }}
+          FINAL_CI_SWEEP_HELPERS_DIR: .ci-rerun-support/scripts
+          HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: bash .ci-rerun-support/scripts/review_final_ci_sweep.sh
 
       - name: Re-dispatch stale security holds
         if: github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true' && steps.provider_outage.outputs.paused != 'true'

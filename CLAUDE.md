@@ -1501,6 +1501,51 @@ not change:
 
 ---
 
+## §32. Production Data Reads — Bridge First (MANDATORY)
+
+This applies in this repo and in every consumer repo that receives this file
+via the `@stable` sync. **When a repo documents a read-only DB bridge, read
+production data through it yourself. Ask the user only when the bridge cannot
+answer.**
+
+### A) Read Through the Bridge — Act, Do Not Ask
+
+Whenever a task needs production data (documents, counts, job or settlement
+state, run markers, logs), query the read-only bridge described in the repo's
+agents file (`AGENTS.md` / `agents.md`, usually an "Agent DB bridge" section)
+before doing anything else. This is a carve-out from §2. It covers:
+
+- verification steps in `/deploy-activate` and `/verify-activation` runbooks;
+- removal preflight checks in `docs/scripts-pending-removal.md` (§18.F);
+- investigations and diagnostics (§8).
+
+Use the targets, ops and request shapes that section documents, and reference
+the bridge URL and token only via env expansion.
+
+### B) What Not to Do
+
+- Do not ask the user to run a query, open a database client, or paste data
+  that the bridge can return.
+- Do not pull database credentials (for example from the DigitalOcean API)
+  to connect directly.
+- Do not treat a 404 as "bridge down": the bridges answer only a correct
+  POST. Check the env vars and send the real request.
+
+### C) When to Go to the User
+
+Ask only when the bridge cannot answer: its env vars are missing, the correct
+POST fails, or the data needs an op, target or database outside the bridge's
+scope. Say once exactly what failed and what you need, then continue with any
+work that does not depend on it. No retry loops (§18).
+
+### D) Scope
+
+Bridges are read-only. Writes and DB mutations still go through code paths
+under §10 and §18.D. Never echo, log or commit a bridge URL or token. A repo
+whose agents file documents no bridge is unaffected.
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**

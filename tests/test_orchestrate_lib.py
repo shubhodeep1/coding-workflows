@@ -1400,6 +1400,27 @@ def _assert_detect_stalls_skips_latch_label(latch_label: str) -> None:
 	assert stalls[0]["recovery_action"] == "auto_approve"
 
 
+def test_detect_stalls_skips_workflow_heal_escalated_latch():
+	"""Issue #9248: a heal issue the workflow-failure heal intake escalated
+	(ai:workflow-heal-escalated) must not be retried or auto-answered by
+	stall recovery; the poller reports it as a human-gated latch instead.
+	"""
+	_assert_detect_stalls_skips_latch_label("ai:workflow-heal-escalated")
+
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	labels = {"10": ["ai:awaiting-approval", "ai:workflow-heal-escalated"]}
+	latched = orchestrate_lib.detect_stall_latched_issues(state, labels)
+	assert latched == [
+		{
+			"id": "issue-1",
+			"github_issue": 10,
+			"phase": "ai:awaiting-approval",
+			"latch_label": "ai:workflow-heal-escalated",
+		}
+	]
+
+
 def test_stall_recovery_latch_label_helper():
 	assert orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval"]) is None
 	assert orchestrate_lib.stall_recovery_latch_label([]) is None
@@ -1412,6 +1433,15 @@ def test_stall_recovery_latch_label_helper():
 	assert (
 		orchestrate_lib.stall_recovery_latch_label(["ai:scope-blocked", "ai:implementing"])
 		== "ai:scope-blocked"
+	)
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval", "ai:workflow-heal-escalated"])
+		== "ai:workflow-heal-escalated"
+	)
+	# Appended last: first-match order for the older latch labels holds.
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:workflow-heal-escalated", "ai:destructive-blocked"])
+		== "ai:destructive-blocked"
 	)
 	# Every latch label is a plain marker, never a phase label, so the
 	# phase machine keeps reporting the underlying pipeline phase.
@@ -3380,6 +3410,84 @@ def test_extract_integration_branch_cli_reads_body_from_stdin() -> None:
 		assert proc.stdout.strip() == expected, (body, proc.stdout)
 		if not expected:
 			assert proc.stdout == ""
+
+
+# ---------------------------------------------------------------------------
+# Issue #8955: check_triage_target_branch / check-triage-target-pr.
+# ---------------------------------------------------------------------------
+
+_TRIAGE_BODY = "<!-- check-failure-triage:pr=5038 -->\nCheck failed.\n\n---\n\nDiagnosis.\n"
+
+
+def test_check_triage_target_branch_accepts_trusted_issue() -> None:
+	fn = orchestrate_lib.check_triage_target_branch
+	assert fn(_TRIAGE_BODY, ["ai:check-triage"], "pipeline-bot", "pipeline-bot") == 5038
+	assert fn(_TRIAGE_BODY, [{"name": "ai:check-triage"}, {"name": "ai:done"}], "Pipeline-Bot", "pipeline-bot") == 5038
+	assert fn("   <!-- check-failure-triage:pr=7 -->  \r\nx", ["ai:check-triage"], "bot", "bot") == 7
+
+
+def test_check_triage_target_branch_rejects_untrusted_or_malformed() -> None:
+	fn = orchestrate_lib.check_triage_target_branch
+	assert fn(_TRIAGE_BODY, ["ai:done"], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY, [], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY, "ai:check-triage", "bot", "bot") is None
+	assert fn(_TRIAGE_BODY, [42, None], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY, ["ai:check-triage"], "someone", "bot") is None
+	assert fn(_TRIAGE_BODY, ["ai:check-triage"], "", "") is None
+	assert fn(_TRIAGE_BODY, ["ai:check-triage"], "bot", "") is None
+	assert fn("No marker\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("", ["ai:check-triage"], "bot", "bot") is None
+	assert fn(None, ["ai:check-triage"], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY + "<!-- check-failure-triage:pr=5038 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY + "<!-- check-failure-triage:pr=99 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("<!-- check-failure-triage:pr=abc -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("<!-- check-failure-triage:pr=0 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("<!-- check-failure-triage:pr=012 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("    <!-- check-failure-triage:pr=12 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("text <!-- check-failure-triage:pr=12 -->\n", ["ai:check-triage"], "bot", "bot") is None
+
+
+def test_check_triage_marker_pattern_matches_resolution_gate() -> None:
+	import check_triage_resolution
+
+	assert orchestrate_lib.CHECK_TRIAGE_PR_MARKER_RE.pattern == check_triage_resolution.PR_MARKER_RE.pattern
+
+
+def test_check_triage_target_branch_ignores_fenced_marker_copies() -> None:
+	import check_triage_resolution
+
+	fn = orchestrate_lib.check_triage_target_branch
+	body = _TRIAGE_BODY + "```\n<!-- check-failure-triage:pr=5038 -->\n```\n~~~~\n<!-- check-failure-triage:pr=9 -->\n~~~~\n"
+	assert fn(body, ["ai:check-triage"], "bot", "bot") == 5038
+	for sample in (body, _TRIAGE_BODY, "a\n```\nb\n~~~\nc\n```\nd\n", "```\nunclosed\n"):
+		assert orchestrate_lib._check_triage_lines_outside_fences(sample) == check_triage_resolution._lines_outside_fences(sample)
+
+
+def _run_check_triage_target_pr_cli(body: str, *extra: str) -> subprocess.CompletedProcess:
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	return subprocess.run(
+		["python3", str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "check-triage-target-pr", *extra],
+		input=body, check=False, capture_output=True, text=True, env=env, cwd=str(REPO_ROOT),
+	)
+
+
+def test_check_triage_target_pr_cli_prints_number_or_nothing() -> None:
+	ok = _run_check_triage_target_pr_cli(
+		_TRIAGE_BODY, "--labels-json", '["ai:check-triage"]', "--author", "Bot", "--pipeline-login", "bot",
+	)
+	assert ok.returncode == 0, ok.stderr
+	assert ok.stdout == "5038\n"
+	for extra in (
+		("--labels-json", "not json", "--author", "bot", "--pipeline-login", "bot"),
+		("--labels-json", '["ai:done"]', "--author", "bot", "--pipeline-login", "bot"),
+		("--labels-json", '["ai:check-triage"]', "--author", "other", "--pipeline-login", "bot"),
+		("--labels-json", '{"name": "ai:check-triage"}', "--author", "bot", "--pipeline-login", "bot"),
+		(),
+	):
+		proc = _run_check_triage_target_pr_cli(_TRIAGE_BODY, *extra)
+		assert proc.returncode == 0, (extra, proc.stderr)
+		assert proc.stdout == "", (extra, proc.stdout)
 
 
 # ---------------------------------------------------------------------------

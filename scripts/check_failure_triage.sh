@@ -47,11 +47,22 @@
 #                                            (default "Check Failure Triage")
 #   CHECK_TRIAGE_TRUSTED_SUPPORT_DIR          trusted prompt root (required for diagnosis)
 #   CHECK_TRIAGE_STAGE                        all (default), collect, diagnose, route,
-#                                             or supersede (close the stale issue the
-#                                             collect stage recorded, issue #8671)
+#                                             supersede (close the stale issue the
+#                                             collect stage recorded, issue #8671), or
+#                                             base-tracked-note (note a skipped PR on
+#                                             the heal issue that tracks its base failure)
+#   CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED    "false" files a per-PR issue even when the
+#                                             default branch fails the same workflow and
+#                                             an open heal issue tracks it (default true)
 #   CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED      "false" keeps a blocked triage issue from an
 #                                             older PR head as a duplicate instead of
 #                                             superseding it (default true; issue #8671)
+#   CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED
+#                                             "false" stops the collect stage re-running a
+#                                             first-attempt run whose failed jobs only hit a
+#                                             github.com release-download 502/503/504
+#                                             (default true; other values warn and stay
+#                                             on; issue #9120)
 #   CHECK_TRIAGE_SUPERSEDE_NEW_ISSUE_URL      supersede stage only: URL of the triage issue
 #                                             the workflow just created (default empty)
 #   CHECK_TRIAGE_PREPARE_ONLY                 true: write issue body without posting
@@ -451,9 +462,205 @@ case "$(printf '%s' "${CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED:-}" | tr '[:upper:]'
 		echo "::warning::CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED is not true or false; stale triage issues are not superseded"
 		;;
 esac
+# Issue #9120: re-run a first-attempt workflow run whose failed jobs only hit a
+# github.com release-download 502/503/504, instead of filing a triage issue.
+# Unset, empty or any-case "true" is on, "false" is off, and any other value
+# stays on with a warning (the gate fails open and re-runs a run at most once).
+RELEASE_DOWNLOAD_RERUN_ENABLED=true
+case "$(printf '%s' "${CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+	''|true) ;;
+	false) RELEASE_DOWNLOAD_RERUN_ENABLED=false ;;
+	*)
+		case "${TRIAGE_STAGE}" in
+			all|collect) echo "::warning::CHECK_FAILURE_TRIAGE_RELEASE_DOWNLOAD_RERUN_ENABLED is not true or false; the release-download re-run stays on" ;;
+		esac
+		;;
+esac
+# Memo of the gate's single run read; the base-branch gate reuses workflow_id
+# instead of reading the same run a second time.
+RELEASE_DOWNLOAD_RERUN_RUN_ID=""
+RELEASE_DOWNLOAD_RERUN_WORKFLOW_ID=""
+
+# Returns 0 when the annotations JSON array in $1 shows a github.com release
+# download that failed with HTTP 502/503/504. Annotation text is untrusted: it
+# is only pattern-matched here, never executed or used as a value. The
+# patterns live in this one place. A full per_page=100 page is accepted: the
+# match is an any(), so a match on a truncated page is also a match on the
+# whole list.
+triage_release_download_classify()
+{
+	local rd_status_re='\b50[234]\b'
+	local rd_release_url_re='https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/releases/(latest/)?download/'
+	local rd_codeql_failure_re='Unable to download and extract CodeQL CLI: Unexpected HTTP response: 50[234]'
+	# Anchored to the https://github.com/ host like rd_release_url_re, so an
+	# evilgithub.com/... URL or a github.com/... path segment does not match.
+	local rd_codeql_url_re='https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/releases/download/'
+	local rd_codeql_status_re='HTTP status code: 50[234]'
+	jq -e \
+		--arg status_re "${rd_status_re}" \
+		--arg release_url_re "${rd_release_url_re}" \
+		--arg codeql_failure_re "${rd_codeql_failure_re}" \
+		--arg codeql_url_re "${rd_codeql_url_re}" \
+		--arg codeql_status_re "${rd_codeql_status_re}" '
+		if type == "array" and length <= 100
+			and all(.[]; type == "object" and (.message | type) == "string" and (.annotation_level | type) == "string")
+		then
+			[.[] | select(.annotation_level == "failure")] as $failures
+			| any($failures[]; (.message | test($status_re)) and (.message | test($release_url_re)))
+				or (any($failures[]; .message | test($codeql_failure_re))
+					and any(.[]; (.message | test($codeql_url_re)) and (.message | test($codeql_status_re))))
+		else false end' "$1" >/dev/null 2>&1
+}
+
+# Collect-stage gate (issue #9120). Every path prints one
+# RELEASE_DOWNLOAD_RERUN line; a skip returns and triage continues as before
+# (fail open). Only a successful re-run stops the run, with exit 0 and no
+# ready=true, so neither diagnose nor post runs.
+triage_release_download_rerun_gate()
+{
+	local rd_url_re rd_run rd_job rd_run_file rd_run_json rd_workflow_id rd_status rd_attempt rd_head
+	local rd_jobs_json rd_ids rd_id rd_count rd_annotations_file rd_post_file rd_post_rc
+	local -a rd_id_list=()
+	if [ "${RELEASE_DOWNLOAD_RERUN_ENABLED}" != "true" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=disabled"
+		return 0
+	fi
+	if [ "${HISTORICAL_MODE}" = "true" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=historical_mode"
+		return 0
+	fi
+	# A failed PR read leaves HEAD_REPO_FULL_NAME empty and skips the fork
+	# guard; the re-run POST is a write, so it needs a verified same-repo head.
+	if [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=pr_unverified"
+		return 0
+	fi
+	rd_url_re='^https://[^/]+/([^/]+/[^/]+)/actions/runs/([1-9][0-9]*)(/job/([1-9][0-9]*))?/?$'
+	if ! [[ "${CHECK_DETAILS_URL}" =~ ${rd_url_re} ]] || [ "${BASH_REMATCH[1]}" != "${REPO}" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=details_url_unparseable"
+		return 0
+	fi
+	rd_run="${BASH_REMATCH[2]}"
+	rd_job="${BASH_REMATCH[4]}"
+	# check_run path: the URL names this check-run's job; workflow_run path
+	# (empty CHECK_RUN_ID): the URL names the run only.
+	if { [ -n "${CHECK_RUN_ID}" ] && [ "${rd_job}" != "${CHECK_RUN_ID}" ]; } ||
+		{ [ -z "${CHECK_RUN_ID}" ] && [ -n "${rd_job}" ]; }; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=details_url_unparseable"
+		return 0
+	fi
+
+	rd_run_file="${RUNTIME_DIR}/release_download_run.json"
+	# jq -e exits 0 on empty input, so a failed or empty read is checked first.
+	if ! rd_run_json="$(gh_retry gh api "repos/${REPO}/actions/runs/${rd_run}" 2>/dev/null)" ||
+		[ -z "${rd_run_json}" ] ||
+		! printf '%s' "${rd_run_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=run_unreadable run=${rd_run}"
+		return 0
+	fi
+	printf '%s\n' "${rd_run_json}" > "${rd_run_file}"
+	rd_workflow_id="$(jq -r '.workflow_id // "" | tostring' "${rd_run_file}" 2>/dev/null || true)"
+	if [[ "${rd_workflow_id}" =~ ^[0-9]+$ ]]; then
+		RELEASE_DOWNLOAD_RERUN_RUN_ID="${rd_run}"
+		RELEASE_DOWNLOAD_RERUN_WORKFLOW_ID="${rd_workflow_id}"
+	fi
+	rd_status="$(jq -r '.status // "" | tostring' "${rd_run_file}" 2>/dev/null || true)"
+	rd_attempt="$(jq -r '.run_attempt // "" | tostring' "${rd_run_file}" 2>/dev/null || true)"
+	rd_head="$(jq -r '.head_sha // "" | tostring' "${rd_run_file}" 2>/dev/null || true)"
+	if [ "${rd_status}" != "completed" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=run_not_completed run=${rd_run}"
+		return 0
+	fi
+	if [ "${rd_attempt}" != "1" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=not_first_attempt run=${rd_run}"
+		return 0
+	fi
+	if [ -z "${HEAD_SHA}" ] || [ "${rd_head,,}" != "${HEAD_SHA,,}" ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=head_mismatch run=${rd_run}"
+		return 0
+	fi
+
+	if [ -n "${CHECK_RUN_ID}" ]; then
+		rd_ids="${CHECK_RUN_ID}"
+	else
+		# Validated like list_run_jobs() in scripts/ci_cancelled_rerun.py.
+		rd_jobs_json="$(gh_retry gh api -X GET "repos/${REPO}/actions/runs/${rd_run}/attempts/1/jobs" -f per_page=100 2>/dev/null || true)"
+		if [ -z "${rd_jobs_json}" ] || ! rd_ids="$(printf '%s' "${rd_jobs_json}" | jq -r '
+			if type == "object" and (.jobs | type) == "array" and (.total_count | type) == "number"
+				and .total_count == (.jobs | length) and .total_count <= 100
+				and all(.jobs[]; type == "object" and .status == "completed"
+					and (.conclusion | type) == "string"
+					and (.check_run_url | type) == "string"
+					and (.check_run_url | test("/check-runs/[1-9][0-9]*$")))
+			then [.jobs[] | select(.conclusion == "failure") | .check_run_url | capture("/check-runs/(?<id>[1-9][0-9]*)$").id] | join(" ")
+			else error("invalid jobs payload") end' 2>/dev/null)"; then
+			echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=jobs_unreadable run=${rd_run}"
+			return 0
+		fi
+	fi
+	read -r -a rd_id_list <<< "${rd_ids}" || true
+	rd_count="${#rd_id_list[@]}"
+	if [ "${rd_count}" -eq 0 ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=no_failed_jobs run=${rd_run}"
+		return 0
+	fi
+	if [ "${rd_count}" -gt 3 ]; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=too_many_failed_jobs run=${rd_run} jobs=${rd_count}"
+		return 0
+	fi
+	rd_annotations_file="${RUNTIME_DIR}/release_download_annotations.json"
+	for rd_id in "${rd_id_list[@]}"; do
+		if ! gh_retry gh api -X GET "repos/${REPO}/check-runs/${rd_id}/annotations" -f per_page=100 > "${rd_annotations_file}" 2>/dev/null ||
+			! [ -s "${rd_annotations_file}" ] ||
+			! jq -e 'type == "array"' "${rd_annotations_file}" >/dev/null 2>&1; then
+			rm -f "${rd_annotations_file}"
+			echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=annotations_unreadable run=${rd_run} job=${rd_id}"
+			return 0
+		fi
+		if ! triage_release_download_classify "${rd_annotations_file}"; then
+			rm -f "${rd_annotations_file}"
+			echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=not_release_download run=${rd_run} job=${rd_id}"
+			return 0
+		fi
+	done
+	rm -f "${rd_annotations_file}"
+
+	# A write is never retried. The response (headers and body) goes to a
+	# private file that is never printed; success means exit 0 and HTTP 201,
+	# as rerun_failed_jobs() in scripts/ci_cancelled_rerun.py checks.
+	if ! rd_post_file="$(mktemp "${RUNTIME_DIR}/release_download_rerun.XXXXXX" 2>/dev/null)"; then
+		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=rerun_failed run=${rd_run}"
+		return 0
+	fi
+	rd_post_rc=0
+	gh api -i -X POST "repos/${REPO}/actions/runs/${rd_run}/rerun-failed-jobs" > "${rd_post_file}" 2>&1 || rd_post_rc=$?
+	if [ "${rd_post_rc}" -eq 0 ] && head -n 1 "${rd_post_file}" 2>/dev/null | grep -qE '^HTTP/[^[:space:]]+ 201([^0-9]|$)'; then
+		rm -f "${rd_post_file}"
+		echo "RELEASE_DOWNLOAD_RERUN outcome=rerun run=${rd_run} job=${rd_id_list[0]} jobs=${rd_count} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		log "skip reason=release_download_rerun run=${rd_run} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		exit 0
+	fi
+	rm -f "${rd_post_file}"
+	echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=rerun_failed run=${rd_run}"
+	return 0
+}
 SUPERSEDE_OLD_ISSUE=""
 SUPERSEDE_OLD_HEAD=""
 SUPERSEDE_NEW_HEAD=""
+# Skip a PR's CI failure that the default branch already has when an open
+# workflow-heal issue tracks that workflow there (issues #9224, #9228, #9230,
+# #9231 and #9232 were all filed for the ubuntu-26.04 breakage heal issue
+# #9215 already tracked). Parsed like CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED.
+TRIAGE_BASE_TRACKED_SKIP_ENABLED=true
+case "$(printf '%s' "${CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+	''|true) ;;
+	false) TRIAGE_BASE_TRACKED_SKIP_ENABLED=false ;;
+	*)
+		TRIAGE_BASE_TRACKED_SKIP_ENABLED=false
+		echo "::warning::CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED is not true or false; failures the default branch already has are triaged per PR"
+		;;
+esac
+TRIAGE_BASE_TRACKED_FILE="${RUNTIME_DIR}/triage_base_tracked.json"
 PR_CHECK_RUNS_CONTEXT_FILE="${RUNTIME_DIR}/pr_check_runs_context.txt"
 # Historical mode (#7093): triage one already-finished CI run of a PR that is
 # no longer open. Only the pr_not_open skip (closed PRs), the dedup scope
@@ -494,7 +701,7 @@ if [ -z "${TRUSTED_SUPPORT_DIR}" ] ||
 	exit 1
 fi
 case "${TRIAGE_STAGE}" in
-	all|collect|diagnose|route|supersede|supersede-check) ;;
+	all|collect|diagnose|route|supersede|supersede-check|base-tracked-note) ;;
 	*) log "error invalid_stage"; exit 1 ;;
 esac
 
@@ -637,6 +844,108 @@ triage_upstream_send()
 	fi
 	return 0
 }
+
+# triage_base_failure_heal_issue <workflow path> <branch>
+#
+# Prints the number of the oldest open ai:workflow-heal issue that tracks a
+# failed run of <workflow path> on <branch> in this repository, or nothing.
+# A match needs a trusted author (OWNER/MEMBER/COLLABORATOR), the run-sourced
+# header `<!-- workflow-failure-heal:source=<repo>#run -->` as its fourth line,
+# `<!-- workflow-failure-heal:workflow=<path> -->` among its first seven lines
+# (scripts/workflow_failure_heal.py compose_issue_body) and the exact line
+# "- **Target branch:** `<branch>`". API cost: one REST read (first page,
+# 100 issues). Returns 1 when that read fails, so the caller files as before.
+triage_base_failure_heal_issue()
+{
+	local heal_workflow_path="$1" heal_branch="$2" heal_listing=""
+	if ! heal_listing="$(gh_retry gh api -X GET "repos/${REPO}/issues" \
+		-f state=open -f labels=ai:workflow-heal -f sort=created -f direction=asc -F per_page=100 2>/dev/null)"; then
+		return 1
+	fi
+	printf '%s' "${heal_listing}" | jq -r \
+		--arg source "<!-- workflow-failure-heal:source=${REPO}#run -->" \
+		--arg workflow "<!-- workflow-failure-heal:workflow=${heal_workflow_path} -->" \
+		--arg target "- **Target branch:** \`${heal_branch}\`" '
+		if type != "array" then error("not_an_array") else . end
+		| [ .[]
+			| select(.pull_request == null)
+			| select((.author_association // "") as $a | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a))
+			| select(
+				([(.body // "") | split("\n")[] | rtrimstr("\r")]) as $l
+				| ($l[3] // "") == $source
+				and ($l[0:7] | index($workflow)) != null
+				and ($l | index($target)) != null)
+			| .number ]
+		| first // empty' 2>/dev/null || return 1
+}
+
+# triage_run_failed_job_names <run id>
+#
+# Prints the names of the run's latest-attempt jobs whose conclusion is not
+# success, skipped or neutral, one per line. The tracked-failure skip compares
+# the PR run's list with the default branch run's, so a PR job that main runs
+# green is never folded into main's heal issue. API cost: one REST read (100
+# jobs). Returns 1 when the read fails or the page does not hold every job, so
+# the caller files as before.
+triage_run_failed_job_names()
+{
+	local failed_jobs_run_id="$1" failed_jobs_listing=""
+	[[ "${failed_jobs_run_id}" =~ ^[1-9][0-9]{0,19}$ ]] || return 1
+	if ! failed_jobs_listing="$(gh_retry gh api "repos/${REPO}/actions/runs/${failed_jobs_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)"; then
+		return 1
+	fi
+	printf '%s' "${failed_jobs_listing}" | jq -r '
+		if type != "object" or (.jobs | type) != "array" or (.total_count // 0) > (.jobs | length) then error("incomplete") else . end
+		| .jobs[]
+		| select((.conclusion // "") as $c | ["success", "skipped", "neutral"] | index($c) | not)
+		| (.name // "" | tostring)
+		| select(. != "")' 2>/dev/null || return 1
+}
+
+if [ "${TRIAGE_STAGE}" = "base-tracked-note" ]; then
+	# Runs in the workflow's "Note PR failure on its base-branch heal issue" step
+	# with the Issues-scoped token, after the collect stage skipped a failure the
+	# default branch already has (skip reason=base_failure_tracked). Posts one
+	# comment on that heal issue so it counts the PR. Never fatal.
+	if [ ! -s "${TRIAGE_BASE_TRACKED_FILE}" ]; then
+		log "op=base_tracked_note outcome=skip reason=metadata_missing"
+		exit 0
+	fi
+	note_heal_issue="$(jq -r '.heal_issue // "" | tostring' "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null || echo '')"
+	note_pr="$(jq -r '.pr_number // "" | tostring' "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null || echo '')"
+	note_head="$(jq -r '.head_sha // "" | tostring' "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null || echo '')"
+	note_run="$(jq -r '.run_id // "" | tostring' "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null || echo '')"
+	note_branch="$(jq -r '.base_ref // "" | tostring' "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null || echo '')"
+	note_workflow="$(jq -r '.workflow_path // "" | tostring' "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null || echo '')"
+	if ! [[ "${note_heal_issue}" =~ ^[1-9][0-9]{0,9}$ ]] || ! [[ "${note_pr}" =~ ^[1-9][0-9]{0,9}$ ]] ||
+		! [[ "${note_head}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${note_run}" =~ ^[1-9][0-9]{0,19}$ ]] ||
+		! [[ "${note_branch}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${note_branch}" == *..* ]] ||
+		! [[ "${note_workflow}" =~ ^\.github/workflows/[A-Za-z0-9_.-]{1,100}\.ya?ml$ ]] || [[ "${note_workflow}" == *..* ]]; then
+		log "op=base_tracked_note outcome=skip reason=metadata_invalid"
+		exit 0
+	fi
+	note_marker="<!-- ${MARKER_PREFIX}base-tracked pr=${note_pr} head=${note_head} run=${note_run} -->"
+	# Skip a note this PR head and run already left (a workflow re-run, or a
+	# gh_retry repeat after a lost response). API cost: the heal issue's comment
+	# pages, read only here; no other call in this stage returns them. A failed
+	# read posts as before.
+	note_existing=""
+	if note_existing="$(gh_retry gh api --paginate "repos/${REPO}/issues/${note_heal_issue}/comments?per_page=100" \
+		--jq '.[] | (.body // "") | split("\n")[0] | rtrimstr("\r")' 2>/dev/null)" &&
+		grep -Fqx -- "${note_marker}" <<<"${note_existing}"; then
+		log "op=base_tracked_note outcome=skip reason=already_noted heal_issue=${note_heal_issue} pr=${note_pr}"
+		exit 0
+	fi
+	note_body="${note_marker}"
+	note_body+=$'\n'
+	note_body+="\`${note_workflow}\` also failed on PR #${note_pr} (head \`${note_head:0:12}\`, run ${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${note_run}). The newest run of that workflow on \`${note_branch}\` fails too, so check-failure triage opened no separate issue for the PR."
+	if gh_retry gh api "repos/${REPO}/issues/${note_heal_issue}/comments" -f body="${note_body}" >/dev/null 2>&1; then
+		log "op=base_tracked_note outcome=posted heal_issue=${note_heal_issue} pr=${note_pr}"
+	else
+		log "op=base_tracked_note outcome=failed heal_issue=${note_heal_issue} pr=${note_pr}"
+	fi
+	exit 0
+fi
 
 if [ "${TRIAGE_STAGE}" = "supersede-check" ]; then
 	# Runs in the workflow's post step before it creates the new issue, with
@@ -903,6 +1212,9 @@ if [ -n "${HEAD_REPO_FULL_NAME}" ] && [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ];
 	exit 0
 fi
 printf '%s' "${PR_JSON}" | jq -r '.body // ""' > "${RUNTIME_DIR}/pr_body.txt" 2>/dev/null || : > "${RUNTIME_DIR}/pr_body.txt"
+# Issue #9120: a first-attempt run that failed only on a github.com
+# release-download 5xx is re-run once and no issue is filed (exits 0 here).
+triage_release_download_rerun_gate
 
 # Opt-in routing (CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED, default off): route
 # the triage issue's fix to the failing PR's own branch, but only for an open
@@ -1174,16 +1486,47 @@ elif ! [[ "${BASE_REF}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${BASE_REF}" == *.
 else
 	base_gate_conclusion=""
 	base_gate_reason=""
+	base_gate_run_id=""
+	base_gate_workflow_path=""
+	base_gate_base_run_id=""
 	if [ -z "${CHECK_RUN_ID}" ]; then
 		# workflow_run triage: the check name is the workflow name.
 		base_gate_run_id="$(printf '%s' "${CHECK_DETAILS_URL}" | sed -n 's#^https://[^/]*/[^/]*/[^/]*/actions/runs/\([0-9][0-9]*\).*#\1#p' | head -n 1)"
 		base_gate_workflow_id=""
-		if [[ "${base_gate_run_id}" =~ ^[0-9]+$ ]]; then
-			base_gate_workflow_id="$(gh_retry gh api "repos/${REPO}/actions/runs/${base_gate_run_id}" --jq '.workflow_id // ""' 2>/dev/null || true)"
+		base_gate_run_meta=""
+		if [[ "${base_gate_run_id}" =~ ^[0-9]+$ ]] && [ "${RELEASE_DOWNLOAD_RERUN_RUN_ID}" = "${base_gate_run_id}" ] &&
+			[[ "${RELEASE_DOWNLOAD_RERUN_WORKFLOW_ID}" =~ ^[0-9]+$ ]]; then
+			# Issue #9120: reuse the release-download gate's read of this run.
+			# Its saved run JSON also carries the workflow file (`.path`).
+			base_gate_run_meta="${RELEASE_DOWNLOAD_RERUN_WORKFLOW_ID} $(jq -r '.path // ""' "${RUNTIME_DIR}/release_download_run.json" 2>/dev/null || true)"
+		elif [[ "${base_gate_run_id}" =~ ^[0-9]+$ ]]; then
+			# The same read also returns the run's workflow file (`.path`), which
+			# the tracked-failure skip below matches against heal issues.
+			base_gate_run_meta="$(gh_retry gh api "repos/${REPO}/actions/runs/${base_gate_run_id}" --jq '[(.workflow_id // "" | tostring), (.path // "")] | join(" ")' 2>/dev/null || true)"
+		fi
+		if [ -n "${base_gate_run_meta}" ]; then
+			base_gate_workflow_id="${base_gate_run_meta%% *}"
+			if [[ "${base_gate_run_meta}" == *" "* ]]; then
+				base_gate_workflow_path="${base_gate_run_meta#* }"
+			fi
+			# A run's `.path` can end in "@<ref>" (".github/workflows/ci.yml@refs/heads/main",
+			# see scripts/review_merge_train.sh). Strip only that "@refs/..." suffix: a
+			# file whose own name holds "@" ("ci.yml@legacy.yml") must not shrink to
+			# another workflow's path; the regex below rejects it instead.
+			base_gate_workflow_path="${base_gate_workflow_path%%@refs/*}"
+			if ! [[ "${base_gate_workflow_path}" =~ ^\.github/workflows/[A-Za-z0-9_.-]{1,100}\.ya?ml$ ]] || [[ "${base_gate_workflow_path}" == *..* ]]; then
+				base_gate_workflow_path=""
+			fi
 		fi
 		if [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then
 			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&event=push&per_page=1" \
-				--jq '.workflow_runs[0] | if . == null then "" elif .status == "completed" then (.conclusion // "") else "pending" end' 2>/dev/null || true)"
+				--jq '.workflow_runs[0] | if . == null then "" elif .status == "completed" then ((.conclusion // "") + " " + (.id // "" | tostring)) else "pending" end' 2>/dev/null || true)"
+			# A completed run also names its id ("<conclusion> <id>"); the
+			# tracked-failure skip below reads that run's failed jobs.
+			if [[ "${base_gate_conclusion}" == *" "* ]]; then
+				base_gate_base_run_id="${base_gate_conclusion#* }"
+				base_gate_conclusion="${base_gate_conclusion%% *}"
+			fi
 			[ -n "${base_gate_conclusion}" ] || base_gate_reason="no_completed_base_run"
 		elif [ -z "${CHECK_DETAILS_URL}" ]; then
 			base_gate_reason="details_url_unavailable"
@@ -1233,6 +1576,75 @@ else
 			triage_report_routing_unverified
 		fi
 		exit 0
+	fi
+	# The default branch fails the same workflow and an open heal issue already
+	# tracks it (#9215 tracked the ubuntu-26.04 breakage while five PRs got
+	# their own triage issues, each blocked on the same fix PR). A per-PR issue
+	# would only wait for that fix, so file none; the workflow's note step adds
+	# the PR to the heal issue. Only a completed `failure` counts, only on the
+	# default branch, and only for a workflow_run triage, whose run read above
+	# names the workflow file. A failed heal-issue read files as before.
+	if [ "${TRIAGE_BASE_TRACKED_SKIP_ENABLED}" = "true" ] && [ "${base_gate_conclusion}" = "failure" ] && [ -n "${base_gate_workflow_path}" ]; then
+		base_gate_default_branch="$(printf '%s' "${PR_JSON}" | jq -r '.base.repo.default_branch // ""' 2>/dev/null || true)"
+		if [ -n "${base_gate_default_branch}" ] && [ "${BASE_REF}" = "${base_gate_default_branch}" ]; then
+			base_gate_heal_issue=""
+			base_gate_heal_lookup_ok=true
+			if ! base_gate_heal_issue="$(triage_base_failure_heal_issue "${base_gate_workflow_path}" "${BASE_REF}")"; then
+				base_gate_heal_issue=""
+				base_gate_heal_lookup_ok=false
+				log "base_tracked outcome=fail_open reason=heal_lookup_failed base=${BASE_REF} pr=${PR_NUMBER}"
+			fi
+			if [[ "${base_gate_heal_issue}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+				# The workflow alone is not enough: a PR job that main runs green
+				# is a PR-specific failure the heal issue does not cover. Skip
+				# only when every job that failed on the PR also failed in main's
+				# newest run; a failed or incomplete jobs read files as before.
+				base_gate_jobs_tracked=false
+				base_gate_pr_failed_jobs=""
+				base_gate_base_failed_jobs=""
+				if base_gate_pr_failed_jobs="$(triage_run_failed_job_names "${base_gate_run_id}")" &&
+					base_gate_base_failed_jobs="$(triage_run_failed_job_names "${base_gate_base_run_id}")"; then
+					if [ -n "${base_gate_pr_failed_jobs}" ]; then
+						base_gate_jobs_tracked=true
+						while IFS= read -r base_gate_pr_failed_job; do
+							if ! grep -Fxq -- "${base_gate_pr_failed_job}" <<<"${base_gate_base_failed_jobs}"; then
+								base_gate_jobs_tracked=false
+								break
+							fi
+						done <<<"${base_gate_pr_failed_jobs}"
+					fi
+					if [ "${base_gate_jobs_tracked}" != "true" ]; then
+						log "base_tracked outcome=file reason=failed_jobs_differ heal_issue=${base_gate_heal_issue} workflow=${base_gate_workflow_path} base=${BASE_REF} pr=${PR_NUMBER}"
+					fi
+				else
+					log "base_tracked outcome=fail_open reason=jobs_lookup_failed heal_issue=${base_gate_heal_issue} base=${BASE_REF} pr=${PR_NUMBER}"
+				fi
+				if [ "${base_gate_jobs_tracked}" = "true" ] && [[ "${HEAD_SHA,,}" =~ ^[0-9a-f]{40}$ ]] && jq -n \
+					--arg heal_issue "${base_gate_heal_issue}" --arg pr_number "${PR_NUMBER}" \
+					--arg head_sha "${HEAD_SHA,,}" --arg run_id "${base_gate_run_id}" \
+					--arg base_ref "${BASE_REF}" --arg workflow_path "${base_gate_workflow_path}" \
+					'{heal_issue: $heal_issue, pr_number: $pr_number, head_sha: $head_sha, run_id: $run_id, base_ref: $base_ref, workflow_path: $workflow_path}' \
+					> "${TRIAGE_BASE_TRACKED_FILE}" 2>/dev/null; then
+					if [ -n "${GITHUB_OUTPUT:-}" ]; then
+						echo "base_failure_tracked=${base_gate_heal_issue}" >> "${GITHUB_OUTPUT}"
+					fi
+					log "skip reason=base_failure_tracked heal_issue=${base_gate_heal_issue} workflow=${base_gate_workflow_path} base=${BASE_REF} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+					if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+						triage_report_routing_unverified
+					fi
+					exit 0
+				fi
+				# Without the note metadata (no valid head SHA, or a failed write)
+				# the note step cannot add the PR to the heal issue, so skipping
+				# would drop the failure. File the per-PR issue as before.
+				rm -f "${TRIAGE_BASE_TRACKED_FILE}"
+				if [ "${base_gate_jobs_tracked}" = "true" ]; then
+					log "base_tracked outcome=fail_open reason=metadata_write_failed heal_issue=${base_gate_heal_issue} base=${BASE_REF} pr=${PR_NUMBER}"
+				fi
+			elif [ "${base_gate_heal_lookup_ok}" = "true" ]; then
+				log "base_tracked outcome=file reason=no_open_heal_issue workflow=${base_gate_workflow_path} base=${BASE_REF} pr=${PR_NUMBER}"
+			fi
+		fi
 	fi
 	log "base_gate outcome=file base=${BASE_REF} base_conclusion=${base_gate_conclusion:-unknown}${base_gate_reason:+ reason=${base_gate_reason}} pr=${PR_NUMBER}"
 fi
