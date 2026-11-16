@@ -35909,7 +35909,7 @@ NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON='[{"name":"codex-bot","email":"codex@user
 NOOP_FORCE_MERGE_SKIP_LABELS=$'e2e-smoke-test\nforce-review'
 
 # _noop_gate_failure_alert <gate> <message>: the force-merge gates and the
-# merge --auto step fail every sweep (about every 5 minutes) for as long as
+# merge --auto step fail every poll tick (cron every 15 minutes) for as long as
 # the PR stays in the same state, and each failure used to page again. Page
 # once per PR head and gate instead: the first failure posts a PR comment
 # carrying a marker and sends the ERROR alert; later sweeps find the marker

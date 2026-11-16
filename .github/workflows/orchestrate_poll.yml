@@ -1903,14 +1903,15 @@ jobs:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
 
-      # Q99: GitHub runs the */5 cron every 25-60 minutes, so a project that
+      # Q99: GitHub runs the poller cron (*/15 since the 2026-11 run-volume cut;
+      # */5 before, which GitHub ran every 25-60 minutes) late, so a project that
       # could take its next step now (a merged wave, a new phase) waited for
       # the next cron run. When this tick moved a project forward
       # (scripts/orchestrate_poll_process.sh record_poll_progress_if_advanced),
       # dispatch the caller workflow once more. The poll job's concurrency
       # group keeps at most one pending run, so this queues one run behind
       # this one. The 300-second force-tick cooldown per tracking issue stops
-      # a chain from polling faster than the cron's nominal */5 cadence.
+      # a chain from polling a project more than once every 5 minutes.
       - name: Queue a follow-up poll after progress
         if: success() && steps.find_tracking.outputs.has_work == 'true'
         # Best effort: the tick's work is already persisted, and cron remains the fallback.
